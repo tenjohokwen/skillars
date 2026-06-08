@@ -1,1 +1,7 @@
-// app global css in SCSS form
+// Design system — import order matters
+@import 'variables';
+@import 'typography';
+@import 'animations';
+@import 'glass';
+@import 'layouts';
+@import 'components';

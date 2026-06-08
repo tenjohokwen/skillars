@@ -1,0 +1,273 @@
+// ============================================================
+// Quasar component overrides — apply design system tokens
+// ============================================================
+
+// ── Body / Page background ──────────────────────────────────
+body,
+.q-page {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: 'Inter', sans-serif;
+}
+
+// ── Header ──────────────────────────────────────────────────
+.q-header {
+  background: var(--surface-glass-strong) !important;
+  backdrop-filter: blur(18px) !important;
+  -webkit-backdrop-filter: blur(18px) !important;
+  border-bottom: 1px solid var(--border-soft) !important;
+  box-shadow: none !important;
+  color: var(--text-primary) !important;
+}
+
+.q-toolbar__title,
+.q-toolbar__title a {
+  color: var(--text-primary) !important;
+}
+
+// ── Drawer ──────────────────────────────────────────────────
+.q-drawer {
+  background: var(--bg-secondary) !important;
+  border-right: 1px solid var(--border-soft) !important;
+}
+
+.q-drawer .q-item {
+  color: var(--text-secondary);
+  border-radius: 12px;
+  margin: 2px 8px;
+  transition: all 0.2s ease;
+
+  &:hover {
+    background: var(--surface-glass-hover);
+    color: var(--text-primary);
+  }
+
+  &.q-router-link--active,
+  &.q-item--active {
+    background: var(--nav-active-bg);
+    color: var(--nav-active-color);
+  }
+}
+
+.q-drawer .q-item-label--header {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 16px 16px 8px;
+}
+
+// ── Cards ───────────────────────────────────────────────────
+.q-card {
+  background: var(--surface-glass) !important;
+  border: 1px solid var(--border-soft) !important;
+  border-radius: 28px !important;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: var(--card-shadow) !important;
+  color: var(--text-primary) !important;
+}
+
+.q-card__section {
+  color: var(--text-primary);
+}
+
+// ── Buttons ─────────────────────────────────────────────────
+.q-btn {
+  border-radius: 14px !important;
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  min-height: 40px;
+}
+
+.q-btn[color="primary"],
+.q-btn.bg-primary {
+  background: var(--hero-gradient) !important;
+  color: #081018 !important;
+  border: none !important;
+
+  &:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25) !important;
+  }
+}
+
+.q-btn--flat {
+  color: var(--text-secondary) !important;
+  background: transparent !important;
+
+  &:hover {
+    background: var(--surface-glass-hover) !important;
+    color: var(--text-primary) !important;
+  }
+}
+
+// ── Inputs ──────────────────────────────────────────────────
+.q-field {
+  font-family: 'Inter', sans-serif;
+}
+
+.q-field__control {
+  background: var(--input-bg) !important;
+  border-radius: 14px !important;
+
+  &:before {
+    border-color: var(--input-border) !important;
+    border-radius: 14px !important;
+  }
+
+  &:hover:before {
+    border-color: var(--border-medium) !important;
+  }
+}
+
+.q-field--focused .q-field__control:before {
+  border-color: var(--input-focus-border) !important;
+  box-shadow: 0 0 0 3px var(--input-focus-shadow) !important;
+}
+
+.q-field__label,
+.q-field__native,
+.q-field__input,
+.q-field__marginal {
+  color: var(--text-primary) !important;
+  font-family: 'Inter', sans-serif;
+}
+
+.q-field__label {
+  color: var(--text-muted) !important;
+}
+
+.q-field--focused .q-field__label {
+  color: var(--accent-primary) !important;
+}
+
+// Select popup
+.q-menu {
+  background: var(--bg-secondary) !important;
+  border: 1px solid var(--border-soft) !important;
+  border-radius: 16px !important;
+  backdrop-filter: blur(18px);
+  box-shadow: var(--card-shadow) !important;
+}
+
+.q-item:hover {
+  background: var(--surface-glass-hover) !important;
+}
+
+// ── Separators ──────────────────────────────────────────────
+.q-separator {
+  background: var(--border-soft) !important;
+}
+
+// ── Banner ──────────────────────────────────────────────────
+.q-banner {
+  border-radius: 14px !important;
+}
+
+// ── Tables ──────────────────────────────────────────────────
+.q-table {
+  background: transparent !important;
+  color: var(--text-primary) !important;
+}
+
+.q-table thead tr {
+  background: transparent;
+
+  th {
+    color: var(--text-muted) !important;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border-soft) !important;
+  }
+}
+
+.q-table tbody tr {
+  border-bottom: 1px solid var(--table-row-border) !important;
+  transition: background 0.15s ease;
+
+  &:hover td {
+    background: var(--table-row-hover) !important;
+  }
+
+  td {
+    color: var(--text-secondary) !important;
+    border-bottom: none !important;
+  }
+}
+
+// ── Dialogs ─────────────────────────────────────────────────
+.q-dialog__backdrop {
+  background: var(--modal-backdrop) !important;
+}
+
+.q-dialog .q-card {
+  border-radius: 28px !important;
+}
+
+// ── Badges ──────────────────────────────────────────────────
+.q-badge {
+  border-radius: 999px !important;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  padding: 3px 10px;
+}
+
+// ── Chips ───────────────────────────────────────────────────
+.q-chip {
+  border-radius: 999px !important;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+// ── Linear Progress ─────────────────────────────────────────
+.q-linear-progress {
+  border-radius: 999px !important;
+  height: 8px !important;
+
+  &__track {
+    background: var(--progress-track) !important;
+    border-radius: 999px !important;
+  }
+
+  &__model {
+    background: var(--hero-gradient) !important;
+    border-radius: 999px !important;
+  }
+}
+
+// ── Scrollbar styling ────────────────────────────────────────
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-medium);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-accent);
+}
+
+// ── Spinner ─────────────────────────────────────────────────
+.q-spinner {
+  color: var(--accent-primary) !important;
+}
+
+// ── Notifications (q-notify) ────────────────────────────────
+.q-notification {
+  border-radius: 16px !important;
+  font-family: 'Inter', sans-serif;
+  backdrop-filter: blur(18px);
+}

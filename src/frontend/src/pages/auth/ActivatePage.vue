@@ -1,46 +1,50 @@
 <template>
-  <q-page class="flex flex-center q-pa-md">
-    <div class="col-12 col-sm-8 col-md-6 col-lg-4" style="max-width: 400px">
-      <q-card>
-        <q-card-section>
-          <div class="text-h5 text-center">{{ t('auth.activateAccount') }}</div>
-        </q-card-section>
+  <q-page class="auth-page">
+    <div class="auth-card-container fade-in">
 
-        <q-card-section>
-          <!-- Loading state -->
-          <div v-if="isLoading" class="text-center q-pa-md">
-            <q-spinner-dots color="primary" size="50px" />
-            <div class="q-mt-md">{{ t('common.loading') }}</div>
+      <div class="auth-brand q-mb-xl">
+        <div class="gradient-text auth-brand-name">Skillars</div>
+        <div class="text-meta">Account activation</div>
+      </div>
+
+      <div class="glass-card--static auth-card text-center">
+
+        <div class="text-section-title q-mb-xs">{{ t('auth.activateAccount') }}</div>
+
+        <!-- Loading -->
+        <div v-if="isLoading" class="q-py-xl">
+          <q-spinner-dots size="40px" style="color: var(--accent-primary)" />
+          <div class="text-meta q-mt-md">{{ t('common.loading') }}</div>
+        </div>
+
+        <!-- No key -->
+        <div v-else-if="!activationKey" class="auth-banner auth-banner--error q-pa-md q-mt-md">
+          Invalid or missing activation key.
+        </div>
+
+        <!-- Success -->
+        <div v-else-if="isSuccess" class="q-py-md">
+          <q-icon name="check_circle" size="48px" style="color: var(--accent-primary)" class="q-mb-md" />
+          <div class="text-card-title q-mb-sm">{{ t('success.activated') }}</div>
+          <div class="text-meta">Redirecting in {{ countdown }}...</div>
+        </div>
+
+        <!-- Error -->
+        <template v-else-if="hasError">
+          <div class="auth-banner auth-banner--error q-pa-md q-mt-md">
+            {{ errorMessage }}
+            <template v-if="helpCode">
+              <br /><small>{{ t('error.helpCode') }}: {{ helpCode }}</small>
+            </template>
           </div>
+          <div class="q-mt-md">
+            <router-link to="/login" class="auth-link">
+              &larr; {{ t('common.back') }} {{ t('auth.login') }}
+            </router-link>
+          </div>
+        </template>
 
-          <!-- No key error -->
-          <q-banner v-else-if="!activationKey" class="bg-negative text-white" rounded>
-            Invalid or missing activation key
-          </q-banner>
-
-          <!-- Success state -->
-          <q-banner v-else-if="isSuccess" class="bg-positive text-white" rounded>
-            {{ t('success.activated') }}
-            <div class="q-mt-sm">Redirecting in {{ countdown }}...</div>
-          </q-banner>
-
-          <!-- Error state -->
-          <template v-else-if="hasError">
-            <q-banner class="bg-negative text-white" rounded>
-              {{ errorMessage }}
-              <template v-if="helpCode">
-                <br />
-                <small>{{ t('error.helpCode') }}: {{ helpCode }}</small>
-              </template>
-            </q-banner>
-            <div class="text-center q-mt-md">
-              <router-link to="/login" class="text-primary">
-                {{ t('common.back') }} {{ t('auth.login') }}
-              </router-link>
-            </div>
-          </template>
-        </q-card-section>
-      </q-card>
+      </div>
     </div>
   </q-page>
 </template>
@@ -55,42 +59,23 @@ import { useErrorHandler } from 'src/composables/useErrorHandler';
 const router = useRouter();
 const route = useRoute();
 const { t } = useI18n();
+const { setError, hasError, errorMessage, helpCode } = useErrorHandler();
 
-const {
-  setError,
-  hasError,
-  errorMessage,
-  helpCode
-} = useErrorHandler();
-
-// Get activation key from route query
 const activationKey = computed(() => route.query.key);
-
-// State
 const isLoading = ref(true);
 const isSuccess = ref(false);
 const countdown = ref(3);
 let redirectTimer = null;
 
-// Handle activation on mount
 async function handleActivation() {
-  if (!activationKey.value) {
-    isLoading.value = false;
-    return;
-  }
-
+  if (!activationKey.value) { isLoading.value = false; return; }
   try {
     await accountApi.activate(activationKey.value);
     isSuccess.value = true;
     isLoading.value = false;
-
-    // Start countdown timer
     redirectTimer = setInterval(() => {
       countdown.value--;
-      if (countdown.value <= 0) {
-        clearInterval(redirectTimer);
-        router.push('/login');
-      }
+      if (countdown.value <= 0) { clearInterval(redirectTimer); router.push('/login'); }
     }, 1000);
   } catch (err) {
     setError(err);
@@ -98,13 +83,29 @@ async function handleActivation() {
   }
 }
 
-onMounted(() => {
-  handleActivation();
-});
-
-onUnmounted(() => {
-  if (redirectTimer) {
-    clearInterval(redirectTimer);
-  }
-});
+onMounted(() => { handleActivation(); });
+onUnmounted(() => { if (redirectTimer) clearInterval(redirectTimer); });
 </script>
+
+<style lang="scss" scoped>
+.auth-brand { text-align: center; }
+.auth-brand-name {
+  font-size: 32px;
+  font-weight: 800;
+  font-family: 'Inter', sans-serif;
+  letter-spacing: -1px;
+}
+.auth-card { padding: 32px; }
+.auth-link {
+  color: var(--accent-primary);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  &:hover { opacity: 0.8; }
+}
+.auth-banner {
+  border-radius: 12px !important;
+  font-size: 14px;
+  &--error { background: rgba(255, 95, 122, 0.12); color: var(--accent-danger); }
+}
+</style>

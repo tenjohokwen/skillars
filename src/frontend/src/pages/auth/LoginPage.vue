@@ -1,87 +1,97 @@
 <template>
-  <q-page class="flex flex-center q-pa-md">
-    <div class="col-12 col-sm-8 col-md-6 col-lg-4" style="max-width: 400px; width: 100%">
-      <q-card style="min-height: 450px">
-        <q-card-section>
-          <div class="text-h5 text-center">{{ t('auth.login') }}</div>
-        </q-card-section>
+  <q-page class="auth-page">
+    <div class="auth-card-container fade-in">
 
-        <q-card-section v-if="route.query.expired === 'true'">
-          <q-banner class="bg-warning text-white" rounded>
-            {{ t('session.expired') }}
-          </q-banner>
-        </q-card-section>
+      <!-- Brand mark -->
+      <div class="auth-brand q-mb-xl">
+        <div class="gradient-text auth-brand-name">Skillars</div>
+        <div class="text-meta">Analytics Platform</div>
+      </div>
 
-        <q-card-section>
-          <q-form @submit.prevent="handleLogin" class="q-gutter-md">
-            <q-input
-              v-model="form.email"
-              type="email"
-              :label="t('auth.email')"
-              lazy-rules
-              :rules="[required, validEmail]"
-              :error="hasFieldError('id')"
-              :error-message="getFieldError('id')"
-            />
+      <div class="glass-card--static auth-card">
 
-            <q-input
-              v-model="form.password"
-              :type="isPwd ? 'password' : 'text'"
-              :label="t('auth.password')"
-              lazy-rules
-              :rules="[required]"
-              :error="hasFieldError('password')"
-              :error-message="getFieldError('password')"
-            >
-              <template #append>
-                <q-icon
-                  :name="isPwd ? 'visibility_off' : 'visibility'"
-                  class="cursor-pointer"
-                  @click="isPwd = !isPwd"
-                />
-              </template>
-            </q-input>
+        <div class="text-section-title q-mb-xs">{{ t('auth.login') }}</div>
+        <div class="text-meta q-mb-lg">Welcome back. Sign in to continue.</div>
 
-            <q-banner
-              v-if="hasError && !isValidationError"
-              class="bg-negative text-white q-mt-md"
-              rounded
-            >
-              {{ errorMessage }}
-              <template v-if="helpCode">
-                <br />
-                <small>{{ t('error.helpCode') }}: {{ helpCode }}</small>
-              </template>
-            </q-banner>
+        <!-- Session expired banner -->
+        <q-banner
+          v-if="route.query.expired === 'true'"
+          class="q-mb-md auth-banner auth-banner--warning"
+          rounded
+        >
+          {{ t('session.expired') }}
+        </q-banner>
 
-            <div class="q-mt-md">
-              <q-btn
-                type="submit"
-                color="primary"
-                class="full-width"
-                :loading="isSubmitting"
-                :disable="isSubmitting"
-                :label="t('auth.login')"
+        <q-form @submit.prevent="handleLogin" class="q-gutter-md">
+          <q-input
+            v-model="form.email"
+            type="email"
+            :label="t('auth.email')"
+            outlined
+            lazy-rules
+            :rules="[required, validEmail]"
+            :error="hasFieldError('id')"
+            :error-message="getFieldError('id')"
+          />
+
+          <q-input
+            v-model="form.password"
+            :type="isPwd ? 'password' : 'text'"
+            :label="t('auth.password')"
+            outlined
+            lazy-rules
+            :rules="[required]"
+            :error="hasFieldError('password')"
+            :error-message="getFieldError('password')"
+          >
+            <template #append>
+              <q-icon
+                :name="isPwd ? 'visibility_off' : 'visibility'"
+                class="cursor-pointer"
+                style="color: var(--text-muted)"
+                @click="isPwd = !isPwd"
               />
-            </div>
-          </q-form>
-        </q-card-section>
+            </template>
+          </q-input>
 
-        <q-card-section class="text-center q-pt-none">
-          <router-link to="/forgot-password" class="text-primary">
+          <q-banner
+            v-if="hasError && !isValidationError"
+            class="auth-banner auth-banner--error"
+            rounded
+          >
+            {{ errorMessage }}
+            <template v-if="helpCode">
+              <br /><small>{{ t('error.helpCode') }}: {{ helpCode }}</small>
+            </template>
+          </q-banner>
+
+          <q-btn
+            type="submit"
+            class="full-width btn-accent q-mt-sm"
+            :loading="isSubmitting"
+            :disable="isSubmitting"
+            :label="t('auth.login')"
+            unelevated
+            size="md"
+          />
+        </q-form>
+
+        <div class="text-center q-mt-md">
+          <router-link to="/forgot-password" class="auth-link">
             {{ t('auth.forgotPassword') }}
           </router-link>
-        </q-card-section>
+        </div>
 
-        <q-separator />
+        <div class="auth-divider"><span>or</span></div>
 
-        <q-card-section class="text-center">
-          <span>{{ t('auth.noAccount') }}</span>
-          <router-link to="/register" class="text-primary q-ml-xs">
+        <div class="text-center">
+          <span class="text-meta">{{ t('auth.noAccount') }}</span>
+          <router-link to="/register" class="auth-link q-ml-xs">
             {{ t('auth.createAccount') }}
           </router-link>
-        </q-card-section>
-      </q-card>
+        </div>
+
+      </div>
     </div>
   </q-page>
 </template>
@@ -100,47 +110,25 @@ const { t } = useI18n();
 const { initSession } = useSession();
 
 const {
-  setError,
-  clearError,
-  hasError,
-  errorMessage,
-  isValidationError,
-  helpCode,
-  hasFieldError,
-  getFieldError
+  setError, clearError, hasError, errorMessage,
+  isValidationError, helpCode, hasFieldError, getFieldError
 } = useErrorHandler();
 
-// Form state
-const form = ref({
-  email: '',
-  password: ''
-});
+const form = ref({ email: '', password: '' });
 const isPwd = ref(true);
 const isSubmitting = ref(false);
 
-// Validation rules
 const required = val => !!val || t('validation.required');
 const validEmail = val => /.+@.+\..+/.test(val) || t('validation.email');
 
-// Handle login submission
 async function handleLogin() {
   clearError();
   isSubmitting.value = true;
-
   try {
     const response = await authApi.login(form.value.email, form.value.password, 1);
-
-    // Check if 2FA is required
     if (response.msgKey === 'check.otp') {
-      router.push({
-        path: '/otp',
-        query: {
-          id: response.payload.loginInfoId,
-          redirect: route.query.redirect
-        }
-      });
+      router.push({ path: '/otp', query: { id: response.payload.loginInfoId, redirect: route.query.redirect } });
     } else {
-      // Login successful, initialize session monitoring and redirect
       initSession();
       router.push(route.query.redirect || '/dashboard');
     }
@@ -151,3 +139,51 @@ async function handleLogin() {
   }
 }
 </script>
+
+<style lang="scss" scoped>
+.auth-brand {
+  text-align: center;
+}
+.auth-brand-name {
+  font-size: 32px;
+  font-weight: 800;
+  font-family: 'Inter', sans-serif;
+  letter-spacing: -1px;
+}
+.auth-card {
+  padding: 32px;
+}
+.auth-link {
+  color: var(--accent-primary);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: opacity 0.15s ease;
+  &:hover { opacity: 0.8; }
+}
+.auth-banner {
+  border-radius: 12px !important;
+  font-size: 14px;
+  &--warning { background: rgba(255, 184, 77, 0.12) !important; color: var(--accent-warning) !important; }
+  &--error   { background: rgba(255, 95, 122, 0.12) !important; color: var(--accent-danger) !important; }
+}
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0;
+  &::before, &::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border-soft);
+  }
+  span {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+}
+</style>

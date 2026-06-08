@@ -1,0 +1,52 @@
+// ============================================================
+// Animation & transition rules
+// Keep all durations ≤ 300ms. No bouncy easing. No large scale transforms.
+// ============================================================
+
+// Standard transition applied broadly
+* {
+  transition-property: background-color, border-color, color, box-shadow, opacity;
+  transition-duration: 0.2s;
+  transition-timing-function: ease;
+}
+
+// Theme switch — slightly longer for full-page feel
+body {
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+// Hover lift — shared base (compose with element selectors)
+.hover-lift {
+  transition: all 0.2s ease;
+
+  &:hover {
+    transform: translateY(-2px);
+  }
+}
+
+// Focus ring for interactive elements
+.focus-ring:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+// Fade-in for page loads / async content
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in {
+  animation: fadeIn 0.25s ease forwards;
+}
+
+// Spinner pulse used by loading states
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
+.pulse {
+  animation: pulse 1.5s ease-in-out infinite;
+}

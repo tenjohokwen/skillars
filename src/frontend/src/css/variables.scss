@@ -1,0 +1,113 @@
+// ============================================================
+// Design System — CSS Custom Properties
+// Dark mode is the default (:root). Light mode overrides via .light class on <body>.
+// To add a new token: define it in :root (dark value) and .light (light value).
+// ============================================================
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+:root {
+  // Backgrounds
+  --bg-primary: #0b1020;
+  --bg-secondary: #11182d;
+  --bg-tertiary: #151f38;
+
+  // Radial glow layers (applied in layouts)
+  --radial-tl: rgba(0, 255, 180, 0.08);
+  --radial-br: rgba(0, 120, 255, 0.08);
+
+  // Glass surfaces
+  --surface-glass: rgba(255, 255, 255, 0.04);
+  --surface-glass-hover: rgba(255, 255, 255, 0.06);
+  --surface-glass-strong: rgba(255, 255, 255, 0.08);
+
+  // Borders
+  --border-soft: rgba(255, 255, 255, 0.06);
+  --border-medium: rgba(255, 255, 255, 0.10);
+  --border-accent: rgba(0, 255, 180, 0.25);
+
+  // Accents — neon for dark bg
+  --accent-primary: #00ffb4;
+  --accent-secondary: #0088ff;
+  --accent-purple: #7b61ff;
+  --accent-warning: #ffb84d;
+  --accent-danger: #ff5f7a;
+
+  // Text
+  --text-primary: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.72);
+  --text-muted: rgba(255, 255, 255, 0.55);
+  --text-disabled: rgba(255, 255, 255, 0.35);
+
+  // Gradients
+  --hero-gradient: linear-gradient(135deg, #00ffb4, #0088ff);
+
+  // Component tokens
+  --card-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+  --progress-track: rgba(255, 255, 255, 0.08);
+  --btn-bg: rgba(255, 255, 255, 0.05);
+  --btn-border: rgba(255, 255, 255, 0.08);
+  --btn-hover: rgba(255, 255, 255, 0.08);
+  --input-bg: rgba(255, 255, 255, 0.04);
+  --input-border: rgba(255, 255, 255, 0.08);
+  --input-focus-border: rgba(0, 255, 180, 0.35);
+  --input-focus-shadow: rgba(0, 255, 180, 0.08);
+  --badge-bg: rgba(0, 255, 180, 0.10);
+  --badge-color: #00ffb4;
+  --nav-active-bg: rgba(0, 255, 180, 0.10);
+  --nav-active-color: #00ffb4;
+  --table-row-border: rgba(255, 255, 255, 0.04);
+  --table-row-hover: rgba(255, 255, 255, 0.03);
+  --modal-backdrop: rgba(0, 0, 0, 0.60);
+}
+
+// ============================================================
+// Light mode overrides — only tokens that differ from dark
+// ============================================================
+body.light {
+  --bg-primary: #f0f4f8;
+  --bg-secondary: #e4eaf3;
+  --bg-tertiary: #d8e2ef;
+
+  --radial-tl: rgba(0, 160, 110, 0.07);
+  --radial-br: rgba(21, 99, 196, 0.07);
+
+  --surface-glass: rgba(255, 255, 255, 0.72);
+  --surface-glass-hover: rgba(255, 255, 255, 0.85);
+  --surface-glass-strong: rgba(255, 255, 255, 0.92);
+
+  --border-soft: rgba(30, 60, 120, 0.08);
+  --border-medium: rgba(30, 60, 120, 0.14);
+  --border-accent: rgba(0, 122, 88, 0.30);
+
+  // Accessible accents — WCAG AA compliant on light backgrounds
+  --accent-primary: #007a58;
+  --accent-secondary: #1563c4;
+  --accent-purple: #5b3fcf;
+  --accent-warning: #c07a00;
+  --accent-danger: #d0294a;
+
+  --text-primary: #0d1a2e;
+  --text-secondary: rgba(13, 26, 46, 0.72);
+  --text-muted: rgba(13, 26, 46, 0.50);
+  --text-disabled: rgba(13, 26, 46, 0.30);
+
+  --hero-gradient: linear-gradient(135deg, #007a58, #1563c4);
+
+  --card-shadow: 0 10px 40px rgba(30, 60, 120, 0.10);
+  --progress-track: rgba(30, 60, 120, 0.10);
+  --btn-bg: rgba(255, 255, 255, 0.75);
+  --btn-border: rgba(30, 60, 120, 0.14);
+  --btn-hover: rgba(255, 255, 255, 0.95);
+  --input-bg: rgba(255, 255, 255, 0.82);
+  --input-border: rgba(30, 60, 120, 0.14);
+  --input-focus-border: rgba(0, 122, 88, 0.45);
+  --input-focus-shadow: rgba(0, 122, 88, 0.10);
+  --badge-bg: rgba(0, 122, 88, 0.10);
+  --badge-color: #007a58;
+  --nav-active-bg: rgba(0, 122, 88, 0.10);
+  --nav-active-color: #007a58;
+  --table-row-border: rgba(30, 60, 120, 0.06);
+  --table-row-hover: rgba(30, 60, 120, 0.04);
+  --modal-backdrop: rgba(13, 26, 46, 0.45);
+}

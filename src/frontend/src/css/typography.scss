@@ -1,0 +1,70 @@
+// ============================================================
+// Typography — Inter font scale
+// ============================================================
+
+.text-hero {
+  font-size: clamp(56px, 8vw, 72px);
+  font-weight: 800;
+  line-height: 1;
+  background: var(--hero-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.text-page-title {
+  font-size: clamp(28px, 3vw, 36px);
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.text-section-title {
+  font-size: clamp(18px, 2vw, 22px);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.text-card-title {
+  font-size: clamp(16px, 1.5vw, 18px);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.text-body {
+  font-size: clamp(14px, 1.2vw, 16px);
+  font-weight: 400;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.text-meta {
+  font-size: clamp(12px, 1vw, 13px);
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  color: var(--text-muted);
+}
+
+.text-label {
+  font-size: clamp(11px, 0.9vw, 13px);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.text-accent {
+  color: var(--accent-primary);
+}
+
+.text-muted-color {
+  color: var(--text-muted);
+}
+
+.text-secondary-color {
+  color: var(--text-secondary);
+}
+
+.text-primary-color {
+  color: var(--text-primary);
+}

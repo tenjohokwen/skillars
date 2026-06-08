@@ -1,131 +1,167 @@
 <template>
   <q-layout view="lHh Lpr lFf">
-    <q-header elevated class="bg-primary">
-      <q-toolbar>
+
+    <!-- ── Header ──────────────────────────────────────────── -->
+    <q-header>
+      <q-toolbar class="header-toolbar">
+
+        <!-- Hamburger (authenticated only) -->
         <q-btn
           v-if="isAuthenticated"
-          flat
-          dense
-          round
+          flat round dense
           icon="menu"
+          class="header-btn"
           aria-label="Menu"
           @click="toggleLeftDrawer"
         />
 
-        <q-toolbar-title>
-          <router-link to="/" class="text-white" style="text-decoration: none">
-            Skillars
-          </router-link>
-        </q-toolbar-title>
+        <!-- Logo / Brand -->
+        <router-link to="/" class="brand-link">
+          <span class="brand-name gradient-text">Skillars</span>
+        </router-link>
 
         <q-space />
 
-        <!-- Language Switcher -->
-        <q-btn-dropdown
-          flat
-          no-caps
-          :label="currentLanguageLabel"
-          icon="language"
-        >
-          <q-list>
+        <!-- Language switcher -->
+        <q-btn-dropdown flat no-caps :label="currentLanguageLabel" icon="language" class="header-btn">
+          <q-list class="dropdown-list">
             <q-item
               v-for="lang in languages"
               :key="lang.value"
-              clickable
-              v-close-popup
+              clickable v-close-popup
               @click="changeLanguage(lang.value)"
+              class="dropdown-item"
             >
               <q-item-section>
                 <q-item-label>{{ lang.label }}</q-item-label>
               </q-item-section>
               <q-item-section side v-if="locale === lang.value">
-                <q-icon name="check" color="primary" />
+                <q-icon name="check" style="color: var(--accent-primary)" />
               </q-item-section>
             </q-item>
           </q-list>
         </q-btn-dropdown>
 
-        <!-- User Menu (when logged in) -->
+        <!-- Theme toggle -->
+        <q-btn
+          flat round dense
+          :icon="isDark ? 'light_mode' : 'dark_mode'"
+          class="header-btn"
+          :aria-label="isDark ? 'Switch to light mode' : 'Switch to dark mode'"
+          @click="toggleTheme"
+        >
+          <q-tooltip>{{ isDark ? 'Light mode' : 'Dark mode' }}</q-tooltip>
+        </q-btn>
+
+        <!-- Authenticated: user menu -->
         <template v-if="isAuthenticated">
-          <q-btn-dropdown
-            flat
-            no-caps
-            :label="username"
-            icon="person"
-          >
-            <q-list>
-              <q-item clickable v-close-popup @click="handleLogout">
+          <q-btn-dropdown flat no-caps :label="username" icon="person" class="header-btn">
+            <q-list class="dropdown-list">
+              <q-item clickable v-close-popup to="/profile" class="dropdown-item">
                 <q-item-section avatar>
-                  <q-icon name="logout" />
+                  <q-icon name="person" style="color: var(--text-secondary)" />
                 </q-item-section>
                 <q-item-section>
-                  <q-item-label>{{ t('auth.logout') }}</q-item-label>
+                  <q-item-label>{{ t('profile.title') }}</q-item-label>
+                </q-item-section>
+              </q-item>
+              <q-separator style="background: var(--border-soft)" />
+              <q-item clickable v-close-popup @click="handleLogout" class="dropdown-item">
+                <q-item-section avatar>
+                  <q-icon name="logout" style="color: var(--accent-danger)" />
+                </q-item-section>
+                <q-item-section>
+                  <q-item-label style="color: var(--accent-danger)">{{ t('auth.logout') }}</q-item-label>
                 </q-item-section>
               </q-item>
             </q-list>
           </q-btn-dropdown>
         </template>
 
-        <!-- Login button (when not logged in) -->
+        <!-- Guest: login button -->
         <template v-else>
-          <q-btn flat no-caps :label="t('auth.login')" to="/login" />
+          <q-btn flat no-caps :label="t('auth.login')" to="/login" class="btn-accent q-px-md" />
         </template>
+
       </q-toolbar>
     </q-header>
 
+    <!-- ── Left Drawer ─────────────────────────────────────── -->
     <q-drawer
       v-if="isAuthenticated"
       v-model="leftDrawerOpen"
       show-if-above
-      bordered
+      :width="280"
+      class="side-drawer"
     >
-      <q-list>
-        <q-item-label header>{{ t('common.menu') }}</q-item-label>
+      <!-- Drawer header -->
+      <div class="drawer-header">
+        <div class="drawer-brand gradient-text">Skillars</div>
+        <div class="text-meta">Analytics Platform</div>
+      </div>
 
-        <q-item clickable to="/dashboard">
+      <q-list padding class="drawer-nav">
+        <!-- Main navigation -->
+        <div class="text-label q-px-md q-mb-sm">Main</div>
+
+        <q-item clickable to="/dashboard" class="nav-item">
           <q-item-section avatar>
-            <q-icon name="dashboard" />
+            <q-icon name="dashboard" class="nav-icon" />
           </q-item-section>
           <q-item-section>
-            <q-item-label>Dashboard</q-item-label>
+            <q-item-label class="nav-label">Dashboard</q-item-label>
           </q-item-section>
         </q-item>
 
-        <q-item clickable to="/profile">
+        <q-item clickable to="/profile" class="nav-item">
           <q-item-section avatar>
-            <q-icon name="person" />
+            <q-icon name="person" class="nav-icon" />
           </q-item-section>
           <q-item-section>
-            <q-item-label>{{ t('profile.title') }}</q-item-label>
+            <q-item-label class="nav-label">{{ t('profile.title') }}</q-item-label>
           </q-item-section>
         </q-item>
 
-        <q-separator spaced />
-        <q-item-label header>Admin</q-item-label>
+        <!-- Admin section -->
+        <div class="text-label q-px-md q-mt-lg q-mb-sm">Admin</div>
 
-        <q-item clickable to="/admin/tenants">
+        <q-item clickable to="/admin/tenants" class="nav-item">
           <q-item-section avatar>
-            <q-icon name="group" />
+            <q-icon name="group" class="nav-icon" />
           </q-item-section>
           <q-item-section>
-            <q-item-label>Tenants</q-item-label>
+            <q-item-label class="nav-label">Tenants</q-item-label>
           </q-item-section>
         </q-item>
 
-        <q-item clickable to="/admin/health-dashboard">
+        <q-item clickable to="/admin/health-dashboard" class="nav-item">
           <q-item-section avatar>
-            <q-icon name="monitor_heart" />
+            <q-icon name="monitor_heart" class="nav-icon" />
           </q-item-section>
           <q-item-section>
-            <q-item-label>Health Dashboard</q-item-label>
+            <q-item-label class="nav-label">Health Dashboard</q-item-label>
           </q-item-section>
         </q-item>
       </q-list>
+
+      <!-- Drawer footer -->
+      <div class="drawer-footer">
+        <q-item clickable class="nav-item logout-item" @click="handleLogout">
+          <q-item-section avatar>
+            <q-icon name="logout" class="nav-icon--danger" />
+          </q-item-section>
+          <q-item-section>
+            <q-item-label class="nav-label--danger">{{ t('auth.logout') }}</q-item-label>
+          </q-item-section>
+        </q-item>
+      </div>
     </q-drawer>
 
+    <!-- ── Page content ────────────────────────────────────── -->
     <q-page-container>
       <router-view />
     </q-page-container>
+
   </q-layout>
 </template>
 
@@ -141,54 +177,38 @@ const { t, locale } = useI18n();
 const { destroySession } = useSession();
 
 const leftDrawerOpen = ref(false);
+const isDark = ref(true);
 
-// Language options
 const languages = [
   { label: 'English', value: 'en-US' },
   { label: 'Français', value: 'fr-FR' },
 ];
 
-// Current language label
 const currentLanguageLabel = computed(() => {
   const lang = languages.find(l => l.value === locale.value);
   return lang ? lang.label : 'English';
 });
 
-// Get username from cookie
 function getUsernameFromCookie() {
   const match = document.cookie.match(/user=([^;]+)/);
   if (match) {
-    try {
-      // The cookie value might be URL encoded
-      return decodeURIComponent(match[1]);
-    } catch {
-      return match[1];
-    }
+    try { return decodeURIComponent(match[1]); } catch { return match[1]; }
   }
   return '';
 }
 
-// Initialize username immediately for reactive auth state
 const username = ref(getUsernameFromCookie());
+const isAuthenticated = computed(() => !!username.value);
 
-// Check if user is authenticated (derived from username which is updated periodically)
-const isAuthenticated = computed(() => {
-  return !!username.value;
-});
-
-// Update username when component mounts and on cookie changes
 function updateUsername() {
   username.value = getUsernameFromCookie();
 }
 
-// Change language
 function changeLanguage(lang) {
   locale.value = lang;
-  // Persist language preference
   localStorage.setItem('locale', lang);
 }
 
-// Load saved language preference
 function loadLanguagePreference() {
   const savedLocale = localStorage.getItem('locale');
   if (savedLocale && languages.some(l => l.value === savedLocale)) {
@@ -196,31 +216,30 @@ function loadLanguagePreference() {
   }
 }
 
-// Delete user cookie
+function toggleTheme() {
+  isDark.value = !isDark.value;
+  document.body.classList.toggle('light', !isDark.value);
+  localStorage.setItem('theme', isDark.value ? 'dark' : 'light');
+}
+
+function loadThemePreference() {
+  const saved = localStorage.getItem('theme');
+  isDark.value = saved !== 'light';
+  document.body.classList.toggle('light', !isDark.value);
+}
+
 function deleteUserCookie() {
   document.cookie = 'user=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
 }
 
-// Handle logout
 async function handleLogout() {
-  try {
-    await authApi.logout();
-  } catch {
-    // Ignore logout errors (may already be logged out)
-  }
-
-  // Clean up session monitoring
+  try { await authApi.logout(); } catch { /* already logged out */ }
   destroySession();
-
-  // Clear username and cookie (updates isAuthenticated immediately)
   username.value = '';
   deleteUserCookie();
-
-  // Redirect to login
   router.push('/login');
 }
 
-// Listen for session expired event
 function onSessionExpired() {
   username.value = '';
   deleteUserCookie();
@@ -233,11 +252,8 @@ function toggleLeftDrawer() {
 onMounted(() => {
   updateUsername();
   loadLanguagePreference();
-
-  // Listen for session expiry
+  loadThemePreference();
   window.addEventListener('session:expired', onSessionExpired);
-
-  // Update username periodically (in case of login state changes)
   const interval = setInterval(updateUsername, 1000);
   onUnmounted(() => {
     clearInterval(interval);
@@ -245,3 +261,132 @@ onMounted(() => {
   });
 });
 </script>
+
+<style lang="scss" scoped>
+// ── Header toolbar ────────────────────────────────────────
+.header-toolbar {
+  padding: 0 16px;
+  min-height: 60px;
+}
+
+.brand-link {
+  text-decoration: none;
+  margin: 0 8px;
+}
+
+.brand-name {
+  font-size: 20px;
+  font-weight: 800;
+  font-family: 'Inter', sans-serif;
+  letter-spacing: -0.5px;
+}
+
+.header-btn {
+  color: var(--text-secondary) !important;
+  font-family: 'Inter', sans-serif;
+  font-weight: 500;
+  font-size: 14px;
+  border-radius: 10px !important;
+  margin: 0 2px;
+
+  &:hover {
+    color: var(--text-primary) !important;
+    background: var(--surface-glass-hover) !important;
+  }
+}
+
+// ── Dropdowns ────────────────────────────────────────────
+.dropdown-list {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-soft);
+  border-radius: 16px;
+  padding: 8px;
+  min-width: 160px;
+}
+
+.dropdown-item {
+  border-radius: 10px;
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  color: var(--text-secondary);
+  transition: all 0.15s ease;
+
+  &:hover {
+    background: var(--surface-glass-hover) !important;
+    color: var(--text-primary);
+  }
+}
+
+// ── Drawer ───────────────────────────────────────────────
+.side-drawer {
+  display: flex;
+  flex-direction: column;
+}
+
+.drawer-header {
+  padding: 24px 20px 16px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.drawer-brand {
+  font-size: 22px;
+  font-weight: 800;
+  font-family: 'Inter', sans-serif;
+  letter-spacing: -0.5px;
+  margin-bottom: 4px;
+}
+
+.drawer-nav {
+  flex: 1;
+  padding-top: 16px;
+}
+
+.nav-item {
+  border-radius: 12px;
+  margin: 2px 8px;
+  min-height: 44px;
+  color: var(--text-secondary);
+  font-family: 'Inter', sans-serif;
+  transition: all 0.2s ease;
+
+  &:hover {
+    background: var(--surface-glass-hover) !important;
+    color: var(--text-primary);
+
+    .nav-icon { color: var(--accent-primary); }
+  }
+
+  // Quasar active router-link class
+  &.q-router-link--active {
+    background: var(--nav-active-bg) !important;
+    color: var(--nav-active-color);
+
+    .nav-icon { color: var(--nav-active-color); }
+    .nav-label { color: var(--nav-active-color); font-weight: 600; }
+  }
+}
+
+.nav-icon {
+  color: var(--text-muted);
+  transition: color 0.2s ease;
+}
+
+.nav-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: inherit;
+}
+
+.nav-icon--danger { color: var(--accent-danger); }
+.nav-label--danger { color: var(--accent-danger); font-size: 14px; font-weight: 500; }
+
+.drawer-footer {
+  padding: 8px;
+  border-top: 1px solid var(--border-soft);
+  margin-top: auto;
+
+  .logout-item:hover {
+    background: rgba(255, 95, 122, 0.08) !important;
+  }
+}
+</style>

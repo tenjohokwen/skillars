@@ -1,0 +1,76 @@
+// ============================================================
+// Layout system
+// ============================================================
+
+// Full-page background with radial glow depth effect
+.app-bg {
+  min-height: 100vh;
+  background-color: var(--bg-primary);
+  background-image:
+    radial-gradient(circle at top left, var(--radial-tl), transparent 30%),
+    radial-gradient(circle at bottom right, var(--radial-br), transparent 30%);
+  transition: background-color 0.3s ease;
+}
+
+// Page wrapper — constrains content and provides consistent horizontal padding
+.app-page {
+  max-width: 1450px;
+  margin: 0 auto;
+  padding: 24px 32px;
+  width: 100%;
+
+  @media (max-width: 768px) {
+    padding: 16px;
+  }
+}
+
+// Three-column analytics dashboard grid
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 320px 1fr 320px;
+  gap: 24px;
+
+  @media (max-width: 1200px) {
+    grid-template-columns: 1fr;
+  }
+}
+
+// Two-column grid (sidebar + main)
+.sidebar-grid {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 24px;
+  align-items: start;
+
+  @media (max-width: 1200px) {
+    grid-template-columns: 1fr;
+  }
+}
+
+// Metric card row — auto-fill responsive columns
+.metrics-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+// Centered auth page layout
+.auth-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+// Auth card max-width container
+.auth-card-container {
+  width: 100%;
+  max-width: 420px;
+}
+
+// Wide auth form (register)
+.auth-card-container--wide {
+  width: 100%;
+  max-width: 620px;
+}

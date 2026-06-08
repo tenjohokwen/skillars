@@ -1,48 +1,64 @@
 <template>
-  <q-page padding>
-    <div class="text-h5 q-mb-md">System Health</div>
+  <q-page>
+    <div class="app-page fade-in">
 
-    <q-inner-loading :showing="isLoading" />
-
-    <div v-if="!isLoading && health">
-      <div class="q-mb-md">
-        <q-chip
-          :color="health.status === 'UP' ? 'positive' : 'negative'"
-          text-color="white"
-          icon="circle"
-        >
-          {{ health.status }}
-        </q-chip>
+      <div class="page-header q-mb-xl">
+        <div class="text-page-title">System Health</div>
+        <div class="text-meta">Real-time infrastructure status</div>
       </div>
 
-      <q-banner v-if="!health.components" class="q-mb-md" color="warning" rounded>
-        Admin access required to view health details.
-      </q-banner>
-
-      <div v-if="health.components">
-        <q-card
-          v-for="(component, name) in health.components"
-          :key="name"
-          class="q-mb-md"
-        >
-          <q-card-section>
-            <div class="row items-center q-mb-sm">
-              <div class="text-subtitle1 q-mr-sm">{{ name }}</div>
-              <q-badge
-                :color="component.status === 'UP' ? 'positive' : 'negative'"
-                :label="component.status"
-              />
-            </div>
-            <div
-              v-for="(val, key) in component.details ?? {}"
-              :key="key"
-              class="text-caption q-mt-xs"
-            >
-              <span class="text-weight-medium">{{ key }}:</span> {{ val }}
-            </div>
-          </q-card-section>
-        </q-card>
+      <div v-if="isLoading" class="flex flex-center q-py-xl">
+        <q-spinner-dots size="40px" style="color: var(--accent-primary)" />
       </div>
+
+      <template v-else-if="health">
+        <!-- Overall status pill -->
+        <div class="q-mb-xl">
+          <span
+            class="status-pill"
+            :class="health.status === 'UP' ? 'status-pill--up' : 'status-pill--down'"
+          >
+            <q-icon :name="health.status === 'UP' ? 'check_circle' : 'cancel'" size="16px" />
+            {{ health.status }}
+          </span>
+        </div>
+
+        <q-banner v-if="!health.components" class="health-banner q-mb-lg" rounded>
+          <template #avatar>
+            <q-icon name="lock" style="color: var(--accent-warning)" />
+          </template>
+          Admin access required to view health details.
+        </q-banner>
+
+        <div v-if="health.components" class="components-grid">
+          <div
+            v-for="(component, name) in health.components"
+            :key="name"
+            class="glass-card component-card"
+          >
+            <div class="component-header">
+              <div class="text-card-title">{{ name }}</div>
+              <span
+                class="status-pill status-pill--sm"
+                :class="component.status === 'UP' ? 'status-pill--up' : 'status-pill--down'"
+              >
+                {{ component.status }}
+              </span>
+            </div>
+            <div v-if="component.details" class="component-details q-mt-md">
+              <div
+                v-for="(val, key) in component.details"
+                :key="key"
+                class="detail-row"
+              >
+                <span class="text-label">{{ key }}</span>
+                <span class="text-meta">{{ val }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+
     </div>
   </q-page>
 </template>
@@ -61,8 +77,6 @@ onMounted(async () => {
   try {
     health.value = await adminApi.getHealth()
   } catch (error) {
-    // Spring returns HTTP 503 when overall status is DOWN, but the body still contains
-    // the full health JSON — extract it so the dashboard can display the DOWN state.
     if (error?.response?.data?.status) {
       health.value = error.response.data
     } else {
@@ -73,3 +87,76 @@ onMounted(async () => {
   }
 })
 </script>
+
+<style lang="scss" scoped>
+.page-header {
+  border-bottom: 1px solid var(--border-soft);
+  padding-bottom: 24px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+
+  &--up {
+    background: rgba(0, 255, 180, 0.12);
+    color: var(--accent-primary);
+  }
+  &--down {
+    background: rgba(255, 95, 122, 0.12);
+    color: var(--accent-danger);
+  }
+  &--sm {
+    font-size: 11px;
+    padding: 4px 12px;
+  }
+}
+
+.health-banner {
+  background: rgba(255, 184, 77, 0.10) !important;
+  color: var(--accent-warning) !important;
+  border: 1px solid rgba(255, 184, 77, 0.20) !important;
+}
+
+.components-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 20px;
+}
+
+.component-card {
+  padding: 24px;
+}
+
+.component-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.component-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-soft);
+
+  &:last-child {
+    border-bottom: none;
+  }
+}
+</style>
