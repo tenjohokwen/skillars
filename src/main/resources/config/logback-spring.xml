@@ -1,0 +1,39 @@
+<configuration>
+
+    <springProperty name="appName"     source="spring.application.name" defaultValue="skillars"/>
+    <springProperty name="environment" source="app.environment"         defaultValue="dev"/>
+    <springProperty name="appVersion"  source="app.version"             defaultValue="unknown"/>
+    <springProperty name="lokiUrl"     source="loki.url"                defaultValue="http://localhost:3100"/>
+    <springProperty name="lokiEnabled" source="loki.enabled"            defaultValue="true"/>
+
+    <appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LoggingEventCompositeJsonEncoder">
+            <providers>
+                <timestamp>
+                    <timeZone>UTC</timeZone>
+                </timestamp>
+                <logLevel/>
+                <threadName/>
+                <loggerName/>
+                <message/>
+                <mdc/>
+                <arguments/>
+                <stackTrace/>
+                <pattern>
+                    <pattern>
+                        {
+                          "service":     "${appName}",
+                          "environment": "${environment}",
+                          "version":     "${appVersion}"
+                        }
+                    </pattern>
+                </pattern>
+            </providers>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="JSON"/>
+    </root>
+
+</configuration>

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.tenant.created.title}">New Tenant Created — Skillars</title>
+</head>
+<body style="font-family: Arial, Helvetica, sans-serif; font-size: 16px; line-height: 1.5; color: #333333; background-color: #ffffff; padding: 32px;">
+
+    <p>A new tenant has been created on the Skillars platform.</p>
+
+    <table style="background-color: #f5f5f5; padding: 16px; border-collapse: collapse; width: 100%;">
+        <tr>
+            <td style="padding: 8px; font-size: 14px;"><strong>Tenant Name:</strong></td>
+            <td style="padding: 8px;" th:text="${map.tenantName}">Tenant Name</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; font-size: 14px;"><strong>Initial Environment:</strong></td>
+            <td style="padding: 8px;">
+                <code style="font-family: 'Courier New', Courier, monospace; font-size: 14px; border-left: 4px solid #1a56db; padding-left: 8px;"
+                      th:text="${map.environment}">PROD</code>
+            </td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; font-size: 14px;"><strong>Created at:</strong></td>
+            <td style="padding: 8px; font-size: 14px;" th:text="${map.createdAt}">2026-04-09T00:00:00Z</td>
+        </tr>
+    </table>
+
+    <p>The initial API key was displayed to the admin at creation time and cannot be retrieved again.</p>
+
+    <p th:text="#{email.closing}">Thanks, the Skillars team</p>
+
+    <hr/>
+    <p><small>
+        <span th:text="#{email.common.helpCode}">Help Code:</span>
+        <span th:text="${map.helpCode}">CODE</span>
+    </small></p>
+
+</body>
+</html>

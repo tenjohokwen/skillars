@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.tenant.status_changed.title}">Account Status Changed — Skillars</title>
+</head>
+<body style="font-family: Arial, Helvetica, sans-serif; font-size: 16px; line-height: 1.5; color: #333333; background-color: #ffffff; padding: 32px;">
+
+    <p>Dear <span th:text="${map.tenantName}">Tenant</span>,</p>
+
+    <div th:switch="${map.eventType}">
+        <p th:case="'SUSPENDED'" style="border-left: 4px solid #c0392b; padding-left: 16px;">Your account has been suspended. All API keys have been revoked. Contact support to resolve this.</p>
+        <p th:case="'REACTIVATED'">Your account has been reactivated. A new production API key has been issued &mdash; check the admin portal.</p>
+        <p th:case="'EMAIL_CHANGED'">The email address on this account has been changed. This notification was sent to your previous address. If you did not request this change, contact support immediately.</p>
+        <div th:case="'WEBHOOK_URL_CHANGED'">
+            <p>Your webhook URL has been updated.</p>
+            <table style="background-color: #f5f5f5; padding: 16px; border-collapse: collapse; width: 100%;">
+                <tr>
+                    <td style="padding: 8px; font-size: 14px;"><strong>Old URL:</strong></td>
+                    <td style="padding: 8px; font-size: 14px;" th:text="${map.oldValue}">https://old.example.com/webhook</td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px; font-size: 14px;"><strong>New URL:</strong></td>
+                    <td style="padding: 8px; font-size: 14px;" th:text="${map.newValue}">https://new.example.com/webhook</td>
+                </tr>
+            </table>
+        </div>
+        <p th:case="*">A change has been made to your account.</p>
+    </div>
+
+    <table style="background-color: #f5f5f5; padding: 16px; border-collapse: collapse; width: 100%; margin-top: 16px;">
+        <tr>
+            <td style="padding: 8px; font-size: 14px;"><strong>Changed at:</strong></td>
+            <td style="padding: 8px; font-size: 14px;" th:text="${map.changedAt}">2026-04-08T00:00:00Z</td>
+        </tr>
+    </table>
+
+    <p th:text="#{email.closing}">Thanks, the Skillars team</p>
+
+    <hr/>
+    <p><small>
+        <span th:text="#{email.common.helpCode}">Help Code:</span>
+        <span th:text="${map.helpCode}">CODE</span>
+    </small></p>
+
+</body>
+</html>

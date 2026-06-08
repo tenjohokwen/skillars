@@ -1,0 +1,122 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: skillars-infra-alerts
+    folder: "Skillars Alerts"
+    interval: 1m
+    rules:
+      - uid: node_exporter_down
+        title: NodeExporterDown
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange: { from: 120, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: 'up{job="node-exporter"} == 0'
+              queryType: instant
+              refId: A
+        for: 1m
+        annotations:
+          summary: "node_exporter is DOWN — disk and memory alerts are blind"
+          runbook: "Check Docker service: docker compose logs node_exporter --tail=50"
+        labels:
+          severity: critical
+
+      - uid: app_down
+        title: AppDown
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange: { from: 120, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: 'up{job="spring-boot-app"} == 0'
+              queryType: instant
+              refId: A
+        for: 1m
+        annotations:
+          summary: "Spring Boot app is DOWN — health endpoint not reachable"
+          runbook: "Check Docker service: docker compose logs app --tail=50"
+        labels:
+          severity: critical
+
+      - uid: disk_data_volume_high
+        title: DiskDataVolumeHigh
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: '(1 - (node_filesystem_avail_bytes{mountpoint="/opt/skillars/data",fstype!="tmpfs"} / node_filesystem_size_bytes{mountpoint="/opt/skillars/data",fstype!="tmpfs"})) > 0.80 and node_filesystem_size_bytes{mountpoint="/opt/skillars/data",fstype!="tmpfs"} > 0'
+              queryType: instant
+              refId: A
+        for: 5m
+        annotations:
+          summary: "Data volume disk >80% — investigate before 90%"
+        labels:
+          severity: warning
+
+      - uid: disk_root_high
+        title: DiskRootHigh
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: '(1 - (node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"})) > 0.80 and node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"} > 0'
+              queryType: instant
+              refId: A
+        for: 5m
+        annotations:
+          summary: "Root disk >80% — investigate before 90%"
+        labels:
+          severity: warning
+
+      - uid: memory_pressure_high
+        title: MemoryPressureHigh
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: '(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.85'
+              queryType: instant
+              refId: A
+        for: 5m
+        annotations:
+          summary: "Node memory >85% used — OOM risk"
+        labels:
+          severity: warning
+
+# ── Contact Points ──────────────────────────────────────────────────────────
+contactPoints:
+  - orgId: 1
+    name: notify-ops
+    receivers:
+      - uid: notify-ops-email
+        type: email
+        settings:
+          addresses: "${GF_ALERT_NOTIFY_EMAIL}"
+          singleEmail: false
+      - uid: notify-ops-slack
+        type: slack
+        settings:
+          url: "${GF_SLACK_WEBHOOK_URL}"
+          username: "Skillars Alerts"
+          icon_emoji: ":rotating_light:"
+          title: "{{ len .Alerts.Firing }} alert(s) firing"
+          text: "{{ range .Alerts.Firing }}*{{ .Labels.alertname }}* — {{ .Annotations.summary }}\n{{ end }}"
+
+# ── Notification Policies ───────────────────────────────────────────────────
+policies:
+  - orgId: 1
+    receiver: notify-ops
+    group_by: ['alertname', 'severity']
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h

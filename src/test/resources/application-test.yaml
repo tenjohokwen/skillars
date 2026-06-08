@@ -1,0 +1,24 @@
+logging:
+  config: classpath:logback-test.xml
+
+app:
+  video:
+    upload:
+      expiry-scheduler-delay-ms: 3600000
+    playback:
+      signing-secret: "dGVzdC1wbGF5YmFjay1zaWduaW5nLXNlY3JldC0zMi1ieXRlcyEh"  # Base64("test-playback-signing-secret-32-bytes!!")
+    bunny:
+      cdn-hostname: ${wiremock.server.bunny-service.baseUrl:http://localhost}
+      api-base-url: ${wiremock.server.bunny-service.baseUrl}
+
+management:
+  tracing:
+    enabled: false
+  otlp:
+    tracing:
+      export:
+        enabled: false
+  metrics:
+    export:
+      prometheus:
+        enabled: false

@@ -1,0 +1,6 @@
+email:
+  retry:
+    enabled: true
+loki:
+  url: ${LOKI_URL:http://localhost:3100}
+  enabled: true

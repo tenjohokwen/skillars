@@ -1,0 +1,76 @@
+package com.softropic.skillars.platform.video.repo;
+
+import com.softropic.skillars.platform.video.contract.AccessState;
+import com.softropic.skillars.platform.video.contract.OperationalState;
+import com.softropic.skillars.platform.video.contract.Visibility;
+import jakarta.persistence.*;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+import java.time.Instant;
+import java.util.UUID;
+
+@Getter
+@Setter
+@NoArgsConstructor
+@Entity
+@Table(name = "videos", schema = "main")
+public class Video {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.UUID)
+    @Column(name = "id", updatable = false, nullable = false)
+    private UUID id;
+
+    @Column(name = "owner_id", nullable = false)
+    private String ownerId;
+
+    @Column(name = "provider", nullable = false)
+    private String provider;
+
+    @Column(name = "provider_asset_id")
+    private String providerAssetId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "operational_state", nullable = false)
+    private OperationalState operationalState;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "access_state", nullable = false)
+    private AccessState accessState;
+
+    @Column(name = "title", nullable = false)
+    private String title;
+
+    @Column(name = "description", columnDefinition = "TEXT")
+    private String description;
+
+    @Column(name = "duration_ms")
+    private Long durationMs;
+
+    @Column(name = "storage_bytes")
+    private Long storageBytes;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "visibility", nullable = false)
+    private Visibility visibility;
+
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private Instant createdAt;
+
+    @Column(name = "updated_at", nullable = false)
+    private Instant updatedAt;
+
+    @PrePersist
+    void onCreate() {
+        Instant now = Instant.now();
+        this.createdAt = now;
+        this.updatedAt = now;
+    }
+
+    @PreUpdate
+    void onUpdate() {
+        this.updatedAt = Instant.now();
+    }
+}

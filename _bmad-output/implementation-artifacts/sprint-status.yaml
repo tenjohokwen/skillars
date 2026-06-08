@@ -1,0 +1,150 @@
+# generated: 2026-05-25
+# last_updated: 2026-06-03
+# project: javatemplate
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: _bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog → in-progress: Automatically when first story is created (via create-story)
+#   - in-progress → done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-05-25
+last_updated: 2026-06-05 # deploy-3-4 → done
+project: javatemplate
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+
+development_status:
+  # ================================================================
+  # MODULE: File Storage
+  # Epics source: _bmad-output/planning-artifacts/epics.md
+  # ================================================================
+
+  # Epic 1: Storage Module Foundation
+  epic-1: done
+  1-1-module-scaffold-database-schema-configuration: done
+  1-2-storageservice-interface-s3-implementation-key-generation: done
+  1-3-storage-test-infrastructure: done
+  epic-1-retrospective: optional
+
+  # Epic 2: Secure Upload Gateway
+  epic-2: done
+  2-1-pre-storage-validation-chain: done
+  2-2-pre-signed-upload-url-endpoint: done
+  2-3-upload-confirmation-endpoint: done
+  epic-2-retrospective: optional
+
+  # Epic 3: File Access & Lifecycle Management
+  epic-3: done
+  3-1-pre-signed-download-url-endpoint-egress-tracking: done
+  3-2-file-deletion-physical-lifecycle: done
+  epic-3-retrospective: optional
+
+  # Epic 4: Async Replication & Resilience
+  epic-4: done
+  4-1-replicated-storage-service: done
+  4-2-async-replication-outbox-poller: done
+  epic-4-retrospective: optional
+
+  # Epic 5: Local Provider, Observability & Production Readiness
+  epic-5: done
+  5-1-local-file-system-storage-provider: done
+  5-2-full-integration-test-suite: done
+  5-3-observability-instrumentation: done
+  5-4-provider-portability-utilities: done
+  epic-5-retrospective: optional
+
+  # ================================================================
+  # MODULE: Video Storage & Streaming
+  # Epics source: _bmad-output/planning-artifacts/video-module/epics.md
+  # ================================================================
+
+  # Video Epic 1: Module Foundation, Bunny.net Adapter & Integration Contract
+  video-epic-1: done
+  video-1-1-module-scaffold-database-schema-configuration: done
+  video-1-2-quotaprovider-interface-integration-contract: done
+  video-1-3-videoprovideradapter-interface-bunnynet-implementation: done
+  video-epic-1-retrospective: optional
+
+  # Video Epic 2: Video Upload Pipeline
+  video-epic-2: done
+  video-2-1-upload-validation-chain: done
+  video-2-2-upload-initialization-quota-management: done
+  video-2-3-upload-confirmation-session-expiry: done
+  video-epic-2-retrospective: optional
+
+  # Video Epic 3: Video Lifecycle & Playback Authorization
+  video-epic-3: done
+  video-3-1-video-state-machine-failed-retry: done
+  video-3-2-playback-token-issuance: done
+  video-3-3-playback-token-revocation: done
+  video-epic-3-retrospective: optional
+
+  # Video Epic 4: Processing Reliability & Reconciliation
+  video-epic-4: done
+  video-4-1-webhook-processing-pipeline-dead-letter-queue: done
+  video-4-2-reconciliation-worker: done
+  video-epic-4-retrospective: optional
+
+  # Video Epic 5: Admin Layer, Observability & Production Readiness
+  video-epic-5: done
+  video-5-1-admin-service-layer-rest-endpoint: done
+  video-5-2-observability-instrumentation: done
+  video-5-3-optional-media-enhancements: done
+  video-epic-5-retrospective: optional
+
+  # ================================================================
+  # MODULE: Deployment & Infrastructure
+  # Epics source: _bmad-output/planning-artifacts/deployment/epics.md
+  # ================================================================
+
+  # Deploy Epic 1: Production Server Foundation
+  deploy-epic-1: in-progress
+  deploy-1-1-server-provisioning-script-iac-firewall: done
+  deploy-1-2-core-docker-compose-service-stack: done
+  deploy-1-3-lgtm-observability-stack: done
+  deploy-1-4-security-hardening: done
+  deploy-1-5-first-time-setup-documentation: done
+  deploy-epic-1-retrospective: optional
+
+  # Deploy Epic 2: CI/CD Pipeline & Release Workflow
+  deploy-epic-2: in-progress
+  deploy-2-1-automated-ci-build-pipeline: done
+  deploy-2-2-manual-production-deploy-workflow-with-smoke-test-auto-revert: done
+  deploy-2-3-deployment-rollback-documentation: done
+  deploy-epic-2-retrospective: optional
+
+  # Deploy Epic 3: Backup, Recovery & Operational Readiness
+  deploy-epic-3: in-progress
+  deploy-3-1-postgresql-backup-automation: done
+  deploy-3-2-scripted-restore-process: done
+  deploy-3-3-external-uptime-monitoring-alert-rules: done
+  deploy-3-4-operational-documentation-suite: done
+  deploy-epic-3-retrospective: optional

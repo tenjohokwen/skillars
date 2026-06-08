@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.platform_config_changed.title}">Platform Configuration Changed</title>
+</head>
+<body>
+    <p>Hello,</p>
+
+    <p>Platform configuration for provider <strong th:text="${map.provider}">PROVIDER</strong>
+    has been updated.</p>
+
+    <table>
+        <tr th:if="${map.msisdnChanged}">
+            <td><strong>MSISDN changed:</strong></td>
+            <td><span th:text="${map.oldMsisdn}">—</span> &#8594; <span th:text="${map.newMsisdn}">—</span></td>
+        </tr>
+        <tr th:if="${map.pinChanged}">
+            <td><strong>PIN changed:</strong></td>
+            <td>PIN has been updated (value not shown for security)</td>
+        </tr>
+        <tr>
+            <td><strong>Changed by:</strong></td>
+            <td th:text="${map.changedBy}">—</td>
+        </tr>
+        <tr>
+            <td><strong>Timestamp:</strong></td>
+            <td th:text="${map.changedAt}">—</td>
+        </tr>
+    </table>
+
+    <p>If this change was not authorized, please investigate immediately.</p>
+
+    <p th:text="#{email.closing}">Thanks, the Skillars team</p>
+</body>
+</html>

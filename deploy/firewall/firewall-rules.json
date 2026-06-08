@@ -1,0 +1,32 @@
+{
+  "name": "skillars-prod-fw",
+  "description": "Production firewall for skillars-prod server. Applied via apply-firewall.sh.",
+  "rules": [
+    {
+      "direction": "in",
+      "protocol": "tcp",
+      "port": "80",
+      "source_ips": ["0.0.0.0/0", "::/0"],
+      "description": "Public HTTP (redirected to HTTPS by Traefik)"
+    },
+    {
+      "direction": "in",
+      "protocol": "tcp",
+      "port": "443",
+      "source_ips": ["0.0.0.0/0", "::/0"],
+      "description": "Public HTTPS"
+    },
+    {
+      "direction": "in",
+      "protocol": "tcp",
+      "port": "22",
+      "source_ips": ["<SSH_ALLOWLIST_IP>/32"],
+      "description": "SSH — restricted to operator IP. Set SSH_ALLOWLIST_IP env var when running apply-firewall.sh."
+    }
+  ],
+  "notes": [
+    "All other inbound traffic is blocked by Hetzner's implicit deny-all default.",
+    "Outbound traffic is unrestricted (Hetzner default).",
+    "This file is documentation only — apply-firewall.sh is authoritative."
+  ]
+}

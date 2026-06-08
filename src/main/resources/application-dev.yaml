@@ -1,0 +1,29 @@
+spring:
+  mail:
+    password: "${SPRING_MAIL_PASSWORD:dev_mail_password}"
+
+# Lists replace entirely in Spring — must repeat full entries to override passwords
+email:
+  providerConfigs:
+    -
+      name: gmx
+      host: mail.gmx.net
+      port: 587
+      username: blue-bone@gmx.de
+      password: "${GMX_PASSWORD:dev_gmx_password}"
+    -
+      name: gmail
+      host: smtp.gmail.com
+      port: 587
+      username: enkap24@gmail.com
+      password: "${GMAIL_PASSWORD:dev_gmail_password}"
+
+app:
+  environment: "${ENVIRONMENT:dev}"
+  video:
+    playback:
+      signing-secret: "${APP_VIDEO_PLAYBACK_SIGNING_SECRET:dGVzdC1wbGF5YmFjay1zaWduaW5nLXNlY3JldC0zMi1ieXRlcyEh}"
+
+skillars:
+  platform:
+    pin-encryption-secret: "${PLATFORM_PIN_ENCRYPTION_SECRET:S3CR3TW0RD}"

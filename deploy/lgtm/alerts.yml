@@ -1,0 +1,89 @@
+groups:
+  - name: skillars-alerts
+    rules:
+      - alert: DbConnectionPoolHigh
+        expr: hikaricp_connections_active / hikaricp_connections_max > 0.80
+        for: 2m
+        labels:
+          severity: high
+        annotations:
+          summary: "DB connection pool at {{ $value | humanizePercentage }} — starvation risk"
+
+      - alert: JvmHeapHigh
+        expr: jvm_memory_used_bytes{area="heap"} / jvm_memory_max_bytes{area="heap"} > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "JVM heap at {{ $value | humanizePercentage }}"
+
+  - name: skillars-infra-alerts
+    rules:
+      - alert: NodeExporterDown
+        expr: up{job="node-exporter"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "node_exporter is DOWN — disk and memory alerts are blind"
+          runbook: "Check Docker service: docker compose logs node_exporter --tail=50"
+
+      - alert: AppDown
+        expr: up{job="spring-boot-app"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Spring Boot app is DOWN — health endpoint not reachable by Prometheus"
+          runbook: "Check Docker service: docker compose logs app --tail=50"
+
+      - alert: DiskDataVolumeHigh
+        expr: |
+          (
+            1 - (
+              node_filesystem_avail_bytes{mountpoint="/opt/skillars/data", fstype!="tmpfs"}
+              /
+              node_filesystem_size_bytes{mountpoint="/opt/skillars/data", fstype!="tmpfs"}
+            )
+          ) > 0.80
+          and
+          node_filesystem_size_bytes{mountpoint="/opt/skillars/data", fstype!="tmpfs"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Data volume disk usage {{ $value | humanizePercentage }} — investigate before 90%"
+          runbook: "Free space: docker system prune -f; find large files: du -sh /opt/skillars/data/*"
+
+      - alert: DiskRootHigh
+        expr: |
+          (
+            1 - (
+              node_filesystem_avail_bytes{mountpoint="/", fstype!="tmpfs"}
+              /
+              node_filesystem_size_bytes{mountpoint="/", fstype!="tmpfs"}
+            )
+          ) > 0.80
+          and
+          node_filesystem_size_bytes{mountpoint="/", fstype!="tmpfs"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Root disk usage {{ $value | humanizePercentage }} — investigate before 90%"
+
+      - alert: MemoryPressureHigh
+        expr: |
+          (
+            1 - (
+              node_memory_MemAvailable_bytes
+              /
+              node_memory_MemTotal_bytes
+            )
+          ) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Node memory at {{ $value | humanizePercentage }} — OOM risk for containers"
+          runbook: "Check container memory: docker stats; identify top consumer: docker compose ps"

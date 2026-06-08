@@ -1,0 +1,313 @@
+baseurl: http://localhost
+server:
+  port: "${port:9990}"
+  error:
+    whitelabel:
+      enabled: false
+  tomcat:
+    accesslog:
+      enabled: true
+      pattern: "%{yyyy-MM-dd HH:mm:ss.SSS}t %a (%{X-Forwarded-For}i) > %A:%p '%r' %{requestBodyLength}r %D %s %B %I '%{Referer}i' '%{User-Agent}i' %u %{username}s %{sessionTracker}s"
+      directory: /usr/local/var/ledger
+      prefix: skillars_access
+      suffix: .ledger
+    remote-ip-header: x-forwarded-for  #tomcat: configure the RemoteIpValve for more sophisticated Forwarded header handling
+    protocol-header: x-forwarded-proto #tomcat: configure the RemoteIpValve for more sophisticated Forwarded header handling
+  forward-headers-strategy: native  #spring: config to get client ip in compliance with the RFC 7239 specification. see ForwardedHeaderFilter bean.
+
+quartz:
+  job-store-type: jdbc
+  jdbc:
+    initialize-schema: never
+  properties:
+    org.quartz.scheduler.instanceName: mobile-pay-scheduler
+    org.quartz.scheduler.instanceId: AUTO
+    org.quartz.threadPool.threadCount: 3
+    org.quartz.jobStore.class: org.quartz.impl.jdbcjobstore.JobStoreTX
+    org.quartz.jobStore.driverDelegateClass: org.quartz.impl.jdbcjobstore.PostgreSQLDelegate
+    org.quartz.jobStore.tablePrefix: QRTZ_
+    org.quartz.jobStore.isClustered: true
+    org.quartz.jobStore.clusterCheckinInterval: 20000
+    org.quartz.jobStore.misfireThreshold: 60000
+
+spring:
+  mvc:
+    async:
+      request-timeout: -1
+  jackson:
+    time-zone: UTC
+    serialization:
+      WRITE_DATES_AS_TIMESTAMPS: false
+  application.name: skillars #custom field
+  autoconfigure.exclude: org.springframework.boot.autoconfigure.web.servlet.error.ErrorMvcAutoConfiguration
+  main.allow-circular-references: false
+  jmx.enabled: false
+  jpa:
+    generate-ddl: true
+    hibernate.ddl-auto: none #none #update #create #create-drop #validate
+    open-in-view: false #is enabled by default. Therefore, database queries may be performed during view rendering.
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        #type.java_time_use_direct_jdbc: true # There is no need for this. new policy is to use just Instant for dates. using jdbc.time_zone just in case
+        default_schema: main
+        enable_lazy_load_no_trans: false    #This is false by default. do not make it true. see  https://vladmihalcea.com/the-hibernate-enable_lazy_load_no_trans-anti-pattern/
+        jdbc:
+          batch_size: 15
+          time_zone: UTC
+        connection.provider_disables_autocommit: true   # GOAL: delay the connection acquisition. It tells Hibernate that the underlying JDBC Connections have already disabled the auto-commit mode. Do not forget to also set hikari.auto-commit to false
+        query.fail_on_pagination_over_collection_fetch: true
+      org.hibernate.envers.store_data_at_delete: true
+      org.hibernate.envers.default_schema: main
+  datasource:
+    url: jdbc:postgresql://localhost/skillars?TimeZone=UTC
+    username: postgres
+    password: postgres
+    hikari:
+      pool-name: hikari-db-pool
+      connection-timeout: 30000
+      idle-timeout: 300000
+      max-lifetime: 900000    #It?s not a very good idea to keep connections open for a very long time since a connection could be closed unexpectedly by a networking failure without the pool knowing of it.
+      maximum-pool-size: 25   #postgress puts a limit of 100 connections (so we can have up to 4 nodes, i.e. 25 for each)
+      minimum-idle: 8
+      auto-commit: false  #needed to be false in order to group statements in a single txn
+      connection-init-sql: "SET TIME ZONE 'UTC'"  # Ensure PostgreSQL session timezone is UTC for all connections.
+      #connection-test-query: select 1   # For other dbs use select 1 from dual
+      data-source-properties:
+        reWriteBatchedInserts: true #optimize postgres batch
+        serverTimezone: UTC
+        useTimezone: true
+        useLegacyDatetimeCode: false
+        useServerPrepStmts: false  #Mysql optimization
+        cachePrepStmts: true  #Mysql optimization
+        prepStmtCacheSize: 500 #Mysql optimization
+        prepStmtCacheSqlLimit: 1024 #Mysql optimization
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 2
+  flyway:
+    enabled: true
+    validateMigrationNaming: true
+    baseline-on-migrate: true
+    defaultSchema: main
+  mail:
+    host: mail.gmx.net
+    port: 587
+    username: blue-bone@gmx.de
+    password: ${SPRING_MAIL_PASSWORD} #BEQMN6SITHUDQEGIDWKZ
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+
+custom:
+  flyway:
+    check-schema: true
+  cors: #Just for dev
+    allowed-origins:
+      - "http://localhost:9990"
+      - "http://127.0.0.1:9990"
+      - "http://localhost:8080"
+      - "http://localhost:5175"
+      - "http://localhost:9000"
+    allowed-methods: '*'
+    allowed-headers: '*'
+    allow-credentials: true  #specifies if cookies and credentials are allowed.
+    max-age: 1800
+email:
+  providerConfigs:
+    -
+      name: gmx
+      host: mail.gmx.net
+      port: 587
+      username: blue-bone@gmx.de
+      password: ${GMX_PASSWORD}
+    -
+      name: gmail
+      host: smtp.gmail.com
+      port: 587
+      username: enkap24@gmail.com
+      password: ${GMAIL_PASSWORD}
+
+
+#log configuration
+# default location is directly in the classpath (root of resources folder)
+logging.config: classpath:config/logback-spring.xml
+logging:
+  level:
+    com.softropic.skillars: INFO
+    io.github.resilience4j: WARN
+    org.quartz: WARN
+##logback.access.config: classpath:config/logback-access-spring.xml ##using custom LoggingFilter for access logging because it logs payload
+loki:
+  url: ${LOKI_URL:http://localhost:3100}
+  enabled: ${LOKI_ENABLED:false}
+app:
+  environment: ${ENVIRONMENT:prod}
+  version: ${APP_VERSION:unknown}
+  storage:
+    provider: s3
+    bucket: ${APP_STORAGE_BUCKET:skillars-dev}
+    endpoint-url: ${APP_STORAGE_ENDPOINT_URL:http://localhost:9000}
+    presign-ttl-seconds: 300
+    upload-ttl-seconds: 600
+    replication:
+      enabled: false
+      max-attempts: 5
+      backoff-initial-ms: 1000
+      backoff-multiplier: 2.0
+      backup:
+        endpoint-url: ${APP_STORAGE_BACKUP_ENDPOINT_URL:}
+        bucket: ${APP_STORAGE_BACKUP_BUCKET:}
+        region: ${APP_STORAGE_BACKUP_REGION:us-east-1}
+        access-key: ${APP_STORAGE_BACKUP_ACCESS_KEY:}
+        secret-key: ${APP_STORAGE_BACKUP_SECRET_KEY:}
+        path-style-access: false
+    poller:
+      fixed-delay-ms: 5000
+      batch-size: 10
+    retry:
+      max-attempts: 3
+      backoff-initial-ms: 1000
+      backoff-multiplier: 2.0
+    deletion:
+      retention-days: 30
+    s3:
+      request-timeout-ms: 5000
+      connection-timeout-ms: 3000
+      region: ${APP_STORAGE_REGION:us-east-1}
+    local:
+      base-dir: ${APP_STORAGE_LOCAL_BASE_DIR:/tmp/skillars-storage}
+  video:
+    provider: bunny
+    upload:
+      max-bytes: 5368709120
+      allowed-mime-types:
+        - video/mp4
+        - video/quicktime
+        - video/webm
+        - video/x-msvideo
+      allowed-formats:
+        - MP4
+        - MOV
+        - WebM
+        - AVI
+      session-ttl-minutes: 60
+      rate-limit:
+        requests-per-minute: 10
+    playback:
+      token-ttl-minutes: 15
+      token-max-ttl-minutes: 120
+      revocation-window-hours: 24
+    reconciliation:
+      fixed-delay-ms: 60000
+      batch-size: 10
+    webhook:
+      max-attempts: 3
+      processor-delay-ms: 5000
+    bunny:
+      api-key: ${APP_VIDEO_BUNNY_API_KEY:}
+      library-id: ${APP_VIDEO_BUNNY_LIBRARY_ID:}
+      cdn-hostname: ${APP_VIDEO_BUNNY_CDN_HOSTNAME:}
+      api-base-url: https://video.bunnycdn.com
+
+platform:
+  filestorage:
+    quota:
+      default-bytes: 10737418240
+    validation:
+      allowed-mime-types:
+        - image/jpeg
+        - image/png
+        - image/gif
+        - image/webp
+        - application/pdf
+        - text/plain
+        - application/octet-stream
+      allowed-extensions:
+        - jpg
+        - jpeg
+        - png
+        - gif
+        - webp
+        - pdf
+        - txt
+        - bin
+      max-size-bytes: 104857600
+
+# hibernate logs
+log:
+  database:
+    spy: false
+allowed:
+  clients: myClientId,hisClientId,herClientId,ourClientId #do not put spaces between entries
+
+datasource.container: true #use container connection config to connect to the container db
+
+##Actuator config
+management:
+  server:
+    port: 8367
+  endpoints:
+    web:
+      exposure:
+        include: health,info,env,metrics,prometheus
+      base-path: /manage  #actuator root path
+      cors:
+        allowed-origins:
+          - "http://localhost:9990"
+          - "http://127.0.0.1:9990"
+          - "http://localhost:8080"
+          - "http://localhost:9000"
+        allowed-methods: "*"
+        allowed-headers: "*"
+        allow-credentials: true
+        max-age: 3600
+  endpoint:
+    health:
+      show-details: when-authorized
+      roles: ROLE_ADMIN
+    info:
+      show-details: when-authorized
+      roles: ROLE_ADMIN
+    env:
+      show-details: when-authorized
+      show-values: when-authorized
+      roles: ROLE_ADMIN
+    prometheus:
+      enabled: true
+  tracing:
+    sampling:
+      probability: 1.0
+  otlp:
+    tracing:
+      endpoint: "http://localhost:4318/v1/traces"
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+  observations:
+    key-values:
+      application: ${spring.application.name}
+defaultTcpConfig: &DEFAULT_TCP
+  readTimeout: 15000
+  connectionTimeout: 15000
+  connectionRequestTimeout: 2000
+  maxConnections: 50
+  maxConnectionsPerRoute: 25
+  checkCertificate: false
+
+skillars:
+  platform:
+    notification-email: ${PLATFORM_NOTIFICATION_EMAIL:tenjoh_okwen@yahoo.com}
+

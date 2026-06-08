@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.profile_change.title}">Security Alert - Profile Changed</title>
+</head>
+<body>
+    <p th:text="#{email.greeting(${recipient.firstname})}">Hello User,</p>
+
+    <div th:switch="${map.action}">
+        <p th:case="'PASSWORD_CHANGED'" th:text="#{email.profile_change.password}">Your password has been changed.</p>
+        <p th:case="'EMAIL_CHANGED'" th:utext="#{email.profile_change.email(${map.oldValue}, ${map.newValue})}">Your email has been changed.</p>
+        <p th:case="'ADDRESS_CHANGED'" th:text="#{email.profile_change.address}">Your address has been updated.</p>
+        <p th:case="'PHONE_CHANGED'" th:text="#{email.profile_change.phone}">Your phone number has been updated.</p>
+        <p th:case="'TWO_FACTOR_AUTH_ENABLED'" th:text="#{email.profile_change.2fa_enabled}">2FA has been enabled.</p>
+        <p th:case="'TWO_FACTOR_AUTH_DISABLED'" th:text="#{email.profile_change.2fa_disabled}">2FA has been disabled.</p>
+        <p th:case="*" th:text="#{email.profile_change.generic}">A change has been made to your profile.</p>
+    </div>
+
+    <p th:text="#{email.profile_change.not_you}">If you did not make this change, please contact our support team immediately.</p>
+
+    <hr/>
+    <p><small><span th:text="#{email.common.helpCode}">Help Code:</span> <span th:text="${map.helpCode}">CODE</span></small></p>
+</body>
+</html>

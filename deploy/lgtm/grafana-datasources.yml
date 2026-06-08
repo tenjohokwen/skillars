@@ -1,0 +1,50 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: Prometheus
+    url: http://prometheus:9090
+    isDefault: true
+
+  - name: Loki
+    type: loki
+    uid: Loki
+    url: http://loki:3100
+    jsonData:
+      derivedFields:
+        - datasourceUid: 'Tempo'
+          matcherRegex: '"traceId":"([a-f0-9]{32})"'
+          name: TraceID
+          url: '$${__value.raw}'
+
+  - name: Tempo
+    type: tempo
+    uid: Tempo
+    url: http://tempo:3200
+    jsonData:
+      lokiSearch:
+        datasourceUid: 'Loki'
+      serviceMap:
+        datasourceUid: 'Prometheus'
+      nodeGraph:
+        enabled: true
+      search:
+        hide: false
+      traceQuery:
+        limit: 20
+      tracesToLogs:
+        datasourceUid: 'Loki'
+        tags: ['service']
+        mappedTags: [{ key: 'service.name', value: 'service' }]
+        mapTagNamesEnabled: true
+        spanStartTimeShift: '1h'
+        spanEndTimeShift: '1h'
+        filterByTraceId: true
+        filterBySpanId: false
+      tracesToMetrics:
+        datasourceUid: 'Prometheus'
+        tags: [{ key: 'service.name', value: 'application' }]
+        queries:
+          - name: 'Request Rate'
+            query: 'rate(http_server_requests_seconds_count{application="$${__tags[\"service.name\"]}"}[5m])'

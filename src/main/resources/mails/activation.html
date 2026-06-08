@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.activation.title}">Account Activation</title>
+</head>
+<body>
+    <p th:text="#{email.greeting(${recipient.firstname})}">Hello User,</p>
+
+    <p th:text="#{email.activation.text1}">Thank you for registering. Please click the link below to activate your account:</p>
+
+    <p>
+        <a th:href="${map.baseUrl} + '/#/activate?key=' + ${map.activationKey}"
+           th:text="#{email.activation.linkText}">
+            Activate your account
+        </a>
+    </p>
+
+    <p th:text="#{email.activation.copyPaste}">Or copy and paste this link into your browser:</p>
+    <p th:text="${map.baseUrl} + '/#/activate?key=' + ${map.activationKey}"></p>
+
+    <p th:text="#{email.activation.ignore}">If you did not register for this account, please ignore this email.</p>
+
+    <hr/>
+    <p><small><span th:text="#{email.common.helpCode}">Help Code:</span> <span th:text="${map.helpCode}">CODE</span></small></p>
+</body>
+</html>
