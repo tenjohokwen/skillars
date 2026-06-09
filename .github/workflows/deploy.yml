@@ -1,0 +1,161 @@
+name: Deploy to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'GHCR image tag to deploy (e.g. sha-abc1234)'
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+
+    steps:
+      - name: Load SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_DEPLOY_KEY }}
+
+      - name: Add Node to known hosts
+        run: echo "${{ secrets.SSH_KNOWN_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Validate image_tag
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          if ! printf '%s' "$IMAGE_TAG" | grep -qE '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$'; then
+            echo "ERROR: image_tag contains illegal characters." >&2
+            exit 1
+          fi
+
+      - name: Capture pre-deploy image
+        id: pre_deploy
+        run: |
+          PREV=$(ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+            "cd /opt/payam && \
+             CID=\$(docker compose ps -q --status running app 2>/dev/null | head -1) && \
+             [ -n \"\$CID\" ] && docker inspect --format='{{.Config.Image}}' \"\$CID\" || echo 'none'")
+          PREV="${PREV:-none}"
+          echo "image=$PREV" >> $GITHUB_OUTPUT
+
+      - name: Authenticate to GHCR on Node
+        env:
+          GHCR_PAT: ${{ secrets.GHCR_PAT }}
+        run: |
+          printf '%s' "$GHCR_PAT" | ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+            "docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
+
+      - name: Deploy
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          IMAGE="ghcr.io/${{ github.repository }}:${IMAGE_TAG}"
+          ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+            "cd /opt/payam && \
+             docker compose pull app && \
+             sed -i \"s|^APP_IMAGE=.*|APP_IMAGE=${IMAGE}|\" .env && \
+             docker compose up -d --no-deps app"
+
+      - name: Smoke test
+        id: smoke
+        run: |
+          RESULT="fail"
+          for i in $(seq 1 12); do
+            STATUS=$(ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "
+              CID=\$(cd /opt/payam && docker compose ps -q --status running app 2>/dev/null | head -1)
+              [ -n \"\$CID\" ] && docker exec \"\$CID\" wget -qO- http://localhost:8367/manage/health 2>/dev/null \
+                | grep -q '\"status\":\"UP\"' && echo 1 || echo 0
+            " 2>/dev/null || echo 0)
+            if [ "$STATUS" = "1" ]; then
+              RESULT="pass"
+              break
+            fi
+            sleep 5
+          done
+          echo "result=$RESULT" >> $GITHUB_OUTPUT
+
+      - name: Auto-Revert on smoke test failure
+        id: revert
+        if: steps.smoke.outputs.result == 'fail'
+        run: |
+          PREV="${{ steps.pre_deploy.outputs.image }}"
+          if [ "$PREV" = "none" ] || [ -z "$PREV" ]; then
+            echo "No previous image to revert to — skipping revert."
+            echo "outcome=skipped" >> $GITHUB_OUTPUT
+          elif ! printf '%s' "$PREV" | grep -qE '^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$'; then
+            echo "ERROR: previous image reference contains unsafe characters; aborting revert." >&2
+            echo "outcome=failed" >> $GITHUB_OUTPUT
+          elif ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+                 "cd /opt/payam && \
+                  sed -i \"s|^APP_IMAGE=.*|APP_IMAGE=${PREV}|\" .env && \
+                  docker compose pull app && \
+                  docker compose up -d --no-deps app"; then
+            echo "outcome=succeeded" >> $GITHUB_OUTPUT
+          else
+            echo "outcome=failed" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Notify Slack — success
+        if: steps.smoke.outputs.result == 'pass'
+        uses: slackapi/slack-github-action@v2.0.0
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            {"text": "✅ *Production deploy succeeded*\nImage: `ghcr.io/${{ github.repository }}:${{ inputs.image_tag }}`\nTriggered by: ${{ github.actor }}"}
+
+      - name: Notify Slack — failure & revert
+        if: steps.smoke.outputs.result == 'fail'
+        uses: slackapi/slack-github-action@v2.0.0
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            {"text": "❌ *Production deploy FAILED*\nFailed image: `ghcr.io/${{ github.repository }}:${{ inputs.image_tag }}`\nAuto-Revert: ${{ steps.revert.outputs.outcome }}\nPrevious image: `${{ steps.pre_deploy.outputs.image }}`\nTriggered by: ${{ github.actor }}"}
+
+      - name: Email — success
+        if: steps.smoke.outputs.result == 'pass'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          to: ${{ secrets.NOTIFY_EMAIL }}
+          from: ${{ secrets.SMTP_USERNAME }}
+          subject: "✅ Deploy succeeded: ${{ inputs.image_tag }}"
+          body: |
+            Production deploy of ghcr.io/${{ github.repository }}:${{ inputs.image_tag }} succeeded.
+            Triggered by: ${{ github.actor }}
+            Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Email — failure & revert
+        if: steps.smoke.outputs.result == 'fail'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          to: ${{ secrets.NOTIFY_EMAIL }}
+          from: ${{ secrets.SMTP_USERNAME }}
+          subject: "❌ Deploy FAILED (revert: ${{ steps.revert.outputs.outcome }}): ${{ inputs.image_tag }}"
+          body: |
+            Production deploy of ghcr.io/${{ github.repository }}:${{ inputs.image_tag }} FAILED.
+            Auto-Revert outcome: ${{ steps.revert.outputs.outcome }}
+            Previous image: ${{ steps.pre_deploy.outputs.image }}
+            Triggered by: ${{ github.actor }}
+            Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Fail workflow on smoke test failure
+        if: steps.smoke.outputs.result == 'fail'
+        run: |
+          echo "Smoke test failed — deploy reverted. Marking workflow as failed."
+          exit 1

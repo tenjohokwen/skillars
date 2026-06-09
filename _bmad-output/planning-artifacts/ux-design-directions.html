@@ -1,0 +1,984 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Skillars — UX Design Directions</title>
+<style>
+  :root {
+    --bg-primary: #0b1020;
+    --bg-secondary: #11182d;
+    --bg-tertiary: #151f38;
+    --surface-glass: rgba(255,255,255,0.04);
+    --surface-glass-hover: rgba(255,255,255,0.06);
+    --surface-glass-strong: rgba(255,255,255,0.08);
+    --border-soft: rgba(255,255,255,0.06);
+    --border-medium: rgba(255,255,255,0.10);
+    --border-accent: rgba(0,255,180,0.25);
+    --accent-primary: #00ffb4;
+    --accent-secondary: #0088ff;
+    --accent-purple: #7b61ff;
+    --accent-warning: #ffb84d;
+    --accent-danger: #ff5f7a;
+    --hero-gradient: linear-gradient(135deg, #00ffb4, #0088ff);
+    --text-primary: #ffffff;
+    --text-secondary: rgba(255,255,255,0.72);
+    --text-muted: rgba(255,255,255,0.55);
+    --text-disabled: rgba(255,255,255,0.35);
+    --card-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    --radial-tl: rgba(0,255,180,0.08);
+    --radial-br: rgba(0,120,255,0.08);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: var(--bg-primary);
+    background-image:
+      radial-gradient(circle at top left, var(--radial-tl), transparent 30%),
+      radial-gradient(circle at bottom right, var(--radial-br), transparent 30%);
+    color: var(--text-primary);
+    min-height: 100vh;
+  }
+
+  /* NAV */
+  .nav {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(11,16,32,0.92);
+    backdrop-filter: blur(18px);
+    border-bottom: 1px solid var(--border-soft);
+    padding: 16px 32px;
+    display: flex; align-items: center; gap: 32px;
+  }
+  .nav-logo { font-size: 18px; font-weight: 800; background: var(--hero-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .nav-tabs { display: flex; gap: 8px; }
+  .tab-btn {
+    padding: 8px 20px; border-radius: 10px; border: 1px solid var(--border-soft);
+    background: transparent; color: var(--text-muted); cursor: pointer;
+    font-size: 13px; font-weight: 600; font-family: inherit;
+    transition: all 0.2s ease;
+  }
+  .tab-btn:hover { background: var(--surface-glass-hover); color: var(--text-primary); }
+  .tab-btn.active { background: var(--surface-glass-strong); color: var(--accent-primary); border-color: var(--border-accent); }
+
+  /* SECTIONS */
+  .section { display: none; padding: 32px; max-width: 1450px; margin: 0 auto; }
+  .section.active { display: block; }
+  .section-header { margin-bottom: 32px; }
+  .section-title { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+  .section-desc { font-size: 14px; color: var(--text-muted); line-height: 1.6; max-width: 700px; }
+
+  /* GLASS CARD */
+  .glass-card {
+    background: var(--surface-glass);
+    border: 1px solid var(--border-soft);
+    border-radius: 28px;
+    backdrop-filter: blur(18px);
+    box-shadow: var(--card-shadow);
+  }
+  .gradient-text { background: var(--hero-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+
+  /* DIRECTION LABEL */
+  .dir-label {
+    display: inline-block; padding: 4px 12px; border-radius: 999px;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;
+    background: var(--surface-glass-strong); border: 1px solid var(--border-medium);
+    color: var(--accent-primary); margin-bottom: 16px;
+  }
+
+  /* ===================== DIRECTION A: SPATIAL DASHBOARD ===================== */
+  .dashboard-grid {
+    display: grid;
+    grid-template-columns: 280px 1fr 320px;
+    gap: 24px;
+    min-height: 600px;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    background: var(--surface-glass);
+    border: 1px solid var(--border-soft);
+    border-radius: 24px;
+    padding: 24px 16px;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .sidebar-logo { font-size: 20px; font-weight: 800; padding: 8px 12px; margin-bottom: 16px; background: var(--hero-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .nav-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 12px; border-radius: 12px;
+    font-size: 13px; font-weight: 500; color: var(--text-secondary);
+    cursor: pointer; transition: all 0.2s ease;
+  }
+  .nav-item:hover { background: var(--surface-glass-hover); color: var(--text-primary); }
+  .nav-item.active { background: var(--surface-glass-strong); color: var(--accent-primary); }
+  .nav-icon { width: 18px; height: 18px; border-radius: 4px; background: currentColor; opacity: 0.6; flex-shrink: 0; }
+  .nav-item.active .nav-icon { opacity: 1; background: var(--accent-primary); }
+  .sidebar-divider { height: 1px; background: var(--border-soft); margin: 8px 0; }
+
+  /* Main content */
+  .main-content { display: flex; flex-direction: column; gap: 24px; }
+  .cmd-header { display: flex; justify-content: space-between; align-items: flex-start; }
+  .cmd-title { font-size: 28px; font-weight: 700; }
+  .cmd-subtitle { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+  .stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .stat-card {
+    background: var(--surface-glass);
+    border: 1px solid var(--border-soft);
+    border-radius: 20px;
+    padding: 20px;
+  }
+  .stat-label { font-size: 11px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px; }
+  .stat-value { font-size: 36px; font-weight: 800; line-height: 1; }
+  .stat-value.gradient { background: var(--hero-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .stat-delta { font-size: 12px; color: var(--accent-primary); margin-top: 6px; }
+
+  .schedule-card {
+    background: var(--surface-glass);
+    border: 1px solid var(--border-soft);
+    border-radius: 24px;
+    padding: 24px;
+    flex: 1;
+  }
+  .card-title { font-size: 16px; font-weight: 700; margin-bottom: 16px; }
+  .session-item {
+    display: flex; align-items: center; gap: 16px;
+    padding: 12px; border-radius: 14px;
+    border: 1px solid var(--border-soft);
+    margin-bottom: 8px;
+    background: var(--surface-glass);
+  }
+  .session-time { font-size: 12px; font-weight: 600; color: var(--text-muted); width: 56px; flex-shrink: 0; }
+  .session-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--accent-primary); flex-shrink: 0; }
+  .session-dot.blue { background: var(--accent-secondary); }
+  .session-dot.purple { background: var(--accent-purple); }
+  .session-info { flex: 1; }
+  .session-name { font-size: 13px; font-weight: 600; }
+  .session-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+  .session-badge {
+    font-size: 10px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 6px;
+  }
+  .badge-confirmed { background: rgba(0,255,180,0.12); color: var(--accent-primary); }
+  .badge-upcoming { background: rgba(0,136,255,0.12); color: var(--accent-secondary); }
+  .badge-requested { background: rgba(255,184,77,0.12); color: var(--accent-warning); }
+
+  /* Right panel */
+  .right-panel { display: flex; flex-direction: column; gap: 16px; }
+  .revenue-card {
+    background: var(--surface-glass);
+    border: 1px solid var(--border-accent);
+    border-radius: 24px;
+    padding: 24px;
+  }
+  .revenue-label { font-size: 11px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px; }
+  .revenue-value { font-size: 48px; font-weight: 800; line-height: 1; background: var(--hero-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .revenue-sub { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+  .progress-bar { height: 8px; border-radius: 999px; background: var(--border-soft); margin-top: 12px; overflow: hidden; }
+  .progress-fill { height: 100%; border-radius: 999px; background: var(--hero-gradient); }
+
+  .client-card {
+    background: var(--surface-glass);
+    border: 1px solid var(--border-soft);
+    border-radius: 24px;
+    padding: 20px;
+    flex: 1;
+  }
+  .client-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .client-item:last-child { border-bottom: none; }
+  .client-avatar {
+    width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0;
+    background: var(--hero-gradient);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700;
+  }
+  .client-name { font-size: 13px; font-weight: 600; }
+  .client-meta { font-size: 11px; color: var(--text-muted); }
+  .client-credits { font-size: 12px; font-weight: 600; color: var(--accent-primary); margin-left: auto; }
+
+  /* ===================== DIRECTION B: CONTENT STREAM ===================== */
+  .stream-layout { display: grid; grid-template-columns: 72px 1fr 360px; gap: 24px; min-height: 600px; }
+  .icon-rail {
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    padding: 16px 0;
+  }
+  .rail-logo { width: 40px; height: 40px; border-radius: 12px; background: var(--hero-gradient); margin-bottom: 16px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 800; color: #0b1020; }
+  .rail-icon {
+    width: 40px; height: 40px; border-radius: 12px;
+    background: var(--surface-glass); border: 1px solid var(--border-soft);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; transition: all 0.2s ease;
+  }
+  .rail-icon.active { background: var(--surface-glass-strong); border-color: var(--border-accent); }
+  .rail-icon-dot { width: 16px; height: 16px; border-radius: 4px; background: var(--text-muted); }
+  .rail-icon.active .rail-icon-dot { background: var(--accent-primary); }
+
+  .stream-main { display: flex; flex-direction: column; gap: 16px; }
+  .stream-header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 16px; border-bottom: 1px solid var(--border-soft); }
+  .stream-greeting { font-size: 22px; font-weight: 700; }
+  .stream-date { font-size: 13px; color: var(--text-muted); }
+
+  .activity-card {
+    background: var(--surface-glass);
+    border: 1px solid var(--border-soft);
+    border-radius: 20px;
+    padding: 20px;
+    display: flex; gap: 16px;
+    transition: all 0.2s ease;
+    cursor: pointer;
+  }
+  .activity-card:hover { background: var(--surface-glass-hover); transform: translateY(-2px); }
+  .activity-type { width: 4px; border-radius: 999px; flex-shrink: 0; }
+  .activity-type.green { background: var(--accent-primary); }
+  .activity-type.blue { background: var(--accent-secondary); }
+  .activity-type.amber { background: var(--accent-warning); }
+  .activity-body { flex: 1; }
+  .activity-title { font-size: 14px; font-weight: 600; }
+  .activity-desc { font-size: 12px; color: var(--text-muted); margin-top: 4px; line-height: 1.5; }
+  .activity-time { font-size: 11px; color: var(--text-disabled); margin-top: 8px; }
+  .activity-action {
+    padding: 6px 14px; border-radius: 10px;
+    background: var(--surface-glass-strong); border: 1px solid var(--border-medium);
+    font-size: 12px; font-weight: 600; color: var(--accent-primary);
+    cursor: pointer; white-space: nowrap; align-self: center;
+  }
+
+  .stream-side { display: flex; flex-direction: column; gap: 16px; }
+  .quick-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .qstat {
+    background: var(--surface-glass);
+    border: 1px solid var(--border-soft);
+    border-radius: 18px;
+    padding: 16px;
+  }
+  .qstat-val { font-size: 28px; font-weight: 800; background: var(--hero-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .qstat-label { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+
+  /* ===================== DIRECTION C: PITCH-SIDE FOCUS ===================== */
+  .pitch-wrapper { display: grid; grid-template-columns: 1fr 400px; gap: 24px; min-height: 600px; }
+  .pitch-main {
+    background: var(--surface-glass);
+    border: 1px solid var(--border-accent);
+    border-radius: 28px;
+    padding: 32px;
+    display: flex; flex-direction: column;
+  }
+  .session-status-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px; }
+  .session-live { display: flex; align-items: center; gap: 8px; }
+  .live-dot { width: 10px; height: 10px; border-radius: 999px; background: var(--accent-primary); box-shadow: 0 0 0 3px rgba(0,255,180,0.2); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 3px rgba(0,255,180,0.2); } 50% { box-shadow: 0 0 0 6px rgba(0,255,180,0.05); } }
+  .live-label { font-size: 12px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--accent-primary); }
+  .session-elapsed { font-size: 13px; color: var(--text-muted); font-weight: 500; }
+  .drill-hero { flex: 1; display: flex; flex-direction: column; justify-content: center; text-align: center; }
+  .block-label { font-size: 11px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; color: var(--accent-secondary); margin-bottom: 12px; }
+  .drill-name { font-size: 42px; font-weight: 800; line-height: 1.1; margin-bottom: 16px; }
+  .drill-timer { font-size: 72px; font-weight: 800; line-height: 1; background: var(--hero-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 24px; }
+  .drill-next { font-size: 13px; color: var(--text-muted); }
+  .drill-next span { color: var(--text-secondary); font-weight: 600; }
+
+  .block-progress { display: flex; gap: 8px; margin: 24px 0; }
+  .block-seg { height: 4px; border-radius: 999px; flex: 1; background: var(--border-soft); }
+  .block-seg.done { background: var(--accent-primary); }
+  .block-seg.active { background: var(--accent-secondary); }
+
+  .pitch-actions { display: flex; gap: 12px; margin-top: 16px; }
+  .btn-primary {
+    flex: 1; padding: 18px; border-radius: 18px;
+    background: var(--accent-primary); color: #0b1020;
+    font-size: 16px; font-weight: 800; border: none; cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,255,180,0.3); }
+  .btn-secondary {
+    padding: 18px 24px; border-radius: 18px;
+    background: var(--surface-glass-strong); border: 1px solid var(--border-medium);
+    color: var(--text-secondary); font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .pitch-side-panel { display: flex; flex-direction: column; gap: 16px; }
+  .drill-queue { background: var(--surface-glass); border: 1px solid var(--border-soft); border-radius: 24px; padding: 20px; flex: 1; }
+  .queue-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 12px; border-radius: 12px; margin-bottom: 6px;
+  }
+  .queue-item.active-drill { background: var(--surface-glass-strong); border: 1px solid var(--border-accent); }
+  .queue-num { font-size: 11px; font-weight: 700; color: var(--text-disabled); width: 20px; flex-shrink: 0; }
+  .queue-item.active-drill .queue-num { color: var(--accent-primary); }
+  .queue-drill { font-size: 13px; font-weight: 500; color: var(--text-muted); }
+  .queue-item.active-drill .queue-drill { color: var(--text-primary); font-weight: 600; }
+  .queue-dur { font-size: 11px; color: var(--text-disabled); margin-left: auto; }
+
+  /* ===================== DIRECTION D: PARENT PORTAL ===================== */
+  .portal-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; min-height: 600px; }
+
+  .player-hero-card {
+    background: var(--surface-glass);
+    border: 1px solid var(--border-soft);
+    border-radius: 28px; padding: 32px;
+    display: flex; flex-direction: column;
+  }
+  .player-profile { display: flex; align-items: center; gap: 16px; margin-bottom: 28px; }
+  .player-avatar-lg {
+    width: 72px; height: 72px; border-radius: 20px; flex-shrink: 0;
+    background: var(--hero-gradient);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 24px; font-weight: 800; color: #0b1020;
+  }
+  .player-name { font-size: 22px; font-weight: 700; }
+  .player-meta { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+
+  .radar-mock {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    position: relative; min-height: 220px;
+  }
+  .radar-bg {
+    width: 200px; height: 200px; border-radius: 999px;
+    border: 1px solid var(--border-soft);
+    position: absolute;
+  }
+  .radar-bg:nth-child(2) { width: 150px; height: 150px; }
+  .radar-bg:nth-child(3) { width: 100px; height: 100px; }
+  .radar-label {
+    position: absolute;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.3px; text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .radar-label:nth-child(4)  { top: 0; left: 50%; transform: translateX(-50%); }
+  .radar-label:nth-child(5)  { top: 30%; right: -20px; }
+  .radar-label:nth-child(6)  { bottom: 30%; right: -16px; }
+  .radar-label:nth-child(7)  { bottom: 0; left: 50%; transform: translateX(-50%); }
+  .radar-label:nth-child(8)  { bottom: 30%; left: -24px; }
+  .radar-label:nth-child(9)  { top: 30%; left: -20px; }
+  .radar-shape {
+    width: 160px; height: 160px;
+    background: linear-gradient(135deg, rgba(0,255,180,0.15), rgba(0,136,255,0.15));
+    border: 1.5px solid rgba(0,255,180,0.4);
+    clip-path: polygon(50% 5%, 90% 25%, 88% 70%, 60% 95%, 20% 85%, 10% 45%);
+    border-radius: 4px;
+  }
+  .radar-center-label { position: absolute; text-align: center; }
+  .radar-score { font-size: 28px; font-weight: 800; background: var(--hero-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .radar-score-label { font-size: 10px; color: var(--text-muted); letter-spacing: 0.3px; }
+
+  .skill-bars { margin-top: 24px; }
+  .skill-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .skill-code { font-size: 11px; font-weight: 700; letter-spacing: 0.5px; color: var(--text-muted); width: 32px; flex-shrink: 0; }
+  .skill-bar { flex: 1; height: 6px; border-radius: 999px; background: var(--border-soft); overflow: hidden; }
+  .skill-fill { height: 100%; border-radius: 999px; background: var(--hero-gradient); }
+  .skill-val { font-size: 12px; font-weight: 700; color: var(--text-secondary); width: 28px; text-align: right; }
+  .skill-delta { font-size: 10px; font-weight: 600; color: var(--accent-primary); width: 28px; }
+
+  .portal-right { display: flex; flex-direction: column; gap: 16px; }
+  .pack-card {
+    background: var(--surface-glass);
+    border: 1px solid var(--border-soft);
+    border-radius: 24px; padding: 24px;
+  }
+  .pack-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
+  .pack-credits { font-size: 42px; font-weight: 800; background: var(--hero-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .pack-label { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+  .pack-coach { font-size: 13px; font-weight: 600; }
+
+  .timeline-card { background: var(--surface-glass); border: 1px solid var(--border-soft); border-radius: 24px; padding: 20px; flex: 1; }
+  .timeline-item { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border-soft); }
+  .timeline-item:last-child { border-bottom: none; }
+  .tl-dot { width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0; background: var(--surface-glass-strong); display: flex; align-items: center; justify-content: center; }
+  .tl-dot-inner { width: 8px; height: 8px; border-radius: 999px; background: var(--accent-primary); }
+  .tl-dot-inner.blue { background: var(--accent-secondary); }
+  .tl-dot-inner.purple { background: var(--accent-purple); }
+  .tl-content { flex: 1; }
+  .tl-title { font-size: 13px; font-weight: 600; }
+  .tl-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+  .tl-time { font-size: 11px; color: var(--text-disabled); white-space: nowrap; }
+
+  /* ===================== DIRECTION E: MARKETPLACE ===================== */
+  .market-layout { display: flex; flex-direction: column; gap: 24px; }
+  .search-bar {
+    background: var(--surface-glass-strong);
+    border: 1px solid var(--border-medium);
+    border-radius: 18px; padding: 16px 24px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .search-input-mock { flex: 1; font-size: 15px; font-weight: 500; color: var(--text-secondary); }
+  .filter-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip {
+    padding: 6px 14px; border-radius: 999px;
+    background: var(--surface-glass); border: 1px solid var(--border-soft);
+    font-size: 12px; font-weight: 600; color: var(--text-muted); cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .chip.active { background: rgba(0,255,180,0.1); border-color: var(--border-accent); color: var(--accent-primary); }
+  .coach-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .coach-card {
+    background: var(--surface-glass);
+    border: 1px solid var(--border-soft);
+    border-radius: 24px; padding: 24px;
+    transition: all 0.2s ease; cursor: pointer;
+  }
+  .coach-card:hover { background: var(--surface-glass-hover); transform: translateY(-2px); border-color: var(--border-medium); }
+  .coach-top { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
+  .coach-avatar-card {
+    width: 56px; height: 56px; border-radius: 16px; flex-shrink: 0;
+    background: var(--hero-gradient);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; font-weight: 800; color: #0b1020;
+  }
+  .coach-info { flex: 1; }
+  .coach-name { font-size: 16px; font-weight: 700; }
+  .coach-location { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+  .coach-badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .verification-badge {
+    padding: 3px 8px; border-radius: 6px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.3px; text-transform: uppercase;
+  }
+  .badge-trusted { background: rgba(0,255,180,0.12); color: var(--accent-primary); border: 1px solid rgba(0,255,180,0.2); }
+  .badge-basic { background: var(--surface-glass-strong); color: var(--text-muted); border: 1px solid var(--border-soft); }
+  .badge-featured { background: rgba(123,97,255,0.15); color: var(--accent-purple); border: 1px solid rgba(123,97,255,0.3); }
+  .capability-icons { display: flex; gap: 6px; margin-bottom: 14px; }
+  .cap-icon { width: 28px; height: 28px; border-radius: 8px; background: var(--surface-glass-strong); border: 1px solid var(--border-soft); display: flex; align-items: center; justify-content: center; }
+  .cap-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--accent-secondary); }
+  .cap-dot.green { background: var(--accent-primary); }
+  .cap-dot.purple { background: var(--accent-purple); }
+  .coach-footer { display: flex; justify-content: space-between; align-items: center; padding-top: 14px; border-top: 1px solid var(--border-soft); }
+  .coach-rating { font-size: 13px; font-weight: 700; }
+  .coach-rating span { color: var(--accent-warning); margin-right: 4px; }
+  .coach-price { font-size: 14px; font-weight: 700; }
+  .coach-price small { font-size: 11px; color: var(--text-muted); font-weight: 400; }
+  .reliability-good { font-size: 11px; color: var(--accent-primary); }
+  .reliability-warn { font-size: 11px; color: var(--accent-warning); }
+
+  /* ===================== WRAP-UP DIRECTION ===================== */
+  .wrapup-wrapper { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+  .wrapup-phone {
+    background: var(--bg-secondary);
+    border: 2px solid var(--border-medium);
+    border-radius: 40px; padding: 32px 24px 40px;
+    max-width: 360px; margin: 0 auto;
+    position: relative;
+  }
+  .phone-notch { width: 80px; height: 20px; background: var(--bg-primary); border-radius: 999px; margin: 0 auto 24px; }
+  .wrapup-screen { display: flex; flex-direction: column; gap: 24px; }
+  .wrapup-step-indicator { display: flex; gap: 6px; justify-content: center; }
+  .step-pip { width: 20px; height: 4px; border-radius: 999px; background: var(--border-soft); }
+  .step-pip.done { background: var(--accent-primary); }
+  .step-pip.active { background: var(--accent-secondary); width: 32px; }
+
+  .wrapup-section-title { font-size: 22px; font-weight: 800; text-align: center; }
+  .wrapup-player { text-align: center; font-size: 14px; color: var(--text-muted); margin-top: 4px; }
+
+  .attendance-check {
+    display: flex; align-items: center; gap: 16px;
+    background: var(--surface-glass-strong);
+    border: 1.5px solid var(--border-accent);
+    border-radius: 18px; padding: 16px 20px;
+  }
+  .check-box {
+    width: 28px; height: 28px; border-radius: 8px;
+    background: var(--accent-primary);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .check-tick { width: 12px; height: 12px; border-radius: 2px; background: #0b1020; }
+  .check-label { font-size: 14px; font-weight: 600; }
+
+  .rating-rows { display: flex; flex-direction: column; gap: 12px; }
+  .rating-row { display: flex; align-items: center; justify-content: space-between; }
+  .rating-label { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+  .stars { display: flex; gap: 6px; }
+  .star { width: 32px; height: 32px; border-radius: 8px; background: var(--surface-glass-strong); border: 1px solid var(--border-soft); display: flex; align-items: center; justify-content: center; }
+  .star.filled { background: rgba(255,184,77,0.15); border-color: rgba(255,184,77,0.3); }
+  .star-inner { width: 12px; height: 12px; border-radius: 2px; background: var(--border-medium); }
+  .star.filled .star-inner { background: var(--accent-warning); }
+
+  .btn-done {
+    width: 100%; padding: 18px; border-radius: 18px;
+    background: var(--accent-primary); color: #0b1020;
+    font-size: 16px; font-weight: 800; border: none; cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .wrapup-summary {
+    background: var(--surface-glass);
+    border: 1px solid var(--border-soft);
+    border-radius: 28px; padding: 28px;
+    display: flex; flex-direction: column; gap: 20px;
+  }
+  .slu-row { display: flex; gap: 12px; }
+  .slu-chip {
+    flex: 1; background: var(--surface-glass-strong);
+    border: 1px solid var(--border-soft); border-radius: 14px;
+    padding: 12px; text-align: center;
+  }
+  .slu-val { font-size: 22px; font-weight: 800; background: var(--hero-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .slu-skill { font-size: 10px; font-weight: 600; letter-spacing: 0.3px; text-transform: uppercase; color: var(--text-muted); margin-top: 4px; }
+  .dna-row { display: flex; flex-direction: column; gap: 8px; }
+  .dna-bar-row { display: flex; align-items: center; gap: 10px; }
+  .dna-label { font-size: 11px; color: var(--text-muted); width: 90px; flex-shrink: 0; }
+  .dna-bar { flex: 1; height: 6px; border-radius: 999px; background: var(--border-soft); overflow: hidden; }
+  .dna-fill { height: 100%; border-radius: 999px; }
+  .dna-fill.green { background: var(--accent-primary); }
+  .dna-fill.blue { background: var(--accent-secondary); }
+  .dna-fill.purple { background: var(--accent-purple); }
+  .dna-pct { font-size: 11px; font-weight: 600; color: var(--text-muted); width: 28px; text-align: right; }
+  .updated-badge { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 12px; background: rgba(0,255,180,0.08); border: 1px solid rgba(0,255,180,0.2); }
+  .updated-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--accent-primary); flex-shrink: 0; }
+  .updated-label { font-size: 12px; font-weight: 600; color: var(--accent-primary); }
+
+  /* Utilities */
+  .direction-block { margin-bottom: 56px; }
+  .direction-desc { font-size: 13px; color: var(--text-muted); margin-bottom: 24px; line-height: 1.6; max-width: 800px; padding: 14px 18px; background: var(--surface-glass); border: 1px solid var(--border-soft); border-radius: 14px; }
+  .mt8 { margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <div class="nav-logo">Skillars</div>
+  <div class="nav-tabs">
+    <button class="tab-btn active" onclick="show('dir-a')">A — Spatial Dashboard</button>
+    <button class="tab-btn" onclick="show('dir-b')">B — Content Stream</button>
+    <button class="tab-btn" onclick="show('dir-c')">C — Pitch Focus</button>
+    <button class="tab-btn" onclick="show('dir-d')">D — Parent Portal</button>
+    <button class="tab-btn" onclick="show('dir-e')">E — Marketplace</button>
+    <button class="tab-btn" onclick="show('dir-f')">F — Wrap-Up Flow</button>
+  </div>
+</div>
+
+<!-- ===================== DIRECTION A ===================== -->
+<div id="dir-a" class="section active">
+  <div class="section-header">
+    <div class="dir-label">Direction A</div>
+    <div class="section-title">Spatial Dashboard — Coach Command Center</div>
+    <div class="section-desc">Classic 3-column desktop layout. Left sidebar for navigation and client list, centre for schedule and activity, right for revenue and quick-access metrics. Maximum information density with clear spatial hierarchy.</div>
+  </div>
+  <div class="dashboard-grid">
+    <div class="sidebar">
+      <div class="sidebar-logo">S</div>
+      <div class="nav-item active"><div class="nav-icon"></div>Command Center</div>
+      <div class="nav-item"><div class="nav-icon"></div>Sessions</div>
+      <div class="nav-item"><div class="nav-icon"></div>Drill Library</div>
+      <div class="nav-item"><div class="nav-icon"></div>Clients</div>
+      <div class="sidebar-divider"></div>
+      <div class="nav-item"><div class="nav-icon"></div>Reports</div>
+      <div class="nav-item"><div class="nav-icon"></div>Revenue</div>
+      <div class="sidebar-divider"></div>
+      <div class="nav-item"><div class="nav-icon"></div>Settings</div>
+    </div>
+    <div class="main-content">
+      <div class="cmd-header">
+        <div>
+          <div class="cmd-title">Good morning, Marcus</div>
+          <div class="cmd-subtitle">Tuesday · 3 sessions today · €340 projected</div>
+        </div>
+        <div class="session-badge badge-confirmed" style="font-size:12px;padding:8px 16px;">Week on track</div>
+      </div>
+      <div class="stats-row">
+        <div class="stat-card">
+          <div class="stat-label">This Week</div>
+          <div class="stat-value gradient">€340</div>
+          <div class="stat-delta">↑ +€60 vs last week</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Sessions Today</div>
+          <div class="stat-value gradient">3</div>
+          <div class="stat-delta">Next: 14:00 · Luca R.</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Active Clients</div>
+          <div class="stat-value gradient">8</div>
+          <div class="stat-delta">2 packs expiring soon</div>
+        </div>
+      </div>
+      <div class="schedule-card">
+        <div class="card-title">Today's Schedule</div>
+        <div class="session-item">
+          <div class="session-time">09:00</div>
+          <div class="session-dot"></div>
+          <div class="session-info"><div class="session-name">Luca Rossi</div><div class="session-meta">Sportpark Wilmersdorf · 60 min · Weak Foot Focus</div></div>
+          <div class="session-badge badge-confirmed">Confirmed</div>
+        </div>
+        <div class="session-item">
+          <div class="session-time">14:00</div>
+          <div class="session-dot blue"></div>
+          <div class="session-info"><div class="session-name">Emma Bauer</div><div class="session-meta">TuS Lichterfelde · 60 min · First Touch</div></div>
+          <div class="session-badge badge-upcoming">Upcoming</div>
+        </div>
+        <div class="session-item">
+          <div class="session-time">16:30</div>
+          <div class="session-dot purple"></div>
+          <div class="session-info"><div class="session-name">Noah Klein</div><div class="session-meta">BSC Rehberge · 90 min · 1v1 &amp; Finishing</div></div>
+          <div class="session-badge badge-requested">Requested</div>
+        </div>
+      </div>
+    </div>
+    <div class="right-panel">
+      <div class="revenue-card">
+        <div class="revenue-label">Projected this week</div>
+        <div class="revenue-value">€340</div>
+        <div class="revenue-sub">Of €500 weekly target</div>
+        <div class="progress-bar"><div class="progress-fill" style="width:68%"></div></div>
+      </div>
+      <div class="client-card">
+        <div class="card-title">Active Clients</div>
+        <div class="client-item"><div class="client-avatar">LR</div><div><div class="client-name">Luca Rossi</div><div class="client-meta">Age 14 · Midfielder</div></div><div class="client-credits">3 left</div></div>
+        <div class="client-item"><div class="client-avatar">EB</div><div><div class="client-name">Emma Bauer</div><div class="client-meta">Age 12 · Forward</div></div><div class="client-credits">7 left</div></div>
+        <div class="client-item"><div class="client-avatar">NK</div><div><div class="client-name">Noah Klein</div><div class="client-meta">Age 16 · Winger</div></div><div class="client-credits">2 left</div></div>
+        <div class="client-item"><div class="client-avatar">SA</div><div><div class="client-name">Sofia Adler</div><div class="client-meta">Age 11 · Goalkeeper</div></div><div class="client-credits">9 left</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== DIRECTION B ===================== -->
+<div id="dir-b" class="section">
+  <div class="section-header">
+    <div class="dir-label">Direction B</div>
+    <div class="section-title">Content Stream — Activity-First Coach View</div>
+    <div class="section-desc">Minimal icon rail replaces the full sidebar. Content is a chronological activity stream — requests, confirmations, completed sessions, pending approvals. Optimised for quick scanning and one-tap actions. More mobile-native feel.</div>
+  </div>
+  <div class="stream-layout">
+    <div class="icon-rail">
+      <div class="rail-logo">S</div>
+      <div class="rail-icon active"><div class="rail-icon-dot"></div></div>
+      <div class="rail-icon"><div class="rail-icon-dot"></div></div>
+      <div class="rail-icon"><div class="rail-icon-dot"></div></div>
+      <div class="rail-icon"><div class="rail-icon-dot"></div></div>
+      <div class="rail-icon"><div class="rail-icon-dot"></div></div>
+    </div>
+    <div class="stream-main">
+      <div class="stream-header">
+        <div><div class="stream-greeting">Good morning, Marcus</div><div class="stream-date" style="margin-top:4px">Tuesday, 10 June · 3 sessions today</div></div>
+        <div class="session-badge badge-confirmed" style="font-size:12px;padding:8px 16px;">No issues</div>
+      </div>
+      <div class="activity-card">
+        <div class="activity-type amber"></div>
+        <div class="activity-body"><div class="activity-title">New booking request — Noah Klein</div><div class="activity-desc">Noah's parent requested Wednesday 16:30 · BSC Rehberge · 90 min · 1v1 &amp; Finishing. Session pack has 8 credits remaining.</div><div class="activity-time">2 minutes ago</div></div>
+        <div class="activity-action">Review</div>
+      </div>
+      <div class="activity-card">
+        <div class="activity-type green"></div>
+        <div class="activity-body"><div class="activity-title">Session completed — Luca Rossi</div><div class="activity-desc">Yesterday's session generated 64 weak-foot contacts and 38 first-touch reps. Development record updated. Parent notified.</div><div class="activity-time">Yesterday, 10:45</div></div>
+        <div class="activity-action">View Report</div>
+      </div>
+      <div class="activity-card">
+        <div class="activity-type blue"></div>
+        <div class="activity-body"><div class="activity-title">Session confirmed — Emma Bauer</div><div class="activity-desc">Today 14:00 · TuS Lichterfelde · First Touch session plan ready. Equipment: 6 cones, 2 balls.</div><div class="activity-time">1 hour ago</div></div>
+        <div class="activity-action">Prep Session</div>
+      </div>
+      <div class="activity-card">
+        <div class="activity-type green"></div>
+        <div class="activity-body"><div class="activity-title">Payment received — Sofia Adler</div><div class="activity-desc">10-session pack purchased. €320 gross · €25.60 commission · €294.40 net. Payout scheduled Thursday.</div><div class="activity-time">2 hours ago</div></div>
+        <div class="activity-action">View Invoice</div>
+      </div>
+    </div>
+    <div class="stream-side">
+      <div class="quick-stats">
+        <div class="qstat"><div class="qstat-val">€340</div><div class="qstat-label">Week projected</div></div>
+        <div class="qstat"><div class="qstat-val">3</div><div class="qstat-label">Today's sessions</div></div>
+        <div class="qstat"><div class="qstat-val">8</div><div class="qstat-label">Active clients</div></div>
+        <div class="qstat"><div class="qstat-val">0</div><div class="qstat-label">Open disputes</div></div>
+      </div>
+      <div class="schedule-card" style="flex:1">
+        <div class="card-title">Today</div>
+        <div class="session-item"><div class="session-time">09:00</div><div class="session-dot"></div><div class="session-info"><div class="session-name">Luca Rossi</div><div class="session-meta">Sportpark Wilmersdorf</div></div><div class="session-badge badge-confirmed">Done</div></div>
+        <div class="session-item"><div class="session-time">14:00</div><div class="session-dot blue"></div><div class="session-info"><div class="session-name">Emma Bauer</div><div class="session-meta">TuS Lichterfelde</div></div><div class="session-badge badge-upcoming">2h away</div></div>
+        <div class="session-item"><div class="session-time">16:30</div><div class="session-dot purple"></div><div class="session-info"><div class="session-name">Noah Klein</div><div class="session-meta">BSC Rehberge</div></div><div class="session-badge badge-requested">Pending</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== DIRECTION C ===================== -->
+<div id="dir-c" class="section">
+  <div class="section-header">
+    <div class="dir-label">Direction C</div>
+    <div class="section-title">Pitch Focus — Active Session Screen</div>
+    <div class="section-desc">Full-screen takeover for the active session state. Everything secondary disappears. Current drill name at 42px bold, timer at 72px gradient. Block progress as subtle horizontal pips. End Session appears only after 5 min. One-handed mobile optimised.</div>
+  </div>
+  <div class="pitch-wrapper">
+    <div class="pitch-main">
+      <div class="session-status-bar">
+        <div class="session-live"><div class="live-dot"></div><div class="live-label">Live Session</div></div>
+        <div class="session-elapsed">Elapsed: 23:14</div>
+      </div>
+      <div class="block-progress">
+        <div class="block-seg done"></div>
+        <div class="block-seg active"></div>
+        <div class="block-seg"></div>
+        <div class="block-seg"></div>
+      </div>
+      <div class="drill-hero">
+        <div class="block-label">Technical Foundation · Block 2 of 4</div>
+        <div class="drill-name">Rondo 4v1<br>Outside Foot</div>
+        <div class="drill-timer">06:22</div>
+        <div class="drill-next">Next: <span>Weak-Foot Wall Passes</span></div>
+      </div>
+      <div class="pitch-actions">
+        <button class="btn-secondary">+2 min</button>
+        <button class="btn-primary">End Session</button>
+        <button class="btn-secondary">Skip</button>
+      </div>
+    </div>
+    <div class="pitch-side-panel">
+      <div class="drill-queue">
+        <div class="card-title" style="margin-bottom:12px">Session Plan</div>
+        <div class="queue-item"><div class="queue-num">✓</div><div class="queue-drill">Dynamic Warm-Up Sequence</div><div class="queue-dur" style="color:var(--accent-primary)">Done</div></div>
+        <div class="queue-item active-drill"><div class="queue-num">2</div><div class="queue-drill">Rondo 4v1 Outside Foot</div><div class="queue-dur">6:22</div></div>
+        <div class="queue-item"><div class="queue-num">3</div><div class="queue-drill">Weak-Foot Wall Passes</div><div class="queue-dur">10 min</div></div>
+        <div class="queue-item"><div class="queue-num">4</div><div class="queue-drill">1v1 Channel Dribbling</div><div class="queue-dur">12 min</div></div>
+        <div class="queue-item"><div class="queue-num">5</div><div class="queue-drill">Small-Sided Game 3v3</div><div class="queue-dur">15 min</div></div>
+        <div class="queue-item"><div class="queue-num">6</div><div class="queue-drill">Cool-Down &amp; Review</div><div class="queue-dur">8 min</div></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Session so far</div>
+        <div style="display:flex;gap:16px;margin-top:8px">
+          <div><div class="stat-value gradient" style="font-size:28px">38</div><div class="stat-label" style="margin-top:4px">Weak-foot reps</div></div>
+          <div><div class="stat-value gradient" style="font-size:28px">22</div><div class="stat-label" style="margin-top:4px">First touch reps</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== DIRECTION D ===================== -->
+<div id="dir-d" class="section">
+  <div class="section-header">
+    <div class="dir-label">Direction D</div>
+    <div class="section-title">Parent Portal — Development Dashboard</div>
+    <div class="section-desc">Two-column layout. Left: player profile with Skills Radar and skill bars showing current scores + improvement deltas. Right: session pack tracker, upcoming sessions, and chronological development timeline. Story-first data presentation.</div>
+  </div>
+  <div class="portal-layout">
+    <div class="player-hero-card">
+      <div class="player-profile">
+        <div class="player-avatar-lg">LR</div>
+        <div>
+          <div class="player-name">Luca Rossi</div>
+          <div class="player-meta">Age 14 · Midfielder · U15 training</div>
+        </div>
+      </div>
+      <div class="radar-mock">
+        <div class="radar-bg"></div>
+        <div class="radar-bg"></div>
+        <div class="radar-bg"></div>
+        <div class="radar-label">DRI</div>
+        <div class="radar-label">PHY</div>
+        <div class="radar-label">FIN</div>
+        <div class="radar-label">DEF</div>
+        <div class="radar-label">PAS</div>
+        <div class="radar-label">WEF</div>
+        <div class="radar-shape"></div>
+        <div class="radar-center-label"><div class="radar-score">68</div><div class="radar-score-label">Overall</div></div>
+      </div>
+      <div class="skill-bars" style="margin-top:16px">
+        <div class="skill-row"><div class="skill-code">DRI</div><div class="skill-bar"><div class="skill-fill" style="width:76%"></div></div><div class="skill-val">76</div><div class="skill-delta">↑+6</div></div>
+        <div class="skill-row"><div class="skill-code">WEF</div><div class="skill-bar"><div class="skill-fill" style="width:64%"></div></div><div class="skill-val">64</div><div class="skill-delta">↑+8</div></div>
+        <div class="skill-row"><div class="skill-code">PAS</div><div class="skill-bar"><div class="skill-fill" style="width:71%"></div></div><div class="skill-val">71</div><div class="skill-delta">↑+3</div></div>
+        <div class="skill-row"><div class="skill-code">F1T</div><div class="skill-bar"><div class="skill-fill" style="width:68%"></div></div><div class="skill-val">68</div><div class="skill-delta">↑+4</div></div>
+        <div class="skill-row"><div class="skill-code">PHY</div><div class="skill-bar"><div class="skill-fill" style="width:58%"></div></div><div class="skill-val">58</div><div class="skill-delta">—</div></div>
+      </div>
+    </div>
+    <div class="portal-right">
+      <div class="pack-card">
+        <div class="pack-header">
+          <div><div class="pack-credits">7 <span style="font-size:18px;font-weight:500;color:var(--text-muted)">/ 10</span></div><div class="pack-label">Sessions remaining</div></div>
+          <div class="session-badge badge-confirmed">Active Pack</div>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" style="width:30%"></div></div>
+        <div class="pack-coach" style="margin-top:12px;color:var(--text-muted);font-size:12px">Coach Marcus Weber · Expires 12 Aug 2026</div>
+      </div>
+      <div class="schedule-card">
+        <div class="card-title">Upcoming Sessions</div>
+        <div class="session-item"><div class="session-time">Today</div><div class="session-dot blue"></div><div class="session-info"><div class="session-name">First Touch Focus</div><div class="session-meta">Sportpark Wilmersdorf · 14:00 · 60 min</div></div><div class="session-badge badge-upcoming">Today</div></div>
+        <div class="session-item"><div class="session-time">Fri</div><div class="session-dot"></div><div class="session-info"><div class="session-name">1v1 &amp; Finishing</div><div class="session-meta">TuS Lichterfelde · 10:00 · 60 min</div></div><div class="session-badge badge-confirmed">Confirmed</div></div>
+      </div>
+      <div class="timeline-card">
+        <div class="card-title" style="margin-bottom:12px">Development Timeline</div>
+        <div class="timeline-item"><div class="tl-dot"><div class="tl-dot-inner"></div></div><div class="tl-content"><div class="tl-title">Session completed · Weak Foot Focus</div><div class="tl-meta">64 weak-foot contacts · WEF up to 64 (+8 since baseline)</div></div><div class="tl-time">Yesterday</div></div>
+        <div class="timeline-item"><div class="tl-dot"><div class="tl-dot-inner blue"></div></div><div class="tl-content"><div class="tl-title">Homework assigned · Rondo Outside Foot</div><div class="tl-meta">Coach Marcus assigned 2 drills · Due before Friday</div></div><div class="tl-time">2 days ago</div></div>
+        <div class="timeline-item"><div class="tl-dot"><div class="tl-dot-inner purple"></div></div><div class="tl-content"><div class="tl-title">Skills Radar updated</div><div class="tl-meta">DRI improved from 70 → 76 · New high score</div></div><div class="tl-time">1 week ago</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== DIRECTION E ===================== -->
+<div id="dir-e" class="section">
+  <div class="section-header">
+    <div class="dir-label">Direction E</div>
+    <div class="section-title">Marketplace — Coach Discovery for Guests</div>
+    <div class="section-desc">Search bar with filter chips up top. 3-column coach card grid below. Each card: avatar, name, location, verification tier badge, capability icons, star rating, price, and reliability indicator — all above the fold on the card. Trust signals scannable in 2 seconds.</div>
+  </div>
+  <div class="market-layout">
+    <div class="search-bar">
+      <div class="search-input-mock">Berlin Mitte · Any price · All ages</div>
+      <div class="filter-chips">
+        <div class="chip active">Berlin</div>
+        <div class="chip">Video Feedback</div>
+        <div class="chip">Under 12s</div>
+        <div class="chip">Top Rated</div>
+        <div class="chip">Trusted+</div>
+      </div>
+    </div>
+    <div class="coach-grid">
+      <div class="coach-card">
+        <div class="coach-top">
+          <div class="coach-avatar-card">MW</div>
+          <div class="coach-info">
+            <div class="coach-name">Marcus Weber</div>
+            <div class="coach-location">Wilmersdorf, Berlin</div>
+            <div class="coach-badges">
+              <div class="verification-badge badge-trusted">Trusted</div>
+              <div class="verification-badge badge-featured">Featured</div>
+            </div>
+          </div>
+        </div>
+        <div class="capability-icons">
+          <div class="cap-icon"><div class="cap-dot green"></div></div>
+          <div class="cap-icon"><div class="cap-dot green"></div></div>
+          <div class="cap-icon"><div class="cap-dot green"></div></div>
+          <div class="cap-icon"><div class="cap-dot"></div></div>
+        </div>
+        <div class="coach-footer">
+          <div><div class="coach-rating"><span>★</span>4.9 <span style="color:var(--text-muted);font-weight:400">(38)</span></div><div class="reliability-good">0 reliability issues</div></div>
+          <div class="coach-price">€65<small>/session</small></div>
+        </div>
+      </div>
+      <div class="coach-card">
+        <div class="coach-top">
+          <div class="coach-avatar-card" style="background:linear-gradient(135deg,#7b61ff,#0088ff)">KS</div>
+          <div class="coach-info">
+            <div class="coach-name">Katja Schmidt</div>
+            <div class="coach-location">Prenzlauer Berg, Berlin</div>
+            <div class="coach-badges">
+              <div class="verification-badge badge-trusted">Trusted</div>
+            </div>
+          </div>
+        </div>
+        <div class="capability-icons">
+          <div class="cap-icon"><div class="cap-dot green"></div></div>
+          <div class="cap-icon"><div class="cap-dot"></div></div>
+          <div class="cap-icon"><div class="cap-dot"></div></div>
+          <div class="cap-icon"><div class="cap-dot"></div></div>
+        </div>
+        <div class="coach-footer">
+          <div><div class="coach-rating"><span>★</span>4.7 <span style="color:var(--text-muted);font-weight:400">(21)</span></div><div class="reliability-good">0 reliability issues</div></div>
+          <div class="coach-price">€50<small>/session</small></div>
+        </div>
+      </div>
+      <div class="coach-card">
+        <div class="coach-top">
+          <div class="coach-avatar-card" style="background:linear-gradient(135deg,#ffb84d,#ff5f7a)">TM</div>
+          <div class="coach-info">
+            <div class="coach-name">Tobias Müller</div>
+            <div class="coach-location">Mitte, Berlin</div>
+            <div class="coach-badges">
+              <div class="verification-badge badge-basic">Basic</div>
+            </div>
+          </div>
+        </div>
+        <div class="capability-icons">
+          <div class="cap-icon"><div class="cap-dot"></div></div>
+          <div class="cap-icon"><div class="cap-dot"></div></div>
+          <div class="cap-icon"><div class="cap-dot"></div></div>
+          <div class="cap-icon"><div class="cap-dot"></div></div>
+        </div>
+        <div class="coach-footer">
+          <div><div class="coach-rating"><span>★</span>4.2 <span style="color:var(--text-muted);font-weight:400">(8)</span></div><div class="reliability-warn">2 issues (90 days)</div></div>
+          <div class="coach-price">€40<small>/session</small></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== DIRECTION F ===================== -->
+<div id="dir-f" class="section">
+  <div class="section-header">
+    <div class="dir-label">Direction F</div>
+    <div class="section-title">Wrap-Up Flow — 30-Second Post-Session Sequence</div>
+    <div class="section-desc">Mobile phone mockup showing the 4-step wrap-up sequence. Step-pip progress indicator at top. Attendance checkbox → star ratings (auto-advance on 5th star) → voice note option → homework assignment. Ends with a summary screen showing Session DNA and SLU data.</div>
+  </div>
+  <div class="wrapup-wrapper">
+    <div class="wrapup-phone">
+      <div class="phone-notch"></div>
+      <div class="wrapup-screen">
+        <div class="wrapup-step-indicator">
+          <div class="step-pip done"></div>
+          <div class="step-pip active"></div>
+          <div class="step-pip"></div>
+          <div class="step-pip"></div>
+        </div>
+        <div class="wrapup-section-title">Rate the session</div>
+        <div class="wrapup-player">Luca Rossi · Weak Foot Focus</div>
+        <div class="rating-rows">
+          <div class="rating-row">
+            <div class="rating-label">Effort</div>
+            <div class="stars">
+              <div class="star filled"><div class="star-inner"></div></div>
+              <div class="star filled"><div class="star-inner"></div></div>
+              <div class="star filled"><div class="star-inner"></div></div>
+              <div class="star filled"><div class="star-inner"></div></div>
+              <div class="star filled"><div class="star-inner"></div></div>
+            </div>
+          </div>
+          <div class="rating-row">
+            <div class="rating-label">Focus</div>
+            <div class="stars">
+              <div class="star filled"><div class="star-inner"></div></div>
+              <div class="star filled"><div class="star-inner"></div></div>
+              <div class="star filled"><div class="star-inner"></div></div>
+              <div class="star filled"><div class="star-inner"></div></div>
+              <div class="star"><div class="star-inner"></div></div>
+            </div>
+          </div>
+          <div class="rating-row">
+            <div class="rating-label">Technique</div>
+            <div class="stars">
+              <div class="star filled"><div class="star-inner"></div></div>
+              <div class="star filled"><div class="star-inner"></div></div>
+              <div class="star filled"><div class="star-inner"></div></div>
+              <div class="star filled"><div class="star-inner"></div></div>
+              <div class="star filled"><div class="star-inner"></div></div>
+            </div>
+          </div>
+        </div>
+        <button class="btn-done">Done →</button>
+      </div>
+    </div>
+    <div class="wrapup-summary">
+      <div class="card-title">Session Complete</div>
+      <div style="font-size:13px;color:var(--text-muted)">Luca Rossi · Weak Foot Focus · 62 min</div>
+      <div class="slu-row">
+        <div class="slu-chip"><div class="slu-val">64</div><div class="slu-skill">Weak Foot</div></div>
+        <div class="slu-chip"><div class="slu-val">38</div><div class="slu-skill">First Touch</div></div>
+        <div class="slu-chip"><div class="slu-val">51</div><div class="slu-skill">Physicality</div></div>
+      </div>
+      <div class="dna-row">
+        <div class="card-title" style="font-size:14px">Session DNA</div>
+        <div class="dna-bar-row"><div class="dna-label">Technical</div><div class="dna-bar"><div class="dna-fill green" style="width:82%"></div></div><div class="dna-pct">82</div></div>
+        <div class="dna-bar-row"><div class="dna-label">Physical</div><div class="dna-bar"><div class="dna-fill blue" style="width:61%"></div></div><div class="dna-pct">61</div></div>
+        <div class="dna-bar-row"><div class="dna-label">Cognitive</div><div class="dna-bar"><div class="dna-fill purple" style="width:44%"></div></div><div class="dna-pct">44</div></div>
+        <div class="dna-bar-row"><div class="dna-label">Match Realism</div><div class="dna-bar"><div class="dna-fill green" style="width:70%"></div></div><div class="dna-pct">70</div></div>
+        <div class="dna-bar-row"><div class="dna-label">Weak Foot</div><div class="dna-bar"><div class="dna-fill" style="width:91%;background:var(--hero-gradient)"></div></div><div class="dna-pct">91</div></div>
+      </div>
+      <div class="updated-badge">
+        <div class="updated-dot"></div>
+        <div class="updated-label">Development record updated · Parent notified</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function show(id) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>
+</body>
+</html>
