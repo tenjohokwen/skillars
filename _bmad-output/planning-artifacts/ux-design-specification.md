@@ -720,6 +720,18 @@ Quasar covers structural primitives. None of Skillars' domain-specific UI concep
 **Purpose:** Switch between multiple player profiles without logout.
 **Anatomy:** Current player avatar + name in header → tap → drawer showing all family profiles → one-tap switch, page context reloads for selected player.
 
+#### `QuotaUsageBar`
+**Purpose:** Visualise storage and bandwidth quota consumption against the user's tier limit; surfaces upgrade prompts when approaching ceiling.
+**Used in:** Player Portal video management screen (Epic 5), Video Management page (Epic 6).
+**Anatomy:**
+- Two labelled rows: "Storage" (used GB / total GB) and "Bandwidth" (used GB / monthly limit)
+- Each row: label · filled progress bar · numeric summary (e.g., "3.2 GB / 5 GB") · tier limit label (e.g., "Instructor Plan — 5 GB")
+- Progress bar fill: default accent token up to 80%; `--color-warning` token from 80–94%; `--color-error` token at 95%+
+- At 95%+: inline one-line prompt "Running low — upgrade for more space" linking to subscription upgrade flow
+**States:** normal · warning (>80%) · critical (>95%) · loading skeleton
+**Behaviour:** Data from `GET /api/video/quotas/me`; re-fetches after any upload or delete event via `video.store.js` (event-driven, no polling).
+**Constraints:** All colours via CSS custom property tokens only — no hardcoded hex. WCAG AA contrast required in both dark and light mode.
+
 ### Component Implementation Strategy
 
 - All custom components are built with Quasar primitives as the structural base

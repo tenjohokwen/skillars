@@ -116,8 +116,8 @@ The following conduct is prohibited and may result in immediate account suspensi
 
 5. **Data Retention.** Skillars retains data as follows:
    - Chat messages: 24 months.
-   - Performance and homework videos (non-yearly subscribers): 90 days.
-   - Performance and homework videos (yearly subscribers): Lifetime of active subscription.
+   - Performance and homework videos (non-yearly subscribers): 30 days after subscription expires.
+   - Performance and homework videos (yearly subscribers): 90 days after subscription expires.
    - Development data (reports, radar charts, timeline): Duration of active account.
 
 6. **Minor Data.** For users under 18, the parent or legal guardian controls data export and deletion requests. Videos of minors require parent approval before becoming visible to the minor player.

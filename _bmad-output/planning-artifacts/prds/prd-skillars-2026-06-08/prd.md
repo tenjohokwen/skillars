@@ -173,6 +173,7 @@ The system must manage the full booking lifecycle through the following states:
 | `CONFIRMED` | Payment processed; session confirmed. |
 | `UPCOMING` | Auto-transitioned 24h before session start; final reminders sent. |
 | `IN_PROGRESS` | Coach tapped [Start Session]; timestamp recorded. |
+| `COMPLETED_PENDING_CONFIRMATION` | Coach submitted session as complete (Quick Complete Mode); credit deduction pending parent/player confirmation; auto-confirms to `COMPLETED` after 24 hours of no response. |
 | `COMPLETED` | Session concluded; session credit deducted. |
 | `CANCELLED_PARENT` | Cancelled by parent; refund rules applied per cancellation window. |
 | `CANCELLED_COACH` | Cancelled by coach; refund rules applied; reliability strike if <24h notice. |
@@ -219,10 +220,13 @@ Two completion paths are supported:
 - **Pitch-side constraint:** The Start/End session and 30-second wrap-up workflow must be completable in under 30 seconds, one-handed, on a mobile device outdoors.
 
 **FR-BKG-012 — Quick Complete Parent Confirmation Gate**
-In Quick Complete Mode, session credit deduction is gated behind explicit parent/player confirmation. Session transitions to `COMPLETED` only after confirmation is received.
+In Quick Complete Mode, session credit deduction is gated behind explicit parent/player confirmation. Session transitions to `COMPLETED` only after confirmation is received. If no confirmation or dispute is received within 24 hours, the session auto-confirms to `COMPLETED` and the credit is deducted.
 
 **FR-BKG-013 — Coach Command Center: Projected Revenue**
 The coach scheduling view must display total projected revenue for the current week based on confirmed upcoming sessions, alongside schedule gaps.
+
+**FR-BKG-014 — Bulk Session Request**
+Parents must be able to select multiple available time slots from a coach's calendar and submit them as a single grouped request (maximum batch size configurable via platform config; default 5). The coach receives one grouped notification and may accept all slots at once or respond to each individually. A single payment transaction covers all accepted bookings in a batch.
 
 ---
 
@@ -482,7 +486,7 @@ Asynchronous upload pipeline:
 Every video asset must progress through a strict state machine:
 `PENDING` → `UPLOADED` → `SCANNING` → `TRANSCODING` → `PUBLISHED`
 
-Failure at any state locks the asset and notifies the uploader.
+Failure at any state locks the asset and notifies the uploader. A `REJECTED` state applies when a parent explicitly rejects a video submitted by a minor player (see FR-VID-012); a rejected video is invisible to the player and flagged for coach awareness and is not auto-deleted.
 
 **FR-VID-004 — Storage Quotas by Tier**
 
@@ -602,7 +606,7 @@ Coach subscriptions are monthly-only. No annual billing option for coaches at MV
 Semi-Pro and Pro tiers require yearly commitment to justify long-term data storage and history portability costs. Prices are configurable.
 
 **FR-PAY-008 — Long-Term Data Retention Incentive**
-Yearly subscribers (player tiers) receive lifetime video retention for the duration of their active subscription. Non-yearly subscribers are subject to the 30-day video archive policy.
+Non-yearly subscribers are subject to the 30-day video archive policy. Yearly subscribers receive 90-day video retention after subscription expiry — three times the grace window of non-yearly subscribers, incentivising annual commitment.
 
 **FR-PAY-009 — Premium Feature Activation (Anti-Bypass)**
 High-value coach features (Video Review Room, Advanced Analytics, Branded Reports) activate only for a specific player-coach pair where active, paid session credits exist. Features deactivate immediately when the paid session pack is exhausted or the subscription expires.
@@ -796,7 +800,7 @@ Any user must be able to report: abusive messages, inappropriate content, fraudu
 |---|---|
 | Chat messages | 24 months |
 | Performance / homework videos (non-yearly subscribers) | 30 days |
-| Performance / homework videos (yearly subscribers) | Lifetime of active subscription |
+| Performance / homework videos (yearly subscribers) | 90 days after subscription expires |
 | Development data (reports, radar, timeline) | Duration of active account |
 | Physical backups post-deletion | 90 days |
 
