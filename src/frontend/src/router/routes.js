@@ -42,6 +42,33 @@ const routes = [
         meta: { requiresGuest: true },
       },
 
+      // Coach registration flow (guest only)
+      {
+        path: 'coach-register',
+        component: () => import('pages/auth/CoachRegisterPage.vue'),
+        meta: { requiresGuest: true },
+      },
+      {
+        path: 'coach/email-pending',
+        component: () => import('pages/auth/CoachEmailPendingPage.vue'),
+        meta: { requiresGuest: true },
+      },
+      {
+        path: 'coach/verify-email',
+        component: () => import('pages/auth/CoachEmailVerifyPage.vue'),
+        meta: { requiresGuest: true },
+      },
+      {
+        path: 'coach/verify-phone',
+        component: () => import('pages/auth/CoachPhoneVerifyPage.vue'),
+        meta: { requiresGuest: true },
+      },
+      {
+        path: 'coach/profile-builder',
+        component: () => import('pages/auth/CoachProfileBuilderPlaceholderPage.vue'),
+        meta: {},
+      },
+
       // Protected pages (auth required)
       {
         path: 'dashboard',

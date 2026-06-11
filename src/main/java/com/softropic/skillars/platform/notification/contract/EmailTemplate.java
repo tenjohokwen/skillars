@@ -6,6 +6,8 @@ public enum EmailTemplate {
     CREATION_DUP("email.creation_dup.title"),
     PASSWORD_RESET("email.pw_reset.title"),
     SEND_OTP("email.otp.title"),
+    COACH_EMAIL_VERIFY("email.coach.verify.title"),
+    COACH_OTP("email.coach.otp.title"),
     EMAIL_CHANGE("email.change.title"),
     PROFILE_CHANGE("email.profile_change.title"),
     TENANT_API_KEY_GENERATED("email.tenant.api_key_generated.title"),

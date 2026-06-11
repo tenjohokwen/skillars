@@ -16,6 +16,8 @@ public final class SecurityConstants {
     public static final String ROLE_USER = "ROLE_USER";
     public static final String ROLE_ADMIN = "ROLE_ADMIN";
     public static final String ROLE_LTD_ADMIN = "ROLE_LTD_ADMIN";
+    public static final String ROLE_COACH = "ROLE_COACH";
+    public static final String ROLE_PARENT = "ROLE_PARENT";
 
     /**
      * Authority names (without ROLE_ prefix)
@@ -27,7 +29,7 @@ public final class SecurityConstants {
     /**
      * Security expressions for @PreAuthorize annotations
      */
-    public static final String HAS_ANY_ROLE = "hasRole('ROLE_ADMIN') or hasRole('ROLE_LTD_ADMIN') or hasRole('ROLE_USER')";
+    public static final String HAS_ANY_ROLE = "hasRole('ROLE_ADMIN') or hasRole('ROLE_LTD_ADMIN') or hasRole('ROLE_USER') or hasRole('ROLE_COACH')";
     public static final String HAS_ADMIN_ROLE = "hasRole('ROLE_ADMIN') or hasRole('ROLE_LTD_ADMIN')";
 
     // ==================== JWT AND AUTHENTICATION CONSTANTS ====================

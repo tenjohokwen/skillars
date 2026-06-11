@@ -502,16 +502,23 @@ So that I can access the platform and begin building my professional profile.
 **And** the platform's Terms of Service and Privacy Policy checkboxes are required and must not be pre-checked
 **And** if either consent checkbox is unchecked, the form cannot be submitted — the submit button remains disabled
 
+**Given** a coach submits the registration form
+**When** the registration is processed
+**Then** the ISO 2-letter language code (`langKey`) is captured from the language the user has selected in the UI and stored on the user record (e.g. `"en"`, `"de"`)
+**And** all transactional emails (verification link, phone OTP) are rendered via Thymeleaf templates in that language using the project's `SpringTemplateEngine` + `MessageSource` pipeline
+**And** if no `langKey` is provided, `"en"` is used as the default
+
 **Given** a coach clicks their email verification link
 **When** the token is valid and not expired
-**Then** their email is marked verified and they proceed to phone OTP entry
+**Then** their email is marked verified (`EMAIL_VERIFIED`) and they proceed to phone OTP entry
 **And** if the token is expired or already used, they see a clear error with a "Resend verification email" option
 
-**Given** a coach enters the 6-digit OTP sent to their phone
-**When** the OTP matches and is within its validity window
-**Then** their phone is marked verified, status changes to `BASIC_VERIFIED`, and they are redirected to the profile builder step
+**Given** a coach enters the 6-digit OTP sent to their registered email address
+**When** the OTP matches and is within its 10-minute validity window
+**Then** their verification status changes to `BASIC_VERIFIED` and they are redirected to the profile builder step
 **And** the OTP input uses a single field with auto-advance between digits and auto-submits on the last digit
 **And** if OTP is incorrect, an inline error appears below the field — the page does not reload
+**And** the OTP delivery channel is email in this story; SMS (Twilio/SNS) is deferred to a later story
 
 **Given** a coach attempts to register with an email already in use
 **When** the registration form is submitted
@@ -522,12 +529,12 @@ So that I can access the platform and begin building my professional profile.
 **When** they are redirected
 **Then** their profile is not publicly listed on the marketplace — it only goes live after profile builder and availability setup are completed (subsequent stories in Epic 2)
 
-**Given** the registration form contains a free-text field (bio, notes)
-**When** the coach types an email address or phone number
-**Then** a real-time amber warning bar appears at the top of the field: "Contact details will be removed on save"
-**And** on save, the value is passed through `infrastructure.sanitizer.ContactDetailSanitizer` server-side before persistence
+**Given** the registration form contains a free-text field (first name, last name)
+**When** the coach types an email address or phone number pattern into the field
+**Then** a real-time amber warning bar appears inside the field: "Contact details will be removed on save"
+**And** on save, the value is passed through `infrastructure.sanitizer.ContactDetailSanitizer` server-side before persistence — redaction is silent and never a blocking error
 
-*Dev notes: Extend `platform.security`. New entities: `users` (email, passwordHash, role ENUM, status ENUM, createdAt TIMESTAMPTZ), `email_verification_tokens` (token, userId, expiresAt, used). Phone OTP via temporary token in Redis or DB (short TTL). Use `infrastructure.ses` for email dispatch. `@PreAuthorize` on profile endpoints. Test: `CoachRegistrationResourceIT`.*
+*Dev notes: Extend `platform.security`. New entities: `email_verification_tokens` (token UUID, userId, expiresAt, used), `phone_otp_tokens` (otpHash SHA-256, userId, expiresAt, used). OTP stored hashed as SHA-256(otp+userId) in DB — no Redis in this phase. Email rendered via Thymeleaf (`coachEmailVerify.html`, `coachOtp.html`) with locale from `user.langKey`; delivered via `infrastructure.ses.SesEmailService` (SesV2Client). `@PreAuthorize` on all non-public endpoints. Test: `CoachRegistrationResourceIT`.*
 
 ### Story 1.4: Parent Registration, Player Profiles & Shadow Accounts
 

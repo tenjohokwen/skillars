@@ -20,6 +20,10 @@ email:
 
 app:
   environment: "${ENVIRONMENT:dev}"
+  ses:
+    from-address: noreply@skillars.com
+    enabled: false
+  frontend-url: "http://localhost:9000"
   video:
     playback:
       signing-secret: "${APP_VIDEO_PLAYBACK_SIGNING_SECRET:dGVzdC1wbGF5YmFjay1zaWduaW5nLXNlY3JldC0zMi1ieXRlcyEh}"

@@ -37,7 +37,24 @@ export default {
     enableTwoFactor: 'Enable Two-Factor Authentication',
     preferredLanguage: 'Preferred Language',
     languageEnglish: 'English',
-    languageFrench: 'French'
+    languageFrench: 'French',
+    coach: {
+      registerTitle: 'Create Coach Account',
+      registerSubtitle: 'Join Skillars and start coaching',
+      emailPendingTitle: 'Check your email',
+      emailPendingBody: 'We sent a verification link to {email}. Click it to continue.',
+      resendEmail: 'Resend email',
+      resendCooldown: 'Resend available in {seconds}s',
+      phoneVerifyTitle: 'Verify your phone',
+      phoneVerifySubtitle: 'Enter the 6-digit code sent to your email',
+      tosLabel: 'I accept the Terms of Service',
+      privacyLabel: 'I accept the Privacy Policy',
+      signInInstead: 'Sign in instead',
+      emailInUse: 'This email is already registered.',
+      contactDetailWarning: 'Contact details will be removed on save',
+      profileBuilderTitle: 'Profile Builder',
+      profileBuilderBody: 'Your account is verified! The profile builder will be available soon.',
+    },
   },
   session: {
     expiring: 'Session Expiring',
@@ -77,7 +94,8 @@ export default {
     contactSupport: 'If the problem persists, contact support with the help code.',
     unknown: 'An unknown Exception has occurred',
     dataError: 'Data integrity error',
-    notFound: 'The requested resource was not found'
+    notFound: 'The requested resource was not found',
+    verificationFailed: 'Verification failed'
   },
   security: {
     unauthorized: 'You do not have the required rights. You can contact help desk',

@@ -20,6 +20,10 @@ email:
 
 app:
   environment: "${ENVIRONMENT:uat}"
+  ses:
+    from-address: noreply@skillars.com
+    enabled: false
+  frontend-url: "${APP_FRONTEND_URL:https://uat.skillars.com}"
 
 skillars:
   platform:

@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.security.api;
 
 import com.softropic.skillars.infrastructure.exception.ApplicationException;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.message.EmailTokenErrorDto;
 import com.softropic.skillars.infrastructure.message.ErrorDto;
 import com.softropic.skillars.infrastructure.message.ErrorMsg;
 import com.softropic.skillars.infrastructure.blobstore.contract.BlobstoreErrorCode;
@@ -13,6 +14,9 @@ import com.softropic.skillars.platform.filestorage.contract.exception.QuotaExcee
 import com.softropic.skillars.platform.filestorage.contract.exception.StorageValidationException;
 import com.softropic.skillars.platform.security.contract.event.SecurityAlertEvent;
 import com.softropic.skillars.infrastructure.security.event.BadCredentialsEvent;
+import com.softropic.skillars.platform.security.contract.exception.CoachRegistrationException;
+import com.softropic.skillars.platform.security.contract.exception.EmailTokenException;
+import com.softropic.skillars.platform.security.contract.exception.OtpVerificationException;
 import com.softropic.skillars.platform.security.contract.exception.ProfileActionException;
 import com.softropic.skillars.infrastructure.security.AuthorizationException;
 import com.softropic.skillars.platform.security.contract.exception.InvalidJWTDataException;
@@ -367,6 +371,27 @@ public class ApiAdvice {
         return dto;
     }
 
+
+    @ExceptionHandler(CoachRegistrationException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ErrorDto coachRegistrationExceptionHandler(final CoachRegistrationException ex) {
+        return logErrorAndReturnDTO(ex, ex.getMessage(), ex.getErrorCode());
+    }
+
+    @ExceptionHandler(EmailTokenException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public EmailTokenErrorDto emailTokenExceptionHandler(final EmailTokenException ex) {
+        final String helpCode = logError(ex, ex.getMessage());
+        final String message = messageSource.getMessage(ex.getErrorCode(), null, ex.getMessage(),
+            Locale.forLanguageTag(RequestMetadataProvider.getClientInfo().getChosenLang()));
+        return new EmailTokenErrorDto(helpCode, new ErrorMsg(ex.getErrorCode(), message), ex.isCanResend());
+    }
+
+    @ExceptionHandler(OtpVerificationException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public ErrorDto otpVerificationExceptionHandler(final OtpVerificationException ex) {
+        return logErrorAndReturnDTO(ex, ex.getMessage(), ex.getErrorCode());
+    }
 
     @ExceptionHandler(StorageObjectNotFoundException.class)
     @ResponseStatus(HttpStatus.NOT_FOUND)

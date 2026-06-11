@@ -1,3 +1,9 @@
+app:
+  ses:
+    from-address: noreply@skillars.com
+    enabled: true
+  frontend-url: "${APP_FRONTEND_URL:https://skillars.com}"
+
 email:
   retry:
     enabled: true

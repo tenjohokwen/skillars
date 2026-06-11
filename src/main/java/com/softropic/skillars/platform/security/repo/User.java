@@ -4,6 +4,8 @@ package com.softropic.skillars.platform.security.repo;
 import com.fasterxml.jackson.annotation.JsonManagedReference;
 import com.softropic.skillars.infrastructure.util.ClockProvider;
 import com.softropic.skillars.platform.security.contract.LoginIdType;
+import com.softropic.skillars.platform.security.contract.SkillarsRole;
+import com.softropic.skillars.platform.security.contract.SkillarsVerificationStatus;
 
 import org.hibernate.envers.Audited;
 
@@ -87,6 +89,13 @@ public class User extends Customer implements Serializable {
 
     private boolean otpEnabled;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "skillars_role")
+    private SkillarsRole skillarsRole;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "verification_status")
+    private SkillarsVerificationStatus verificationStatus = SkillarsVerificationStatus.UNVERIFIED;
 
     @ManyToMany(cascade = {REFRESH, DETACH, PERSIST}, fetch = FetchType.LAZY)
     @JoinTable(
@@ -206,6 +215,22 @@ public class User extends Customer implements Serializable {
 
     public void setOtpEnabled(boolean otpEnabled) {
         this.otpEnabled = otpEnabled;
+    }
+
+    public SkillarsRole getSkillarsRole() {
+        return skillarsRole;
+    }
+
+    public void setSkillarsRole(SkillarsRole skillarsRole) {
+        this.skillarsRole = skillarsRole;
+    }
+
+    public SkillarsVerificationStatus getVerificationStatus() {
+        return verificationStatus;
+    }
+
+    public void setVerificationStatus(SkillarsVerificationStatus verificationStatus) {
+        this.verificationStatus = verificationStatus;
     }
 
     // ==================== BUSINESS METHODS ====================

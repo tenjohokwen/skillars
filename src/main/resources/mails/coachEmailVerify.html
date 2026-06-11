@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.coach.verify.title}">Verify your Skillars account</title>
+</head>
+<body>
+    <p th:text="#{email.greeting(${recipient.firstname})}">Hello User,</p>
+
+    <p th:text="#{email.coach.verify.text1}">Thank you for registering. Click the link below to verify your email address.</p>
+
+    <p>
+        <a th:href="${map.verifyUrl}" th:text="#{email.coach.verify.linkText}">
+            Verify my email
+        </a>
+    </p>
+
+    <p th:text="#{email.coach.verify.expiry}">This link expires in 24 hours.</p>
+
+    <p th:text="#{email.coach.verify.ignore}">If you did not create a Skillars coach account, please ignore this email.</p>
+</body>
+</html>
