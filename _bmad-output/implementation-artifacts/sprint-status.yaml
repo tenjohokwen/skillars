@@ -157,7 +157,7 @@ development_status:
   # Epic 1: Platform Foundation & Security
   skillars-epic-1: in-progress
   skillars-1-1-feature-gate-configuration-layer: done
-  skillars-1-2-skillars-design-system-foundation: backlog
+  skillars-1-2-skillars-design-system-foundation: done
   skillars-1-3-coach-account-registration-email-verification: backlog
   skillars-1-4-parent-registration-player-profiles-shadow-accounts: backlog
   skillars-1-5-authentication-jwt-security: backlog

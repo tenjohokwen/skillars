@@ -1,7 +1,7 @@
 // Design system — import order matters
-@import 'variables';
-@import 'typography';
-@import 'animations';
-@import 'glass';
-@import 'layouts';
-@import 'components';
+@import 'tokens/colors';  // CSS custom property tokens (dark + light)
+@import 'typography';     // Utility classes (.text-hero, .text-body, etc.) — imports tokens/typography internally
+@import 'animations';     // Transitions + prefers-reduced-motion
+@import 'glass';          // .glass-card and surface utilities
+@import 'layouts';        // .app-bg, .app-page, grid helpers
+@import 'components';     // Quasar component overrides

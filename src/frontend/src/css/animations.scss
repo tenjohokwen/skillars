@@ -17,7 +17,7 @@ body {
 
 // Hover lift — shared base (compose with element selectors)
 .hover-lift {
-  transition: all 0.2s ease;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 
   &:hover {
     transform: translateY(-2px);
@@ -49,4 +49,8 @@ body {
 
 .pulse {
   animation: pulse 1.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
 }

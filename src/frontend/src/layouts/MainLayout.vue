@@ -45,12 +45,12 @@
         <!-- Theme toggle -->
         <q-btn
           flat round dense
-          :icon="isDark ? 'light_mode' : 'dark_mode'"
+          :icon="darkMode ? 'light_mode' : 'dark_mode'"
           class="header-btn"
-          :aria-label="isDark ? 'Switch to light mode' : 'Switch to dark mode'"
-          @click="toggleTheme"
+          :aria-label="darkMode ? t('theme.toggle') : t('theme.toggle')"
+          @click="onToggleTheme"
         >
-          <q-tooltip>{{ isDark ? 'Light mode' : 'Dark mode' }}</q-tooltip>
+          <q-tooltip>{{ darkMode ? t('theme.light') : t('theme.dark') }}</q-tooltip>
         </q-btn>
 
         <!-- Authenticated: user menu -->
@@ -171,13 +171,14 @@ import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { authApi } from 'src/api/auth.api';
 import { useSession } from 'src/composables/useSession';
+import { toggleTheme as bootToggleTheme, isDarkMode } from 'src/boot/theme';
 
 const router = useRouter();
 const { t, locale } = useI18n();
 const { destroySession } = useSession();
 
 const leftDrawerOpen = ref(false);
-const isDark = ref(true);
+const darkMode = ref(isDarkMode());
 
 const languages = [
   { label: 'English', value: 'en-US' },
@@ -216,16 +217,15 @@ function loadLanguagePreference() {
   }
 }
 
-function toggleTheme() {
-  isDark.value = !isDark.value;
-  document.body.classList.toggle('light', !isDark.value);
-  localStorage.setItem('theme', isDark.value ? 'dark' : 'light');
+function onToggleTheme() {
+  bootToggleTheme();
+  darkMode.value = isDarkMode();
 }
 
-function loadThemePreference() {
-  const saved = localStorage.getItem('theme');
-  isDark.value = saved !== 'light';
-  document.body.classList.toggle('light', !isDark.value);
+function onStorageThemeChange(event) {
+  if (event.key === 'skillars-theme') {
+    darkMode.value = isDarkMode();
+  }
 }
 
 function deleteUserCookie() {
@@ -252,13 +252,13 @@ function toggleLeftDrawer() {
 onMounted(() => {
   updateUsername();
   loadLanguagePreference();
-  loadThemePreference();
   window.addEventListener('session:expired', onSessionExpired);
-  const interval = setInterval(updateUsername, 1000);
-  onUnmounted(() => {
-    clearInterval(interval);
-    window.removeEventListener('session:expired', onSessionExpired);
-  });
+  window.addEventListener('storage', onStorageThemeChange);
+});
+
+onUnmounted(() => {
+  window.removeEventListener('session:expired', onSessionExpired);
+  window.removeEventListener('storage', onStorageThemeChange);
 });
 </script>
 
@@ -386,7 +386,7 @@ onMounted(() => {
   margin-top: auto;
 
   .logout-item:hover {
-    background: rgba(255, 95, 122, 0.08) !important;
+    background: var(--surface-danger-hover) !important;
   }
 }
 </style>

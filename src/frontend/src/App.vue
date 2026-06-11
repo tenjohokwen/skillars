@@ -27,25 +27,7 @@ function handleSessionExpired() {
   });
 }
 
-// Apply persisted theme before first render to avoid flash
-function applyPersistedTheme() {
-  const saved = localStorage.getItem('theme');
-  if (saved === 'light') {
-    document.body.classList.add('light');
-  } else {
-    document.body.classList.remove('light');
-  }
-}
-
-// Apply background class on body for the radial glow
-function applyBodyClass() {
-  document.body.classList.add('app-bg');
-}
-
 onMounted(() => {
-  applyPersistedTheme();
-  applyBodyClass();
-
   if (isAuthenticated()) {
     startSessionMonitoring();
   }

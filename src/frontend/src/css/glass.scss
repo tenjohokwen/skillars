@@ -49,7 +49,7 @@
 // Accent button — gradient background, dark text legible in both modes
 .btn-accent {
   background: var(--hero-gradient) !important;
-  color: #081018 !important;
+  color: var(--text-on-accent) !important;
   border: none !important;
   border-radius: 14px !important;
   font-weight: 600;

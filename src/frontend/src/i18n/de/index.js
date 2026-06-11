@@ -1,0 +1,25 @@
+export default {
+  common: {
+    cancel: 'Abbrechen',
+    save: 'Speichern',
+    back: 'Zurück',
+    next: 'Weiter',
+    loading: 'Wird geladen...',
+    confirm: 'Bestätigen',
+    delete: 'Löschen',
+  },
+  theme: {
+    toggle: 'Design wechseln',
+    dark: 'Dunkelmodus',
+    light: 'Hellmodus',
+  },
+  auth: {},
+  booking: {},
+  video: {},
+  marketplace: {},
+  session: {},
+  development: {},
+  payment: {},
+  messaging: {},
+  admin: {},
+}

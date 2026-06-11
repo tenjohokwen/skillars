@@ -8,6 +8,11 @@ const i18n = createI18n({
   legacy: false,
   globalInjection: true,
   messages,
+  fallbackLocale: {
+    'de': ['en', 'en-US'],
+    'en': ['en-US'],
+    default: ['en-US'],
+  },
 })
 
 /**

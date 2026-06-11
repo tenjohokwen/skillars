@@ -1,9 +1,10 @@
 // ============================================================
 // Typography — Inter font scale
 // ============================================================
+@import 'tokens/typography';
 
 .text-hero {
-  font-size: clamp(56px, 8vw, 72px);
+  font-size: $font-hero;
   font-weight: 800;
   line-height: 1;
   background: var(--hero-gradient);
@@ -13,40 +14,40 @@
 }
 
 .text-page-title {
-  font-size: clamp(28px, 3vw, 36px);
+  font-size: $font-page-title;
   font-weight: 700;
   color: var(--text-primary);
   line-height: 1.2;
 }
 
 .text-section-title {
-  font-size: clamp(18px, 2vw, 22px);
+  font-size: $font-section-title;
   font-weight: 700;
   color: var(--text-primary);
 }
 
 .text-card-title {
-  font-size: clamp(16px, 1.5vw, 18px);
+  font-size: $font-card-title;
   font-weight: 700;
   color: var(--text-primary);
 }
 
 .text-body {
-  font-size: clamp(14px, 1.2vw, 16px);
+  font-size: $font-body;
   font-weight: 400;
   line-height: 1.6;
   color: var(--text-secondary);
 }
 
 .text-meta {
-  font-size: clamp(12px, 1vw, 13px);
+  font-size: $font-meta;
   font-weight: 500;
   letter-spacing: 0.3px;
   color: var(--text-muted);
 }
 
 .text-label {
-  font-size: clamp(11px, 0.9vw, 13px);
+  font-size: $font-label;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;

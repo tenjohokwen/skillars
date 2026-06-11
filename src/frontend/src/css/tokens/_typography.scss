@@ -1,0 +1,8 @@
+// Font scale — used by typography.scss utility classes
+$font-hero:          clamp(56px, 8vw, 72px);
+$font-page-title:    clamp(28px, 3vw, 36px);
+$font-section-title: clamp(18px, 2vw, 22px);
+$font-card-title:    clamp(16px, 1.5vw, 18px);
+$font-body:          clamp(14px, 1.2vw, 16px);
+$font-meta:          clamp(12px, 1vw, 13px);
+$font-label:         clamp(11px, 0.9vw, 13px);

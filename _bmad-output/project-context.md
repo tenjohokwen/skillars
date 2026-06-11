@@ -181,3 +181,4 @@ If any check fails, the class belongs in a platform module.
 - Remove rules that become obvious over time.
 
 _Last Updated: 2026-05-27_
+
