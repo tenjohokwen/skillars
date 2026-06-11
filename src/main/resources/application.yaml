@@ -153,6 +153,8 @@ loki:
 app:
   environment: ${ENVIRONMENT:prod}
   version: ${APP_VERSION:unknown}
+  config:
+    cache-ttl-seconds: 300
   storage:
     provider: s3
     bucket: ${APP_STORAGE_BUCKET:skillars-dev}
