@@ -22,6 +22,9 @@
 
         <q-space />
 
+        <!-- Parent child switcher (self-hides when no players) -->
+        <ParentChildSwitcher />
+
         <!-- Language switcher -->
         <q-btn-dropdown flat no-caps :label="currentLanguageLabel" icon="language" class="header-btn">
           <q-list class="dropdown-list">
@@ -172,6 +175,7 @@ import { useI18n } from 'vue-i18n';
 import { authApi } from 'src/api/auth.api';
 import { useSession } from 'src/composables/useSession';
 import { toggleTheme as bootToggleTheme, isDarkMode } from 'src/boot/theme';
+import ParentChildSwitcher from 'src/components/ParentChildSwitcher.vue';
 
 const router = useRouter();
 const { t, locale } = useI18n();

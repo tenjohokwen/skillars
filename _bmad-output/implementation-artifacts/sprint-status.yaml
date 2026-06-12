@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-06-11
+# last_updated: 2026-06-12
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-06-11
+last_updated: 2026-06-12
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -159,7 +159,7 @@ development_status:
   skillars-1-1-feature-gate-configuration-layer: done
   skillars-1-2-skillars-design-system-foundation: done
   skillars-1-3-coach-account-registration-email-verification: done
-  skillars-1-4-parent-registration-player-profiles-shadow-accounts: backlog
+  skillars-1-4-parent-registration-player-profiles-shadow-accounts: done
   skillars-1-5-authentication-jwt-security: backlog
   skillars-1-6-age-tier-enforcement-family-data-isolation: backlog
   skillars-epic-1-retrospective: optional

@@ -69,6 +69,39 @@ const routes = [
         meta: {},
       },
 
+      // Parent registration flow (guest only)
+      {
+        path: 'parent-register',
+        component: () => import('pages/auth/ParentRegisterPage.vue'),
+        meta: { requiresGuest: true },
+      },
+      {
+        path: 'parent/email-pending',
+        component: () => import('pages/auth/ParentEmailPendingPage.vue'),
+        meta: { requiresGuest: true },
+      },
+      {
+        path: 'parent/verify-email',
+        component: () => import('pages/auth/ParentEmailVerifyPage.vue'),
+        meta: { requiresGuest: true },
+      },
+      {
+        path: 'parent/verify-phone',
+        component: () => import('pages/auth/ParentPhoneVerifyPage.vue'),
+        meta: { requiresGuest: true },
+      },
+      // Post-verification — no auth guard (JWT not available until Story 1.5)
+      {
+        path: 'parent/create-player',
+        component: () => import('pages/auth/CreatePlayerProfilePage.vue'),
+        meta: {},
+      },
+      {
+        path: 'parent/dashboard',
+        component: () => import('pages/auth/ParentDashboardPlaceholderPage.vue'),
+        meta: {},
+      },
+
       // Protected pages (auth required)
       {
         path: 'dashboard',

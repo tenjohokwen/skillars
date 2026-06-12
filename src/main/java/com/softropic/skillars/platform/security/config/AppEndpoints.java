@@ -25,12 +25,15 @@ public final class AppEndpoints {
         "/v1/account/reset_password/init", "/v1/account/reset_password/finish",
         "/api/v1/emails/**", "/authenticate",
         "/api/security/coach/register**", "/api/security/coach/verify-email**",
-        "/api/security/coach/verify-phone**", "/api/security/coach/resend-verification**"
+        "/api/security/coach/verify-phone**", "/api/security/coach/resend-verification**",
+        "/api/security/parent/register**", "/api/security/parent/verify-email**",
+        "/api/security/parent/verify-phone**", "/api/security/parent/resend-verification**",
+        "/api/security/parent/resend-otp**"
     );
     public static final List<String> PUBLIC_MGMT_ENDPOINTS = List.of("/manage/prometheus", "/manage/health", "/manage/info");
     public static final List<String> ALL_UNRESTRICTED;
 
-    private static final String[] SECURED_AUTHORITIES = new String[]{AuthoritiesConstants.ADMIN, AuthoritiesConstants.USER, AuthoritiesConstants.LTD_ADMIN, AuthoritiesConstants.COACH};
+    private static final String[] SECURED_AUTHORITIES = new String[]{AuthoritiesConstants.ADMIN, AuthoritiesConstants.USER, AuthoritiesConstants.LTD_ADMIN, AuthoritiesConstants.COACH, AuthoritiesConstants.PARENT};
 
 
     static {

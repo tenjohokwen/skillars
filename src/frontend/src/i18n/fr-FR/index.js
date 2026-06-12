@@ -1,4 +1,31 @@
 export default {
+  player: {
+    createTitle: 'Ajouter un profil de joueur',
+    nameLabel: 'Nom du joueur',
+    dobLabel: 'Date de naissance',
+    positionLabel: 'Position',
+    ageTierLabel: 'Groupe d\'âge',
+    consentTitle: 'Consentement parental',
+    consentBody: 'En créant ce profil pour un mineur, vous confirmez être son tuteur légal et acceptez la responsabilité de toute activité sur ce compte.',
+    consentLabel: 'Je consens au nom de ce joueur mineur',
+    createButton: 'Créer le profil',
+    switcher: {
+      title: 'Changer de joueur',
+      noPlayers: 'Aucun profil de joueur encore',
+    },
+    positions: {
+      GOALKEEPER: 'Gardien de but',
+      DEFENDER: 'Défenseur',
+      MIDFIELDER: 'Milieu de terrain',
+      FORWARD: 'Attaquant',
+    },
+    ageTiers: {
+      U10: 'U10',
+      AGE_10_12: '10–12',
+      AGE_13_17: '13–17',
+      ADULT: '18+',
+    },
+  },
   auth: {
     login: 'Connexion',
     logout: 'Deconnexion',
@@ -37,7 +64,27 @@ export default {
     enableTwoFactor: "Activer l'authentification a deux facteurs",
     preferredLanguage: 'Langue preferee',
     languageEnglish: 'Anglais',
-    languageFrench: 'Francais'
+    languageFrench: 'Francais',
+    parent: {
+      registerTitle: 'Créer un compte parent',
+      registerSubtitle: 'Gérez le parcours de coaching de votre enfant',
+      emailPendingTitle: 'Vérifiez votre email',
+      emailPendingBody: 'Nous avons envoyé un lien de vérification à {email}. Cliquez dessus pour continuer.',
+      resendEmail: 'Renvoyer l\'email',
+      resendCooldown: 'Renvoi disponible dans {seconds}s',
+      phoneVerifyTitle: 'Vérifiez votre téléphone',
+      phoneVerifySubtitle: 'Entrez le code à 6 chiffres envoyé à votre email',
+      tosLabel: 'J\'accepte les Conditions d\'utilisation',
+      privacyLabel: 'J\'accepte la Politique de confidentialité',
+      parentConsentLabel: 'J\'accepte la Politique de consentement parental et confirme être le tuteur légal',
+      signInInstead: 'Se connecter à la place',
+      emailInUse: 'Cet email est déjà enregistré.',
+      phoneInUse: 'Ce numéro de téléphone est déjà enregistré.',
+      resendOtp: 'Renvoyer le code',
+      contactDetailWarning: 'Les coordonnées seront supprimées lors de l\'enregistrement',
+      dashboardTitle: 'Compte vérifié',
+      dashboardBody: 'Votre compte est vérifié ! Connectez-vous pour créer des profils de joueurs et commencer à gérer les sessions.',
+    },
   },
   session: {
     expiring: 'Session expirant',
@@ -77,7 +124,8 @@ export default {
     contactSupport: "Si le probleme persiste, contactez le support avec le code d'aide.",
     unknown: "Une exception inconnue s'est produite",
     dataError: "Erreur d'integrite des donnees",
-    notFound: "La ressource demandee n'a pas ete trouvee"
+    notFound: "La ressource demandee n'a pas ete trouvee",
+    verificationFailed: 'Échec de la vérification'
   },
   security: {
     unauthorized: "Vous n'avez pas les droits requis. Vous pouvez contacter le support",

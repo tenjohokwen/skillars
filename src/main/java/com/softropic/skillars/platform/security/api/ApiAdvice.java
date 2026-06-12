@@ -15,6 +15,8 @@ import com.softropic.skillars.platform.filestorage.contract.exception.StorageVal
 import com.softropic.skillars.platform.security.contract.event.SecurityAlertEvent;
 import com.softropic.skillars.infrastructure.security.event.BadCredentialsEvent;
 import com.softropic.skillars.platform.security.contract.exception.CoachRegistrationException;
+import com.softropic.skillars.platform.security.contract.exception.ParentRegistrationException;
+import com.softropic.skillars.platform.security.contract.exception.ShadowAccountException;
 import com.softropic.skillars.platform.security.contract.exception.EmailTokenException;
 import com.softropic.skillars.platform.security.contract.exception.OtpVerificationException;
 import com.softropic.skillars.platform.security.contract.exception.ProfileActionException;
@@ -375,6 +377,18 @@ public class ApiAdvice {
     @ExceptionHandler(CoachRegistrationException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
     public ErrorDto coachRegistrationExceptionHandler(final CoachRegistrationException ex) {
+        return logErrorAndReturnDTO(ex, ex.getMessage(), ex.getErrorCode());
+    }
+
+    @ExceptionHandler(ParentRegistrationException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ErrorDto parentRegistrationExceptionHandler(final ParentRegistrationException ex) {
+        return logErrorAndReturnDTO(ex, ex.getMessage(), ex.getErrorCode());
+    }
+
+    @ExceptionHandler(ShadowAccountException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ErrorDto shadowAccountExceptionHandler(final ShadowAccountException ex) {
         return logErrorAndReturnDTO(ex, ex.getMessage(), ex.getErrorCode());
     }
 

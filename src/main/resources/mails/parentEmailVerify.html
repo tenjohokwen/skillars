@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.parent.verify.title}">Verify your Skillars parent account</title>
+</head>
+<body>
+    <p th:text="#{email.greeting(${recipient.firstname})}">Hello User,</p>
+
+    <p th:text="#{email.parent.verify.text1}">Thank you for registering. Click the link below to verify your email address.</p>
+
+    <p>
+        <a th:href="${map.verifyUrl}" th:text="#{email.parent.verify.linkText}">
+            Verify my email
+        </a>
+    </p>
+
+    <p th:text="#{email.parent.verify.expiry}">This link expires in 24 hours.</p>
+
+    <p th:text="#{email.parent.verify.ignore}">If you did not create a Skillars parent account, please ignore this email.</p>
+</body>
+</html>

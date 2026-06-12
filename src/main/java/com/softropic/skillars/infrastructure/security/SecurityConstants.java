@@ -29,8 +29,9 @@ public final class SecurityConstants {
     /**
      * Security expressions for @PreAuthorize annotations
      */
-    public static final String HAS_ANY_ROLE = "hasRole('ROLE_ADMIN') or hasRole('ROLE_LTD_ADMIN') or hasRole('ROLE_USER') or hasRole('ROLE_COACH')";
+    public static final String HAS_ANY_ROLE = "hasRole('ROLE_ADMIN') or hasRole('ROLE_LTD_ADMIN') or hasRole('ROLE_USER') or hasRole('ROLE_COACH') or hasRole('ROLE_PARENT')";
     public static final String HAS_ADMIN_ROLE = "hasRole('ROLE_ADMIN') or hasRole('ROLE_LTD_ADMIN')";
+    public static final String HAS_PARENT_ROLE = "hasRole('ROLE_PARENT')";
 
     // ==================== JWT AND AUTHENTICATION CONSTANTS ====================
 

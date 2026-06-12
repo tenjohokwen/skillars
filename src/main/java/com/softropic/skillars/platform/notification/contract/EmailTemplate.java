@@ -8,6 +8,8 @@ public enum EmailTemplate {
     SEND_OTP("email.otp.title"),
     COACH_EMAIL_VERIFY("email.coach.verify.title"),
     COACH_OTP("email.coach.otp.title"),
+    PARENT_EMAIL_VERIFY("email.parent.verify.title"),
+    PARENT_OTP("email.parent.otp.title"),
     EMAIL_CHANGE("email.change.title"),
     PROFILE_CHANGE("email.profile_change.title"),
     TENANT_API_KEY_GENERATED("email.tenant.api_key_generated.title"),

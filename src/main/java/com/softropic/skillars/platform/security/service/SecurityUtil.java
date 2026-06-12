@@ -96,8 +96,9 @@ public final class SecurityUtil {
      */
     public  User getCurrentUser() {
         final SecurityContext securityContext = SecurityContextHolder.getContext();
-        var authentication = (UsernamePasswordAuthenticationToken) securityContext.getAuthentication();
-        if (authentication != null && authentication.getDetails() instanceof Principal principal) {
+        var authentication = securityContext.getAuthentication();
+        if (authentication instanceof UsernamePasswordAuthenticationToken token
+                && token.getDetails() instanceof Principal principal) {
             return principal;
         }
         throw new IllegalStateException("User not found!");
