@@ -66,7 +66,12 @@ const routes = [
       {
         path: 'coach/profile-builder',
         component: () => import('pages/auth/CoachProfileBuilderPlaceholderPage.vue'),
-        meta: {},
+        meta: { requiresAuth: true },
+      },
+      {
+        path: 'coach/command-center',
+        component: () => import('pages/coach/CoachCommandCenterPlaceholderPage.vue'),
+        meta: { requiresAuth: true },
       },
 
       // Parent registration flow (guest only)
@@ -90,16 +95,20 @@ const routes = [
         component: () => import('pages/auth/ParentPhoneVerifyPage.vue'),
         meta: { requiresGuest: true },
       },
-      // Post-verification — no auth guard (JWT not available until Story 1.5)
       {
         path: 'parent/create-player',
         component: () => import('pages/auth/CreatePlayerProfilePage.vue'),
-        meta: {},
+        meta: { requiresAuth: true },
       },
       {
         path: 'parent/dashboard',
         component: () => import('pages/auth/ParentDashboardPlaceholderPage.vue'),
-        meta: {},
+        meta: { requiresAuth: true },
+      },
+      {
+        path: 'player/locker-room',
+        component: () => import('pages/player/PlayerLockerRoomPlaceholderPage.vue'),
+        meta: { requiresAuth: true },
       },
 
       // Protected pages (auth required)

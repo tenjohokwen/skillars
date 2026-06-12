@@ -1,5 +1,8 @@
 export default {
   auth: {
+    accountNotVerified: 'Your account is not yet verified. Please complete phone verification first.',
+    accountLocked: 'Too many login attempts. Please try again in a few minutes.',
+    invalidCredentials: 'Invalid email or password.',
     login: 'Login',
     logout: 'Logout',
     register: 'Register',
@@ -76,7 +79,13 @@ export default {
       dashboardBody: 'Your account is verified! Sign in to create player profiles and start managing sessions.',
     },
   },
+  coach: {
+    commandCenterTitle: 'Coach Command Center',
+    commandCenterBody: 'Your coaching dashboard will appear here once sessions are set up.',
+  },
   player: {
+    lockerRoomTitle: 'Player Locker Room',
+    lockerRoomBody: 'Your training content and homework will appear here.',
     createTitle: 'Add Player Profile',
     nameLabel: 'Player name',
     dobLabel: 'Date of birth',

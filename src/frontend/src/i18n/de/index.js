@@ -14,6 +14,9 @@ export default {
     light: 'Hellmodus',
   },
   auth: {
+    accountNotVerified: 'Ihr Konto ist noch nicht verifiziert. Bitte schließen Sie zunächst die Telefonverifizierung ab.',
+    accountLocked: 'Zu viele Anmeldeversuche. Versuchen Sie es in einigen Minuten erneut.',
+    invalidCredentials: 'Ungültige E-Mail-Adresse oder Passwort.',
     coach: {
       registerTitle: 'Trainer-Konto erstellen',
       registerSubtitle: 'Bei Skillars registrieren und mit dem Training beginnen',
@@ -52,7 +55,13 @@ export default {
       dashboardBody: 'Ihr Konto ist verifiziert! Melden Sie sich an, um Spielerprofile zu erstellen und Sitzungen zu verwalten.',
     },
   },
+  coach: {
+    commandCenterTitle: 'Trainer-Kommandozentrale',
+    commandCenterBody: 'Ihr Trainings-Dashboard erscheint hier, sobald Sitzungen eingerichtet sind.',
+  },
   player: {
+    lockerRoomTitle: 'Umkleideraum des Spielers',
+    lockerRoomBody: 'Ihr Trainingsinhalt und Ihre Hausaufgaben erscheinen hier.',
     createTitle: 'Spielerprofil hinzufügen',
     nameLabel: 'Spielername',
     dobLabel: 'Geburtsdatum',

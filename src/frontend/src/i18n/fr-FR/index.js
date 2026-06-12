@@ -1,5 +1,11 @@
 export default {
+  coach: {
+    commandCenterTitle: 'Centre de commande du coach',
+    commandCenterBody: 'Votre tableau de bord de coaching apparaîtra ici une fois les sessions configurées.',
+  },
   player: {
+    lockerRoomTitle: 'Vestiaire du joueur',
+    lockerRoomBody: "Votre contenu d'entraînement et vos devoirs apparaîtront ici.",
     createTitle: 'Ajouter un profil de joueur',
     nameLabel: 'Nom du joueur',
     dobLabel: 'Date de naissance',
@@ -27,6 +33,9 @@ export default {
     },
   },
   auth: {
+    accountNotVerified: "Votre compte n'est pas encore vérifié. Veuillez d'abord finaliser la vérification téléphonique.",
+    accountLocked: 'Trop de tentatives de connexion. Veuillez réessayer dans quelques minutes.',
+    invalidCredentials: 'Adresse e-mail ou mot de passe incorrect.',
     login: 'Connexion',
     logout: 'Deconnexion',
     register: "S'inscrire",

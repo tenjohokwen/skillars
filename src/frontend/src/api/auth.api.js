@@ -36,5 +36,19 @@ export const authApi = {
    */
   checkAuth() {
     return api.get('/v1/account/authenticate');
-  }
+  },
+
+  async skillarsLogin(email, password) {
+    const res = await api.post('/api/auth/login', { email, password })
+    return res.data
+  },
+
+  async skillarsRefresh() {
+    const res = await api.post('/api/auth/refresh')
+    return res.data
+  },
+
+  async skillarsLogout() {
+    await api.post('/api/auth/logout')
+  },
 };

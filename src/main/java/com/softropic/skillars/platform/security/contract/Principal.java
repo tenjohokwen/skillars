@@ -20,6 +20,8 @@ public class Principal extends User {
     private final boolean otpEnabled;
     private final String phone;
     private final LoginIdType loginIdType;
+    private final SkillarsRole skillarsRole;
+    private final SkillarsVerificationStatus verificationStatus;
     //TODO add the session id
     //Please note that the email address used as the username/login is the one associate to the user at the user creation time. If users update their email address in their My Profile area, the username is not updated to reflect the new email address.
 
@@ -39,6 +41,8 @@ public class Principal extends User {
         this.otpEnabled = builder.otpEnabled;
         this.phone = builder.phone;
         this.loginIdType = builder.loginIdType;
+        this.skillarsRole = builder.skillarsRole;
+        this.verificationStatus = builder.verificationStatus;
     }
 
     public static class Builder {
@@ -58,6 +62,8 @@ public class Principal extends User {
         private Boolean otpEnabled;
         private String phone;
         private LoginIdType loginIdType = LoginIdType.EMAIL;
+        private SkillarsRole skillarsRole;
+        private SkillarsVerificationStatus verificationStatus;
 
         // Builder methods for User fields
         public Builder username(String username) {
@@ -116,6 +122,16 @@ public class Principal extends User {
             return this;
         }
 
+        public Builder skillarsRole(SkillarsRole role) {
+            this.skillarsRole = role;
+            return this;
+        }
+
+        public Builder verificationStatus(SkillarsVerificationStatus status) {
+            this.verificationStatus = status;
+            return this;
+        }
+
         public Principal build() {
             return new Principal(this);
         }
@@ -137,7 +153,10 @@ public class Principal extends User {
                             .gender(user.getGender())
                             .displayName(user.getFirstName())
                             .businessId(String.valueOf(user.getId()))
-                            .otpEnabled(user.isOtpEnabled()).build();
+                            .otpEnabled(user.isOtpEnabled())
+                            .skillarsRole(user.getSkillarsRole())
+                            .verificationStatus(user.getVerificationStatus())
+                            .build();
     }
 
     public Gender getGender() {
@@ -154,5 +173,13 @@ public class Principal extends User {
 
     public boolean isOtpEnabled() {
         return otpEnabled;
+    }
+
+    public SkillarsRole getSkillarsRole() {
+        return skillarsRole;
+    }
+
+    public SkillarsVerificationStatus getVerificationStatus() {
+        return verificationStatus;
     }
 }

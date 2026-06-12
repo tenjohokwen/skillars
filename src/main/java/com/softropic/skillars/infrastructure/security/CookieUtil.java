@@ -30,6 +30,30 @@ public class CookieUtil {
         return cookie != null ? cookie.getValue() : null;
     }
 
+    public static void addCookie(HttpServletResponse res, String name, String value,
+                                 boolean httpOnly, int maxAge, String sameSite) {
+        ResponseCookie cookie = ResponseCookie.from(name, value)
+                                              .path("/")
+                                              .maxAge(maxAge)
+                                              .httpOnly(httpOnly)
+                                              .secure(RequestMetadataProvider.getClientInfo().isHttps())
+                                              .sameSite(sameSite)
+                                              .build();
+        res.addHeader("Set-Cookie", cookie.toString());
+    }
+
+    public static void removeCookie(String name, HttpServletResponse res,
+                                    boolean httpOnly, String sameSite) {
+        ResponseCookie cookie = ResponseCookie.from(name)
+                                              .path("/")
+                                              .maxAge(0)
+                                              .httpOnly(httpOnly)
+                                              .secure(RequestMetadataProvider.getClientInfo().isHttps())
+                                              .sameSite(sameSite)
+                                              .build();
+        res.addHeader("Set-Cookie", cookie.toString());
+    }
+
     public static void removeCookie(String cookieName, HttpServletResponse res, boolean httpOnly) {
         ResponseCookie springCookie = ResponseCookie.from(cookieName)
                                                     .path("/")

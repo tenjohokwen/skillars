@@ -22,6 +22,24 @@
           {{ t('session.expired') }}
         </q-banner>
 
+        <!-- Account not verified banner -->
+        <q-banner
+          v-if="accountNotVerified"
+          class="q-mb-md auth-banner auth-banner--error"
+          rounded
+        >
+          {{ t('auth.accountNotVerified') }}
+        </q-banner>
+
+        <!-- Rate limit banner -->
+        <q-banner
+          v-if="rateLimited"
+          class="q-mb-md auth-banner auth-banner--error"
+          rounded
+        >
+          {{ t('auth.accountLocked') }}
+        </q-banner>
+
         <q-form @submit.prevent="handleLogin" class="q-gutter-md">
           <q-input
             v-model="form.email"
@@ -102,38 +120,56 @@ import { useRouter, useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { authApi } from 'src/api/auth.api';
 import { useErrorHandler } from 'src/composables/useErrorHandler';
-import { useSession } from 'src/composables/useSession';
+import { useAuthStore } from 'src/stores/auth.store';
 
 const router = useRouter();
 const route = useRoute();
 const { t } = useI18n();
-const { initSession } = useSession();
+const authStore = useAuthStore();
 
 const {
   setError, clearError, hasError, errorMessage,
   isValidationError, helpCode, hasFieldError, getFieldError
 } = useErrorHandler();
 
+const ROLE_ROUTES = {
+  COACH: '/coach/command-center',
+  PARENT: '/parent/dashboard',
+  PLAYER: '/player/locker-room',
+  ADMIN: '/admin/health-dashboard',
+};
+
 const form = ref({ email: '', password: '' });
 const isPwd = ref(true);
 const isSubmitting = ref(false);
+const accountNotVerified = ref(false);
+const rateLimited = ref(false);
 
 const required = val => !!val || t('validation.required');
 const validEmail = val => /.+@.+\..+/.test(val) || t('validation.email');
 
 async function handleLogin() {
   clearError();
+  accountNotVerified.value = false;
+  rateLimited.value = false;
   isSubmitting.value = true;
   try {
-    const response = await authApi.login(form.value.email, form.value.password, 1);
-    if (response.msgKey === 'check.otp') {
-      router.push({ path: '/otp', query: { id: response.payload.loginInfoId, redirect: route.query.redirect } });
-    } else {
-      initSession();
-      router.push(route.query.redirect || '/dashboard');
-    }
+    const response = await authApi.skillarsLogin(form.value.email, form.value.password);
+    authStore.setUser(response);
+    const redirect = route.query.redirect
+    const safePath = typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')
+      ? redirect
+      : ROLE_ROUTES[response.role] || '/dashboard'
+    router.push(safePath)
   } catch (err) {
-    setError(err);
+    const status = err?.response?.status;
+    if (status === 403) {
+      accountNotVerified.value = true;
+    } else if (status === 429) {
+      rateLimited.value = true;
+    } else {
+      setError(err);
+    }
   } finally {
     isSubmitting.value = false;
   }

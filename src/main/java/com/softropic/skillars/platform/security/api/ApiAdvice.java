@@ -15,6 +15,8 @@ import com.softropic.skillars.platform.filestorage.contract.exception.StorageVal
 import com.softropic.skillars.platform.security.contract.event.SecurityAlertEvent;
 import com.softropic.skillars.infrastructure.security.event.BadCredentialsEvent;
 import com.softropic.skillars.platform.security.contract.exception.CoachRegistrationException;
+import com.softropic.skillars.platform.security.contract.exception.LoginRateLimitedException;
+import com.softropic.skillars.platform.security.contract.exception.SkillarsAccountNotVerifiedException;
 import com.softropic.skillars.platform.security.contract.exception.ParentRegistrationException;
 import com.softropic.skillars.platform.security.contract.exception.ShadowAccountException;
 import com.softropic.skillars.platform.security.contract.exception.EmailTokenException;
@@ -35,6 +37,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.MessageSource;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.AccountExpiredException;
@@ -257,6 +260,20 @@ public class ApiAdvice {
     public ErrorDto jwtExpirationHandler(final JWTExpiredException exception) {
         final String defaultMsg = "Your session is no longer valid. You need to sign-in again";
         return handleSecErrorAndReturnDTO(exception, defaultMsg, "security.sessionExpired");
+    }
+
+    @ExceptionHandler(SkillarsAccountNotVerifiedException.class)
+    @ResponseStatus(HttpStatus.FORBIDDEN)
+    public ErrorDto accountNotVerifiedHandler(final SkillarsAccountNotVerifiedException ex) {
+        return handleSecErrorAndReturnDTO(ex, ex.getMessage(), "security.accountNotVerified");
+    }
+
+    @ExceptionHandler(LoginRateLimitedException.class)
+    public ResponseEntity<ErrorDto> loginRateLimitedHandler(final LoginRateLimitedException ex) {
+        ErrorDto body = handleSecErrorAndReturnDTO(ex, ex.getMessage(), "security.accountLocked");
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header("Retry-After", String.valueOf(ex.getRetryAfterSeconds()))
+                .body(body);
     }
 
     @ExceptionHandler(SecException.class)

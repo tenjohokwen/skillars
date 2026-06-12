@@ -55,6 +55,9 @@ public final class SecurityConstants {
     public static final String ANONYMOUS_SESSION_COOKIE = "nym";
     public static final String LOCALE_COOKIE = "lang";
     public static final Duration JWT_TTL = Duration.ofMinutes(15);
+    public static final String REFRESH_TOKEN_COOKIE    = "rtkn";
+    public static final String SKILLARS_PROFILE_COOKIE = "skp";
+    public static final Duration REFRESH_TOKEN_TTL     = Duration.ofDays(7);
     public static final String ROLES = "roles";
     public static final String LOGIN_ID = "id";
     public static final String LOGIN_CODE = "loginCode";

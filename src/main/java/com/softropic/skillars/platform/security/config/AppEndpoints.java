@@ -28,7 +28,10 @@ public final class AppEndpoints {
         "/api/security/coach/verify-phone**", "/api/security/coach/resend-verification**",
         "/api/security/parent/register**", "/api/security/parent/verify-email**",
         "/api/security/parent/verify-phone**", "/api/security/parent/resend-verification**",
-        "/api/security/parent/resend-otp**"
+        "/api/security/parent/resend-otp**",
+        "/api/auth/login**",
+        "/api/auth/refresh**",
+        "/api/auth/logout**"
     );
     public static final List<String> PUBLIC_MGMT_ENDPOINTS = List.of("/manage/prometheus", "/manage/health", "/manage/info");
     public static final List<String> ALL_UNRESTRICTED;

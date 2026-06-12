@@ -6,6 +6,7 @@ import {
   createWebHashHistory,
 } from 'vue-router'
 import routes from './routes'
+import { useAuthStore } from 'src/stores/auth.store'
 
 /*
  * If not building with SSR mode, you can
@@ -33,11 +34,24 @@ export default defineRouter(function (/* { store, ssrContext } */) {
     history: createHistory(process.env.VUE_ROUTER_BASE),
   })
 
-  // Navigation guards for auth protection
+  const ROLE_ROUTES = {
+    COACH: '/coach/command-center',
+    PARENT: '/parent/dashboard',
+    PLAYER: '/player/locker-room',
+    ADMIN: '/admin/health-dashboard',
+  }
+
+  let hydrated = false
   Router.beforeEach((to, from, next) => {
+    const authStore = useAuthStore()
+    if (!hydrated) {
+      authStore.hydrateFromCookie()
+      hydrated = true
+    }
+
     const requiresAuth = to.matched.some((r) => r.meta.requiresAuth)
     const requiresGuest = to.matched.some((r) => r.meta.requiresGuest)
-    const isAuthenticated = document.cookie.includes('user=')
+    const isAuthenticated = authStore.isAuthenticated
 
     if (requiresAuth && !isAuthenticated) {
       next({ path: '/login', query: { redirect: to.fullPath } })
@@ -45,7 +59,7 @@ export default defineRouter(function (/* { store, ssrContext } */) {
     }
 
     if (requiresGuest && isAuthenticated) {
-      next('/dashboard')
+      next(ROLE_ROUTES[authStore.role] || '/dashboard')
       return
     }
 
