@@ -159,40 +159,55 @@ class JWTAuthorizationFilterTest {
     }
 
     @Test
-    @DisplayName("No Token: SecurityContext not set, filter chain aborts")
-    void testWhenNoToken_ThrowMissingAuthenticationException() {
+    @DisplayName("No Token: 401 sent, filter chain aborted")
+    void testWhenNoToken_ThrowMissingAuthenticationException() throws ServletException, IOException {
         // Setup
         when(loginTokenManager.extractPrincipal(request)).thenReturn(null);
 
         // Action
-        assertThrows(MissingAuthenticationException.class, () -> filter.doFilterInternal(request, response, filterChain));
+        filter.doFilterInternal(request, response, filterChain);
+
+        // Verification
+        verify(response).sendError(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(securityUtil).logout(response);
+        verify(filterChain, never()).doFilter(request, response);
     }
 
     @Test
-    @DisplayName("Expired Token: Context not set, aborts the filter chain")
-    void testWhenJWTExpiredException_LetExceptionBubbleUp() {
+    @DisplayName("Expired Token: 401 sent, filter chain aborted")
+    void testWhenJWTExpiredException_LetExceptionBubbleUp() throws ServletException, IOException {
         // Setup
         JWTExpiredException expiredException = new JWTExpiredException("Token expired", null, null);
         when(loginTokenManager.extractPrincipal(request)).thenThrow(expiredException);
 
         // Action
-        assertThrows(JWTExpiredException.class, () -> filter.doFilterInternal(request, response, filterChain));
+        filter.doFilterInternal(request, response, filterChain);
+
+        // Verification
+        verify(response).sendError(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(securityUtil).logout(response);
+        verify(filterChain, never()).doFilter(request, response);
     }
 
     @Test
-    @DisplayName("Invalid Signature Token: Context not set, abort filter chain")
-    void testWhenInvalidJWTDataException_LetExceptionBubbleUp() {
+    @DisplayName("Invalid Signature Token: 401 sent, filter chain aborted")
+    void testWhenInvalidJWTDataException_LetExceptionBubbleUp() throws ServletException, IOException {
         // Setup
         InvalidJWTDataException invalidSigException = new InvalidJWTDataException("Invalid signature", null);
         when(loginTokenManager.extractPrincipal(request)).thenThrow(invalidSigException);
 
         // Action
-        assertThrows(InvalidJWTDataException.class, () -> filter.doFilterInternal(request, response, filterChain));
+        filter.doFilterInternal(request, response, filterChain);
+
+        // Verification
+        verify(response).sendError(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(securityUtil).logout(response);
+        verify(filterChain, never()).doFilter(request, response);
     }
 
     @Test
-    @DisplayName("Token Fixation Detected: abort filter chain")
-    void testWhenTokenFixed_ThrowJWTTheftExceptionAndLetItBubbleUp() {
+    @DisplayName("Token Fixation Detected: 401 sent, filter chain aborted")
+    void testWhenTokenFixed_ThrowJWTTheftExceptionAndLetItBubbleUp() throws ServletException, IOException {
         // Setup
         when(loginTokenManager.extractPrincipal(request)).thenReturn(principal); // Token initially seems valid
         when(loadUserByUserNameService.loadUserByUsername("testuser")).thenReturn(userDetails); // User details are loaded
@@ -205,14 +220,18 @@ class JWTAuthorizationFilterTest {
         SecurityContextHolder.setContext(context);
         assertNotNull(SecurityContextHolder.getContext().getAuthentication(), "Context should have auth before isTokenFixed check");
 
-
         // Action
-        assertThrows(JWTTheftException.class, () -> filter.doFilterInternal(request, response, filterChain));
+        filter.doFilterInternal(request, response, filterChain);
+
+        // Verification
+        verify(response).sendError(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(securityUtil).logout(response);
+        verify(filterChain, never()).doFilter(request, response);
     }
 
     @Test
-    @DisplayName("User Disabled: Context not set, abort filter chain")
-    void testWhenUserDisabled_LetDisabledExeceptionBubbleUp() {
+    @DisplayName("User Disabled: 401 sent, filter chain aborted")
+    void testWhenUserDisabled_LetDisabledExeceptionBubbleUp() throws ServletException, IOException {
         // Setup
         when(loginTokenManager.extractPrincipal(request)).thenReturn(principal);
         when(loginTokenManager.isTokenFixed(request)).thenReturn(false);
@@ -220,12 +239,17 @@ class JWTAuthorizationFilterTest {
         when(daoAuthProvider.authorize(any(), any())).thenThrow(new DisabledException("Account is disabled"));
 
         // Action
-        assertThrows(DisabledException.class, () -> filter.doFilterInternal(request, response, filterChain));
+        filter.doFilterInternal(request, response, filterChain);
+
+        // Verification
+        verify(response).sendError(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(securityUtil).logout(response);
+        verify(filterChain, never()).doFilter(request, response);
     }
 
     @Test
-    @DisplayName("User Locked: Context not set, abort filter chain")
-    void testWhenUserLocked_LetLockedExceptionBubbleUp() {
+    @DisplayName("User Locked: 401 sent, filter chain aborted")
+    void testWhenUserLocked_LetLockedExceptionBubbleUp() throws ServletException, IOException {
         // Setup
         when(loginTokenManager.extractPrincipal(request)).thenReturn(principal);
         when(loginTokenManager.isTokenFixed(request)).thenReturn(false);
@@ -233,11 +257,16 @@ class JWTAuthorizationFilterTest {
         when(daoAuthProvider.authorize(any(), any())).thenThrow(new LockedException("Account is locked"));
 
         // Action
-        assertThrows(LockedException.class, () -> filter.doFilterInternal(request, response, filterChain));
+        filter.doFilterInternal(request, response, filterChain);
+
+        // Verification
+        verify(response).sendError(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(securityUtil).logout(response);
+        verify(filterChain, never()).doFilter(request, response);
     }
 
     @Test
-    @DisplayName("User Not Found by DAO: Context not set, event published, filter chain aborts")
+    @DisplayName("User Not Found by DAO: UsernameNotFoundException propagates (not an auth-token failure)")
     void testUserNotFoundByDao_LetUsernameNotFoundExceptionBubbleUp() {
         // Setup
         when(loginTokenManager.extractPrincipal(request)).thenReturn(principal);
@@ -251,7 +280,8 @@ class JWTAuthorizationFilterTest {
     }
 
     @Test
-    void testAuthorizationExceptionBubblesUp() {
+    @DisplayName("Authorization Exception: 401 sent, filter chain aborted")
+    void testAuthorizationExceptionBubblesUp() throws ServletException, IOException {
         // Setup
         when(loginTokenManager.extractPrincipal(request)).thenReturn(principal);
         when(loginTokenManager.isTokenFixed(request)).thenReturn(false);
@@ -260,9 +290,13 @@ class JWTAuthorizationFilterTest {
         doThrow(missingRights).when(daoAuthProvider).checkAuthorities(any(), any());
 
         // Action
-        assertThrows(AuthorizationException.class, () -> filter.doFilterInternal(request, response, filterChain));
+        filter.doFilterInternal(request, response, filterChain);
 
         // Verification
+        verify(response).sendError(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(securityUtil).logout(response);
+        verify(filterChain, never()).doFilter(request, response);
+
         verify(loginTokenManager).ensureClientHasPostLoginId();
         verify(loginTokenManager).isTokenFixed(request);
         verify(loginTokenManager, times(2)).extractPrincipal(request);
@@ -271,5 +305,5 @@ class JWTAuthorizationFilterTest {
         verify(securedHttpEndpointGuard).isUnrestricted(request);
         verify(loginTokenManager, never()).extendTtlOfToken(any(), any());
     }
-    
+
 }

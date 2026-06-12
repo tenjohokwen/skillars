@@ -333,7 +333,7 @@ public class SecurityIT {
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(accountUri, HttpMethod.GET, null, httpHeaders, Map.class))
                 .isInstanceOf(HttpClientErrorException.class)
-                .hasFieldOrPropertyWithValue("statusCode", HttpStatus.FORBIDDEN);
+                .hasFieldOrPropertyWithValue("statusCode", HttpStatus.UNAUTHORIZED);
     }
 
     @Test

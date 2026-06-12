@@ -14,6 +14,7 @@ import com.softropic.skillars.platform.filestorage.contract.exception.QuotaExcee
 import com.softropic.skillars.platform.filestorage.contract.exception.StorageValidationException;
 import com.softropic.skillars.platform.security.contract.event.SecurityAlertEvent;
 import com.softropic.skillars.infrastructure.security.event.BadCredentialsEvent;
+import com.softropic.skillars.platform.marketplace.contract.MarketplaceException;
 import com.softropic.skillars.platform.security.contract.exception.CoachRegistrationException;
 import com.softropic.skillars.platform.security.contract.exception.FeatureGatedException;
 import com.softropic.skillars.platform.security.contract.exception.UserNotFoundException;
@@ -283,6 +284,13 @@ public class ApiAdvice {
     public ErrorDto featureGatedHandler(final FeatureGatedException ex) {
         log.warn("Feature gate blocked: feature={} requiredTier={}", ex.getFeatureKey(), ex.getRequiredTier());
         return logErrorAndReturnDTO(ex, ex.getMessage(), "security.featureGated");
+    }
+
+    @ExceptionHandler(MarketplaceException.class)
+    @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)
+    public ErrorDto marketplaceExceptionHandler(final MarketplaceException ex) {
+        log.warn("Marketplace error: code={} msg={}", ex.getErrorCode(), ex.getMessage());
+        return logErrorAndReturnDTO(ex, ex.getMessage(), ex.getErrorCode());
     }
 
     @ExceptionHandler(SecException.class)

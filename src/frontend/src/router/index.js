@@ -7,6 +7,7 @@ import {
 } from 'vue-router'
 import routes from './routes'
 import { useAuthStore } from 'src/stores/auth.store'
+import { useProfileBuilderStore } from 'src/stores/profileBuilder.store'
 
 /*
  * If not building with SSR mode, you can
@@ -42,7 +43,7 @@ export default defineRouter(function (/* { store, ssrContext } */) {
   }
 
   let hydrated = false
-  Router.beforeEach((to, from, next) => {
+  Router.beforeEach(async (to, from, next) => {
     const authStore = useAuthStore()
     if (!hydrated) {
       authStore.hydrateFromCookie()
@@ -61,6 +62,15 @@ export default defineRouter(function (/* { store, ssrContext } */) {
     if (requiresGuest && isAuthenticated) {
       next(ROLE_ROUTES[authStore.role] || '/dashboard')
       return
+    }
+
+    if (to.path === '/coach/command-center' && authStore.isCoach) {
+      const pbStore = useProfileBuilderStore()
+      await pbStore.loadStatus()
+      if (!pbStore.isComplete) {
+        next('/coach/profile-builder')
+        return
+      }
     }
 
     next()

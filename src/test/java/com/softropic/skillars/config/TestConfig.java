@@ -13,6 +13,7 @@ import net.ttddyy.dsproxy.listener.QueryExecutionListener;
 import net.ttddyy.dsproxy.listener.logging.SystemOutQueryLoggingListener;
 import net.ttddyy.dsproxy.support.ProxyDataSourceBuilder;
 
+import org.apache.hc.client5.http.impl.classic.HttpClients;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.jdbc.JdbcConnectionDetails;
@@ -22,6 +23,7 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
+import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.web.client.RestTemplate;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -107,6 +109,12 @@ public class TestConfig {
     public RestTemplate restTemplate(RestTemplateBuilder builder) {
         // Primary bean — wins unqualified RestTemplate injection (e.g. HttpTestClient)
         // noRetryRestTemplate bean (WebhookConfig) requires @Qualifier("noRetryRestTemplate")
-        return builder.build();
+        // Cookie management is disabled: Apache HttpClient 5's default cookie store would
+        // persist login cookies across tests, causing unauthenticated requests to be
+        // silently injected with a previous test's JWT.
+        var httpClient = HttpClients.custom().disableCookieManagement().build();
+        return builder
+            .requestFactory(() -> new HttpComponentsClientHttpRequestFactory(httpClient))
+            .build();
     }
 }

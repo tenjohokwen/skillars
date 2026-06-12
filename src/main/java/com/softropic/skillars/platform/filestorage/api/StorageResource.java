@@ -7,6 +7,7 @@ import com.softropic.skillars.platform.filestorage.contract.SignDownloadResponse
 import com.softropic.skillars.platform.filestorage.contract.SignUploadRequest;
 import com.softropic.skillars.platform.filestorage.contract.SignUploadResponse;
 import com.softropic.skillars.platform.filestorage.service.FileStorageService;
+import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.servlet.http.HttpServletRequest;
@@ -14,6 +15,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -33,11 +35,20 @@ public class StorageResource {
     private final FileStorageService fileStorageService;
     private final SecurityUtil securityUtil;
 
+    // Owner-bound entities: entityId must match the authenticated user's own ID
+    private static final java.util.Set<String> OWNER_BOUND_ENTITIES = java.util.Set.of("coach_profile");
+
     @PostMapping("/sign/upload")
     @PreAuthorize(SecurityConstants.HAS_ANY_ROLE)
     @Observed(name = "storage.sign.upload")
     public ResponseEntity<SignUploadResponse> signUpload(
         @RequestBody @Valid SignUploadRequest request) {
+        if (OWNER_BOUND_ENTITIES.contains(request.entity())) {
+            String ownerId = ((Principal) securityUtil.getCurrentUser()).getBusinessId();
+            if (!ownerId.equals(request.entityId())) {
+                throw new AccessDeniedException("entityId must match authenticated user");
+            }
+        }
         return ResponseEntity.ok(fileStorageService.signUpload(request));
     }
 

@@ -165,8 +165,8 @@ development_status:
   skillars-epic-1-retrospective: optional
 
   # Epic 2: Coach Discovery & Onboarding
-  skillars-epic-2: backlog
-  skillars-2-1-coach-profile-builder: backlog
+  skillars-epic-2: in-progress
+  skillars-2-1-coach-profile-builder: review
   skillars-2-2-coach-marketplace-search: backlog
   skillars-2-3-coach-public-profile-page: backlog
   skillars-2-4-contact-detail-sanitization-ux: backlog

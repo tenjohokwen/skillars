@@ -1,0 +1,2583 @@
+diff --git a/_bmad-output/implementation-artifacts/sprint-status.yaml b/_bmad-output/implementation-artifacts/sprint-status.yaml
+index 2b7b762..b930c1c 100644
+--- a/_bmad-output/implementation-artifacts/sprint-status.yaml
++++ b/_bmad-output/implementation-artifacts/sprint-status.yaml
+@@ -165,8 +165,8 @@ development_status:
+   skillars-epic-1-retrospective: optional
+ 
+   # Epic 2: Coach Discovery & Onboarding
+-  skillars-epic-2: backlog
+-  skillars-2-1-coach-profile-builder: backlog
++  skillars-epic-2: in-progress
++  skillars-2-1-coach-profile-builder: review
+   skillars-2-2-coach-marketplace-search: backlog
+   skillars-2-3-coach-public-profile-page: backlog
+   skillars-2-4-contact-detail-sanitization-ux: backlog
+diff --git a/src/frontend/src/api/marketplace.api.js b/src/frontend/src/api/marketplace.api.js
+new file mode 100644
+index 0000000..398a72b
+--- /dev/null
++++ b/src/frontend/src/api/marketplace.api.js
+@@ -0,0 +1,16 @@
++import { api } from 'src/boot/axios'
++
++export const getProfileBuilderStatus = () =>
++  api.get('/api/marketplace/coaches/me/profile/status')
++
++export const saveProfileBuilderStep = (stepNumber, data) =>
++  api.put(`/api/marketplace/coaches/me/profile/steps/${stepNumber}`, data)
++
++export const publishProfile = () =>
++  api.post('/api/marketplace/coaches/me/profile/publish')
++
++export const signUpload = (payload) =>
++  api.post('/api/storage/sign/upload', payload)
++
++export const confirmUpload = (key, payload) =>
++  api.post(`/api/storage/confirm/${key}`, payload)
+diff --git a/src/frontend/src/components/profileBuilder/ProfileBuilderStep1.vue b/src/frontend/src/components/profileBuilder/ProfileBuilderStep1.vue
+new file mode 100644
+index 0000000..607d842
+--- /dev/null
++++ b/src/frontend/src/components/profileBuilder/ProfileBuilderStep1.vue
+@@ -0,0 +1,89 @@
++<template>
++  <div>
++    <q-input
++      v-model="form.displayName"
++      :label="t('auth.coach.step1DisplayName')"
++      outlined
++      lazy-rules
++      :rules="[v => !!v || t('validation.required'), v => v.length <= 120 || t('validation.maxLength', { max: 120 })]"
++      class="q-mb-sm"
++    />
++    <q-input
++      v-model="form.bio"
++      :label="t('auth.coach.step1Bio')"
++      type="textarea"
++      outlined
++      autogrow
++      :rules="[v => !v || v.length <= 2000 || t('validation.maxLength', { max: 2000 })]"
++      class="q-mb-sm"
++    />
++    <q-input
++      v-model="form.city"
++      :label="t('auth.coach.step1City')"
++      outlined
++      class="q-mb-sm"
++    />
++    <q-input
++      v-model="form.district"
++      :label="t('auth.coach.step1District')"
++      outlined
++      class="q-mb-sm"
++    />
++    <q-select
++      v-model="form.languages"
++      :label="t('auth.coach.step1Languages')"
++      :options="languageOptions"
++      outlined
++      multiple
++      use-chips
++      :rules="[v => (v && v.length > 0) || t('validation.required')]"
++      class="q-mb-sm"
++    />
++    <div class="q-mt-md">
++      <q-btn
++        :label="t('common.next')"
++        color="primary"
++        @click="submit"
++        :loading="loading"
++        unelevated
++      />
++    </div>
++  </div>
++</template>
++
++<script setup>
++import { reactive } from 'vue'
++import { useI18n } from 'vue-i18n'
++
++const { t } = useI18n()
++
++const props = defineProps({
++  loading: Boolean,
++})
++
++const emit = defineEmits(['submit'])
++
++const languageOptions = ['English', 'German', 'French', 'Spanish', 'Arabic', 'Portuguese']
++
++const canonicalTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
++
++const form = reactive({
++  displayName: '',
++  bio: '',
++  city: '',
++  district: '',
++  languages: [],
++})
++
++function submit() {
++  if (!form.displayName || form.languages.length === 0) return
++  emit('submit', {
++    displayName: form.displayName,
++    bio: form.bio || null,
++    city: form.city || null,
++    district: form.district || null,
++    languages: form.languages,
++    canonicalTimezone,
++  })
++}
++</script>
+diff --git a/src/frontend/src/components/profileBuilder/ProfileBuilderStep2.vue b/src/frontend/src/components/profileBuilder/ProfileBuilderStep2.vue
+new file mode 100644
+index 0000000..b84215f
+--- /dev/null
++++ b/src/frontend/src/components/profileBuilder/ProfileBuilderStep2.vue
+@@ -0,0 +1,56 @@
++<template>
++  <div>
++    <div class="text-caption q-mb-xs">{{ t('auth.coach.step2Specialties') }}</div>
++    <q-select
++      v-model="form.specialties"
++      :options="specialtyOptions"
++      outlined
++      multiple
++      use-chips
++      :rules="[v => (v && v.length > 0) || t('validation.required')]"
++      class="q-mb-md"
++    />
++    <div class="text-caption q-mb-xs">{{ t('auth.coach.step2AgeGroups') }}</div>
++    <div class="q-gutter-sm q-mb-md">
++      <q-checkbox v-model="form.ageGroups" val="U10" label="U10" />
++      <q-checkbox v-model="form.ageGroups" val="AGE_10_12" label="10–12" />
++      <q-checkbox v-model="form.ageGroups" val="AGE_13_17" label="13–17" />
++      <q-checkbox v-model="form.ageGroups" val="ADULT" label="18+" />
++    </div>
++    <q-btn
++      :label="t('common.next')"
++      color="primary"
++      @click="submit"
++      :loading="loading"
++      unelevated
++    />
++  </div>
++</template>
++
++<script setup>
++import { reactive } from 'vue'
++import { useI18n } from 'vue-i18n'
++
++const { t } = useI18n()
++
++defineProps({ loading: Boolean })
++const emit = defineEmits(['submit'])
++
++const specialtyOptions = [
++  'Dribbling', 'Shooting', 'Passing', 'Defending', 'Goalkeeping',
++  'Fitness', 'Tactics', 'Set Pieces', 'Heading', 'First Touch',
++]
++
++const form = reactive({
++  specialties: [],
++  ageGroups: [],
++})
++
++function submit() {
++  if (!form.specialties.length || !form.ageGroups.length) return
++  emit('submit', {
++    specialties: form.specialties,
++    ageGroups: form.ageGroups,
++  })
++}
++</script>
+diff --git a/src/frontend/src/components/profileBuilder/ProfileBuilderStep3.vue b/src/frontend/src/components/profileBuilder/ProfileBuilderStep3.vue
+new file mode 100644
+index 0000000..85cfb90
+--- /dev/null
++++ b/src/frontend/src/components/profileBuilder/ProfileBuilderStep3.vue
+@@ -0,0 +1,92 @@
++<template>
++  <div>
++    <q-input
++      v-model.number="form.perSessionPrice"
++      :label="t('auth.coach.step3PerSessionPrice')"
++      outlined
++      type="number"
++      prefix="€"
++      :rules="[v => !!v && v > 0 || t('validation.required')]"
++      class="q-mb-md"
++    />
++
++    <div class="text-caption q-mb-xs">{{ t('auth.coach.step3SessionPacks') }}</div>
++    <div v-for="(pack, i) in form.sessionPacks" :key="i" class="row q-col-gutter-sm q-mb-sm">
++      <div class="col-4">
++        <q-input
++          v-model.number="pack.sessionCount"
++          label="Sessions"
++          outlined
++          type="number"
++          dense
++        />
++      </div>
++      <div class="col-4">
++        <q-input
++          v-model.number="pack.totalPrice"
++          label="Price (€)"
++          outlined
++          type="number"
++          dense
++        />
++      </div>
++      <div class="col-3">
++        <q-input v-model="pack.label" label="Label" outlined dense />
++      </div>
++      <div class="col-1 flex items-center">
++        <q-btn icon="close" flat dense @click="removePack(i)" />
++      </div>
++    </div>
++    <q-btn
++      :label="t('auth.coach.step3AddPack')"
++      flat
++      size="sm"
++      icon="add"
++      @click="addPack"
++      class="q-mb-md"
++    />
++
++    <q-btn
++      :label="t('common.next')"
++      color="primary"
++      @click="submit"
++      :loading="loading"
++      unelevated
++    />
++  </div>
++</template>
++
++<script setup>
++import { reactive } from 'vue'
++import { useI18n } from 'vue-i18n'
++
++const { t } = useI18n()
++
++defineProps({ loading: Boolean })
++const emit = defineEmits(['submit'])
++
++const form = reactive({
++  perSessionPrice: null,
++  sessionPacks: [],
++})
++
++function addPack() {
++  form.sessionPacks.push({ sessionCount: null, totalPrice: null, label: '' })
++}
++
++function removePack(i) {
++  form.sessionPacks.splice(i, 1)
++}
++
++function submit() {
++  if (!form.perSessionPrice || form.perSessionPrice <= 0) return
++  emit('submit', {
++    perSessionPrice: form.perSessionPrice,
++    sessionPacks: form.sessionPacks.filter(p => p.sessionCount > 0 && p.totalPrice > 0).map(p => ({
++      sessionCount: p.sessionCount,
++      totalPrice: p.totalPrice,
++      label: p.label || null,
++    })),
++  })
++}
++</script>
+diff --git a/src/frontend/src/components/profileBuilder/ProfileBuilderStep4.vue b/src/frontend/src/components/profileBuilder/ProfileBuilderStep4.vue
+new file mode 100644
+index 0000000..0f4e2bb
+--- /dev/null
++++ b/src/frontend/src/components/profileBuilder/ProfileBuilderStep4.vue
+@@ -0,0 +1,91 @@
++<template>
++  <div>
++    <div class="text-caption q-mb-xs">{{ t('auth.coach.step4AvailabilityWindows') }}</div>
++    <div v-for="(win, i) in form.windows" :key="i" class="row q-col-gutter-sm q-mb-sm items-center">
++      <div class="col-3">
++        <q-select
++          v-model="win.dayOfWeek"
++          :options="dayOptions"
++          option-value="value"
++          option-label="label"
++          emit-value
++          map-options
++          label="Day"
++          outlined
++          dense
++        />
++      </div>
++      <div class="col-3">
++        <q-input v-model="win.startTime" label="Start" outlined dense type="time" />
++      </div>
++      <div class="col-3">
++        <q-input v-model="win.endTime" label="End" outlined dense type="time" />
++      </div>
++      <div class="col-2">
++        <q-btn icon="close" flat dense @click="removeWindow(i)" />
++      </div>
++    </div>
++    <q-btn
++      :label="t('auth.coach.step4AddWindow')"
++      flat
++      size="sm"
++      icon="add"
++      @click="addWindow"
++      class="q-mb-md"
++    />
++    <div>
++      <q-btn
++        :label="t('common.next')"
++        color="primary"
++        @click="submit"
++        :loading="loading"
++        unelevated
++      />
++    </div>
++  </div>
++</template>
++
++<script setup>
++import { reactive } from 'vue'
++import { useI18n } from 'vue-i18n'
++
++const { t } = useI18n()
++
++defineProps({ loading: Boolean })
++const emit = defineEmits(['submit'])
++
++const canonicalTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
++
++const dayOptions = [
++  { label: 'Monday', value: 1 },
++  { label: 'Tuesday', value: 2 },
++  { label: 'Wednesday', value: 3 },
++  { label: 'Thursday', value: 4 },
++  { label: 'Friday', value: 5 },
++  { label: 'Saturday', value: 6 },
++  { label: 'Sunday', value: 7 },
++]
++
++const form = reactive({ windows: [] })
++
++function addWindow() {
++  form.windows.push({ dayOfWeek: null, startTime: '', endTime: '' })
++}
++
++function removeWindow(i) {
++  form.windows.splice(i, 1)
++}
++
++function submit() {
++  const valid = form.windows.length > 0 && form.windows.every(w => w.dayOfWeek && w.startTime && w.endTime)
++  if (!valid) return
++  emit('submit', {
++    windows: form.windows.map(w => ({
++      dayOfWeek: w.dayOfWeek,
++      startTime: w.startTime,
++      endTime: w.endTime,
++      canonicalTimezone,
++    })),
++  })
++}
++</script>
+diff --git a/src/frontend/src/components/profileBuilder/ProfileBuilderStep5.vue b/src/frontend/src/components/profileBuilder/ProfileBuilderStep5.vue
+new file mode 100644
+index 0000000..aa44c6a
+--- /dev/null
++++ b/src/frontend/src/components/profileBuilder/ProfileBuilderStep5.vue
+@@ -0,0 +1,68 @@
++<template>
++  <div>
++    <q-file
++      v-model="selectedFile"
++      :label="t('auth.coach.step5PhotoLabel')"
++      outlined
++      accept=".jpg,.jpeg,.png"
++      :max-file-size="5242880"
++      @update:model-value="onFileSelected"
++      class="q-mb-md"
++    >
++      <template #prepend>
++        <q-icon name="photo_camera" />
++      </template>
++    </q-file>
++
++    <div v-if="previewUrl" class="q-mb-md">
++      <q-img :src="previewUrl" style="max-width: 200px; max-height: 200px" />
++    </div>
++
++    <div class="q-gutter-sm">
++      <q-btn
++        :label="t('auth.coach.step5Upload')"
++        color="primary"
++        @click="submit"
++        :loading="loading"
++        :disable="!selectedFile"
++        unelevated
++      />
++      <q-btn
++        :label="t('auth.coach.step5SkipLabel')"
++        flat
++        @click="skip"
++        :disable="loading"
++      />
++    </div>
++  </div>
++</template>
++
++<script setup>
++import { ref } from 'vue'
++import { useI18n } from 'vue-i18n'
++
++const { t } = useI18n()
++
++defineProps({ loading: Boolean })
++const emit = defineEmits(['submit', 'skip'])
++
++const selectedFile = ref(null)
++const previewUrl = ref(null)
++
++function onFileSelected(file) {
++  if (!file) {
++    previewUrl.value = null
++    return
++  }
++  previewUrl.value = URL.createObjectURL(file)
++}
++
++function submit() {
++  if (!selectedFile.value) return
++  emit('submit', selectedFile.value)
++}
++
++function skip() {
++  emit('skip')
++}
++</script>
+diff --git a/src/frontend/src/i18n/de/index.js b/src/frontend/src/i18n/de/index.js
+index 4e86432..a2e41a5 100644
+--- a/src/frontend/src/i18n/de/index.js
++++ b/src/frontend/src/i18n/de/index.js
+@@ -31,8 +31,30 @@ export default {
+       signInInstead: 'Stattdessen anmelden',
+       emailInUse: 'Diese E-Mail-Adresse ist bereits registriert.',
+       contactDetailWarning: 'Kontaktdaten werden beim Speichern entfernt',
+-      profileBuilderTitle: 'Profil erstellen',
+-      profileBuilderBody: 'Dein Konto ist verifiziert! Der Profilbuilder wird in Kürze verfügbar sein.',
++      profileBuilderTitle: 'Profil vervollständigen',
++      profileBuilderBody: 'Schließe diese 5 Schritte ab, um auf dem Marktplatz sichtbar zu werden.',
++      step1Title: 'Identität & Standort',
++      step1DisplayName: 'Anzeigename',
++      step1Bio: 'Biografie',
++      step1City: 'Stadt',
++      step1District: 'Bezirk',
++      step1Languages: 'Trainingssprachen',
++      step2Title: 'Spezialisierungen & Altersgruppen',
++      step2Specialties: 'Spezialisierungen',
++      step2AgeGroups: 'Altersgruppen',
++      step3Title: 'Preise',
++      step3PerSessionPrice: 'Preis pro Einheit (EUR)',
++      step3SessionPacks: 'Einheitenpakete (optional)',
++      step3AddPack: 'Paket hinzufügen',
++      step4Title: 'Verfügbarkeit',
++      step4AvailabilityWindows: 'Verfügbarkeitsfenster',
++      step4AddWindow: 'Fenster hinzufügen',
++      step5Title: 'Profilfoto',
++      step5PhotoLabel: 'Profilfoto',
++      step5Upload: 'Hochladen & Weiter',
++      step5SkipLabel: 'Vorerst überspringen',
++      publishSuccess: 'Dein Profil ist live! Willkommen bei Skillars.',
++      bioSanitizationWarning: 'Kontaktdaten werden beim Speichern entfernt.',
+     },
+     parent: {
+       registerTitle: 'Elternkonto erstellen',
+diff --git a/src/frontend/src/i18n/en-US/index.js b/src/frontend/src/i18n/en-US/index.js
+index 99bd018..dfd02cb 100644
+--- a/src/frontend/src/i18n/en-US/index.js
++++ b/src/frontend/src/i18n/en-US/index.js
+@@ -55,8 +55,30 @@ export default {
+       signInInstead: 'Sign in instead',
+       emailInUse: 'This email is already registered.',
+       contactDetailWarning: 'Contact details will be removed on save',
+-      profileBuilderTitle: 'Profile Builder',
+-      profileBuilderBody: 'Your account is verified! The profile builder will be available soon.',
++      profileBuilderTitle: 'Complete Your Profile',
++      profileBuilderBody: 'Complete these 5 steps to go live on the marketplace.',
++      step1Title: 'Identity & Location',
++      step1DisplayName: 'Display Name',
++      step1Bio: 'Bio',
++      step1City: 'City',
++      step1District: 'District',
++      step1Languages: 'Coaching Languages',
++      step2Title: 'Specialties & Age Groups',
++      step2Specialties: 'Specializations',
++      step2AgeGroups: 'Age Groups',
++      step3Title: 'Pricing',
++      step3PerSessionPrice: 'Per Session Price (EUR)',
++      step3SessionPacks: 'Session Packs (optional)',
++      step3AddPack: 'Add Pack',
++      step4Title: 'Availability',
++      step4AvailabilityWindows: 'Availability Windows',
++      step4AddWindow: 'Add Window',
++      step5Title: 'Profile Photo',
++      step5PhotoLabel: 'Profile Photo',
++      step5Upload: 'Upload & Continue',
++      step5SkipLabel: 'Skip for now',
++      publishSuccess: 'Your profile is live! Welcome to Skillars.',
++      bioSanitizationWarning: 'Contact details will be removed on save.',
+     },
+     parent: {
+       registerTitle: 'Create Parent Account',
+diff --git a/src/frontend/src/i18n/en/index.js b/src/frontend/src/i18n/en/index.js
+index e2a9f10..c035062 100644
+--- a/src/frontend/src/i18n/en/index.js
++++ b/src/frontend/src/i18n/en/index.js
+@@ -32,8 +32,30 @@ export default {
+       signInInstead: 'Sign in instead',
+       emailInUse: 'This email is already registered.',
+       contactDetailWarning: 'Contact details will be removed on save',
+-      profileBuilderTitle: 'Profile Builder',
+-      profileBuilderBody: 'Your account is verified! The profile builder will be available soon.',
++      profileBuilderTitle: 'Complete Your Profile',
++      profileBuilderBody: 'Complete these 5 steps to go live on the marketplace.',
++      step1Title: 'Identity & Location',
++      step1DisplayName: 'Display Name',
++      step1Bio: 'Bio',
++      step1City: 'City',
++      step1District: 'District',
++      step1Languages: 'Coaching Languages',
++      step2Title: 'Specialties & Age Groups',
++      step2Specialties: 'Specializations',
++      step2AgeGroups: 'Age Groups',
++      step3Title: 'Pricing',
++      step3PerSessionPrice: 'Per Session Price (EUR)',
++      step3SessionPacks: 'Session Packs (optional)',
++      step3AddPack: 'Add Pack',
++      step4Title: 'Availability',
++      step4AvailabilityWindows: 'Availability Windows',
++      step4AddWindow: 'Add Window',
++      step5Title: 'Profile Photo',
++      step5PhotoLabel: 'Profile Photo',
++      step5Upload: 'Upload & Continue',
++      step5SkipLabel: 'Skip for now',
++      publishSuccess: 'Your profile is live! Welcome to Skillars.',
++      bioSanitizationWarning: 'Contact details will be removed on save.',
+     },
+     parent: {
+       registerTitle: 'Create Parent Account',
+diff --git a/src/frontend/src/i18n/fr-FR/index.js b/src/frontend/src/i18n/fr-FR/index.js
+index edaa906..cd05c97 100644
+--- a/src/frontend/src/i18n/fr-FR/index.js
++++ b/src/frontend/src/i18n/fr-FR/index.js
+@@ -94,6 +94,45 @@ export default {
+       dashboardTitle: 'Compte vérifié',
+       dashboardBody: 'Votre compte est vérifié ! Connectez-vous pour créer des profils de joueurs et commencer à gérer les sessions.',
+     },
++    coach: {
++      registerTitle: 'Créer un compte coach',
++      registerSubtitle: 'Rejoignez Skillars et commencez à coacher',
++      emailPendingTitle: 'Vérifiez votre email',
++      emailPendingBody: 'Nous avons envoyé un lien de vérification à {email}. Cliquez dessus pour continuer.',
++      resendEmail: 'Renvoyer l\'email',
++      resendCooldown: 'Renvoi disponible dans {seconds}s',
++      phoneVerifyTitle: 'Vérifiez votre téléphone',
++      phoneVerifySubtitle: 'Entrez le code à 6 chiffres envoyé à votre email',
++      tosLabel: 'J\'accepte les Conditions d\'utilisation',
++      privacyLabel: 'J\'accepte la Politique de confidentialité',
++      signInInstead: 'Se connecter à la place',
++      emailInUse: 'Cet email est déjà enregistré.',
++      contactDetailWarning: 'Les coordonnées seront supprimées lors de l\'enregistrement',
++      profileBuilderTitle: 'Complétez votre profil',
++      profileBuilderBody: 'Complétez ces 5 étapes pour apparaître sur la marketplace.',
++      step1Title: 'Identité & Localisation',
++      step1DisplayName: 'Nom d\'affichage',
++      step1Bio: 'Biographie',
++      step1City: 'Ville',
++      step1District: 'Quartier',
++      step1Languages: 'Langues d\'entraînement',
++      step2Title: 'Spécialités & Groupes d\'âge',
++      step2Specialties: 'Spécialisations',
++      step2AgeGroups: 'Groupes d\'âge',
++      step3Title: 'Tarification',
++      step3PerSessionPrice: 'Prix par séance (EUR)',
++      step3SessionPacks: 'Packs de séances (optionnel)',
++      step3AddPack: 'Ajouter un pack',
++      step4Title: 'Disponibilité',
++      step4AvailabilityWindows: 'Créneaux de disponibilité',
++      step4AddWindow: 'Ajouter un créneau',
++      step5Title: 'Photo de profil',
++      step5PhotoLabel: 'Photo de profil',
++      step5Upload: 'Télécharger & Continuer',
++      step5SkipLabel: 'Ignorer pour l\'instant',
++      publishSuccess: 'Votre profil est en ligne ! Bienvenue sur Skillars.',
++      bioSanitizationWarning: 'Les coordonnées seront supprimées lors de l\'enregistrement.',
++    },
+   },
+   session: {
+     expiring: 'Session expirant',
+diff --git a/src/frontend/src/pages/auth/CoachProfileBuilderPlaceholderPage.vue b/src/frontend/src/pages/auth/CoachProfileBuilderPlaceholderPage.vue
+index 8ab2021..dcfb492 100644
+--- a/src/frontend/src/pages/auth/CoachProfileBuilderPlaceholderPage.vue
++++ b/src/frontend/src/pages/auth/CoachProfileBuilderPlaceholderPage.vue
+@@ -3,15 +3,128 @@
+     <div class="auth-card-container fade-in">
+       <div class="glass-card--static auth-card">
+         <div class="text-section-title q-mb-xs">{{ t('auth.coach.profileBuilderTitle') }}</div>
+-        <div class="text-meta">{{ t('auth.coach.profileBuilderBody') }}</div>
++        <div class="text-meta q-mb-lg">{{ t('auth.coach.profileBuilderBody') }}</div>
++
++        <q-banner v-if="store.error" class="q-mb-md auth-banner auth-banner--error" rounded>
++          {{ store.error?.response?.data?.message || t('error.generic') }}
++        </q-banner>
++
++        <q-stepper
++          v-model="store.currentStep"
++          color="primary"
++          animated
++          flat
++          header-nav
++        >
++          <q-step :name="1" :title="t('auth.coach.step1Title')" icon="person" :done="store.lastCompletedStep >= 1">
++            <ProfileBuilderStep1 :loading="store.loading" @submit="onStep1" />
++          </q-step>
++
++          <q-step :name="2" :title="t('auth.coach.step2Title')" icon="sports_soccer" :done="store.lastCompletedStep >= 2">
++            <ProfileBuilderStep2 :loading="store.loading" @submit="onStep2" />
++          </q-step>
++
++          <q-step :name="3" :title="t('auth.coach.step3Title')" icon="euro" :done="store.lastCompletedStep >= 3">
++            <ProfileBuilderStep3 :loading="store.loading" @submit="onStep3" />
++          </q-step>
++
++          <q-step :name="4" :title="t('auth.coach.step4Title')" icon="schedule" :done="store.lastCompletedStep >= 4">
++            <ProfileBuilderStep4 :loading="store.loading" @submit="onStep4" />
++          </q-step>
++
++          <q-step :name="5" :title="t('auth.coach.step5Title')" icon="photo_camera" :done="store.lastCompletedStep >= 5">
++            <ProfileBuilderStep5
++              :loading="store.loading"
++              @submit="onStep5WithPhoto"
++              @skip="onStep5Skip"
++            />
++          </q-step>
++        </q-stepper>
+       </div>
+     </div>
+   </q-page>
+ </template>
+ 
+ <script setup>
++import { onMounted } from 'vue'
++import { useRouter } from 'vue-router'
+ import { useI18n } from 'vue-i18n'
++import { useProfileBuilderStore } from 'src/stores/profileBuilder.store'
++import { useAuthStore } from 'src/stores/auth.store'
++import { signUpload, confirmUpload } from 'src/api/marketplace.api'
++import ProfileBuilderStep1 from 'src/components/profileBuilder/ProfileBuilderStep1.vue'
++import ProfileBuilderStep2 from 'src/components/profileBuilder/ProfileBuilderStep2.vue'
++import ProfileBuilderStep3 from 'src/components/profileBuilder/ProfileBuilderStep3.vue'
++import ProfileBuilderStep4 from 'src/components/profileBuilder/ProfileBuilderStep4.vue'
++import ProfileBuilderStep5 from 'src/components/profileBuilder/ProfileBuilderStep5.vue'
++
+ const { t } = useI18n()
++const router = useRouter()
++const store = useProfileBuilderStore()
++const authStore = useAuthStore()
++
++onMounted(async () => {
++  await store.loadStatus()
++  if (store.isComplete) {
++    router.push('/coach/command-center')
++  }
++})
++
++async function onStep1(data) {
++  await store.submitStep(1, data)
++}
++
++async function onStep2(data) {
++  await store.submitStep(2, data)
++}
++
++async function onStep3(data) {
++  await store.submitStep(3, data)
++}
++
++async function onStep4(data) {
++  await store.submitStep(4, data)
++}
++
++async function onStep5WithPhoto(file) {
++  const userId = authStore.userId
++  const extension = file.name.split('.').pop().toLowerCase()
++  const contentType = file.type
++
++  const signRes = await signUpload({
++    entity: 'coach_profile',
++    entityId: String(userId),
++    contentType,
++    extension,
++    fileSizeBytes: file.size,
++  })
++
++  const { key, uploadUrl } = signRes.data
++  await fetch(uploadUrl, {
++    method: 'PUT',
++    body: file,
++    headers: { 'Content-Type': contentType },
++  })
++
++  const confirmRes = await confirmUpload(key, {
++    contentType,
++    fileSizeBytes: file.size,
++  })
++
++  const photoUrl = confirmRes.data?.key || key
++  await store.submitStep(5, { photoUrl })
++  await publishAndRedirect()
++}
++
++async function onStep5Skip() {
++  await store.submitStep(5, { photoUrl: null })
++  await publishAndRedirect()
++}
++
++async function publishAndRedirect() {
++  await store.finishAndPublish()
++  router.push('/coach/command-center')
++}
+ </script>
+ 
+ <style lang="scss" scoped>
+diff --git a/src/frontend/src/router/index.js b/src/frontend/src/router/index.js
+index a7f4f37..733aa61 100644
+--- a/src/frontend/src/router/index.js
++++ b/src/frontend/src/router/index.js
+@@ -7,6 +7,7 @@ import {
+ } from 'vue-router'
+ import routes from './routes'
+ import { useAuthStore } from 'src/stores/auth.store'
++import { useProfileBuilderStore } from 'src/stores/profileBuilder.store'
+ 
+ /*
+  * If not building with SSR mode, you can
+@@ -42,7 +43,7 @@ export default defineRouter(function (/* { store, ssrContext } */) {
+   }
+ 
+   let hydrated = false
+-  Router.beforeEach((to, from, next) => {
++  Router.beforeEach(async (to, from, next) => {
+     const authStore = useAuthStore()
+     if (!hydrated) {
+       authStore.hydrateFromCookie()
+@@ -63,6 +64,15 @@ export default defineRouter(function (/* { store, ssrContext } */) {
+       return
+     }
+ 
++    if (to.path === '/coach/command-center' && authStore.isCoach) {
++      const pbStore = useProfileBuilderStore()
++      await pbStore.loadStatus()
++      if (!pbStore.isComplete) {
++        next('/coach/profile-builder')
++        return
++      }
++    }
++
+     next()
+   })
+ 
+diff --git a/src/frontend/src/stores/profileBuilder.store.js b/src/frontend/src/stores/profileBuilder.store.js
+new file mode 100644
+index 0000000..62ff906
+--- /dev/null
++++ b/src/frontend/src/stores/profileBuilder.store.js
+@@ -0,0 +1,70 @@
++import { defineStore } from 'pinia'
++import { ref, computed } from 'vue'
++import { getProfileBuilderStatus, saveProfileBuilderStep, publishProfile } from 'src/api/marketplace.api'
++
++export const useProfileBuilderStore = defineStore('profileBuilder', () => {
++  const status = ref(null)
++  const currentStep = ref(1)
++  const loading = ref(false)
++  const error = ref(null)
++
++  const isComplete = computed(() => status.value?.profileComplete === true)
++  const lastCompletedStep = computed(() => status.value?.lastCompletedStep ?? 0)
++
++  async function loadStatus() {
++    loading.value = true
++    error.value = null
++    try {
++      const res = await getProfileBuilderStatus()
++      status.value = res.data
++      currentStep.value = Math.min((res.data.lastCompletedStep ?? 0) + 1, 5)
++    } catch (e) {
++      error.value = e
++    } finally {
++      loading.value = false
++    }
++  }
++
++  async function submitStep(stepNumber, data) {
++    loading.value = true
++    error.value = null
++    try {
++      await saveProfileBuilderStep(stepNumber, data)
++      if (status.value) {
++        status.value = { ...status.value, lastCompletedStep: stepNumber }
++      }
++      currentStep.value = stepNumber + 1
++    } catch (e) {
++      error.value = e
++      throw e
++    } finally {
++      loading.value = false
++    }
++  }
++
++  async function finishAndPublish() {
++    loading.value = true
++    error.value = null
++    try {
++      const res = await publishProfile()
++      status.value = res.data
++    } catch (e) {
++      error.value = e
++      throw e
++    } finally {
++      loading.value = false
++    }
++  }
++
++  return {
++    status,
++    currentStep,
++    loading,
++    error,
++    isComplete,
++    lastCompletedStep,
++    loadStatus,
++    submitStep,
++    finishAndPublish,
++  }
++})
+diff --git a/src/main/java/com/softropic/skillars/infrastructure/security/SecurityConstants.java b/src/main/java/com/softropic/skillars/infrastructure/security/SecurityConstants.java
+index c3cfeff..865afcb 100644
+--- a/src/main/java/com/softropic/skillars/infrastructure/security/SecurityConstants.java
++++ b/src/main/java/com/softropic/skillars/infrastructure/security/SecurityConstants.java
+@@ -31,6 +31,7 @@ public final class SecurityConstants {
+      */
+     public static final String HAS_ANY_ROLE = "hasRole('ROLE_ADMIN') or hasRole('ROLE_LTD_ADMIN') or hasRole('ROLE_USER') or hasRole('ROLE_COACH') or hasRole('ROLE_PARENT')";
+     public static final String HAS_ADMIN_ROLE = "hasRole('ROLE_ADMIN') or hasRole('ROLE_LTD_ADMIN')";
++    public static final String HAS_COACH_ROLE = "hasRole('ROLE_COACH')";
+     public static final String HAS_PARENT_ROLE = "hasRole('ROLE_PARENT')";
+ 
+     // ==================== JWT AND AUTHENTICATION CONSTANTS ====================
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/api/ProfileBuilderResource.java b/src/main/java/com/softropic/skillars/platform/marketplace/api/ProfileBuilderResource.java
+new file mode 100644
+index 0000000..9c73d5c
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/api/ProfileBuilderResource.java
+@@ -0,0 +1,87 @@
++package com.softropic.skillars.platform.marketplace.api;
++
++import com.softropic.skillars.infrastructure.security.SecurityConstants;
++import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStatusResponse;
++import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep1Request;
++import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep2Request;
++import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep3Request;
++import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep4Request;
++import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep5Request;
++import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStepResponse;
++import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
++import com.softropic.skillars.platform.security.contract.Principal;
++import com.softropic.skillars.platform.security.service.SecurityUtil;
++import io.micrometer.observation.annotation.Observed;
++import jakarta.validation.Valid;
++import lombok.RequiredArgsConstructor;
++import lombok.extern.slf4j.Slf4j;
++import org.springframework.http.ResponseEntity;
++import org.springframework.security.access.prepost.PreAuthorize;
++import org.springframework.web.bind.annotation.GetMapping;
++import org.springframework.web.bind.annotation.PostMapping;
++import org.springframework.web.bind.annotation.PutMapping;
++import org.springframework.web.bind.annotation.RequestBody;
++import org.springframework.web.bind.annotation.RequestMapping;
++import org.springframework.web.bind.annotation.RestController;
++
++@Observed(name = "marketplace.profile_builder")
++@RestController
++@RequestMapping("/api/marketplace/coaches/me/profile")
++@RequiredArgsConstructor
++@Slf4j
++public class ProfileBuilderResource {
++
++    private final CoachProfileService coachProfileService;
++    private final SecurityUtil securityUtil;
++
++    @GetMapping("/status")
++    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
++    public ResponseEntity<ProfileBuilderStatusResponse> getStatus() {
++        return ResponseEntity.ok(coachProfileService.getBuilderStatus(currentUserId()));
++    }
++
++    @PutMapping("/steps/1")
++    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
++    public ResponseEntity<ProfileBuilderStepResponse> saveStep1(
++            @RequestBody @Valid ProfileBuilderStep1Request req) {
++        return ResponseEntity.ok(coachProfileService.saveStep1(currentUserId(), req));
++    }
++
++    @PutMapping("/steps/2")
++    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
++    public ResponseEntity<ProfileBuilderStepResponse> saveStep2(
++            @RequestBody @Valid ProfileBuilderStep2Request req) {
++        return ResponseEntity.ok(coachProfileService.saveStep2(currentUserId(), req));
++    }
++
++    @PutMapping("/steps/3")
++    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
++    public ResponseEntity<ProfileBuilderStepResponse> saveStep3(
++            @RequestBody @Valid ProfileBuilderStep3Request req) {
++        return ResponseEntity.ok(coachProfileService.saveStep3(currentUserId(), req));
++    }
++
++    @PutMapping("/steps/4")
++    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
++    public ResponseEntity<ProfileBuilderStepResponse> saveStep4(
++            @RequestBody @Valid ProfileBuilderStep4Request req) {
++        return ResponseEntity.ok(coachProfileService.saveStep4(currentUserId(), req));
++    }
++
++    @PutMapping("/steps/5")
++    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
++    public ResponseEntity<ProfileBuilderStepResponse> saveStep5(
++            @RequestBody @Valid ProfileBuilderStep5Request req) {
++        return ResponseEntity.ok(coachProfileService.saveStep5(currentUserId(), req));
++    }
++
++    @PostMapping("/publish")
++    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
++    public ResponseEntity<ProfileBuilderStatusResponse> publish() {
++        return ResponseEntity.ok(coachProfileService.publishProfile(currentUserId()));
++    }
++
++    private Long currentUserId() {
++        return Long.parseLong(((Principal) securityUtil.getCurrentUser()).getBusinessId());
++    }
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/config/MarketplaceConfig.java b/src/main/java/com/softropic/skillars/platform/marketplace/config/MarketplaceConfig.java
+new file mode 100644
+index 0000000..86ad4af
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/config/MarketplaceConfig.java
+@@ -0,0 +1,7 @@
++package com.softropic.skillars.platform.marketplace.config;
++
++import org.springframework.context.annotation.Configuration;
++
++@Configuration
++public class MarketplaceConfig {
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/contract/CoachProfileMapper.java b/src/main/java/com/softropic/skillars/platform/marketplace/contract/CoachProfileMapper.java
+new file mode 100644
+index 0000000..6f901e1
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/contract/CoachProfileMapper.java
+@@ -0,0 +1,31 @@
++package com.softropic.skillars.platform.marketplace.contract;
++
++import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
++import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
++import org.mapstruct.Mapper;
++import org.mapstruct.Mapping;
++
++@Mapper(componentModel = "spring")
++public interface CoachProfileMapper {
++
++    @Mapping(target = "id", ignore = true)
++    @Mapping(target = "userId", source = "userId")
++    @Mapping(target = "displayName", source = "req.displayName")
++    @Mapping(target = "bio", ignore = true)
++    @Mapping(target = "city", source = "req.city")
++    @Mapping(target = "district", source = "req.district")
++    @Mapping(target = "languages", source = "req.languages")
++    @Mapping(target = "canonicalTimezone", source = "req.canonicalTimezone")
++    @Mapping(target = "photoUrl", ignore = true)
++    @Mapping(target = "status", ignore = true)
++    @Mapping(target = "createdAt", ignore = true)
++    CoachProfile toEntity(ProfileBuilderStep1Request req, Long userId);
++
++    @Mapping(target = "id", ignore = true)
++    @Mapping(target = "coachId", source = "coachId")
++    @Mapping(target = "dayOfWeek", source = "req.dayOfWeek")
++    @Mapping(target = "startTime", source = "req.startTime")
++    @Mapping(target = "endTime", source = "req.endTime")
++    @Mapping(target = "canonicalTimezone", source = "req.canonicalTimezone")
++    CoachAvailabilityWindow toEntity(ProfileBuilderStep4Request.AvailabilityWindowRequest req, java.util.UUID coachId);
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/contract/CoachProfileStatus.java b/src/main/java/com/softropic/skillars/platform/marketplace/contract/CoachProfileStatus.java
+new file mode 100644
+index 0000000..44c9b55
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/contract/CoachProfileStatus.java
+@@ -0,0 +1,5 @@
++package com.softropic.skillars.platform.marketplace.contract;
++
++public enum CoachProfileStatus {
++    DRAFT, ACTIVE
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/contract/CoachSubscriptionTier.java b/src/main/java/com/softropic/skillars/platform/marketplace/contract/CoachSubscriptionTier.java
+new file mode 100644
+index 0000000..7f60f0f
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/contract/CoachSubscriptionTier.java
+@@ -0,0 +1,5 @@
++package com.softropic.skillars.platform.marketplace.contract;
++
++public enum CoachSubscriptionTier {
++    SCOUT, INSTRUCTOR, ACADEMY
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/contract/MarketplaceException.java b/src/main/java/com/softropic/skillars/platform/marketplace/contract/MarketplaceException.java
+new file mode 100644
+index 0000000..eb3500f
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/contract/MarketplaceException.java
+@@ -0,0 +1,15 @@
++package com.softropic.skillars.platform.marketplace.contract;
++
++public class MarketplaceException extends RuntimeException {
++
++    private final String errorCode;
++
++    public MarketplaceException(String errorCode, String message) {
++        super(message);
++        this.errorCode = errorCode;
++    }
++
++    public String getErrorCode() {
++        return errorCode;
++    }
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStatusResponse.java b/src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStatusResponse.java
+new file mode 100644
+index 0000000..8a85039
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStatusResponse.java
+@@ -0,0 +1,10 @@
++package com.softropic.skillars.platform.marketplace.contract;
++
++import java.util.UUID;
++
++public record ProfileBuilderStatusResponse(
++    UUID coachId,
++    CoachProfileStatus status,
++    int lastCompletedStep,
++    boolean profileComplete
++) {}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep1Request.java b/src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep1Request.java
+new file mode 100644
+index 0000000..46a223d
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep1Request.java
+@@ -0,0 +1,16 @@
++package com.softropic.skillars.platform.marketplace.contract;
++
++import jakarta.validation.constraints.NotBlank;
++import jakarta.validation.constraints.NotEmpty;
++import jakarta.validation.constraints.Size;
++
++import java.util.List;
++
++public record ProfileBuilderStep1Request(
++    @NotBlank @Size(max = 120) String displayName,
++    @Size(max = 2000) String bio,
++    @Size(max = 100) String city,
++    @Size(max = 100) String district,
++    @NotEmpty List<@NotBlank String> languages,
++    @NotBlank String canonicalTimezone
++) {}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep2Request.java b/src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep2Request.java
+new file mode 100644
+index 0000000..905b9d0
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep2Request.java
+@@ -0,0 +1,12 @@
++package com.softropic.skillars.platform.marketplace.contract;
++
++import com.softropic.skillars.platform.security.contract.AgeTier;
++import jakarta.validation.constraints.NotBlank;
++import jakarta.validation.constraints.NotEmpty;
++
++import java.util.List;
++
++public record ProfileBuilderStep2Request(
++    @NotEmpty List<@NotBlank String> specialties,
++    @NotEmpty List<AgeTier> ageGroups
++) {}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep3Request.java b/src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep3Request.java
+new file mode 100644
+index 0000000..ef6c57b
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep3Request.java
+@@ -0,0 +1,20 @@
++package com.softropic.skillars.platform.marketplace.contract;
++
++import jakarta.validation.constraints.DecimalMin;
++import jakarta.validation.constraints.NotNull;
++import jakarta.validation.constraints.Positive;
++import jakarta.validation.constraints.Size;
++
++import java.math.BigDecimal;
++import java.util.List;
++
++public record ProfileBuilderStep3Request(
++    @NotNull @DecimalMin("0.01") BigDecimal perSessionPrice,
++    List<SessionPackRequest> sessionPacks
++) {
++    public record SessionPackRequest(
++        @Positive int sessionCount,
++        @NotNull @DecimalMin("0.01") BigDecimal totalPrice,
++        @Size(max = 100) String label
++    ) {}
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep4Request.java b/src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep4Request.java
+new file mode 100644
+index 0000000..074c040
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep4Request.java
+@@ -0,0 +1,21 @@
++package com.softropic.skillars.platform.marketplace.contract;
++
++import jakarta.validation.constraints.Max;
++import jakarta.validation.constraints.Min;
++import jakarta.validation.constraints.NotBlank;
++import jakarta.validation.constraints.NotEmpty;
++import jakarta.validation.constraints.NotNull;
++
++import java.time.LocalTime;
++import java.util.List;
++
++public record ProfileBuilderStep4Request(
++    @NotEmpty List<AvailabilityWindowRequest> windows
++) {
++    public record AvailabilityWindowRequest(
++        @Min(1) @Max(7) short dayOfWeek,
++        @NotNull LocalTime startTime,
++        @NotNull LocalTime endTime,
++        @NotBlank String canonicalTimezone
++    ) {}
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep5Request.java b/src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep5Request.java
+new file mode 100644
+index 0000000..ff141c5
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep5Request.java
+@@ -0,0 +1,5 @@
++package com.softropic.skillars.platform.marketplace.contract;
++
++public record ProfileBuilderStep5Request(
++    String photoUrl
++) {}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStepResponse.java b/src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStepResponse.java
+new file mode 100644
+index 0000000..cb00351
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStepResponse.java
+@@ -0,0 +1,5 @@
++package com.softropic.skillars.platform.marketplace.contract;
++
++import java.util.UUID;
++
++public record ProfileBuilderStepResponse(UUID coachId, int stepSaved, int nextStep) {}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachAgeGroup.java b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachAgeGroup.java
+new file mode 100644
+index 0000000..f9b668d
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachAgeGroup.java
+@@ -0,0 +1,35 @@
++package com.softropic.skillars.platform.marketplace.repo;
++
++import com.softropic.skillars.platform.security.contract.AgeTier;
++import jakarta.persistence.Column;
++import jakarta.persistence.Entity;
++import jakarta.persistence.EnumType;
++import jakarta.persistence.Enumerated;
++import jakarta.persistence.GeneratedValue;
++import jakarta.persistence.GenerationType;
++import jakarta.persistence.Id;
++import jakarta.persistence.Table;
++import lombok.Getter;
++import lombok.NoArgsConstructor;
++import lombok.Setter;
++
++import java.util.UUID;
++
++@Entity
++@Table(schema = "marketplace", name = "coach_age_groups")
++@Getter
++@Setter
++@NoArgsConstructor
++public class CoachAgeGroup {
++
++    @Id
++    @GeneratedValue(strategy = GenerationType.UUID)
++    private UUID id;
++
++    @Column(name = "coach_id", nullable = false)
++    private UUID coachId;
++
++    @Enumerated(EnumType.STRING)
++    @Column(name = "age_tier", nullable = false)
++    private AgeTier ageTier;
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachAgeGroupRepository.java b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachAgeGroupRepository.java
+new file mode 100644
+index 0000000..cfcdd69
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachAgeGroupRepository.java
+@@ -0,0 +1,11 @@
++package com.softropic.skillars.platform.marketplace.repo;
++
++import org.springframework.data.jpa.repository.JpaRepository;
++
++import java.util.List;
++import java.util.UUID;
++
++public interface CoachAgeGroupRepository extends JpaRepository<CoachAgeGroup, UUID> {
++    List<CoachAgeGroup> findByCoachId(UUID coachId);
++    void deleteByCoachId(UUID coachId);
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachAvailabilityWindow.java b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachAvailabilityWindow.java
+new file mode 100644
+index 0000000..dacc3e1
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachAvailabilityWindow.java
+@@ -0,0 +1,41 @@
++package com.softropic.skillars.platform.marketplace.repo;
++
++import jakarta.persistence.Column;
++import jakarta.persistence.Entity;
++import jakarta.persistence.GeneratedValue;
++import jakarta.persistence.GenerationType;
++import jakarta.persistence.Id;
++import jakarta.persistence.Table;
++import lombok.Getter;
++import lombok.NoArgsConstructor;
++import lombok.Setter;
++
++import java.time.LocalTime;
++import java.util.UUID;
++
++@Entity
++@Table(schema = "marketplace", name = "coach_availability_windows")
++@Getter
++@Setter
++@NoArgsConstructor
++public class CoachAvailabilityWindow {
++
++    @Id
++    @GeneratedValue(strategy = GenerationType.UUID)
++    private UUID id;
++
++    @Column(name = "coach_id", nullable = false)
++    private UUID coachId;
++
++    @Column(name = "day_of_week", nullable = false)
++    private short dayOfWeek;
++
++    @Column(name = "start_time", nullable = false)
++    private LocalTime startTime;
++
++    @Column(name = "end_time", nullable = false)
++    private LocalTime endTime;
++
++    @Column(name = "canonical_timezone", nullable = false)
++    private String canonicalTimezone;
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachAvailabilityWindowRepository.java b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachAvailabilityWindowRepository.java
+new file mode 100644
+index 0000000..bacd266
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachAvailabilityWindowRepository.java
+@@ -0,0 +1,11 @@
++package com.softropic.skillars.platform.marketplace.repo;
++
++import org.springframework.data.jpa.repository.JpaRepository;
++
++import java.util.List;
++import java.util.UUID;
++
++public interface CoachAvailabilityWindowRepository extends JpaRepository<CoachAvailabilityWindow, UUID> {
++    List<CoachAvailabilityWindow> findByCoachId(UUID coachId);
++    void deleteByCoachId(UUID coachId);
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachPricing.java b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachPricing.java
+new file mode 100644
+index 0000000..3ceb955
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachPricing.java
+@@ -0,0 +1,30 @@
++package com.softropic.skillars.platform.marketplace.repo;
++
++import jakarta.persistence.Column;
++import jakarta.persistence.Entity;
++import jakarta.persistence.Id;
++import jakarta.persistence.Table;
++import lombok.Getter;
++import lombok.NoArgsConstructor;
++import lombok.Setter;
++
++import java.math.BigDecimal;
++import java.util.UUID;
++
++@Entity
++@Table(schema = "marketplace", name = "coach_pricing")
++@Getter
++@Setter
++@NoArgsConstructor
++public class CoachPricing {
++
++    @Id
++    @Column(name = "coach_id")
++    private UUID coachId;
++
++    @Column(name = "per_session_price", nullable = false)
++    private BigDecimal perSessionPrice;
++
++    @Column(nullable = false)
++    private String currency = "EUR";
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachPricingRepository.java b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachPricingRepository.java
+new file mode 100644
+index 0000000..49cf037
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachPricingRepository.java
+@@ -0,0 +1,10 @@
++package com.softropic.skillars.platform.marketplace.repo;
++
++import org.springframework.data.jpa.repository.JpaRepository;
++
++import java.util.Optional;
++import java.util.UUID;
++
++public interface CoachPricingRepository extends JpaRepository<CoachPricing, UUID> {
++    Optional<CoachPricing> findByCoachId(UUID coachId);
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachProfile.java b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachProfile.java
+new file mode 100644
+index 0000000..6ea4668
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachProfile.java
+@@ -0,0 +1,62 @@
++package com.softropic.skillars.platform.marketplace.repo;
++
++import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
++import io.hypersistence.utils.hibernate.type.array.ListArrayType;
++import jakarta.persistence.Column;
++import jakarta.persistence.Entity;
++import jakarta.persistence.EnumType;
++import jakarta.persistence.Enumerated;
++import jakarta.persistence.GeneratedValue;
++import jakarta.persistence.GenerationType;
++import jakarta.persistence.Id;
++import jakarta.persistence.Table;
++import lombok.Getter;
++import lombok.NoArgsConstructor;
++import lombok.Setter;
++import org.hibernate.annotations.Type;
++
++import java.time.OffsetDateTime;
++import java.util.ArrayList;
++import java.util.List;
++import java.util.UUID;
++
++@Entity
++@Table(schema = "marketplace", name = "coach_profiles")
++@Getter
++@Setter
++@NoArgsConstructor
++public class CoachProfile {
++
++    @Id
++    @GeneratedValue(strategy = GenerationType.UUID)
++    private UUID id;
++
++    @Column(name = "user_id", nullable = false, unique = true)
++    private Long userId;
++
++    @Column(name = "display_name", nullable = false)
++    private String displayName;
++
++    @Column(columnDefinition = "TEXT")
++    private String bio;
++
++    private String city;
++    private String district;
++
++    @Type(ListArrayType.class)
++    @Column(columnDefinition = "varchar[]")
++    private List<String> languages = new ArrayList<>();
++
++    @Column(name = "canonical_timezone", nullable = false)
++    private String canonicalTimezone;
++
++    @Column(name = "photo_url")
++    private String photoUrl;
++
++    @Enumerated(EnumType.STRING)
++    @Column(nullable = false)
++    private CoachProfileStatus status = CoachProfileStatus.DRAFT;
++
++    @Column(name = "created_at", nullable = false, updatable = false)
++    private OffsetDateTime createdAt = OffsetDateTime.now();
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachProfileRepository.java b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachProfileRepository.java
+new file mode 100644
+index 0000000..c653e57
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachProfileRepository.java
+@@ -0,0 +1,11 @@
++package com.softropic.skillars.platform.marketplace.repo;
++
++import org.springframework.data.jpa.repository.JpaRepository;
++
++import java.util.Optional;
++import java.util.UUID;
++
++public interface CoachProfileRepository extends JpaRepository<CoachProfile, UUID> {
++    Optional<CoachProfile> findByUserId(Long userId);
++    boolean existsByUserId(Long userId);
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachSpecialty.java b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachSpecialty.java
+new file mode 100644
+index 0000000..ed086cf
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachSpecialty.java
+@@ -0,0 +1,31 @@
++package com.softropic.skillars.platform.marketplace.repo;
++
++import jakarta.persistence.Column;
++import jakarta.persistence.Entity;
++import jakarta.persistence.GeneratedValue;
++import jakarta.persistence.GenerationType;
++import jakarta.persistence.Id;
++import jakarta.persistence.Table;
++import lombok.Getter;
++import lombok.NoArgsConstructor;
++import lombok.Setter;
++
++import java.util.UUID;
++
++@Entity
++@Table(schema = "marketplace", name = "coach_specialties")
++@Getter
++@Setter
++@NoArgsConstructor
++public class CoachSpecialty {
++
++    @Id
++    @GeneratedValue(strategy = GenerationType.UUID)
++    private UUID id;
++
++    @Column(name = "coach_id", nullable = false)
++    private UUID coachId;
++
++    @Column(nullable = false)
++    private String skill;
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachSpecialtyRepository.java b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachSpecialtyRepository.java
+new file mode 100644
+index 0000000..99eed1f
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachSpecialtyRepository.java
+@@ -0,0 +1,11 @@
++package com.softropic.skillars.platform.marketplace.repo;
++
++import org.springframework.data.jpa.repository.JpaRepository;
++
++import java.util.List;
++import java.util.UUID;
++
++public interface CoachSpecialtyRepository extends JpaRepository<CoachSpecialty, UUID> {
++    List<CoachSpecialty> findByCoachId(UUID coachId);
++    void deleteByCoachId(UUID coachId);
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachSubscription.java b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachSubscription.java
+new file mode 100644
+index 0000000..36c050b
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachSubscription.java
+@@ -0,0 +1,34 @@
++package com.softropic.skillars.platform.marketplace.repo;
++
++import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
++import jakarta.persistence.Column;
++import jakarta.persistence.Entity;
++import jakarta.persistence.EnumType;
++import jakarta.persistence.Enumerated;
++import jakarta.persistence.Id;
++import jakarta.persistence.Table;
++import lombok.Getter;
++import lombok.NoArgsConstructor;
++import lombok.Setter;
++
++import java.time.OffsetDateTime;
++import java.util.UUID;
++
++@Entity
++@Table(schema = "marketplace", name = "coach_subscriptions")
++@Getter
++@Setter
++@NoArgsConstructor
++public class CoachSubscription {
++
++    @Id
++    @Column(name = "coach_id")
++    private UUID coachId;
++
++    @Enumerated(EnumType.STRING)
++    @Column(nullable = false)
++    private CoachSubscriptionTier tier = CoachSubscriptionTier.SCOUT;
++
++    @Column(name = "active_since", nullable = false)
++    private OffsetDateTime activeSince = OffsetDateTime.now();
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachSubscriptionRepository.java b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachSubscriptionRepository.java
+new file mode 100644
+index 0000000..b29bcb9
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachSubscriptionRepository.java
+@@ -0,0 +1,10 @@
++package com.softropic.skillars.platform.marketplace.repo;
++
++import org.springframework.data.jpa.repository.JpaRepository;
++
++import java.util.Optional;
++import java.util.UUID;
++
++public interface CoachSubscriptionRepository extends JpaRepository<CoachSubscription, UUID> {
++    Optional<CoachSubscription> findByCoachId(UUID coachId);
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/repo/SessionPack.java b/src/main/java/com/softropic/skillars/platform/marketplace/repo/SessionPack.java
+new file mode 100644
+index 0000000..628caec
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/repo/SessionPack.java
+@@ -0,0 +1,37 @@
++package com.softropic.skillars.platform.marketplace.repo;
++
++import jakarta.persistence.Column;
++import jakarta.persistence.Entity;
++import jakarta.persistence.GeneratedValue;
++import jakarta.persistence.GenerationType;
++import jakarta.persistence.Id;
++import jakarta.persistence.Table;
++import lombok.Getter;
++import lombok.NoArgsConstructor;
++import lombok.Setter;
++
++import java.math.BigDecimal;
++import java.util.UUID;
++
++@Entity
++@Table(schema = "marketplace", name = "session_packs")
++@Getter
++@Setter
++@NoArgsConstructor
++public class SessionPack {
++
++    @Id
++    @GeneratedValue(strategy = GenerationType.UUID)
++    private UUID id;
++
++    @Column(name = "coach_id", nullable = false)
++    private UUID coachId;
++
++    @Column(name = "session_count", nullable = false)
++    private int sessionCount;
++
++    @Column(name = "total_price", nullable = false)
++    private BigDecimal totalPrice;
++
++    private String label;
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/repo/SessionPackRepository.java b/src/main/java/com/softropic/skillars/platform/marketplace/repo/SessionPackRepository.java
+new file mode 100644
+index 0000000..0784c6a
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/repo/SessionPackRepository.java
+@@ -0,0 +1,11 @@
++package com.softropic.skillars.platform.marketplace.repo;
++
++import org.springframework.data.jpa.repository.JpaRepository;
++
++import java.util.List;
++import java.util.UUID;
++
++public interface SessionPackRepository extends JpaRepository<SessionPack, UUID> {
++    List<SessionPack> findByCoachId(UUID coachId);
++    void deleteByCoachId(UUID coachId);
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfilePhotoEventListener.java b/src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfilePhotoEventListener.java
+new file mode 100644
+index 0000000..6556b27
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfilePhotoEventListener.java
+@@ -0,0 +1,47 @@
++package com.softropic.skillars.platform.marketplace.service;
++
++import com.softropic.skillars.platform.filestorage.event.StorageObjectConfirmedEvent;
++import com.softropic.skillars.platform.filestorage.repo.FileStorageObject;
++import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
++import lombok.RequiredArgsConstructor;
++import lombok.extern.slf4j.Slf4j;
++import org.springframework.context.event.EventListener;
++import org.springframework.stereotype.Component;
++import org.springframework.transaction.annotation.Transactional;
++
++@Component
++@RequiredArgsConstructor
++@Slf4j
++public class CoachProfilePhotoEventListener {
++
++    private static final String COACH_PROFILE_ENTITY = "coach_profile";
++
++    private final CoachProfileRepository coachProfileRepository;
++
++    @EventListener
++    @Transactional
++    public void onStorageConfirmed(StorageObjectConfirmedEvent event) {
++        FileStorageObject fso = event.getStorageObject();
++
++        // Key format: {entity}/{entityId}/{year}/{month}/{uuid}.{extension}
++        String[] parts = fso.getKey().split("/");
++        if (parts.length < 2 || !COACH_PROFILE_ENTITY.equals(parts[0])) {
++            return;
++        }
++
++        String entityId = parts[1];
++        long userId;
++        try {
++            userId = Long.parseLong(entityId);
++        } catch (NumberFormatException e) {
++            log.warn("coach_profile storage event with non-numeric entityId in key: {}", fso.getKey());
++            return;
++        }
++
++        coachProfileRepository.findByUserId(userId).ifPresent(profile -> {
++            profile.setPhotoUrl(fso.getKey());
++            coachProfileRepository.save(profile);
++            log.info("Updated coach profile photo: userId={}", userId);
++        });
++    }
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java b/src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java
+new file mode 100644
+index 0000000..80128af
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java
+@@ -0,0 +1,227 @@
++package com.softropic.skillars.platform.marketplace.service;
++
++import com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer;
++import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
++import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
++import com.softropic.skillars.platform.marketplace.contract.MarketplaceException;
++import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStatusResponse;
++import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep1Request;
++import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep2Request;
++import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep3Request;
++import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep4Request;
++import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep5Request;
++import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStepResponse;
++import com.softropic.skillars.platform.marketplace.repo.CoachAgeGroup;
++import com.softropic.skillars.platform.marketplace.repo.CoachAgeGroupRepository;
++import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
++import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
++import com.softropic.skillars.platform.marketplace.repo.CoachPricing;
++import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
++import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
++import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
++import com.softropic.skillars.platform.marketplace.repo.CoachSpecialty;
++import com.softropic.skillars.platform.marketplace.repo.CoachSpecialtyRepository;
++import com.softropic.skillars.platform.marketplace.repo.CoachSubscription;
++import com.softropic.skillars.platform.marketplace.repo.CoachSubscriptionRepository;
++import com.softropic.skillars.platform.marketplace.repo.SessionPack;
++import com.softropic.skillars.platform.marketplace.repo.SessionPackRepository;
++import lombok.RequiredArgsConstructor;
++import org.springframework.stereotype.Service;
++import org.springframework.transaction.annotation.Transactional;
++
++import java.util.List;
++
++@Service
++@RequiredArgsConstructor
++public class CoachProfileService {
++
++    private final CoachProfileRepository coachProfileRepository;
++    private final CoachSpecialtyRepository coachSpecialtyRepository;
++    private final CoachAgeGroupRepository coachAgeGroupRepository;
++    private final CoachPricingRepository coachPricingRepository;
++    private final SessionPackRepository sessionPackRepository;
++    private final CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
++    private final CoachSubscriptionRepository coachSubscriptionRepository;
++    private final ContactDetailSanitizer contactDetailSanitizer;
++
++    @Transactional
++    public CoachProfile getOrCreateDraft(Long userId) {
++        return coachProfileRepository.findByUserId(userId).orElseGet(() -> {
++            CoachProfile draft = new CoachProfile();
++            draft.setUserId(userId);
++            draft.setDisplayName("");
++            draft.setCanonicalTimezone("UTC");
++            draft.setStatus(CoachProfileStatus.DRAFT);
++            return coachProfileRepository.save(draft);
++        });
++    }
++
++    @Transactional
++    public ProfileBuilderStepResponse saveStep1(Long userId, ProfileBuilderStep1Request req) {
++        CoachProfile profile = coachProfileRepository.findByUserId(userId).orElseGet(() -> {
++            CoachProfile p = new CoachProfile();
++            p.setUserId(userId);
++            p.setStatus(CoachProfileStatus.DRAFT);
++            return p;
++        });
++
++        profile.setDisplayName(req.displayName());
++        profile.setBio(req.bio() != null ? contactDetailSanitizer.sanitize(req.bio()).sanitized() : null);
++        profile.setCity(req.city());
++        profile.setDistrict(req.district());
++        profile.setLanguages(req.languages());
++        profile.setCanonicalTimezone(req.canonicalTimezone());
++
++        CoachProfile saved = coachProfileRepository.save(profile);
++        return new ProfileBuilderStepResponse(saved.getId(), 1, 2);
++    }
++
++    @Transactional
++    public ProfileBuilderStepResponse saveStep2(Long userId, ProfileBuilderStep2Request req) {
++        CoachProfile profile = requireProfile(userId);
++
++        coachSpecialtyRepository.deleteByCoachId(profile.getId());
++        List<CoachSpecialty> specialties = req.specialties().stream().map(skill -> {
++            CoachSpecialty s = new CoachSpecialty();
++            s.setCoachId(profile.getId());
++            s.setSkill(skill);
++            return s;
++        }).toList();
++        coachSpecialtyRepository.saveAll(specialties);
++
++        coachAgeGroupRepository.deleteByCoachId(profile.getId());
++        List<CoachAgeGroup> ageGroups = req.ageGroups().stream().map(tier -> {
++            CoachAgeGroup ag = new CoachAgeGroup();
++            ag.setCoachId(profile.getId());
++            ag.setAgeTier(tier);
++            return ag;
++        }).toList();
++        coachAgeGroupRepository.saveAll(ageGroups);
++
++        return new ProfileBuilderStepResponse(profile.getId(), 2, 3);
++    }
++
++    @Transactional
++    public ProfileBuilderStepResponse saveStep3(Long userId, ProfileBuilderStep3Request req) {
++        CoachProfile profile = requireProfile(userId);
++
++        CoachPricing pricing = coachPricingRepository.findByCoachId(profile.getId())
++            .orElseGet(() -> {
++                CoachPricing p = new CoachPricing();
++                p.setCoachId(profile.getId());
++                return p;
++            });
++        pricing.setPerSessionPrice(req.perSessionPrice());
++        pricing.setCurrency("EUR");
++        coachPricingRepository.save(pricing);
++
++        if (req.sessionPacks() != null) {
++            sessionPackRepository.deleteByCoachId(profile.getId());
++            List<SessionPack> packs = req.sessionPacks().stream().map(sp -> {
++                SessionPack pack = new SessionPack();
++                pack.setCoachId(profile.getId());
++                pack.setSessionCount(sp.sessionCount());
++                pack.setTotalPrice(sp.totalPrice());
++                pack.setLabel(sp.label());
++                return pack;
++            }).toList();
++            sessionPackRepository.saveAll(packs);
++        }
++
++        return new ProfileBuilderStepResponse(profile.getId(), 3, 4);
++    }
++
++    @Transactional
++    public ProfileBuilderStepResponse saveStep4(Long userId, ProfileBuilderStep4Request req) {
++        CoachProfile profile = requireProfile(userId);
++
++        coachAvailabilityWindowRepository.deleteByCoachId(profile.getId());
++        List<CoachAvailabilityWindow> windows = req.windows().stream().map(w -> {
++            CoachAvailabilityWindow win = new CoachAvailabilityWindow();
++            win.setCoachId(profile.getId());
++            win.setDayOfWeek(w.dayOfWeek());
++            win.setStartTime(w.startTime());
++            win.setEndTime(w.endTime());
++            win.setCanonicalTimezone(w.canonicalTimezone());
++            return win;
++        }).toList();
++        coachAvailabilityWindowRepository.saveAll(windows);
++
++        return new ProfileBuilderStepResponse(profile.getId(), 4, 5);
++    }
++
++    @Transactional
++    public ProfileBuilderStepResponse saveStep5(Long userId, ProfileBuilderStep5Request req) {
++        CoachProfile profile = requireProfile(userId);
++
++        if (req.photoUrl() != null) {
++            profile.setPhotoUrl(req.photoUrl());
++            coachProfileRepository.save(profile);
++        }
++
++        return new ProfileBuilderStepResponse(profile.getId(), 5, 5);
++    }
++
++    @Transactional
++    public ProfileBuilderStatusResponse publishProfile(Long userId) {
++        CoachProfile profile = requireProfile(userId);
++
++        if (profile.getStatus() != CoachProfileStatus.DRAFT) {
++            throw new MarketplaceException("marketplace.alreadyPublished", "Profile is already published");
++        }
++
++        validateAllStepsComplete(profile);
++
++        profile.setStatus(CoachProfileStatus.ACTIVE);
++        coachProfileRepository.save(profile);
++
++        CoachSubscription subscription = new CoachSubscription();
++        subscription.setCoachId(profile.getId());
++        subscription.setTier(CoachSubscriptionTier.SCOUT);
++        coachSubscriptionRepository.save(subscription);
++
++        return new ProfileBuilderStatusResponse(profile.getId(), CoachProfileStatus.ACTIVE, 5, true);
++    }
++
++    public ProfileBuilderStatusResponse getBuilderStatus(Long userId) {
++        return coachProfileRepository.findByUserId(userId)
++            .map(profile -> {
++                int lastStep = resolveLastCompletedStep(profile);
++                boolean complete = profile.getStatus() == CoachProfileStatus.ACTIVE;
++                return new ProfileBuilderStatusResponse(profile.getId(), profile.getStatus(), lastStep, complete);
++            })
++            .orElse(new ProfileBuilderStatusResponse(null, null, 0, false));
++    }
++
++    private CoachProfile requireProfile(Long userId) {
++        return coachProfileRepository.findByUserId(userId)
++            .orElseThrow(() -> new MarketplaceException("marketplace.profileNotFound",
++                "Coach profile not found for userId=" + userId));
++    }
++
++    private void validateAllStepsComplete(CoachProfile profile) {
++        if (profile.getDisplayName() == null || profile.getDisplayName().isBlank()) {
++            throw new MarketplaceException("marketplace.incompleteProfile", "Step 1 not complete: display name missing");
++        }
++        if (coachSpecialtyRepository.findByCoachId(profile.getId()).isEmpty()) {
++            throw new MarketplaceException("marketplace.incompleteProfile", "Step 2 not complete: no specialties");
++        }
++        if (coachAgeGroupRepository.findByCoachId(profile.getId()).isEmpty()) {
++            throw new MarketplaceException("marketplace.incompleteProfile", "Step 2 not complete: no age groups");
++        }
++        if (coachPricingRepository.findByCoachId(profile.getId()).isEmpty()) {
++            throw new MarketplaceException("marketplace.incompleteProfile", "Step 3 not complete: pricing not set");
++        }
++        if (coachAvailabilityWindowRepository.findByCoachId(profile.getId()).isEmpty()) {
++            throw new MarketplaceException("marketplace.incompleteProfile", "Step 4 not complete: no availability windows");
++        }
++    }
++
++    private int resolveLastCompletedStep(CoachProfile profile) {
++        if (profile.getDisplayName() == null || profile.getDisplayName().isBlank()) return 0;
++        if (coachSpecialtyRepository.findByCoachId(profile.getId()).isEmpty()) return 1;
++        if (coachPricingRepository.findByCoachId(profile.getId()).isEmpty()) return 2;
++        if (coachAvailabilityWindowRepository.findByCoachId(profile.getId()).isEmpty()) return 3;
++        return 5;
++    }
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/security/api/ApiAdvice.java b/src/main/java/com/softropic/skillars/platform/security/api/ApiAdvice.java
+index 8f7eb1c..15bff95 100644
+--- a/src/main/java/com/softropic/skillars/platform/security/api/ApiAdvice.java
++++ b/src/main/java/com/softropic/skillars/platform/security/api/ApiAdvice.java
+@@ -14,6 +14,7 @@ import com.softropic.skillars.platform.filestorage.contract.exception.QuotaExcee
+ import com.softropic.skillars.platform.filestorage.contract.exception.StorageValidationException;
+ import com.softropic.skillars.platform.security.contract.event.SecurityAlertEvent;
+ import com.softropic.skillars.infrastructure.security.event.BadCredentialsEvent;
++import com.softropic.skillars.platform.marketplace.contract.MarketplaceException;
+ import com.softropic.skillars.platform.security.contract.exception.CoachRegistrationException;
+ import com.softropic.skillars.platform.security.contract.exception.FeatureGatedException;
+ import com.softropic.skillars.platform.security.contract.exception.UserNotFoundException;
+@@ -285,6 +286,13 @@ public class ApiAdvice {
+         return logErrorAndReturnDTO(ex, ex.getMessage(), "security.featureGated");
+     }
+ 
++    @ExceptionHandler(MarketplaceException.class)
++    @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)
++    public ErrorDto marketplaceExceptionHandler(final MarketplaceException ex) {
++        log.warn("Marketplace error: code={} msg={}", ex.getErrorCode(), ex.getMessage());
++        return logErrorAndReturnDTO(ex, ex.getMessage(), ex.getErrorCode());
++    }
++
+     @ExceptionHandler(SecException.class)
+     @ResponseStatus(HttpStatus.UNAUTHORIZED) //could occur when method security throws exception
+     public ErrorDto secExceptionHandler(final SecException exception) {
+diff --git a/src/main/resources/db/migration/V26__marketplace_coach_profiles.sql b/src/main/resources/db/migration/V26__marketplace_coach_profiles.sql
+new file mode 100644
+index 0000000..f3786f0
+--- /dev/null
++++ b/src/main/resources/db/migration/V26__marketplace_coach_profiles.sql
+@@ -0,0 +1,70 @@
++CREATE SCHEMA IF NOT EXISTS marketplace;
++
++CREATE TABLE marketplace.coach_profiles (
++    id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
++    user_id          BIGINT      NOT NULL UNIQUE REFERENCES main."user"(id),
++    display_name     VARCHAR(120) NOT NULL,
++    bio              TEXT,
++    city             VARCHAR(100),
++    district         VARCHAR(100),
++    languages        VARCHAR[]   NOT NULL DEFAULT '{}',
++    canonical_timezone VARCHAR(64) NOT NULL,
++    photo_url        VARCHAR(512),
++    status           VARCHAR(20) NOT NULL DEFAULT 'DRAFT',
++    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
++    CONSTRAINT chk_coach_profile_status CHECK (status IN ('DRAFT','ACTIVE'))
++);
++
++CREATE TABLE marketplace.coach_specialties (
++    id       UUID     PRIMARY KEY DEFAULT gen_random_uuid(),
++    coach_id UUID     NOT NULL REFERENCES marketplace.coach_profiles(id),
++    skill    VARCHAR(100) NOT NULL,
++    CONSTRAINT uq_coach_specialty UNIQUE (coach_id, skill)
++);
++
++CREATE TABLE marketplace.coach_age_groups (
++    id       UUID     PRIMARY KEY DEFAULT gen_random_uuid(),
++    coach_id UUID     NOT NULL REFERENCES marketplace.coach_profiles(id),
++    age_tier VARCHAR(20) NOT NULL,
++    CONSTRAINT uq_coach_age_group UNIQUE (coach_id, age_tier),
++    CONSTRAINT chk_age_tier CHECK (age_tier IN ('U10','AGE_10_12','AGE_13_17','ADULT'))
++);
++
++CREATE TABLE marketplace.coach_pricing (
++    coach_id          UUID        PRIMARY KEY REFERENCES marketplace.coach_profiles(id),
++    per_session_price NUMERIC(10,2) NOT NULL,
++    currency          VARCHAR(3)  NOT NULL DEFAULT 'EUR',
++    CONSTRAINT chk_coach_pricing_currency CHECK (currency = 'EUR')
++);
++
++CREATE TABLE marketplace.session_packs (
++    id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
++    coach_id      UUID        NOT NULL REFERENCES marketplace.coach_profiles(id),
++    session_count INT         NOT NULL CHECK (session_count > 0),
++    total_price   NUMERIC(10,2) NOT NULL,
++    label         VARCHAR(100),
++    CONSTRAINT uq_session_pack UNIQUE (coach_id, session_count)
++);
++
++CREATE TABLE marketplace.coach_availability_windows (
++    id                 UUID     PRIMARY KEY DEFAULT gen_random_uuid(),
++    coach_id           UUID     NOT NULL REFERENCES marketplace.coach_profiles(id),
++    day_of_week        SMALLINT NOT NULL CHECK (day_of_week BETWEEN 1 AND 7),
++    start_time         TIME     NOT NULL,
++    end_time           TIME     NOT NULL,
++    canonical_timezone VARCHAR(64) NOT NULL,
++    CONSTRAINT chk_availability_time_order CHECK (end_time > start_time)
++);
++
++CREATE TABLE marketplace.coach_subscriptions (
++    coach_id     UUID        PRIMARY KEY REFERENCES marketplace.coach_profiles(id),
++    tier         VARCHAR(20) NOT NULL DEFAULT 'SCOUT',
++    active_since TIMESTAMPTZ NOT NULL DEFAULT now(),
++    CONSTRAINT chk_coach_subscription_tier CHECK (tier IN ('SCOUT','INSTRUCTOR','ACADEMY'))
++);
++
++CREATE INDEX idx_coach_profiles_user_id  ON marketplace.coach_profiles(user_id);
++CREATE INDEX idx_coach_profiles_status   ON marketplace.coach_profiles(status);
++CREATE INDEX idx_coach_specialties_coach ON marketplace.coach_specialties(coach_id);
++CREATE INDEX idx_coach_age_groups_coach  ON marketplace.coach_age_groups(coach_id);
++CREATE INDEX idx_availability_coach      ON marketplace.coach_availability_windows(coach_id);
+diff --git a/src/test/java/com/softropic/skillars/platform/marketplace/api/CoachProfileBuilderIT.java b/src/test/java/com/softropic/skillars/platform/marketplace/api/CoachProfileBuilderIT.java
+new file mode 100644
+index 0000000..205e148
+--- /dev/null
++++ b/src/test/java/com/softropic/skillars/platform/marketplace/api/CoachProfileBuilderIT.java
+@@ -0,0 +1,560 @@
++package com.softropic.skillars.platform.marketplace.api;
++
++import com.softropic.skillars.config.TestConfig;
++import com.softropic.skillars.e2e.HttpTestClient;
++import com.softropic.skillars.infrastructure.security.SecurityConstants;
++import com.softropic.skillars.platform.security.SecurityIT;
++
++import org.junit.jupiter.api.AfterEach;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.boot.test.context.SpringBootTest;
++import org.springframework.boot.test.web.server.LocalServerPort;
++import org.springframework.context.annotation.Import;
++import org.springframework.http.HttpHeaders;
++import org.springframework.http.HttpMethod;
++import org.springframework.http.HttpStatus;
++import org.springframework.http.MediaType;
++import org.springframework.http.ResponseEntity;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.security.crypto.password.PasswordEncoder;
++import org.springframework.test.context.ActiveProfiles;
++import org.springframework.test.context.TestPropertySource;
++import org.springframework.test.context.jdbc.Sql;
++import org.springframework.transaction.support.TransactionTemplate;
++import org.springframework.web.client.HttpClientErrorException;
++
++import java.sql.Timestamp;
++import java.time.Instant;
++import java.util.List;
++import java.util.Map;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.assertThatThrownBy;
++
++@ActiveProfiles({"dev", "test"})
++@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
++@Import(TestConfig.class)
++@TestPropertySource(properties = {
++    "spring.cloud.compatibility-verifier.enabled=false",
++    "rate.limiting.enabled=false",
++    "allowed.clients=testClientId"
++})
++@Sql({SecurityIT.SEC_DATA_SQL_PATH})
++class CoachProfileBuilderIT {
++
++    private static final String LOGIN_ENDPOINT    = "/api/auth/login";
++    private static final String PROFILE_BASE      = "/api/marketplace/coaches/me/profile";
++    private static final String CLIENT_ID         = "testClientId";
++    private static final String TEST_PASSWORD     = "CoachPass@123!";
++
++    private static final long COACH_ID = 9100000001L;
++    private static final long PARENT_ID = 9100000002L;
++    private static final String COACH_EMAIL  = "coach.builder@skillars-test.com";
++    private static final String PARENT_EMAIL = "parent.builder@skillars-test.com";
++
++    @Autowired
++    private JdbcTemplate jdbcTemplate;
++
++    @Autowired
++    private TransactionTemplate transactionTemplate;
++
++    @Autowired
++    private HttpTestClient httpTestClient;
++
++    @Autowired
++    private PasswordEncoder passwordEncoder;
++
++    @LocalServerPort
++    private int randomServerPort;
++
++    @BeforeEach
++    void setUp() {
++        String passwordHash = passwordEncoder.encode(TEST_PASSWORD);
++        transactionTemplate.execute(status -> {
++            jdbcTemplate.update(
++                "INSERT INTO main.authority (id, name, status, created_by, created_date) " +
++                "VALUES (9100, 'ROLE_COACH', 'ACTIVE', 'system', ?) ON CONFLICT (name) DO NOTHING",
++                Timestamp.from(Instant.now())
++            );
++            jdbcTemplate.update(
++                "INSERT INTO main.authority (id, name, status, created_by, created_date) " +
++                "VALUES (9101, 'ROLE_PARENT', 'ACTIVE', 'system', ?) ON CONFLICT (name) DO NOTHING",
++                Timestamp.from(Instant.now())
++            );
++            insertCoachUser(COACH_ID, COACH_EMAIL, passwordHash);
++            insertParentUser(PARENT_ID, PARENT_EMAIL, passwordHash);
++            jdbcTemplate.update(
++                "INSERT INTO main.user_authority (user_id, authority_id) " +
++                "VALUES (?, (SELECT id FROM main.authority WHERE name = 'ROLE_COACH')) ON CONFLICT DO NOTHING",
++                COACH_ID
++            );
++            jdbcTemplate.update(
++                "INSERT INTO main.user_authority (user_id, authority_id) " +
++                "VALUES (?, (SELECT id FROM main.authority WHERE name = 'ROLE_PARENT')) ON CONFLICT DO NOTHING",
++                PARENT_ID
++            );
++            return null;
++        });
++    }
++
++    @AfterEach
++    void tearDown() {
++        transactionTemplate.execute(status -> {
++            jdbcTemplate.execute("DELETE FROM marketplace.coach_subscriptions");
++            jdbcTemplate.execute("DELETE FROM marketplace.coach_availability_windows");
++            jdbcTemplate.execute("DELETE FROM marketplace.session_packs");
++            jdbcTemplate.execute("DELETE FROM marketplace.coach_pricing");
++            jdbcTemplate.execute("DELETE FROM marketplace.coach_age_groups");
++            jdbcTemplate.execute("DELETE FROM marketplace.coach_specialties");
++            jdbcTemplate.execute("DELETE FROM marketplace.coach_profiles");
++            jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
++            jdbcTemplate.execute("DELETE FROM main.login_attempts");
++            jdbcTemplate.execute("DELETE FROM main.user_authority WHERE user_id IN (" + COACH_ID + "," + PARENT_ID + ")");
++            jdbcTemplate.execute("DELETE FROM main.\"user\" WHERE id IN (" + COACH_ID + "," + PARENT_ID + ")");
++            jdbcTemplate.execute("DELETE FROM main.authority WHERE id IN (9100, 9101)");
++            jdbcTemplate.execute("DELETE FROM main.sec");
++            return null;
++        });
++    }
++
++    @Test
++    void saveStep1_validRequest_returns200AndDraftCreated() {
++        String cookies = loginAndGetCookies(COACH_EMAIL);
++
++        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/steps/1",
++            HttpMethod.PUT,
++            step1Payload("John Coach", "I coach youth football", "Berlin", "Mitte",
++                List.of("English", "German"), "Europe/Berlin"),
++            authenticatedHeaders(cookies),
++            Map.class
++        );
++
++        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
++        assertThat(response.getBody()).containsKey("coachId");
++        assertThat(response.getBody().get("stepSaved")).isEqualTo(1);
++        assertThat(response.getBody().get("nextStep")).isEqualTo(2);
++    }
++
++    @Test
++    void saveStep1_bioWithEmail_sanitizedOnPersistence() {
++        String cookies = loginAndGetCookies(COACH_EMAIL);
++
++        httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/steps/1",
++            HttpMethod.PUT,
++            step1Payload("John Coach", "Contact me at john@example.com", "Berlin", null,
++                List.of("English"), "Europe/Berlin"),
++            authenticatedHeaders(cookies),
++            Map.class
++        );
++
++        String storedBio = jdbcTemplate.queryForObject(
++            "SELECT bio FROM marketplace.coach_profiles WHERE user_id = ?", String.class, COACH_ID);
++        assertThat(storedBio).doesNotContain("john@example.com");
++        assertThat(storedBio).contains("[contact details removed]");
++    }
++
++    @Test
++    void saveStep1_missingDisplayName_returns400() {
++        String cookies = loginAndGetCookies(COACH_EMAIL);
++
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/steps/1",
++            HttpMethod.PUT,
++            Map.of("bio", "bio", "languages", List.of("English"), "canonicalTimezone", "Europe/Berlin"),
++            authenticatedHeaders(cookies),
++            Map.class
++        ))
++            .isInstanceOf(HttpClientErrorException.class)
++            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
++    }
++
++    @Test
++    void saveStep2_validRequest_returns200() {
++        String cookies = loginAndGetCookies(COACH_EMAIL);
++        saveStep1(cookies);
++
++        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/steps/2",
++            HttpMethod.PUT,
++            Map.of("specialties", List.of("Dribbling", "Shooting"), "ageGroups", List.of("U10", "AGE_10_12")),
++            authenticatedHeaders(cookies),
++            Map.class
++        );
++
++        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
++        assertThat(response.getBody().get("stepSaved")).isEqualTo(2);
++    }
++
++    @Test
++    void saveStep2_noSpecialties_returns400() {
++        String cookies = loginAndGetCookies(COACH_EMAIL);
++        saveStep1(cookies);
++
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/steps/2",
++            HttpMethod.PUT,
++            Map.of("specialties", List.of(), "ageGroups", List.of("U10")),
++            authenticatedHeaders(cookies),
++            Map.class
++        ))
++            .isInstanceOf(HttpClientErrorException.class)
++            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
++    }
++
++    @Test
++    void saveStep3_validRequest_returns200() {
++        String cookies = loginAndGetCookies(COACH_EMAIL);
++        saveStep1(cookies);
++        saveStep2(cookies);
++
++        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/steps/3",
++            HttpMethod.PUT,
++            Map.of("perSessionPrice", 50.0),
++            authenticatedHeaders(cookies),
++            Map.class
++        );
++
++        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
++        assertThat(response.getBody().get("stepSaved")).isEqualTo(3);
++    }
++
++    @Test
++    void saveStep3_missingPerSessionPrice_returns400() {
++        String cookies = loginAndGetCookies(COACH_EMAIL);
++        saveStep1(cookies);
++        saveStep2(cookies);
++
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/steps/3",
++            HttpMethod.PUT,
++            Map.of("sessionPacks", List.of()),
++            authenticatedHeaders(cookies),
++            Map.class
++        ))
++            .isInstanceOf(HttpClientErrorException.class)
++            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
++    }
++
++    @Test
++    void saveStep4_validRequest_returns200() {
++        String cookies = loginAndGetCookies(COACH_EMAIL);
++        saveStep1(cookies);
++        saveStep2(cookies);
++        saveStep3(cookies);
++
++        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/steps/4",
++            HttpMethod.PUT,
++            Map.of("windows", List.of(Map.of("dayOfWeek", 1, "startTime", "09:00:00", "endTime", "11:00:00",
++                "canonicalTimezone", "Europe/Berlin"))),
++            authenticatedHeaders(cookies),
++            Map.class
++        );
++
++        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
++        assertThat(response.getBody().get("stepSaved")).isEqualTo(4);
++    }
++
++    @Test
++    void saveStep4_noWindows_returns400() {
++        String cookies = loginAndGetCookies(COACH_EMAIL);
++        saveStep1(cookies);
++        saveStep2(cookies);
++        saveStep3(cookies);
++
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/steps/4",
++            HttpMethod.PUT,
++            Map.of("windows", List.of()),
++            authenticatedHeaders(cookies),
++            Map.class
++        ))
++            .isInstanceOf(HttpClientErrorException.class)
++            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
++    }
++
++    @Test
++    void saveStep5_withPhoto_returns200() {
++        String cookies = loginAndGetCookies(COACH_EMAIL);
++        saveStep1(cookies);
++        saveStep2(cookies);
++        saveStep3(cookies);
++        saveStep4(cookies);
++
++        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/steps/5",
++            HttpMethod.PUT,
++            Map.of("photoUrl", "coach_profile/9100000001/2026/06/test-photo.jpg"),
++            authenticatedHeaders(cookies),
++            Map.class
++        );
++
++        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
++        assertThat(response.getBody().get("stepSaved")).isEqualTo(5);
++    }
++
++    @Test
++    void saveStep5_skip_returns200WithNullPhotoUrl() {
++        String cookies = loginAndGetCookies(COACH_EMAIL);
++        saveStep1(cookies);
++        saveStep2(cookies);
++        saveStep3(cookies);
++        saveStep4(cookies);
++
++        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/steps/5",
++            HttpMethod.PUT,
++            Map.of(),
++            authenticatedHeaders(cookies),
++            Map.class
++        );
++
++        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
++    }
++
++    @Test
++    void publishProfile_allStepsComplete_returnsActiveStatus() {
++        String cookies = loginAndGetCookies(COACH_EMAIL);
++        saveAllSteps(cookies);
++
++        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/publish",
++            HttpMethod.POST,
++            null,
++            authenticatedHeaders(cookies),
++            Map.class
++        );
++
++        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
++        assertThat(response.getBody().get("status")).isEqualTo("ACTIVE");
++        assertThat(response.getBody().get("profileComplete")).isEqualTo(true);
++    }
++
++    @Test
++    void publishProfile_missingStep_returns422() {
++        String cookies = loginAndGetCookies(COACH_EMAIL);
++        // Only save step 1 — missing step 2, 3, 4
++        saveStep1(cookies);
++
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/publish",
++            HttpMethod.POST,
++            null,
++            authenticatedHeaders(cookies),
++            Map.class
++        ))
++            .isInstanceOf(HttpClientErrorException.class)
++            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
++    }
++
++    @Test
++    void getStatus_noDraft_returnsStep0() {
++        String cookies = loginAndGetCookies(COACH_EMAIL);
++
++        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/status",
++            HttpMethod.GET,
++            null,
++            authenticatedHeaders(cookies),
++            Map.class
++        );
++
++        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
++        assertThat(response.getBody().get("lastCompletedStep")).isEqualTo(0);
++        assertThat(response.getBody().get("profileComplete")).isEqualTo(false);
++    }
++
++    @Test
++    void getStatus_afterStep2_returnsLastCompletedStep2() {
++        String cookies = loginAndGetCookies(COACH_EMAIL);
++        saveStep1(cookies);
++        saveStep2(cookies);
++
++        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/status",
++            HttpMethod.GET,
++            null,
++            authenticatedHeaders(cookies),
++            Map.class
++        );
++
++        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
++        assertThat(response.getBody().get("lastCompletedStep")).isEqualTo(2);
++    }
++
++    @Test
++    void saveStep1_unauthenticated_returns401() {
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/steps/1",
++            HttpMethod.PUT,
++            step1Payload("John", null, null, null, List.of("English"), "UTC"),
++            clientHeaders(),
++            Map.class
++        ))
++            .isInstanceOf(HttpClientErrorException.class)
++            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
++                .isIn(HttpStatus.UNAUTHORIZED, HttpStatus.FORBIDDEN));
++    }
++
++    @Test
++    void saveStep1_asParent_returns403() {
++        String cookies = loginAndGetCookies(PARENT_EMAIL);
++
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/steps/1",
++            HttpMethod.PUT,
++            step1Payload("John", null, null, null, List.of("English"), "UTC"),
++            authenticatedHeaders(cookies),
++            Map.class
++        ))
++            .isInstanceOf(HttpClientErrorException.class)
++            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
++    }
++
++    // ---- helpers ----
++
++    private void saveStep1(String cookies) {
++        httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/steps/1",
++            HttpMethod.PUT,
++            step1Payload("Coach Name", "Bio text", "Berlin", "Mitte", List.of("English"), "Europe/Berlin"),
++            authenticatedHeaders(cookies),
++            Map.class
++        );
++    }
++
++    private void saveStep2(String cookies) {
++        httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/steps/2",
++            HttpMethod.PUT,
++            Map.of("specialties", List.of("Dribbling"), "ageGroups", List.of("ADULT")),
++            authenticatedHeaders(cookies),
++            Map.class
++        );
++    }
++
++    private void saveStep3(String cookies) {
++        httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/steps/3",
++            HttpMethod.PUT,
++            Map.of("perSessionPrice", 50.0),
++            authenticatedHeaders(cookies),
++            Map.class
++        );
++    }
++
++    private void saveStep4(String cookies) {
++        httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/steps/4",
++            HttpMethod.PUT,
++            Map.of("windows", List.of(Map.of("dayOfWeek", 1, "startTime", "09:00:00", "endTime", "11:00:00",
++                "canonicalTimezone", "Europe/Berlin"))),
++            authenticatedHeaders(cookies),
++            Map.class
++        );
++    }
++
++    private void saveAllSteps(String cookies) {
++        saveStep1(cookies);
++        saveStep2(cookies);
++        saveStep3(cookies);
++        saveStep4(cookies);
++        httpTestClient.makeHttpRequest(
++            baseUrl() + PROFILE_BASE + "/steps/5",
++            HttpMethod.PUT,
++            Map.of(),
++            authenticatedHeaders(cookies),
++            Map.class
++        );
++    }
++
++    private String loginAndGetCookies(String email) {
++        ResponseEntity<Map> loginResponse = httpTestClient.makeHttpRequest(
++            baseUrl() + LOGIN_ENDPOINT,
++            HttpMethod.POST,
++            Map.of("email", email, "password", TEST_PASSWORD),
++            clientHeaders(),
++            Map.class
++        );
++        assertThat(loginResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
++        List<String> setCookies = loginResponse.getHeaders().get("Set-Cookie");
++        assertThat(setCookies).isNotNull();
++        return setCookies.stream()
++            .map(c -> c.split(";")[0])
++            .reduce((a, b) -> a + "; " + b)
++            .orElseThrow();
++    }
++
++    private HttpHeaders clientHeaders() {
++        HttpHeaders headers = new HttpHeaders();
++        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
++        headers.setContentType(MediaType.APPLICATION_JSON);
++        headers.add(SecurityConstants.API_KEY_HEADER, CLIENT_ID);
++        return headers;
++    }
++
++    private HttpHeaders authenticatedHeaders(String cookieValue) {
++        HttpHeaders headers = clientHeaders();
++        headers.add(HttpHeaders.COOKIE, cookieValue);
++        return headers;
++    }
++
++    private String baseUrl() {
++        return "http://localhost:" + randomServerPort;
++    }
++
++    private Map<String, Object> step1Payload(String displayName, String bio, String city, String district,
++                                              List<String> languages, String timezone) {
++        java.util.Map<String, Object> payload = new java.util.HashMap<>();
++        if (displayName != null) payload.put("displayName", displayName);
++        if (bio != null) payload.put("bio", bio);
++        if (city != null) payload.put("city", city);
++        if (district != null) payload.put("district", district);
++        if (languages != null) payload.put("languages", languages);
++        if (timezone != null) payload.put("canonicalTimezone", timezone);
++        return payload;
++    }
++
++    private void insertCoachUser(long id, String email, String passwordHash) {
++        jdbcTemplate.update(
++            "INSERT INTO main.\"user\" " +
++            "(id, created_by, created_date, last_modified_by, last_modified_date, request_id, session_id, " +
++            "status, dob, email, first_name, gender, lang_key, last_name, iso2_country, phone, " +
++            "activated, locked, login, login_id_type, password_hash, otp_enabled, " +
++            "skillars_role, verification_status) " +
++            "VALUES (?, 'system', ?, 'system', ?, 'test-req', NULL, " +
++            "'ACTIVE', '1990-03-15', ?, 'Test', 'OTHER', 'en', 'Coach', 'DE', ?, " +
++            "true, false, ?, 'EMAIL', ?, false, " +
++            "'COACH', 'BASIC_VERIFIED')",
++            id,
++            Timestamp.from(Instant.now()), Timestamp.from(Instant.now()),
++            email,
++            "670" + (id % 10000000),
++            email, passwordHash
++        );
++    }
++
++    private void insertParentUser(long id, String email, String passwordHash) {
++        jdbcTemplate.update(
++            "INSERT INTO main.\"user\" " +
++            "(id, created_by, created_date, last_modified_by, last_modified_date, request_id, session_id, " +
++            "status, dob, email, first_name, gender, lang_key, last_name, iso2_country, phone, " +
++            "activated, locked, login, login_id_type, password_hash, otp_enabled, " +
++            "skillars_role, verification_status) " +
++            "VALUES (?, 'system', ?, 'system', ?, 'test-req', NULL, " +
++            "'ACTIVE', '1985-06-01', ?, 'Test', 'OTHER', 'en', 'Parent', 'DE', ?, " +
++            "true, false, ?, 'EMAIL', ?, false, " +
++            "'PARENT', 'BASIC_VERIFIED')",
++            id,
++            Timestamp.from(Instant.now()), Timestamp.from(Instant.now()),
++            email,
++            "670" + (id % 10000000 + 1),
++            email, passwordHash
++        );
++    }
++}

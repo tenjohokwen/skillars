@@ -16,6 +16,7 @@ import com.softropic.skillars.platform.security.service.DaoAuthProvider;
 import org.apache.commons.collections4.CollectionUtils;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.env.Environment;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.AccountStatusException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -81,10 +82,11 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
                 try {
                     attemptAuthorization(req, res);
                 }
-                catch (AccountStatusException | AuthorizationException e) {
-                    //includes AccountExpiredException, CredentialsExpiredException, LockedException, InvalidJWTDataException, JWTTheftException, JWTExpiredException
+                catch (AccountStatusException | AuthorizationException | AccessDeniedException e) {
+                    //includes AccountExpiredException, CredentialsExpiredException, LockedException, InvalidJWTDataException, JWTTheftException, JWTExpiredException, AccessDeniedException (missing token)
                     securityUtil.logout(res);
-                    throw e;
+                    res.sendError(HttpServletResponse.SC_UNAUTHORIZED);
+                    return;
                 }
             } else {
                 //Put anonymous authentication token
