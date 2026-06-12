@@ -590,43 +590,49 @@ So that my account and any linked player data are protected against unauthorized
 
 **Given** a registered and verified user submits valid credentials to `POST /api/auth/login`
 **When** authentication succeeds
-**Then** an access token (15-minute TTL) is set as an `HttpOnly; Secure; SameSite=Strict` cookie
-**And** a refresh token is issued, stored in the `refresh_tokens` table (userId, tokenHash, expiresAt, used: false), and set as a separate `HttpOnly; Secure; SameSite=Strict` cookie
-**And** the response body contains the user's role, id, and display name — never the raw token string
+**Then** the response sets two `HttpOnly; Secure` cookies: an access token (15-min TTL) and a refresh token (7-day TTL, `SameSite=Lax`, cookie name `rtkn`)
+**And** a non-HttpOnly `skp` cookie (URL-encoded JSON `{"id":<Long>,"role":"<ROLE>"}`) is also set for frontend state hydration
+**And** the response body contains `userId`, `role`, and `displayName` — never the raw token string
+**And** the refresh token is persisted in the `refresh_tokens` table with `token_hash` (SHA-256 of raw token), `expires_at`, and `used: false`
 
-**Given** an authenticated user's access token has expired
-**When** they send any authenticated request
-**Then** the frontend automatically calls `POST /api/auth/refresh` using the refresh token cookie
-**And** if the refresh token is valid and unused, a new access token is issued and the old refresh token is marked `used: true` and replaced with a new one (rotation)
-**And** if the refresh token has already been used (reuse detected), both cookies are immediately cleared, all refresh tokens for that user are revoked in the database, and the user is redirected to the login page
+**Given** a client presents a valid, unused refresh token cookie to `POST /api/auth/refresh`
+**When** the token is found and not expired
+**Then** the old token record is marked `used=true`, a new access token and refresh token pair is issued (rotation), and the `skp` cookie is refreshed
+**And** if the refresh token has already been used (theft detected), all refresh tokens for that user are revoked (`used=true`), all auth cookies are cleared, and the response is `401 Unauthorized`
+**And** if the token is expired or not found, all auth cookies are cleared and the response is `401 Unauthorized`
 
 **Given** a user sends `POST /api/auth/logout`
 **When** the request is received
-**Then** both the access token and refresh token cookies are cleared (Set-Cookie with past expiry)
-**And** the current refresh token record is marked `used: true` in the database
-**And** subsequent requests with the old cookies receive `401 Unauthorized`
+**Then** the presented refresh token is marked `used=true` in the database
+**And** all auth cookies (`rtkn`, `skp`, `potc`, `bcookie`, `user=`, `ION`, `rint`) are cleared via `Set-Cookie: ...; Max-Age=0`
+**And** subsequent requests with the cleared cookies receive `401 Unauthorized`
 
 **Given** an unauthenticated request reaches any protected endpoint
-**When** neither a valid access token nor a valid refresh token is present
+**When** no valid access token cookie is present
 **Then** the response is `401 Unauthorized` with `ErrorDto`
-**And** the frontend redirects the user to the login page, preserving the originally requested URL as a post-login redirect parameter
+**And** the frontend redirects to `/login?redirect=<originally-requested-path>`
 
-**Given** a coach with status `UNVERIFIED` attempts to log in
+**Given** any Skillars user (`skillarsRole != null`) with `verificationStatus != BASIC_VERIFIED` attempts to log in
 **When** credentials are correct but verification is incomplete
 **Then** the response is `403 Forbidden` with `ErrorDto` code `security.accountNotVerified`
-**And** a verification prompt is displayed — the user is not signed in
+**And** the user is NOT signed in — no cookies are set
 
 **Given** login fails due to invalid credentials
-**When** the user has made 5 consecutive failed attempts within 15 minutes
-**Then** the account is temporarily locked for 15 minutes
-**And** subsequent attempts return `429 Too Many Requests` with a retry-after timestamp in the `ErrorDto`
-**And** the lock duration and attempt threshold are read from ConfigService
+**When** the user's email has accumulated 5 failed attempts within a 15-minute window
+**Then** subsequent attempts return `429 Too Many Requests` with `ErrorDto`
+**And** the attempt threshold and lock window are read from ConfigService keys `security.login.max-attempts` / `security.login.lock-window-minutes`
+**And** attempts are tracked in the DB `login_attempts` table (multi-node safe — no in-memory cache)
 
 **Given** a successfully authenticated user
 **When** they are redirected after login
-**Then** a `COACH` role is routed to the Command Center; a `PARENT` role to the Parent Portal; a `PLAYER` role to the Locker Room; an `ADMIN` role to the Admin dashboard
+**Then** `COACH` → `/coach/command-center`; `PARENT` → `/parent/dashboard`; `PLAYER` → `/player/locker-room`; `ADMIN` → `/admin/health-dashboard`; no-role (legacy) users → `/dashboard`
 
-*Dev notes: Extend `platform.security`. New entity: `refresh_tokens` (id UUID, userId UUID, tokenHash VARCHAR, expiresAt TIMESTAMPTZ, used BOOLEAN DEFAULT false, createdAt TIMESTAMPTZ). JWT signed with JJWT 0.13.0; claims include `userId`, `role`, `sessionId`. Spring Security filter reads access token from cookie (not `Authorization` header). `AuthResource`: POST /api/auth/login, /api/auth/refresh, /api/auth/logout. Failed login attempts tracked in `login_attempts` (userId, attemptedAt) — query count within window, read lock threshold from ConfigService. Test: `AuthResourceIT`.*
+**Given** the application is loaded or the page is reloaded
+**When** a `skp` cookie is present (set by login or refresh)
+**Then** `auth.store.js` (Pinia) hydrates `userId` and `role` from the URL-decoded JSON in `skp`
+**And** the router navigation guard uses `authStore.isAuthenticated` (not `document.cookie.includes('user=')`) to decide access
+
+*Dev notes: Extends `platform.security`. New entities: `refresh_tokens` (BIGINT TSID PK via `BaseEntity`, `user_id BIGINT FK`, `token_hash VARCHAR(64)` SHA-256 hex, `expires_at TIMESTAMPTZ`, `used BOOLEAN DEFAULT false`, `rotated_at TIMESTAMPTZ`) and `login_attempts` (BIGINT TSID PK, `identifier VARCHAR(255)`, `attempted_at TIMESTAMPTZ`). New endpoints are parallel to legacy `/authenticate` — nothing removed. `AuthResource`: `POST /api/auth/login`, `/refresh`, `/logout` — all in `PUBLIC_ENDPOINTS`. `AuthService` handles token logic; `AuthResource.login()` calls `loginTokenManager.ensureClientHasPreLoginId()` before delegating to service (fcookie requirement). SHA-256 via Java 17 `HexFormat`. ConfigService via `configService.find(key).map(Integer::parseInt).orElse(default)`. Test: `AuthResourceIT` (11 integration test cases, `@SpringBootTest + @Testcontainers`).*
 
 ### Story 1.6: Age-Tier Enforcement & Family Data Isolation
 
