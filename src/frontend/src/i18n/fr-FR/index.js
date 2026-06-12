@@ -136,6 +136,11 @@ export default {
     notFound: "La ressource demandee n'a pas ete trouvee",
     verificationFailed: 'Échec de la vérification'
   },
+  featureGate: {
+    requiredTier: 'Nécessite le plan {tier}',
+    description: "Passez à {tier} pour débloquer cette fonctionnalité et accélérer votre coaching.",
+    upgradeCTA: 'Mettre à niveau',
+  },
   security: {
     unauthorized: "Vous n'avez pas les droits requis. Vous pouvez contacter le support",
     authError: "Un probleme d'authentification s'est produit.",
@@ -146,7 +151,9 @@ export default {
     badCreds: "La combinaison identifiant et mot de passe n'existe pas",
     opForbidden: "L'acces a ete refuse. Vous pouvez contacter le support",
     sessionExpired: "Votre session n'est plus valide. Vous devez vous reconnecter",
-    generic: "Exception interne inconnue. Vous pouvez contacter le support avec votre code d'aide"
+    generic: "Exception interne inconnue. Vous pouvez contacter le support avec votre code d'aide",
+    featureGated: "Cette fonctionnalité nécessite un niveau d'abonnement supérieur.",
+    userNotFound: 'Le profil joueur demandé est introuvable.',
   },
   success: {
     registered: 'Inscription reussie ! Veuillez verifier votre email pour activer votre compte.',

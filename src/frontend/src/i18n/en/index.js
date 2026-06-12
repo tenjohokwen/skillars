@@ -89,6 +89,15 @@ export default {
       ADULT: '18+',
     },
   },
+  featureGate: {
+    requiredTier: 'Requires {tier} plan',
+    description: 'Upgrade to {tier} to unlock this feature and accelerate your coaching.',
+    upgradeCTA: 'Upgrade plan',
+  },
+  security: {
+    featureGated: 'This feature requires a higher subscription tier.',
+    userNotFound: 'The requested player profile could not be found.',
+  },
   error: {
     verificationFailed: 'Verification failed',
   },

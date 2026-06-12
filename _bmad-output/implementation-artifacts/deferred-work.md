@@ -1,3 +1,6 @@
+## Deferred from: code review of skillars-1-6-age-tier-enforcement-family-data-isolation (2026-06-12)
+- Flyway V25 hardcoded IDs 112–114 — `ON CONFLICT (key) DO NOTHING` does not guard against PK collision if those IDs are already taken by different rows with different keys; spec explicitly verified the ID range is safe; established codebase Flyway seed pattern [V25__age_policy_config_seed.sql:1–6]
+
 ## Deferred from: code review of skillars-1-5-authentication-jwt-security (2026-06-12)
 - Tests use raw `jdbcTemplate` inserts instead of Instancio for test data — project rule violation but tests are functionally correct [AuthResourceIT.java]
 - `AuthResourceIT` lacks `@Testcontainers` annotation — may be managed via inherited `TestConfig` or `SecurityIT` base class; verify before next review [AuthResourceIT.java]

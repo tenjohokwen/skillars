@@ -96,6 +96,15 @@ export default {
   payment: {},
   messaging: {},
   admin: {},
+  featureGate: {
+    requiredTier: 'Erfordert {tier}-Plan',
+    description: 'Upgraden Sie auf {tier}, um diese Funktion freizuschalten und Ihr Coaching zu beschleunigen.',
+    upgradeCTA: 'Plan upgraden',
+  },
+  security: {
+    featureGated: 'Diese Funktion erfordert ein höheres Abonnement-Tier.',
+    userNotFound: 'Das angeforderte Spielerprofil konnte nicht gefunden werden.',
+  },
   error: {
     verificationFailed: 'Verifizierung fehlgeschlagen',
   },

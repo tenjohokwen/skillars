@@ -153,6 +153,11 @@ export default {
     notFound: 'The requested resource was not found',
     verificationFailed: 'Verification failed'
   },
+  featureGate: {
+    requiredTier: 'Requires {tier} plan',
+    description: 'Upgrade to {tier} to unlock this feature and accelerate your coaching.',
+    upgradeCTA: 'Upgrade plan',
+  },
   security: {
     unauthorized: 'You do not have the required rights. You can contact help desk',
     authError: 'Authentication issue has occurred.',
@@ -163,7 +168,9 @@ export default {
     badCreds: 'The login and password combination does not exist',
     opForbidden: 'Access has been denied. You can contact help desk',
     sessionExpired: 'Your session is no longer valid. You need to sign-in again',
-    generic: 'Internal unknown exception. You can contact help desk with your help code'
+    generic: 'Internal unknown exception. You can contact help desk with your help code',
+    featureGated: 'This feature requires a higher subscription tier.',
+    userNotFound: 'The requested player profile could not be found.',
   },
   success: {
     registered: 'Registration successful! Please check your email to activate your account.',

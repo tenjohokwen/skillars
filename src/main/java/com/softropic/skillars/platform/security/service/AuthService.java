@@ -66,7 +66,7 @@ public class AuthService {
 
         // Rate-limit key is SHA-256(email|ip) so an attacker on a different IP cannot
         // lock the legitimate user's own IP+email combination (account-DoS prevention).
-        String identifier = sha256Hex(email.toLowerCase() + "|" + clientIp);
+        String identifier = sha256Hex(email.toLowerCase() + "|" + canonicaliseIp(clientIp));
         Instant windowStart = Instant.now(ClockProvider.getClock()).minus(lockWindowMin, ChronoUnit.MINUTES);
         long recentAttempts = loginAttemptRepository.countByIdentifierAndAttemptedAtAfter(identifier, windowStart);
         if (recentAttempts >= maxAttempts) {
@@ -228,6 +228,13 @@ public class AuthService {
     private void recordAttempt(String identifier) {
         loginAttemptRepository.save(
             new LoginAttempt(identifier, Instant.now(ClockProvider.getClock())));
+    }
+
+    private static String canonicaliseIp(String ip) {
+        if (ip == null) return "unknown";
+        if ("0:0:0:0:0:0:0:1".equals(ip) || "::1".equals(ip)) return "127.0.0.1";
+        if (ip.startsWith("::ffff:")) return ip.substring(7);
+        return ip;
     }
 
     private static String sha256Hex(String raw) {

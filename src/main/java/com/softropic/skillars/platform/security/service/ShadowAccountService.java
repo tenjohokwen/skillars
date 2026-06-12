@@ -5,6 +5,7 @@ import com.softropic.skillars.platform.security.contract.AgeTier;
 import com.softropic.skillars.platform.security.contract.CreatePlayerProfileRequest;
 import com.softropic.skillars.platform.security.contract.PlayerProfileResponse;
 import com.softropic.skillars.platform.security.contract.exception.ShadowAccountException;
+import com.softropic.skillars.platform.security.contract.exception.UserNotFoundException;
 import com.softropic.skillars.platform.security.repo.ParentPlayerLink;
 import com.softropic.skillars.platform.security.repo.ParentPlayerLinkRepository;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
@@ -75,6 +76,13 @@ public class ShadowAccountService {
             .stream()
             .map(playerProfileMapper::toResponse)
             .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public PlayerProfileResponse getPlayerProfile(Long playerId, Long parentId) {
+        PlayerProfile profile = playerProfileRepository.findByIdAndParentId(playerId, parentId)
+            .orElseThrow(() -> new UserNotFoundException(playerId));
+        return playerProfileMapper.toResponse(profile);
     }
 
     public void linkAdditionalParent(Long requestingParentId, Long playerId) {

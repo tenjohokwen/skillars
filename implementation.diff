@@ -1,0 +1,790 @@
+diff --git a/_bmad-output/implementation-artifacts/sprint-status.yaml b/_bmad-output/implementation-artifacts/sprint-status.yaml
+index 9edde94..d0eb2c7 100644
+--- a/_bmad-output/implementation-artifacts/sprint-status.yaml
++++ b/_bmad-output/implementation-artifacts/sprint-status.yaml
+@@ -161,7 +161,7 @@ development_status:
+   skillars-1-3-coach-account-registration-email-verification: done
+   skillars-1-4-parent-registration-player-profiles-shadow-accounts: done
+   skillars-1-5-authentication-jwt-security: done
+-  skillars-1-6-age-tier-enforcement-family-data-isolation: backlog
++  skillars-1-6-age-tier-enforcement-family-data-isolation: review
+   skillars-epic-1-retrospective: optional
+ 
+   # Epic 2: Coach Discovery & Onboarding
+diff --git a/src/frontend/src/i18n/de/index.js b/src/frontend/src/i18n/de/index.js
+index 84bbace..258693c 100644
+--- a/src/frontend/src/i18n/de/index.js
++++ b/src/frontend/src/i18n/de/index.js
+@@ -96,6 +96,14 @@ export default {
+   payment: {},
+   messaging: {},
+   admin: {},
++  featureGate: {
++    requiredTier: 'Erfordert {tier}-Plan',
++    description: 'Upgraden Sie auf {tier}, um diese Funktion freizuschalten und Ihr Coaching zu beschleunigen.',
++    upgradeCTA: 'Plan upgraden',
++  },
++  security: {
++    featureGated: 'Diese Funktion erfordert ein höheres Abonnement-Tier.',
++  },
+   error: {
+     verificationFailed: 'Verifizierung fehlgeschlagen',
+   },
+diff --git a/src/frontend/src/i18n/en-US/index.js b/src/frontend/src/i18n/en-US/index.js
+index 5a56328..cb1dc0c 100644
+--- a/src/frontend/src/i18n/en-US/index.js
++++ b/src/frontend/src/i18n/en-US/index.js
+@@ -153,6 +153,11 @@ export default {
+     notFound: 'The requested resource was not found',
+     verificationFailed: 'Verification failed'
+   },
++  featureGate: {
++    requiredTier: 'Requires {tier} plan',
++    description: 'Upgrade to {tier} to unlock this feature and accelerate your coaching.',
++    upgradeCTA: 'Upgrade plan',
++  },
+   security: {
+     unauthorized: 'You do not have the required rights. You can contact help desk',
+     authError: 'Authentication issue has occurred.',
+@@ -163,7 +168,8 @@ export default {
+     badCreds: 'The login and password combination does not exist',
+     opForbidden: 'Access has been denied. You can contact help desk',
+     sessionExpired: 'Your session is no longer valid. You need to sign-in again',
+-    generic: 'Internal unknown exception. You can contact help desk with your help code'
++    generic: 'Internal unknown exception. You can contact help desk with your help code',
++    featureGated: 'This feature requires a higher subscription tier.',
+   },
+   success: {
+     registered: 'Registration successful! Please check your email to activate your account.',
+diff --git a/src/frontend/src/i18n/en/index.js b/src/frontend/src/i18n/en/index.js
+index 42700a4..705722c 100644
+--- a/src/frontend/src/i18n/en/index.js
++++ b/src/frontend/src/i18n/en/index.js
+@@ -89,6 +89,14 @@ export default {
+       ADULT: '18+',
+     },
+   },
++  featureGate: {
++    requiredTier: 'Requires {tier} plan',
++    description: 'Upgrade to {tier} to unlock this feature and accelerate your coaching.',
++    upgradeCTA: 'Upgrade plan',
++  },
++  security: {
++    featureGated: 'This feature requires a higher subscription tier.',
++  },
+   error: {
+     verificationFailed: 'Verification failed',
+   },
+diff --git a/src/frontend/src/i18n/fr-FR/index.js b/src/frontend/src/i18n/fr-FR/index.js
+index 0a209c9..1e4024a 100644
+--- a/src/frontend/src/i18n/fr-FR/index.js
++++ b/src/frontend/src/i18n/fr-FR/index.js
+@@ -136,6 +136,11 @@ export default {
+     notFound: "La ressource demandee n'a pas ete trouvee",
+     verificationFailed: 'Échec de la vérification'
+   },
++  featureGate: {
++    requiredTier: 'Nécessite le plan {tier}',
++    description: "Passez à {tier} pour débloquer cette fonctionnalité et accélérer votre coaching.",
++    upgradeCTA: 'Mettre à niveau',
++  },
+   security: {
+     unauthorized: "Vous n'avez pas les droits requis. Vous pouvez contacter le support",
+     authError: "Un probleme d'authentification s'est produit.",
+@@ -146,7 +151,8 @@ export default {
+     badCreds: "La combinaison identifiant et mot de passe n'existe pas",
+     opForbidden: "L'acces a ete refuse. Vous pouvez contacter le support",
+     sessionExpired: "Votre session n'est plus valide. Vous devez vous reconnecter",
+-    generic: "Exception interne inconnue. Vous pouvez contacter le support avec votre code d'aide"
++    generic: "Exception interne inconnue. Vous pouvez contacter le support avec votre code d'aide",
++    featureGated: "Cette fonctionnalité nécessite un niveau d'abonnement supérieur.",
+   },
+   success: {
+     registered: 'Inscription reussie ! Veuillez verifier votre email pour activer votre compte.',
+diff --git a/src/main/java/com/softropic/skillars/platform/security/api/ApiAdvice.java b/src/main/java/com/softropic/skillars/platform/security/api/ApiAdvice.java
+index ee2fb68..398fffa 100644
+--- a/src/main/java/com/softropic/skillars/platform/security/api/ApiAdvice.java
++++ b/src/main/java/com/softropic/skillars/platform/security/api/ApiAdvice.java
+@@ -15,6 +15,7 @@ import com.softropic.skillars.platform.filestorage.contract.exception.StorageVal
+ import com.softropic.skillars.platform.security.contract.event.SecurityAlertEvent;
+ import com.softropic.skillars.infrastructure.security.event.BadCredentialsEvent;
+ import com.softropic.skillars.platform.security.contract.exception.CoachRegistrationException;
++import com.softropic.skillars.platform.security.contract.exception.FeatureGatedException;
+ import com.softropic.skillars.platform.security.contract.exception.LoginRateLimitedException;
+ import com.softropic.skillars.platform.security.contract.exception.SkillarsAccountNotVerifiedException;
+ import com.softropic.skillars.platform.security.contract.exception.ParentRegistrationException;
+@@ -276,6 +277,13 @@ public class ApiAdvice {
+                 .body(body);
+     }
+ 
++    @ExceptionHandler(FeatureGatedException.class)
++    @ResponseStatus(HttpStatus.FORBIDDEN)
++    public ErrorDto featureGatedHandler(final FeatureGatedException ex) {
++        log.warn("Feature gate blocked: feature={} requiredTier={}", ex.getFeatureKey(), ex.getRequiredTier());
++        return logErrorAndReturnDTO(ex, ex.getMessage(), "security.featureGated");
++    }
++
+     @ExceptionHandler(SecException.class)
+     @ResponseStatus(HttpStatus.UNAUTHORIZED) //could occur when method security throws exception
+     public ErrorDto secExceptionHandler(final SecException exception) {
+diff --git a/src/main/java/com/softropic/skillars/platform/security/api/ShadowAccountResource.java b/src/main/java/com/softropic/skillars/platform/security/api/ShadowAccountResource.java
+index 60a6536..1a0be79 100644
+--- a/src/main/java/com/softropic/skillars/platform/security/api/ShadowAccountResource.java
++++ b/src/main/java/com/softropic/skillars/platform/security/api/ShadowAccountResource.java
+@@ -13,9 +13,9 @@ import lombok.RequiredArgsConstructor;
+ import org.springframework.http.HttpStatus;
+ import org.springframework.http.ResponseEntity;
+ import org.springframework.security.access.prepost.PreAuthorize;
++import org.springframework.web.bind.annotation.GetMapping;
+ import org.springframework.web.bind.annotation.PathVariable;
+ import org.springframework.web.bind.annotation.PostMapping;
+-import org.springframework.web.bind.annotation.GetMapping;
+ import org.springframework.web.bind.annotation.RequestBody;
+ import org.springframework.web.bind.annotation.RequestMapping;
+ import org.springframework.web.bind.annotation.RestController;
+@@ -48,6 +48,13 @@ public class ShadowAccountResource {
+         return ResponseEntity.ok(shadowAccountService.listPlayerProfiles(parentId));
+     }
+ 
++    @PreAuthorize("@playerOwnershipGuard.check(authentication, #playerId)")
++    @GetMapping("/{playerId}")
++    public ResponseEntity<PlayerProfileResponse> getPlayerProfile(@PathVariable Long playerId) {
++        Long parentId = Long.parseLong(((Principal) securityUtil.getCurrentUser()).getBusinessId());
++        return ResponseEntity.ok(shadowAccountService.getPlayerProfile(playerId, parentId));
++    }
++
+     @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+     @PostMapping("/{playerId}/link-parent")
+     public ResponseEntity<Void> linkParent(@PathVariable Long playerId) {
+diff --git a/src/main/java/com/softropic/skillars/platform/security/service/AgePolicyService.java b/src/main/java/com/softropic/skillars/platform/security/service/AgePolicyService.java
+index 45f0795..e122d87 100644
+--- a/src/main/java/com/softropic/skillars/platform/security/service/AgePolicyService.java
++++ b/src/main/java/com/softropic/skillars/platform/security/service/AgePolicyService.java
+@@ -3,6 +3,10 @@ package com.softropic.skillars.platform.security.service;
+ import com.softropic.skillars.platform.config.service.ConfigService;
+ import com.softropic.skillars.platform.security.contract.AgePolicy;
+ import com.softropic.skillars.platform.security.contract.AgeTier;
++import com.softropic.skillars.platform.security.contract.MessagingPolicy;
++import com.softropic.skillars.platform.security.contract.exception.UserNotFoundException;
++import com.softropic.skillars.platform.security.repo.PlayerProfile;
++import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+ import lombok.RequiredArgsConstructor;
+ import org.springframework.stereotype.Service;
+ 
+@@ -16,6 +20,7 @@ public class AgePolicyService {
+     private static final AgePolicy DEFAULTS = AgePolicy.defaults();
+ 
+     private final ConfigService configService;
++    private final PlayerProfileRepository playerProfileRepository;
+ 
+     public AgeTier getAgeTier(LocalDate dateOfBirth) {
+         int age = Period.between(dateOfBirth, LocalDate.now()).getYears();
+@@ -43,4 +48,16 @@ public class AgePolicyService {
+     public boolean isIndependentAccountAllowed(AgeTier ageTier) {
+         return ageTier != AgeTier.U10;
+     }
++
++    public MessagingPolicy getMessagingPolicy(Long playerId) {
++        PlayerProfile player = playerProfileRepository.findById(playerId)
++            .orElseThrow(() -> new UserNotFoundException(playerId));
++        AgeTier tier = getAgeTier(player.getDateOfBirth());
++        return switch (tier) {
++            case U10       -> MessagingPolicy.prohibited();
++            case AGE_10_12 -> MessagingPolicy.parentManaged();
++            case AGE_13_17 -> MessagingPolicy.supervised();
++            case ADULT     -> MessagingPolicy.unrestricted();
++        };
++    }
+ }
+diff --git a/src/main/java/com/softropic/skillars/platform/security/service/ShadowAccountService.java b/src/main/java/com/softropic/skillars/platform/security/service/ShadowAccountService.java
+index a78d4ef..a52acb8 100644
+--- a/src/main/java/com/softropic/skillars/platform/security/service/ShadowAccountService.java
++++ b/src/main/java/com/softropic/skillars/platform/security/service/ShadowAccountService.java
+@@ -77,6 +77,13 @@ public class ShadowAccountService {
+             .toList();
+     }
+ 
++    @Transactional(readOnly = true)
++    public PlayerProfileResponse getPlayerProfile(Long playerId, Long parentId) {
++        PlayerProfile profile = playerProfileRepository.findByIdAndParentId(playerId, parentId)
++            .orElseThrow(() -> new ShadowAccountException("security.playerNotFound", "Player not found for this parent"));
++        return playerProfileMapper.toResponse(profile);
++    }
++
+     public void linkAdditionalParent(Long requestingParentId, Long playerId) {
+         if (parentPlayerLinkRepository.existsByPlayerId(playerId)) {
+             throw new ShadowAccountException("security.playerAlreadyHasParent", "Player already has a parent");
+--- /dev/null
++++ src/frontend/src/components/common/FeatureGateOverlay.vue
+<script setup>
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
+
+defineProps({
+  requiredTier: {
+    type: String,
+    required: true,
+  },
+  featureLabel: {
+    type: String,
+    required: true,
+  },
+})
+
+const emit = defineEmits(['upgrade-clicked'])
+</script>
+
+<template>
+  <div class="feature-gate-wrapper">
+    <div class="gate-preview-blur" aria-hidden="true">
+      <slot />
+    </div>
+    <div class="gate-overlay glass-card">
+      <p class="gate-tier-label text-caption q-mb-xs">
+        {{ t('featureGate.requiredTier', { tier: requiredTier }) }}
+      </p>
+      <p class="gate-feature-label text-subtitle2 q-mb-md">{{ featureLabel }}</p>
+      <p class="gate-description text-body2 q-mb-lg">
+        {{ t('featureGate.description', { tier: requiredTier }) }}
+      </p>
+      <q-btn
+        color="primary"
+        :label="t('featureGate.upgradeCTA')"
+        unelevated
+        @click="emit('upgrade-clicked')"
+      />
+    </div>
+  </div>
+</template>
+
+<style lang="scss" scoped>
+.feature-gate-wrapper {
+  position: relative;
+}
+.gate-preview-blur {
+  filter: blur(6px);
+  pointer-events: none;
+  user-select: none;
+}
+.gate-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+}
+</style>
+--- /dev/null
++++ src/main/java/com/softropic/skillars/platform/security/contract/MessagingPolicy.java
+package com.softropic.skillars.platform.security.contract;
+
+public record MessagingPolicy(boolean canMessage, boolean parentVisible, boolean directAllowed) {
+
+    public static MessagingPolicy prohibited() {
+        return new MessagingPolicy(false, true, false);
+    }
+
+    public static MessagingPolicy parentManaged() {
+        return new MessagingPolicy(true, true, false);
+    }
+
+    public static MessagingPolicy supervised() {
+        return new MessagingPolicy(true, true, true);
+    }
+
+    public static MessagingPolicy unrestricted() {
+        return new MessagingPolicy(true, false, true);
+    }
+}
+--- /dev/null
++++ src/main/java/com/softropic/skillars/platform/security/contract/exception/FeatureGatedException.java
+package com.softropic.skillars.platform.security.contract.exception;
+
+public class FeatureGatedException extends RuntimeException {
+
+    private final String requiredTier;
+    private final String featureKey;
+
+    public FeatureGatedException(String featureKey, String requiredTier) {
+        super("Feature '" + featureKey + "' requires tier: " + requiredTier);
+        this.requiredTier = requiredTier;
+        this.featureKey = featureKey;
+    }
+
+    public String getRequiredTier() { return requiredTier; }
+    public String getFeatureKey() { return featureKey; }
+}
+--- /dev/null
++++ src/main/java/com/softropic/skillars/platform/security/service/PlayerOwnershipGuard.java
+package com.softropic.skillars.platform.security.service;
+
+import com.softropic.skillars.platform.security.contract.Principal;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.Authentication;
+import org.springframework.stereotype.Component;
+
+@Component("playerOwnershipGuard")
+@RequiredArgsConstructor
+public class PlayerOwnershipGuard {
+
+    private final PlayerProfileRepository playerProfileRepository;
+
+    public boolean check(Authentication authentication, Long playerId) {
+        if (authentication == null || !authentication.isAuthenticated()) {
+            return false;
+        }
+        Object principal = authentication.getPrincipal();
+        if (!(principal instanceof Principal skillarsP)) {
+            return false;
+        }
+        try {
+            Long parentId = Long.parseLong(skillarsP.getBusinessId());
+            return playerProfileRepository.findByIdAndParentId(playerId, parentId).isPresent();
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+}
+--- /dev/null
++++ src/main/resources/db/migration/V25__age_policy_config_seed.sql
+INSERT INTO main.platform_config (id, key, value, value_type, description, updated_at)
+VALUES
+    (112, 'security.age-policy.u10-max-age',        '9',  'LONG', 'Max age (inclusive) for U10 tier',       NOW()),
+    (113, 'security.age-policy.young-teen-max-age', '12', 'LONG', 'Max age (inclusive) for AGE_10_12 tier', NOW()),
+    (114, 'security.age-policy.teen-max-age',       '17', 'LONG', 'Max age (inclusive) for AGE_13_17 tier', NOW())
+ON CONFLICT (key) DO NOTHING;
+--- /dev/null
++++ src/test/java/com/softropic/skillars/platform/security/api/FamilyDataIsolationIT.java
+package com.softropic.skillars.platform.security.api;
+
+import com.softropic.skillars.config.TestConfig;
+import com.softropic.skillars.e2e.HttpTestClient;
+import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.security.SecurityIT;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.jdbc.Sql;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.web.client.HttpClientErrorException;
+
+import java.sql.Date;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.util.List;
+import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+@ActiveProfiles({"dev", "test"})
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@Import(TestConfig.class)
+@TestPropertySource(properties = {
+    "spring.cloud.compatibility-verifier.enabled=false",
+    "rate.limiting.enabled=false",
+    "allowed.clients=testClientId"
+})
+@Sql({SecurityIT.SEC_DATA_SQL_PATH})
+class FamilyDataIsolationIT {
+
+    private static final String LOGIN_ENDPOINT   = "/api/auth/login";
+    private static final String PLAYERS_ENDPOINT = "/api/security/players";
+    private static final String CLIENT_ID        = "testClientId";
+    private static final String TEST_PASSWORD    = "TestPass@123!";
+
+    private static final long AUTHORITY_PARENT_ID = 903L;
+    private static final long PARENT_A_ID         = 9000000010L;
+    private static final long PARENT_B_ID         = 9000000011L;
+    private static final long PLAYER_A1_ID        = 9000000020L;
+    private static final long PLAYER_B1_ID        = 9000000021L;
+
+    private static final String PARENT_A_EMAIL = "family.a@skillars-test.com";
+    private static final String PARENT_B_EMAIL = "family.b@skillars-test.com";
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private TransactionTemplate transactionTemplate;
+
+    @Autowired
+    private HttpTestClient httpTestClient;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    @LocalServerPort
+    private int randomServerPort;
+
+    @BeforeEach
+    void setUp() {
+        String passwordHash = passwordEncoder.encode(TEST_PASSWORD);
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.authority (id, name, status, created_by, created_date) " +
+                "VALUES (?, 'ROLE_PARENT', 'ACTIVE', 'system', ?) ON CONFLICT (name) DO NOTHING",
+                AUTHORITY_PARENT_ID, Timestamp.from(Instant.now())
+            );
+            insertUser(PARENT_A_ID, PARENT_A_EMAIL, passwordHash);
+            insertUser(PARENT_B_ID, PARENT_B_EMAIL, passwordHash);
+            jdbcTemplate.update(
+                "INSERT INTO main.user_authority (user_id, authority_id) " +
+                "VALUES (?, (SELECT id FROM main.authority WHERE name = 'ROLE_PARENT')) ON CONFLICT DO NOTHING",
+                PARENT_A_ID
+            );
+            jdbcTemplate.update(
+                "INSERT INTO main.user_authority (user_id, authority_id) " +
+                "VALUES (?, (SELECT id FROM main.authority WHERE name = 'ROLE_PARENT')) ON CONFLICT DO NOTHING",
+                PARENT_B_ID
+            );
+            insertPlayerProfile(PLAYER_A1_ID, "Player A1", PARENT_A_ID);
+            insertPlayerProfile(PLAYER_B1_ID, "Player B1", PARENT_B_ID);
+            return null;
+        });
+    }
+
+    @AfterEach
+    void tearDown() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.execute("DELETE FROM main.player_profiles");
+            jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
+            jdbcTemplate.execute("DELETE FROM main.login_attempts");
+            jdbcTemplate.execute("DELETE FROM main.user_authority");
+            jdbcTemplate.execute("DELETE FROM main.\"user\"");
+            jdbcTemplate.execute("DELETE FROM main.authority WHERE id = " + AUTHORITY_PARENT_ID);
+            jdbcTemplate.execute("DELETE FROM main.sec");
+            return null;
+        });
+    }
+
+    @Test
+    void getPlayerProfile_ownPlayer_returns200() {
+        String authCookies = loginAndGetCookies(PARENT_A_EMAIL);
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + PLAYERS_ENDPOINT + "/" + PLAYER_A1_ID,
+            HttpMethod.GET,
+            null,
+            authenticatedHeaders(authCookies),
+            Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).containsKey("id");
+        assertThat(Long.parseLong((String) response.getBody().get("id"))).isEqualTo(PLAYER_A1_ID);
+    }
+
+    @Test
+    void getPlayerProfile_crossFamily_returns403() {
+        String parentBCookies = loginAndGetCookies(PARENT_B_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + PLAYERS_ENDPOINT + "/" + PLAYER_A1_ID,
+            HttpMethod.GET,
+            null,
+            authenticatedHeaders(parentBCookies),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
+                .isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    @Test
+    void getPlayerProfile_crossFamily_neverReturns404() {
+        String parentBCookies = loginAndGetCookies(PARENT_B_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + PLAYERS_ENDPOINT + "/" + PLAYER_A1_ID,
+            HttpMethod.GET,
+            null,
+            authenticatedHeaders(parentBCookies),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isNotEqualTo(HttpStatus.NOT_FOUND);
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            });
+    }
+
+    @Test
+    void getPlayerProfile_unauthenticated_returns401() {
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + PLAYERS_ENDPOINT + "/" + PLAYER_A1_ID,
+            HttpMethod.GET,
+            null,
+            clientHeaders(),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
+                .isIn(HttpStatus.UNAUTHORIZED, HttpStatus.FORBIDDEN));
+    }
+
+    @Test
+    void listPlayerProfiles_parentSeeOwnPlayersOnly() {
+        String parentACookies = loginAndGetCookies(PARENT_A_EMAIL);
+
+        ResponseEntity<List> response = httpTestClient.makeHttpRequest(
+            baseUrl() + PLAYERS_ENDPOINT,
+            HttpMethod.GET,
+            null,
+            authenticatedHeaders(parentACookies),
+            List.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        List<?> players = response.getBody();
+        assertThat(players).isNotNull().hasSize(1);
+
+        Map<?, ?> player = (Map<?, ?>) players.get(0);
+        assertThat(player.get("name")).isEqualTo("Player A1");
+        assertThat(Long.parseLong((String) player.get("id"))).isEqualTo(PLAYER_A1_ID);
+    }
+
+    // ---- helpers ----
+
+    private String loginAndGetCookies(String email) {
+        ResponseEntity<Map> loginResponse = httpTestClient.makeHttpRequest(
+            baseUrl() + LOGIN_ENDPOINT,
+            HttpMethod.POST,
+            Map.of("email", email, "password", TEST_PASSWORD),
+            clientHeaders(),
+            Map.class
+        );
+        assertThat(loginResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+        List<String> setCookies = loginResponse.getHeaders().get("Set-Cookie");
+        assertThat(setCookies).isNotNull();
+        return setCookies.stream()
+            .map(c -> c.split(";")[0])
+            .reduce((a, b) -> a + "; " + b)
+            .orElseThrow();
+    }
+
+    private HttpHeaders clientHeaders() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.add(SecurityConstants.API_KEY_HEADER, CLIENT_ID);
+        return headers;
+    }
+
+    private HttpHeaders authenticatedHeaders(String cookieValue) {
+        HttpHeaders headers = clientHeaders();
+        headers.add(HttpHeaders.COOKIE, cookieValue);
+        return headers;
+    }
+
+    private String baseUrl() {
+        return "http://localhost:" + randomServerPort;
+    }
+
+    private void insertUser(long id, String email, String passwordHash) {
+        jdbcTemplate.update(
+            "INSERT INTO main.\"user\" " +
+            "(id, created_by, created_date, last_modified_by, last_modified_date, request_id, session_id, " +
+            "status, dob, email, first_name, gender, lang_key, last_name, iso2_country, phone, " +
+            "activated, locked, login, login_id_type, password_hash, otp_enabled, " +
+            "skillars_role, verification_status) " +
+            "VALUES (?, 'system', ?, 'system', ?, 'test-req', NULL, " +
+            "'ACTIVE', '1985-06-01', ?, 'Test', 'OTHER', 'en', 'Parent', 'CM', ?, " +
+            "true, false, ?, 'EMAIL', ?, false, " +
+            "'PARENT', 'BASIC_VERIFIED')",
+            id,
+            Timestamp.from(Instant.now()), Timestamp.from(Instant.now()),
+            email,
+            "657" + (id % 10000000),
+            email, passwordHash
+        );
+    }
+
+    private void insertPlayerProfile(long id, String name, long parentId) {
+        jdbcTemplate.update(
+            "INSERT INTO main.player_profiles " +
+            "(id, name, date_of_birth, position, age_tier, parent_id, independent_account_allowed, created_at, created_by) " +
+            "VALUES (?, ?, ?, 'MIDFIELDER', 'ADULT', ?, true, ?, 'system')",
+            id, name, Date.valueOf(LocalDate.now().minusYears(20)),
+            parentId, Timestamp.from(Instant.now())
+        );
+    }
+}
+--- /dev/null
++++ src/test/java/com/softropic/skillars/platform/security/service/AgePolicyServiceTest.java
+package com.softropic.skillars.platform.security.service;
+
+import com.softropic.skillars.platform.config.service.ConfigService;
+import com.softropic.skillars.platform.security.contract.AgeTier;
+import com.softropic.skillars.platform.security.contract.MessagingPolicy;
+import com.softropic.skillars.platform.security.contract.exception.UserNotFoundException;
+import com.softropic.skillars.platform.security.repo.PlayerProfile;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+
+import java.time.LocalDate;
+import java.util.Optional;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
+class AgePolicyServiceTest {
+
+    @Mock
+    private ConfigService configService;
+
+    @Mock
+    private PlayerProfileRepository playerProfileRepository;
+
+    @InjectMocks
+    private AgePolicyService agePolicyService;
+
+    @BeforeEach
+    void setUp() {
+        // Default: ConfigService returns empty — exercises the orElse(DEFAULTS) path (9, 12, 17)
+        when(configService.find(anyString())).thenReturn(Optional.empty());
+    }
+
+    // ---- getAgeTier tests ----
+
+    @Test
+    void getAgeTier_age9_returnsU10() {
+        LocalDate dob = LocalDate.now().minusYears(9);
+        assertThat(agePolicyService.getAgeTier(dob)).isEqualTo(AgeTier.U10);
+    }
+
+    @Test
+    void getAgeTier_age10_returnsAge1012() {
+        LocalDate dob = LocalDate.now().minusYears(10);
+        assertThat(agePolicyService.getAgeTier(dob)).isEqualTo(AgeTier.AGE_10_12);
+    }
+
+    @Test
+    void getAgeTier_age12_returnsAge1012() {
+        LocalDate dob = LocalDate.now().minusYears(12);
+        assertThat(agePolicyService.getAgeTier(dob)).isEqualTo(AgeTier.AGE_10_12);
+    }
+
+    @Test
+    void getAgeTier_age13_returnsAge1317() {
+        LocalDate dob = LocalDate.now().minusYears(13);
+        assertThat(agePolicyService.getAgeTier(dob)).isEqualTo(AgeTier.AGE_13_17);
+    }
+
+    @Test
+    void getAgeTier_age17_returnsAge1317() {
+        LocalDate dob = LocalDate.now().minusYears(17);
+        assertThat(agePolicyService.getAgeTier(dob)).isEqualTo(AgeTier.AGE_13_17);
+    }
+
+    @Test
+    void getAgeTier_age18_returnsAdult() {
+        LocalDate dob = LocalDate.now().minusYears(18);
+        assertThat(agePolicyService.getAgeTier(dob)).isEqualTo(AgeTier.ADULT);
+    }
+
+    @Test
+    void getAgeTier_configOverride_respectsCustomBoundary() {
+        // Override u10-max-age to 8 — age 9 should now be AGE_10_12
+        when(configService.find("security.age-policy.u10-max-age")).thenReturn(Optional.of("8"));
+        LocalDate dob = LocalDate.now().minusYears(9);
+        assertThat(agePolicyService.getAgeTier(dob)).isEqualTo(AgeTier.AGE_10_12);
+    }
+
+    // ---- getMessagingPolicy tests ----
+
+    @Test
+    void getMessagingPolicy_u10Player_returnsProhibited() {
+        PlayerProfile player = playerWithDob(LocalDate.now().minusYears(8));
+        when(playerProfileRepository.findById(1L)).thenReturn(Optional.of(player));
+
+        MessagingPolicy policy = agePolicyService.getMessagingPolicy(1L);
+
+        assertThat(policy.canMessage()).isFalse();
+        assertThat(policy.parentVisible()).isTrue();
+        assertThat(policy.directAllowed()).isFalse();
+    }
+
+    @Test
+    void getMessagingPolicy_age1012Player_returnsParentManaged() {
+        PlayerProfile player = playerWithDob(LocalDate.now().minusYears(11));
+        when(playerProfileRepository.findById(2L)).thenReturn(Optional.of(player));
+
+        MessagingPolicy policy = agePolicyService.getMessagingPolicy(2L);
+
+        assertThat(policy.canMessage()).isTrue();
+        assertThat(policy.parentVisible()).isTrue();
+        assertThat(policy.directAllowed()).isFalse();
+    }
+
+    @Test
+    void getMessagingPolicy_age1317Player_returnsSupervised() {
+        PlayerProfile player = playerWithDob(LocalDate.now().minusYears(15));
+        when(playerProfileRepository.findById(3L)).thenReturn(Optional.of(player));
+
+        MessagingPolicy policy = agePolicyService.getMessagingPolicy(3L);
+
+        assertThat(policy.canMessage()).isTrue();
+        assertThat(policy.parentVisible()).isTrue();
+        assertThat(policy.directAllowed()).isTrue();
+    }
+
+    @Test
+    void getMessagingPolicy_adultPlayer_returnsUnrestricted() {
+        PlayerProfile player = playerWithDob(LocalDate.now().minusYears(25));
+        when(playerProfileRepository.findById(4L)).thenReturn(Optional.of(player));
+
+        MessagingPolicy policy = agePolicyService.getMessagingPolicy(4L);
+
+        assertThat(policy.canMessage()).isTrue();
+        assertThat(policy.parentVisible()).isFalse();
+        assertThat(policy.directAllowed()).isTrue();
+    }
+
+    @Test
+    void getMessagingPolicy_unknownPlayer_throwsUserNotFoundException() {
+        when(playerProfileRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> agePolicyService.getMessagingPolicy(99L))
+            .isInstanceOf(UserNotFoundException.class);
+    }
+
+    private PlayerProfile playerWithDob(LocalDate dob) {
+        PlayerProfile p = new PlayerProfile();
+        p.setDateOfBirth(dob);
+        return p;
+    }
+}

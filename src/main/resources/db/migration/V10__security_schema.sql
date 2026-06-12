@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS "user" (
     dob                DATE NOT NULL,
     lang_key           TEXT,
     phone              VARCHAR(50) UNIQUE,
-    iso2_country       VARCHAR(2) NOT NULL,
+    iso2_country       VARCHAR(2) ,
     phone_type         VARCHAR(20),
     email              TEXT UNIQUE NOT NULL,
     national_id        VARCHAR(255),

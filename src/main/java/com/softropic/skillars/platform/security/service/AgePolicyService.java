@@ -3,6 +3,10 @@ package com.softropic.skillars.platform.security.service;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.security.contract.AgePolicy;
 import com.softropic.skillars.platform.security.contract.AgeTier;
+import com.softropic.skillars.platform.security.contract.MessagingPolicy;
+import com.softropic.skillars.platform.security.contract.exception.UserNotFoundException;
+import com.softropic.skillars.platform.security.repo.PlayerProfile;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -16,6 +20,7 @@ public class AgePolicyService {
     private static final AgePolicy DEFAULTS = AgePolicy.defaults();
 
     private final ConfigService configService;
+    private final PlayerProfileRepository playerProfileRepository;
 
     public AgeTier getAgeTier(LocalDate dateOfBirth) {
         int age = Period.between(dateOfBirth, LocalDate.now()).getYears();
@@ -42,5 +47,17 @@ public class AgePolicyService {
 
     public boolean isIndependentAccountAllowed(AgeTier ageTier) {
         return ageTier != AgeTier.U10;
+    }
+
+    public MessagingPolicy getMessagingPolicy(Long playerId) {
+        PlayerProfile player = playerProfileRepository.findById(playerId)
+            .orElseThrow(() -> new UserNotFoundException(playerId));
+        AgeTier tier = getAgeTier(player.getDateOfBirth());
+        return switch (tier) {
+            case U10       -> MessagingPolicy.prohibited();
+            case AGE_10_12 -> MessagingPolicy.parentManaged();
+            case AGE_13_17 -> MessagingPolicy.supervised();
+            case ADULT     -> MessagingPolicy.unrestricted();
+        };
     }
 }

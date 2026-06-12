@@ -15,6 +15,8 @@ import com.softropic.skillars.platform.filestorage.contract.exception.StorageVal
 import com.softropic.skillars.platform.security.contract.event.SecurityAlertEvent;
 import com.softropic.skillars.infrastructure.security.event.BadCredentialsEvent;
 import com.softropic.skillars.platform.security.contract.exception.CoachRegistrationException;
+import com.softropic.skillars.platform.security.contract.exception.FeatureGatedException;
+import com.softropic.skillars.platform.security.contract.exception.UserNotFoundException;
 import com.softropic.skillars.platform.security.contract.exception.LoginRateLimitedException;
 import com.softropic.skillars.platform.security.contract.exception.SkillarsAccountNotVerifiedException;
 import com.softropic.skillars.platform.security.contract.exception.ParentRegistrationException;
@@ -276,6 +278,13 @@ public class ApiAdvice {
                 .body(body);
     }
 
+    @ExceptionHandler(FeatureGatedException.class)
+    @ResponseStatus(HttpStatus.FORBIDDEN)
+    public ErrorDto featureGatedHandler(final FeatureGatedException ex) {
+        log.warn("Feature gate blocked: feature={} requiredTier={}", ex.getFeatureKey(), ex.getRequiredTier());
+        return logErrorAndReturnDTO(ex, ex.getMessage(), "security.featureGated");
+    }
+
     @ExceptionHandler(SecException.class)
     @ResponseStatus(HttpStatus.UNAUTHORIZED) //could occur when method security throws exception
     public ErrorDto secExceptionHandler(final SecException exception) {
@@ -446,6 +455,12 @@ public class ApiAdvice {
     @ResponseStatus(HttpStatus.BAD_GATEWAY)
     public ErrorDto storageProviderHandler(final StorageProviderException ex) {
         return logErrorAndReturnDTO(ex, "storage.providerError", BlobstoreErrorCode.PROVIDER_ERROR.getErrorCode());
+    }
+
+    @ExceptionHandler(UserNotFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public ErrorDto userNotFoundHandler(final UserNotFoundException ex) {
+        return logErrorAndReturnDTO(ex, ex.getMessage(), "security.userNotFound");
     }
 
     @ExceptionHandler(ResourceNotFoundException.class)

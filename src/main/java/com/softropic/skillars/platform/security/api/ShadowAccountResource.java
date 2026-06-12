@@ -13,9 +13,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -48,7 +48,14 @@ public class ShadowAccountResource {
         return ResponseEntity.ok(shadowAccountService.listPlayerProfiles(parentId));
     }
 
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize("@playerOwnershipGuard.check(authentication, #playerId)")
+    @GetMapping("/{playerId}")
+    public ResponseEntity<PlayerProfileResponse> getPlayerProfile(@PathVariable Long playerId) {
+        Long parentId = Long.parseLong(((Principal) securityUtil.getCurrentUser()).getBusinessId());
+        return ResponseEntity.ok(shadowAccountService.getPlayerProfile(playerId, parentId));
+    }
+
+    @PreAuthorize("@playerOwnershipGuard.check(authentication, #playerId)")
     @PostMapping("/{playerId}/link-parent")
     public ResponseEntity<Void> linkParent(@PathVariable Long playerId) {
         throw new ShadowAccountException("security.playerAlreadyHasParent", "Player already has a parent");
