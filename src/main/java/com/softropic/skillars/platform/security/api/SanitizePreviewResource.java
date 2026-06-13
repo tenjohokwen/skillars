@@ -5,6 +5,7 @@ import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -21,14 +22,14 @@ public class SanitizePreviewResource {
 
     private final ContactDetailSanitizer contactDetailSanitizer;
 
-    public record SanitizePreviewRequest(@NotNull String text) {}
+    public record SanitizePreviewRequest(@NotNull @Size(max = 2000) String text) {}
 
-    public record SanitizePreviewResponse(String sanitized, boolean wasModified) {}
+    public record SanitizePreviewResponse(String original, String sanitized, boolean detectionFound) {}
 
     @PostMapping("/sanitize-preview")
     @PreAuthorize(SecurityConstants.HAS_ANY_ROLE)
     public ResponseEntity<SanitizePreviewResponse> preview(@RequestBody @Valid SanitizePreviewRequest request) {
         ContactDetailSanitizer.SanitizerResult result = contactDetailSanitizer.sanitize(request.text());
-        return ResponseEntity.ok(new SanitizePreviewResponse(result.sanitized(), result.wasModified()));
+        return ResponseEntity.ok(new SanitizePreviewResponse(request.text(), result.sanitized(), result.wasModified()));
     }
 }

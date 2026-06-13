@@ -1,6 +1,6 @@
 # Story skillars-2.2: Coach Marketplace & Search
 
-Status: in-progress
+Status: done
 
 ## Story
 

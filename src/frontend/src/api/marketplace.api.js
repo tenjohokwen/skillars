@@ -20,3 +20,6 @@ export const signUpload = (payload) =>
 
 export const confirmUpload = (key, payload) =>
   api.post(`/api/storage/confirm/${key}`, payload)
+
+export const sanitizePreview = (text, signal) =>
+  api.post('/api/util/sanitize-preview', { text }, { signal })
