@@ -112,6 +112,16 @@ const routes = [
         meta: { requiresAuth: true },
       },
       {
+        path: 'parent/coaches/:coachId/purchase-sessions',
+        component: () => import('pages/parent/SessionPackPurchasePage.vue'),
+        meta: { requiresAuth: true, role: 'PARENT' },
+      },
+      {
+        path: 'parent/players/:playerId/packs',
+        component: () => import('pages/parent/SessionPackDashboardPage.vue'),
+        meta: { requiresAuth: true, role: 'PARENT' },
+      },
+      {
         path: 'player/locker-room',
         component: () => import('pages/player/PlayerLockerRoomPlaceholderPage.vue'),
         meta: { requiresAuth: true },

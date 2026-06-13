@@ -1,3 +1,14 @@
+## Deferred from: code review of skillars-3-2-session-pack-purchase-credit-dashboard (2026-06-13)
+- Payment charged before record persisted — `capturePayment` called before `repository.save`; `@Transactional` does not roll back external gateway call. Stub safe now; fix with idempotency key when Stripe is wired in Epic 7. [SessionPackService.java:purchasePack+purchaseSingleSession]
+- Payment reference (transaction ID) never stored — return value of `capturePayment` discarded; no `payment_reference` column in schema. Add column and persist in Epic 7. [SessionPackService.java + V30 migration]
+- `deductCredit()` has no `parentId` re-authorization — acknowledged by TODO(3.3); Story 3.3's `BookingService` must only supply a verified `playerId` from a committed booking entity. [SessionPackService.java:deductCredit]
+- No concurrency integration test for `deductCredit` / pessimistic lock — `SELECT FOR UPDATE` correctness not exercise by real concurrent transactions. Add in a dedicated testing story or before Story 3.6 wires `deductCredit`. [SessionPackResourceIT.java]
+- `@Sql(SecurityIT.SEC_DATA_SQL_PATH)` ordering dependency undocumented in `SessionPackResourceIT` — pre-existing pattern from 3.1; document what ID ranges SEC_DATA_SQL_PATH uses to prevent collision. [SessionPackResourceIT.java]
+- `tearDown` deletes `main.sec` / `main.refresh_tokens` without `WHERE` — unconditional delete matches other IT classes; revisit if tests ever run in parallel against a shared DB. [SessionPackResourceIT.java:tearDown]
+- `PlayerProfileRepository.findById` used instead of `findByIdAndParentId` in `verifyPlayerOwnership` — diverges from the repo's family-isolation contract; not a correctness bug now. [SessionPackService.java:verifyPlayerOwnership]
+- No DB-level state machine constraints — `ACTIVE+credits=0` or `EXHAUSTED+credits>0` not prevented at DB layer; enforce with additional `CHECK` constraints when the status lifecycle is fully stable. [V30__booking_session_packs.sql]
+- In-memory `coachId` filter in `getPacksForPlayer` — loads all packs for parent+player then Java stream filters by coachId; push filter into SQL when pack volumes grow. [SessionPackService.java:getPacksForPlayer]
+
 ## Deferred from: code review of skillars-3-1-coach-availability-management (2026-06-13)
 - Block spans midnight → negative CSS height in WeeklyCalendar overlay — multi-day block rendering is out of scope for Story 3.1 ACs; handle when calendar becomes a product priority [WeeklyCalendar.vue:1652-1668]
 - `getAvailabilityCalendar` timezone-expansion logic (LocalTime + canonicalTimezone → Instant) not unit-tested — IT tests cover it implicitly; add targeted unit test when timezone bugs appear or before Story 3.5 timezone management work [AvailabilityServiceTest.java]

@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-06-13 # Story 3.1 done — all review patches applied
+last_updated: 2026-06-13 # Story 3.2 done
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -175,7 +175,7 @@ development_status:
   # Epic 3: Booking & Scheduling
   skillars-epic-3: in-progress
   skillars-3-1-coach-availability-management: done
-  skillars-3-2-session-pack-purchase-credit-dashboard: backlog
+  skillars-3-2-session-pack-purchase-credit-dashboard: done
   skillars-3-3-booking-request-approval-workflow: backlog
   skillars-3-4-booking-state-machine-sse: backlog
   skillars-3-5-scheduling-views-timezone-management: backlog

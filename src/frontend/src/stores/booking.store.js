@@ -7,6 +7,8 @@ import {
   deleteAvailabilityWindow,
   addAvailabilityBlock,
   deleteAvailabilityBlock,
+  getPlayerPacks,
+  purchaseSessionPack,
 } from 'src/api/booking.api'
 
 export const useBookingStore = defineStore('booking', () => {
@@ -18,6 +20,16 @@ export const useBookingStore = defineStore('booking', () => {
   const error = ref(null)
 
   const hasWindows = computed(() => windows.value.length > 0)
+
+  const sessionPacks = ref([])
+  const packsLoading = ref(false)
+  const packsError = ref(null)
+
+  const creditsForCoach = computed(() => (coachId) =>
+    sessionPacks.value
+      .filter((p) => p.status === 'ACTIVE' && p.coachId === coachId)
+      .reduce((sum, p) => sum + p.creditsRemaining, 0)
+  )
 
   function currentMonday() {
     const today = new Date()
@@ -70,8 +82,28 @@ export const useBookingStore = defineStore('booking', () => {
     await loadAvailability(coachId, weekStart.value ?? currentMonday())
   }
 
+  async function loadPlayerPacks(playerId) {
+    packsLoading.value = true
+    packsError.value = null
+    try {
+      const res = await getPlayerPacks(playerId)
+      sessionPacks.value = res.data ?? []
+    } catch (e) {
+      packsError.value = e
+    } finally {
+      packsLoading.value = false
+    }
+  }
+
+  async function purchasePack(playerId, request) {
+    await purchaseSessionPack(playerId, request)
+    await loadPlayerPacks(playerId)
+  }
+
   return {
     windows, blocks, computedSlots, weekStart, loading, error, hasWindows,
+    sessionPacks, packsLoading, packsError, creditsForCoach,
     loadAvailability, createWindow, editWindow, removeWindow, createBlock, removeBlock,
+    loadPlayerPacks, purchasePack,
   }
 })

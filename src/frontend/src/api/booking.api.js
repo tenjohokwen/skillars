@@ -17,3 +17,9 @@ export const addAvailabilityBlock = (data) =>
 
 export const deleteAvailabilityBlock = (id) =>
   api.delete(`/api/bookings/coaches/me/availability/blocks/${id}`)
+
+export const getPlayerPacks = (playerId, coachId) =>
+  api.get(`/api/bookings/players/${playerId}/packs`, { params: coachId ? { coachId } : {} })
+
+export const purchaseSessionPack = (playerId, request) =>
+  api.post(`/api/bookings/players/${playerId}/packs/purchase`, request)

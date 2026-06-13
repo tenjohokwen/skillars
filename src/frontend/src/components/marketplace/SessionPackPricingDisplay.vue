@@ -11,7 +11,7 @@
     <div v-for="pack in sessionPacks" :key="pack.sessionCount" class="pack-row">
       <span class="pack-label">{{ packLabel(pack) }}</span>
       <span class="pack-price">{{ formatPrice(pack.totalPrice) }}</span>
-      <span v-if="perSessionPrice != null && pack.sessionCount > 1" class="pack-saving text-caption">
+      <span v-if="perSessionPrice != null && pack.sessionCount > 1 && savings(pack)" class="pack-saving text-caption">
         {{ savings(pack) }}
       </span>
     </div>
@@ -39,14 +39,14 @@ function formatPrice(value) {
 }
 
 function packLabel(pack) {
-  return pack.label || `${pack.sessionCount} sessions`
+  return pack.label || t('marketplace.sessionsFallbackLabel', { count: pack.sessionCount })
 }
 
 function savings(pack) {
   const full = props.perSessionPrice * pack.sessionCount
   const saved = full - pack.totalPrice
   if (saved <= 0) return ''
-  return `Save ${formatPrice(saved)}`
+  return t('marketplace.savingsLabel', { amount: formatPrice(saved) })
 }
 </script>
 

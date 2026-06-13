@@ -158,12 +158,21 @@
             </span>
           </div>
 
-          <!-- Session pack tracker -->
-          <SessionPackTracker
+          <!-- Session pack pricing display -->
+          <SessionPackPricingDisplay
             :session-packs="profile.sessionPacks"
             :per-session-price="profile.perSessionPrice"
             :currency="profile.currency"
             class="q-mb-md"
+          />
+
+          <!-- Credit tracker — always visible before booking CTA for parents -->
+          <SessionPackTracker
+            v-if="authStore.isParent"
+            :credits-remaining="creditsForThisCoach"
+            :session-count="activePackSessionCount"
+            class="q-mb-md"
+            @buy-sessions="handleBuySessions"
           />
 
           <!-- CTA -->
@@ -173,6 +182,8 @@
             class="full-width"
             size="md"
             :label="authStore.isParent ? t('marketplace.bookSession') : t('marketplace.signUpToBook')"
+            :loading="authStore.isParent && bookingStore.packsLoading"
+            :disable="authStore.isParent && !bookingStore.packsLoading && !hasCreditsForCoach"
             @click="handleCta"
           />
         </div>
@@ -211,20 +222,25 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { getCoachProfile } from 'src/api/marketplace.api'
 import { useAuthStore } from 'src/stores/auth.store'
+import { useBookingStore } from 'src/stores/booking.store'
+import { usePlayerStore } from 'src/stores/playerStore'
 import VerificationBadge from 'src/components/marketplace/VerificationBadge.vue'
 import ReliabilityIndicator from 'src/components/marketplace/ReliabilityIndicator.vue'
 import CapabilityBadgeSet from 'src/components/marketplace/CapabilityBadgeSet.vue'
-import SessionPackTracker from 'src/components/marketplace/SessionPackTracker.vue'
+import SessionPackPricingDisplay from 'src/components/marketplace/SessionPackPricingDisplay.vue'
+import SessionPackTracker from 'src/components/booking/SessionPackTracker.vue'
 
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
 const authStore = useAuthStore()
+const bookingStore = useBookingStore()
+const playerStore = usePlayerStore()
 
 const profile = ref(null)
 const loading = ref(true)
@@ -232,10 +248,38 @@ const notFound = ref(false)
 const lightboxOpen = ref(false)
 const lightboxItem = ref(null)
 
+const coachId = route.params.coachId
+
+const creditsForThisCoach = computed(() => bookingStore.creditsForCoach(coachId))
+const activePackSessionCount = computed(() => {
+  const activePack = bookingStore.sessionPacks.find(
+    (p) => p.coachId === coachId && p.status === 'ACTIVE'
+  )
+  return activePack?.sessionCount ?? 0
+})
+const hasCreditsForCoach = computed(() =>
+  bookingStore.sessionPacks.some((p) => p.coachId === coachId && p.status === 'ACTIVE' && p.creditsRemaining > 0)
+)
+
+function handleBuySessions() {
+  const playerId = playerStore.activePlayerId
+  if (!playerId) return
+  router.push(`/parent/coaches/${coachId}/purchase-sessions?playerId=${playerId}`)
+}
+
 onMounted(async () => {
   try {
-    const response = await getCoachProfile(route.params.coachId)
+    const response = await getCoachProfile(coachId)
     profile.value = response.data
+
+    if (authStore.isParent) {
+      if (!playerStore.activePlayerId) {
+        await playerStore.fetchPlayers()
+      }
+      if (playerStore.activePlayerId) {
+        await bookingStore.loadPlayerPacks(playerStore.activePlayerId)
+      }
+    }
   } catch (err) {
     if (err.response?.status === 404) {
       notFound.value = true
@@ -248,7 +292,7 @@ onMounted(async () => {
 function handleCta() {
   if (!profile.value) return
   if (authStore.isParent) {
-    router.push(`/booking/new?coachId=${profile.value.id}`)
+    router.push(`/booking/new?coachId=${coachId}`)
   } else {
     router.push(`/login?returnUrl=${encodeURIComponent(route.fullPath)}`)
   }
