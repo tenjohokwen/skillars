@@ -34,6 +34,9 @@ public final class SecurityConstants {
     public static final String HAS_COACH_ROLE = "hasRole('ROLE_COACH')";
     public static final String HAS_PARENT_ROLE = "hasRole('ROLE_PARENT')";
 
+    /** Use on public endpoints that are explicitly accessible without authentication. */
+    public static final String IS_PERMIT_ALL = "permitAll()";
+
     // ==================== JWT AND AUTHENTICATION CONSTANTS ====================
 
     public static final String TOKEN_PREFIX = "Bearer ";

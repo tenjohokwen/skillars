@@ -9,6 +9,9 @@ export const saveProfileBuilderStep = (stepNumber, data) =>
 export const publishProfile = () =>
   api.post('/api/marketplace/coaches/me/profile/publish')
 
+export const searchCoaches = (params = {}) =>
+  api.get('/api/marketplace/coaches', { params })
+
 export const signUpload = (payload) =>
   api.post('/api/storage/sign/upload', payload)
 

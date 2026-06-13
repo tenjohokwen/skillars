@@ -796,20 +796,22 @@ So that I can find a coach that matches my child's needs before committing to a 
 
 **Given** any visitor (authenticated or guest) navigates to the marketplace
 **When** the page loads
-**Then** a grid of `CoachCard` components is displayed — 3 columns on desktop (≥1200px), 2 on tablet (768–1199px), 1 on mobile
-**And** skeleton cards matching the exact dimensions of real `CoachCard` components are shown while data loads (UX-DR26)
+**Then** the page renders in a "search prompt" state — no coach cards are shown until a city is entered
+**And** once a city is submitted, a grid of `CoachCard` components is displayed — 3 columns on desktop (≥1200px), 2 on tablet (768–1199px), 1 on mobile
+**And** skeleton cards matching the exact dimensions of real `CoachCard` components are shown while city results are loading (UX-DR26)
 **And** only coaches with `coach_profiles.status = ACTIVE` are returned — DRAFT profiles are never included
 
-**Given** the marketplace is loaded
+**Given** city results are displayed
 **When** the default sort is applied
-**Then** results are sorted by distance from the visitor's detected location (browser geolocation, fallback to city-level IP detection)
-**And** re-sorting by star rating or price is available via a sort control without a full page reload
+**Then** results are sorted alphabetically by display name within the searched city
+**And** re-sorting by price or star rating is available via a sort control without a full page reload
 
-**Given** a user applies one or more filters (city, district, language, price range, age groups, skill specialization, star rating)
-**When** the filter is submitted
-**Then** `GET /api/marketplace/coaches` is called with the filter parameters
-**And** only coaches matching all active filters are returned
-**And** the active filter state persists if the user navigates to a profile and returns via the browser back button
+**Given** a user enters a city and submits the search
+**When** `GET /api/marketplace/coaches?city={city}&page=0&size=20` is called
+**Then** only ACTIVE coaches in that city are returned, paginated (20 per page; `hasNext` signals further pages)
+**And** the user can narrow results by applying additional filters — district, language, price range, age group, skill specialization — these are exposed only after city entry and re-trigger the query
+**And** a star rating filter (`minRating`) is available; at this stage all ratings default to 0.0 (Epic 9 populates reviews), so `minRating > 0` returns no results
+**And** the active filter state (including city) is persisted in URL query params — navigating to a profile and returning via the browser back button restores the full search
 
 **Given** a `CoachCard` is rendered
 **When** displayed in the grid
@@ -826,7 +828,7 @@ So that I can find a coach that matches my child's needs before committing to a 
 **When** the empty state renders
 **Then** an icon, headline ("No coaches found"), and a "Clear filters" CTA are shown — never a bare empty list (UX-DR25)
 
-*Dev notes: `platform.marketplace`. `CoachMarketplaceResource`: GET /api/marketplace/coaches (query params: city, district, language, minPrice, maxPrice, ageGroup, skill, minRating, sortBy). `CoachSearchService` queries `coach_profiles` JOIN `coach_specialties`, `coach_age_groups`, `coach_pricing`. Aggregate rating computed from `reviews` table (Epic 9 populates; default 0.0 / 0 reviews at this stage). Reliability strike count read from `coach_reliability_strikes` table (Epic 7 populates; default 0). `CoachCard.vue` component with `ReliabilityIndicator.vue` sub-component. Frontend filter state preserved in URL query params (Pinia store + Vue Router sync). Test: `CoachMarketplaceResourceIT`.*
+*Dev notes: `platform.marketplace`. `CoachMarketplaceResource`: GET /api/marketplace/coaches (required: `city` — returns 400 if omitted; optional: `district`, `language`, `minPrice`, `maxPrice`, `ageGroup`, `skill`, `minRating`, `sortBy`, `page` (default 0), `size` (default 20)). `CoachSearchService` queries `coach_profiles` via `JpaSpecificationExecutor` + `Specification<CoachProfile>` — only the current page's rows are loaded. Batch-enriches specialties, pricing, and reliability strikes using page-scoped IDs. Aggregate rating computed from `reviews` table (Epic 9 populates; default 0.0 / 0 reviews at this stage). Reliability strike count read from `coach_reliability_strikes` table (Epic 7 populates; default 0). `CoachCard.vue` component with `ReliabilityIndicator.vue` sub-component. Frontend filter state preserved in URL query params (Pinia store + Vue Router sync). Test: `CoachMarketplaceResourceIT`.*
 
 ### Story 2.3: Coach Public Profile Page
 

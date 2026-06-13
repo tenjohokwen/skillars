@@ -7,5 +7,6 @@ import java.util.UUID;
 
 public interface CoachSpecialtyRepository extends JpaRepository<CoachSpecialty, UUID> {
     List<CoachSpecialty> findByCoachId(UUID coachId);
+    List<CoachSpecialty> findByCoachIdIn(List<UUID> coachIds);
     void deleteByCoachId(UUID coachId);
 }

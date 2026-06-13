@@ -111,6 +111,17 @@ const routes = [
         meta: { requiresAuth: true },
       },
 
+      // Marketplace — public (guests can browse, AC 5, FR-MKT-005)
+      {
+        path: 'marketplace',
+        component: () => import('pages/marketplace/MarketplacePage.vue'),
+      },
+      {
+        path: 'coaches/:coachId',
+        component: () => import('pages/marketplace/CoachPublicProfilePlaceholderPage.vue'),
+        // Full implementation in Story 2.3
+      },
+
       // Protected pages (auth required)
       {
         path: 'dashboard',

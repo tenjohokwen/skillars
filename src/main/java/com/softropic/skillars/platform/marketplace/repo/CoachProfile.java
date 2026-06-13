@@ -57,6 +57,9 @@ public class CoachProfile {
     @Column(nullable = false)
     private CoachProfileStatus status = CoachProfileStatus.DRAFT;
 
+    @Column(name = "verification_tier", nullable = false)
+    private String verificationTier = "BASIC";
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt = OffsetDateTime.now();
 }

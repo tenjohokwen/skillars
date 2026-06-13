@@ -31,7 +31,8 @@ public final class AppEndpoints {
         "/api/security/parent/resend-otp**",
         "/api/auth/login**",
         "/api/auth/refresh**",
-        "/api/auth/logout**"
+        "/api/auth/logout**",
+        "/api/marketplace/coaches**"   // guests can browse the marketplace (FR-MKT-005)
     );
     public static final List<String> PUBLIC_MGMT_ENDPOINTS = List.of("/manage/prometheus", "/manage/health", "/manage/info");
     public static final List<String> ALL_UNRESTRICTED;
