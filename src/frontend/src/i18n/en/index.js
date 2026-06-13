@@ -7,6 +7,13 @@ export default {
     loading: 'Loading...',
     confirm: 'Confirm',
     delete: 'Delete',
+    day: 'Day',
+    startTime: 'Start Time',
+    endTime: 'End Time',
+    startDate: 'Start Date',
+    endDate: 'End Date',
+    reason: 'Reason',
+    optional: 'optional',
   },
   theme: {
     toggle: 'Toggle theme',
@@ -123,7 +130,19 @@ export default {
   error: {
     verificationFailed: 'Verification failed',
   },
-  booking: {},
+  booking: {
+    availability: {
+      title: 'Manage Availability',
+      addWindow: 'Add Recurring Window',
+      addBlock: 'Block Personal Time',
+      editWindow: 'Edit Availability Window',
+      deleteConfirm: 'Are you sure you want to delete this?',
+      bookingConflictWarning: 'You have a booking during this time. Changes apply to future availability only.',
+      blockAdded: 'Time block saved successfully.',
+      windowAdded: 'Availability window saved successfully.',
+      blocked: 'Blocked',
+    },
+  },
   video: {},
   marketplace: {
     title: 'Find a Coach',

@@ -18,6 +18,8 @@ WORKDIR /app
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 USER appuser
 
+ENV JAVA_TOOL_OPTIONS="-Duser.timezone=UTC"
+
 COPY --chown=appuser:appgroup --from=builder /app/target/skillars-*.jar app.jar
 EXPOSE 9990 8367
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \

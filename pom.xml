@@ -489,6 +489,7 @@
 				<artifactId>maven-failsafe-plugin</artifactId>
 				<configuration>
 					<trimStackTrace>false</trimStackTrace>
+					<argLine>-Duser.timezone=UTC</argLine>
 				</configuration>
 				<executions>
 					<execution>
@@ -504,6 +505,7 @@
 				<artifactId>maven-surefire-plugin</artifactId>
 				<configuration>
 					<trimStackTrace>false</trimStackTrace>
+					<argLine>-Duser.timezone=UTC</argLine>
 				</configuration>
 			</plugin>
 			<plugin>

@@ -52,6 +52,7 @@ export default defineRouter(function (/* { store, ssrContext } */) {
 
     const requiresAuth = to.matched.some((r) => r.meta.requiresAuth)
     const requiresGuest = to.matched.some((r) => r.meta.requiresGuest)
+    const requiresCoach = to.matched.some((r) => r.meta.requiresCoach)
     const isAuthenticated = authStore.isAuthenticated
 
     if (requiresAuth && !isAuthenticated) {
@@ -60,6 +61,11 @@ export default defineRouter(function (/* { store, ssrContext } */) {
     }
 
     if (requiresGuest && isAuthenticated) {
+      next(ROLE_ROUTES[authStore.role] || '/dashboard')
+      return
+    }
+
+    if (requiresCoach && isAuthenticated && !authStore.isCoach) {
       next(ROLE_ROUTES[authStore.role] || '/dashboard')
       return
     }

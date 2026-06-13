@@ -73,6 +73,12 @@ const routes = [
         component: () => import('pages/coach/CoachCommandCenterPlaceholderPage.vue'),
         meta: { requiresAuth: true },
       },
+      {
+        path: 'coach/availability',
+        name: 'coach-availability',
+        component: () => import('pages/coach/AvailabilityManagerPage.vue'),
+        meta: { requiresAuth: true, requiresCoach: true },
+      },
 
       // Parent registration flow (guest only)
       {
