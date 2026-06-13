@@ -14,6 +14,7 @@ import com.softropic.skillars.platform.filestorage.contract.exception.QuotaExcee
 import com.softropic.skillars.platform.filestorage.contract.exception.StorageValidationException;
 import com.softropic.skillars.platform.security.contract.event.SecurityAlertEvent;
 import com.softropic.skillars.infrastructure.security.event.BadCredentialsEvent;
+import com.softropic.skillars.platform.marketplace.contract.CoachProfileNotFoundException;
 import com.softropic.skillars.platform.marketplace.contract.MarketplaceException;
 import com.softropic.skillars.platform.security.contract.exception.CoachRegistrationException;
 import com.softropic.skillars.platform.security.contract.exception.FeatureGatedException;
@@ -291,6 +292,13 @@ public class ApiAdvice {
     public ErrorDto marketplaceExceptionHandler(final MarketplaceException ex) {
         log.warn("Marketplace error: code={} msg={}", ex.getErrorCode(), ex.getMessage());
         return logErrorAndReturnDTO(ex, ex.getMessage(), ex.getErrorCode());
+    }
+
+    @ExceptionHandler(CoachProfileNotFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public ErrorDto coachProfileNotFoundHandler(final CoachProfileNotFoundException ex) {
+        log.info("Coach profile not found: {}", ex.getMessage());
+        return logErrorAndReturnDTO(ex, ex.getMessage(), "marketplace.profileNotFound");
     }
 
     @ExceptionHandler(SecException.class)

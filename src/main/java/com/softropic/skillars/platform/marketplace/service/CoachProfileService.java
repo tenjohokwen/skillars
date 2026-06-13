@@ -1,6 +1,9 @@
 package com.softropic.skillars.platform.marketplace.service;
 
 import com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer;
+import com.softropic.skillars.platform.marketplace.contract.CoachMediaItemDto;
+import com.softropic.skillars.platform.marketplace.contract.CoachProfileDto;
+import com.softropic.skillars.platform.marketplace.contract.CoachProfileNotFoundException;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
 import com.softropic.skillars.platform.marketplace.contract.MarketplaceException;
@@ -11,14 +14,18 @@ import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep3R
 import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep4Request;
 import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep5Request;
 import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStepResponse;
+import com.softropic.skillars.platform.marketplace.contract.SessionPackDto;
 import com.softropic.skillars.platform.marketplace.repo.CoachAgeGroup;
 import com.softropic.skillars.platform.marketplace.repo.CoachAgeGroupRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
+import com.softropic.skillars.platform.marketplace.repo.CoachMediaItem;
+import com.softropic.skillars.platform.marketplace.repo.CoachMediaItemRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachPricing;
 import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.marketplace.repo.CoachReliabilityStrikeRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachSpecialty;
 import com.softropic.skillars.platform.marketplace.repo.CoachSpecialtyRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscription;
@@ -29,9 +36,11 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.OffsetDateTime;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
@@ -46,6 +55,9 @@ public class CoachProfileService {
     private final CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
     private final CoachSubscriptionRepository coachSubscriptionRepository;
     private final ContactDetailSanitizer contactDetailSanitizer;
+    private final CoachMediaItemRepository coachMediaItemRepository;
+    private final CoachCapabilityService coachCapabilityService;
+    private final CoachReliabilityStrikeRepository coachReliabilityStrikeRepository;
 
     @Transactional
     public CoachProfile getOrCreateDraft(Long userId) {
@@ -212,6 +224,64 @@ public class CoachProfileService {
                 return new ProfileBuilderStatusResponse(profile.getId(), profile.getStatus(), lastStep, complete);
             })
             .orElse(new ProfileBuilderStatusResponse(null, null, 0, false));
+    }
+
+    private static final int STRIKE_WINDOW_DAYS = 90;
+
+    @Transactional(readOnly = true)
+    public CoachProfileDto getPublicProfile(UUID coachId) {
+        CoachProfile profile = coachProfileRepository.findById(coachId)
+            .filter(p -> p.getStatus() == CoachProfileStatus.ACTIVE)
+            .orElseThrow(() -> new CoachProfileNotFoundException(coachId));
+
+        List<String> specialties = coachSpecialtyRepository.findByCoachId(profile.getId())
+            .stream().map(CoachSpecialty::getSkill).toList();
+
+        List<String> ageGroups = coachAgeGroupRepository.findByCoachId(profile.getId())
+            .stream().map(ag -> ag.getAgeTier().name()).toList();
+
+        CoachPricing pricing = coachPricingRepository.findByCoachId(profile.getId()).orElse(null);
+
+        List<SessionPackDto> sessionPacks = sessionPackRepository.findByCoachId(profile.getId())
+            .stream()
+            .map(sp -> new SessionPackDto(sp.getSessionCount(), sp.getTotalPrice(), "EUR", sp.getLabel()))
+            .toList();
+
+        boolean available = !coachAvailabilityWindowRepository.findByCoachId(profile.getId()).isEmpty();
+
+        OffsetDateTime since = OffsetDateTime.now().minusDays(STRIKE_WINDOW_DAYS);
+        int strikeCount = (int) coachReliabilityStrikeRepository
+            .countByCoachIdAndCreatedAtAfter(profile.getId(), since);
+
+        List<CoachMediaItemDto> mediaGallery = coachMediaItemRepository
+            .findByCoachIdOrderByDisplayOrderAsc(profile.getId())
+            .stream().limit(6)
+            .map(m -> new CoachMediaItemDto(m.getId(), m.getFileUrl(), m.getMediaType(), m.getDisplayOrder()))
+            .toList();
+
+        List<String> capabilityBadges = coachCapabilityService.getActiveBadges(profile.getId());
+
+        return new CoachProfileDto(
+            profile.getId(),
+            profile.getDisplayName(),
+            profile.getPhotoUrl(),
+            profile.getVerificationTier(),
+            capabilityBadges,
+            0.0,
+            0,
+            profile.getBio(),
+            profile.getLanguages(),
+            profile.getCity(),
+            profile.getDistrict(),
+            specialties,
+            ageGroups,
+            pricing != null ? pricing.getPerSessionPrice() : null,
+            "EUR",
+            sessionPacks,
+            available,
+            strikeCount,
+            mediaGallery
+        );
     }
 
     private CoachProfile requireProfile(Long userId) {

@@ -17,4 +17,6 @@ public interface CoachReliabilityStrikeRepository extends JpaRepository<CoachRel
         @Param("coachIds") List<UUID> coachIds,
         @Param("since") OffsetDateTime since
     );
+
+    long countByCoachIdAndCreatedAtAfter(UUID coachId, OffsetDateTime since);
 }

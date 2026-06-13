@@ -12,6 +12,9 @@ export const publishProfile = () =>
 export const searchCoaches = (params = {}) =>
   api.get('/api/marketplace/coaches', { params })
 
+export const getCoachProfile = (coachId) =>
+  api.get(`/api/marketplace/coaches/${coachId}`)
+
 export const signUpload = (payload) =>
   api.post('/api/storage/sign/upload', payload)
 

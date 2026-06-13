@@ -118,8 +118,7 @@ const routes = [
       },
       {
         path: 'coaches/:coachId',
-        component: () => import('pages/marketplace/CoachPublicProfilePlaceholderPage.vue'),
-        // Full implementation in Story 2.3
+        component: () => import('pages/marketplace/CoachPublicProfilePage.vue'),
       },
 
       // Protected pages (auth required)

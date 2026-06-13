@@ -38,6 +38,7 @@ public class CoachSearchService {
     private final CoachSpecialtyRepository coachSpecialtyRepository;
     private final CoachPricingRepository coachPricingRepository;
     private final CoachReliabilityStrikeRepository strikeRepository;
+    private final CoachCapabilityService coachCapabilityService;
 
     public CoachSearchResponse searchCoaches(CoachSearchParams params, int page, int size) {
         // 1. Build DB-level specification — status=ACTIVE and city filter always applied
@@ -62,6 +63,7 @@ public class CoachSearchService {
         Map<UUID, List<String>> specialtiesByCoach = loadSpecialties(pageIds);
         Map<UUID, BigDecimal>   priceByCoach       = loadPrices(pageIds);
         Map<UUID, Integer>      strikesByCoach     = loadReliabilityStrikes(pageIds);
+        Map<UUID, List<String>> capabilityBadgesByCoach = coachCapabilityService.getActiveBadgesBatch(pageIds);
 
         // 6. Assemble DTOs
         List<CoachCardDto> dtos = profiles.stream().map(p -> new CoachCardDto(
@@ -76,7 +78,7 @@ public class CoachSearchService {
             0.0,      // aggregateRating — wired in Epic 9
             0,        // reviewCount     — wired in Epic 9
             strikesByCoach.getOrDefault(p.getId(), 0),
-            List.of() // capabilityBadges — wired in Story 2.3
+            capabilityBadgesByCoach.getOrDefault(p.getId(), List.of())
         )).toList();
 
         // 7. Apply price sort within the current page (cross-page price sort deferred to future migration)

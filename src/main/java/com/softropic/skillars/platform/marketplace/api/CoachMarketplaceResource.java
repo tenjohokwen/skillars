@@ -1,8 +1,10 @@
 package com.softropic.skillars.platform.marketplace.api;
 
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.marketplace.contract.CoachProfileDto;
 import com.softropic.skillars.platform.marketplace.contract.CoachSearchParams;
 import com.softropic.skillars.platform.marketplace.contract.CoachSearchResponse;
+import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.marketplace.service.CoachSearchService;
 import com.softropic.skillars.platform.security.contract.AgeTier;
 import io.micrometer.observation.annotation.Observed;
@@ -15,14 +17,15 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
+import java.util.UUID;
 
 @Validated
-@Observed(name = "marketplace.search")
 @RestController
 @RequestMapping("/api/marketplace/coaches")
 @RequiredArgsConstructor
@@ -30,8 +33,10 @@ import java.math.BigDecimal;
 public class CoachMarketplaceResource {
 
     private final CoachSearchService coachSearchService;
+    private final CoachProfileService coachProfileService;
 
     @GetMapping
+    @Observed(name = "marketplace.search")
     @PreAuthorize(SecurityConstants.IS_PERMIT_ALL)
     public ResponseEntity<CoachSearchResponse> searchCoaches(
             @RequestParam @NotBlank String city,
@@ -50,5 +55,12 @@ public class CoachMarketplaceResource {
             city, district, language, minPrice, maxPrice, ageGroup, skill, minRating, sortBy
         );
         return ResponseEntity.ok(coachSearchService.searchCoaches(params, page, size));
+    }
+
+    @GetMapping("/{coachId}")
+    @Observed(name = "marketplace.profile")
+    @PreAuthorize(SecurityConstants.IS_PERMIT_ALL)
+    public ResponseEntity<CoachProfileDto> getCoachProfile(@PathVariable UUID coachId) {
+        return ResponseEntity.ok(coachProfileService.getPublicProfile(coachId));
     }
 }
