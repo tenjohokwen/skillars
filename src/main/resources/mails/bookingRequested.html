@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.booking.requested.title}">New Booking Request</title>
+</head>
+<body>
+    <h2>New Session Request</h2>
+    <p>Hello <span th:text="${map.coachDisplayName}">Coach</span>,</p>
+    <p>You have a new session request for <strong th:text="${map.requestedStartTime}">date</strong> (<span th:text="${map.canonicalTimezone}">timezone</span>).</p>
+    <p th:if="${map.notes != null and !map.notes.isEmpty()}">Player notes: <em th:text="${map.notes}"></em></p>
+    <p>Please log in to Skillars to accept or decline this request.</p>
+</body>
+</html>

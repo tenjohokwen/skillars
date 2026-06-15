@@ -9,6 +9,11 @@ import {
   deleteAvailabilityBlock,
   getPlayerPacks,
   purchaseSessionPack,
+  createBookingRequest,
+  acceptBooking,
+  declineBooking,
+  getParentBookings,
+  getCoachBookingRequests,
 } from 'src/api/booking.api'
 
 export const useBookingStore = defineStore('booking', () => {
@@ -25,10 +30,19 @@ export const useBookingStore = defineStore('booking', () => {
   const packsLoading = ref(false)
   const packsError = ref(null)
 
-  const creditsForCoach = computed(() => (coachId) =>
-    sessionPacks.value
-      .filter((p) => p.status === 'ACTIVE' && p.coachId === coachId)
-      .reduce((sum, p) => sum + p.creditsRemaining, 0)
+  const parentBookings = ref([])
+  const bookingsLoading = ref(false)
+  const bookingsError = ref(null)
+
+  const coachBookingRequests = ref([])
+  const coachRequestsLoading = ref(false)
+  const coachRequestsError = ref(null)
+
+  const creditsForCoach = computed(
+    () => (coachId) =>
+      sessionPacks.value
+        .filter((p) => p.status === 'ACTIVE' && p.coachId === coachId)
+        .reduce((sum, p) => sum + p.creditsRemaining, 0),
   )
 
   function currentMonday() {
@@ -100,10 +114,77 @@ export const useBookingStore = defineStore('booking', () => {
     await loadPlayerPacks(playerId)
   }
 
+  async function loadParentBookings() {
+    bookingsLoading.value = true
+    bookingsError.value = null
+    try {
+      const res = await getParentBookings()
+      parentBookings.value = res.data ?? []
+    } catch (e) {
+      bookingsError.value = e
+    } finally {
+      bookingsLoading.value = false
+    }
+  }
+
+  async function loadCoachBookingRequests() {
+    coachRequestsLoading.value = true
+    coachRequestsError.value = null
+    try {
+      const res = await getCoachBookingRequests()
+      coachBookingRequests.value = res.data ?? []
+    } catch (e) {
+      coachRequestsError.value = e
+    } finally {
+      coachRequestsLoading.value = false
+    }
+  }
+
+  async function submitBookingRequest(request) {
+    await createBookingRequest(request)
+    await loadParentBookings()
+  }
+
+  async function approveBooking(id) {
+    await acceptBooking(id)
+    await loadCoachBookingRequests()
+  }
+
+  async function rejectBooking(id) {
+    await declineBooking(id)
+    await loadCoachBookingRequests()
+  }
+
   return {
-    windows, blocks, computedSlots, weekStart, loading, error, hasWindows,
-    sessionPacks, packsLoading, packsError, creditsForCoach,
-    loadAvailability, createWindow, editWindow, removeWindow, createBlock, removeBlock,
-    loadPlayerPacks, purchasePack,
+    windows,
+    blocks,
+    computedSlots,
+    weekStart,
+    loading,
+    error,
+    hasWindows,
+    sessionPacks,
+    packsLoading,
+    packsError,
+    creditsForCoach,
+    parentBookings,
+    bookingsLoading,
+    bookingsError,
+    coachBookingRequests,
+    coachRequestsLoading,
+    coachRequestsError,
+    loadAvailability,
+    createWindow,
+    editWindow,
+    removeWindow,
+    createBlock,
+    removeBlock,
+    loadPlayerPacks,
+    purchasePack,
+    loadParentBookings,
+    loadCoachBookingRequests,
+    submitBookingRequest,
+    approveBooking,
+    rejectBooking,
   }
 })

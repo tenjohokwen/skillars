@@ -23,3 +23,13 @@ export const getPlayerPacks = (playerId, coachId) =>
 
 export const purchaseSessionPack = (playerId, request) =>
   api.post(`/api/bookings/players/${playerId}/packs/purchase`, request)
+
+export const createBookingRequest = (request) => api.post('/api/bookings/requests', request)
+
+export const acceptBooking = (id) => api.put(`/api/bookings/requests/${id}/accept`)
+
+export const declineBooking = (id) => api.put(`/api/bookings/requests/${id}/decline`)
+
+export const getParentBookings = () => api.get('/api/bookings/requests')
+
+export const getCoachBookingRequests = () => api.get('/api/bookings/requests/coach')

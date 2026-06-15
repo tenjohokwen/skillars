@@ -18,7 +18,12 @@ public enum EmailTemplate {
     TENANT_API_KEY_REACTIVATED("email.tenant.api_key_reactivated.title"),
     TENANT_WEBHOOK_SECRET_REGENERATED("email.tenant.webhook_secret_regenerated.title"),
     TENANT_STATUS_CHANGED("email.tenant.status_changed.title"),
-    TENANT_CREATED("email.tenant.created.title");
+    TENANT_CREATED("email.tenant.created.title"),
+    BOOKING_REQUESTED("email.booking.requested.title"),
+    BOOKING_CONFIRMED("email.booking.confirmed.title"),
+    BOOKING_DECLINED("email.booking.declined.title"),
+    BOOKING_EXPIRED("email.booking.expired.title"),
+    BOOKING_REMINDER("email.booking.reminder.title");
 
     private final String subjectKey;
     EmailTemplate(final String subjectKey) {

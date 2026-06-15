@@ -988,12 +988,15 @@ So that I know what capacity we have before requesting a booking.
 **Given** a parent taps "Buy sessions" on a coach's profile
 **When** the purchase flow opens
 **Then** they see all available session pack options for that coach (sessionCount, totalPrice, per-session equivalent price) plus the per-session single booking option
+**And** each pack option displays its validity window ("Valid for X months — expires approximately [calculated date] if purchased today") so the parent can make an informed commitment before paying
 **And** a `SessionPackTracker` showing current credits (if any) is visible at the top of the purchase screen
 
 **Given** a parent selects a session pack and confirms purchase
 **When** payment is captured (Stripe integration wired in Epic 7; at this stage, simulate capture with a stub)
-**Then** a `session_packs_purchased` record is created (id UUID, parentId, playerId, coachId, sessionCount, creditsRemaining INT, purchasedAt TIMESTAMPTZ, status ENUM ACTIVE/EXHAUSTED/EXPIRED)
+**Then** a `session_packs_purchased` record is created (id UUID, parentId, playerId, coachId, sessionCount, creditsRemaining INT, purchasedAt TIMESTAMPTZ, expires_at TIMESTAMPTZ, status ENUM ACTIVE/EXHAUSTED/EXPIRED)
 **And** `creditsRemaining` is set to `sessionCount`
+**And** `expires_at` is set based on pack size: 1 session → 90 days, 2–5 sessions → 180 days, 6–10 sessions → 365 days, 11+ sessions → 548 days (all from `purchasedAt`; thresholds read from `platform_config`, admin-modifiable)
+**And** the purchase confirmation displays "Credits valid until [expires_at date]"
 **And** the `SessionPackTracker` updates immediately to reflect the new credit balance
 
 **Given** a parent attempts to request a booking when `creditsRemaining = 0` for all packs with that coach
@@ -1009,62 +1012,73 @@ So that I know what capacity we have before requesting a booking.
 
 **Given** a parent views the Player Portal
 **When** they navigate to the session pack dashboard
-**Then** all active and exhausted packs are listed with coach name, original credit count, credits remaining, purchase date, and pack status
+**Then** all active and exhausted packs are listed with coach name, original credit count, credits remaining, purchase date, expiry date, and pack status
+**And** active packs expiring within 30 days display an amber "Expires in X days" warning with a "Pause" CTA
+**And** paused packs show "Paused until [date]" with the revised expiry date
+**And** expired packs show "Expired on [date]" in error state
 **And** an empty state ("No session packs yet — find a coach to get started") with a marketplace CTA is shown if no packs exist (UX-DR25)
 
-*Dev notes: `platform.booking`. New entities: `session_packs_purchased` (id UUID, parentId UUID, playerId UUID, coachId UUID, sessionCount INT, creditsRemaining INT, purchasedAt TIMESTAMPTZ, status ENUM ACTIVE/EXHAUSTED/EXPIRED). `SessionPackService.deductCredit(playerId, coachId)` — FIFO across active packs, `@Transactional`, SELECT FOR UPDATE on the pack row (NFR-004). `SessionPackExhaustedEvent` published via `ApplicationEventPublisher` when `creditsRemaining` reaches 0. Payment capture stubbed via `PaymentGateway` interface (wired in Epic 7). `SessionPackResource`: GET /api/booking/players/{playerId}/packs, POST /api/booking/players/{playerId}/packs/purchase. `@PreAuthorize` parent ownership on all endpoints. `SessionPackTracker.vue` reads from `booking.store.js`. Test: `SessionPackServiceTest` (unit — FIFO deduction, concurrent deduction with SELECT FOR UPDATE), `SessionPackResourceIT`.*
+*Dev notes: `platform.booking`. New entities: `session_packs_purchased` (id UUID, parentId UUID, playerId UUID, coachId UUID, sessionCount INT, creditsRemaining INT, purchasedAt TIMESTAMPTZ, expires_at TIMESTAMPTZ NOT NULL, paused_until TIMESTAMPTZ nullable, status ENUM ACTIVE/EXHAUSTED/EXPIRED). `expires_at` is computed at purchase time from session count tier (thresholds in `platform_config`). `SessionPackService.deductCredit(playerId, coachId)` — FIFO across active packs, `@Transactional`, SELECT FOR UPDATE on the pack row (NFR-004). `SessionPackExhaustedEvent` published via `ApplicationEventPublisher` when `creditsRemaining` reaches 0. Payment capture stubbed via `PaymentGateway` interface (wired in Epic 7). `SessionPackResource`: GET /api/booking/players/{playerId}/packs, POST /api/booking/players/{playerId}/packs/purchase. `@PreAuthorize` parent ownership on all endpoints. `SessionPackTracker.vue` reads from `booking.store.js`. Expiry enforcement, pause logic, and scheduler defined in Story 3.9. Test: `SessionPackServiceTest` (unit — FIFO deduction, concurrent deduction with SELECT FOR UPDATE), `SessionPackResourceIT`.*
 
 ### Story 3.3: Booking Request & Approval Workflow
 
 As a parent,
-I want to request a session with a coach and receive confirmation once they accept and payment is captured,
-So that sessions are scheduled with mutual agreement and financial commitment from both sides.
+I want to request a session with a coach and receive confirmation once they accept,
+So that sessions are scheduled with mutual agreement, backed by pre-purchased session credits.
 
 **Acceptance Criteria:**
 
-**Given** a parent has at least one active session credit with a coach
+**Given** a parent has at least one effective available credit with a coach (effective = creditsRemaining from active, non-expired, non-paused packs minus credits already committed to in-flight bookings in REQUESTED, ACCEPTED, CONFIRMED, or UPCOMING status with that same coach)
 **When** they select an available slot from the coach's calendar and submit a booking request
-**Then** a `bookings` record is created with status `REQUESTED` (id UUID, parentId, playerId, coachId, requestedStartTime TIMESTAMPTZ, requestedEndTime TIMESTAMPTZ, status ENUM, canonicalTimezone, createdAt TIMESTAMPTZ, `@Version` for optimistic locking)
-**And** the coach receives an in-app notification of the new request
+**Then** the backend validates: (a) `requestedStartTime` is in the future; (b) the coach profile status is `ACTIVE`; (c) the requested slot falls within the coach's configured availability windows (from Story 3.1); (d) effective credits > 0 for that player+coach pair
+**And** a `bookings` record is created with status `REQUESTED` (id UUID, parentId BIGINT, playerId BIGINT, coachId UUID, requestedStartTime TIMESTAMPTZ, requestedEndTime TIMESTAMPTZ, status VARCHAR, canonicalTimezone VARCHAR, notes VARCHAR nullable, version INT for `@Version` optimistic locking, createdAt TIMESTAMPTZ, updatedAt TIMESTAMPTZ)
+**And** the coach receives a notification email of the new request including the parent's notes
 **And** the parent sees the booking in `REQUESTED` state with a `BookingStateChip` labelled "Awaiting coach response" in `--accent-warning`
+**And** credits are coach-specific — a credit purchased with Coach A cannot satisfy a booking with Coach B
+**And** credits are price-locked at purchase time — if the coach later changes their pricing, existing purchased credits remain valid at the original rate without re-authorisation
 
 **Given** a booking is in `REQUESTED` state
 **When** the coach accepts it
-**Then** `BookingService.transition(bookingId, ACCEPT, context)` is the only permitted method to advance the state — no direct `setStatus()` call anywhere
-**And** status transitions to `ACCEPTED`
-**And** the payment pre-authorisation is triggered via the `PaymentGateway` interface (stubbed until Epic 7)
-**And** on successful pre-auth, status advances to `PAYMENT_PENDING` then immediately to `CONFIRMED`
+**Then** `BookingService.acceptBooking(bookingId, coachUserId)` is the only permitted method to advance the state — no direct `setStatus()` call outside of `BookingService`
+**And** status transitions directly `REQUESTED → ACCEPTED → CONFIRMED` in a single transaction (no intermediate payment step — payment was pre-captured at session pack purchase time; Epic 7 will introduce Stripe pre-authorisation for future payment flows)
 **And** the parent receives a notification: "Your session with [Coach] on [date] is confirmed"
 **And** the `BookingStateChip` updates to "Confirmed" in `--accent-primary`
 
 **Given** a booking is in `REQUESTED` state
 **When** the coach declines it
 **Then** `BookingService.transition(bookingId, DECLINE, context)` advances status to `DECLINED`
-**And** no payment is captured
+**And** no additional payment is captured (payment was pre-captured at pack purchase time)
 **And** the parent is notified with the decline and a prompt to choose another slot
-**And** no credit is deducted — credits are only deducted at `COMPLETED`
+**And** no credit is deducted — credits are only deducted at `COMPLETED`; the declined booking is excluded from the in-flight count, freeing the soft-reserved credit for a new request
 
 **Given** a coach does not respond to a `REQUESTED` booking
-**When** the request has been open for longer than the configurable expiry window (read from ConfigService)
-**Then** the booking auto-expires to `DECLINED` via a scheduled job
-**And** the parent is notified of the auto-expiry
+**When** the request has been open for longer than the configurable expiry window (read from ConfigService key `booking.request_expiry_hours`, default 48h)
+**Then** the booking status is set to `DECLINED` via a scheduled job and a `BookingExpiredEvent` is published (distinct from `BookingDeclinedEvent` — auto-expiry is not an active coach rejection)
+**And** the parent receives a dedicated expiry notification: "Your session request was not responded to in time" (not the coach-declined wording)
+**And** the soft-reserved credit is freed automatically (expired booking excluded from in-flight count)
 
 **Given** a booking reaches `CONFIRMED` status
-**When** the session start time is within 24 hours
-**Then** status automatically transitions to `UPCOMING` via a scheduled job
-**And** reminder notifications are sent to both coach and parent (intervals read from ConfigService — default 24h and 2h)
+**When** the session start time is within 24 hours (or is already in the past due to scheduler downtime — catch-up)
+**Then** status automatically transitions to `UPCOMING` via a scheduled job; the catch-up query also picks up CONFIRMED bookings whose `requestedStartTime` has already passed
+**And** reminder notifications are sent to both coach and parent separately for the 24h window (`PRIMARY`) and the 2h window (`SECONDARY`); each send is idempotent (stamped `primaryReminderSentAt` / `secondaryReminderSentAt`)
 
 **Given** a parent views their upcoming sessions
 **When** the bookings list renders
-**Then** all sessions for all their player profiles are shown with: coach name, date/time in Pitch Timezone, status chip, player name, credit count for that coach
+**Then** all sessions for all their player profiles are shown with: coach name, date/time in `canonicalTimezone`, status chip, player name, and `effectiveCreditsRemaining` for that coach (returned directly in `BookingResponse` — no separate pack load required)
 **And** sessions are sorted chronologically — nearest first
 
 **Given** a `BookingStateChip` renders any booking status
 **When** displayed
-**Then** the chip shows a plain-English label mapped from the internal enum — never the raw enum value (e.g., `REQUESTED` → "Awaiting coach response", `CONFIRMED` → "Confirmed", `DECLINED` → "Declined") (UX-DR11)
-**And** each state maps to its designated CSS token colour
+**Then** the chip shows a plain-English label mapped from the internal status string — never the raw value (REQUESTED → "Awaiting coach response", ACCEPTED → "Accepted", CONFIRMED → "Confirmed", UPCOMING → "Upcoming", DECLINED → "Declined", COMPLETED → "Completed" [Story 3.6], CANCELLED → "Cancelled" [Story 3.9], DISPUTED → "Disputed" [Story 3.6]) (UX-DR11)
+**And** each state maps to its designated CSS token colour; COMPLETED/CANCELLED/DISPUTED use neutral placeholder tokens until their respective stories define the final UX
 
-*Dev notes: `platform.booking`. New entity: `bookings` (id UUID, parentId UUID, playerId UUID, coachId UUID, requestedStartTime TIMESTAMPTZ, requestedEndTime TIMESTAMPTZ, status ENUM, canonicalTimezone VARCHAR, notes VARCHAR nullable, version INT for @Version, createdAt TIMESTAMPTZ, updatedAt TIMESTAMPTZ). `BookingService.transition(bookingId, BookingEvent, context)` is the sole state transition method — enforced by making `booking.setStatus()` package-private. `BookingResource`: POST /api/booking/bookings, PUT /api/booking/bookings/{id}/accept, PUT /api/booking/bookings/{id}/decline. Credit check via `SessionPackService.hasCredits(playerId, coachId)` before booking creation. Reminder scheduling via `@Scheduled` outbox job in `BookingReminderService`. `BookingStateChip.vue` component maps all 14 states to labels and token colours. `@TransactionalEventListener(AFTER_COMMIT)` in `platform.notification` for coach/parent notifications. Test: `BookingServiceTest` (unit — state machine transitions), `BookingRequestResourceIT`.*
+**Given** a coach is authenticated
+**When** they access their booking inbox
+**Then** `GET /api/bookings/requests/coach` returns all `REQUESTED` bookings for that coach, sorted by `requestedStartTime ASC`
+**And** each row shows: parent name, player name, requested date/time in `canonicalTimezone`, notes
+**And** the coach can accept or decline each request from `CoachBookingRequestsPage.vue`
+
+*Dev notes: `platform.booking`. New entity: `bookings` (id UUID, parentId BIGINT, playerId BIGINT, coachId UUID, requestedStartTime TIMESTAMPTZ, requestedEndTime TIMESTAMPTZ, status VARCHAR(30), canonicalTimezone VARCHAR, notes VARCHAR(500) nullable, version INT for @Version, createdAt TIMESTAMPTZ, updatedAt TIMESTAMPTZ). `BookingService.acceptBooking(bookingId, coachUserId)` and `BookingService.declineBooking(bookingId, coachUserId)` are the permitted transition methods. `BookingResource`: POST /api/bookings/requests, GET /api/bookings/requests (parent), PUT /api/bookings/requests/{id}/accept, PUT /api/bookings/requests/{id}/decline, GET /api/bookings/requests/coach. `BookingResponse` includes `effectiveCreditsRemaining` (computed at query time from `sumActiveCredits - countInFlightBookings` for that player+coach pair). Effective credit check via `SessionPackService.hasCredits(playerId, coachId)` — uses `repository.sumActiveCredits()` minus `bookingRepository.countInFlightBookings()` to prevent TOCTOU double-booking; uses `SELECT FOR UPDATE` on `session_packs_purchased` rows when effective credits ≤ 1 to prevent concurrent double-booking. Slot validation in `createBookingRequest`: coach must be ACTIVE, `requestedStartTime` must be in the future, slot must fall within a `coach_availability_window` (Story 3.1). Auto-expiry fires `BookingExpiredEvent` (distinct from `BookingDeclinedEvent`). Reminder scheduler includes catch-up query for CONFIRMED bookings whose `requestedStartTime` is already past. V31 schema adds index `(player_id, coach_id, status)` and forward-declares all terminal statuses including CANCELLED. `@TransactionalEventListener(AFTER_COMMIT)` in `platform.notification` for all notifications. Test: `BookingServiceTest` (unit — state machine, soft-reservation, slot validation, coach ACTIVE check), `BookingRequestResourceIT`.*
 
 ### Story 3.4: Booking State Machine & SSE
 
@@ -1327,6 +1341,59 @@ So that I can plan a training schedule upfront and review the total cost before 
 **Then** `400` with `ErrorDto` code `booking.batchSizeExceeded`
 
 *Dev notes: `platform.booking`. New table: `booking_batches` via Flyway migration. `bookings` table: add column `batchId UUID nullable` FK → `booking_batches`. `BookingBatchService.acceptAll()` transitions bookings and publishes `BatchBookingAcceptedEvent`. `BookingBatchResource`: POST /api/booking/batches (`@PreAuthorize` parent), POST /api/booking/batches/{batchId}/accept-all (`@PreAuthorize` coach — service verifies coachId ownership). Individual accept/decline endpoints unchanged. Frontend: `CoachCalendar.vue` gains multi-select mode; basket component shows running total and credit preview (read from `GET /api/payment/credits/balance`); `booking.api.js` adds `createBatch()` and `acceptAllBatch()`. Test: `BookingBatchResourceIT` (create, accept-all, partial individual accept, ownership guard, size limit), `BatchSizeEnforcementTest` (ConfigService boundary).*
+
+### Story 3.9: Session Pack Expiry & Pause Management
+
+As a parent,
+I want my session pack credits to carry a defined validity window and to be able to pause them during genuine incapacity,
+So that I have clear, fair commitment terms — and both I and the coach are protected from open-ended procrastination.
+
+**Acceptance Criteria:**
+
+**Given** the `session_packs_purchased` table is migrated with `expires_at` and `paused_until` columns (V32)
+**When** existing ACTIVE packs are backfilled
+**Then** their `expires_at` is set retroactively based on `purchasedAt` and the session count tier thresholds — no existing pack should be left with a null `expires_at`
+
+**Given** `SessionPackService.hasCredits(playerId, coachId)` is evaluated
+**When** a pack has `status = 'EXPIRED'` or `paused_until > now()`
+**Then** that pack's credits are excluded from the effective credit count — the parent cannot submit booking requests against an expired or currently-paused pack
+
+**Given** an active session pack will expire within 30 days
+**When** the expiry warning scheduler runs (every 60 minutes)
+**Then** the parent receives a notification: "Your {N} sessions with {Coach} expire on {date} — book them or pause your pack to extend your window"
+**And** a second warning fires at 7 days before expiry
+**And** each warning is idempotent — sent at most once per threshold per pack (stamp `warning_30d_sent_at`, `warning_7d_sent_at` on the pack row)
+
+**Given** a session pack has `expires_at ≤ now()` and `status = 'ACTIVE'` and `credits_remaining > 0`
+**When** the expiry scheduler runs
+**Then** `status` transitions to `EXPIRED`
+**And** a `SessionPackExpiredEvent` is published (Epic 7 will wire refund flow for unused credits)
+**And** the parent receives a notification: "Your {N} unused sessions with {Coach} have expired" with a note that refund eligibility will be reviewed
+
+**Given** a parent has an active session pack with remaining credits and no existing pause on record
+**When** they submit a pause request with `pauseStartDate` and `pauseDurationDays` (1–90 days, one pause per pack lifetime)
+**Then** the system identifies all bookings for that player+coach with `requestedStartTime` within the pause window and status IN (`REQUESTED`, `ACCEPTED`, `CONFIRMED`, `UPCOMING`)
+**And** if conflicting bookings exist: the parent is presented with the full list and must explicitly confirm their cancellation before the pause is applied — the pause is not applied until confirmation is received
+**And** if no conflicting bookings exist: the pause is applied immediately
+
+**Given** the parent confirms a pause with one or more conflicting bookings
+**When** the pause is applied
+**Then** every conflicting booking transitions to `CANCELLED` (a new terminal state distinct from `DECLINED`)
+**And** a `BookingCancelledDueToPauseEvent` is published for each cancelled booking
+**And** the coach receives an individual cancellation notification per affected booking so their calendar slots are freed for other players
+**And** the parent receives a single confirmation listing all cancelled sessions and the new pack expiry date
+**And** `paused_until` is set on the pack to `pauseStartDate + pauseDurationDays`
+**And** `expires_at` is extended by `pauseDurationDays` so the pause does not consume validity time
+
+**Given** a pause period has elapsed (`paused_until ≤ now()`)
+**When** `SessionPackService.hasCredits()` is called
+**Then** the pack is treated as fully ACTIVE again — credits are counted normally with no further action required
+
+**Given** a parent attempts to apply a second pause to a pack that already has a pause on record
+**When** the pause request is submitted
+**Then** `400` with `ErrorDto` code `booking.packAlreadyPaused` — one pause per pack lifetime is the platform limit
+
+*Dev notes: `platform.booking`. V32 migration: add `expires_at TIMESTAMPTZ NOT NULL DEFAULT now()` (backfilled via UPDATE based on session_count tier), `paused_until TIMESTAMPTZ`, `warning_30d_sent_at TIMESTAMPTZ`, `warning_7d_sent_at TIMESTAMPTZ` to `booking.session_packs_purchased`; add `CANCELLED` to `booking.bookings` CHECK constraint (status IN ('REQUESTED','ACCEPTED','CONFIRMED','UPCOMING','DECLINED','CANCELLED','COMPLETED','DISPUTED')). Expiry tier thresholds stored in `platform_config`: `pack.expiry.days.tier1` (1 session → 90), `pack.expiry.days.tier2` (2–5 → 180), `pack.expiry.days.tier3` (6–10 → 365), `pack.expiry.days.tier4` (11+ → 548). `SessionPackService` gains `BookingRepository` dependency (already added in Story 3.3); update `hasCredits()` to also exclude `paused_until > now()` packs. New `SessionPackExpiryScheduler` (`@Scheduled` every 60 min): run expiry transitions and warning notifications. New endpoint `POST /api/bookings/players/{playerId}/packs/{packId}/pause` (`@PreAuthorize` parent ownership) — body: `{ pauseStartDate, pauseDurationDays }`; first call returns `200` with conflict list if bookings exist (no pause applied yet); second call with `{ ..., confirmedCancellationIds: [...] }` applies the pause and triggers cascade cancellations. Each cascade cancellation calls `BookingService.cancelDueToPause(bookingId)` → sets status `CANCELLED`, publishes `BookingCancelledDueToPauseEvent`, resolved via `@TransactionalEventListener` in `BookingEmailListener`. Frontend: `SessionPackDashboard.vue` gains expiry badge, pause CTA, and cancellation confirmation modal. Test: `SessionPackExpirySchedulerTest` (unit — tier boundary, warning idempotency), `SessionPackPauseResourceIT` (pause with conflicts, pause without conflicts, second-pause rejected, cascade cancellation verifiable via booking status check).*
 
 ---
 

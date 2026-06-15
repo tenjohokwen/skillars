@@ -17,6 +17,7 @@ import com.softropic.skillars.platform.marketplace.repo.SessionPackRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
@@ -45,6 +46,7 @@ public class SessionPackService {
     private final PaymentGateway paymentGateway;
     private final ApplicationEventPublisher eventPublisher;
     private final SessionPackMapper mapper;
+    private final BookingRepository bookingRepository;
 
     @Transactional(readOnly = true)
     public List<SessionPackPurchasedResponse> getPacksForPlayer(Long parentId, Long playerId, UUID coachId) {
@@ -116,7 +118,9 @@ public class SessionPackService {
 
     @Transactional(readOnly = true)
     public boolean hasCredits(Long playerId, UUID coachId) {
-        return repository.hasActiveCredits(playerId, coachId);
+        int creditsRemaining = repository.sumActiveCredits(playerId, coachId);
+        long inFlight = bookingRepository.countInFlightBookings(playerId, coachId);
+        return (creditsRemaining - inFlight) > 0;
     }
 
     @Transactional(readOnly = true)

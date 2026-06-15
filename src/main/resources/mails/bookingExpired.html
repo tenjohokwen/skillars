@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.booking.expired.title}">Session Request Expired</title>
+</head>
+<body>
+    <h2>Session Request Not Responded To</h2>
+    <p>Your session request with <strong th:text="${map.coachDisplayName}">Coach</strong> on <strong th:text="${map.requestedStartTime}">date</strong> was not responded to in time.</p>
+    <p>Your session credits have not been affected. You can send a new request or choose another coach on Skillars.</p>
+</body>
+</html>

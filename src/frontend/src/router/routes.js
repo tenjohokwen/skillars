@@ -122,6 +122,23 @@ const routes = [
         meta: { requiresAuth: true, role: 'PARENT' },
       },
       {
+        path: 'parent/coaches/:coachId/request-booking',
+        component: () => import('pages/parent/BookingRequestPage.vue'),
+        meta: { requiresAuth: true, role: 'PARENT' },
+      },
+      {
+        path: 'parent/bookings',
+        name: 'parent-bookings',
+        component: () => import('pages/parent/ParentBookingsPage.vue'),
+        meta: { requiresAuth: true, role: 'PARENT' },
+      },
+      {
+        path: 'coach/booking-requests',
+        name: 'coach-booking-requests',
+        component: () => import('pages/coach/CoachBookingRequestsPage.vue'),
+        meta: { requiresAuth: true, requiresCoach: true },
+      },
+      {
         path: 'player/locker-room',
         component: () => import('pages/player/PlayerLockerRoomPlaceholderPage.vue'),
         meta: { requiresAuth: true },

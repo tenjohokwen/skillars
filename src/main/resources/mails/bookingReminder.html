@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.booking.reminder.title}">Session Reminder</title>
+</head>
+<body>
+    <h2 th:text="${map.reminderType == 'PRIMARY'} ? 'Session in 24 hours' : 'Session in 2 hours'">Session Reminder</h2>
+    <p>Your session with <strong th:text="${map.coachDisplayName}">Coach</strong> is scheduled for <strong th:text="${map.requestedStartTime}">date</strong> (<span th:text="${map.canonicalTimezone}">timezone</span>).</p>
+    <p>Log in to Skillars to prepare for your session.</p>
+</body>
+</html>

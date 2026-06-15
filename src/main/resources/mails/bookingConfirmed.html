@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.booking.confirmed.title}">Session Confirmed</title>
+</head>
+<body>
+    <h2>Your Session is Confirmed!</h2>
+    <p>Your session with <strong th:text="${map.coachDisplayName}">Coach</strong> on <strong th:text="${map.requestedStartTime}">date</strong> (<span th:text="${map.canonicalTimezone}">timezone</span>) is confirmed.</p>
+    <p>Log in to Skillars to view your upcoming sessions.</p>
+</body>
+</html>

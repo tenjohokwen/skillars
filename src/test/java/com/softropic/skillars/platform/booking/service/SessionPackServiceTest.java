@@ -4,6 +4,7 @@ import com.softropic.skillars.platform.booking.contract.PaymentGateway;
 import com.softropic.skillars.platform.booking.contract.SessionPackExhaustedEvent;
 import com.softropic.skillars.platform.booking.contract.SessionPackMapper;
 import com.softropic.skillars.platform.booking.contract.SessionPackPurchasedResponse;
+import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.repo.SessionPackPurchased;
 import com.softropic.skillars.platform.booking.repo.SessionPackPurchasedRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
@@ -49,6 +50,7 @@ class SessionPackServiceTest {
     @Mock PaymentGateway paymentGateway;
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock SessionPackMapper mapper;
+    @Mock BookingRepository bookingRepository;
 
     @InjectMocks SessionPackService service;
 
@@ -116,14 +118,16 @@ class SessionPackServiceTest {
 
     @Test
     void hasCredits_activePackExists_returnsTrue() {
-        when(repository.hasActiveCredits(PLAYER_ID, COACH_ID)).thenReturn(true);
+        when(repository.sumActiveCredits(PLAYER_ID, COACH_ID)).thenReturn(3);
+        when(bookingRepository.countInFlightBookings(PLAYER_ID, COACH_ID)).thenReturn(0L);
 
         assertThat(service.hasCredits(PLAYER_ID, COACH_ID)).isTrue();
     }
 
     @Test
     void hasCredits_allPacksExhausted_returnsFalse() {
-        when(repository.hasActiveCredits(PLAYER_ID, COACH_ID)).thenReturn(false);
+        when(repository.sumActiveCredits(PLAYER_ID, COACH_ID)).thenReturn(0);
+        when(bookingRepository.countInFlightBookings(PLAYER_ID, COACH_ID)).thenReturn(0L);
 
         assertThat(service.hasCredits(PLAYER_ID, COACH_ID)).isFalse();
     }

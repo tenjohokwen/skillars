@@ -22,7 +22,8 @@ export default {
   },
   // Namespace stubs — keys added by feature stories
   auth: {
-    accountNotVerified: 'Your account is not yet verified. Please complete phone verification first.',
+    accountNotVerified:
+      'Your account is not yet verified. Please complete phone verification first.',
     accountLocked: 'Too many login attempts. Please try again in a few minutes.',
     invalidCredentials: 'Invalid email or password.',
     coach: {
@@ -82,7 +83,8 @@ export default {
       resendOtp: 'Resend code',
       contactDetailWarning: 'Contact details will be removed on save',
       dashboardTitle: 'Account Verified',
-      dashboardBody: 'Your account is verified! Sign in to create player profiles and start managing sessions.',
+      dashboardBody:
+        'Your account is verified! Sign in to create player profiles and start managing sessions.',
     },
   },
   coach: {
@@ -98,7 +100,8 @@ export default {
     positionLabel: 'Position',
     ageTierLabel: 'Age tier',
     consentTitle: 'Parent Consent',
-    consentBody: 'By creating this profile for a minor, you confirm you are their legal guardian and accept responsibility for all activity on this account.',
+    consentBody:
+      'By creating this profile for a minor, you confirm you are their legal guardian and accept responsibility for all activity on this account.',
     consentLabel: 'I consent on behalf of this minor player',
     createButton: 'Create Profile',
     switcher: {
@@ -131,13 +134,39 @@ export default {
     verificationFailed: 'Verification failed',
   },
   booking: {
+    requests: {
+      statusRequested: 'Awaiting coach response',
+      statusAccepted: 'Accepted',
+      statusConfirmed: 'Confirmed',
+      statusUpcoming: 'Upcoming',
+      statusDeclined: 'Declined',
+      statusCompleted: 'Completed',
+      statusCancelled: 'Cancelled',
+      statusDisputed: 'Disputed',
+      requestTitle: 'Book a session with {coachName}',
+      selectSlot: 'Select a time slot',
+      notes: 'Notes for coach (optional)',
+      confirmRequest: 'Request session',
+      noCreditsWarning: 'Buy a session pack to request a booking',
+      listTitle: 'My bookings',
+      emptyState: 'No bookings yet — book your first session with a coach',
+      emptyStateCta: 'Find a coach',
+      confirmationPending: 'Awaiting coach response',
+      coachInboxTitle: 'Booking requests',
+      coachInboxEmpty: 'No pending booking requests',
+      parentLabel: 'Parent: {name}',
+      accept: 'Accept',
+      decline: 'Decline',
+      creditsRemaining: '{count} credits remaining with this coach',
+    },
     availability: {
       title: 'Manage Availability',
       addWindow: 'Add Recurring Window',
       addBlock: 'Block Personal Time',
       editWindow: 'Edit Availability Window',
       deleteConfirm: 'Are you sure you want to delete this?',
-      bookingConflictWarning: 'You have a booking during this time. Changes apply to future availability only.',
+      bookingConflictWarning:
+        'You have a booking during this time. Changes apply to future availability only.',
       blockAdded: 'Time block saved successfully.',
       windowAdded: 'Availability window saved successfully.',
       blocked: 'Blocked',

@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.booking.declined.title}">Session Request Declined</title>
+</head>
+<body>
+    <h2>Session Request Declined</h2>
+    <p>Unfortunately, <strong th:text="${map.coachDisplayName}">Coach</strong> has declined your session request for <strong th:text="${map.requestedStartTime}">date</strong>.</p>
+    <p>Your session credits have not been affected. You can request a different time slot or find another coach on Skillars.</p>
+</body>
+</html>
