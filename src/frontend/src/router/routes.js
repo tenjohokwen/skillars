@@ -70,8 +70,8 @@ const routes = [
       },
       {
         path: 'coach/command-center',
-        component: () => import('pages/coach/CoachCommandCenterPlaceholderPage.vue'),
-        meta: { requiresAuth: true },
+        component: () => import('pages/coach/CoachCommandCenterPage.vue'),
+        meta: { requiresAuth: true, requiresCoach: true },
       },
       {
         path: 'coach/availability',
@@ -119,6 +119,11 @@ const routes = [
       {
         path: 'parent/players/:playerId/packs',
         component: () => import('pages/parent/SessionPackDashboardPage.vue'),
+        meta: { requiresAuth: true, role: 'PARENT' },
+      },
+      {
+        path: 'parent/players/:playerId/sessions',
+        component: () => import('pages/parent/ParentPlayerPortalPage.vue'),
         meta: { requiresAuth: true, role: 'PARENT' },
       },
       {

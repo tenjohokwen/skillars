@@ -2,10 +2,13 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { authApi } from 'src/api/auth.api'
 
+const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+
 export const useAuthStore = defineStore('auth', () => {
   const userId = ref(null)
   const role = ref(null)
   const displayName = ref(null)
+  const timezoneNoticeDismissed = ref(false)
 
   const isAuthenticated = computed(() => !!userId.value)
   const isCoach = computed(() => role.value === 'COACH')
@@ -43,6 +46,10 @@ export const useAuthStore = defineStore('auth', () => {
    * The skp cookie holds URL-encoded JSON: {"id":<Long>,"role":"COACH"}.
    * NOTE: the user= cookie contains only the display name (plain string) — do NOT parse it as JSON.
    */
+  function dismissTimezoneNotice() {
+    timezoneNoticeDismissed.value = true
+  }
+
   function hydrateFromCookie() {
     try {
       const match = document.cookie.match(/(?:^|;\s*)skp=([^;]*)/)
@@ -68,9 +75,12 @@ export const useAuthStore = defineStore('auth', () => {
     isParent,
     isPlayer,
     isAdmin,
+    timezoneNoticeDismissed,
+    browserTimezone,
     setUser,
     clearUser,
     logout,
     hydrateFromCookie,
+    dismissTimezoneNotice,
   }
 })

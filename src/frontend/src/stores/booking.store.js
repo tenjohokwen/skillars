@@ -15,6 +15,8 @@ import {
   getParentBookings,
   getCoachBookingRequests,
   getBookingById,
+  getCoachSchedule,
+  getParentSchedule,
 } from 'src/api/booking.api'
 
 export function useBookingSse(bookingId) {
@@ -97,6 +99,14 @@ export const useBookingStore = defineStore('booking', () => {
   const coachBookingRequests = ref([])
   const coachRequestsLoading = ref(false)
   const coachRequestsError = ref(null)
+
+  const coachSchedule = ref(null)
+  const coachScheduleLoading = ref(false)
+  const coachScheduleError = ref(null)
+
+  const parentSchedule = ref(null)
+  const parentScheduleLoading = ref(false)
+  const parentScheduleError = ref(null)
 
   const creditsForCoach = computed(
     () => (coachId) =>
@@ -200,6 +210,33 @@ export const useBookingStore = defineStore('booking', () => {
     }
   }
 
+  async function loadCoachSchedule(weekStart) {
+    coachSchedule.value = null
+    coachScheduleLoading.value = true
+    coachScheduleError.value = null
+    try {
+      const res = await getCoachSchedule(weekStart)
+      coachSchedule.value = res.data
+    } catch (e) {
+      coachScheduleError.value = e
+    } finally {
+      coachScheduleLoading.value = false
+    }
+  }
+
+  async function loadParentSchedule(playerId) {
+    parentScheduleLoading.value = true
+    parentScheduleError.value = null
+    try {
+      const res = await getParentSchedule(playerId)
+      parentSchedule.value = res.data
+    } catch (e) {
+      parentScheduleError.value = e
+    } finally {
+      parentScheduleLoading.value = false
+    }
+  }
+
   async function submitBookingRequest(request) {
     await createBookingRequest(request)
     await loadParentBookings()
@@ -246,5 +283,13 @@ export const useBookingStore = defineStore('booking', () => {
     submitBookingRequest,
     approveBooking,
     rejectBooking,
+    coachSchedule,
+    coachScheduleLoading,
+    coachScheduleError,
+    parentSchedule,
+    parentScheduleLoading,
+    parentScheduleError,
+    loadCoachSchedule,
+    loadParentSchedule,
   }
 })

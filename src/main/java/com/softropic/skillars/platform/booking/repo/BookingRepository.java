@@ -12,6 +12,32 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
 
     List<Booking> findAllByParentIdOrderByRequestedStartTimeAsc(Long parentId);
 
+    @Query("""
+        SELECT b FROM Booking b
+        WHERE b.coachId = :coachId
+          AND b.status IN :statuses
+          AND b.requestedStartTime >= :weekStart
+          AND b.requestedStartTime < :weekEnd
+        ORDER BY b.requestedStartTime ASC
+        """)
+    List<Booking> findByCoachIdAndStatusInAndTimeBetween(
+        @Param("coachId") UUID coachId,
+        @Param("statuses") List<String> statuses,
+        @Param("weekStart") Instant weekStart,
+        @Param("weekEnd") Instant weekEnd);
+
+    @Query("""
+        SELECT b FROM Booking b
+        WHERE b.parentId = :parentId
+          AND b.playerId = :playerId
+          AND b.status IN :statuses
+        ORDER BY b.requestedStartTime ASC
+        """)
+    List<Booking> findByParentIdAndPlayerIdAndStatusIn(
+        @Param("parentId") Long parentId,
+        @Param("playerId") Long playerId,
+        @Param("statuses") List<String> statuses);
+
     List<Booking> findByCoachIdAndStatusOrderByRequestedStartTimeAsc(UUID coachId, String status);
 
     @Query("""

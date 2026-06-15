@@ -12,6 +12,9 @@ import com.softropic.skillars.platform.booking.contract.BookingStatus;
 import com.softropic.skillars.platform.booking.contract.BookingStatusChangedEvent;
 import com.softropic.skillars.platform.booking.contract.CoachReliabilityStrikeQueuedEvent;
 import com.softropic.skillars.platform.booking.contract.CreateBookingRequest;
+import com.softropic.skillars.platform.booking.contract.ParentScheduleItem;
+import com.softropic.skillars.platform.booking.contract.ParentScheduleResponse;
+import com.softropic.skillars.platform.booking.contract.ScheduleBookingItem;
 import com.softropic.skillars.platform.booking.contract.TransitionContext;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
@@ -34,8 +37,10 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.DateTimeException;
 import java.time.DayOfWeek;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.EnumSet;
@@ -252,6 +257,63 @@ public class BookingService {
             String parentName = resolveParentName(b.getParentId());
             return toResponse(b, coach.getDisplayName(), playerName, parentName, 0);
         }).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<ScheduleBookingItem> getCoachWeekSchedule(UUID coachId, LocalDate weekStart) {
+        Instant wkStart = weekStart.atStartOfDay(ZoneOffset.UTC).toInstant();
+        Instant wkEnd = weekStart.plusDays(7).atStartOfDay(ZoneOffset.UTC).toInstant();
+
+        List<Booking> bookings = bookingRepository.findByCoachIdAndStatusInAndTimeBetween(
+            coachId,
+            List.of("CONFIRMED", "UPCOMING", "REQUESTED", "IN_PROGRESS", "COMPLETED_PENDING_CONFIRMATION"),
+            wkStart, wkEnd);
+
+        return bookings.stream()
+            .map(b -> new ScheduleBookingItem(
+                b.getId(),
+                b.getPlayerId(),
+                resolvePlayerName(b.getPlayerId()),
+                b.getRequestedStartTime(),
+                b.getRequestedEndTime(),
+                b.getStatus(),
+                b.getCanonicalTimezone()))
+            .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public ParentScheduleResponse getParentPlayerSchedule(Long parentId, Long playerId) {
+        PlayerProfile player = playerProfileRepository.findById(playerId)
+            .orElseThrow(() -> new ResourceNotFoundException("Player not found", "player_profile"));
+        if (!Objects.equals(player.getParentId(), parentId)) {
+            throw new ResourceNotFoundException("Player not found", "player_profile");
+        }
+
+        List<Booking> bookings = bookingRepository.findByParentIdAndPlayerIdAndStatusIn(
+            parentId, playerId, List.of("CONFIRMED", "UPCOMING", "REQUESTED", "IN_PROGRESS"));
+
+        List<ParentScheduleItem> items = bookings.stream().map(b -> {
+            String coachName = coachProfileRepository.findById(b.getCoachId())
+                .map(CoachProfile::getDisplayName)
+                .orElse("Unknown Coach");
+            int credits = (int) (sessionPackService.getCreditsRemaining(b.getPlayerId(), b.getCoachId())
+                - bookingRepository.countInFlightBookings(b.getPlayerId(), b.getCoachId()));
+            if (credits < 0) {
+                log.warn("Over-booking detected: playerId={} coachId={} credits={}", b.getPlayerId(), b.getCoachId(), credits);
+            }
+            int effectiveCredits = Math.max(0, credits);
+            return new ParentScheduleItem(
+                b.getId(),
+                b.getCoachId(),
+                coachName,
+                b.getRequestedStartTime(),
+                b.getRequestedEndTime(),
+                b.getStatus(),
+                b.getCanonicalTimezone(),
+                effectiveCredits);
+        }).toList();
+
+        return new ParentScheduleResponse(playerId, items);
     }
 
     public Booking getBookingOrThrow(UUID bookingId) {

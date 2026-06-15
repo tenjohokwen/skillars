@@ -90,6 +90,9 @@ export default {
   coach: {
     commandCenterTitle: 'Coach Command Center',
     commandCenterBody: 'Your coaching dashboard will appear here once sessions are set up.',
+    commandCenterSidebar: 'Active Clients',
+    commandCenterNoClients: 'No active clients this week',
+    commandCenterSchedule: 'Schedule',
   },
   player: {
     lockerRoomTitle: 'Player Locker Room',
@@ -179,6 +182,30 @@ export default {
       blockAdded: 'Time block saved successfully.',
       windowAdded: 'Availability window saved successfully.',
       blocked: 'Blocked',
+    },
+    schedule: {
+      weekOf: 'Week of {date}',
+      prevWeek: 'Previous week',
+      nextWeek: 'Next week',
+      noBookings: 'No sessions scheduled this week',
+      startSession: 'Start Session',
+      shareSlot: 'Share this slot',
+      slotCopied: 'Booking link copied to clipboard',
+      slotCopyFailed: 'Could not copy link — please copy the URL manually',
+    },
+    revenue: {
+      projectedTitle: 'Projected Revenue',
+      gross: 'Gross',
+      commission: 'Platform commission ({rate}%)',
+      net: 'Your payout',
+    },
+    timezone: {
+      noticeDiffers:
+        'Your browser timezone ({browser}) differs from the session timezone ({pitch}). Times are shown in session timezone.',
+      showInMyTime: 'Show in my time',
+      showInSessionTime: 'Show in session time',
+      parentScheduleTitle: 'Upcoming sessions',
+      parentScheduleEmpty: 'No upcoming sessions for this player',
     },
     packs: {
       healthyStatus: '{remaining} sessions remaining',

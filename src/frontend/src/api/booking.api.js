@@ -35,3 +35,9 @@ export const getParentBookings = () => api.get('/api/bookings/requests')
 export const getCoachBookingRequests = () => api.get('/api/bookings/requests/coach')
 
 export const getBookingById = (id) => api.get(`/api/bookings/${id}`)
+
+export const getCoachSchedule = (weekStart) =>
+  api.get('/api/bookings/coaches/me/schedule', { params: { weekStart } })
+
+export const getParentSchedule = (playerId) =>
+  api.get('/api/bookings/parents/me/schedule', { params: { playerId } })

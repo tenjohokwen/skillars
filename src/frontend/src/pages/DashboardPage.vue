@@ -1,5 +1,9 @@
 <template>
   <q-page>
+    <TimezoneNotice
+      v-if="dashboardPitchTimezone && !authStore.timezoneNoticeDismissed"
+      :pitch-timezone="dashboardPitchTimezone"
+    />
     <div class="app-page fade-in">
 
       <!-- Page header -->
@@ -33,7 +37,10 @@
 </template>
 
 <script setup>
-import { computed } from 'vue';
+import { computed, onMounted } from 'vue'
+import { useBookingStore } from 'src/stores/booking.store'
+import { useAuthStore } from 'src/stores/auth.store'
+import TimezoneNotice from 'src/components/booking/TimezoneNotice.vue'
 
 function getUsernameFromCookie() {
   const match = document.cookie.match(/user=([^;]+)/);
@@ -43,7 +50,20 @@ function getUsernameFromCookie() {
   return 'User';
 }
 
-const username = computed(() => getUsernameFromCookie());
+const username = computed(() => getUsernameFromCookie())
+
+const bookingStore = useBookingStore()
+const authStore = useAuthStore()
+
+onMounted(async () => {
+  if (authStore.isParent && bookingStore.parentBookings.length === 0) {
+    await bookingStore.loadParentBookings()
+  }
+})
+
+const dashboardPitchTimezone = computed(() => {
+  return bookingStore.parentBookings[0]?.canonicalTimezone ?? null
+})
 
 const metrics = [
   { label: 'Sessions Today', value: '—', sub: 'No data yet' },
