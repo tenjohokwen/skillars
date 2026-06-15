@@ -1,3 +1,15 @@
+## Deferred from: code review of skillars-3-4-booking-state-machine-sse (2026-06-15)
+- No optimistic/pessimistic lock on `transition()` — concurrent callers can both pass `validate()` on the same booking; add `@Lock(PESSIMISTIC_WRITE)` in a concurrency-hardening pass [BookingService.java:85]
+- `getRequestedStartTime()` null not guarded before `ChronoUnit.HOURS.between()` in `applyRefundLogic` — in practice never null (set at creation); add guard if entity nullability changes [BookingService.java:256]
+- SSE endpoint accepts subscriptions for terminal-state bookings — emitters accumulate for COMPLETED/CANCELLED/REFUNDED bookings; implement lifecycle-based subscription guard in a resource-management pass [BookingEventResource.java:37]
+- `verifyIsParty` has no admin bypass path — no admin role exists yet; revisit when admin management stories are implemented
+- Negative `hoursUntilSession` for past-session cancellations silently maps to NONE — probably correct but undocumented; add an explicit branch or comment [BookingService.java:256]
+- Polling fallback has no exponential backoff — 2 s fixed interval is spec-prescribed degraded mode; add backoff if hammering becomes observable in production [booking.store.js]
+- `isCoachParty()` returns generic 403 when coach profile is deleted — indistinguishable from unauthorized third-party; improve error when coach-account-deletion story is implemented [BookingEventResource.java:70-73]
+- Dead `CANCELLED` entry in `BookingStateChip.statusMap` — harmless graceful-degradation fallback; clean up after data migration is confirmed complete [BookingStateChip.vue]
+- `PAYMENT_FAILED` sets no `refundEligibility` — `null` is intentional; Epic 7 handles payment-failure refund logic independently [BookingService.java:applyRefundLogic]
+- `useBookingSse()` not wired into `BookingStateChip` — SSE wire-up deferred to consuming page/component story; chip will be connected when the parent booking detail page is built
+
 ## Deferred from: code review of skillars-3-3-booking-request-approval-workflow Group E (2026-06-15)
 - `getParentBookings_returnsListSortedByStartTime` IT test asserts only HTTP 200 + non-null body — sort order never verified; needs 2+ bookings in reverse chronological order + `extracting("requestedStartTime").isSorted()` assertion; a regression removing the `OrderBy` from the JPA method would not be caught [BookingRequestResourceIT.java:480]
 - `parentName` field not asserted in `getCoachBookingRequests` IT test — AC 8 requires parent name on coach inbox rows; `response.getBody().get(0).get("parentName")` never checked [BookingRequestResourceIT.java:524]

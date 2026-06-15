@@ -4,6 +4,7 @@ import com.softropic.skillars.platform.booking.contract.BookingConfirmedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingDeclinedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingRequestedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingResponse;
+import com.softropic.skillars.platform.booking.contract.BookingStateTransitionException;
 import com.softropic.skillars.platform.booking.contract.CreateBookingRequest;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
@@ -55,6 +56,7 @@ class BookingServiceTest {
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private SessionPackPurchasedRepository sessionPackPurchasedRepository;
 
+    private BookingStateMachine bookingStateMachine;
     private BookingService bookingService;
 
     private static final Long PARENT_ID = 100L;
@@ -64,8 +66,9 @@ class BookingServiceTest {
 
     @BeforeEach
     void setUp() {
+        bookingStateMachine = new BookingStateMachine();
         bookingService = new BookingService(
-            bookingRepository, sessionPackService, coachProfileRepository,
+            bookingRepository, bookingStateMachine, sessionPackService, coachProfileRepository,
             coachAvailabilityWindowRepository, playerProfileRepository,
             userRepository, eventPublisher, sessionPackPurchasedRepository
         );
@@ -197,7 +200,7 @@ class BookingServiceTest {
     }
 
     @Test
-    void acceptBooking_alreadyDeclined_throwsOperationNotAllowedException() {
+    void acceptBooking_alreadyDeclined_throwsBookingStateTransitionException() {
         Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "DECLINED");
         CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
 
@@ -205,7 +208,7 @@ class BookingServiceTest {
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
 
         assertThatThrownBy(() -> bookingService.acceptBooking(booking.getId(), COACH_USER_ID))
-            .isInstanceOf(OperationNotAllowedException.class);
+            .isInstanceOf(BookingStateTransitionException.class);
     }
 
     // ---- declineBooking tests ----
@@ -227,7 +230,7 @@ class BookingServiceTest {
     }
 
     @Test
-    void declineBooking_confirmedBooking_throwsOperationNotAllowedException() {
+    void declineBooking_confirmedBooking_throwsBookingStateTransitionException() {
         Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");
         CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
 
@@ -235,11 +238,11 @@ class BookingServiceTest {
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
 
         assertThatThrownBy(() -> bookingService.declineBooking(booking.getId(), COACH_USER_ID))
-            .isInstanceOf(OperationNotAllowedException.class);
+            .isInstanceOf(BookingStateTransitionException.class);
     }
 
     @Test
-    void transition_invalidTransition_throwsIllegalState() {
+    void declineBooking_upcomingBooking_throwsBookingStateTransitionException() {
         Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING");
         CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
 
@@ -247,7 +250,7 @@ class BookingServiceTest {
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
 
         assertThatThrownBy(() -> bookingService.declineBooking(booking.getId(), COACH_USER_ID))
-            .isInstanceOf(OperationNotAllowedException.class);
+            .isInstanceOf(BookingStateTransitionException.class);
     }
 
     // ---- helpers ----

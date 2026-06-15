@@ -33,3 +33,5 @@ export const declineBooking = (id) => api.put(`/api/bookings/requests/${id}/decl
 export const getParentBookings = () => api.get('/api/bookings/requests')
 
 export const getCoachBookingRequests = () => api.get('/api/bookings/requests/coach')
+
+export const getBookingById = (id) => api.get(`/api/bookings/${id}`)

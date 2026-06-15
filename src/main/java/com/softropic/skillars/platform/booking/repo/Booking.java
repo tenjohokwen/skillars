@@ -13,6 +13,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -66,6 +67,12 @@ public class Booking {
 
     @Column(name = "secondary_reminder_sent_at")
     private Instant secondaryReminderSentAt;
+
+    @Column(name = "refund_eligibility", length = 10)
+    private String refundEligibility;
+
+    @Column(name = "refund_amount", precision = 10, scale = 2)
+    private BigDecimal refundAmount;
 
     @PrePersist
     void onCreate() {

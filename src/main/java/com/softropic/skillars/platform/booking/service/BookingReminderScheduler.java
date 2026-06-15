@@ -1,8 +1,11 @@
 package com.softropic.skillars.platform.booking.service;
 
+import com.softropic.skillars.platform.booking.contract.ActorRole;
+import com.softropic.skillars.platform.booking.contract.BookingEvent;
 import com.softropic.skillars.platform.booking.contract.BookingReminderEvent;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.booking.contract.TransitionContext;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
@@ -27,6 +30,7 @@ import java.util.stream.Collectors;
 public class BookingReminderScheduler {
 
     private final BookingRepository bookingRepository;
+    private final BookingService bookingService;
     private final ApplicationEventPublisher eventPublisher;
     private final com.softropic.skillars.platform.config.service.ConfigService configService;
     private final CoachProfileRepository coachProfileRepository;
@@ -44,9 +48,9 @@ public class BookingReminderScheduler {
         Set<UUID> primaryProcessed = toTransition.stream().map(Booking::getId).collect(Collectors.toSet());
         for (Booking b : toTransition) {
             try {
-                b.setStatus("UPCOMING");
+                bookingService.transition(b.getId(), BookingEvent.SCHEDULE_UPCOMING,
+                    new TransitionContext(ActorRole.SYSTEM, null));
                 b.setPrimaryReminderSentAt(now);
-                bookingRepository.save(b);
                 eventPublisher.publishEvent(buildReminderEvent(b, "PRIMARY"));
                 log.info("Transitioned booking {} to UPCOMING and sent primary reminder", b.getId());
             } catch (Exception e) {

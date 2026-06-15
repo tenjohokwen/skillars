@@ -1,6 +1,9 @@
 package com.softropic.skillars.platform.booking.service;
 
+import com.softropic.skillars.platform.booking.contract.ActorRole;
+import com.softropic.skillars.platform.booking.contract.BookingEvent;
 import com.softropic.skillars.platform.booking.contract.BookingExpiredEvent;
+import com.softropic.skillars.platform.booking.contract.TransitionContext;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
@@ -24,6 +27,7 @@ import java.util.concurrent.TimeUnit;
 public class BookingExpiryScheduler {
 
     private final BookingRepository bookingRepository;
+    private final BookingService bookingService;
     private final ApplicationEventPublisher eventPublisher;
     private final com.softropic.skillars.platform.config.service.ConfigService configService;
     private final CoachProfileRepository coachProfileRepository;
@@ -37,8 +41,8 @@ public class BookingExpiryScheduler {
         List<Booking> stale = bookingRepository.findRequestedBookingsOlderThan(threshold);
         for (Booking booking : stale) {
             try {
-                booking.setStatus("DECLINED");
-                bookingRepository.save(booking);
+                bookingService.transition(booking.getId(), BookingEvent.DECLINE,
+                    new TransitionContext(ActorRole.SYSTEM, null));
                 CoachProfile coach = coachProfileRepository.findById(booking.getCoachId()).orElse(null);
                 String coachName = coach != null ? coach.getDisplayName() : "Coach";
                 eventPublisher.publishEvent(new BookingExpiredEvent(

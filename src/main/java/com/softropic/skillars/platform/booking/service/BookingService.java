@@ -2,11 +2,17 @@ package com.softropic.skillars.platform.booking.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.security.SecurityError;
+import com.softropic.skillars.platform.booking.contract.ActorRole;
 import com.softropic.skillars.platform.booking.contract.BookingConfirmedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingDeclinedEvent;
+import com.softropic.skillars.platform.booking.contract.BookingEvent;
 import com.softropic.skillars.platform.booking.contract.BookingRequestedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingResponse;
+import com.softropic.skillars.platform.booking.contract.BookingStatus;
+import com.softropic.skillars.platform.booking.contract.BookingStatusChangedEvent;
+import com.softropic.skillars.platform.booking.contract.CoachReliabilityStrikeQueuedEvent;
 import com.softropic.skillars.platform.booking.contract.CreateBookingRequest;
+import com.softropic.skillars.platform.booking.contract.TransitionContext;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
@@ -25,12 +31,14 @@ import org.springframework.security.authentication.InsufficientAuthenticationExc
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.DayOfWeek;
 import java.time.DateTimeException;
+import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.time.temporal.ChronoUnit;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -43,14 +51,29 @@ import java.util.stream.Collectors;
 @Slf4j
 public class BookingService {
 
-    private static final Map<String, Set<String>> ALLOWED_TRANSITIONS = Map.of(
-        "REQUESTED", Set.of("ACCEPTED", "DECLINED"),
-        "ACCEPTED",  Set.of("CONFIRMED"),
-        "CONFIRMED", Set.of("UPCOMING"),
-        "UPCOMING",  Set.of()
+    private static final Map<BookingEvent, Set<ActorRole>> EVENT_ROLES = Map.ofEntries(
+        Map.entry(BookingEvent.ACCEPT,            EnumSet.of(ActorRole.COACH)),
+        Map.entry(BookingEvent.DECLINE,           EnumSet.of(ActorRole.COACH, ActorRole.SYSTEM)),
+        Map.entry(BookingEvent.SCHEDULE_UPCOMING, EnumSet.of(ActorRole.SYSTEM)),
+        Map.entry(BookingEvent.INITIATE_PAYMENT, EnumSet.of(ActorRole.COACH, ActorRole.SYSTEM)),
+        Map.entry(BookingEvent.PAYMENT_CAPTURED, EnumSet.of(ActorRole.COACH, ActorRole.SYSTEM)),
+        Map.entry(BookingEvent.PAYMENT_FAILED,   EnumSet.of(ActorRole.SYSTEM)),
+        Map.entry(BookingEvent.CANCEL_PARENT,    EnumSet.of(ActorRole.PARENT)),
+        Map.entry(BookingEvent.CANCEL_COACH,     EnumSet.of(ActorRole.COACH)),
+        Map.entry(BookingEvent.START,            EnumSet.of(ActorRole.COACH, ActorRole.SYSTEM)),
+        Map.entry(BookingEvent.NO_SHOW_PLAYER,   EnumSet.of(ActorRole.COACH)),
+        Map.entry(BookingEvent.NO_SHOW_COACH,    EnumSet.of(ActorRole.PARENT, ActorRole.SYSTEM)),
+        Map.entry(BookingEvent.COMPLETE_PENDING, EnumSet.of(ActorRole.COACH, ActorRole.SYSTEM)),
+        Map.entry(BookingEvent.COMPLETE,         EnumSet.of(ActorRole.PARENT, ActorRole.SYSTEM)),
+        Map.entry(BookingEvent.QUICK_COMPLETE,   EnumSet.of(ActorRole.COACH, ActorRole.SYSTEM)),
+        Map.entry(BookingEvent.DISPUTE,          EnumSet.of(ActorRole.PARENT, ActorRole.COACH)),
+        Map.entry(BookingEvent.SETTLE_REFUND,    EnumSet.of(ActorRole.SYSTEM)),
+        Map.entry(BookingEvent.SETTLE_COMPLETE,  EnumSet.of(ActorRole.SYSTEM)),
+        Map.entry(BookingEvent.REFUND_PROCESSED, EnumSet.of(ActorRole.SYSTEM))
     );
 
     private final BookingRepository bookingRepository;
+    private final BookingStateMachine bookingStateMachine;
     private final SessionPackService sessionPackService;
     private final CoachProfileRepository coachProfileRepository;
     private final CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
@@ -58,6 +81,33 @@ public class BookingService {
     private final UserRepository userRepository;
     private final ApplicationEventPublisher eventPublisher;
     private final com.softropic.skillars.platform.booking.repo.SessionPackPurchasedRepository sessionPackPurchasedRepository;
+
+    @Transactional
+    public void transition(UUID bookingId, BookingEvent event, TransitionContext context) {
+        transitionInternal(bookingId, event, context, true);
+    }
+
+    private void transitionInternal(UUID bookingId, BookingEvent event, TransitionContext context, boolean publishEvent) {
+        validateActorAuthorization(event, context);
+        Booking booking = getBookingOrThrow(bookingId);
+        BookingStatus currentStatus;
+        try {
+            currentStatus = BookingStatus.valueOf(booking.getStatus());
+        } catch (IllegalArgumentException e) {
+            throw new ResourceNotFoundException(
+                "Booking " + bookingId + " has unrecognised status '" + booking.getStatus() + "'", "booking");
+        }
+        bookingStateMachine.validate(currentStatus, event);
+        BookingStatus newStatus = bookingStateMachine.targetStatus(currentStatus, event);
+
+        applyRefundLogic(booking, event, currentStatus);
+
+        booking.setStatus(newStatus.name());
+        bookingRepository.save(booking);
+        if (publishEvent) {
+            eventPublisher.publishEvent(new BookingStatusChangedEvent(this, bookingId, newStatus.name()));
+        }
+    }
 
     @Transactional
     public BookingResponse createBookingRequest(Long parentId, CreateBookingRequest req) {
@@ -115,8 +165,7 @@ public class BookingService {
 
     @Transactional
     public BookingResponse acceptBooking(UUID bookingId, Long coachUserId) {
-        Booking booking = bookingRepository.findById(bookingId)
-            .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking"));
+        Booking booking = getBookingOrThrow(bookingId);
 
         CoachProfile coach = coachProfileRepository.findByUserId(coachUserId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
@@ -124,25 +173,25 @@ public class BookingService {
             throw new OperationNotAllowedException("Coach does not own this booking", SecurityError.MISSING_RIGHTS);
         }
 
-        validateTransition(booking.getStatus(), "ACCEPTED");
-        booking.setStatus("ACCEPTED");
-        validateTransition("ACCEPTED", "CONFIRMED");
-        booking.setStatus("CONFIRMED");
-        bookingRepository.save(booking);
+        TransitionContext ctx = new TransitionContext(ActorRole.COACH, coachUserId);
+        transitionInternal(bookingId, BookingEvent.ACCEPT, ctx, false);
+        transitionInternal(bookingId, BookingEvent.INITIATE_PAYMENT, ctx, false);
+        transitionInternal(bookingId, BookingEvent.PAYMENT_CAPTURED, ctx, true);
 
-        String parentEmail = resolveEmail(booking.getParentId());
+        // Reload to get updated status
+        Booking updated = getBookingOrThrow(bookingId);
+        String parentEmail = resolveEmail(updated.getParentId());
         eventPublisher.publishEvent(new BookingConfirmedEvent(
-            this, booking.getId(), booking.getParentId(), parentEmail,
-            coach.getDisplayName(), booking.getRequestedStartTime(), booking.getCanonicalTimezone()
+            this, updated.getId(), updated.getParentId(), parentEmail,
+            coach.getDisplayName(), updated.getRequestedStartTime(), updated.getCanonicalTimezone()
         ));
 
-        return toResponse(booking, coach.getDisplayName(), resolvePlayerName(booking.getPlayerId()), null, 0);
+        return toResponse(updated, coach.getDisplayName(), resolvePlayerName(updated.getPlayerId()), null, 0);
     }
 
     @Transactional
     public void declineBooking(UUID bookingId, Long coachUserId) {
-        Booking booking = bookingRepository.findById(bookingId)
-            .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking"));
+        Booking booking = getBookingOrThrow(bookingId);
 
         CoachProfile coach = coachProfileRepository.findByUserId(coachUserId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
@@ -150,16 +199,27 @@ public class BookingService {
             throw new OperationNotAllowedException("Coach does not own this booking", SecurityError.MISSING_RIGHTS);
         }
 
-        validateTransition(booking.getStatus(), "DECLINED");
-        booking.setStatus("DECLINED");
-        bookingRepository.save(booking);
+        TransitionContext ctx = new TransitionContext(ActorRole.COACH, coachUserId);
+        transition(bookingId, BookingEvent.DECLINE, ctx);
 
         eventPublisher.publishEvent(new BookingDeclinedEvent(
-            this, booking.getId(), booking.getParentId(),
+            this, bookingId, booking.getParentId(),
             resolveEmail(booking.getParentId()),
             coach.getDisplayName(), booking.getRequestedStartTime(),
             booking.getCanonicalTimezone()
         ));
+    }
+
+    @Transactional(readOnly = true)
+    public BookingResponse getBooking(UUID id) {
+        return toBookingResponse(getBookingOrThrow(id));
+    }
+
+    public BookingResponse toBookingResponse(Booking booking) {
+        CoachProfile coach = coachProfileRepository.findById(booking.getCoachId()).orElse(null);
+        String coachName = coach != null ? coach.getDisplayName() : "Unknown Coach";
+        String playerName = resolvePlayerName(booking.getPlayerId());
+        return toResponse(booking, coachName, playerName, null, 0);
     }
 
     @Transactional(readOnly = true)
@@ -194,11 +254,48 @@ public class BookingService {
         }).toList();
     }
 
-    private void validateTransition(String from, String to) {
-        Set<String> allowed = ALLOWED_TRANSITIONS.getOrDefault(from, Set.of());
-        if (!allowed.contains(to)) {
+    public Booking getBookingOrThrow(UUID bookingId) {
+        return bookingRepository.findById(bookingId)
+            .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking"));
+    }
+
+    private void validateActorAuthorization(BookingEvent event, TransitionContext context) {
+        Set<ActorRole> allowed = EVENT_ROLES.getOrDefault(event, Set.of());
+        if (!allowed.contains(context.actorRole())) {
             throw new OperationNotAllowedException(
-                "Invalid booking transition: " + from + " → " + to, SecurityError.MISSING_RIGHTS);
+                "Role " + context.actorRole() + " may not fire event " + event,
+                SecurityError.MISSING_RIGHTS
+            );
+        }
+    }
+
+    private void applyRefundLogic(Booking booking, BookingEvent event, BookingStatus currentStatus) {
+        switch (event) {
+            case CANCEL_PARENT -> {
+                // Only compute refund eligibility when payment has actually been captured
+                if (currentStatus == BookingStatus.CONFIRMED || currentStatus == BookingStatus.UPCOMING) {
+                    long hoursUntilSession = ChronoUnit.HOURS.between(Instant.now(), booking.getRequestedStartTime());
+                    String eligibility = hoursUntilSession > 24 ? "FULL" : hoursUntilSession >= 6 ? "PARTIAL" : "NONE";
+                    booking.setRefundEligibility(eligibility);
+                }
+            }
+            case CANCEL_COACH -> {
+                booking.setRefundEligibility("FULL");
+                long hoursUntilSession = ChronoUnit.HOURS.between(Instant.now(), booking.getRequestedStartTime());
+                if (hoursUntilSession <= 24) {
+                    eventPublisher.publishEvent(new CoachReliabilityStrikeQueuedEvent(
+                        this, booking.getId(), booking.getCoachId(), "CANCEL_WITHIN_24H"
+                    ));
+                }
+            }
+            case NO_SHOW_PLAYER -> booking.setRefundEligibility("NONE");
+            case NO_SHOW_COACH -> {
+                booking.setRefundEligibility("FULL");
+                eventPublisher.publishEvent(new CoachReliabilityStrikeQueuedEvent(
+                    this, booking.getId(), booking.getCoachId(), "NO_SHOW_COACH"
+                ));
+            }
+            default -> { /* no refund logic for other events */ }
         }
     }
 
@@ -236,6 +333,7 @@ public class BookingService {
             LocalTime requestedEnd = endZdt.toLocalTime();
 
             if (w.getDayOfWeek() == (short) requestedDow
+                && startZdt.toLocalDate().equals(endZdt.toLocalDate())
                 && !requestedStart.isBefore(w.getStartTime())
                 && !requestedEnd.isAfter(w.getEndTime())) {
                 return true;

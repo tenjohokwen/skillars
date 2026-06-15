@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, onUnmounted } from 'vue'
 import {
   getCoachAvailability,
   addAvailabilityWindow,
@@ -14,7 +14,67 @@ import {
   declineBooking,
   getParentBookings,
   getCoachBookingRequests,
+  getBookingById,
 } from 'src/api/booking.api'
+
+export function useBookingSse(bookingId) {
+  const status = ref(null)
+  const connectionState = ref('disconnected')
+  let es = null
+  let retryCount = 0
+  let pollingInterval = null
+  const delays = [1000, 2000, 4000, 8000, 16000, 30000]
+
+  function connect() {
+    es = new EventSource(`/api/bookings/${bookingId}/events`, { withCredentials: true })
+    connectionState.value = 'reconnecting'
+    es.onopen = () => {
+      connectionState.value = 'connected'
+    }
+    es.addEventListener('status', (e) => {
+      status.value = e.data
+      retryCount = 0
+      if (pollingInterval) {
+        clearInterval(pollingInterval)
+        pollingInterval = null
+        connectionState.value = 'connected'
+      }
+    })
+    es.onerror = () => {
+      es.close()
+      retryCount++
+      if (retryCount >= 3 && !pollingInterval) {
+        connectionState.value = 'polling'
+        pollingInterval = setInterval(async () => {
+          const r = await getBookingById(bookingId)
+          status.value = r.data.status
+        }, 2000)
+      } else if (!pollingInterval) {
+        connectionState.value = 'reconnecting'
+        const delay = delays[Math.min(retryCount - 1, delays.length - 1)]
+        setTimeout(connect, delay)
+      }
+    }
+    es.addEventListener('heartbeat', () => {
+      es.close()
+      retryCount = 0
+      clearInterval(pollingInterval)
+      pollingInterval = null
+      connect()
+    })
+  }
+
+  function cleanup() {
+    es?.close()
+    clearInterval(pollingInterval)
+    pollingInterval = null
+    connectionState.value = 'disconnected'
+  }
+
+  connect()
+  onUnmounted(cleanup)
+  return { status, connectionState, cleanup }
+}
 
 export const useBookingStore = defineStore('booking', () => {
   const windows = ref([])

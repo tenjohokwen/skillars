@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-06-15 # Story 3.3 full review complete (Groups A–D) → done
+last_updated: 2026-06-15 # Story 3.4 code review complete — all patches applied → done
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -177,7 +177,7 @@ development_status:
   skillars-3-1-coach-availability-management: done
   skillars-3-2-session-pack-purchase-credit-dashboard: done
   skillars-3-3-booking-request-approval-workflow: done
-  skillars-3-4-booking-state-machine-sse: backlog
+  skillars-3-4-booking-state-machine-sse: done
   skillars-3-5-scheduling-views-timezone-management: backlog
   skillars-3-6-session-completion-live-mode-quick-complete: backlog
   skillars-3-7-rescheduling-duplication-reminders: backlog

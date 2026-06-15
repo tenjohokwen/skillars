@@ -15,6 +15,7 @@ import com.softropic.skillars.platform.filestorage.contract.exception.StorageVal
 import com.softropic.skillars.platform.security.contract.event.SecurityAlertEvent;
 import com.softropic.skillars.infrastructure.security.event.BadCredentialsEvent;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileNotFoundException;
+import com.softropic.skillars.platform.booking.contract.BookingStateTransitionException;
 import com.softropic.skillars.platform.marketplace.contract.MarketplaceException;
 import com.softropic.skillars.platform.security.contract.exception.CoachRegistrationException;
 import com.softropic.skillars.platform.security.contract.exception.FeatureGatedException;
@@ -285,6 +286,13 @@ public class ApiAdvice {
     public ErrorDto featureGatedHandler(final FeatureGatedException ex) {
         log.warn("Feature gate blocked: feature={} requiredTier={}", ex.getFeatureKey(), ex.getRequiredTier());
         return logErrorAndReturnDTO(ex, ex.getMessage(), "security.featureGated");
+    }
+
+    @ExceptionHandler(BookingStateTransitionException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ErrorDto bookingStateTransitionExceptionHandler(final BookingStateTransitionException ex) {
+        log.warn("Booking state transition rejected: {}", ex.getMessage());
+        return logErrorAndReturnDTO(ex, ex.getMessage(), ex.getErrorCode());
     }
 
     @ExceptionHandler(MarketplaceException.class)

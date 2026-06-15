@@ -12,12 +12,21 @@ const { t } = useI18n()
 const statusMap = {
   REQUESTED: { key: 'booking.requests.statusRequested', cls: 'chip--warning' },
   ACCEPTED: { key: 'booking.requests.statusAccepted', cls: 'chip--primary' },
+  PAYMENT_PENDING: { key: 'booking.requests.statusPaymentPending', cls: 'chip--warning' },
   CONFIRMED: { key: 'booking.requests.statusConfirmed', cls: 'chip--primary' },
   UPCOMING: { key: 'booking.requests.statusUpcoming', cls: 'chip--primary' },
+  IN_PROGRESS: { key: 'booking.requests.statusInProgress', cls: 'chip--primary' },
+  COMPLETED_PENDING_CONFIRMATION: { key: 'booking.requests.statusCompletingPending', cls: 'chip--warning' },
   DECLINED: { key: 'booking.requests.statusDeclined', cls: 'chip--error' },
   COMPLETED: { key: 'booking.requests.statusCompleted', cls: 'chip--neutral' },
   CANCELLED: { key: 'booking.requests.statusCancelled', cls: 'chip--neutral' },
+  CANCELLED_PARENT: { key: 'booking.requests.statusCancelledParent', cls: 'chip--neutral' },
+  CANCELLED_COACH: { key: 'booking.requests.statusCancelledCoach', cls: 'chip--neutral' },
+  NO_SHOW_PLAYER: { key: 'booking.requests.statusNoShowPlayer', cls: 'chip--error' },
+  NO_SHOW_COACH: { key: 'booking.requests.statusNoShowCoach', cls: 'chip--error' },
   DISPUTED: { key: 'booking.requests.statusDisputed', cls: 'chip--neutral' },
+  REFUND_PENDING: { key: 'booking.requests.statusRefundPending', cls: 'chip--warning' },
+  REFUNDED: { key: 'booking.requests.statusRefunded', cls: 'chip--neutral' },
 }
 
 const label = computed(() => {

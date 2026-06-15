@@ -34,6 +34,9 @@ public final class SecurityConstants {
     public static final String HAS_COACH_ROLE = "hasRole('ROLE_COACH')";
     public static final String HAS_PARENT_ROLE = "hasRole('ROLE_PARENT')";
 
+    /** Use on endpoints that require any authenticated user regardless of role. */
+    public static final String IS_AUTHENTICATED = "isAuthenticated()";
+
     /** Use on public endpoints that are explicitly accessible without authentication. */
     public static final String IS_PERMIT_ALL = "permitAll()";
 
