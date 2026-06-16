@@ -35,11 +35,12 @@ public class BookingStateMachine {
             BookingEvent.CANCEL_PARENT, BookingStatus.CANCELLED_PARENT
         ));
         t.put(BookingStatus.UPCOMING, Map.of(
-            BookingEvent.START, BookingStatus.IN_PROGRESS,
-            BookingEvent.NO_SHOW_PLAYER, BookingStatus.NO_SHOW_PLAYER,
-            BookingEvent.NO_SHOW_COACH, BookingStatus.NO_SHOW_COACH,
-            BookingEvent.CANCEL_COACH, BookingStatus.CANCELLED_COACH,
-            BookingEvent.CANCEL_PARENT, BookingStatus.CANCELLED_PARENT
+            BookingEvent.START,            BookingStatus.IN_PROGRESS,
+            BookingEvent.NO_SHOW_PLAYER,   BookingStatus.NO_SHOW_PLAYER,
+            BookingEvent.NO_SHOW_COACH,    BookingStatus.NO_SHOW_COACH,
+            BookingEvent.CANCEL_COACH,     BookingStatus.CANCELLED_COACH,
+            BookingEvent.CANCEL_PARENT,    BookingStatus.CANCELLED_PARENT,
+            BookingEvent.COMPLETE_PENDING, BookingStatus.COMPLETED_PENDING_CONFIRMATION
         ));
         t.put(BookingStatus.IN_PROGRESS, Map.of(
             BookingEvent.COMPLETE_PENDING, BookingStatus.COMPLETED_PENDING_CONFIRMATION,

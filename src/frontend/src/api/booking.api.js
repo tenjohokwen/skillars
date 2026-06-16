@@ -41,3 +41,16 @@ export const getCoachSchedule = (weekStart) =>
 
 export const getParentSchedule = (playerId) =>
   api.get('/api/bookings/parents/me/schedule', { params: { playerId } })
+
+export const startSession = (id) => api.post(`/api/bookings/${id}/start`)
+
+export const endSession = (id) => api.post(`/api/bookings/${id}/end`)
+
+export const submitWrapUp = (id, data) => api.post(`/api/bookings/${id}/complete`, data)
+
+export const initiateQuickComplete = (id) => api.post(`/api/bookings/${id}/quick-complete`)
+
+export const confirmCompletion = (id) => api.put(`/api/bookings/${id}/confirm-completion`)
+
+export const getDrillSuggestions = (bookingId) =>
+  api.get(`/api/bookings/session/${bookingId}/drills/suggestions`, { params: { limit: 2 } })

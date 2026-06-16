@@ -54,6 +54,16 @@
         </q-item-section>
         <q-item-section side>
           <BookingStateChip :status="booking.status" />
+          <q-btn
+            v-if="booking.status === 'COMPLETED_PENDING_CONFIRMATION'"
+            unelevated
+            color="primary"
+            size="sm"
+            class="q-mt-sm"
+            :label="t('booking.completion.confirmCompletion')"
+            :loading="confirmingId === booking.id"
+            @click="handleConfirmCompletion(booking.id)"
+          />
         </q-item-section>
       </q-item>
     </q-list>
@@ -63,17 +73,32 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useQuasar } from 'quasar'
 import { useBookingStore } from 'src/stores/booking.store'
 import { useAuthStore } from 'src/stores/auth.store'
 import BookingStateChip from 'src/components/booking/BookingStateChip.vue'
 import TimezoneNotice from 'src/components/booking/TimezoneNotice.vue'
 
 const { t } = useI18n()
+const $q = useQuasar()
 const bookingStore = useBookingStore()
 const authStore = useAuthStore()
 
 const showInMyTime = ref({})
 const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+const confirmingId = ref(null)
+
+async function handleConfirmCompletion(bookingId) {
+  confirmingId.value = bookingId
+  try {
+    await bookingStore.handleConfirmCompletion(bookingId)
+    $q.notify({ message: t('booking.completion.confirmationSuccess'), type: 'positive' })
+  } catch {
+    $q.notify({ message: t('error.verificationFailed'), type: 'negative' })
+  } finally {
+    confirmingId.value = null
+  }
+}
 
 const firstBookingTimezone = computed(() => {
   return bookingStore.parentBookings[0]?.canonicalTimezone ?? null

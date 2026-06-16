@@ -1069,7 +1069,7 @@ So that sessions are scheduled with mutual agreement, backed by pre-purchased se
 
 **Given** a `BookingStateChip` renders any booking status
 **When** displayed
-**Then** the chip shows a plain-English label mapped from the internal status string — never the raw value (REQUESTED → "Awaiting coach response", ACCEPTED → "Accepted", CONFIRMED → "Confirmed", UPCOMING → "Upcoming", DECLINED → "Declined", COMPLETED → "Completed" [Story 3.6], CANCELLED → "Cancelled" [Story 3.9], DISPUTED → "Disputed" [Story 3.6]) (UX-DR11)
+**Then** the chip shows a plain-English label mapped from the internal status string — never the raw value (REQUESTED → "Awaiting coach response", ACCEPTED → "Accepted", CONFIRMED → "Confirmed", UPCOMING → "Upcoming", DECLINED → "Declined", COMPLETED → "Completed" [Story 3.6], CANCELLED → "Cancelled" [Story 3.10], DISPUTED → "Disputed" [Story 3.6]) (UX-DR11)
 **And** each state maps to its designated CSS token colour; COMPLETED/CANCELLED/DISPUTED use neutral placeholder tokens until their respective stories define the final UX
 
 **Given** a coach is authenticated
@@ -1238,7 +1238,38 @@ So that session records are accurate and development data is captured without in
 
 *Dev notes: `platform.booking`. `ActiveSessionScreen.vue` — full-screen, `position: fixed`, z-index above all navigation; mounted on `IN_PROGRESS` state. `WrapUpSequence.vue` — 4-step stepper component, auto-advance on 5th star via `@change` watcher. Voice note: browser `MediaRecorder` API → upload via `filestorage` module → transcription stubbed (wired in future). Homework drill suggestions: `GET /api/session/drills/suggestions?sessionId={id}&limit=2` (Epic 4 provides; stub returns empty array at this stage). `BookingCompletedEvent` payload: bookingId, coachId, playerId, sessionId, attendanceMap, ratings (Effort/Focus/Technique), homeworkDrillIds[]. `QuickCompleteConfirmationResource`: PUT /api/booking/bookings/{id}/confirm-completion. Auto-confirm scheduled job: `@Scheduled` in `QuickCompleteTimeoutService`, timeout window from ConfigService. Test: `SessionCompletionServiceTest` (unit — both paths), `WrapUpResourceIT`.*
 
-### Story 3.7: Rescheduling, Duplication & Reminders
+### Story 3.7: Session Pause & Resume
+
+As a coach,
+I want to pause and resume a live session when there is an interruption on the pitch,
+So that the session timer accurately reflects net active coaching time and I can restart without losing session state.
+
+**Acceptance Criteria:**
+
+**Given** a booking is in `IN_PROGRESS` status and the coach taps "Pause"
+**When** the pause action is confirmed
+**Then** `BookingCompletionService.pauseSession(bookingId, coachUserId)` fires `BookingEvent.PAUSE` (COACH) → `PAUSED`
+**And** the Active Session Screen freezes the elapsed timer and displays a "PAUSED" indicator
+**And** the "End Session" button is hidden while paused — the coach cannot end a paused session
+
+**Given** a booking is in `PAUSED` status and the coach taps "Resume"
+**When** the resume action is confirmed
+**Then** `BookingCompletionService.resumeSession(bookingId, coachUserId)` fires `BookingEvent.RESUME` (COACH) → `IN_PROGRESS`
+**And** the elapsed timer resumes from where it left off — paused duration is excluded from net active time
+**And** the "End Session" button visibility follows the net active time rule (≥ 5 minutes of non-paused time)
+
+**Given** a booking is in `IN_PROGRESS` or `PAUSED` status
+**When** the coach taps "Pause" or "Resume" respectively
+**Then** `BookingStatusChangedEvent` is published and SSE subscribers receive the updated status automatically (no extra wiring required — existing `BookingService.transition()` → `BookingSseService` pipeline handles this)
+
+**Given** a coach pauses and resumes multiple times in one session
+**When** the session finally ends via "End Session"
+**Then** net active time is the total elapsed time minus all paused durations — tracked client-side via `netActiveSeconds` accumulator in `ActiveSessionScreen.vue`
+**And** the 5-minute gate for "End Session" is based on `netActiveSeconds ≥ 300`, not wall-clock time
+
+*Dev notes: `platform.booking`. New migration V34 (after Story 3.6 creates V33): `ALTER TABLE booking.bookings DROP CONSTRAINT chk_bkg_status; ALTER TABLE booking.bookings ADD CONSTRAINT chk_bkg_status CHECK (status IN (...existing values..., 'PAUSED'))`. Add `PAUSED` to `BookingStatus` enum. Add `PAUSE`, `RESUME` to `BookingEvent` enum. State machine: `IN_PROGRESS → PAUSE → PAUSED`, `PAUSED → RESUME → IN_PROGRESS`, `PAUSED → COMPLETE_PENDING → COMPLETED_PENDING_CONFIRMATION` (allow ending from paused state). `EVENT_ROLES` in `BookingService`: `PAUSE → COACH`, `RESUME → COACH`. New endpoints in `SessionCompletionResource`: `POST /api/bookings/{id}/pause` (@PreAuthorize COACH → 204), `POST /api/bookings/{id}/resume` (@PreAuthorize COACH → 204). Frontend: `ActiveSessionScreen.vue` gains pause/resume state: `isPaused = ref(false)`, `pausedAt = ref(null)`, `totalPausedSeconds = ref(0)`; `netActiveSeconds = computed(() => elapsed.value - totalPausedSeconds.value)`; `endAllowed = computed(() => netActiveSeconds.value >= 300)`. Pause button shows when `IN_PROGRESS` and not paused; Resume button shows when paused. `BookingStateChip.vue`: add `PAUSED: { key: 'booking.requests.statusPaused', cls: 'chip--warning' }`. `booking.api.js`: add `pauseSession(id)` and `resumeSession(id)`. `booking.store.js`: add `handlePauseSession()` and `handleResumeSession()`. i18n: add `booking.completion.pause`, `booking.completion.resume`, `booking.completion.paused`, `booking.requests.statusPaused`. Test: `SessionPauseResumeServiceTest` (unit — single pause, multiple cycles, end from paused), `SessionCompletionResourceIT` (extend with pause/resume tests).*
+
+### Story 3.8: Rescheduling, Duplication & Reminders
 
 As a parent or coach,
 I want to reschedule sessions, duplicate recurring bookings, and receive timely reminders,
@@ -1286,7 +1317,7 @@ So that scheduling logistics stay low-friction for both sides of a regular coach
 
 ---
 
-### Story 3.8: Bulk Session Request from Calendar
+### Story 3.9: Bulk Session Request from Calendar
 
 As a parent,
 I want to select multiple available slots from a coach's calendar and submit them as a single bulk request,
@@ -1342,7 +1373,7 @@ So that I can plan a training schedule upfront and review the total cost before 
 
 *Dev notes: `platform.booking`. New table: `booking_batches` via Flyway migration. `bookings` table: add column `batchId UUID nullable` FK → `booking_batches`. `BookingBatchService.acceptAll()` transitions bookings and publishes `BatchBookingAcceptedEvent`. `BookingBatchResource`: POST /api/booking/batches (`@PreAuthorize` parent), POST /api/booking/batches/{batchId}/accept-all (`@PreAuthorize` coach — service verifies coachId ownership). Individual accept/decline endpoints unchanged. Frontend: `CoachCalendar.vue` gains multi-select mode; basket component shows running total and credit preview (read from `GET /api/payment/credits/balance`); `booking.api.js` adds `createBatch()` and `acceptAllBatch()`. Test: `BookingBatchResourceIT` (create, accept-all, partial individual accept, ownership guard, size limit), `BatchSizeEnforcementTest` (ConfigService boundary).*
 
-### Story 3.9: Session Pack Expiry & Pause Management
+### Story 3.10: Session Pack Expiry & Pause Management
 
 As a parent,
 I want my session pack credits to carry a defined validity window and to be able to pause them during genuine incapacity,

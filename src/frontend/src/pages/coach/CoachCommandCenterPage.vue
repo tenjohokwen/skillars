@@ -1,5 +1,31 @@
 <template>
   <q-page class="command-center q-pa-md">
+    <!-- Live session overlay -->
+    <ActiveSessionScreen
+      v-if="showActiveSession"
+      :booking-id="activeBookingId"
+      :player-name="activePlayerName"
+      :session-start-time="activeSessionStart"
+      @session-ended="onSessionEnded"
+      @close="showActiveSession = false"
+    />
+
+    <!-- Wrap-up overlay -->
+    <WrapUpSequence
+      v-if="showWrapUp"
+      :booking-id="activeBookingId"
+      :player-id="activePlayerId"
+      :player-name="activePlayerName"
+      :is-live-mode="isLiveMode"
+      @wrap-up-complete="onWrapUpComplete"
+      @cancelled="showWrapUp = false"
+    />
+
+    <!-- Post wrap-up summary overlay -->
+    <div v-if="showPostWrapUpSummary" class="post-wrap-up-overlay">
+      <SessionDNAChart :booking-id="activeBookingId" variant="compact" />
+      <div class="text-body1 text-center q-mt-md">{{ t('booking.completion.summaryTitle') }}</div>
+    </div>
     <TimezoneNotice
       v-if="bookingStore.coachSchedule && !authStore.timezoneNoticeDismissed"
       :pitch-timezone="bookingStore.coachSchedule.coachTimezone"
@@ -56,6 +82,14 @@
                 unelevated
                 class="start-session-btn q-mt-xs"
                 :label="t('booking.schedule.startSession')"
+                @click="handleStartSession(booking)"
+              />
+              <q-btn
+                v-if="booking.status === 'UPCOMING'"
+                flat dense size="sm"
+                :label="t('booking.completion.quickComplete')"
+                class="q-mt-xs"
+                @click="handleQuickComplete(booking)"
               />
             </div>
 
@@ -109,11 +143,23 @@ import { useBookingStore } from 'src/stores/booking.store'
 import { useAuthStore } from 'src/stores/auth.store'
 import BookingStateChip from 'src/components/booking/BookingStateChip.vue'
 import TimezoneNotice from 'src/components/booking/TimezoneNotice.vue'
+import ActiveSessionScreen from 'src/components/booking/ActiveSessionScreen.vue'
+import WrapUpSequence from 'src/components/booking/WrapUpSequence.vue'
+import SessionDNAChart from 'src/components/booking/SessionDNAChart.vue'
 
 const { t } = useI18n()
 const $q = useQuasar()
 const bookingStore = useBookingStore()
 const authStore = useAuthStore()
+
+const showActiveSession = ref(false)
+const showWrapUp = ref(false)
+const showPostWrapUpSummary = ref(false)
+const activeBookingId = ref(null)
+const activePlayerName = ref('')
+const activeSessionStart = ref('')
+const activePlayerId = ref(null)
+const isLiveMode = ref(true)
 
 function localDateString(d) {
   const y = d.getFullYear()
@@ -228,6 +274,39 @@ function generateSlotLink() {
   return window.location.origin + '/marketplace'
 }
 
+async function handleStartSession(booking) {
+  await bookingStore.handleStartSession(booking.bookingId)
+  activeBookingId.value = String(booking.bookingId)
+  activePlayerName.value = booking.playerName
+  activeSessionStart.value = booking.requestedStartTime
+  activePlayerId.value = booking.playerId
+  isLiveMode.value = true
+  showActiveSession.value = true
+}
+
+async function handleQuickComplete(booking) {
+  await bookingStore.handleInitiateQuickComplete(booking.bookingId)
+  activeBookingId.value = String(booking.bookingId)
+  activePlayerName.value = booking.playerName
+  activePlayerId.value = booking.playerId
+  isLiveMode.value = false
+  showWrapUp.value = true
+}
+
+function onSessionEnded() {
+  showActiveSession.value = false
+  showWrapUp.value = true
+}
+
+function onWrapUpComplete() {
+  showWrapUp.value = false
+  showPostWrapUpSummary.value = true
+  setTimeout(() => {
+    showPostWrapUpSummary.value = false
+    bookingStore.loadCoachSchedule(selectedWeek.value)
+  }, 3000)
+}
+
 async function shareSlot() {
   try {
     await navigator.clipboard.writeText(generateSlotLink())
@@ -297,6 +376,20 @@ async function shareSlot() {
   border-radius: 6px;
   padding: 8px;
   margin-bottom: 6px;
+}
+
+.post-wrap-up-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 3000;
+  background: var(--surface-page);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
 }
 
 .start-session-btn {

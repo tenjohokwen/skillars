@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.booking.quick_complete_confirm.title}">Session Confirmation Required</title>
+</head>
+<body>
+    <h2>Session Confirmation Request</h2>
+    <p>Hi there,</p>
+    <p>
+        <strong th:text="${map.coachDisplayName}">Your Coach</strong> has recorded a completed session
+        with <strong th:text="${map.playerName}">your player</strong>
+        on <strong th:text="${map.requestedStartTime}">date</strong>
+        (<span th:text="${map.canonicalTimezone}">timezone</span>).
+    </p>
+    <p>Please confirm or dispute this session by logging in to Skillars:</p>
+    <p>
+        <a th:href="${map.bookingsUrl}" href="#">View my bookings &rarr;</a>
+    </p>
+    <p style="color: #666; font-size: 0.9em;">
+        If you take no action within 24 hours, the session will be automatically confirmed.
+    </p>
+</body>
+</html>

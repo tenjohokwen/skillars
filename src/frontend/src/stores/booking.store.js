@@ -17,6 +17,11 @@ import {
   getBookingById,
   getCoachSchedule,
   getParentSchedule,
+  startSession,
+  endSession,
+  submitWrapUp,
+  initiateQuickComplete,
+  confirmCompletion,
 } from 'src/api/booking.api'
 
 export function useBookingSse(bookingId) {
@@ -107,6 +112,10 @@ export const useBookingStore = defineStore('booking', () => {
   const parentSchedule = ref(null)
   const parentScheduleLoading = ref(false)
   const parentScheduleError = ref(null)
+
+  const activeSessionBookingId = ref(null)
+  const completionLoading = ref(false)
+  const completionError = ref(null)
 
   const creditsForCoach = computed(
     () => (coachId) =>
@@ -252,6 +261,74 @@ export const useBookingStore = defineStore('booking', () => {
     await loadCoachBookingRequests()
   }
 
+  async function handleStartSession(bookingId) {
+    completionLoading.value = true
+    completionError.value = null
+    try {
+      await startSession(bookingId)
+      activeSessionBookingId.value = bookingId
+    } catch (e) {
+      completionError.value = e
+      throw e
+    } finally {
+      completionLoading.value = false
+    }
+  }
+
+  async function handleEndSession(bookingId) {
+    completionLoading.value = true
+    completionError.value = null
+    try {
+      await endSession(bookingId)
+    } catch (e) {
+      completionError.value = e
+      throw e
+    } finally {
+      completionLoading.value = false
+    }
+  }
+
+  async function handleSubmitWrapUp(bookingId, wrapUpData) {
+    completionLoading.value = true
+    completionError.value = null
+    try {
+      await submitWrapUp(bookingId, wrapUpData)
+      activeSessionBookingId.value = null
+    } catch (e) {
+      completionError.value = e
+      throw e
+    } finally {
+      completionLoading.value = false
+    }
+  }
+
+  async function handleInitiateQuickComplete(bookingId) {
+    completionLoading.value = true
+    completionError.value = null
+    try {
+      await initiateQuickComplete(bookingId)
+    } catch (e) {
+      completionError.value = e
+      throw e
+    } finally {
+      completionLoading.value = false
+    }
+  }
+
+  async function handleConfirmCompletion(bookingId) {
+    completionLoading.value = true
+    completionError.value = null
+    try {
+      await confirmCompletion(bookingId)
+      await loadParentBookings()
+    } catch (e) {
+      completionError.value = e
+      throw e
+    } finally {
+      completionLoading.value = false
+    }
+  }
+
   return {
     windows,
     blocks,
@@ -291,5 +368,13 @@ export const useBookingStore = defineStore('booking', () => {
     parentScheduleError,
     loadCoachSchedule,
     loadParentSchedule,
+    activeSessionBookingId,
+    completionLoading,
+    completionError,
+    handleStartSession,
+    handleEndSession,
+    handleSubmitWrapUp,
+    handleInitiateQuickComplete,
+    handleConfirmCompletion,
   }
 })
