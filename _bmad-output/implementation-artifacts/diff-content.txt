@@ -1,0 +1,673 @@
+diff --git a/_bmad-output/implementation-artifacts/sprint-status.yaml b/_bmad-output/implementation-artifacts/sprint-status.yaml
+index cb73c24..13ccc51 100644
+--- a/_bmad-output/implementation-artifacts/sprint-status.yaml
++++ b/_bmad-output/implementation-artifacts/sprint-status.yaml
+@@ -35,7 +35,7 @@
+ # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+ 
+ generated: 2026-05-25
+-last_updated: 2026-06-16 # Story 3.6 review patches applied
++last_updated: 2026-06-16 # Story 3.7 review
+ project: javatemplate
+ project_key: NOKEY
+ tracking_system: file-system
+@@ -180,7 +180,7 @@ development_status:
+   skillars-3-4-booking-state-machine-sse: done
+   skillars-3-5-scheduling-views-timezone-management: done
+   skillars-3-6-session-completion-live-mode-quick-complete: done
+-  skillars-3-7-session-pause-resume: backlog
++  skillars-3-7-session-pause-resume: review
+   skillars-3-8-rescheduling-duplication-reminders: backlog
+   skillars-3-9-bulk-session-request-from-calendar: backlog
+   skillars-3-10-session-pack-expiry-pause-management: backlog
+diff --git a/src/frontend/src/api/booking.api.js b/src/frontend/src/api/booking.api.js
+index a57489f..682fa0a 100644
+--- a/src/frontend/src/api/booking.api.js
++++ b/src/frontend/src/api/booking.api.js
+@@ -46,6 +46,10 @@ export const startSession = (id) => api.post(`/api/bookings/${id}/start`)
+ 
+ export const endSession = (id) => api.post(`/api/bookings/${id}/end`)
+ 
++export const pauseSession = (id) => api.post(`/api/bookings/${id}/pause`)
++
++export const resumeSession = (id) => api.post(`/api/bookings/${id}/resume`)
++
+ export const submitWrapUp = (id, data) => api.post(`/api/bookings/${id}/complete`, data)
+ 
+ export const initiateQuickComplete = (id) => api.post(`/api/bookings/${id}/quick-complete`)
+diff --git a/src/frontend/src/components/booking/ActiveSessionScreen.vue b/src/frontend/src/components/booking/ActiveSessionScreen.vue
+index 314ce0b..e60f6ed 100644
+--- a/src/frontend/src/components/booking/ActiveSessionScreen.vue
++++ b/src/frontend/src/components/booking/ActiveSessionScreen.vue
+@@ -31,8 +31,37 @@
+       {{ t('booking.completion.nextDrill', 'Next drill: —') }}
+     </div>
+ 
+-    <!-- End Session button -->
++    <!-- Action error feedback -->
++    <div v-if="actionError" class="active-session__error">{{ actionError }}</div>
++
++    <!-- PAUSED indicator -->
++    <div v-if="isPaused" class="active-session__paused-indicator">
++      {{ t('booking.completion.paused') }}
++    </div>
++
++    <!-- Pause button: shown when not paused -->
++    <q-btn
++      v-if="!isPaused"
++      flat
++      class="active-session__pause-btn"
++      :label="t('booking.completion.pause')"
++      :loading="pausing"
++      @click="handlePauseSession"
++    />
++
++    <!-- Resume button: shown when paused -->
+     <q-btn
++      v-if="isPaused"
++      unelevated
++      class="active-session__resume-btn"
++      :label="t('booking.completion.resume')"
++      :loading="resuming"
++      @click="handleResumeSession"
++    />
++
++    <!-- End Session button: hidden while paused -->
++    <q-btn
++      v-if="!isPaused"
+       unelevated
+       class="active-session__end-btn"
+       :label="endAllowed ? t('booking.completion.endSession') : t('booking.completion.endSessionDisabled')"
+@@ -44,7 +73,7 @@
+ </template>
+ 
+ <script setup>
+-import { ref, computed, onMounted, onUnmounted } from 'vue'
++import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+ import { useI18n } from 'vue-i18n'
+ import { useBookingStore } from 'src/stores/booking.store'
+ 
+@@ -52,6 +81,7 @@ const props = defineProps({
+   bookingId: { type: String, required: true },
+   playerName: { type: String, required: true },
+   sessionStartTime: { type: String, required: true },
++  bookingStatus: { type: String, required: true },
+ })
+ 
+ const emit = defineEmits(['session-ended', 'close'])
+@@ -61,9 +91,23 @@ const bookingStore = useBookingStore()
+ 
+ const elapsed = ref(0)
+ const ending = ref(false)
++const isPaused = ref(false)
++const pausing = ref(false)
++const resuming = ref(false)
++const actionError = ref(null)
+ let timer = null
+ 
+-const endAllowed = computed(() => elapsed.value >= 300)
++const endAllowed = computed(() => !isPaused.value && elapsed.value >= 300)
++
++function startTimer() {
++  if (timer) return
++  timer = setInterval(() => { elapsed.value++ }, 1000)
++}
++
++function stopTimer() {
++  clearInterval(timer)
++  timer = null
++}
+ 
+ const formattedElapsed = computed(() => {
+   const h = Math.floor(elapsed.value / 3600)
+@@ -74,22 +118,69 @@ const formattedElapsed = computed(() => {
+ 
+ async function handleEndSession() {
+   ending.value = true
++  actionError.value = null
+   try {
+     await bookingStore.handleEndSession(props.bookingId)
+     emit('session-ended')
++  } catch {
++    actionError.value = t('booking.completion.actionError')
+   } finally {
+     ending.value = false
+   }
+ }
+ 
++async function handlePauseSession() {
++  pausing.value = true
++  actionError.value = null
++  stopTimer()
++  isPaused.value = true
++  try {
++    await bookingStore.handlePauseSession(props.bookingId)
++  } catch {
++    isPaused.value = false
++    startTimer()
++    actionError.value = t('booking.completion.actionError')
++  } finally {
++    pausing.value = false
++  }
++}
++
++async function handleResumeSession() {
++  resuming.value = true
++  actionError.value = null
++  try {
++    await bookingStore.handleResumeSession(props.bookingId)
++    isPaused.value = false
++    startTimer()
++  } catch {
++    actionError.value = t('booking.completion.actionError')
++  } finally {
++    resuming.value = false
++  }
++}
++
++// SSE-driven status sync: handles remote pause/resume (other device/tab)
++watch(() => props.bookingStatus, (status) => {
++  if (status === 'PAUSED' && !isPaused.value) {
++    isPaused.value = true
++    stopTimer()
++  } else if (status === 'IN_PROGRESS' && isPaused.value) {
++    isPaused.value = false
++    startTimer()
++  }
++})
++
+ onMounted(() => {
+-  timer = setInterval(() => {
+-    elapsed.value++
+-  }, 1000)
++  if (props.bookingStatus === 'PAUSED') {
++    isPaused.value = true
++    // Do NOT start the interval — session is already paused server-side
++  } else {
++    startTimer()
++  }
+ })
+ 
+ onUnmounted(() => {
+-  clearInterval(timer)
++  stopTimer()
+ })
+ </script>
+ 
+@@ -151,6 +242,47 @@ onUnmounted(() => {
+   margin-bottom: 48px;
+ }
+ 
++.active-session__error {
++  color: var(--accent-error, #ef4444);
++  font-size: 14px;
++  margin-bottom: 12px;
++  text-align: center;
++}
++
++.active-session__paused-indicator {
++  font-size: 24px;
++  font-weight: 700;
++  color: var(--accent-warning);
++  letter-spacing: 0.1em;
++  margin-bottom: 24px;
++  animation: pulse 2s infinite;
++}
++
++@keyframes pulse {
++  0%, 100% { opacity: 1; }
++  50% { opacity: 0.5; }
++}
++
++.active-session__pause-btn {
++  width: 100%;
++  max-width: 400px;
++  height: 48px;
++  color: var(--text-secondary);
++  margin-bottom: 12px;
++}
++
++.active-session__resume-btn {
++  width: 100%;
++  max-width: 400px;
++  height: 56px;
++  background: var(--accent-warning);
++  color: #fff;
++  font-size: 18px;
++  font-weight: 600;
++  border-radius: 12px;
++  margin-bottom: 12px;
++}
++
+ .active-session__end-btn {
+   width: 100%;
+   max-width: 400px;
+diff --git a/src/frontend/src/components/booking/BookingStateChip.vue b/src/frontend/src/components/booking/BookingStateChip.vue
+index 5da238c..77af3e7 100644
+--- a/src/frontend/src/components/booking/BookingStateChip.vue
++++ b/src/frontend/src/components/booking/BookingStateChip.vue
+@@ -16,6 +16,7 @@ const statusMap = {
+   CONFIRMED: { key: 'booking.requests.statusConfirmed', cls: 'chip--primary' },
+   UPCOMING: { key: 'booking.requests.statusUpcoming', cls: 'chip--primary' },
+   IN_PROGRESS: { key: 'booking.requests.statusInProgress', cls: 'chip--primary' },
++  PAUSED: { key: 'booking.requests.statusPaused', cls: 'chip--warning' },
+   COMPLETED_PENDING_CONFIRMATION: { key: 'booking.requests.statusCompletingPending', cls: 'chip--warning' },
+   DECLINED: { key: 'booking.requests.statusDeclined', cls: 'chip--error' },
+   COMPLETED: { key: 'booking.requests.statusCompleted', cls: 'chip--neutral' },
+diff --git a/src/frontend/src/i18n/en/index.js b/src/frontend/src/i18n/en/index.js
+index d0aacec..950a958 100644
+--- a/src/frontend/src/i18n/en/index.js
++++ b/src/frontend/src/i18n/en/index.js
+@@ -148,6 +148,7 @@ export default {
+       statusDisputed: 'Disputed',
+       statusPaymentPending: 'Payment pending',
+       statusInProgress: 'In progress',
++      statusPaused: 'Paused',
+       statusCompletingPending: 'Completing...',
+       statusCancelledParent: 'Cancelled',
+       statusCancelledCoach: 'Cancelled by coach',
+@@ -230,6 +231,10 @@ export default {
+     completion: {
+       endSession: 'End Session',
+       endSessionDisabled: 'Available after 5 minutes',
++      pause: 'Pause',
++      resume: 'Resume',
++      paused: 'PAUSED',
++      actionError: 'Something went wrong. Please try again.',
+       quickComplete: 'Quick Complete',
+       summaryTitle: 'Development record updated',
+       confirmCompletion: 'Confirm session',
+diff --git a/src/frontend/src/stores/booking.store.js b/src/frontend/src/stores/booking.store.js
+index e959639..1d09495 100644
+--- a/src/frontend/src/stores/booking.store.js
++++ b/src/frontend/src/stores/booking.store.js
+@@ -19,6 +19,8 @@ import {
+   getParentSchedule,
+   startSession,
+   endSession,
++  pauseSession,
++  resumeSession,
+   submitWrapUp,
+   initiateQuickComplete,
+   confirmCompletion,
+@@ -288,6 +290,32 @@ export const useBookingStore = defineStore('booking', () => {
+     }
+   }
+ 
++  async function handlePauseSession(bookingId) {
++    completionLoading.value = true
++    completionError.value = null
++    try {
++      await pauseSession(bookingId)
++    } catch (e) {
++      completionError.value = e
++      throw e
++    } finally {
++      completionLoading.value = false
++    }
++  }
++
++  async function handleResumeSession(bookingId) {
++    completionLoading.value = true
++    completionError.value = null
++    try {
++      await resumeSession(bookingId)
++    } catch (e) {
++      completionError.value = e
++      throw e
++    } finally {
++      completionLoading.value = false
++    }
++  }
++
+   async function handleSubmitWrapUp(bookingId, wrapUpData) {
+     completionLoading.value = true
+     completionError.value = null
+@@ -373,6 +401,8 @@ export const useBookingStore = defineStore('booking', () => {
+     completionError,
+     handleStartSession,
+     handleEndSession,
++    handlePauseSession,
++    handleResumeSession,
+     handleSubmitWrapUp,
+     handleInitiateQuickComplete,
+     handleConfirmCompletion,
+diff --git a/src/main/java/com/softropic/skillars/platform/booking/api/SessionCompletionResource.java b/src/main/java/com/softropic/skillars/platform/booking/api/SessionCompletionResource.java
+index e99e301..00e41de 100644
+--- a/src/main/java/com/softropic/skillars/platform/booking/api/SessionCompletionResource.java
++++ b/src/main/java/com/softropic/skillars/platform/booking/api/SessionCompletionResource.java
+@@ -48,6 +48,20 @@ public class SessionCompletionResource {
+         return ResponseEntity.noContent().build();
+     }
+ 
++    @PostMapping("/{id}/pause")
++    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
++    public ResponseEntity<Void> pauseSession(@PathVariable UUID id) {
++        bookingCompletionService.pauseSession(id, currentUserId());
++        return ResponseEntity.noContent().build();
++    }
++
++    @PostMapping("/{id}/resume")
++    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
++    public ResponseEntity<Void> resumeSession(@PathVariable UUID id) {
++        bookingCompletionService.resumeSession(id, currentUserId());
++        return ResponseEntity.noContent().build();
++    }
++
+     @PostMapping("/{id}/complete")
+     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+     public ResponseEntity<Void> submitWrapUp(@PathVariable UUID id, @RequestBody @Valid WrapUpRequest request) {
+diff --git a/src/main/java/com/softropic/skillars/platform/booking/contract/BookingEvent.java b/src/main/java/com/softropic/skillars/platform/booking/contract/BookingEvent.java
+index bf23cf5..4c8bf4a 100644
+--- a/src/main/java/com/softropic/skillars/platform/booking/contract/BookingEvent.java
++++ b/src/main/java/com/softropic/skillars/platform/booking/contract/BookingEvent.java
+@@ -10,6 +10,8 @@ public enum BookingEvent {
+     CANCEL_PARENT,
+     CANCEL_COACH,
+     START,
++    PAUSE,
++    RESUME,
+     NO_SHOW_PLAYER,
+     NO_SHOW_COACH,
+     COMPLETE_PENDING,
+diff --git a/src/main/java/com/softropic/skillars/platform/booking/contract/BookingStatus.java b/src/main/java/com/softropic/skillars/platform/booking/contract/BookingStatus.java
+index 610c6d7..b4df0e1 100644
+--- a/src/main/java/com/softropic/skillars/platform/booking/contract/BookingStatus.java
++++ b/src/main/java/com/softropic/skillars/platform/booking/contract/BookingStatus.java
+@@ -7,6 +7,7 @@ public enum BookingStatus {
+     CONFIRMED,
+     UPCOMING,
+     IN_PROGRESS,
++    PAUSED,
+     COMPLETED_PENDING_CONFIRMATION,
+     COMPLETED,
+     DECLINED,
+diff --git a/src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java b/src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java
+index 9abca91..1dd635a 100644
+--- a/src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java
++++ b/src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java
+@@ -57,11 +57,46 @@ public class BookingCompletionService {
+ 
+     @Transactional
+     public void endSession(UUID bookingId, Long coachUserId) {
++        CoachProfile coach = resolveCoach(coachUserId);
++        Booking booking = bookingService.getBookingOrThrow(bookingId);
++        verifyCoachOwnership(booking, coach);
++        BookingStatus current = BookingStatus.valueOf(booking.getStatus());
++        if (current != BookingStatus.IN_PROGRESS && current != BookingStatus.PAUSED) {
++            throw new OperationNotAllowedException(
++                "Booking is in status " + current + ", expected IN_PROGRESS or PAUSED",
++                SecurityError.MISSING_RIGHTS);
++        }
++        try {
++            bookingService.transition(bookingId, BookingEvent.COMPLETE_PENDING, new TransitionContext(ActorRole.COACH, coachUserId));
++        } catch (OptimisticLockingFailureException e) {
++            throw new OperationNotAllowedException("Booking status changed concurrently — retry", SecurityError.MISSING_RIGHTS);
++        }
++    }
++
++    @Transactional
++    public void pauseSession(UUID bookingId, Long coachUserId) {
+         CoachProfile coach = resolveCoach(coachUserId);
+         Booking booking = bookingService.getBookingOrThrow(bookingId);
+         verifyCoachOwnership(booking, coach);
+         verifyStatus(booking, BookingStatus.IN_PROGRESS);
+-        bookingService.transition(bookingId, BookingEvent.COMPLETE_PENDING, new TransitionContext(ActorRole.COACH, coachUserId));
++        try {
++            bookingService.transition(bookingId, BookingEvent.PAUSE, new TransitionContext(ActorRole.COACH, coachUserId));
++        } catch (OptimisticLockingFailureException e) {
++            throw new OperationNotAllowedException("Booking status changed concurrently — retry", SecurityError.MISSING_RIGHTS);
++        }
++    }
++
++    @Transactional
++    public void resumeSession(UUID bookingId, Long coachUserId) {
++        CoachProfile coach = resolveCoach(coachUserId);
++        Booking booking = bookingService.getBookingOrThrow(bookingId);
++        verifyCoachOwnership(booking, coach);
++        verifyStatus(booking, BookingStatus.PAUSED);
++        try {
++            bookingService.transition(bookingId, BookingEvent.RESUME, new TransitionContext(ActorRole.COACH, coachUserId));
++        } catch (OptimisticLockingFailureException e) {
++            throw new OperationNotAllowedException("Booking status changed concurrently — retry", SecurityError.MISSING_RIGHTS);
++        }
+     }
+ 
+     @Transactional
+diff --git a/src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java b/src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+index 959b771..48b16dd 100644
+--- a/src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
++++ b/src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+@@ -66,6 +66,8 @@ public class BookingService {
+         Map.entry(BookingEvent.CANCEL_PARENT,    EnumSet.of(ActorRole.PARENT)),
+         Map.entry(BookingEvent.CANCEL_COACH,     EnumSet.of(ActorRole.COACH)),
+         Map.entry(BookingEvent.START,            EnumSet.of(ActorRole.COACH, ActorRole.SYSTEM)),
++        Map.entry(BookingEvent.PAUSE,            EnumSet.of(ActorRole.COACH)),
++        Map.entry(BookingEvent.RESUME,           EnumSet.of(ActorRole.COACH)),
+         Map.entry(BookingEvent.NO_SHOW_PLAYER,   EnumSet.of(ActorRole.COACH)),
+         Map.entry(BookingEvent.NO_SHOW_COACH,    EnumSet.of(ActorRole.PARENT, ActorRole.SYSTEM)),
+         Map.entry(BookingEvent.COMPLETE_PENDING, EnumSet.of(ActorRole.COACH, ActorRole.SYSTEM)),
+diff --git a/src/main/java/com/softropic/skillars/platform/booking/service/BookingStateMachine.java b/src/main/java/com/softropic/skillars/platform/booking/service/BookingStateMachine.java
+index 3f54d1f..7f8c781 100644
+--- a/src/main/java/com/softropic/skillars/platform/booking/service/BookingStateMachine.java
++++ b/src/main/java/com/softropic/skillars/platform/booking/service/BookingStateMachine.java
+@@ -43,8 +43,18 @@ public class BookingStateMachine {
+             BookingEvent.COMPLETE_PENDING, BookingStatus.COMPLETED_PENDING_CONFIRMATION
+         ));
+         t.put(BookingStatus.IN_PROGRESS, Map.of(
++            BookingEvent.PAUSE,            BookingStatus.PAUSED,
+             BookingEvent.COMPLETE_PENDING, BookingStatus.COMPLETED_PENDING_CONFIRMATION,
+-            BookingEvent.DISPUTE, BookingStatus.DISPUTED
++            BookingEvent.DISPUTE,          BookingStatus.DISPUTED
++        ));
++        // CANCEL_COACH/CANCEL_PARENT from PAUSED (not IN_PROGRESS) are the admin/system cancellation path —
++        // a live session cannot be cancelled mid-flight, but a paused one can be administratively terminated.
++        t.put(BookingStatus.PAUSED, Map.of(
++            BookingEvent.RESUME,           BookingStatus.IN_PROGRESS,
++            BookingEvent.COMPLETE_PENDING, BookingStatus.COMPLETED_PENDING_CONFIRMATION,
++            BookingEvent.DISPUTE,          BookingStatus.DISPUTED,
++            BookingEvent.CANCEL_COACH,     BookingStatus.CANCELLED_COACH,
++            BookingEvent.CANCEL_PARENT,    BookingStatus.CANCELLED_PARENT
+         ));
+         t.put(BookingStatus.COMPLETED_PENDING_CONFIRMATION, Map.of(
+             BookingEvent.COMPLETE, BookingStatus.COMPLETED,
+diff --git a/src/test/java/com/softropic/skillars/platform/booking/api/SessionCompletionResourceIT.java b/src/test/java/com/softropic/skillars/platform/booking/api/SessionCompletionResourceIT.java
+index c18f09e..91c2706 100644
+--- a/src/test/java/com/softropic/skillars/platform/booking/api/SessionCompletionResourceIT.java
++++ b/src/test/java/com/softropic/skillars/platform/booking/api/SessionCompletionResourceIT.java
+@@ -48,12 +48,14 @@ class SessionCompletionResourceIT {
+     private static final String CLIENT_ID      = "testClientId";
+     private static final String TEST_PASSWORD  = "TestPass@123!";
+ 
+-    private static final long PARENT_ID     = 9600000001L;
+-    private static final long PLAYER_ID     = 9600000002L;
+-    private static final long COACH_USER_ID = 9600000010L;
++    private static final long PARENT_ID      = 9600000001L;
++    private static final long PLAYER_ID      = 9600000002L;
++    private static final long COACH_USER_ID  = 9600000010L;
++    private static final long COACH_2_USER_ID = 9600000011L;
+ 
+-    private static final String PARENT_EMAIL = "parent.completion@skillars-test.com";
+-    private static final String COACH_EMAIL  = "coach.completion@skillars-test.com";
++    private static final String PARENT_EMAIL  = "parent.completion@skillars-test.com";
++    private static final String COACH_EMAIL   = "coach.completion@skillars-test.com";
++    private static final String COACH_2_EMAIL = "coach2.completion@skillars-test.com";
+ 
+     @Autowired private JdbcTemplate jdbcTemplate;
+     @Autowired private TransactionTemplate transactionTemplate;
+@@ -63,12 +65,14 @@ class SessionCompletionResourceIT {
+     @LocalServerPort private int randomServerPort;
+ 
+     private UUID coachProfileId;
++    private UUID coachProfile2Id;
+     private UUID bookingId;
+ 
+     @BeforeEach
+     void setUp() {
+         String passwordHash = passwordEncoder.encode(TEST_PASSWORD);
+         coachProfileId = UUID.randomUUID();
++        coachProfile2Id = UUID.randomUUID();
+         bookingId = UUID.randomUUID();
+ 
+         transactionTemplate.execute(status -> {
+@@ -114,6 +118,23 @@ class SessionCompletionResourceIT {
+                 coachProfileId
+             );
+ 
++            insertUser(COACH_2_USER_ID, COACH_2_EMAIL, passwordHash, "COACH");
++            jdbcTemplate.update(
++                "INSERT INTO main.user_authority (user_id, authority_id) " +
++                "VALUES (?, (SELECT id FROM main.authority WHERE name = 'ROLE_COACH')) ON CONFLICT DO NOTHING",
++                COACH_2_USER_ID
++            );
++            jdbcTemplate.update(
++                "INSERT INTO marketplace.coach_profiles " +
++                "(id, user_id, display_name, bio, city, languages, canonical_timezone, status) " +
++                "VALUES (?, ?, 'Other Coach', 'Bio', 'Munich', ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE')",
++                coachProfile2Id, COACH_2_USER_ID
++            );
++            jdbcTemplate.update(
++                "INSERT INTO marketplace.coach_pricing (coach_id, per_session_price, currency) VALUES (?, 50.00, 'EUR')",
++                coachProfile2Id
++            );
++
+             jdbcTemplate.update(
+                 "INSERT INTO booking.session_packs_purchased " +
+                 "(id, parent_id, player_id, coach_id, session_count, credits_remaining, status, purchased_at) " +
+@@ -132,13 +153,13 @@ class SessionCompletionResourceIT {
+             jdbcTemplate.update("DELETE FROM booking.session_completion_data WHERE booking_id = ?", bookingId);
+             jdbcTemplate.update("DELETE FROM booking.bookings WHERE parent_id = ?", PARENT_ID);
+             jdbcTemplate.update("DELETE FROM booking.session_packs_purchased WHERE parent_id = ?", PARENT_ID);
+-            jdbcTemplate.update("DELETE FROM marketplace.coach_pricing WHERE coach_id = ?", coachProfileId);
+-            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
++            jdbcTemplate.update("DELETE FROM marketplace.coach_pricing WHERE coach_id IN (?, ?)", coachProfileId, coachProfile2Id);
++            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id IN (?, ?)", coachProfileId, coachProfile2Id);
+             jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = ?", PLAYER_ID);
+             jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
+             jdbcTemplate.execute("DELETE FROM main.login_attempts");
+-            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?)", PARENT_ID, COACH_USER_ID);
+-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?)", PARENT_ID, COACH_USER_ID);
++            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?, ?)", PARENT_ID, COACH_USER_ID, COACH_2_USER_ID);
++            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?, ?)", PARENT_ID, COACH_USER_ID, COACH_2_USER_ID);
+             jdbcTemplate.execute("DELETE FROM main.authority WHERE id IN (9600, 9601)");
+             jdbcTemplate.execute("DELETE FROM main.sec");
+             return null;
+@@ -265,6 +286,118 @@ class SessionCompletionResourceIT {
+         assertThat(status).isEqualTo("COMPLETED");
+     }
+ 
++    @Test
++    void pauseSession_fromInProgress_returns204AndStatusIsPaused() {
++        setBookingStatus("IN_PROGRESS");
++        String coachCookies = loginAndGetCookies(COACH_EMAIL);
++
++        ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
++            baseUrl() + "/api/bookings/" + bookingId + "/pause",
++            HttpMethod.POST, null, authenticatedHeaders(coachCookies), Void.class
++        );
++
++        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
++        String status = jdbcTemplate.queryForObject(
++            "SELECT status FROM booking.bookings WHERE id = ?", String.class, bookingId);
++        assertThat(status).isEqualTo("PAUSED");
++    }
++
++    @Test
++    void resumeSession_fromPaused_returns204AndStatusIsInProgress() {
++        setBookingStatus("PAUSED");
++        String coachCookies = loginAndGetCookies(COACH_EMAIL);
++
++        ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
++            baseUrl() + "/api/bookings/" + bookingId + "/resume",
++            HttpMethod.POST, null, authenticatedHeaders(coachCookies), Void.class
++        );
++
++        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
++        String status = jdbcTemplate.queryForObject(
++            "SELECT status FROM booking.bookings WHERE id = ?", String.class, bookingId);
++        assertThat(status).isEqualTo("IN_PROGRESS");
++    }
++
++    @Test
++    void pauseSession_unauthenticated_returns401() {
++        setBookingStatus("IN_PROGRESS");
++
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + "/api/bookings/" + bookingId + "/pause",
++            HttpMethod.POST, null, clientHeaders(), Void.class
++        ))
++            .isInstanceOf(HttpClientErrorException.class)
++            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED));
++    }
++
++    @Test
++    void pauseSession_parentRole_returns403() {
++        setBookingStatus("IN_PROGRESS");
++        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
++
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + "/api/bookings/" + bookingId + "/pause",
++            HttpMethod.POST, null, authenticatedHeaders(parentCookies), Void.class
++        ))
++            .isInstanceOf(HttpClientErrorException.class)
++            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
++    }
++
++    @Test
++    void pauseSession_alreadyPaused_returns4xx() {
++        setBookingStatus("PAUSED");
++        String coachCookies = loginAndGetCookies(COACH_EMAIL);
++
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + "/api/bookings/" + bookingId + "/pause",
++            HttpMethod.POST, null, authenticatedHeaders(coachCookies), Void.class
++        ))
++            .isInstanceOf(HttpClientErrorException.class)
++            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode().is4xxClientError()).isTrue());
++    }
++
++    @Test
++    void endSession_fromPaused_returns204AndStatusIsCompletedPendingConfirmation() {
++        setBookingStatus("PAUSED");
++        String coachCookies = loginAndGetCookies(COACH_EMAIL);
++
++        ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
++            baseUrl() + "/api/bookings/" + bookingId + "/end",
++            HttpMethod.POST, null, authenticatedHeaders(coachCookies), Void.class
++        );
++
++        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
++        String status = jdbcTemplate.queryForObject(
++            "SELECT status FROM booking.bookings WHERE id = ?", String.class, bookingId);
++        assertThat(status).isEqualTo("COMPLETED_PENDING_CONFIRMATION");
++    }
++
++    @Test
++    void pauseSession_wrongCoach_returns4xx() {
++        setBookingStatus("IN_PROGRESS");
++        String coach2Cookies = loginAndGetCookies(COACH_2_EMAIL);
++
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + "/api/bookings/" + bookingId + "/pause",
++            HttpMethod.POST, null, authenticatedHeaders(coach2Cookies), Void.class
++        ))
++            .isInstanceOf(HttpClientErrorException.class)
++            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode().is4xxClientError()).isTrue());
++    }
++
++    @Test
++    void resumeSession_wrongCoach_returns4xx() {
++        setBookingStatus("PAUSED");
++        String coach2Cookies = loginAndGetCookies(COACH_2_EMAIL);
++
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + "/api/bookings/" + bookingId + "/resume",
++            HttpMethod.POST, null, authenticatedHeaders(coach2Cookies), Void.class
++        ))
++            .isInstanceOf(HttpClientErrorException.class)
++            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode().is4xxClientError()).isTrue());
++    }
++
+     @Test
+     void getDrillSuggestions_returns200AndEmptyArray() {
+         String coachCookies = loginAndGetCookies(COACH_EMAIL);

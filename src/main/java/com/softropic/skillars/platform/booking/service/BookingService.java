@@ -66,6 +66,8 @@ public class BookingService {
         Map.entry(BookingEvent.CANCEL_PARENT,    EnumSet.of(ActorRole.PARENT)),
         Map.entry(BookingEvent.CANCEL_COACH,     EnumSet.of(ActorRole.COACH)),
         Map.entry(BookingEvent.START,            EnumSet.of(ActorRole.COACH, ActorRole.SYSTEM)),
+        Map.entry(BookingEvent.PAUSE,            EnumSet.of(ActorRole.COACH)),
+        Map.entry(BookingEvent.RESUME,           EnumSet.of(ActorRole.COACH)),
         Map.entry(BookingEvent.NO_SHOW_PLAYER,   EnumSet.of(ActorRole.COACH)),
         Map.entry(BookingEvent.NO_SHOW_COACH,    EnumSet.of(ActorRole.PARENT, ActorRole.SYSTEM)),
         Map.entry(BookingEvent.COMPLETE_PENDING, EnumSet.of(ActorRole.COACH, ActorRole.SYSTEM)),

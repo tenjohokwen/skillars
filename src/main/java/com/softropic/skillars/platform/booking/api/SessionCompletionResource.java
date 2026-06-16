@@ -48,6 +48,20 @@ public class SessionCompletionResource {
         return ResponseEntity.noContent().build();
     }
 
+    @PostMapping("/{id}/pause")
+    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+    public ResponseEntity<Void> pauseSession(@PathVariable UUID id) {
+        bookingCompletionService.pauseSession(id, currentUserId());
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/{id}/resume")
+    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+    public ResponseEntity<Void> resumeSession(@PathVariable UUID id) {
+        bookingCompletionService.resumeSession(id, currentUserId());
+        return ResponseEntity.noContent().build();
+    }
+
     @PostMapping("/{id}/complete")
     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
     public ResponseEntity<Void> submitWrapUp(@PathVariable UUID id, @RequestBody @Valid WrapUpRequest request) {

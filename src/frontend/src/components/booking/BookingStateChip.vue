@@ -16,6 +16,7 @@ const statusMap = {
   CONFIRMED: { key: 'booking.requests.statusConfirmed', cls: 'chip--primary' },
   UPCOMING: { key: 'booking.requests.statusUpcoming', cls: 'chip--primary' },
   IN_PROGRESS: { key: 'booking.requests.statusInProgress', cls: 'chip--primary' },
+  PAUSED: { key: 'booking.requests.statusPaused', cls: 'chip--warning' },
   COMPLETED_PENDING_CONFIRMATION: { key: 'booking.requests.statusCompletingPending', cls: 'chip--warning' },
   DECLINED: { key: 'booking.requests.statusDeclined', cls: 'chip--error' },
   COMPLETED: { key: 'booking.requests.statusCompleted', cls: 'chip--neutral' },

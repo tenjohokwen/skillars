@@ -43,8 +43,18 @@ public class BookingStateMachine {
             BookingEvent.COMPLETE_PENDING, BookingStatus.COMPLETED_PENDING_CONFIRMATION
         ));
         t.put(BookingStatus.IN_PROGRESS, Map.of(
+            BookingEvent.PAUSE,            BookingStatus.PAUSED,
             BookingEvent.COMPLETE_PENDING, BookingStatus.COMPLETED_PENDING_CONFIRMATION,
-            BookingEvent.DISPUTE, BookingStatus.DISPUTED
+            BookingEvent.DISPUTE,          BookingStatus.DISPUTED
+        ));
+        // CANCEL_COACH/CANCEL_PARENT from PAUSED (not IN_PROGRESS) are the admin/system cancellation path —
+        // a live session cannot be cancelled mid-flight, but a paused one can be administratively terminated.
+        t.put(BookingStatus.PAUSED, Map.of(
+            BookingEvent.RESUME,           BookingStatus.IN_PROGRESS,
+            BookingEvent.COMPLETE_PENDING, BookingStatus.COMPLETED_PENDING_CONFIRMATION,
+            BookingEvent.DISPUTE,          BookingStatus.DISPUTED,
+            BookingEvent.CANCEL_COACH,     BookingStatus.CANCELLED_COACH,
+            BookingEvent.CANCEL_PARENT,    BookingStatus.CANCELLED_PARENT
         ));
         t.put(BookingStatus.COMPLETED_PENDING_CONFIRMATION, Map.of(
             BookingEvent.COMPLETE, BookingStatus.COMPLETED,

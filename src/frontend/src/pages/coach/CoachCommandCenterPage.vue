@@ -6,8 +6,9 @@
       :booking-id="activeBookingId"
       :player-name="activePlayerName"
       :session-start-time="activeSessionStart"
+      :booking-status="activeBookingStatus"
       @session-ended="onSessionEnded"
-      @close="showActiveSession = false"
+      @close="handleCloseActiveSession"
     />
 
     <!-- Wrap-up overlay -->
@@ -136,7 +137,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { useBookingStore } from 'src/stores/booking.store'
@@ -160,6 +161,23 @@ const activePlayerName = ref('')
 const activeSessionStart = ref('')
 const activePlayerId = ref(null)
 const isLiveMode = ref(true)
+const activeBookingStatus = ref('IN_PROGRESS')
+
+let sessionEventSource = null
+
+function startSessionSse(bookingId) {
+  sessionEventSource?.close()
+  const es = new EventSource(`/api/bookings/${bookingId}/events`, { withCredentials: true })
+  es.addEventListener('status', (e) => { activeBookingStatus.value = e.data })
+  sessionEventSource = es
+}
+
+function stopSessionSse() {
+  sessionEventSource?.close()
+  sessionEventSource = null
+}
+
+onUnmounted(stopSessionSse)
 
 function localDateString(d) {
   const y = d.getFullYear()
@@ -281,6 +299,8 @@ async function handleStartSession(booking) {
   activeSessionStart.value = booking.requestedStartTime
   activePlayerId.value = booking.playerId
   isLiveMode.value = true
+  activeBookingStatus.value = 'IN_PROGRESS'
+  startSessionSse(booking.bookingId)
   showActiveSession.value = true
 }
 
@@ -294,8 +314,14 @@ async function handleQuickComplete(booking) {
 }
 
 function onSessionEnded() {
+  stopSessionSse()
   showActiveSession.value = false
   showWrapUp.value = true
+}
+
+function handleCloseActiveSession() {
+  stopSessionSse()
+  showActiveSession.value = false
 }
 
 function onWrapUpComplete() {

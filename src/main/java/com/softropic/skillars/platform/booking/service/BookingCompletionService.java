@@ -60,8 +60,43 @@ public class BookingCompletionService {
         CoachProfile coach = resolveCoach(coachUserId);
         Booking booking = bookingService.getBookingOrThrow(bookingId);
         verifyCoachOwnership(booking, coach);
+        BookingStatus current = BookingStatus.valueOf(booking.getStatus());
+        if (current != BookingStatus.IN_PROGRESS && current != BookingStatus.PAUSED) {
+            throw new OperationNotAllowedException(
+                "Booking is in status " + current + ", expected IN_PROGRESS or PAUSED",
+                SecurityError.MISSING_RIGHTS);
+        }
+        try {
+            bookingService.transition(bookingId, BookingEvent.COMPLETE_PENDING, new TransitionContext(ActorRole.COACH, coachUserId));
+        } catch (OptimisticLockingFailureException e) {
+            throw new OperationNotAllowedException("Booking status changed concurrently — retry", SecurityError.MISSING_RIGHTS);
+        }
+    }
+
+    @Transactional
+    public void pauseSession(UUID bookingId, Long coachUserId) {
+        CoachProfile coach = resolveCoach(coachUserId);
+        Booking booking = bookingService.getBookingOrThrow(bookingId);
+        verifyCoachOwnership(booking, coach);
         verifyStatus(booking, BookingStatus.IN_PROGRESS);
-        bookingService.transition(bookingId, BookingEvent.COMPLETE_PENDING, new TransitionContext(ActorRole.COACH, coachUserId));
+        try {
+            bookingService.transition(bookingId, BookingEvent.PAUSE, new TransitionContext(ActorRole.COACH, coachUserId));
+        } catch (OptimisticLockingFailureException e) {
+            throw new OperationNotAllowedException("Booking status changed concurrently — retry", SecurityError.MISSING_RIGHTS);
+        }
+    }
+
+    @Transactional
+    public void resumeSession(UUID bookingId, Long coachUserId) {
+        CoachProfile coach = resolveCoach(coachUserId);
+        Booking booking = bookingService.getBookingOrThrow(bookingId);
+        verifyCoachOwnership(booking, coach);
+        verifyStatus(booking, BookingStatus.PAUSED);
+        try {
+            bookingService.transition(bookingId, BookingEvent.RESUME, new TransitionContext(ActorRole.COACH, coachUserId));
+        } catch (OptimisticLockingFailureException e) {
+            throw new OperationNotAllowedException("Booking status changed concurrently — retry", SecurityError.MISSING_RIGHTS);
+        }
     }
 
     @Transactional

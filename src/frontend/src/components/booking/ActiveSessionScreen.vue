@@ -2,7 +2,7 @@
   <div class="active-session">
     <!-- Back button — only before 5 minutes have elapsed (coach tapped Start by accident) -->
     <q-btn
-      v-if="!endAllowed"
+      v-if="!isPaused && elapsed < 300"
       flat
       dense
       round
@@ -31,8 +31,37 @@
       {{ t('booking.completion.nextDrill', 'Next drill: —') }}
     </div>
 
-    <!-- End Session button -->
+    <!-- Action error feedback -->
+    <div v-if="actionError" class="active-session__error">{{ actionError }}</div>
+
+    <!-- PAUSED indicator -->
+    <div v-if="isPaused" class="active-session__paused-indicator">
+      {{ t('booking.completion.paused') }}
+    </div>
+
+    <!-- Pause button: shown when not paused -->
     <q-btn
+      v-if="!isPaused"
+      flat
+      class="active-session__pause-btn"
+      :label="t('booking.completion.pause')"
+      :loading="pausing"
+      @click="handlePauseSession"
+    />
+
+    <!-- Resume button: shown when paused -->
+    <q-btn
+      v-if="isPaused"
+      unelevated
+      class="active-session__resume-btn"
+      :label="t('booking.completion.resume')"
+      :loading="resuming"
+      @click="handleResumeSession"
+    />
+
+    <!-- End Session button: hidden while paused -->
+    <q-btn
+      v-if="!isPaused"
       unelevated
       class="active-session__end-btn"
       :label="endAllowed ? t('booking.completion.endSession') : t('booking.completion.endSessionDisabled')"
@@ -44,7 +73,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useBookingStore } from 'src/stores/booking.store'
 
@@ -52,6 +81,7 @@ const props = defineProps({
   bookingId: { type: String, required: true },
   playerName: { type: String, required: true },
   sessionStartTime: { type: String, required: true },
+  bookingStatus: { type: String, required: true },
 })
 
 const emit = defineEmits(['session-ended', 'close'])
@@ -61,9 +91,23 @@ const bookingStore = useBookingStore()
 
 const elapsed = ref(0)
 const ending = ref(false)
+const isPaused = ref(false)
+const pausing = ref(false)
+const resuming = ref(false)
+const actionError = ref(null)
 let timer = null
 
-const endAllowed = computed(() => elapsed.value >= 300)
+const endAllowed = computed(() => !isPaused.value && elapsed.value >= 300)
+
+function startTimer() {
+  if (timer) return
+  timer = setInterval(() => { elapsed.value++ }, 1000)
+}
+
+function stopTimer() {
+  clearInterval(timer)
+  timer = null
+}
 
 const formattedElapsed = computed(() => {
   const h = Math.floor(elapsed.value / 3600)
@@ -74,22 +118,69 @@ const formattedElapsed = computed(() => {
 
 async function handleEndSession() {
   ending.value = true
+  actionError.value = null
   try {
     await bookingStore.handleEndSession(props.bookingId)
     emit('session-ended')
+  } catch {
+    actionError.value = t('booking.completion.actionError')
   } finally {
     ending.value = false
   }
 }
 
+async function handlePauseSession() {
+  pausing.value = true
+  actionError.value = null
+  stopTimer()
+  isPaused.value = true
+  try {
+    await bookingStore.handlePauseSession(props.bookingId)
+  } catch {
+    isPaused.value = false
+    startTimer()
+    actionError.value = t('booking.completion.actionError')
+  } finally {
+    pausing.value = false
+  }
+}
+
+async function handleResumeSession() {
+  resuming.value = true
+  actionError.value = null
+  try {
+    await bookingStore.handleResumeSession(props.bookingId)
+    isPaused.value = false
+    startTimer()
+  } catch {
+    actionError.value = t('booking.completion.actionError')
+  } finally {
+    resuming.value = false
+  }
+}
+
+// SSE-driven status sync: handles remote pause/resume (other device/tab)
+watch(() => props.bookingStatus, (status) => {
+  if (status === 'PAUSED' && !isPaused.value) {
+    isPaused.value = true
+    stopTimer()
+  } else if (status === 'IN_PROGRESS' && isPaused.value) {
+    isPaused.value = false
+    startTimer()
+  }
+})
+
 onMounted(() => {
-  timer = setInterval(() => {
-    elapsed.value++
-  }, 1000)
+  if (props.bookingStatus === 'PAUSED') {
+    isPaused.value = true
+    // Do NOT start the interval — session is already paused server-side
+  } else {
+    startTimer()
+  }
 })
 
 onUnmounted(() => {
-  clearInterval(timer)
+  stopTimer()
 })
 </script>
 
@@ -149,6 +240,47 @@ onUnmounted(() => {
 .active-session__next-drill {
   font-size: 16px;
   margin-bottom: 48px;
+}
+
+.active-session__error {
+  color: var(--accent-error, #ef4444);
+  font-size: 14px;
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+.active-session__paused-indicator {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--accent-warning);
+  letter-spacing: 0.1em;
+  margin-bottom: 24px;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.active-session__pause-btn {
+  width: 100%;
+  max-width: 400px;
+  height: 48px;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+
+.active-session__resume-btn {
+  width: 100%;
+  max-width: 400px;
+  height: 56px;
+  background: var(--accent-warning);
+  color: #fff;
+  font-size: 18px;
+  font-weight: 600;
+  border-radius: 12px;
+  margin-bottom: 12px;
 }
 
 .active-session__end-btn {

@@ -10,6 +10,8 @@ public enum BookingEvent {
     CANCEL_PARENT,
     CANCEL_COACH,
     START,
+    PAUSE,
+    RESUME,
     NO_SHOW_PLAYER,
     NO_SHOW_COACH,
     COMPLETE_PENDING,

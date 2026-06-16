@@ -48,12 +48,14 @@ class SessionCompletionResourceIT {
     private static final String CLIENT_ID      = "testClientId";
     private static final String TEST_PASSWORD  = "TestPass@123!";
 
-    private static final long PARENT_ID     = 9600000001L;
-    private static final long PLAYER_ID     = 9600000002L;
-    private static final long COACH_USER_ID = 9600000010L;
+    private static final long PARENT_ID      = 9600000001L;
+    private static final long PLAYER_ID      = 9600000002L;
+    private static final long COACH_USER_ID  = 9600000010L;
+    private static final long COACH_2_USER_ID = 9600000011L;
 
-    private static final String PARENT_EMAIL = "parent.completion@skillars-test.com";
-    private static final String COACH_EMAIL  = "coach.completion@skillars-test.com";
+    private static final String PARENT_EMAIL  = "parent.completion@skillars-test.com";
+    private static final String COACH_EMAIL   = "coach.completion@skillars-test.com";
+    private static final String COACH_2_EMAIL = "coach2.completion@skillars-test.com";
 
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
@@ -63,12 +65,14 @@ class SessionCompletionResourceIT {
     @LocalServerPort private int randomServerPort;
 
     private UUID coachProfileId;
+    private UUID coachProfile2Id;
     private UUID bookingId;
 
     @BeforeEach
     void setUp() {
         String passwordHash = passwordEncoder.encode(TEST_PASSWORD);
         coachProfileId = UUID.randomUUID();
+        coachProfile2Id = UUID.randomUUID();
         bookingId = UUID.randomUUID();
 
         transactionTemplate.execute(status -> {
@@ -114,6 +118,23 @@ class SessionCompletionResourceIT {
                 coachProfileId
             );
 
+            insertUser(COACH_2_USER_ID, COACH_2_EMAIL, passwordHash, "COACH");
+            jdbcTemplate.update(
+                "INSERT INTO main.user_authority (user_id, authority_id) " +
+                "VALUES (?, (SELECT id FROM main.authority WHERE name = 'ROLE_COACH')) ON CONFLICT DO NOTHING",
+                COACH_2_USER_ID
+            );
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_profiles " +
+                "(id, user_id, display_name, bio, city, languages, canonical_timezone, status) " +
+                "VALUES (?, ?, 'Other Coach', 'Bio', 'Munich', ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE')",
+                coachProfile2Id, COACH_2_USER_ID
+            );
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_pricing (coach_id, per_session_price, currency) VALUES (?, 50.00, 'EUR')",
+                coachProfile2Id
+            );
+
             jdbcTemplate.update(
                 "INSERT INTO booking.session_packs_purchased " +
                 "(id, parent_id, player_id, coach_id, session_count, credits_remaining, status, purchased_at) " +
@@ -132,13 +153,13 @@ class SessionCompletionResourceIT {
             jdbcTemplate.update("DELETE FROM booking.session_completion_data WHERE booking_id = ?", bookingId);
             jdbcTemplate.update("DELETE FROM booking.bookings WHERE parent_id = ?", PARENT_ID);
             jdbcTemplate.update("DELETE FROM booking.session_packs_purchased WHERE parent_id = ?", PARENT_ID);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_pricing WHERE coach_id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
+            jdbcTemplate.update("DELETE FROM marketplace.coach_pricing WHERE coach_id IN (?, ?)", coachProfileId, coachProfile2Id);
+            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id IN (?, ?)", coachProfileId, coachProfile2Id);
             jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = ?", PLAYER_ID);
             jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
             jdbcTemplate.execute("DELETE FROM main.login_attempts");
-            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?)", PARENT_ID, COACH_USER_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?)", PARENT_ID, COACH_USER_ID);
+            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?, ?)", PARENT_ID, COACH_USER_ID, COACH_2_USER_ID);
+            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?, ?)", PARENT_ID, COACH_USER_ID, COACH_2_USER_ID);
             jdbcTemplate.execute("DELETE FROM main.authority WHERE id IN (9600, 9601)");
             jdbcTemplate.execute("DELETE FROM main.sec");
             return null;
@@ -263,6 +284,118 @@ class SessionCompletionResourceIT {
         String status = jdbcTemplate.queryForObject(
             "SELECT status FROM booking.bookings WHERE id = ?", String.class, bookingId);
         assertThat(status).isEqualTo("COMPLETED");
+    }
+
+    @Test
+    void pauseSession_fromInProgress_returns204AndStatusIsPaused() {
+        setBookingStatus("IN_PROGRESS");
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/pause",
+            HttpMethod.POST, null, authenticatedHeaders(coachCookies), Void.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        String status = jdbcTemplate.queryForObject(
+            "SELECT status FROM booking.bookings WHERE id = ?", String.class, bookingId);
+        assertThat(status).isEqualTo("PAUSED");
+    }
+
+    @Test
+    void resumeSession_fromPaused_returns204AndStatusIsInProgress() {
+        setBookingStatus("PAUSED");
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/resume",
+            HttpMethod.POST, null, authenticatedHeaders(coachCookies), Void.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        String status = jdbcTemplate.queryForObject(
+            "SELECT status FROM booking.bookings WHERE id = ?", String.class, bookingId);
+        assertThat(status).isEqualTo("IN_PROGRESS");
+    }
+
+    @Test
+    void pauseSession_unauthenticated_returns401() {
+        setBookingStatus("IN_PROGRESS");
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/pause",
+            HttpMethod.POST, null, clientHeaders(), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED));
+    }
+
+    @Test
+    void pauseSession_parentRole_returns403() {
+        setBookingStatus("IN_PROGRESS");
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/pause",
+            HttpMethod.POST, null, authenticatedHeaders(parentCookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    @Test
+    void pauseSession_alreadyPaused_returnsForbidden() {
+        setBookingStatus("PAUSED");
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/pause",
+            HttpMethod.POST, null, authenticatedHeaders(coachCookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    @Test
+    void endSession_fromPaused_returns204AndStatusIsCompletedPendingConfirmation() {
+        setBookingStatus("PAUSED");
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/end",
+            HttpMethod.POST, null, authenticatedHeaders(coachCookies), Void.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        String status = jdbcTemplate.queryForObject(
+            "SELECT status FROM booking.bookings WHERE id = ?", String.class, bookingId);
+        assertThat(status).isEqualTo("COMPLETED_PENDING_CONFIRMATION");
+    }
+
+    @Test
+    void pauseSession_wrongCoach_returnsForbidden() {
+        setBookingStatus("IN_PROGRESS");
+        String coach2Cookies = loginAndGetCookies(COACH_2_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/pause",
+            HttpMethod.POST, null, authenticatedHeaders(coach2Cookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    @Test
+    void resumeSession_wrongCoach_returnsForbidden() {
+        setBookingStatus("PAUSED");
+        String coach2Cookies = loginAndGetCookies(COACH_2_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/resume",
+            HttpMethod.POST, null, authenticatedHeaders(coach2Cookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
     @Test

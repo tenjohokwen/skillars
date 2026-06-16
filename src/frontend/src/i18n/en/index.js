@@ -148,6 +148,7 @@ export default {
       statusDisputed: 'Disputed',
       statusPaymentPending: 'Payment pending',
       statusInProgress: 'In progress',
+      statusPaused: 'Paused',
       statusCompletingPending: 'Completing...',
       statusCancelledParent: 'Cancelled',
       statusCancelledCoach: 'Cancelled by coach',
@@ -230,6 +231,10 @@ export default {
     completion: {
       endSession: 'End Session',
       endSessionDisabled: 'Available after 5 minutes',
+      pause: 'Pause',
+      resume: 'Resume',
+      paused: 'PAUSED',
+      actionError: 'Something went wrong. Please try again.',
       quickComplete: 'Quick Complete',
       summaryTitle: 'Development record updated',
       confirmCompletion: 'Confirm session',

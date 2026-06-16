@@ -19,6 +19,8 @@ import {
   getParentSchedule,
   startSession,
   endSession,
+  pauseSession,
+  resumeSession,
   submitWrapUp,
   initiateQuickComplete,
   confirmCompletion,
@@ -288,6 +290,32 @@ export const useBookingStore = defineStore('booking', () => {
     }
   }
 
+  async function handlePauseSession(bookingId) {
+    completionLoading.value = true
+    completionError.value = null
+    try {
+      await pauseSession(bookingId)
+    } catch (e) {
+      completionError.value = e
+      throw e
+    } finally {
+      completionLoading.value = false
+    }
+  }
+
+  async function handleResumeSession(bookingId) {
+    completionLoading.value = true
+    completionError.value = null
+    try {
+      await resumeSession(bookingId)
+    } catch (e) {
+      completionError.value = e
+      throw e
+    } finally {
+      completionLoading.value = false
+    }
+  }
+
   async function handleSubmitWrapUp(bookingId, wrapUpData) {
     completionLoading.value = true
     completionError.value = null
@@ -373,6 +401,8 @@ export const useBookingStore = defineStore('booking', () => {
     completionError,
     handleStartSession,
     handleEndSession,
+    handlePauseSession,
+    handleResumeSession,
     handleSubmitWrapUp,
     handleInitiateQuickComplete,
     handleConfirmCompletion,

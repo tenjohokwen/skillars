@@ -1,0 +1,20 @@
+[
+  {
+    "location": "ActiveSessionScreen.vue",
+    "trigger_condition": "Coach closes browser tab or navigates away while PAUSED",
+    "guard_snippet": "onMounted(() => { window.addEventListener('beforeunload', handleUnload) })",
+    "potential_consequence": "Timer drifts or session stays locked in PAUSED state if client never resumes"
+  },
+  {
+    "location": "BookingCompletionService.java",
+    "trigger_condition": "Race condition between endSession() and pauseSession() API calls",
+    "guard_snippet": "@Lock(LockModeType.PESSIMISTIC_WRITE) in repository",
+    "potential_consequence": "Booking ends while state machine thinks it is paused, causing inconsistent state"
+  },
+  {
+    "location": "BookingStateMachine.java",
+    "trigger_condition": "No guard against PAUSED status when processing auto-confirm Quick Completes",
+    "guard_snippet": "List<SessionCompletionData> findPendingQuickCompletes() filter: AND b.status != 'PAUSED'",
+    "potential_consequence": "Auto-confirmation might unexpectedly complete a session that is merely paused, not abandoned"
+  }
+]
