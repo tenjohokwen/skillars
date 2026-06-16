@@ -92,6 +92,37 @@
                 class="q-mt-xs"
                 @click="handleQuickComplete(booking)"
               />
+              <q-btn
+                v-if="booking.status === 'COMPLETED'"
+                flat dense size="sm"
+                :label="t('booking.schedule.repeatNextWeek')"
+                :loading="duplicatingId === booking.bookingId"
+                class="q-mt-xs"
+                @click="handleRepeatNextWeek(booking)"
+              />
+              <template v-if="booking.pendingReschedule">
+                <div class="text-caption q-mt-xs" style="color: var(--accent-warning)">
+                  {{ t('booking.reschedule.pendingLabel') }}
+                </div>
+                <div class="text-caption q-mt-xs">
+                  {{ t('booking.reschedule.proposed') }}
+                  {{ slotLabel(booking.pendingReschedule.proposedStartTime, bookingStore.coachSchedule.coachTimezone) }}
+                </div>
+                <div class="row q-gutter-xs q-mt-xs">
+                  <q-btn
+                    flat dense size="sm" color="positive"
+                    :label="t('booking.reschedule.accept')"
+                    :loading="rescheduleActionId === booking.bookingId"
+                    @click="handleAcceptReschedule(booking)"
+                  />
+                  <q-btn
+                    flat dense size="sm" color="negative"
+                    :label="t('booking.reschedule.decline')"
+                    :loading="rescheduleActionId === booking.bookingId"
+                    @click="handleDeclineReschedule(booking)"
+                  />
+                </div>
+              </template>
             </div>
 
             <!-- Available windows without bookings -->
@@ -162,6 +193,8 @@ const activeSessionStart = ref('')
 const activePlayerId = ref(null)
 const isLiveMode = ref(true)
 const activeBookingStatus = ref('IN_PROGRESS')
+const duplicatingId = ref(null)
+const rescheduleActionId = ref(null)
 
 let sessionEventSource = null
 
@@ -331,6 +364,46 @@ function onWrapUpComplete() {
     showPostWrapUpSummary.value = false
     bookingStore.loadCoachSchedule(selectedWeek.value)
   }, 3000)
+}
+
+async function handleAcceptReschedule(booking) {
+  rescheduleActionId.value = booking.bookingId
+  try {
+    await bookingStore.handleAcceptReschedule(booking.bookingId, booking.pendingReschedule.id)
+    await bookingStore.loadCoachSchedule(selectedWeek.value)
+    $q.notify({ message: t('booking.reschedule.accepted'), type: 'positive' })
+  } catch {
+    $q.notify({ message: t('booking.reschedule.acceptFailed'), type: 'negative' })
+  } finally {
+    rescheduleActionId.value = null
+  }
+}
+
+async function handleDeclineReschedule(booking) {
+  rescheduleActionId.value = booking.bookingId
+  try {
+    await bookingStore.handleDeclineReschedule(booking.bookingId, booking.pendingReschedule.id)
+    await bookingStore.loadCoachSchedule(selectedWeek.value)
+    $q.notify({ message: t('booking.reschedule.declined'), type: 'positive' })
+  } catch {
+    $q.notify({ message: t('booking.reschedule.declineFailed'), type: 'negative' })
+  } finally {
+    rescheduleActionId.value = null
+  }
+}
+
+async function handleRepeatNextWeek(booking) {
+  if (duplicatingId.value !== null) return
+  duplicatingId.value = booking.bookingId
+  try {
+    await bookingStore.handleDuplicateNextWeek(booking.bookingId)
+    await bookingStore.loadCoachSchedule(selectedWeek.value)
+    $q.notify({ message: t('booking.schedule.repeatProposed'), type: 'positive' })
+  } catch {
+    $q.notify({ message: t('booking.schedule.repeatFailed'), type: 'negative' })
+  } finally {
+    duplicatingId.value = null
+  }
 }
 
 async function shareSlot() {

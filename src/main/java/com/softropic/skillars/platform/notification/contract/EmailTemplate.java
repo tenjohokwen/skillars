@@ -24,7 +24,11 @@ public enum EmailTemplate {
     BOOKING_DECLINED("email.booking.declined.title"),
     BOOKING_EXPIRED("email.booking.expired.title"),
     BOOKING_REMINDER("email.booking.reminder.title"),
-    BOOKING_QUICK_COMPLETE_CONFIRM("email.booking.quick_complete_confirm.title");
+    BOOKING_QUICK_COMPLETE_CONFIRM("email.booking.quick_complete_confirm.title"),
+    BOOKING_RESCHEDULE_REQUESTED("email.booking.reschedule_requested.title"),
+    BOOKING_RESCHEDULE_ACCEPTED("email.booking.reschedule_accepted.title"),
+    BOOKING_RESCHEDULE_DECLINED("email.booking.reschedule_declined.title"),
+    BOOKING_DUPLICATE_PROPOSED("email.booking.duplicate_proposed.title");
 
     private final String subjectKey;
     EmailTemplate(final String subjectKey) {

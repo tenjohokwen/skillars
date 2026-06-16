@@ -283,3 +283,12 @@
 ## Deferred from: code review (2026-05-26)
 - ~~Potential Path Traversal [S3StorageService.java]~~ — **RESOLVED 2026-05-28**: `StorageKeyGenerator` strips `/` from `entity` and `entityId` inputs via `[^a-zA-Z0-9_-]` sanitization. The `/` chars in the composed S3 key come exclusively from hardcoded format-string separators, not user input.
 - ~~Unbounded Thread Pool [BlobstoreConfig.java]~~ — **RESOLVED 2026-05-28**: Replaced `Executors.newFixedThreadPool` with `ThreadPoolExecutor` backed by `ArrayBlockingQueue(100)` and `CallerRunsPolicy`. Pool size and queue capacity configurable via `app.storage.executor.*`.
+
+## Deferred from: code review of skillars-3-8-rescheduling-duplication-reminders (2026-06-16)
+- D1: `completionLoading` shared across all reschedule/duplicate store actions — consumers cannot distinguish which operation is in-flight; per-booking scoping refs partially mitigate; pre-existing [`booking.store.js`]
+- D2: `ShortCode.shortenInt(UUID.randomUUID().hashCode())` idempotency key collision risk — 128-bit UUID collapsed to 32-bit int; low-probability but non-zero collision chance; pre-existing across all email handlers [`BookingEmailListener.java`]
+- D3: Empty email silently accepted in notification loops — if coach/parent user lookup fails, empty-string email is used with no exception or warning; pre-existing pattern [`BookingEmailListener.java`]
+- D4: `currentUserId()` ClassCastException risk — `getCurrentUser()` cast to `Principal` without instanceof check; 500 instead of 401 if principal type changes; pre-existing across all resources [`RescheduleResource.java`]
+- D5: `COACH` value in `proposedBy` DB constraint allowed but never set — coach-initiated reschedule path not in scope this story; DB is future-proof [`BookingRescheduleRequest.java`]
+- D6: Service-layer tests use Mockito unit test pattern (`@ExtendWith(MockitoExtension.class)`) — story spec Task 20/21 explicitly defined unit tests; integration coverage provided by `RescheduleResourceIT` [`RescheduleServiceTest.java`, `BookingDuplicationServiceTest.java`]
+- D7: `datetime-local` input in reschedule dialog coerces proposed times to browser local timezone — the ISO-8601 string sent to the API reflects the user's local offset, not the coach's canonical timezone; browser local time intent is ambiguous (parent and coach may be in different timezones); add a visible canonical timezone hint label next to the inputs in a future UX polish story [`ParentBookingsPage.vue`]

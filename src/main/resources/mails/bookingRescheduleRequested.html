@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.booking.reschedule_requested.title}">Reschedule Request</title>
+</head>
+<body>
+    <h2>Reschedule Request</h2>
+    <p><strong th:text="${map.parentName}">Parent</strong> has requested to reschedule the session on <strong th:text="${map.originalStartTime}">date</strong> (<span th:text="${map.canonicalTimezone}">timezone</span>) to <strong th:text="${map.proposedStartTime}">new date</strong>.</p>
+    <p>Log in to Skillars to accept or decline this request.</p>
+</body>
+</html>

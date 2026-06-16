@@ -5,7 +5,11 @@ import com.softropic.skillars.platform.booking.contract.BookingDeclinedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingExpiredEvent;
 import com.softropic.skillars.platform.booking.contract.BookingReminderEvent;
 import com.softropic.skillars.platform.booking.contract.BookingRequestedEvent;
+import com.softropic.skillars.platform.booking.contract.DuplicateBookingProposedEvent;
 import com.softropic.skillars.platform.booking.contract.QuickCompleteConfirmationRequiredEvent;
+import com.softropic.skillars.platform.booking.contract.RescheduleAcceptedEvent;
+import com.softropic.skillars.platform.booking.contract.RescheduleDeclinedEvent;
+import com.softropic.skillars.platform.booking.contract.RescheduleRequestedEvent;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.contract.Recipient;
@@ -20,8 +24,12 @@ import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.time.format.FormatStyle;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -133,6 +141,91 @@ public class BookingEmailListener {
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onRescheduleRequested(RescheduleRequestedEvent event) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("parentName", event.getParentName());
+        data.put("originalStartTime", formatInstantInZone(event.getOriginalStartTime(), event.getCanonicalTimezone()));
+        data.put("proposedStartTime", formatInstantInZone(event.getProposedStartTime(), event.getCanonicalTimezone()));
+        data.put("canonicalTimezone", event.getCanonicalTimezone());
+
+        Recipient recipient = new Recipient();
+        recipient.setEmail(event.getCoachEmail());
+        recipient.setLangKey("en");
+
+        publisher.publishEvent(new Envelope(
+            List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_REQUESTED,
+            Instant.now().plus(Duration.ofDays(1)), data,
+            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+        ));
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onRescheduleAccepted(RescheduleAcceptedEvent event) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("coachDisplayName", event.getCoachDisplayName());
+        data.put("newStartTime", formatInstantInZone(event.getNewStartTime(), event.getCanonicalTimezone()));
+        data.put("canonicalTimezone", event.getCanonicalTimezone());
+
+        for (String email : List.of(event.getParentEmail(), event.getCoachEmail()).stream()
+                .filter(e -> e != null && !e.isBlank()).toList()) {
+            Recipient recipient = new Recipient();
+            recipient.setEmail(email);
+            recipient.setLangKey("en");
+            publisher.publishEvent(new Envelope(
+                List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_ACCEPTED,
+                Instant.now().plus(Duration.ofDays(1)), data,
+                ShortCode.shortenInt(UUID.randomUUID().hashCode())
+            ));
+        }
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onRescheduleDeclined(RescheduleDeclinedEvent event) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("coachDisplayName", event.getCoachDisplayName());
+        data.put("originalStartTime", formatInstantInZone(event.getOriginalStartTime(), event.getCanonicalTimezone()));
+        data.put("canonicalTimezone", event.getCanonicalTimezone());
+
+        Recipient recipient = new Recipient();
+        recipient.setEmail(event.getParentEmail());
+        recipient.setLangKey("en");
+
+        publisher.publishEvent(new Envelope(
+            List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_DECLINED,
+            Instant.now().plus(Duration.ofDays(1)), data,
+            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+        ));
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onDuplicateBookingProposed(DuplicateBookingProposedEvent event) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("coachDisplayName", event.getCoachDisplayName());
+        data.put("proposedStartTime", formatInstantInZone(event.getProposedStartTime(), event.getCanonicalTimezone()));
+        data.put("canonicalTimezone", event.getCanonicalTimezone());
+
+        Recipient recipient = new Recipient();
+        recipient.setEmail(event.getParentEmail());
+        recipient.setLangKey("en");
+
+        publisher.publishEvent(new Envelope(
+            List.of(recipient), EmailTemplate.BOOKING_DUPLICATE_PROPOSED,
+            Instant.now().plus(Duration.ofDays(1)), data,
+            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+        ));
+    }
+
+    private String formatInstantInZone(Instant instant, String timezone) {
+        try {
+            return DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
+                .withLocale(Locale.ENGLISH)
+                .withZone(ZoneId.of(timezone))
+                .format(instant);
+        } catch (Exception e) {
+            return instant.toString();
+        }
+    }
+
     public void onBookingReminder(BookingReminderEvent event) {
         Map<String, Object> data = new HashMap<>();
         data.put("coachDisplayName", event.getCoachDisplayName());
@@ -140,7 +233,8 @@ public class BookingEmailListener {
         data.put("canonicalTimezone", event.getCanonicalTimezone());
         data.put("reminderType", event.getReminderType());
 
-        for (String email : List.of(event.getParentEmail(), event.getCoachEmail())) {
+        for (String email : List.of(event.getParentEmail(), event.getCoachEmail()).stream()
+                .filter(e -> e != null && !e.isBlank()).toList()) {
             Recipient recipient = new Recipient();
             recipient.setEmail(email);
             recipient.setLangKey("en");

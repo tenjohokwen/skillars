@@ -24,6 +24,10 @@ import {
   submitWrapUp,
   initiateQuickComplete,
   confirmCompletion,
+  requestReschedule,
+  acceptReschedule,
+  declineReschedule,
+  duplicateNextWeek,
 } from 'src/api/booking.api'
 
 export function useBookingSse(bookingId) {
@@ -357,6 +361,59 @@ export const useBookingStore = defineStore('booking', () => {
     }
   }
 
+  async function handleRequestReschedule(bookingId, data) {
+    completionLoading.value = true
+    completionError.value = null
+    try {
+      await requestReschedule(bookingId, data)
+      await loadParentBookings()
+    } catch (e) {
+      completionError.value = e
+      throw e
+    } finally {
+      completionLoading.value = false
+    }
+  }
+
+  async function handleAcceptReschedule(bookingId, rescheduleId) {
+    completionLoading.value = true
+    completionError.value = null
+    try {
+      await acceptReschedule(bookingId, rescheduleId)
+    } catch (e) {
+      completionError.value = e
+      throw e
+    } finally {
+      completionLoading.value = false
+    }
+  }
+
+  async function handleDeclineReschedule(bookingId, rescheduleId) {
+    completionLoading.value = true
+    completionError.value = null
+    try {
+      await declineReschedule(bookingId, rescheduleId)
+    } catch (e) {
+      completionError.value = e
+      throw e
+    } finally {
+      completionLoading.value = false
+    }
+  }
+
+  async function handleDuplicateNextWeek(bookingId) {
+    completionLoading.value = true
+    completionError.value = null
+    try {
+      await duplicateNextWeek(bookingId)
+    } catch (e) {
+      completionError.value = e
+      throw e
+    } finally {
+      completionLoading.value = false
+    }
+  }
+
   return {
     windows,
     blocks,
@@ -406,5 +463,9 @@ export const useBookingStore = defineStore('booking', () => {
     handleSubmitWrapUp,
     handleInitiateQuickComplete,
     handleConfirmCompletion,
+    handleRequestReschedule,
+    handleAcceptReschedule,
+    handleDeclineReschedule,
+    handleDuplicateNextWeek,
   }
 })

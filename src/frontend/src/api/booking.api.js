@@ -58,3 +58,8 @@ export const confirmCompletion = (id) => api.put(`/api/bookings/${id}/confirm-co
 
 export const getDrillSuggestions = (bookingId) =>
   api.get(`/api/bookings/session/${bookingId}/drills/suggestions`, { params: { limit: 2 } })
+
+export const requestReschedule = (id, data) => api.post(`/api/bookings/${id}/reschedule`, data)
+export const acceptReschedule = (id, rescheduleId) => api.put(`/api/bookings/${id}/reschedule/${rescheduleId}/accept`)
+export const declineReschedule = (id, rescheduleId) => api.put(`/api/bookings/${id}/reschedule/${rescheduleId}/decline`)
+export const duplicateNextWeek = (id) => api.post(`/api/bookings/${id}/duplicate-next-week`)

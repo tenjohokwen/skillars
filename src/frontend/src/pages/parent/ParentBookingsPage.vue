@@ -51,6 +51,26 @@
               t('booking.requests.creditsRemaining', { count: booking.effectiveCreditsRemaining })
             }}
           </q-item-label>
+
+          <!-- Pending reschedule indicator -->
+          <div v-if="booking.pendingReschedule" class="text-caption q-mt-xs"
+               style="color: var(--accent-warning)">
+            {{ t('booking.reschedule.pendingLabel') }}
+          </div>
+          <div v-if="booking.pendingReschedule" class="text-caption q-mt-xs">
+            <span class="text-strike">{{ formatDateTime(booking.requestedStartTime, booking.canonicalTimezone) }}</span>
+            → {{ formatDateTime(booking.pendingReschedule.proposedStartTime, booking.canonicalTimezone) }}
+          </div>
+
+          <!-- Request Change button -->
+          <q-btn
+            v-if="['CONFIRMED', 'UPCOMING'].includes(booking.status) && !booking.pendingReschedule"
+            flat dense size="sm"
+            :label="t('booking.reschedule.requestChange')"
+            :loading="reschedulingId === booking.id"
+            @click="openRescheduleDialog(booking)"
+            class="q-mt-xs self-start"
+          />
         </q-item-section>
         <q-item-section side>
           <BookingStateChip :status="booking.status" />
@@ -67,6 +87,27 @@
         </q-item-section>
       </q-item>
     </q-list>
+
+    <!-- Reschedule dialog -->
+    <q-dialog v-model="rescheduleDialogOpen">
+      <q-card style="min-width: 320px">
+        <q-card-section>
+          <div class="text-h6">{{ t('booking.reschedule.dialogTitle') }}</div>
+        </q-card-section>
+        <q-card-section>
+          <q-input v-model="rescheduleProposedStart" type="datetime-local"
+                   :label="t('booking.reschedule.proposedStart')" />
+          <q-input v-model="rescheduleProposedEnd" type="datetime-local"
+                   :label="t('booking.reschedule.proposedEnd')" class="q-mt-sm" />
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat :label="t('common.cancel')" v-close-popup />
+          <q-btn unelevated color="primary"
+                 :label="t('booking.reschedule.submit')"
+                 @click="submitReschedule" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
 
@@ -88,6 +129,12 @@ const showInMyTime = ref({})
 const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
 const confirmingId = ref(null)
 
+const rescheduleDialogOpen = ref(false)
+const rescheduleBookingId = ref(null)
+const rescheduleProposedStart = ref('')
+const rescheduleProposedEnd = ref('')
+const reschedulingId = ref(null)
+
 async function handleConfirmCompletion(bookingId) {
   confirmingId.value = bookingId
   try {
@@ -97,6 +144,34 @@ async function handleConfirmCompletion(bookingId) {
     $q.notify({ message: t('error.verificationFailed'), type: 'negative' })
   } finally {
     confirmingId.value = null
+  }
+}
+
+function openRescheduleDialog(booking) {
+  rescheduleBookingId.value = booking.id
+  rescheduleProposedStart.value = ''
+  rescheduleProposedEnd.value = ''
+  rescheduleDialogOpen.value = true
+}
+
+async function submitReschedule() {
+  if (!rescheduleProposedStart.value || !rescheduleProposedEnd.value) {
+    $q.notify({ message: t('booking.reschedule.requestFailed'), type: 'negative' })
+    return
+  }
+  reschedulingId.value = rescheduleBookingId.value
+  try {
+    const data = {
+      proposedStartTime: new Date(rescheduleProposedStart.value).toISOString(),
+      proposedEndTime: new Date(rescheduleProposedEnd.value).toISOString(),
+    }
+    await bookingStore.handleRequestReschedule(rescheduleBookingId.value, data)
+    rescheduleDialogOpen.value = false
+    $q.notify({ message: t('booking.reschedule.requestSent'), type: 'positive' })
+  } catch {
+    $q.notify({ message: t('booking.reschedule.requestFailed'), type: 'negative' })
+  } finally {
+    reschedulingId.value = null
   }
 }
 

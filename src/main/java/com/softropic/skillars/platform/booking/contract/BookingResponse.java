@@ -16,5 +16,6 @@ public record BookingResponse(
     String notes,
     Instant createdAt,
     String parentName,
-    int effectiveCreditsRemaining
+    int effectiveCreditsRemaining,
+    RescheduleRequestResponse pendingReschedule
 ) {}

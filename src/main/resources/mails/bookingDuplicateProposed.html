@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.booking.duplicate_proposed.title}">Repeat Session Proposed</title>
+</head>
+<body>
+    <h2>Repeat Session Proposed</h2>
+    <p><strong th:text="${map.coachDisplayName}">Coach</strong> has proposed a repeat session on <strong th:text="${map.proposedStartTime}">date</strong> (<span th:text="${map.canonicalTimezone}">timezone</span>). Log in to confirm.</p>
+    <p>Log in to Skillars to view and confirm the session.</p>
+</body>
+</html>

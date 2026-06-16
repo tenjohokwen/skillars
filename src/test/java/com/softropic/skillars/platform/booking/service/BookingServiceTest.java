@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.booking.contract.BookingStateTransitionEx
 import com.softropic.skillars.platform.booking.contract.CreateBookingRequest;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequestRepository;
 import com.softropic.skillars.platform.booking.repo.SessionPackPurchasedRepository;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
@@ -55,6 +56,7 @@ class BookingServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private SessionPackPurchasedRepository sessionPackPurchasedRepository;
+    @Mock private BookingRescheduleRequestRepository rescheduleRequestRepository;
 
     private BookingStateMachine bookingStateMachine;
     private BookingService bookingService;
@@ -70,7 +72,7 @@ class BookingServiceTest {
         bookingService = new BookingService(
             bookingRepository, bookingStateMachine, sessionPackService, coachProfileRepository,
             coachAvailabilityWindowRepository, playerProfileRepository,
-            userRepository, eventPublisher, sessionPackPurchasedRepository
+            userRepository, eventPublisher, sessionPackPurchasedRepository, rescheduleRequestRepository
         );
     }
 

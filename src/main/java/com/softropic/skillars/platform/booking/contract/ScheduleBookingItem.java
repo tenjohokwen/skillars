@@ -10,5 +10,6 @@ public record ScheduleBookingItem(
     Instant requestedStartTime,
     Instant requestedEndTime,
     String status,
-    String canonicalTimezone
+    String canonicalTimezone,
+    RescheduleRequestResponse pendingReschedule
 ) {}

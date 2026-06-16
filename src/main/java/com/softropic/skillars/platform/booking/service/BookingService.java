@@ -14,10 +14,13 @@ import com.softropic.skillars.platform.booking.contract.CoachReliabilityStrikeQu
 import com.softropic.skillars.platform.booking.contract.CreateBookingRequest;
 import com.softropic.skillars.platform.booking.contract.ParentScheduleItem;
 import com.softropic.skillars.platform.booking.contract.ParentScheduleResponse;
+import com.softropic.skillars.platform.booking.contract.RescheduleRequestResponse;
 import com.softropic.skillars.platform.booking.contract.ScheduleBookingItem;
 import com.softropic.skillars.platform.booking.contract.TransitionContext;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequest;
+import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequestRepository;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
@@ -88,6 +91,7 @@ public class BookingService {
     private final UserRepository userRepository;
     private final ApplicationEventPublisher eventPublisher;
     private final com.softropic.skillars.platform.booking.repo.SessionPackPurchasedRepository sessionPackPurchasedRepository;
+    private final BookingRescheduleRequestRepository rescheduleRequestRepository;
 
     @Transactional
     public void transition(UUID bookingId, BookingEvent event, TransitionContext context) {
@@ -237,12 +241,22 @@ public class BookingService {
         Map<UUID, String> coachNames = coachProfileRepository.findAllById(coachIds).stream()
             .collect(Collectors.toMap(CoachProfile::getId, CoachProfile::getDisplayName));
 
+        Set<UUID> bookingIds = bookings.stream().map(Booking::getId).collect(Collectors.toSet());
+        Map<UUID, RescheduleRequestResponse> pendingReschedules = bookingIds.isEmpty()
+            ? Map.of()
+            : rescheduleRequestRepository.findPendingByBookingIdIn(bookingIds).stream()
+                .collect(Collectors.toMap(
+                    BookingRescheduleRequest::getBookingId,
+                    r -> new RescheduleRequestResponse(r.getId(), r.getProposedBy(),
+                        r.getProposedStartTime(), r.getProposedEndTime(), r.getStatus()),
+                    (a, b) -> a));
+
         return bookings.stream().map(b -> {
             String coachName = coachNames.getOrDefault(b.getCoachId(), "Unknown Coach");
             String playerName = resolvePlayerName(b.getPlayerId());
             int effectiveCredits = (int) (sessionPackService.getCreditsRemaining(b.getPlayerId(), b.getCoachId())
                 - bookingRepository.countInFlightBookings(b.getPlayerId(), b.getCoachId()));
-            return toResponse(b, coachName, playerName, null, effectiveCredits);
+            return toResponse(b, coachName, playerName, null, effectiveCredits, pendingReschedules.get(b.getId()));
         }).toList();
     }
 
@@ -268,8 +282,19 @@ public class BookingService {
 
         List<Booking> bookings = bookingRepository.findByCoachIdAndStatusInAndTimeBetween(
             coachId,
-            List.of("CONFIRMED", "UPCOMING", "REQUESTED", "IN_PROGRESS", "COMPLETED_PENDING_CONFIRMATION"),
+            List.of("CONFIRMED", "UPCOMING", "REQUESTED", "IN_PROGRESS",
+                    "COMPLETED_PENDING_CONFIRMATION", "COMPLETED"),
             wkStart, wkEnd);
+
+        Set<UUID> bookingIds = bookings.stream().map(Booking::getId).collect(Collectors.toSet());
+        Map<UUID, RescheduleRequestResponse> pendingReschedules = bookingIds.isEmpty()
+            ? Map.of()
+            : rescheduleRequestRepository.findPendingByBookingIdIn(bookingIds).stream()
+                .collect(Collectors.toMap(
+                    BookingRescheduleRequest::getBookingId,
+                    r -> new RescheduleRequestResponse(r.getId(), r.getProposedBy(),
+                        r.getProposedStartTime(), r.getProposedEndTime(), r.getStatus()),
+                    (a, b2) -> a));
 
         return bookings.stream()
             .map(b -> new ScheduleBookingItem(
@@ -279,7 +304,8 @@ public class BookingService {
                 b.getRequestedStartTime(),
                 b.getRequestedEndTime(),
                 b.getStatus(),
-                b.getCanonicalTimezone()))
+                b.getCanonicalTimezone(),
+                pendingReschedules.get(b.getId())))
             .toList();
     }
 
@@ -407,6 +433,11 @@ public class BookingService {
     }
 
     private BookingResponse toResponse(Booking b, String coachName, String playerName, String parentName, int effectiveCredits) {
+        return toResponse(b, coachName, playerName, parentName, effectiveCredits, null);
+    }
+
+    private BookingResponse toResponse(Booking b, String coachName, String playerName, String parentName,
+                                        int effectiveCredits, RescheduleRequestResponse pendingReschedule) {
         return new BookingResponse(
             b.getId(),
             b.getPlayerId(),
@@ -420,7 +451,8 @@ public class BookingService {
             b.getNotes(),
             b.getCreatedAt(),
             parentName,
-            effectiveCredits
+            effectiveCredits,
+            pendingReschedule
         );
     }
 }
