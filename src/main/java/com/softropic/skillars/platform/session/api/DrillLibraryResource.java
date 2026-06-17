@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.session.contract.DrillResponse;
 import com.softropic.skillars.platform.session.contract.DrillTagRequest;
 import com.softropic.skillars.platform.session.contract.InvalidParamException;
 import com.softropic.skillars.platform.session.service.DrillLibraryService;
+import com.softropic.skillars.platform.session.service.DrillUploadService;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +23,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Observed(name = "session.drills")
@@ -31,6 +33,7 @@ import java.util.UUID;
 public class DrillLibraryResource {
 
     private final DrillLibraryService drillLibraryService;
+    private final DrillUploadService drillUploadService;
     private final SecurityUtil securityUtil;
 
     @GetMapping
@@ -76,6 +79,13 @@ public class DrillLibraryResource {
     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
     public ResponseEntity<List<String>> getSuggestedTags() {
         return ResponseEntity.ok(drillLibraryService.getSuggestedTags(currentCoachUserId()));
+    }
+
+    @GetMapping("/video-upload/eligible")
+    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+    public ResponseEntity<Map<String, Boolean>> checkVideoUploadEligibility() {
+        boolean eligible = drillUploadService.isVideoUploadEligible(currentCoachUserId());
+        return ResponseEntity.ok(Map.of("eligible", eligible));
     }
 
     private Long currentCoachUserId() {

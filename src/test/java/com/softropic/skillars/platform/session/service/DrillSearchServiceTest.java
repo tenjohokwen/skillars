@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.session.service;
 
+import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.session.contract.DrillMetadata;
@@ -8,6 +9,7 @@ import com.softropic.skillars.platform.session.repo.Drill;
 import com.softropic.skillars.platform.session.repo.DrillRepository;
 import com.softropic.skillars.platform.session.repo.DrillTagRepository;
 import com.softropic.skillars.platform.session.repo.DrillVideoRefRepository;
+import com.softropic.skillars.platform.video.repo.VideoRepository;
 import org.instancio.Instancio;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,6 +36,8 @@ class DrillSearchServiceTest {
     @Mock private DrillTagRepository drillTagRepository;
     @Mock private ConfigService configService;
     @Mock private CoachProfileService coachProfileService;
+    @Mock private VideoRepository videoRepository;
+    @Mock private VideoProviderAdapter videoProviderAdapter;
 
     private DrillLibraryService service;
 
@@ -42,7 +46,7 @@ class DrillSearchServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new DrillLibraryService(drillRepository, drillVideoRefRepository, drillTagRepository, configService, coachProfileService);
+        service = new DrillLibraryService(drillRepository, drillVideoRefRepository, drillTagRepository, configService, coachProfileService, videoRepository, videoProviderAdapter);
         when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_PROFILE_ID);
         lenient().when(drillVideoRefRepository.findByDrillIdIn(anyList())).thenReturn(List.of());
     }

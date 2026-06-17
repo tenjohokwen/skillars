@@ -79,6 +79,49 @@
             <q-chip v-for="tag in drill.tags" :key="tag" size="sm">{{ tag }}</q-chip>
           </div>
         </div>
+
+        <!-- Upload section (COACH drills only, INSTRUCTOR+ tier) -->
+        <div v-if="props.drill.libraryType === 'COACH' && sessionStore.canUploadVideo === true"
+             class="detail-panel__upload q-mt-md">
+          <template v-if="!props.drill.hasVideo">
+            <q-file
+              v-model="selectedVideoFile"
+              accept="video/*"
+              :label="t('session.drillLibrary.upload.selectVideo')"
+              dense
+              outlined
+              @update:model-value="onFileSelected"
+            >
+              <template #prepend>
+                <q-icon name="videocam" />
+              </template>
+            </q-file>
+            <q-btn
+              v-if="selectedVideoFile"
+              :loading="isUploading"
+              :label="t('session.drillLibrary.upload.startUpload')"
+              color="primary"
+              class="q-mt-sm"
+              @click="startUpload"
+            />
+            <q-linear-progress
+              v-if="isUploading"
+              :value="uploadPercent"
+              class="q-mt-sm"
+              color="primary"
+            />
+          </template>
+          <template v-else>
+            <q-btn
+              flat
+              dense
+              color="negative"
+              :label="t('session.drillLibrary.upload.removeVideo')"
+              icon="delete"
+              @click="confirmRemoveVideo"
+            />
+          </template>
+        </div>
       </template>
     </div>
   </q-bottom-sheet>
@@ -173,6 +216,49 @@
                 <q-chip v-for="tag in drill.tags" :key="tag" size="sm">{{ tag }}</q-chip>
               </div>
             </div>
+
+            <!-- Upload section (COACH drills only, INSTRUCTOR+ tier) -->
+            <div v-if="props.drill.libraryType === 'COACH' && sessionStore.canUploadVideo === true"
+                 class="detail-panel__upload q-mt-md">
+              <template v-if="!props.drill.hasVideo">
+                <q-file
+                  v-model="selectedVideoFile"
+                  accept="video/*"
+                  :label="t('session.drillLibrary.upload.selectVideo')"
+                  dense
+                  outlined
+                  @update:model-value="onFileSelected"
+                >
+                  <template #prepend>
+                    <q-icon name="videocam" />
+                  </template>
+                </q-file>
+                <q-btn
+                  v-if="selectedVideoFile"
+                  :loading="isUploading"
+                  :label="t('session.drillLibrary.upload.startUpload')"
+                  color="primary"
+                  class="q-mt-sm"
+                  @click="startUpload"
+                />
+                <q-linear-progress
+                  v-if="isUploading"
+                  :value="uploadPercent"
+                  class="q-mt-sm"
+                  color="primary"
+                />
+              </template>
+              <template v-else>
+                <q-btn
+                  flat
+                  dense
+                  color="negative"
+                  :label="t('session.drillLibrary.upload.removeVideo')"
+                  icon="delete"
+                  @click="confirmRemoveVideo"
+                />
+              </template>
+            </div>
           </template>
         </q-card-section>
       </q-scroll-area>
@@ -181,9 +267,11 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useI18n } from 'vue-i18n'
+import { Upload } from 'tus-js-client'
+import { useSessionStore } from 'src/stores/session.store'
 
 defineOptions({ name: 'DrillDetailPanel' })
 
@@ -196,6 +284,7 @@ const emit = defineEmits(['close'])
 
 const $q = useQuasar()
 const { t } = useI18n()
+const sessionStore = useSessionStore()
 
 const isMobile = computed(() => $q.screen.lt.sm)
 
@@ -211,6 +300,106 @@ const sluBreakdown = computed(() => {
     slu: Math.round((repDensity * weight) / 100),
   }))
 })
+
+const selectedVideoFile = ref(null)
+const selectedVideoFileDuration = ref(0)
+const isUploading = ref(false)
+const uploadPercent = ref(0)
+let tusUpload = null
+
+onMounted(async () => {
+  if (props.drill?.libraryType === 'COACH') {
+    await sessionStore.fetchVideoUploadEligibility()
+  }
+})
+
+onUnmounted(() => {
+  tusUpload?.abort()
+  sessionStore.uploadingDrillId = null
+})
+
+async function onFileSelected(file) {
+  if (!file) {
+    selectedVideoFileDuration.value = 0
+    return
+  }
+  try {
+    const duration = Math.round(await readVideoDuration(file))
+    selectedVideoFileDuration.value = isFinite(duration) ? duration : 0
+  } catch {
+    selectedVideoFileDuration.value = 0
+  }
+}
+
+function readVideoDuration(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const video = document.createElement('video')
+    video.preload = 'metadata'
+    video.onloadedmetadata = () => { URL.revokeObjectURL(url); resolve(video.duration) }
+    video.onerror = () => { URL.revokeObjectURL(url); reject(new Error('metadata read failed')) }
+    video.src = url
+  })
+}
+
+async function startUpload() {
+  if (!selectedVideoFile.value || isUploading.value) return
+  isUploading.value = true
+  uploadPercent.value = 0
+  try {
+    const creds = await sessionStore.initiateVideoUpload(
+      props.drill.id,
+      selectedVideoFile.value,
+      selectedVideoFileDuration.value,
+    )
+    await runTusUpload(selectedVideoFile.value, creds.signedUploadUrl)
+    $q.notify({ type: 'positive', message: t('session.drillLibrary.upload.uploadStarted') })
+    sessionStore.updateDrillVideoState(props.drill.id, { hasVideo: true, videoUrl: null })
+  } catch (e) {
+    const helpCode = e?.response?.data?.helpCode
+    if (helpCode === 'video.quotaExceeded') {
+      $q.notify({ type: 'negative', message: t('session.drillLibrary.upload.quotaExceeded') })
+    } else if (helpCode === 'video.constraintViolated') {
+      $q.notify({ type: 'negative', message: t('session.drillLibrary.upload.constraintViolated') })
+    } else {
+      $q.notify({ type: 'negative', message: t('session.drillLibrary.upload.uploadFailed') })
+    }
+  } finally {
+    isUploading.value = false
+    selectedVideoFile.value = null
+    selectedVideoFileDuration.value = 0
+  }
+}
+
+function runTusUpload(file, signedUploadUrl) {
+  return new Promise((resolve, reject) => {
+    tusUpload = new Upload(file, {
+      uploadUrl: signedUploadUrl,
+      onProgress(bytesUploaded, bytesTotal) {
+        uploadPercent.value = bytesTotal > 0 ? bytesUploaded / bytesTotal : 0
+      },
+      onSuccess: resolve,
+      onError: reject,
+    })
+    tusUpload.start()
+  })
+}
+
+function confirmRemoveVideo() {
+  $q.dialog({
+    title: t('session.drillLibrary.upload.removeConfirmTitle'),
+    message: t('session.drillLibrary.upload.removeConfirmMsg'),
+    ok: { label: t('session.drillLibrary.upload.removeConfirm'), color: 'negative' },
+    cancel: true,
+  }).onOk(async () => {
+    try {
+      await sessionStore.removeVideo(props.drill.id)
+      $q.notify({ type: 'positive', message: t('session.drillLibrary.upload.videoRemoved') })
+    } catch {
+      $q.notify({ type: 'negative', message: t('session.drillLibrary.upload.removeFailed') })
+    }
+  })
+}
 </script>
 
 <style scoped lang="scss">

@@ -20,4 +20,7 @@ public interface VideoRepository extends JpaRepository<Video, UUID> {
         FOR UPDATE SKIP LOCKED
         """, nativeQuery = true)
     List<Video> findNonTerminalForUpdate(@Param("limit") int limit);
+
+    @Query("SELECT v FROM Video v WHERE v.id IN :ids AND v.operationalState = com.softropic.skillars.platform.video.contract.OperationalState.READY AND v.accessState = com.softropic.skillars.platform.video.contract.AccessState.ACTIVE")
+    List<Video> findReadyAndActiveByIds(@Param("ids") List<UUID> ids);
 }

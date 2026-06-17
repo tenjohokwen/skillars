@@ -21,4 +21,22 @@ public interface DrillVideoRefRepository extends JpaRepository<DrillVideoRef, UU
     @Transactional
     @Query("UPDATE DrillVideoRef d SET d.refCount = d.refCount + 1 WHERE d.drillId = :drillId")
     void incrementRefCount(@Param("drillId") UUID drillId);
+
+    @Modifying(clearAutomatically = true)
+    @Transactional
+    @Query("UPDATE DrillVideoRef d SET d.videoId = :videoId WHERE d.drillId = :drillId")
+    void setVideoId(@Param("drillId") UUID drillId, @Param("videoId") UUID videoId);
+
+    @Modifying(clearAutomatically = true)
+    @Transactional
+    @Query("UPDATE DrillVideoRef d SET d.videoId = null WHERE d.drillId = :drillId")
+    void clearVideoId(@Param("drillId") UUID drillId);
+
+    @Query("SELECT CASE WHEN COUNT(d) > 0 THEN true ELSE false END FROM DrillVideoRef d WHERE d.videoId = :videoId")
+    boolean existsByVideoId(@Param("videoId") UUID videoId);
+
+    @Modifying(clearAutomatically = true)
+    @Transactional
+    @Query(value = "INSERT INTO session.drill_video_refs (drill_id, video_id, ref_count) VALUES (:drillId, :videoId, 1) ON CONFLICT (drill_id) DO UPDATE SET video_id = :videoId", nativeQuery = true)
+    void upsertVideoId(@Param("drillId") UUID drillId, @Param("videoId") UUID videoId);
 }

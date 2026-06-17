@@ -24,4 +24,16 @@ export const sessionApi = {
   getTagSuggestions() {
     return api.get('/api/session/drills/tags/suggestions')
   },
+
+  checkVideoUploadEligibility() {
+    return api.get('/api/session/drills/video-upload/eligible')
+  },
+
+  initiateVideoUpload(drillId, payload) {
+    return api.post(`/api/session/drills/${drillId}/video/initiate`, payload)
+  },
+
+  deleteVideo(drillId) {
+    return api.delete(`/api/session/drills/${drillId}/video`)
+  },
 }

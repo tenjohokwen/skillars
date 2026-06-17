@@ -1,6 +1,9 @@
 package com.softropic.skillars.platform.session.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.video.PlaybackTokenClaims;
+import com.softropic.skillars.infrastructure.video.SignedPlaybackUrl;
+import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
@@ -13,6 +16,10 @@ import com.softropic.skillars.platform.session.repo.DrillRepository;
 import com.softropic.skillars.platform.session.repo.DrillTagRepository;
 import com.softropic.skillars.platform.session.repo.DrillVideoRef;
 import com.softropic.skillars.platform.session.repo.DrillVideoRefRepository;
+import com.softropic.skillars.platform.video.contract.AccessState;
+import com.softropic.skillars.platform.video.contract.OperationalState;
+import com.softropic.skillars.platform.video.repo.Video;
+import com.softropic.skillars.platform.video.repo.VideoRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -41,6 +48,8 @@ class DrillLibraryServiceTest {
     @Mock private DrillTagRepository drillTagRepository;
     @Mock private ConfigService configService;
     @Mock private CoachProfileService coachProfileService;
+    @Mock private VideoRepository videoRepository;
+    @Mock private VideoProviderAdapter videoProviderAdapter;
 
     private DrillLibraryService service;
 
@@ -49,7 +58,7 @@ class DrillLibraryServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new DrillLibraryService(drillRepository, drillVideoRefRepository, drillTagRepository, configService, coachProfileService);
+        service = new DrillLibraryService(drillRepository, drillVideoRefRepository, drillTagRepository, configService, coachProfileService, videoRepository, videoProviderAdapter);
         when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_PROFILE_ID);
     }
 
@@ -155,6 +164,77 @@ class DrillLibraryServiceTest {
         service.checkSessionBuilderGate(COACH_USER_ID);
     }
 
+    // ── batchVideoLookup (via listDrills PLATFORM path) ──────────────────────
+
+    @Test
+    void batchVideoLookup_videoReady_returnsHasVideoTrueWithSignedUrl() {
+        UUID drillId = UUID.randomUUID();
+        UUID videoId = UUID.randomUUID();
+        Drill drill = buildDrill(drillId, "PLATFORM", "ACTIVE", null);
+
+        when(drillRepository.findByLibraryTypeAndStatus("PLATFORM", "ACTIVE")).thenReturn(List.of(drill));
+        when(drillVideoRefRepository.findByDrillIdIn(any())).thenReturn(List.of(buildVideoRef(drillId, videoId)));
+
+        Video readyVideo = buildVideo(videoId, OperationalState.READY, AccessState.ACTIVE, "asset-123");
+        when(videoRepository.findReadyAndActiveByIds(any())).thenReturn(List.of(readyVideo));
+        when(videoProviderAdapter.generatePlaybackUrl(any(), any(PlaybackTokenClaims.class)))
+            .thenReturn(new SignedPlaybackUrl("https://cdn.example.com/play/asset-123", Instant.now().plusSeconds(7200)));
+
+        List<DrillResponse> results = service.listDrills("PLATFORM", null, null, null, null, null, COACH_USER_ID);
+
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).hasVideo()).isTrue();
+        assertThat(results.get(0).videoUrl()).isEqualTo("https://cdn.example.com/play/asset-123");
+    }
+
+    @Test
+    void batchVideoLookup_videoInUploadingState_returnsHasVideoTrueAndNullUrl() {
+        UUID drillId = UUID.randomUUID();
+        UUID videoId = UUID.randomUUID();
+        Drill drill = buildDrill(drillId, "PLATFORM", "ACTIVE", null);
+
+        when(drillRepository.findByLibraryTypeAndStatus("PLATFORM", "ACTIVE")).thenReturn(List.of(drill));
+        when(drillVideoRefRepository.findByDrillIdIn(any())).thenReturn(List.of(buildVideoRef(drillId, videoId)));
+        // UPLOADING video is NOT returned by findReadyAndActiveByIds
+        when(videoRepository.findReadyAndActiveByIds(any())).thenReturn(List.of());
+
+        List<DrillResponse> results = service.listDrills("PLATFORM", null, null, null, null, null, COACH_USER_ID);
+
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).hasVideo()).isTrue();
+        assertThat(results.get(0).videoUrl()).isNull();
+    }
+
+    @Test
+    void batchVideoLookup_noRef_returnsHasVideoFalse() {
+        UUID drillId = UUID.randomUUID();
+        Drill drill = buildDrill(drillId, "PLATFORM", "ACTIVE", null);
+
+        when(drillRepository.findByLibraryTypeAndStatus("PLATFORM", "ACTIVE")).thenReturn(List.of(drill));
+        when(drillVideoRefRepository.findByDrillIdIn(any())).thenReturn(List.of());
+
+        List<DrillResponse> results = service.listDrills("PLATFORM", null, null, null, null, null, COACH_USER_ID);
+
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).hasVideo()).isFalse();
+        assertThat(results.get(0).videoUrl()).isNull();
+    }
+
+    @Test
+    void batchVideoLookup_refVideoIdNull_returnsHasVideoFalse() {
+        UUID drillId = UUID.randomUUID();
+        Drill drill = buildDrill(drillId, "PLATFORM", "ACTIVE", null);
+
+        when(drillRepository.findByLibraryTypeAndStatus("PLATFORM", "ACTIVE")).thenReturn(List.of(drill));
+        when(drillVideoRefRepository.findByDrillIdIn(any())).thenReturn(List.of(buildVideoRef(drillId, null)));
+
+        List<DrillResponse> results = service.listDrills("PLATFORM", null, null, null, null, null, COACH_USER_ID);
+
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).hasVideo()).isFalse();
+        assertThat(results.get(0).videoUrl()).isNull();
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────
 
     private Drill buildDrill(UUID id, String libraryType, String status, UUID ownerCoachId) {
@@ -181,5 +261,16 @@ class DrillLibraryServiceTest {
         ref.setVideoId(videoId);
         ref.setRefCount(1);
         return ref;
+    }
+
+    private Video buildVideo(UUID id, OperationalState opState, AccessState accState, String providerAssetId) {
+        Video v = new Video();
+        v.setId(id);
+        v.setOperationalState(opState);
+        v.setAccessState(accState);
+        v.setProviderAssetId(providerAssetId);
+        v.setOwnerId("coach-" + id);
+        v.setProvider("bunny");
+        return v;
     }
 }

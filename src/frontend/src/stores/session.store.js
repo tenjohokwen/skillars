@@ -15,6 +15,9 @@ export const useSessionStore = defineStore('session', () => {
   })
   const selectedDrill = ref(null)
   const tagSuggestions = ref([])
+  const canUploadVideo = ref(null)
+  const uploadingDrillId = ref(null)
+  const uploadProgress = ref(0)
 
   async function fetchDrills(library) {
     loading.value = true
@@ -106,6 +109,59 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
+  async function fetchVideoUploadEligibility() {
+    if (canUploadVideo.value !== null) return
+    try {
+      const res = await sessionApi.checkVideoUploadEligibility()
+      canUploadVideo.value = res.data.eligible === true
+    } catch {
+      // do not cache failure — leave null so the next mount retries
+    }
+  }
+
+  async function initiateVideoUpload(drillId, file, durationSeconds) {
+    uploadingDrillId.value = drillId
+    uploadProgress.value = 0
+    try {
+      const payload = {
+        fileName: file.name,
+        fileSizeBytes: file.size,
+        mimeType: file.type,
+        durationSeconds: durationSeconds ?? 0,
+      }
+      const res = await sessionApi.initiateVideoUpload(drillId, payload)
+      const { videoId, uploadSessionId, signedUploadUrl, expiresAt } = res.data
+      return { videoId, uploadSessionId, signedUploadUrl, expiresAt }
+    } catch (e) {
+      error.value = e
+      throw e
+    } finally {
+      uploadingDrillId.value = null
+    }
+  }
+
+  function updateDrillVideoState(drillId, { hasVideo, videoUrl }) {
+    const drill = drills.value.find((d) => d.id === drillId)
+    if (drill) {
+      drill.hasVideo = hasVideo
+      drill.videoUrl = videoUrl ?? null
+    }
+    if (selectedDrill.value?.id === drillId) {
+      selectedDrill.value.hasVideo = hasVideo
+      selectedDrill.value.videoUrl = videoUrl ?? null
+    }
+  }
+
+  async function removeVideo(drillId) {
+    try {
+      await sessionApi.deleteVideo(drillId)
+      updateDrillVideoState(drillId, { hasVideo: false, videoUrl: null })
+    } catch (e) {
+      error.value = e
+      throw e
+    }
+  }
+
   return {
     drills,
     loading,
@@ -114,11 +170,18 @@ export const useSessionStore = defineStore('session', () => {
     activeFilters,
     selectedDrill,
     tagSuggestions,
+    canUploadVideo,
+    uploadingDrillId,
+    uploadProgress,
     fetchDrills,
     searchDrills,
     cloneDrill,
     addTag,
     removeTag,
     fetchTagSuggestions,
+    fetchVideoUploadEligibility,
+    initiateVideoUpload,
+    updateDrillVideoState,
+    removeVideo,
   }
 })

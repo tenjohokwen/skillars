@@ -5,7 +5,8 @@ import com.softropic.skillars.infrastructure.exception.ErrorCode;
 public enum SessionErrorCode implements ErrorCode {
 
     CLONE_NOT_ALLOWED,
-    SESSION_CANNOT_TAG_UNAUTHORIZED;
+    SESSION_CANNOT_TAG_UNAUTHORIZED,
+    DRILL_UPLOAD_NOT_ALLOWED;
 
     @Override
     public String getErrorCode() {
