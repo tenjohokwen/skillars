@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.booking.cancelled_due_to_pause.title}">Session Cancelled — Pack Paused</title>
+</head>
+<body>
+    <h2>Session cancelled due to pack pause</h2>
+    <p><strong th:text="${map.parentName}">Parent</strong>'s session on <strong th:text="${map.requestedStartTime}">date</strong> (<span th:text="${map.canonicalTimezone}">timezone</span>) has been cancelled — their session pack was paused.</p>
+    <p>This slot is now available for new bookings.</p>
+    <p>Log in to Skillars to manage your schedule.</p>
+</body>
+</html>

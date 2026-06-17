@@ -17,30 +17,34 @@ public class BookingStateMachine {
         Map<BookingStatus, Map<BookingEvent, BookingStatus>> t = new HashMap<>();
 
         t.put(BookingStatus.REQUESTED, Map.of(
-            BookingEvent.ACCEPT, BookingStatus.ACCEPTED,
-            BookingEvent.DECLINE, BookingStatus.DECLINED
+            BookingEvent.ACCEPT,              BookingStatus.ACCEPTED,
+            BookingEvent.DECLINE,             BookingStatus.DECLINED,
+            BookingEvent.CANCEL_DUE_TO_PAUSE, BookingStatus.CANCELLED
         ));
         t.put(BookingStatus.ACCEPTED, Map.of(
-            BookingEvent.INITIATE_PAYMENT, BookingStatus.PAYMENT_PENDING,
-            BookingEvent.CANCEL_COACH, BookingStatus.CANCELLED_COACH,
-            BookingEvent.CANCEL_PARENT, BookingStatus.CANCELLED_PARENT
+            BookingEvent.INITIATE_PAYMENT,    BookingStatus.PAYMENT_PENDING,
+            BookingEvent.CANCEL_COACH,        BookingStatus.CANCELLED_COACH,
+            BookingEvent.CANCEL_PARENT,       BookingStatus.CANCELLED_PARENT,
+            BookingEvent.CANCEL_DUE_TO_PAUSE, BookingStatus.CANCELLED
         ));
         t.put(BookingStatus.PAYMENT_PENDING, Map.of(
             BookingEvent.PAYMENT_CAPTURED, BookingStatus.CONFIRMED,
-            BookingEvent.PAYMENT_FAILED, BookingStatus.REFUND_PENDING
+            BookingEvent.PAYMENT_FAILED,   BookingStatus.REFUND_PENDING
         ));
         t.put(BookingStatus.CONFIRMED, Map.of(
-            BookingEvent.SCHEDULE_UPCOMING, BookingStatus.UPCOMING,
-            BookingEvent.CANCEL_COACH, BookingStatus.CANCELLED_COACH,
-            BookingEvent.CANCEL_PARENT, BookingStatus.CANCELLED_PARENT
+            BookingEvent.SCHEDULE_UPCOMING,   BookingStatus.UPCOMING,
+            BookingEvent.CANCEL_COACH,        BookingStatus.CANCELLED_COACH,
+            BookingEvent.CANCEL_PARENT,       BookingStatus.CANCELLED_PARENT,
+            BookingEvent.CANCEL_DUE_TO_PAUSE, BookingStatus.CANCELLED
         ));
         t.put(BookingStatus.UPCOMING, Map.of(
-            BookingEvent.START,            BookingStatus.IN_PROGRESS,
-            BookingEvent.NO_SHOW_PLAYER,   BookingStatus.NO_SHOW_PLAYER,
-            BookingEvent.NO_SHOW_COACH,    BookingStatus.NO_SHOW_COACH,
-            BookingEvent.CANCEL_COACH,     BookingStatus.CANCELLED_COACH,
-            BookingEvent.CANCEL_PARENT,    BookingStatus.CANCELLED_PARENT,
-            BookingEvent.COMPLETE_PENDING, BookingStatus.COMPLETED_PENDING_CONFIRMATION
+            BookingEvent.START,               BookingStatus.IN_PROGRESS,
+            BookingEvent.NO_SHOW_PLAYER,      BookingStatus.NO_SHOW_PLAYER,
+            BookingEvent.NO_SHOW_COACH,       BookingStatus.NO_SHOW_COACH,
+            BookingEvent.CANCEL_COACH,        BookingStatus.CANCELLED_COACH,
+            BookingEvent.CANCEL_PARENT,       BookingStatus.CANCELLED_PARENT,
+            BookingEvent.COMPLETE_PENDING,    BookingStatus.COMPLETED_PENDING_CONFIRMATION,
+            BookingEvent.CANCEL_DUE_TO_PAUSE, BookingStatus.CANCELLED
         ));
         t.put(BookingStatus.IN_PROGRESS, Map.of(
             BookingEvent.PAUSE,            BookingStatus.PAUSED,
@@ -57,15 +61,15 @@ public class BookingStateMachine {
             BookingEvent.CANCEL_PARENT,    BookingStatus.CANCELLED_PARENT
         ));
         t.put(BookingStatus.COMPLETED_PENDING_CONFIRMATION, Map.of(
-            BookingEvent.COMPLETE, BookingStatus.COMPLETED,
+            BookingEvent.COMPLETE,       BookingStatus.COMPLETED,
             BookingEvent.QUICK_COMPLETE, BookingStatus.COMPLETED,
-            BookingEvent.DISPUTE, BookingStatus.DISPUTED
+            BookingEvent.DISPUTE,        BookingStatus.DISPUTED
         ));
         t.put(BookingStatus.COMPLETED, Map.of(
             BookingEvent.DISPUTE, BookingStatus.DISPUTED
         ));
         t.put(BookingStatus.DISPUTED, Map.of(
-            BookingEvent.SETTLE_REFUND, BookingStatus.REFUND_PENDING,
+            BookingEvent.SETTLE_REFUND,  BookingStatus.REFUND_PENDING,
             BookingEvent.SETTLE_COMPLETE, BookingStatus.COMPLETED
         ));
         t.put(BookingStatus.REFUND_PENDING, Map.of(

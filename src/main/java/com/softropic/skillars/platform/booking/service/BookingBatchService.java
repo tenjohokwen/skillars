@@ -100,7 +100,7 @@ public class BookingBatchService {
             throw new BatchRuleViolationException("booking.duplicateSlotStartTime");
         }
 
-        sessionPackPurchasedRepository.findActivePacksForDeduction(req.playerId(), req.coachId());
+        sessionPackPurchasedRepository.findActivePacksForDeduction(req.playerId(), req.coachId(), Instant.now());
         if (!sessionPackService.hasCredits(req.playerId(), req.coachId())) {
             throw new OperationNotAllowedException("No effective session credits available for this coach", SecurityError.MISSING_RIGHTS);
         }

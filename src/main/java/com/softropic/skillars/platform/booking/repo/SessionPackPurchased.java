@@ -46,6 +46,18 @@ public class SessionPackPurchased {
     @Column(nullable = false, length = 20)
     private String status;
 
+    @Column(name = "expires_at", nullable = false)
+    private Instant expiresAt;
+
+    @Column(name = "paused_until")
+    private Instant pausedUntil;
+
+    @Column(name = "warning_30d_sent_at")
+    private Instant warning30dSentAt;
+
+    @Column(name = "warning_7d_sent_at")
+    private Instant warning7dSentAt;
+
     @PrePersist
     void onCreate() {
         if (this.purchasedAt == null) this.purchasedAt = Instant.now();

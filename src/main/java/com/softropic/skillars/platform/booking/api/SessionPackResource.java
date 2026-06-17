@@ -1,6 +1,8 @@
 package com.softropic.skillars.platform.booking.api;
 
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.booking.contract.PauseConflictResponse;
+import com.softropic.skillars.platform.booking.contract.PausePackRequest;
 import com.softropic.skillars.platform.booking.contract.PurchaseSessionPackRequest;
 import com.softropic.skillars.platform.booking.contract.SessionPackPurchasedResponse;
 import com.softropic.skillars.platform.booking.service.SessionPackService;
@@ -51,6 +53,16 @@ public class SessionPackResource {
             ? sessionPackService.purchasePack(parentId, playerId, req.coachId(), req.sessionPackId())
             : sessionPackService.purchaseSingleSession(parentId, playerId, req.coachId());
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    @PostMapping("/players/{playerId}/packs/{packId}/pause")
+    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    public ResponseEntity<PauseConflictResponse> pausePack(
+            @PathVariable Long playerId,
+            @PathVariable UUID packId,
+            @Valid @RequestBody PausePackRequest req) {
+        PauseConflictResponse response = sessionPackService.pausePack(currentParentId(), playerId, packId, req);
+        return ResponseEntity.ok(response);
     }
 
     private Long currentParentId() {

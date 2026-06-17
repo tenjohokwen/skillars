@@ -75,7 +75,7 @@ class BookingBatchServiceTest {
 
         CoachProfile coach = buildActiveCoach();
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
-        when(sessionPackPurchasedRepository.findActivePacksForDeduction(PLAYER_ID, COACH_ID)).thenReturn(List.of());
+        when(sessionPackPurchasedRepository.findActivePacksForDeduction(any(Long.class), any(UUID.class), any(Instant.class))).thenReturn(List.of());
         when(sessionPackService.hasCredits(PLAYER_ID, COACH_ID)).thenReturn(true);
 
         BookingBatch savedBatch = new BookingBatch();
@@ -124,7 +124,7 @@ class BookingBatchServiceTest {
         player.setParentId(PARENT_ID);
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(buildActiveCoach()));
-        when(sessionPackPurchasedRepository.findActivePacksForDeduction(PLAYER_ID, COACH_ID)).thenReturn(List.of());
+        when(sessionPackPurchasedRepository.findActivePacksForDeduction(any(Long.class), any(UUID.class), any(Instant.class))).thenReturn(List.of());
         when(sessionPackService.hasCredits(PLAYER_ID, COACH_ID)).thenReturn(false);
 
         assertThatThrownBy(() -> service.createBatch(PARENT_ID, buildRequest(1)))

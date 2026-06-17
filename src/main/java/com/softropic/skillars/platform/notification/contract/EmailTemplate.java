@@ -30,7 +30,11 @@ public enum EmailTemplate {
     BOOKING_RESCHEDULE_DECLINED("email.booking.reschedule_declined.title"),
     BOOKING_DUPLICATE_PROPOSED("email.booking.duplicate_proposed.title"),
     BOOKING_BATCH_REQUESTED("email.booking.batch_requested.title"),
-    BOOKING_BATCH_ACCEPTED("email.booking.batch_accepted.title");
+    BOOKING_BATCH_ACCEPTED("email.booking.batch_accepted.title"),
+    SESSION_PACK_EXPIRY_WARNING("email.session_pack.expiry_warning.title"),
+    SESSION_PACK_EXPIRED("email.session_pack.expired.title"),
+    BOOKING_CANCELLED_DUE_TO_PAUSE("email.booking.cancelled_due_to_pause.title"),
+    PACK_PAUSED("email.session_pack.paused.title");
 
     private final String subjectKey;
     EmailTemplate(final String subjectKey) {

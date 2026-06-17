@@ -4,6 +4,7 @@ import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.booking.contract.ActorRole;
 import com.softropic.skillars.platform.booking.contract.BatchGroupedBookingResponse;
+import com.softropic.skillars.platform.booking.contract.BookingCancelledDueToPauseEvent;
 import com.softropic.skillars.platform.booking.contract.BookingConfirmedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingDeclinedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingEvent;
@@ -82,8 +83,9 @@ public class BookingService {
         Map.entry(BookingEvent.QUICK_COMPLETE,   EnumSet.of(ActorRole.COACH, ActorRole.SYSTEM)),
         Map.entry(BookingEvent.DISPUTE,          EnumSet.of(ActorRole.PARENT, ActorRole.COACH)),
         Map.entry(BookingEvent.SETTLE_REFUND,    EnumSet.of(ActorRole.SYSTEM)),
-        Map.entry(BookingEvent.SETTLE_COMPLETE,  EnumSet.of(ActorRole.SYSTEM)),
-        Map.entry(BookingEvent.REFUND_PROCESSED, EnumSet.of(ActorRole.SYSTEM))
+        Map.entry(BookingEvent.SETTLE_COMPLETE,      EnumSet.of(ActorRole.SYSTEM)),
+        Map.entry(BookingEvent.REFUND_PROCESSED,     EnumSet.of(ActorRole.SYSTEM)),
+        Map.entry(BookingEvent.CANCEL_DUE_TO_PAUSE,  EnumSet.of(ActorRole.SYSTEM))
     );
 
     private final BookingRepository bookingRepository;
@@ -152,7 +154,7 @@ public class BookingService {
         }
 
         // Acquire pessimistic lock on pack rows before credit check to prevent concurrent double-booking
-        sessionPackPurchasedRepository.findActivePacksForDeduction(req.playerId(), req.coachId());
+        sessionPackPurchasedRepository.findActivePacksForDeduction(req.playerId(), req.coachId(), Instant.now());
         if (!sessionPackService.hasCredits(req.playerId(), req.coachId())) {
             throw new OperationNotAllowedException("No effective session credits available for this coach", SecurityError.MISSING_RIGHTS);
         }
@@ -386,6 +388,24 @@ public class BookingService {
         }).toList();
 
         return new ParentScheduleResponse(playerId, items);
+    }
+
+    @Transactional
+    public void cancelDueToPause(UUID bookingId, UUID coachId, Long parentId) {
+        Booking booking = getBookingOrThrow(bookingId);
+        if (!Objects.equals(booking.getParentId(), parentId) || !Objects.equals(booking.getCoachId(), coachId)) {
+            throw new OperationNotAllowedException("Booking does not belong to this parent/pack", SecurityError.MISSING_RIGHTS);
+        }
+        transition(bookingId, BookingEvent.CANCEL_DUE_TO_PAUSE, new TransitionContext(ActorRole.SYSTEM, null));
+        CoachProfile coach = coachProfileRepository.findById(coachId).orElse(null);
+        String coachEmail = coach != null ? resolveEmail(coach.getUserId()) : "";
+        String coachDisplayName = coach != null ? coach.getDisplayName() : "Coach";
+        String parentName = resolveParentName(parentId);
+        eventPublisher.publishEvent(new BookingCancelledDueToPauseEvent(
+            this, bookingId, parentId, coachId, coachEmail, coachDisplayName,
+            parentName, booking.getRequestedStartTime(), booking.getCanonicalTimezone()
+        ));
+        log.info("Booking {} cancelled due to pack pause", bookingId);
     }
 
     public Booking getBookingOrThrow(UUID bookingId) {

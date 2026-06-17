@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-06-17 # Story 3.9 patches applied — all 12 review findings resolved; story done
+last_updated: 2026-06-17 # Story 3.10 patches applied — code review complete
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -183,7 +183,7 @@ development_status:
   skillars-3-7-session-pause-resume: done
   skillars-3-8-rescheduling-duplication-reminders: done
   skillars-3-9-bulk-session-request-from-calendar: done
-  skillars-3-10-session-pack-expiry-pause-management: backlog
+  skillars-3-10-session-pack-expiry-pause-management: done
   skillars-epic-3-retrospective: optional
 
   # Epic 4: Session Builder & Drill Library

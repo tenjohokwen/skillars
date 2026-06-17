@@ -91,7 +91,7 @@ class BookingServiceTest {
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
         when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
-        when(sessionPackPurchasedRepository.findActivePacksForDeduction(PLAYER_ID, COACH_ID)).thenReturn(List.of());
+        when(sessionPackPurchasedRepository.findActivePacksForDeduction(any(Long.class), any(UUID.class), any(Instant.class))).thenReturn(List.of());
         when(sessionPackService.hasCredits(PLAYER_ID, COACH_ID)).thenReturn(true);
         when(sessionPackService.getCreditsRemaining(PLAYER_ID, COACH_ID)).thenReturn(3);
         when(bookingRepository.countInFlightBookings(PLAYER_ID, COACH_ID)).thenReturn(0L);
@@ -115,7 +115,7 @@ class BookingServiceTest {
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
         when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
-        when(sessionPackPurchasedRepository.findActivePacksForDeduction(PLAYER_ID, COACH_ID)).thenReturn(List.of());
+        when(sessionPackPurchasedRepository.findActivePacksForDeduction(any(Long.class), any(UUID.class), any(Instant.class))).thenReturn(List.of());
         when(sessionPackService.hasCredits(PLAYER_ID, COACH_ID)).thenReturn(false);
 
         CreateBookingRequest req = makeValidRequest(COACH_ID, PLAYER_ID, window);

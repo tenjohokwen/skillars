@@ -10,5 +10,7 @@ public record SessionPackPurchasedResponse(
     int sessionCount,
     int creditsRemaining,
     Instant purchasedAt,
-    String status
+    String status,
+    Instant expiresAt,
+    Instant pausedUntil
 ) {}

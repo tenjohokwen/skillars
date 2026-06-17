@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.notification.infrastructure.listener;
 
 import com.softropic.skillars.platform.booking.contract.BatchBookingAcceptedEvent;
+import com.softropic.skillars.platform.booking.contract.BookingCancelledDueToPauseEvent;
 import com.softropic.skillars.platform.booking.contract.BatchBookingRequestedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingConfirmedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingDeclinedEvent;
@@ -276,6 +277,24 @@ public class BookingEmailListener {
         } catch (Exception e) {
             return instant.toString();
         }
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onBookingCancelledDueToPause(BookingCancelledDueToPauseEvent event) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("parentName", event.getParentName());
+        data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
+        data.put("canonicalTimezone", event.getCanonicalTimezone());
+
+        Recipient recipient = new Recipient();
+        recipient.setEmail(event.getCoachEmail());
+        recipient.setLangKey("en");
+
+        publisher.publishEvent(new Envelope(
+            List.of(recipient), EmailTemplate.BOOKING_CANCELLED_DUE_TO_PAUSE,
+            Instant.now().plus(Duration.ofDays(1)), data,
+            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+        ));
     }
 
     public void onBookingReminder(BookingReminderEvent event) {

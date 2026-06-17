@@ -7,6 +7,7 @@ import com.softropic.skillars.platform.booking.contract.SessionPackPurchasedResp
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.repo.SessionPackPurchased;
 import com.softropic.skillars.platform.booking.repo.SessionPackPurchasedRepository;
+import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachPricing;
@@ -16,6 +17,7 @@ import com.softropic.skillars.platform.marketplace.repo.SessionPackRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import com.softropic.skillars.platform.security.repo.UserRepository;
 import org.instancio.Instancio;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -35,6 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.instancio.Select.field;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -51,6 +54,8 @@ class SessionPackServiceTest {
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock SessionPackMapper mapper;
     @Mock BookingRepository bookingRepository;
+    @Mock ConfigService configService;
+    @Mock UserRepository userRepository;
 
     @InjectMocks SessionPackService service;
 
@@ -61,7 +66,7 @@ class SessionPackServiceTest {
     @Test
     void deductCredit_singleActivePack_decrementsCredits() {
         SessionPackPurchased pack = packWith(PLAYER_ID, COACH_ID, 5, 3);
-        when(repository.findActivePacksForDeduction(PLAYER_ID, COACH_ID)).thenReturn(List.of(pack));
+        when(repository.findActivePacksForDeduction(eq(PLAYER_ID), eq(COACH_ID), any(Instant.class))).thenReturn(List.of(pack));
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         service.deductCredit(PLAYER_ID, COACH_ID);
@@ -82,7 +87,7 @@ class SessionPackServiceTest {
         newPack.setPurchasedAt(newer);
 
         // repository returns FIFO order (oldest first)
-        when(repository.findActivePacksForDeduction(PLAYER_ID, COACH_ID)).thenReturn(List.of(oldPack, newPack));
+        when(repository.findActivePacksForDeduction(eq(PLAYER_ID), eq(COACH_ID), any(Instant.class))).thenReturn(List.of(oldPack, newPack));
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         service.deductCredit(PLAYER_ID, COACH_ID);
@@ -94,7 +99,7 @@ class SessionPackServiceTest {
     @Test
     void deductCredit_packExhausted_statusChangesToExhaustedAndEventPublished() {
         SessionPackPurchased pack = packWith(PLAYER_ID, COACH_ID, 3, 1);
-        when(repository.findActivePacksForDeduction(PLAYER_ID, COACH_ID)).thenReturn(List.of(pack));
+        when(repository.findActivePacksForDeduction(eq(PLAYER_ID), eq(COACH_ID), any(Instant.class))).thenReturn(List.of(pack));
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         service.deductCredit(PLAYER_ID, COACH_ID);
@@ -110,7 +115,7 @@ class SessionPackServiceTest {
 
     @Test
     void deductCredit_noActiveCredits_throwsOperationNotAllowedException() {
-        when(repository.findActivePacksForDeduction(PLAYER_ID, COACH_ID)).thenReturn(List.of());
+        when(repository.findActivePacksForDeduction(eq(PLAYER_ID), eq(COACH_ID), any(Instant.class))).thenReturn(List.of());
 
         assertThatThrownBy(() -> service.deductCredit(PLAYER_ID, COACH_ID))
             .isInstanceOf(OperationNotAllowedException.class);
@@ -118,7 +123,7 @@ class SessionPackServiceTest {
 
     @Test
     void hasCredits_activePackExists_returnsTrue() {
-        when(repository.sumActiveCredits(PLAYER_ID, COACH_ID)).thenReturn(3);
+        when(repository.sumActiveCredits(eq(PLAYER_ID), eq(COACH_ID), any(Instant.class))).thenReturn(3);
         when(bookingRepository.countInFlightBookings(PLAYER_ID, COACH_ID)).thenReturn(0L);
 
         assertThat(service.hasCredits(PLAYER_ID, COACH_ID)).isTrue();
@@ -126,7 +131,16 @@ class SessionPackServiceTest {
 
     @Test
     void hasCredits_allPacksExhausted_returnsFalse() {
-        when(repository.sumActiveCredits(PLAYER_ID, COACH_ID)).thenReturn(0);
+        when(repository.sumActiveCredits(eq(PLAYER_ID), eq(COACH_ID), any(Instant.class))).thenReturn(0);
+        when(bookingRepository.countInFlightBookings(PLAYER_ID, COACH_ID)).thenReturn(0L);
+
+        assertThat(service.hasCredits(PLAYER_ID, COACH_ID)).isFalse();
+    }
+
+    @Test
+    void hasCredits_activePack_includesPausedExclusion() {
+        // Paused pack: sumActiveCredits returns 0 because paused packs are excluded
+        when(repository.sumActiveCredits(eq(PLAYER_ID), eq(COACH_ID), any(Instant.class))).thenReturn(0);
         when(bookingRepository.countInFlightBookings(PLAYER_ID, COACH_ID)).thenReturn(0L);
 
         assertThat(service.hasCredits(PLAYER_ID, COACH_ID)).isFalse();
@@ -155,6 +169,7 @@ class SessionPackServiceTest {
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile));
         when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(pricing));
         when(paymentGateway.capturePayment(any(), any())).thenReturn("stub-ref");
+        when(configService.getLong("pack.expiry.days.tier2")).thenReturn(180L);
         when(repository.save(any())).thenAnswer(inv -> {
             SessionPackPurchased saved = inv.getArgument(0);
             if (saved.getPurchasedAt() == null) saved.setPurchasedAt(Instant.now());
@@ -167,7 +182,7 @@ class SessionPackServiceTest {
             return new SessionPackPurchasedResponse(
                 p.getId(), p.getCoachId(), name,
                 p.getSessionCount(), p.getCreditsRemaining(),
-                p.getPurchasedAt(), p.getStatus());
+                p.getPurchasedAt(), p.getStatus(), p.getExpiresAt(), p.getPausedUntil());
         });
 
         SessionPackPurchasedResponse response = service.purchasePack(PARENT_ID, PLAYER_ID, COACH_ID, packId);
@@ -176,6 +191,41 @@ class SessionPackServiceTest {
         assertThat(response.creditsRemaining()).isEqualTo(5);
         assertThat(response.status()).isEqualTo("ACTIVE");
         assertThat(response.coachDisplayName()).isEqualTo("Test Coach");
+    }
+
+    @Test
+    void purchasePack_setsExpiresAt() {
+        UUID packId = UUID.randomUUID();
+
+        PlayerProfile player = new PlayerProfile();
+        player.setParentId(PARENT_ID);
+
+        SessionPack offered = new SessionPack();
+        offered.setCoachId(COACH_ID);
+        offered.setSessionCount(5);
+        offered.setTotalPrice(new BigDecimal("100.00"));
+
+        CoachProfile coachProfile = new CoachProfile();
+        coachProfile.setDisplayName("Test Coach");
+
+        CoachPricing pricing = new CoachPricing();
+        pricing.setCurrency("EUR");
+
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(sessionPackRepository.findById(packId)).thenReturn(Optional.of(offered));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile));
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(pricing));
+        when(paymentGateway.capturePayment(any(), any())).thenReturn("stub-ref");
+        when(configService.getLong("pack.expiry.days.tier2")).thenReturn(180L);
+
+        ArgumentCaptor<SessionPackPurchased> captor = ArgumentCaptor.forClass(SessionPackPurchased.class);
+        when(repository.save(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+        when(mapper.toResponse(any(SessionPackPurchased.class), any())).thenReturn(null);
+
+        service.purchasePack(PARENT_ID, PLAYER_ID, COACH_ID, packId);
+
+        SessionPackPurchased saved = captor.getValue();
+        assertThat(saved.getExpiresAt()).isNotNull();
     }
 
     // ----- helpers -----

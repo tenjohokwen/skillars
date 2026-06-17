@@ -9,6 +9,7 @@ public enum BookingEvent {
     PAYMENT_FAILED,
     CANCEL_PARENT,
     CANCEL_COACH,
+    CANCEL_DUE_TO_PAUSE,
     START,
     PAUSE,
     RESUME,

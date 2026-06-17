@@ -30,6 +30,7 @@ import {
   duplicateNextWeek,
   createBatch,
   acceptAllBatch,
+  pauseSessionPack,
 } from 'src/api/booking.api'
 
 export function useBookingSse(bookingId) {
@@ -113,6 +114,11 @@ export const useBookingStore = defineStore('booking', () => {
   const coachBatchGroups = ref([])
   const coachRequestsLoading = ref(false)
   const coachRequestsError = ref(null)
+
+  const packPauseLoading = ref(false)
+  const packPauseError = ref(null)
+  const packPauseConflicts = ref([])
+  const packPauseResult = ref(null)
 
   const batchBasket = ref([])
   const batchSubmitting = ref(false)
@@ -209,6 +215,43 @@ export const useBookingStore = defineStore('booking', () => {
   async function purchasePack(playerId, request) {
     await purchaseSessionPack(playerId, request)
     await loadPlayerPacks(playerId)
+  }
+
+  async function initiatePausePack(playerId, packId, pauseStartDate, pauseDurationDays) {
+    packPauseLoading.value = true
+    packPauseError.value = null
+    try {
+      const res = await pauseSessionPack(playerId, packId, { pauseStartDate, pauseDurationDays })
+      packPauseResult.value = res.data
+      packPauseConflicts.value = res.data.conflictingBookings ?? []
+      return res.data
+    } catch (e) {
+      packPauseError.value = e
+      throw e
+    } finally {
+      packPauseLoading.value = false
+    }
+  }
+
+  async function confirmPausePack(playerId, packId, pauseStartDate, pauseDurationDays, confirmedCancellationIds) {
+    packPauseLoading.value = true
+    packPauseError.value = null
+    try {
+      const res = await pauseSessionPack(playerId, packId, {
+        pauseStartDate,
+        pauseDurationDays,
+        confirmedCancellationIds,
+      })
+      packPauseResult.value = res.data
+      packPauseConflicts.value = []
+      await loadPlayerPacks(playerId)
+      return res.data
+    } catch (e) {
+      packPauseError.value = e
+      throw e
+    } finally {
+      packPauseLoading.value = false
+    }
   }
 
   async function loadParentBookings() {
@@ -509,8 +552,14 @@ export const useBookingStore = defineStore('booking', () => {
     removeWindow,
     createBlock,
     removeBlock,
+    packPauseLoading,
+    packPauseError,
+    packPauseConflicts,
+    packPauseResult,
     loadPlayerPacks,
     purchasePack,
+    initiatePausePack,
+    confirmPausePack,
     loadParentBookings,
     loadCoachBookingRequests,
     submitBookingRequest,

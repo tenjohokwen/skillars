@@ -66,3 +66,6 @@ export const duplicateNextWeek = (id) => api.post(`/api/bookings/${id}/duplicate
 export const getBatchConfig = () => api.get('/api/bookings/batches/config')
 export const createBatch = (data) => api.post('/api/bookings/batches', data)
 export const acceptAllBatch = (batchId) => api.post(`/api/bookings/batches/${batchId}/accept-all`)
+
+export const pauseSessionPack = (playerId, packId, data) =>
+  api.post(`/api/bookings/players/${playerId}/packs/${packId}/pause`, data)

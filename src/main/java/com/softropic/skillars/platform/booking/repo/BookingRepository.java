@@ -81,4 +81,20 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
 
     @Query("SELECT b.batchId, COUNT(b) FROM Booking b WHERE b.batchId IN :batchIds GROUP BY b.batchId")
     List<Object[]> countByBatchIdIn(@Param("batchIds") Set<UUID> batchIds);
+
+    @Query("""
+        SELECT b FROM Booking b
+        WHERE b.playerId = :playerId
+          AND b.coachId = :coachId
+          AND b.status IN :statuses
+          AND b.requestedStartTime >= :pauseStart
+          AND b.requestedStartTime <  :pauseEnd
+        ORDER BY b.requestedStartTime ASC
+        """)
+    List<Booking> findConflictingBookingsForPause(
+        @Param("playerId")   Long playerId,
+        @Param("coachId")    UUID coachId,
+        @Param("pauseStart") Instant pauseStart,
+        @Param("pauseEnd")   Instant pauseEnd,
+        @Param("statuses")   List<String> statuses);
 }

@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.session_pack.expired.title}">Session Pack Expired</title>
+</head>
+<body>
+    <h2>Your session pack has expired</h2>
+    <p>Your <strong th:text="${map.creditsRemaining}">N</strong> unused session(s) with <strong th:text="${map.coachDisplayName}">Coach</strong> have expired.</p>
+    <p>Refund eligibility for unused sessions will be reviewed by the Skillars team.</p>
+    <p>Log in to Skillars to purchase a new session pack and continue your training.</p>
+</body>
+</html>

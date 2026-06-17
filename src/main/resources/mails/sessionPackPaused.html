@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.session_pack.paused.title}">Session Pack Paused</title>
+</head>
+<body>
+    <h2>Your session pack has been paused</h2>
+    <p>Your pack with <strong th:text="${map.coachDisplayName}">Coach</strong> is now paused. Your new expiry date is <strong th:text="${map.newExpiresAt}">date</strong>.</p>
+    <div th:if="${map.cancelledBookingTimes != null and !map.cancelledBookingTimes.isEmpty()}">
+        <p>The following sessions were cancelled as part of this pause:</p>
+        <ul>
+            <li th:each="time : ${map.cancelledBookingTimes}" th:text="${time}">Session time</li>
+        </ul>
+        <p>Your coach has been notified of each cancellation.</p>
+    </div>
+    <p>Log in to Skillars to book new sessions when your pack resumes.</p>
+</body>
+</html>

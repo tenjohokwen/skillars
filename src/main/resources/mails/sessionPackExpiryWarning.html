@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.session_pack.expiry_warning.title}">Session Pack Expiry Warning</title>
+</head>
+<body>
+    <h2>Your session pack is expiring soon</h2>
+    <p>Your <strong th:text="${map.creditsRemaining}">N</strong> session(s) with <strong th:text="${map.coachDisplayName}">Coach</strong> expire on <strong th:text="${map.expiresAt}">date</strong>.</p>
+    <p>Book your remaining sessions or pause your pack to extend your window.</p>
+    <p>Log in to Skillars to take action before your pack expires.</p>
+</body>
+</html>

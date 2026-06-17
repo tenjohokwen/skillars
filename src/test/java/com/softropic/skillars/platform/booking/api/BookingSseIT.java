@@ -38,6 +38,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -153,9 +154,11 @@ class BookingSseIT {
             );
             jdbcTemplate.update(
                 "INSERT INTO booking.session_packs_purchased " +
-                "(id, parent_id, player_id, coach_id, session_count, credits_remaining, status, purchased_at) " +
-                "VALUES (?, ?, ?, ?, 3, 3, 'ACTIVE', ?)",
-                UUID.randomUUID(), SSE_PARENT_ID, SSE_PLAYER_ID, coachProfileId, Timestamp.from(Instant.now())
+                "(id, parent_id, player_id, coach_id, session_count, credits_remaining, status, purchased_at, expires_at) " +
+                "VALUES (?, ?, ?, ?, 3, 3, 'ACTIVE', ?, ?)",
+                UUID.randomUUID(), SSE_PARENT_ID, SSE_PLAYER_ID, coachProfileId,
+                Timestamp.from(Instant.now()),
+                Timestamp.from(Instant.now().plus(180, ChronoUnit.DAYS))
             );
 
             // Pre-create a booking in REQUESTED status

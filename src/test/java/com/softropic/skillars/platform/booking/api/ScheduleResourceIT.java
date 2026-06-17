@@ -28,6 +28,7 @@ import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -121,9 +122,11 @@ class ScheduleResourceIT {
 
             jdbcTemplate.update(
                 "INSERT INTO booking.session_packs_purchased " +
-                "(id, parent_id, player_id, coach_id, session_count, credits_remaining, status, purchased_at) " +
-                "VALUES (?, ?, ?, ?, 5, 5, 'ACTIVE', ?)",
-                UUID.randomUUID(), PARENT_ID, PLAYER_ID, coachProfileId, Timestamp.from(Instant.now())
+                "(id, parent_id, player_id, coach_id, session_count, credits_remaining, status, purchased_at, expires_at) " +
+                "VALUES (?, ?, ?, ?, 5, 5, 'ACTIVE', ?, ?)",
+                UUID.randomUUID(), PARENT_ID, PLAYER_ID, coachProfileId,
+                Timestamp.from(Instant.now()),
+                Timestamp.from(Instant.now().plus(180, ChronoUnit.DAYS))
             );
 
             return null;
