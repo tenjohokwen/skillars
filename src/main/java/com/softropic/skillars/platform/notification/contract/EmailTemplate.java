@@ -28,7 +28,9 @@ public enum EmailTemplate {
     BOOKING_RESCHEDULE_REQUESTED("email.booking.reschedule_requested.title"),
     BOOKING_RESCHEDULE_ACCEPTED("email.booking.reschedule_accepted.title"),
     BOOKING_RESCHEDULE_DECLINED("email.booking.reschedule_declined.title"),
-    BOOKING_DUPLICATE_PROPOSED("email.booking.duplicate_proposed.title");
+    BOOKING_DUPLICATE_PROPOSED("email.booking.duplicate_proposed.title"),
+    BOOKING_BATCH_REQUESTED("email.booking.batch_requested.title"),
+    BOOKING_BATCH_ACCEPTED("email.booking.batch_accepted.title");
 
     private final String subjectKey;
     EmailTemplate(final String subjectKey) {

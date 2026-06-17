@@ -15,6 +15,7 @@ import com.softropic.skillars.platform.filestorage.contract.exception.StorageVal
 import com.softropic.skillars.platform.security.contract.event.SecurityAlertEvent;
 import com.softropic.skillars.infrastructure.security.event.BadCredentialsEvent;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileNotFoundException;
+import com.softropic.skillars.platform.booking.contract.BatchRuleViolationException;
 import com.softropic.skillars.platform.booking.contract.BookingStateTransitionException;
 import com.softropic.skillars.platform.marketplace.contract.MarketplaceException;
 import com.softropic.skillars.platform.security.contract.exception.CoachRegistrationException;
@@ -229,6 +230,14 @@ public class ApiAdvice {
         final ErrorDto errorDTO = logErrorAndReturnDTO(exception, defaultMsg, "security.unauthorized");
         publisher.publishEvent(new SecurityAlertEvent(exception, errorDTO.getHelpCode()));
         return errorDTO;
+    }
+
+    @ExceptionHandler({
+            BatchRuleViolationException.class
+    })
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public ErrorDto batchRuleViolationHandler(final BatchRuleViolationException exception) {
+        return logErrorAndReturnDTO(exception, exception.getMessage(), exception.getErrorCode());
     }
 
     @ExceptionHandler({

@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.booking.service;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.booking.contract.ActorRole;
+import com.softropic.skillars.platform.booking.contract.BatchGroupedBookingResponse;
 import com.softropic.skillars.platform.booking.contract.BookingConfirmedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingDeclinedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingEvent;
@@ -10,6 +11,7 @@ import com.softropic.skillars.platform.booking.contract.BookingRequestedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingResponse;
 import com.softropic.skillars.platform.booking.contract.BookingStatus;
 import com.softropic.skillars.platform.booking.contract.BookingStatusChangedEvent;
+import com.softropic.skillars.platform.booking.contract.CoachInboxResponse;
 import com.softropic.skillars.platform.booking.contract.CoachReliabilityStrikeQueuedEvent;
 import com.softropic.skillars.platform.booking.contract.CreateBookingRequest;
 import com.softropic.skillars.platform.booking.contract.ParentScheduleItem;
@@ -18,6 +20,8 @@ import com.softropic.skillars.platform.booking.contract.RescheduleRequestRespons
 import com.softropic.skillars.platform.booking.contract.ScheduleBookingItem;
 import com.softropic.skillars.platform.booking.contract.TransitionContext;
 import com.softropic.skillars.platform.booking.repo.Booking;
+import com.softropic.skillars.platform.booking.repo.BookingBatch;
+import com.softropic.skillars.platform.booking.repo.BookingBatchRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequest;
 import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequestRepository;
@@ -92,6 +96,7 @@ public class BookingService {
     private final ApplicationEventPublisher eventPublisher;
     private final com.softropic.skillars.platform.booking.repo.SessionPackPurchasedRepository sessionPackPurchasedRepository;
     private final BookingRescheduleRequestRepository rescheduleRequestRepository;
+    private final BookingBatchRepository batchRepository;
 
     @Transactional
     public void transition(UUID bookingId, BookingEvent event, TransitionContext context) {
@@ -171,7 +176,7 @@ public class BookingService {
 
         int effectiveCredits = (int) (sessionPackService.getCreditsRemaining(req.playerId(), req.coachId())
             - bookingRepository.countInFlightBookings(req.playerId(), req.coachId()));
-        return toResponse(booking, coach.getDisplayName(), player.getName(), null, effectiveCredits);
+        return toResponse(booking, coach.getDisplayName(), player.getName(), null, effectiveCredits, null, null, null);
     }
 
     @Transactional
@@ -197,7 +202,7 @@ public class BookingService {
             coach.getDisplayName(), updated.getRequestedStartTime(), updated.getCanonicalTimezone()
         ));
 
-        return toResponse(updated, coach.getDisplayName(), resolvePlayerName(updated.getPlayerId()), null, 0);
+        return toResponse(updated, coach.getDisplayName(), resolvePlayerName(updated.getPlayerId()), null, 0, null, null, null);
     }
 
     @Transactional
@@ -230,7 +235,7 @@ public class BookingService {
         CoachProfile coach = coachProfileRepository.findById(booking.getCoachId()).orElse(null);
         String coachName = coach != null ? coach.getDisplayName() : "Unknown Coach";
         String playerName = resolvePlayerName(booking.getPlayerId());
-        return toResponse(booking, coachName, playerName, null, 0);
+        return toResponse(booking, coachName, playerName, null, 0, null, null, null);
     }
 
     @Transactional(readOnly = true)
@@ -251,28 +256,67 @@ public class BookingService {
                         r.getProposedStartTime(), r.getProposedEndTime(), r.getStatus()),
                     (a, b) -> a));
 
+        Set<UUID> batchIds = bookings.stream()
+            .map(Booking::getBatchId)
+            .filter(Objects::nonNull)
+            .collect(Collectors.toSet());
+        Map<UUID, Integer> batchSizeMap = batchIds.isEmpty()
+            ? Map.of()
+            : bookingRepository.countByBatchIdIn(batchIds).stream()
+                .collect(Collectors.toMap(
+                    arr -> (UUID) arr[0],
+                    arr -> ((Number) arr[1]).intValue(),
+                    (a, b) -> a));
+
         return bookings.stream().map(b -> {
             String coachName = coachNames.getOrDefault(b.getCoachId(), "Unknown Coach");
             String playerName = resolvePlayerName(b.getPlayerId());
             int effectiveCredits = (int) (sessionPackService.getCreditsRemaining(b.getPlayerId(), b.getCoachId())
                 - bookingRepository.countInFlightBookings(b.getPlayerId(), b.getCoachId()));
-            return toResponse(b, coachName, playerName, null, effectiveCredits, pendingReschedules.get(b.getId()));
+            return toResponse(b, coachName, playerName, null, effectiveCredits,
+                pendingReschedules.get(b.getId()), b.getBatchId(), batchSizeMap.get(b.getBatchId()));
         }).toList();
     }
 
     @Transactional(readOnly = true)
-    public List<BookingResponse> getCoachBookingRequests(Long coachUserId) {
+    public CoachInboxResponse getCoachBookingRequests(Long coachUserId) {
         CoachProfile coach = coachProfileRepository.findByUserId(coachUserId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
 
         List<Booking> bookings = bookingRepository
             .findByCoachIdAndStatusOrderByRequestedStartTimeAsc(coach.getId(), "REQUESTED");
 
-        return bookings.stream().map(b -> {
-            String playerName = resolvePlayerName(b.getPlayerId());
-            String parentName = resolveParentName(b.getParentId());
-            return toResponse(b, coach.getDisplayName(), playerName, parentName, 0);
+        List<BookingResponse> singles = new java.util.ArrayList<>();
+        Map<UUID, List<Booking>> batchedByBatchId = new java.util.LinkedHashMap<>();
+
+        for (Booking b : bookings) {
+            if (b.getBatchId() == null) {
+                String playerName = resolvePlayerName(b.getPlayerId());
+                String parentName = resolveParentName(b.getParentId());
+                singles.add(toResponse(b, coach.getDisplayName(), playerName, parentName, 0, null, null, null));
+            } else {
+                batchedByBatchId.computeIfAbsent(b.getBatchId(), k -> new java.util.ArrayList<>()).add(b);
+            }
+        }
+
+        Set<UUID> batchIds = batchedByBatchId.keySet();
+        Map<UUID, Integer> requestedCountMap = batchIds.isEmpty() ? Map.of()
+            : batchRepository.findAllById(batchIds).stream()
+                .collect(Collectors.toMap(BookingBatch::getId, BookingBatch::getRequestedCount));
+
+        List<BatchGroupedBookingResponse> batchGroups = batchedByBatchId.entrySet().stream().map(entry -> {
+            UUID batchId = entry.getKey();
+            List<Booking> batchBookings = entry.getValue();
+            int totalCount = requestedCountMap.getOrDefault(batchId, batchBookings.size());
+            String parentName = batchBookings.isEmpty() ? "" : resolveParentName(batchBookings.get(0).getParentId());
+            List<BookingResponse> bookingResponses = batchBookings.stream().map(b -> {
+                String playerName = resolvePlayerName(b.getPlayerId());
+                return toResponse(b, coach.getDisplayName(), playerName, parentName, 0, null, batchId, totalCount);
+            }).toList();
+            return new BatchGroupedBookingResponse(batchId, parentName, totalCount, bookingResponses);
         }).toList();
+
+        return new CoachInboxResponse(singles, batchGroups);
     }
 
     @Transactional(readOnly = true)
@@ -432,12 +476,9 @@ public class BookingService {
         return false;
     }
 
-    private BookingResponse toResponse(Booking b, String coachName, String playerName, String parentName, int effectiveCredits) {
-        return toResponse(b, coachName, playerName, parentName, effectiveCredits, null);
-    }
-
     private BookingResponse toResponse(Booking b, String coachName, String playerName, String parentName,
-                                        int effectiveCredits, RescheduleRequestResponse pendingReschedule) {
+                                        int effectiveCredits, RescheduleRequestResponse pendingReschedule,
+                                        UUID batchId, Integer batchSize) {
         return new BookingResponse(
             b.getId(),
             b.getPlayerId(),
@@ -452,7 +493,9 @@ public class BookingService {
             b.getCreatedAt(),
             parentName,
             effectiveCredits,
-            pendingReschedule
+            pendingReschedule,
+            batchId,
+            batchSize
         );
     }
 }

@@ -74,6 +74,9 @@ public class Booking {
     @Column(name = "refund_amount", precision = 10, scale = 2)
     private BigDecimal refundAmount;
 
+    @Column(name = "batch_id")
+    private UUID batchId;
+
     @PrePersist
     void onCreate() {
         if (createdAt == null) createdAt = Instant.now();

@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.booking.api;
 
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.booking.contract.BookingResponse;
+import com.softropic.skillars.platform.booking.contract.CoachInboxResponse;
 import com.softropic.skillars.platform.booking.contract.CreateBookingRequest;
 import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.platform.security.contract.Principal;
@@ -49,7 +50,7 @@ public class BookingResource {
     // Declared before /{id}/accept and /{id}/decline to avoid Spring path-matching ambiguity
     @GetMapping("/coach")
     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
-    public ResponseEntity<List<BookingResponse>> getCoachBookingRequests() {
+    public ResponseEntity<CoachInboxResponse> getCoachBookingRequests() {
         return ResponseEntity.ok(bookingService.getCoachBookingRequests(currentCoachUserId()));
     }
 

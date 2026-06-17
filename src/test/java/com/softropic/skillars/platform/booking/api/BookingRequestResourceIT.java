@@ -512,17 +512,18 @@ class BookingRequestResourceIT {
         );
 
         String coachCookies = loginAndGetCookies(COACH_EMAIL);
-        ResponseEntity<List> response = httpTestClient.makeHttpRequest(
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
             baseUrl() + BOOKINGS_BASE + "/coach",
             HttpMethod.GET,
             null,
             authenticatedHeaders(coachCookies),
-            List.class
+            Map.class
         );
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(response.getBody()).isNotEmpty();
-        Map<?, ?> booking = (Map<?, ?>) response.getBody().get(0);
+        List<?> singleBookings = (List<?>) response.getBody().get("singleBookings");
+        assertThat(singleBookings).isNotEmpty();
+        Map<?, ?> booking = (Map<?, ?>) singleBookings.get(0);
         assertThat(booking.get("status")).isEqualTo("REQUESTED");
     }
 

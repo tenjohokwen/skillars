@@ -264,6 +264,23 @@ export default {
       acceptFailed: 'Could not accept reschedule. Please try again.',
       declineFailed: 'Could not decline reschedule. Please try again.',
     },
+    batch: {
+      enterBatchMode: 'Multi-select',
+      exitBatchMode: 'Single select',
+      added: 'Added',
+      selectedCount: '{n} of {max} slots selected',
+      reviewRequests: 'Review requests',
+      reviewTitle: 'Review session requests',
+      creditPreview:
+        '{credits} credit(s) available across {count} session(s) — any deficit will be charged at payment',
+      confirmRequests: 'Confirm requests',
+      submitted: 'Session requests submitted — coach will review',
+      submitError: 'Could not submit session requests. Please try again.',
+      groupTitle: '{name} — {n} sessions requested',
+      acceptAll: 'Accept all {n} sessions',
+      acceptedAll: 'All sessions accepted',
+      acceptError: 'Could not accept all sessions. Please try again.',
+    },
     wrapUp: {
       step1Title: 'Attendance',
       step1Label: 'Player attended',

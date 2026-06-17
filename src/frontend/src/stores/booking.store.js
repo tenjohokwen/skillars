@@ -28,6 +28,8 @@ import {
   acceptReschedule,
   declineReschedule,
   duplicateNextWeek,
+  createBatch,
+  acceptAllBatch,
 } from 'src/api/booking.api'
 
 export function useBookingSse(bookingId) {
@@ -108,8 +110,18 @@ export const useBookingStore = defineStore('booking', () => {
   const bookingsError = ref(null)
 
   const coachBookingRequests = ref([])
+  const coachBatchGroups = ref([])
   const coachRequestsLoading = ref(false)
   const coachRequestsError = ref(null)
+
+  const batchBasket = ref([])
+  const batchSubmitting = ref(false)
+  const batchError = ref(null)
+
+  const batchBasketSize = computed(() => batchBasket.value.length)
+  const isSlotInBasket = computed(() => (startTime) =>
+    batchBasket.value.some((s) => s.startTime === startTime),
+  )
 
   const coachSchedule = ref(null)
   const coachScheduleLoading = ref(false)
@@ -217,7 +229,8 @@ export const useBookingStore = defineStore('booking', () => {
     coachRequestsError.value = null
     try {
       const res = await getCoachBookingRequests()
-      coachBookingRequests.value = res.data ?? []
+      coachBookingRequests.value = res.data.singleBookings ?? []
+      coachBatchGroups.value = res.data.batchGroups ?? []
     } catch (e) {
       coachRequestsError.value = e
     } finally {
@@ -414,6 +427,58 @@ export const useBookingStore = defineStore('booking', () => {
     }
   }
 
+  function addSlotToBasket(slot) {
+    batchBasket.value.push(slot)
+  }
+
+  function removeSlotFromBasket(startTime) {
+    batchBasket.value = batchBasket.value.filter((s) => s.startTime !== startTime)
+  }
+
+  function clearBatchBasket() {
+    batchBasket.value = []
+  }
+
+  async function submitBatch(coachId, playerId, totalAmount) {
+    batchSubmitting.value = true
+    batchError.value = null
+    try {
+      const res = await createBatch({
+        coachId,
+        playerId,
+        slots: batchBasket.value.map((s) => ({
+          requestedStartTime: s.startTime,
+          requestedEndTime: s.endTime,
+        })),
+        totalAmount,
+      })
+      clearBatchBasket()
+      return res.data
+    } catch (e) {
+      batchError.value = e
+      throw e
+    } finally {
+      batchSubmitting.value = false
+    }
+  }
+
+  const batchAcceptLoading = ref(false)
+  const batchAcceptError = ref(null)
+
+  async function handleAcceptAllBatch(batchId) {
+    batchAcceptLoading.value = true
+    batchAcceptError.value = null
+    try {
+      await acceptAllBatch(batchId)
+      await loadCoachBookingRequests()
+    } catch (e) {
+      batchAcceptError.value = e
+      throw e
+    } finally {
+      batchAcceptLoading.value = false
+    }
+  }
+
   return {
     windows,
     blocks,
@@ -430,8 +495,14 @@ export const useBookingStore = defineStore('booking', () => {
     bookingsLoading,
     bookingsError,
     coachBookingRequests,
+    coachBatchGroups,
     coachRequestsLoading,
     coachRequestsError,
+    batchBasket,
+    batchBasketSize,
+    batchSubmitting,
+    batchError,
+    isSlotInBasket,
     loadAvailability,
     createWindow,
     editWindow,
@@ -467,5 +538,12 @@ export const useBookingStore = defineStore('booking', () => {
     handleAcceptReschedule,
     handleDeclineReschedule,
     handleDuplicateNextWeek,
+    addSlotToBasket,
+    removeSlotFromBasket,
+    clearBatchBasket,
+    submitBatch,
+    batchAcceptLoading,
+    batchAcceptError,
+    handleAcceptAllBatch,
   }
 })

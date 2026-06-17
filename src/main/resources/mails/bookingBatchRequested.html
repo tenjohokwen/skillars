@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.booking.batch_requested.title}">Bulk Session Request</title>
+</head>
+<body>
+    <h2>Bulk Session Request</h2>
+    <p><strong th:text="${map.parentName}">Parent</strong> has requested <strong th:text="${map.requestedCount}">N</strong> session(s).</p>
+    <p>Session dates (<span th:text="${map.canonicalTimezone}">timezone</span>):</p>
+    <ul>
+        <li th:each="date : ${map.sessionDates}" th:text="${date}">date</li>
+    </ul>
+    <p>Log in to Skillars to view and respond to these requests.</p>
+</body>
+</html>

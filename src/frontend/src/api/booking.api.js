@@ -63,3 +63,6 @@ export const requestReschedule = (id, data) => api.post(`/api/bookings/${id}/res
 export const acceptReschedule = (id, rescheduleId) => api.put(`/api/bookings/${id}/reschedule/${rescheduleId}/accept`)
 export const declineReschedule = (id, rescheduleId) => api.put(`/api/bookings/${id}/reschedule/${rescheduleId}/decline`)
 export const duplicateNextWeek = (id) => api.post(`/api/bookings/${id}/duplicate-next-week`)
+export const getBatchConfig = () => api.get('/api/bookings/batches/config')
+export const createBatch = (data) => api.post('/api/bookings/batches', data)
+export const acceptAllBatch = (batchId) => api.post(`/api/bookings/batches/${batchId}/accept-all`)

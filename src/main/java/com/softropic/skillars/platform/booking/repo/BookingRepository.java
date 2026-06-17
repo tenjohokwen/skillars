@@ -1,11 +1,12 @@
 package com.softropic.skillars.platform.booking.repo;
 
-import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 public interface BookingRepository extends JpaRepository<Booking, UUID> {
@@ -73,4 +74,11 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
           AND b.status IN ('REQUESTED', 'ACCEPTED', 'CONFIRMED', 'UPCOMING')
         """)
     long countInFlightBookings(@Param("playerId") Long playerId, @Param("coachId") UUID coachId);
+
+    List<Booking> findByBatchId(UUID batchId);
+
+    List<Booking> findByBatchIdAndStatus(UUID batchId, String status);
+
+    @Query("SELECT b.batchId, COUNT(b) FROM Booking b WHERE b.batchId IN :batchIds GROUP BY b.batchId")
+    List<Object[]> countByBatchIdIn(@Param("batchIds") Set<UUID> batchIds);
 }

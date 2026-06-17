@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.booking.batch_accepted.title}">Sessions Accepted</title>
+</head>
+<body>
+    <h2>Sessions Accepted</h2>
+    <p>Coach <strong th:text="${map.coachDisplayName}">Coach</strong> has accepted <strong th:text="${map.acceptedCount}">N</strong> session request(s).</p>
+    <p>Log in to Skillars to view your confirmed sessions.</p>
+</body>
+</html>

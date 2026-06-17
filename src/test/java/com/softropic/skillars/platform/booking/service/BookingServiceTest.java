@@ -7,6 +7,7 @@ import com.softropic.skillars.platform.booking.contract.BookingResponse;
 import com.softropic.skillars.platform.booking.contract.BookingStateTransitionException;
 import com.softropic.skillars.platform.booking.contract.CreateBookingRequest;
 import com.softropic.skillars.platform.booking.repo.Booking;
+import com.softropic.skillars.platform.booking.repo.BookingBatchRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequestRepository;
 import com.softropic.skillars.platform.booking.repo.SessionPackPurchasedRepository;
@@ -57,6 +58,7 @@ class BookingServiceTest {
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private SessionPackPurchasedRepository sessionPackPurchasedRepository;
     @Mock private BookingRescheduleRequestRepository rescheduleRequestRepository;
+    @Mock private BookingBatchRepository bookingBatchRepository;
 
     private BookingStateMachine bookingStateMachine;
     private BookingService bookingService;
@@ -72,7 +74,8 @@ class BookingServiceTest {
         bookingService = new BookingService(
             bookingRepository, bookingStateMachine, sessionPackService, coachProfileRepository,
             coachAvailabilityWindowRepository, playerProfileRepository,
-            userRepository, eventPublisher, sessionPackPurchasedRepository, rescheduleRequestRepository
+            userRepository, eventPublisher, sessionPackPurchasedRepository,
+            rescheduleRequestRepository, bookingBatchRepository
         );
     }
 

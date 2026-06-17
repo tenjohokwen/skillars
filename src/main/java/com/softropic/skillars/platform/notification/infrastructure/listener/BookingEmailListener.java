@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.notification.infrastructure.listener;
 
+import com.softropic.skillars.platform.booking.contract.BatchBookingAcceptedEvent;
+import com.softropic.skillars.platform.booking.contract.BatchBookingRequestedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingConfirmedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingDeclinedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingExpiredEvent;
@@ -192,6 +194,56 @@ public class BookingEmailListener {
 
         publisher.publishEvent(new Envelope(
             List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_DECLINED,
+            Instant.now().plus(Duration.ofDays(1)), data,
+            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+        ));
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onBatchBookingRequested(BatchBookingRequestedEvent event) {
+        if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
+            log.warn("Cannot send batch booking requested email: coach email is blank, batchId={}", event.getBatchId());
+            return;
+        }
+
+        Map<String, Object> data = new HashMap<>();
+        data.put("parentName", event.getParentName());
+        data.put("requestedCount", event.getRequestedCount());
+        data.put("canonicalTimezone", event.getCanonicalTimezone());
+        List<String> formattedDates = event.getSessionDates().stream()
+            .map(d -> formatInstantInZone(d, event.getCanonicalTimezone()))
+            .toList();
+        data.put("sessionDates", formattedDates);
+
+        Recipient recipient = new Recipient();
+        recipient.setEmail(event.getCoachEmail());
+        recipient.setLangKey("en");
+
+        publisher.publishEvent(new Envelope(
+            List.of(recipient), EmailTemplate.BOOKING_BATCH_REQUESTED,
+            Instant.now().plus(Duration.ofDays(1)), data,
+            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+        ));
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onBatchBookingAccepted(BatchBookingAcceptedEvent event) {
+        if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
+            log.warn("Cannot send batch booking accepted email: parent email is blank, batchId={}", event.getBatchId());
+            return;
+        }
+
+        Map<String, Object> data = new HashMap<>();
+        data.put("coachDisplayName", event.getCoachDisplayName());
+        data.put("acceptedCount", event.getAcceptedCount());
+        data.put("batchId", event.getBatchId().toString());
+
+        Recipient recipient = new Recipient();
+        recipient.setEmail(event.getParentEmail());
+        recipient.setLangKey("en");
+
+        publisher.publishEvent(new Envelope(
+            List.of(recipient), EmailTemplate.BOOKING_BATCH_ACCEPTED,
             Instant.now().plus(Duration.ofDays(1)), data,
             ShortCode.shortenInt(UUID.randomUUID().hashCode())
         ));
