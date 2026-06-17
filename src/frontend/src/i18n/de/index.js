@@ -149,7 +149,94 @@ export default {
     ageGroup1317: '13–17 Jahre',
     ageGroupAdult: 'Erwachsene',
   },
-  session: {},
+  session: {
+    drillLibrary: {
+      title: 'Übungsbibliothek',
+      placeholder: 'Übungskarten folgen in Story 4.2',
+    },
+  },
+  sessDrill: {
+    toeTaps: {
+      name: 'Zehenspitzen-Taps',
+      desc: 'Schnell abwechselnde Zehenspitzen-Taps auf dem Ball für schnelle Füße und ein besseres Ballgefühl.',
+    },
+    insideOutsideRoll: {
+      name: 'Innen-Außen-Rolle',
+      desc: 'Den Ball mit abwechselnden Innen-Außen-Fußkontakten über den Körper rollen, um Ballgefühl und Kontrolle zu entwickeln.',
+    },
+    lShapeMastery: {
+      name: 'L-Form-Meisterschaft',
+      desc: 'Spieler zieht den Ball mit der Sohle zurück und zieht ihn dann mit dem Innenfuß in einem L-Muster.',
+    },
+    foundationJugglingSequence: {
+      name: 'Grundlagen-Jongliersequenz',
+      desc: 'Strukturierte Jonglierübung: Oberschenkel zu Oberschenkel, Fuß zu Oberschenkel, kontinuierliches Fußjonglieren.',
+    },
+    coneSlalomBallMastery: {
+      name: 'Hütchen-Slalom-Ballbeherrschung',
+      desc: 'Spieler dribbelt einen Hütchen-Slalom ausschließlich mit Innen- und Außenfußkontakten.',
+    },
+    staticFinishInsideFoot: {
+      name: 'Statischer Abschluss — Innenfuß',
+      desc: 'Stationäres Schusstraining mit dem Innenfuß für Platzierung und Genauigkeit.',
+    },
+    turnAndShoot: {
+      name: 'Drehen und Schießen',
+      desc: 'Einen Pass mit dem Rücken zum Tor empfangen, drehen und sofort abschließen.',
+    },
+    shootingOnTheMove: {
+      name: 'Schuss aus der Bewegung',
+      desc: 'Spieler empfängt einen seitlichen Pass in Bewegung und schließt aufs Tor ab, ohne den Schritt zu unterbrechen.',
+    },
+    oneVOneFinishingUnderPressure: {
+      name: '1v1 Abschluss unter Druck',
+      desc: 'Stürmer empfängt, überwindet einen passiven Verteidiger und schießt innerhalb von 5 Sekunden.',
+    },
+    volleyFinishing: {
+      name: 'Volley-Abschluss',
+      desc: 'Spieler üben Volleys aus Flanken oder Zuwürfen mit Fokus auf Technik und Timing.',
+    },
+    cruyffTurn: {
+      name: 'Cruyff-Drehung',
+      desc: 'Klassische Finte: Passgeste oder Flanke vortäuschen, dann den Ball mit dem Innenfuß hinter das Standbein ziehen.',
+    },
+    stepOverToAccelerate: {
+      name: 'Übersteiger zum Beschleunigen',
+      desc: 'Übersteiger einsetzen, um den Verteidiger aus dem Gleichgewicht zu bringen, dann mit dem Außenfuß in den Raum spurten.',
+    },
+    elasticoFlipFlap: {
+      name: 'Elastico / Flip-Flap',
+      desc: 'Den Ball außen antippen und mit demselben Fuß in einer schnellen Bewegung nach innen wegziehen.',
+    },
+    pressureEscapeRondo3v1: {
+      name: 'Druck-Flucht-Rondo (3v1)',
+      desc: 'Drei Zuspieler halten den Ball in einem kleinen Quadrat gegen einen Verteidiger; nach 5 Pässen muss sich ein Spieler herausdribbeln.',
+    },
+    bodyFeintAndDrive: {
+      name: 'Körperfinte und Antritt',
+      desc: 'Schulter absenken, um eine Richtung vorzutäuschen, dann mit dem Außenfuß an der Gegenseite vorbeigehen.',
+    },
+    passAndMove2Touch: {
+      name: 'Passen und Bewegen (2-Touch)',
+      desc: 'Einfaches Passen und Bewegen in Paaren — empfangen, kontrollieren, passen, neue Position einnehmen.',
+    },
+    wallPassOneTwoCombination: {
+      name: 'Doppelpass (1-2-Kombination)',
+      desc: 'Spieler spielt einen Pass zum Wandspieler, empfängt den Rückpass im Lauf und setzt nach vorne fort.',
+    },
+    switchOfPlayFromCentral: {
+      name: 'Spielverlagerung aus der Mitte',
+      desc: 'Mittelspieler empfängt, dreht sich und verlagert das Spiel unter Zeitdruck auf den gegenüberliegenden Flügelspieler.',
+    },
+    thirdManRunCombination: {
+      name: 'Dritte-Mann-Kombination',
+      desc: 'Zwei Spieler kombinieren, um einen dritten Läufer, der spät ins letzte Drittel einläuft, freizuspielen.',
+    },
+    receivingInTheHalfTurn: {
+      name: 'Empfangen in der Halbdrehung',
+      desc: 'Spieler geht dem Ball entgegen und empfängt zwischen den Linien in einer halb gedrehten Position, um das Spiel vorwärts zu halten.',
+    },
+  },
   development: {},
   payment: {},
   messaging: {},

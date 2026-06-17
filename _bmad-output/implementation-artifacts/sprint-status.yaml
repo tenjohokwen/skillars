@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-06-17 # Story 3.10 patches applied — code review complete
+last_updated: 2026-06-17 # Story 4.1 done — Drill Library Foundation patches applied
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -187,8 +187,8 @@ development_status:
   skillars-epic-3-retrospective: optional
 
   # Epic 4: Session Builder & Drill Library
-  skillars-epic-4: backlog
-  skillars-4-1-drill-library-foundation: backlog
+  skillars-epic-4: in-progress
+  skillars-4-1-drill-library-foundation: done
   skillars-4-2-drill-card-operations: backlog
   skillars-4-3-custom-drill-uploads: backlog
   skillars-4-4-session-builder-block-structure-dna: backlog

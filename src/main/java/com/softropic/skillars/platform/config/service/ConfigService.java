@@ -67,6 +67,15 @@ public class ConfigService {
         }
     }
 
+    public boolean getBoolean(String key) {
+        return find(key)
+            .map(v -> "true".equalsIgnoreCase(v))
+            .orElseGet(() -> {
+                log.warn("Feature gate config key '{}' not found in platform config; defaulting to false", key);
+                return false;
+            });
+    }
+
     public Optional<String> find(String key) {
         ensureFresh();
         return Optional.ofNullable(cache.get(key)).map(PlatformConfig::getValue);

@@ -379,7 +379,94 @@ export default {
       VERIFIED_IDENTITY: "This coach's identity has been verified by Skillars",
     },
   },
-  session: {},
+  session: {
+    drillLibrary: {
+      title: 'Drill Library',
+      placeholder: 'Drill cards coming in Story 4.2',
+    },
+  },
+  sessDrill: {
+    toeTaps: {
+      name: 'Toe Taps',
+      desc: 'Rapid alternating toe taps on top of the ball to develop quick feet and ball feel.',
+    },
+    insideOutsideRoll: {
+      name: 'Inside-Outside Roll',
+      desc: 'Roll the ball across the body using inside-outside foot alternations to build touch and control.',
+    },
+    lShapeMastery: {
+      name: 'L-Shape Mastery',
+      desc: 'Player uses sole to pull back, then inside foot to drag the ball in an L-pattern.',
+    },
+    foundationJugglingSequence: {
+      name: 'Foundation Juggling Sequence',
+      desc: 'Structured juggling progression: thigh-to-thigh, foot-to-thigh, continuous foot juggle.',
+    },
+    coneSlalomBallMastery: {
+      name: 'Cone Slalom Ball Mastery',
+      desc: 'Player dribbles a cone slalom using only inside and outside touches.',
+    },
+    staticFinishInsideFoot: {
+      name: 'Static Finish — Inside Foot',
+      desc: 'Stationary shooting practice using the inside foot for placement and accuracy.',
+    },
+    turnAndShoot: {
+      name: 'Turn and Shoot',
+      desc: 'Receive a pass with back to goal, turn, and shoot first time.',
+    },
+    shootingOnTheMove: {
+      name: 'Shooting on the Move',
+      desc: 'Player receives a lateral pass while moving and finishes on goal without breaking stride.',
+    },
+    oneVOneFinishingUnderPressure: {
+      name: '1v1 Finishing Under Pressure',
+      desc: 'Attacker receives, beats a passive defender, and shoots within a 5-second window.',
+    },
+    volleyFinishing: {
+      name: 'Volley Finishing',
+      desc: 'Players practice volleys from crossed balls or throws, focusing on technique and timing.',
+    },
+    cruyffTurn: {
+      name: 'Cruyff Turn',
+      desc: 'Classic feint: fake to pass or cross, pull ball behind standing leg with inside foot.',
+    },
+    stepOverToAccelerate: {
+      name: 'Step-Over to Accelerate',
+      desc: 'Use step-over(s) to unbalance a defender, then burst into space with outside foot.',
+    },
+    elasticoFlipFlap: {
+      name: 'Elastico / Flip-Flap',
+      desc: 'Touch ball outside then whip inside with same foot in one fast motion to beat the defender.',
+    },
+    pressureEscapeRondo3v1: {
+      name: 'Pressure Escape Rondo (3v1)',
+      desc: 'Three passers keep the ball in a small square from one defender; after 5 passes, player must dribble out.',
+    },
+    bodyFeintAndDrive: {
+      name: 'Body Feint and Drive',
+      desc: 'Drop shoulder to fake one direction, drive past passive defender with outside foot on opposite side.',
+    },
+    passAndMove2Touch: {
+      name: 'Pass and Move (2-Touch)',
+      desc: 'Simple pass and move in pairs — receive, control, pass, move to new position.',
+    },
+    wallPassOneTwoCombination: {
+      name: 'Wall Pass (1-2 Combination)',
+      desc: 'Player plays pass to wall player, receives return ball in stride, and continues forward.',
+    },
+    switchOfPlayFromCentral: {
+      name: 'Switch of Play from Central',
+      desc: 'Central player receives, spins, and switches play across to opposite wide player under time pressure.',
+    },
+    thirdManRunCombination: {
+      name: 'Third-Man Run Combination',
+      desc: 'Two players combine to play in a third runner arriving late into the final third.',
+    },
+    receivingInTheHalfTurn: {
+      name: 'Receiving in the Half-Turn',
+      desc: 'Player checks to the ball, receives between the lines in a half-turned body position to keep play moving forward.',
+    },
+  },
   development: {},
   payment: {},
   messaging: {},

@@ -16,6 +16,7 @@ import com.softropic.skillars.platform.security.contract.event.SecurityAlertEven
 import com.softropic.skillars.infrastructure.security.event.BadCredentialsEvent;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileNotFoundException;
 import com.softropic.skillars.platform.booking.contract.BatchRuleViolationException;
+import com.softropic.skillars.platform.session.contract.InvalidParamException;
 import com.softropic.skillars.platform.booking.contract.BookingStateTransitionException;
 import com.softropic.skillars.platform.marketplace.contract.MarketplaceException;
 import com.softropic.skillars.platform.security.contract.exception.CoachRegistrationException;
@@ -288,6 +289,12 @@ public class ApiAdvice {
         return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                 .header("Retry-After", String.valueOf(ex.getRetryAfterSeconds()))
                 .body(body);
+    }
+
+    @ExceptionHandler(InvalidParamException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public ErrorDto invalidParamHandler(final InvalidParamException ex) {
+        return logErrorAndReturnDTO(ex, ex.getMessage(), "validation.invalidParam");
     }
 
     @ExceptionHandler(FeatureGatedException.class)

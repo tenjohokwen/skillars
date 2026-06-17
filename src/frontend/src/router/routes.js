@@ -144,6 +144,12 @@ const routes = [
         meta: { requiresAuth: true, requiresCoach: true },
       },
       {
+        path: 'coach/drills',
+        name: 'coach-drill-library',
+        component: () => import('pages/coach/DrillLibraryPage.vue'),
+        meta: { requiresAuth: true, requiresCoach: true },
+      },
+      {
         path: 'player/locker-room',
         component: () => import('pages/player/PlayerLockerRoomPlaceholderPage.vue'),
         meta: { requiresAuth: true },

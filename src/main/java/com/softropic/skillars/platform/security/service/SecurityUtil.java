@@ -10,6 +10,7 @@ import com.softropic.skillars.platform.security.contract.Principal;
 
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
@@ -156,6 +157,18 @@ public final class SecurityUtil {
             authToken.setDetails(principal);
         }
         return authentication;
+    }
+
+    public Long getCurrentCoachUserId() {
+        User user = getCurrentUser();
+        if (!(user instanceof Principal principal) || principal.getBusinessId() == null || principal.getBusinessId().isBlank()) {
+            throw new InsufficientAuthenticationException("Principal has no business ID");
+        }
+        try {
+            return Long.parseLong(principal.getBusinessId());
+        } catch (NumberFormatException e) {
+            throw new InsufficientAuthenticationException("Invalid business ID format in principal");
+        }
     }
 
     public boolean hasClientIdentifier() {

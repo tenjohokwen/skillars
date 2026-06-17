@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.marketplace.service;
 
+import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer;
 import com.softropic.skillars.platform.marketplace.contract.CoachMediaItemDto;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileDto;
@@ -282,6 +283,20 @@ public class CoachProfileService {
             strikeCount,
             mediaGallery
         );
+    }
+
+    @Transactional(readOnly = true)
+    public CoachSubscriptionTier getCoachSubscriptionTier(UUID coachId) {
+        return coachSubscriptionRepository.findByCoachId(coachId)
+            .map(CoachSubscription::getTier)
+            .orElseThrow(() -> new ResourceNotFoundException("CoachSubscription not found", "coach_subscription"));
+    }
+
+    @Transactional(readOnly = true)
+    public UUID getCoachIdByUserId(Long userId) {
+        return coachProfileRepository.findByUserId(userId)
+            .map(CoachProfile::getId)
+            .orElseThrow(() -> new ResourceNotFoundException("CoachProfile not found", "coach_profile"));
     }
 
     private CoachProfile requireProfile(Long userId) {
