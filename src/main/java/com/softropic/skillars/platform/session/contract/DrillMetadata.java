@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.session.contract;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.util.List;
 import java.util.Map;
 
@@ -16,5 +18,6 @@ public record DrillMetadata(
     String difficultyTier,
     List<String> equipmentRequired,
     String recommendedGroupSize,
-    List<String> coachingPoints
+    List<String> coachingPoints,
+    @JsonProperty("setupDiagram") String setupDiagram
 ) {}

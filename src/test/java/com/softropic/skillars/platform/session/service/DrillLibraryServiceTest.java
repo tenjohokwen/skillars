@@ -10,6 +10,7 @@ import com.softropic.skillars.platform.session.contract.DrillMetadata;
 import com.softropic.skillars.platform.session.contract.DrillResponse;
 import com.softropic.skillars.platform.session.repo.Drill;
 import com.softropic.skillars.platform.session.repo.DrillRepository;
+import com.softropic.skillars.platform.session.repo.DrillTagRepository;
 import com.softropic.skillars.platform.session.repo.DrillVideoRef;
 import com.softropic.skillars.platform.session.repo.DrillVideoRefRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -37,6 +38,7 @@ class DrillLibraryServiceTest {
 
     @Mock private DrillRepository drillRepository;
     @Mock private DrillVideoRefRepository drillVideoRefRepository;
+    @Mock private DrillTagRepository drillTagRepository;
     @Mock private ConfigService configService;
     @Mock private CoachProfileService coachProfileService;
 
@@ -47,7 +49,7 @@ class DrillLibraryServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new DrillLibraryService(drillRepository, drillVideoRefRepository, configService, coachProfileService);
+        service = new DrillLibraryService(drillRepository, drillVideoRefRepository, drillTagRepository, configService, coachProfileService);
         when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_PROFILE_ID);
     }
 
@@ -95,6 +97,7 @@ class DrillLibraryServiceTest {
             d.setCreatedAt(Instant.now());
             return d;
         });
+        when(drillVideoRefRepository.findByDrillId(any(UUID.class))).thenReturn(Optional.empty());
 
         service.cloneDrill(sourceDrillId, COACH_USER_ID);
 
@@ -167,7 +170,7 @@ class DrillLibraryServiceTest {
         d.setMetadata(new DrillMetadata(
             List.of("ball_mastery"), List.of("coordination"),
             Map.of("ball_mastery", 70), 20, 2, 1, 1, 1, false,
-            "U12", List.of("ball"), "2–6", List.of("Keep eyes up")
+            "U12", List.of("ball"), "2–6", List.of("Keep eyes up"), null
         ));
         return d;
     }

@@ -49,6 +49,9 @@ public class Drill {
     @Column(nullable = false, columnDefinition = "jsonb")
     private DrillMetadata metadata;
 
+    @Column(name = "source_drill_id")
+    private UUID sourceDrillId;
+
     @Column(name = "trans_key", unique = true, length = 100)
     private String transKey;
 

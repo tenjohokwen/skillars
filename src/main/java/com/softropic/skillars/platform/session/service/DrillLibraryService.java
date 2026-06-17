@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.session.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import org.springframework.dao.DataIntegrityViolationException;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
@@ -10,6 +11,9 @@ import com.softropic.skillars.platform.session.contract.DrillResponse;
 import com.softropic.skillars.platform.session.contract.SessionErrorCode;
 import com.softropic.skillars.platform.session.repo.Drill;
 import com.softropic.skillars.platform.session.repo.DrillRepository;
+import com.softropic.skillars.platform.session.repo.DrillTag;
+import com.softropic.skillars.platform.session.repo.DrillTagId;
+import com.softropic.skillars.platform.session.repo.DrillTagRepository;
 import com.softropic.skillars.platform.session.repo.DrillVideoRef;
 import com.softropic.skillars.platform.session.repo.DrillVideoRefRepository;
 import lombok.RequiredArgsConstructor;
@@ -17,7 +21,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -31,22 +38,51 @@ public class DrillLibraryService {
 
     private final DrillRepository drillRepository;
     private final DrillVideoRefRepository drillVideoRefRepository;
+    private final DrillTagRepository drillTagRepository;
     private final ConfigService configService;
     private final CoachProfileService coachProfileService;
 
     @Transactional(readOnly = true)
-    public List<DrillResponse> listPlatformDrills() {
-        List<Drill> drills = drillRepository.findByLibraryTypeAndStatus("PLATFORM", "ACTIVE");
-        Set<UUID> withVideo = batchVideoLookup(drills);
-        return drills.stream().map(d -> toResponse(d, withVideo.contains(d.getId()))).toList();
-    }
+    public List<DrillResponse> listDrills(
+        String library,
+        String q,
+        String skill,
+        String difficultyTier,
+        List<String> equipment,
+        Boolean weakFootBias,
+        Long coachUserId
+    ) {
+        List<Drill> drills;
+        if ("PLATFORM".equals(library)) {
+            drills = drillRepository.findByLibraryTypeAndStatus("PLATFORM", "ACTIVE");
+        } else {
+            UUID coachId = resolveCoachId(coachUserId);
+            drills = drillRepository.findByOwnerCoachIdAndStatus(coachId, "ACTIVE");
+        }
 
-    @Transactional(readOnly = true)
-    public List<DrillResponse> listPrivateDrills(Long coachUserId) {
-        UUID coachId = resolveCoachId(coachUserId);
-        List<Drill> drills = drillRepository.findByOwnerCoachIdAndStatus(coachId, "ACTIVE");
+        drills = applyFilters(drills, q, skill, difficultyTier, equipment, weakFootBias);
+
         Set<UUID> withVideo = batchVideoLookup(drills);
-        return drills.stream().map(d -> toResponse(d, withVideo.contains(d.getId()))).toList();
+        List<UUID> drillIds = drills.stream().map(Drill::getId).toList();
+
+        if ("PRIVATE".equals(library)) {
+            UUID coachId = resolveCoachId(coachUserId);
+            Map<UUID, List<String>> tagsByDrill = buildTagMap(drillIds, coachId);
+            return drills.stream()
+                .map(d -> toResponse(d, withVideo.contains(d.getId()), tagsByDrill.getOrDefault(d.getId(), List.of()), null, null))
+                .toList();
+        } else {
+            // Resolve coachId for clone provenance; coaches without a profile can still browse PLATFORM drills
+            UUID coachId = null;
+            try {
+                coachId = resolveCoachId(coachUserId);
+            } catch (ResourceNotFoundException ignored) {}
+            Map<UUID, UUID> cloneMap = buildCloneMap(drillIds, coachId);
+            return drills.stream()
+                .map(d -> toResponse(d, withVideo.contains(d.getId()), List.of(),
+                    cloneMap.containsKey(d.getId()), cloneMap.get(d.getId())))
+                .toList();
+        }
     }
 
     public DrillResponse cloneDrill(UUID sourceDrillId, Long coachUserId) {
@@ -70,6 +106,7 @@ public class DrillLibraryService {
         clone.setOwnerCoachId(coachId);
         clone.setStatus("ACTIVE");
         clone.setMetadata(source.getMetadata());
+        clone.setSourceDrillId(source.getId());
         Drill saved = drillRepository.save(clone);
 
         boolean hasVideo = false;
@@ -84,7 +121,44 @@ public class DrillLibraryService {
             hasVideo = sourceRefOpt.get().getVideoId() != null;
         }
 
-        return toResponse(saved, hasVideo);
+        return toResponse(saved, hasVideo, List.of(), null, null);
+    }
+
+    public void addTag(UUID drillId, String tag, Long coachUserId) {
+        UUID coachId = resolveCoachId(coachUserId);
+        Drill drill = drillRepository.findById(drillId)
+            .orElseThrow(() -> new ResourceNotFoundException("Drill not found", "drill"));
+
+        if (!"COACH".equals(drill.getLibraryType()) || !coachId.equals(drill.getOwnerCoachId())) {
+            throw new OperationNotAllowedException("Cannot tag this drill", SessionErrorCode.SESSION_CANNOT_TAG_UNAUTHORIZED);
+        }
+
+        DrillTagId tagId = new DrillTagId(drillId, tag, coachId);
+        if (!drillTagRepository.existsById(tagId)) {
+            try {
+                drillTagRepository.save(new DrillTag(tagId));
+            } catch (DataIntegrityViolationException ignored) {
+                // concurrent duplicate insert — PK constraint fires; treat as idempotent
+            }
+        }
+    }
+
+    public void removeTag(UUID drillId, String tag, Long coachUserId) {
+        UUID coachId = resolveCoachId(coachUserId);
+        Drill drill = drillRepository.findById(drillId)
+            .orElseThrow(() -> new ResourceNotFoundException("Drill not found", "drill"));
+
+        if (!"COACH".equals(drill.getLibraryType()) || !coachId.equals(drill.getOwnerCoachId())) {
+            throw new OperationNotAllowedException("Cannot tag this drill", SessionErrorCode.SESSION_CANNOT_TAG_UNAUTHORIZED);
+        }
+
+        drillTagRepository.deleteByIdDrillIdAndIdTagAndIdCoachId(drillId, tag, coachId);
+    }
+
+    @Transactional(readOnly = true)
+    public List<String> getSuggestedTags(Long coachUserId) {
+        UUID coachId = resolveCoachId(coachUserId);
+        return drillTagRepository.findDistinctTagsByCoachId(coachId);
     }
 
     public void checkSessionBuilderGate(Long coachUserId) {
@@ -94,6 +168,59 @@ public class DrillLibraryService {
         if (!enabled) {
             throw new FeatureGatedException("session_builder", resolveMinEnabledTier());
         }
+    }
+
+    private List<Drill> applyFilters(List<Drill> drills, String q, String skill, String difficultyTier,
+                                     List<String> equipment, Boolean weakFootBias) {
+        return drills.stream().filter(d -> {
+            if (q != null && !q.isBlank()) {
+                String lower = q.toLowerCase();
+                boolean nameMatch = d.getName() != null && d.getName().toLowerCase().contains(lower);
+                boolean descMatch = d.getDescription() != null && d.getDescription().toLowerCase().contains(lower);
+                boolean cpMatch = d.getMetadata() != null
+                    && d.getMetadata().coachingPoints() != null
+                    && d.getMetadata().coachingPoints().stream().anyMatch(cp -> cp.toLowerCase().contains(lower));
+                if (!nameMatch && !descMatch && !cpMatch) return false;
+            }
+            if (skill != null && !skill.isBlank() && d.getMetadata() != null) {
+                boolean primary = d.getMetadata().primarySkills() != null && d.getMetadata().primarySkills().contains(skill);
+                boolean secondary = d.getMetadata().secondarySkills() != null && d.getMetadata().secondarySkills().contains(skill);
+                if (!primary && !secondary) return false;
+            }
+            if (difficultyTier != null && !difficultyTier.isBlank() && d.getMetadata() != null) {
+                if (!difficultyTier.equals(d.getMetadata().difficultyTier())) return false;
+            }
+            if (equipment != null && !equipment.isEmpty() && d.getMetadata() != null) {
+                if (d.getMetadata().equipmentRequired() == null) return false;
+                boolean anyMatch = equipment.stream().anyMatch(e -> d.getMetadata().equipmentRequired().contains(e));
+                if (!anyMatch) return false;
+            }
+            if (weakFootBias != null && d.getMetadata() != null) {
+                if (d.getMetadata().weakFootBias() != weakFootBias) return false;
+            }
+            return true;
+        }).toList();
+    }
+
+    private Map<UUID, List<String>> buildTagMap(List<UUID> drillIds, UUID coachId) {
+        if (drillIds.isEmpty()) return Map.of();
+        List<com.softropic.skillars.platform.session.repo.DrillTag> tags =
+            drillTagRepository.findByIdDrillIdInAndIdCoachId(drillIds, coachId);
+        Map<UUID, List<String>> map = new HashMap<>();
+        for (com.softropic.skillars.platform.session.repo.DrillTag t : tags) {
+            map.computeIfAbsent(t.getId().getDrillId(), k -> new ArrayList<>()).add(t.getId().getTag());
+        }
+        return map;
+    }
+
+    private Map<UUID, UUID> buildCloneMap(List<UUID> drillIds, UUID coachId) {
+        if (drillIds.isEmpty() || coachId == null) return Map.of();
+        List<DrillRepository.CloneProjection> rows = drillRepository.findClonesBySourceIdsAndCoach(drillIds, coachId);
+        Map<UUID, UUID> map = new HashMap<>();
+        for (DrillRepository.CloneProjection row : rows) {
+            map.put(row.getSourceId(), row.getCloneId());
+        }
+        return map;
     }
 
     private UUID resolveCoachId(Long userId) {
@@ -121,7 +248,7 @@ public class DrillLibraryService {
             .collect(Collectors.toSet());
     }
 
-    private DrillResponse toResponse(Drill drill, boolean hasVideo) {
+    private DrillResponse toResponse(Drill drill, boolean hasVideo, List<String> tags, Boolean isClonedByMe, UUID cloneId) {
         return new DrillResponse(
             drill.getId(),
             drill.getName(),
@@ -131,8 +258,12 @@ public class DrillLibraryService {
             drill.getStatus(),
             drill.getMetadata(),
             hasVideo,
+            null,
             drill.getTransKey(),
-            drill.getCreatedAt()
+            drill.getCreatedAt(),
+            tags,
+            isClonedByMe,
+            cloneId
         );
     }
 }

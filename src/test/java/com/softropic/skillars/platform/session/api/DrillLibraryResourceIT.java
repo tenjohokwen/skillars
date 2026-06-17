@@ -1,31 +1,20 @@
 package com.softropic.skillars.platform.session.api;
 
 import com.softropic.skillars.config.TestConfig;
-import com.softropic.skillars.e2e.HttpTestClient;
-import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
-import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
 
-import java.sql.Timestamp;
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -42,13 +31,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
     "allowed.clients=testClientId"
 })
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
-class DrillLibraryResourceIT {
+class DrillLibraryResourceIT extends BaseSessionIT {
 
-    private static final String LOGIN_ENDPOINT  = "/api/auth/login";
-    private static final String DRILLS_BASE     = "/api/session/drills";
-    private static final String PLANS_BASE      = "/api/session/plans";
-    private static final String CLIENT_ID       = "testClientId";
-    private static final String TEST_PASSWORD   = "TestPass@123!";
+    private static final String PLANS_BASE = "/api/session/plans";
 
     private static final long COACH_USER_ID        = 9550000010L;
     private static final long COACH_USER_ID2       = 9550000020L;
@@ -56,18 +41,11 @@ class DrillLibraryResourceIT {
     private static final long SCOUT_COACH_USER_ID  = 9550000040L;
     private static final long INSTR_COACH_USER_ID  = 9550000050L;
 
-    private static final String COACH_EMAIL       = "coach.drill@skillars-test.com";
-    private static final String COACH_EMAIL2      = "coach2.drill@skillars-test.com";
-    private static final String PARENT_EMAIL      = "parent.drill@skillars-test.com";
-    private static final String SCOUT_EMAIL       = "scout.drill@skillars-test.com";
-    private static final String INSTR_EMAIL       = "instructor.drill@skillars-test.com";
-
-    @Autowired private JdbcTemplate jdbcTemplate;
-    @Autowired private TransactionTemplate transactionTemplate;
-    @Autowired private HttpTestClient httpTestClient;
-    @Autowired private PasswordEncoder passwordEncoder;
-
-    @LocalServerPort private int randomServerPort;
+    private static final String COACH_EMAIL  = "coach.drill@skillars-test.com";
+    private static final String COACH_EMAIL2 = "coach2.drill@skillars-test.com";
+    private static final String PARENT_EMAIL = "parent.drill@skillars-test.com";
+    private static final String SCOUT_EMAIL  = "scout.drill@skillars-test.com";
+    private static final String INSTR_EMAIL  = "instructor.drill@skillars-test.com";
 
     private UUID coachProfileId;
     private UUID coachProfileId2;
@@ -340,96 +318,5 @@ class DrillLibraryResourceIT {
         );
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
-    }
-
-    // ── helpers ──────────────────────────────────────────────────────────────
-
-    private String loginAndGetCookies(String email) {
-        ResponseEntity<Map> loginResponse = httpTestClient.makeHttpRequest(
-            baseUrl() + LOGIN_ENDPOINT,
-            HttpMethod.POST,
-            Map.of("email", email, "password", TEST_PASSWORD),
-            clientHeaders(),
-            Map.class
-        );
-        assertThat(loginResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
-        List<String> setCookies = loginResponse.getHeaders().get("Set-Cookie");
-        assertThat(setCookies).isNotNull();
-        return setCookies.stream()
-            .map(c -> c.split(";")[0])
-            .reduce((a, b) -> a + "; " + b)
-            .orElseThrow();
-    }
-
-    private HttpHeaders clientHeaders() {
-        HttpHeaders headers = new HttpHeaders();
-        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.add(SecurityConstants.API_KEY_HEADER, CLIENT_ID);
-        return headers;
-    }
-
-    private HttpHeaders authenticatedHeaders(String cookieValue) {
-        HttpHeaders headers = clientHeaders();
-        headers.add(HttpHeaders.COOKIE, cookieValue);
-        return headers;
-    }
-
-    private String baseUrl() {
-        return "http://localhost:" + randomServerPort;
-    }
-
-    private void insertAuthority(int id, String name) {
-        jdbcTemplate.update(
-            "INSERT INTO main.authority (id, name, status, created_by, created_date) " +
-            "VALUES (?, ?, 'ACTIVE', 'system', ?) ON CONFLICT (name) DO NOTHING",
-            id, name, Timestamp.from(Instant.now())
-        );
-    }
-
-    private void insertUser(long id, String email, String passwordHash, String role) {
-        jdbcTemplate.update(
-            "INSERT INTO main.\"user\" " +
-            "(id, created_by, created_date, last_modified_by, last_modified_date, request_id, session_id, " +
-            "status, dob, email, first_name, gender, lang_key, last_name, iso2_country, phone, " +
-            "activated, locked, login, login_id_type, password_hash, otp_enabled, " +
-            "skillars_role, verification_status) " +
-            "VALUES (?, 'system', ?, 'system', ?, 'test-req', NULL, " +
-            "'ACTIVE', '1990-01-01', ?, 'Test', 'OTHER', 'en', ?, 'DE', ?, " +
-            "true, false, ?, 'EMAIL', ?, false, " +
-            "?, 'BASIC_VERIFIED')",
-            id,
-            Timestamp.from(Instant.now()), Timestamp.from(Instant.now()),
-            email, role,
-            "69" + (id % 100000000),
-            email, passwordHash, role
-        );
-    }
-
-    private void grantRole(long userId, String roleName) {
-        jdbcTemplate.update(
-            "INSERT INTO main.user_authority (user_id, authority_id) " +
-            "VALUES (?, (SELECT id FROM main.authority WHERE name = ?)) ON CONFLICT DO NOTHING",
-            userId, roleName
-        );
-    }
-
-    private UUID insertCoachProfile(long userId) {
-        UUID profileId = UUID.randomUUID();
-        jdbcTemplate.update(
-            "INSERT INTO marketplace.coach_profiles " +
-            "(id, user_id, display_name, bio, city, languages, canonical_timezone, status) " +
-            "VALUES (?, ?, 'Drill Coach', 'Bio', 'Berlin', ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE')",
-            profileId, userId
-        );
-        return profileId;
-    }
-
-    private void insertSubscription(UUID coachProfileId, String tier) {
-        jdbcTemplate.update(
-            "INSERT INTO marketplace.coach_subscriptions (coach_id, tier, active_since) " +
-            "VALUES (?, ?, NOW()) ON CONFLICT DO NOTHING",
-            coachProfileId, tier
-        );
     }
 }
