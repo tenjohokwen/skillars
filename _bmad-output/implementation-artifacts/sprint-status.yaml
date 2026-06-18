@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-06-18 # Story 4.6 done — Homework Assignment & Player Locker Room
+last_updated: 2026-06-18 # Story 5.1 done — second review pass complete, all patches applied
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -197,8 +197,8 @@ development_status:
   skillars-epic-4-retrospective: optional
 
   # Epic 5: Player Development Intelligence
-  skillars-epic-5: backlog
-  skillars-5-1-slu-engine-skill-taxonomy: backlog
+  skillars-epic-5: in-progress
+  skillars-5-1-slu-engine-skill-taxonomy: done
   skillars-5-2-skill-exposure-dashboard-neglected-skill-detection: backlog
   skillars-5-3-skills-radar-assessment-entry-multi-coach-cumulation: backlog
   skillars-5-4-skills-radar-display-development-correlation: backlog

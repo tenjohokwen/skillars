@@ -3,9 +3,14 @@ package com.softropic.skillars.infrastructure.config;
 import com.softropic.skillars.infrastructure.threadpool.MdcDecorator;
 import com.softropic.skillars.infrastructure.threadpool.TenantContextTaskDecorator;
 
+import org.slf4j.LoggerFactory;
+import org.springframework.aop.interceptor.AsyncUncaughtExceptionHandler;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.annotation.AsyncConfigurer;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+
+import java.util.concurrent.ThreadPoolExecutor;
 
 /**
  * General-purpose async executor configuration for multi-tenant applications.
@@ -23,7 +28,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
  * the originating request.
  */
 @Configuration("tenantAsyncConfig")
-public class AsyncConfig {
+public class AsyncConfig implements AsyncConfigurer {
 
     @Bean(name = "taskExecutor")
     public ThreadPoolTaskExecutor taskExecutor() {
@@ -32,6 +37,7 @@ public class AsyncConfig {
         executor.setMaxPoolSize(16);
         executor.setQueueCapacity(100);
         executor.setThreadNamePrefix("skillars-async-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
 
         // Compose MdcDecorator (existing) + TenantContextTaskDecorator (new)
         executor.setTaskDecorator(task -> {
@@ -42,5 +48,12 @@ public class AsyncConfig {
 
         executor.initialize();
         return executor;
+    }
+
+    @Override
+    public AsyncUncaughtExceptionHandler getAsyncUncaughtExceptionHandler() {
+        return (ex, method, params) ->
+            LoggerFactory.getLogger(AsyncConfig.class)
+                .error("Uncaught exception in @Async method '{}': {}", method.getName(), ex.getMessage(), ex);
     }
 }

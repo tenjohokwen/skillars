@@ -14,6 +14,7 @@ public final class AppEndpoints {
 
     public static final String                    SECURED           = "/v1/**";
     public static final String                    SECURED_API           = "/api/**";
+    public static final String                    DEVELOPMENT_API       = "/api/development/**"; // covered by SECURED_API wildcard; declared for documentation
     public static final String                    ACTUATOR           = "/manage/**";
     public static final String                    REFRESH           = "/refresh";
     public static final Map<String, String[]> SECURED_MAPPINGS;

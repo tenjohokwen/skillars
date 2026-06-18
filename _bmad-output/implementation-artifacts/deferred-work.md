@@ -1,3 +1,22 @@
+## Deferred from: code review of skillars-5-1-slu-engine-skill-taxonomy — Pass 2 (2026-06-18)
+- D1: No retry on saveAll failure — SLU permanently lost on transient DB error; dev notes acknowledge and provide a recovery query; infrastructure-wide limitation [`SluCalculationService.java:165`]
+- D2: CallerRunsPolicy can block HTTP thread under executor saturation — prior review explicit tradeoff: AbortPolicy silently drops SLU vs CallerRunsPolicy blocks request thread [`AsyncConfig.java:40`]
+- D3: Duration rounding over/under-counts block time — prior review accepted as intentional approximation; documented in dev notes [`SluCalculationService.java:121`]
+- D4: Thread.sleep in negative-path IT tests — prior review explicitly deferred; acceptable for negative async tests with no positive signal [`SluCalculationServiceIT.java`]
+- D5: No booking_id stored in player_skill_stats — no DB-level idempotency anchor; behavioral gap addressed by idempotency pre-check patch; schema addition out of story scope [`V46__development_module_init.sql`]
+- D6: No guard on zero/negative repDensity/intensity metadata fields — pre-existing drill creation validation gap; zero repDensity silently produces no SLU without warning log [`SluFormula.java`]
+- D7: NUMERIC(10,4) overflow at extreme session attribute values — theoretical at realistic gameplay values with default 0.10 scales [`SluFormula.java`, `V46__development_module_init.sql`]
+- D8: SluRepository inherits deleteAll/deleteById — AC 4 met; comment warns developers; runtime override-to-throw is defense-in-depth only [`SluRepository.java`]
+- D9: Skill code case-sensitivity — lowercase skillWeighting keys silently dropped; fix belongs at drill creation (input normalisation), not SLU calculation [`SluCalculationService.java`]
+
+## Deferred from: code review of skillars-5-1-slu-engine-skill-taxonomy (2026-06-18)
+- W1: Negative metadata fields (repDensity/intensity/etc.) can produce corrupt SLU via double-negative — pre-existing validation gap at drill creation; fix at DrillMetadata validation layer [`SluFormula.java:45-66`]
+- W2: @Async executor naming ambiguity — explicit `@Async("taskExecutor")` qualifier would eliminate uncertainty; largely covered by the AsyncUncaughtExceptionHandler patch [`SluCalculationService.java:43`]
+- W3: configService.getString whitespace/empty string causes NumberFormatException → silent SLU abort — pre-existing ConfigService limitation; fix belongs at config write validation [`SluCalculationService.java:78-85`]
+- W4: Thread.sleep in negative-path IT tests — acceptable for negative async assertions where no positive signal exists; replace with Awaitility + log spy if flakiness is observed in CI [`SluCalculationServiceIT.java:107,125,135,171`]
+- W5: Platform config IDs 70-72 skip 68-69 — intentional gap; no migration uses 68-69; ON CONFLICT DO NOTHING prevents failures [`V46__development_module_init.sql:51-55`]
+- W6: player_id and coach_id have no FK constraints on player_skill_stats — intentional for immutable audit rows; cascading deletes would corrupt historical SLU [`V46__development_module_init.sql:19,21`]
+
 ## Deferred from: code review of skillars-4-6-homework-assignment-player-locker-room (2026-06-18)
 - W1: `getLockerRoomDrills` calls `hasActivePack` once per unique coach (N+1 queries) — performance concern, not correctness; batch API needed; address in a performance-hardening pass [`HomeworkAssignmentService.java:getLockerRoomDrills`]
 - W2: Missing composite index on `(player_id, coach_id)` on `homework_assignments` — full player-index scan used for the coach-filter path as data grows [`V45__homework_assignments.sql`]
