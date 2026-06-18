@@ -438,9 +438,10 @@ class TenantAdminResourceIT {
         assertThat(getResponse.getBody()).contains("SUSPENDED");
 
         // Verify all keys are REVOKED
-        Integer nonRevokedCount = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM main.tenant_api_key WHERE tenant_id = ? AND key_status != 'REVOKED'",
-            Integer.class, tenantId);
+        Integer nonRevokedCount = transactionTemplate.execute(status ->
+            jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM main.tenant_api_key WHERE tenant_id = ? AND key_status != 'REVOKED'",
+                Integer.class, tenantId));
         assertThat(nonRevokedCount).isEqualTo(0);
     }
 

@@ -38,7 +38,7 @@ export default defineRouter(function (/* { store, ssrContext } */) {
   const ROLE_ROUTES = {
     COACH: '/coach/command-center',
     PARENT: '/parent/dashboard',
-    PLAYER: '/player/locker-room',
+    PLAYER: '/player/locker-room', // TODO(player-login): update to /player/locker-room/:playerId when PLAYER role is implemented
     ADMIN: '/admin/health-dashboard',
   }
 

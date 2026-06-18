@@ -41,6 +41,7 @@ import java.time.OffsetDateTime;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -355,5 +356,11 @@ public class CoachProfileService {
                 }
             }
         }
+    }
+
+    @Transactional(readOnly = true)
+    public Map<UUID, String> getDisplayNamesByIds(Set<UUID> coachIds) {
+        return coachProfileRepository.findAllById(coachIds).stream()
+            .collect(Collectors.toMap(CoachProfile::getId, CoachProfile::getDisplayName));
     }
 }

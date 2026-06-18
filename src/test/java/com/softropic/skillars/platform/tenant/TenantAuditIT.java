@@ -68,6 +68,7 @@ class TenantAuditIT {
             jdbcTemplate.execute("DELETE FROM main.revinfo");
             jdbcTemplate.execute("DELETE FROM main.tenant_api_key");
             jdbcTemplate.execute("DELETE FROM main.tenant");
+            jdbcTemplate.execute("DELETE FROM main.sec");
             return null;
         });
         SecurityContextHolder.clearContext();
@@ -84,15 +85,17 @@ class TenantAuditIT {
         tenantService.updateName(ref, "Audit Updated");
 
         // Assert update audit row exists with the new name
-        Integer updateCount = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM main.tenant_aud WHERE id = ? AND name = ?",
-            Integer.class, tenantId, "Audit Updated");
+        Integer updateCount = transactionTemplate.execute(status ->
+            jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM main.tenant_aud WHERE id = ? AND name = ?",
+                Integer.class, tenantId, "Audit Updated"));
         assertThat(updateCount).isGreaterThanOrEqualTo(1);
 
         // Assert creation row exists (revtype = 0 means INSERT)
-        Integer createCount = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM main.tenant_aud WHERE id = ? AND revtype = 0",
-            Integer.class, tenantId);
+        Integer createCount = transactionTemplate.execute(status ->
+            jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM main.tenant_aud WHERE id = ? AND revtype = 0",
+                Integer.class, tenantId));
         assertThat(createCount).isGreaterThanOrEqualTo(1);
     }
 
@@ -107,16 +110,18 @@ class TenantAuditIT {
         ApiKeyService.ApiKeyAndRawKey rotated = apiKeyService.rotate(initialKeyId);
 
         // The old key should have a ROTATED audit entry
-        Integer oldKeyRotatedCount = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM main.tenant_api_key_aud WHERE id = ? AND key_status = 'ROTATED'",
-            Integer.class, initialKeyId);
+        Integer oldKeyRotatedCount = transactionTemplate.execute(status ->
+            jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM main.tenant_api_key_aud WHERE id = ? AND key_status = 'ROTATED'",
+                Integer.class, initialKeyId));
         assertThat(oldKeyRotatedCount).isGreaterThanOrEqualTo(1);
 
         // The new ACTIVE key should have an INSERT audit entry (revtype = 0)
         Long newKeyId = rotated.entity().getId();
-        Integer newKeyInsertCount = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM main.tenant_api_key_aud WHERE id = ? AND key_status = 'ACTIVE' AND revtype = 0",
-            Integer.class, newKeyId);
+        Integer newKeyInsertCount = transactionTemplate.execute(status ->
+            jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM main.tenant_api_key_aud WHERE id = ? AND key_status = 'ACTIVE' AND revtype = 0",
+                Integer.class, newKeyId));
         assertThat(newKeyInsertCount).isGreaterThanOrEqualTo(1);
     }
 
@@ -129,15 +134,17 @@ class TenantAuditIT {
         Long keyId = result.key().getId();
 
         // The tenant INSERT audit row should capture the admin identity
-        String tenantCreatedBy = jdbcTemplate.queryForObject(
-            "SELECT created_by FROM main.tenant_aud WHERE id = ? AND revtype = 0",
-            String.class, tenantId);
+        String tenantCreatedBy = transactionTemplate.execute(status ->
+            jdbcTemplate.queryForObject(
+                "SELECT created_by FROM main.tenant_aud WHERE id = ? AND revtype = 0",
+                String.class, tenantId));
         assertThat(tenantCreatedBy).isEqualTo("admin@test.com");
 
         // The key INSERT audit row should also capture the admin identity
-        String keyCreatedBy = jdbcTemplate.queryForObject(
-            "SELECT created_by FROM main.tenant_api_key_aud WHERE id = ? AND revtype = 0",
-            String.class, keyId);
+        String keyCreatedBy = transactionTemplate.execute(status ->
+            jdbcTemplate.queryForObject(
+                "SELECT created_by FROM main.tenant_api_key_aud WHERE id = ? AND revtype = 0",
+                String.class, keyId));
         assertThat(keyCreatedBy).isEqualTo("admin@test.com");
     }
 }

@@ -71,68 +71,86 @@ abstract class BaseSessionIT {
     }
 
     protected void insertAuthority(int id, String name) {
-        jdbcTemplate.update(
-            "INSERT INTO main.authority (id, name, status, created_by, created_date) " +
-            "VALUES (?, ?, 'ACTIVE', 'system', ?) ON CONFLICT (name) DO NOTHING",
-            id, name, Timestamp.from(Instant.now())
-        );
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.authority (id, name, status, created_by, created_date) " +
+                "VALUES (?, ?, 'ACTIVE', 'system', ?) ON CONFLICT (name) DO NOTHING",
+                id, name, Timestamp.from(Instant.now())
+            );
+            return null;
+        });
     }
 
     protected void insertUser(long id, String email, String passwordHash, String role) {
-        jdbcTemplate.update(
-            "INSERT INTO main.\"user\" " +
-            "(id, created_by, created_date, last_modified_by, last_modified_date, request_id, session_id, " +
-            "status, dob, email, first_name, gender, lang_key, last_name, iso2_country, phone, " +
-            "activated, locked, login, login_id_type, password_hash, otp_enabled, " +
-            "skillars_role, verification_status) " +
-            "VALUES (?, 'system', ?, 'system', ?, 'test-req', NULL, " +
-            "'ACTIVE', '1990-01-01', ?, 'Test', 'OTHER', 'en', ?, 'DE', ?, " +
-            "true, false, ?, 'EMAIL', ?, false, " +
-            "?, 'BASIC_VERIFIED')",
-            id,
-            Timestamp.from(Instant.now()), Timestamp.from(Instant.now()),
-            email, role,
-            "69" + (id % 100000000),
-            email, passwordHash, role
-        );
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.\"user\" " +
+                "(id, created_by, created_date, last_modified_by, last_modified_date, request_id, session_id, " +
+                "status, dob, email, first_name, gender, lang_key, last_name, iso2_country, phone, " +
+                "activated, locked, login, login_id_type, password_hash, otp_enabled, " +
+                "skillars_role, verification_status) " +
+                "VALUES (?, 'system', ?, 'system', ?, 'test-req', NULL, " +
+                "'ACTIVE', '1990-01-01', ?, 'Test', 'OTHER', 'en', ?, 'DE', ?, " +
+                "true, false, ?, 'EMAIL', ?, false, " +
+                "?, 'BASIC_VERIFIED')",
+                id,
+                Timestamp.from(Instant.now()), Timestamp.from(Instant.now()),
+                email, role,
+                "69" + (id % 100000000),
+                email, passwordHash, role
+            );
+            return null;
+        });
     }
 
     protected void grantRole(long userId, String roleName) {
-        jdbcTemplate.update(
-            "INSERT INTO main.user_authority (user_id, authority_id) " +
-            "VALUES (?, (SELECT id FROM main.authority WHERE name = ?)) ON CONFLICT DO NOTHING",
-            userId, roleName
-        );
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.user_authority (user_id, authority_id) " +
+                "VALUES (?, (SELECT id FROM main.authority WHERE name = ?)) ON CONFLICT DO NOTHING",
+                userId, roleName
+            );
+            return null;
+        });
     }
 
     protected UUID insertCoachProfile(long userId) {
         UUID profileId = UUID.randomUUID();
-        jdbcTemplate.update(
-            "INSERT INTO marketplace.coach_profiles " +
-            "(id, user_id, display_name, bio, city, languages, canonical_timezone, status) " +
-            "VALUES (?, ?, 'Test Coach', 'Bio', 'Berlin', ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE')",
-            profileId, userId
-        );
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_profiles " +
+                "(id, user_id, display_name, bio, city, languages, canonical_timezone, status) " +
+                "VALUES (?, ?, 'Test Coach', 'Bio', 'Berlin', ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE')",
+                profileId, userId
+            );
+            return null;
+        });
         return profileId;
     }
 
     protected void insertSubscription(UUID coachId, String tier) {
-        jdbcTemplate.update(
-            "INSERT INTO marketplace.coach_subscriptions (coach_id, tier, active_since) " +
-            "VALUES (?, ?, NOW()) ON CONFLICT DO NOTHING",
-            coachId, tier
-        );
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_subscriptions (coach_id, tier, active_since) " +
+                "VALUES (?, ?, NOW()) ON CONFLICT DO NOTHING",
+                coachId, tier
+            );
+            return null;
+        });
     }
 
     protected void insertDrill(UUID id, String name, String libraryType, UUID ownerCoachId, String status) {
-        jdbcTemplate.update(
-            "INSERT INTO session.drills (id, name, library_type, owner_coach_id, status, metadata, version) " +
-            "VALUES (?, ?, ?, ?, ?, ?::jsonb, 0)",
-            id, name, libraryType, ownerCoachId, status,
-            "{\"primarySkills\":[\"dribbling\"],\"secondarySkills\":[],\"skillWeighting\":{\"dribbling\":100}," +
-            "\"repDensity\":10,\"intensity\":2,\"pressureLevel\":1,\"cognitiveLoad\":1,\"matchRealism\":2," +
-            "\"weakFootBias\":false,\"difficultyTier\":\"U12\",\"equipmentRequired\":[\"ball\"]," +
-            "\"recommendedGroupSize\":\"2\",\"coachingPoints\":[\"Keep it simple\"]}"
-        );
+        transactionTemplate.execute(txStatus -> {
+            jdbcTemplate.update(
+                "INSERT INTO session.drills (id, name, library_type, owner_coach_id, status, metadata, version) " +
+                "VALUES (?, ?, ?, ?, ?, ?::jsonb, 0)",
+                id, name, libraryType, ownerCoachId, status,
+                "{\"primarySkills\":[\"dribbling\"],\"secondarySkills\":[],\"skillWeighting\":{\"dribbling\":100}," +
+                "\"repDensity\":10,\"intensity\":2,\"pressureLevel\":1,\"cognitiveLoad\":1,\"matchRealism\":2," +
+                "\"weakFootBias\":false,\"difficultyTier\":\"U12\",\"equipmentRequired\":[\"ball\"]," +
+                "\"recommendedGroupSize\":\"2\",\"coachingPoints\":[\"Keep it simple\"]}"
+            );
+            return null;
+        });
     }
 }

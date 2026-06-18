@@ -49,7 +49,8 @@ public class WebhookEventProcessorScheduler {
     private final UploadSessionRepository uploadSessionRepository;
 
     @Observed(name = "video.webhook.processQueue")
-    @Scheduled(fixedDelayString = "${app.video.webhook.processor-delay-ms:5000}")
+    @Scheduled(fixedDelayString = "${app.video.webhook.processor-delay-ms:5000}",
+               initialDelayString = "${app.video.webhook.processor-delay-ms:5000}")
     public void processPending() {
         videoMetrics.updateWebhookQueueDepth(
             webhookEventRepository.countByStatus(VideoWebhookStatus.PENDING));

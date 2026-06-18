@@ -182,6 +182,7 @@ class ConfigResourceIT {
             // Remove admin test user
             jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id = " + ADMIN_USER_ID);
             jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id = " + ADMIN_USER_ID);
+            jdbcTemplate.execute("DELETE FROM main.sec");
 
             return null;
         });

@@ -23,9 +23,11 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.context.SecurityContextImpl;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDate;
 import java.util.Set;
@@ -56,6 +58,12 @@ class AccountManagementFacadeIT {
     @Autowired
     private MailManager mailManager;
 
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private TransactionTemplate transactionTemplate;
+
     private TestMailManager testMailManager;
 
     @BeforeEach
@@ -69,6 +77,10 @@ class AccountManagementFacadeIT {
     @AfterEach
     void tearDown() {
         SecurityContextHolder.clearContext();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.execute("DELETE FROM main.sec");
+            return null;
+        });
     }
 
     // -------------------------------------------------------------------------

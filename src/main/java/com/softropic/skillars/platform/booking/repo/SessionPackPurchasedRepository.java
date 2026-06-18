@@ -65,6 +65,19 @@ public interface SessionPackPurchasedRepository extends JpaRepository<SessionPac
         """)
     List<SessionPackPurchased> findPacksNeedingWarning7d(@Param("now") Instant now, @Param("threshold7d") Instant threshold7d);
 
+    @Query("""
+        SELECT s FROM SessionPackPurchased s
+        WHERE s.playerId = :playerId AND s.coachId = :coachId
+          AND s.status = 'ACTIVE' AND s.creditsRemaining > 0
+          AND (s.pausedUntil IS NULL OR s.pausedUntil <= :now)
+        ORDER BY s.purchasedAt ASC
+        """)
+    List<SessionPackPurchased> findActivePacks(@Param("playerId") Long playerId,
+                                               @Param("coachId") UUID coachId,
+                                               @Param("now") Instant now);
+
+    java.util.Optional<SessionPackPurchased> findTopByPlayerIdAndCoachIdOrderByPurchasedAtDesc(Long playerId, UUID coachId);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT s FROM SessionPackPurchased s WHERE s.id = :id")
     java.util.Optional<SessionPackPurchased> findByIdForUpdate(@Param("id") UUID id);

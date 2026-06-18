@@ -71,6 +71,7 @@ class EmailRetrySchedulerIT {
         transactionTemplate.execute(status -> {
             jdbcTemplate.execute("DELETE FROM main.envelope_entity_recipients");
             jdbcTemplate.execute("DELETE FROM main.envelope_entity");
+            jdbcTemplate.execute("DELETE FROM main.sec");
             return null;
         });
         ((TestMailManager) mailManager).clear();

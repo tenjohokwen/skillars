@@ -87,6 +87,12 @@ export default {
   player: {
     lockerRoomTitle: 'Umkleideraum des Spielers',
     lockerRoomBody: 'Ihr Trainingsinhalt und Ihre Hausaufgaben erscheinen hier.',
+    homeworkEmptyTitle: 'Noch keine Hausaufgaben',
+    homeworkEmptySubtitle: 'Dein Trainer hat noch keine Hausaufgaben gegeben — schau nach deiner nächsten Einheit wieder rein',
+    homeworkCompleted: 'Erledigt!',
+    homeworkMarkDone: 'Ich habe das gemacht',
+    assignedBy: 'Zugewiesen von {coach}',
+    viewLockerRoom: 'Umkleide',
     createTitle: 'Spielerprofil hinzufügen',
     nameLabel: 'Spielername',
     dobLabel: 'Geburtsdatum',

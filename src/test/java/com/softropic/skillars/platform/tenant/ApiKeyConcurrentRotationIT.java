@@ -53,6 +53,7 @@ class ApiKeyConcurrentRotationIT {
             jdbcTemplate.execute("DELETE FROM main.revinfo");
             jdbcTemplate.execute("DELETE FROM main.tenant_api_key");
             jdbcTemplate.execute("DELETE FROM main.tenant");
+            jdbcTemplate.execute("DELETE FROM main.sec");
             return null;
         });
     }

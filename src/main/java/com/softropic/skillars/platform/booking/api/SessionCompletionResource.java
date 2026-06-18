@@ -5,10 +5,15 @@ import com.softropic.skillars.platform.booking.contract.WrapUpRequest;
 import com.softropic.skillars.platform.booking.service.BookingCompletionService;
 import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
+import com.softropic.skillars.platform.session.contract.DrillResponse;
+import com.softropic.skillars.platform.session.repo.SessionRepository;
+import com.softropic.skillars.platform.session.service.DrillSuggestionService;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.authentication.InsufficientAuthenticationException;
@@ -33,6 +38,13 @@ public class SessionCompletionResource {
 
     private final BookingCompletionService bookingCompletionService;
     private final SecurityUtil securityUtil;
+    private final SessionRepository sessionRepository;
+
+    // @Lazy breaks circular dependency: platform.session imports platform.booking.contract,
+    // and platform.booking.api now injects platform.session.service.DrillSuggestionService.
+    @Autowired
+    @Lazy
+    private DrillSuggestionService drillSuggestionService;
 
     @PostMapping("/{id}/start")
     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
@@ -85,11 +97,12 @@ public class SessionCompletionResource {
 
     @GetMapping("/session/{bookingId}/drills/suggestions")
     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
-    public ResponseEntity<List<Object>> getDrillSuggestions(
+    public ResponseEntity<List<DrillResponse>> getDrillSuggestions(
             @PathVariable UUID bookingId,
             @RequestParam(defaultValue = "2") int limit) {
-        log.debug("Drill suggestions stub called for booking {} — Epic 4 will provide real data", bookingId);
-        return ResponseEntity.ok(List.of());
+        return sessionRepository.findByBookingId(bookingId)
+            .map(session -> ResponseEntity.ok(drillSuggestionService.suggest(session.getId(), currentUserId(), limit)))
+            .orElseGet(() -> ResponseEntity.ok(List.of()));
     }
 
     private Long currentUserId() {

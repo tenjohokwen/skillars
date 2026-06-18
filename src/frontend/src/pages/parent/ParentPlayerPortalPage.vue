@@ -5,7 +5,15 @@
       :pitch-timezone="firstBookingTimezone"
     />
 
-    <div class="text-h5 q-mb-md">{{ t('booking.timezone.parentScheduleTitle') }}</div>
+    <div class="row items-center justify-between q-mb-md">
+      <div class="text-h5">{{ t('booking.timezone.parentScheduleTitle') }}</div>
+      <q-btn
+        flat
+        icon="sports_soccer"
+        :to="{ name: 'player-locker-room', params: { playerId: route.params.playerId } }"
+        :label="t('player.viewLockerRoom')"
+      />
+    </div>
 
     <div v-if="bookingStore.parentScheduleLoading" class="flex flex-center q-py-xl">
       <q-spinner size="48px" />

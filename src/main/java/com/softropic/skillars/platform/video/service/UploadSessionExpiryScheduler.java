@@ -27,7 +27,8 @@ public class UploadSessionExpiryScheduler {
     private final VideoProperties properties;
     private final TransactionTemplate transactionTemplate;
 
-    @Scheduled(fixedDelayString = "${app.video.upload.expiry-scheduler-delay-ms:30000}")
+    @Scheduled(fixedDelayString = "${app.video.upload.expiry-scheduler-delay-ms:30000}",
+               initialDelayString = "${app.video.upload.expiry-scheduler-delay-ms:30000}")
     public void processExpired() {
         int batchSize = properties.getReconciliation().getBatchSize();
 

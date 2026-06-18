@@ -15,6 +15,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
@@ -42,6 +43,9 @@ class SecretServiceIT {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private TransactionTemplate transactionTemplate;
+
     @BeforeAll
     static void beforeAll() {
         MockHttpServletRequest request = new MockHttpServletRequest();
@@ -66,7 +70,8 @@ class SecretServiceIT {
         assertThat(Arrays.equals(bytes, secret.getSecretBytes())).isTrue();
         assertThat(secret.getStatus()).isEqualTo(EntityStatus.INACTIVE);
         final String query = "SELECT status, value, version FROM main.sec where version = '%s' AND bus_id = '%s'";
-        final Map<String, Object> results = jdbcTemplate.queryForMap(String.format(query, V_1, JWT));
+        final Map<String, Object> results = transactionTemplate.execute(status ->
+            jdbcTemplate.queryForMap(String.format(query, V_1, JWT)));
         assertThat(results).containsEntry("status","INACTIVE");
     }
 
@@ -77,7 +82,8 @@ class SecretServiceIT {
         assertThat(Arrays.equals(bytes, secret.getSecretBytes())).isTrue();
         assertThat(secret.getStatus()).isEqualTo(EntityStatus.ACTIVE);
         final String query = "SELECT status, value, version FROM main.sec where version = '%s' AND bus_id = '%s'";
-        final Map<String, Object> results = jdbcTemplate.queryForMap(String.format(query, V_1, JWT));
+        final Map<String, Object> results = transactionTemplate.execute(status ->
+            jdbcTemplate.queryForMap(String.format(query, V_1, JWT)));
         assertThat(results).containsEntry("status","ACTIVE");
     }
 

@@ -136,9 +136,10 @@ class RotatedKeyCleanupJobIT {
 
         apiKeyService.revokeExpiredRotatedKeys();
 
-        Integer revokedAuditCount = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM main.tenant_api_key_aud WHERE id = ? AND key_status = 'REVOKED'",
-            Integer.class, rotatedKeyId);
+        Integer revokedAuditCount = transactionTemplate.execute(status ->
+            jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM main.tenant_api_key_aud WHERE id = ? AND key_status = 'REVOKED'",
+                Integer.class, rotatedKeyId));
         assertThat(revokedAuditCount).isGreaterThanOrEqualTo(1);
     }
 

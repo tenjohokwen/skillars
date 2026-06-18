@@ -60,6 +60,7 @@ class TenantProvisioningIT {
         transactionTemplate.execute(status -> {
             jdbcTemplate.execute("delete from main.tenant_api_key");
             jdbcTemplate.execute("delete from main.tenant");
+            jdbcTemplate.execute("DELETE FROM main.sec");
             return null;
         });
     }

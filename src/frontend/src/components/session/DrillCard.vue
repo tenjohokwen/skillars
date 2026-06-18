@@ -113,8 +113,8 @@
         </template>
       </div>
 
-      <!-- Clone indicator for PLATFORM drills -->
-      <div v-if="drill.libraryType === 'PLATFORM'" class="drill-card__clone-row q-mt-sm">
+      <!-- Clone indicator for PLATFORM drills — not shown in locker-room context -->
+      <div v-if="drill.libraryType === 'PLATFORM' && context !== 'locker-room'" class="drill-card__clone-row q-mt-sm">
         <template v-if="drill.isClonedByMe">
           <q-badge color="positive" class="q-mr-sm">
             {{ t('session.drillLibrary.inYourLibrary') }}

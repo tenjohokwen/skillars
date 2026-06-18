@@ -6,6 +6,12 @@ export default {
   player: {
     lockerRoomTitle: 'Vestiaire du joueur',
     lockerRoomBody: "Votre contenu d'entraînement et vos devoirs apparaîtront ici.",
+    homeworkEmptyTitle: 'Pas encore de devoirs',
+    homeworkEmptySubtitle: "Votre entraîneur n'a pas encore assigné de devoirs — revenez après votre prochaine séance",
+    homeworkCompleted: 'Fait !',
+    homeworkMarkDone: "Je l'ai fait",
+    assignedBy: 'Assigné par {coach}',
+    viewLockerRoom: 'Vestiaire',
     createTitle: 'Ajouter un profil de joueur',
     nameLabel: 'Nom du joueur',
     dobLabel: 'Date de naissance',

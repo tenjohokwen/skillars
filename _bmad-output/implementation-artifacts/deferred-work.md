@@ -1,3 +1,9 @@
+## Deferred from: code review of skillars-4-6-homework-assignment-player-locker-room (2026-06-18)
+- W1: `getLockerRoomDrills` calls `hasActivePack` once per unique coach (N+1 queries) — performance concern, not correctness; batch API needed; address in a performance-hardening pass [`HomeworkAssignmentService.java:getLockerRoomDrills`]
+- W2: Missing composite index on `(player_id, coach_id)` on `homework_assignments` — full player-index scan used for the coach-filter path as data grows [`V45__homework_assignments.sql`]
+- W3: `handleBookingCompleted` stores null sessionId with no log.warn — async bean ordering is not guaranteed; add warn log if sessionId resolves null [`HomeworkAssignmentService.java:handleBookingCompleted`]
+- W4: `@Size(max=2)` on `WrapUpRequest.homeworkDrillIds` not enforced on event-driven path — HTTP validation is the only entry point today; add size guard in service if other publishers emerge [`HomeworkAssignmentService.java`]
+
 ## Deferred from: code review of skillars-4-5-intelligent-drill-suggestions-session-templates — Round 2 (2026-06-18)
 - W1: `deleteTemplate()` no ARCHIVED guard — idempotent re-archive silently succeeds (204) on already-archived template; acceptable behavior [`SessionTemplateService.java:deleteTemplate`]
 - W2: `deployTemplate()` passes `t.getBlocks()` by reference not defensive copy — safe in current code path; no mutation after save in same transaction [`SessionTemplateService.java:deployTemplate`]

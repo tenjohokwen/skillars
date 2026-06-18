@@ -213,27 +213,30 @@ class BookingSseIT {
         AtomicInteger capturedStatus = new AtomicInteger(-1);
         AtomicReference<String> capturedContentType = new AtomicReference<>("");
 
-        // Use execute() with a custom ResponseExtractor to capture headers without consuming the SSE body
-        try {
-            restTemplate.execute(
-                URI.create(sseUrl),
-                HttpMethod.GET,
-                req -> {
-                    req.getHeaders().setAccept(List.of(MediaType.TEXT_EVENT_STREAM));
-                    req.getHeaders().add(SecurityConstants.API_KEY_HEADER, CLIENT_ID);
-                    req.getHeaders().add(HttpHeaders.COOKIE, cookies);
-                },
-                response -> {
-                    capturedStatus.set(response.getStatusCode().value());
-                    if (response.getHeaders().getContentType() != null) {
-                        capturedContentType.set(response.getHeaders().getContentType().toString());
+        // Run the SSE call in a daemon thread so the main thread is not blocked by the
+        // open-ended body drain.  The await() below returns as soon as the status is set.
+        CompletableFuture.runAsync(() -> {
+            try {
+                restTemplate.execute(
+                    URI.create(sseUrl),
+                    HttpMethod.GET,
+                    req -> {
+                        req.getHeaders().setAccept(List.of(MediaType.TEXT_EVENT_STREAM));
+                        req.getHeaders().add(SecurityConstants.API_KEY_HEADER, CLIENT_ID);
+                        req.getHeaders().add(HttpHeaders.COOKIE, cookies);
+                    },
+                    response -> {
+                        capturedStatus.set(response.getStatusCode().value());
+                        if (response.getHeaders().getContentType() != null) {
+                            capturedContentType.set(response.getHeaders().getContentType().toString());
+                        }
+                        return null;
                     }
-                    return null;
-                }
-            );
-        } catch (Exception e) {
-            // SSE body-reading errors are expected; what matters is the status captured above
-        }
+                );
+            } catch (Exception ignored) {}
+        });
+
+        await().atMost(5, TimeUnit.SECONDS).until(() -> capturedStatus.get() != -1);
 
         assertThat(capturedStatus.get()).isEqualTo(200);
         assertThat(capturedContentType.get()).contains("text/event-stream");

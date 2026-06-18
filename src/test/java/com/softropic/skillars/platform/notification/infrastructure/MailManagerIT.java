@@ -7,11 +7,14 @@ import com.softropic.skillars.platform.notification.contract.Recipient;
 import com.softropic.skillars.platform.notification.service.MailManager;
 import com.softropic.skillars.utils.TestMailManager;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.List;
@@ -33,6 +36,20 @@ public class MailManagerIT {
 
     @Autowired
     private MailManager mailManager;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private TransactionTemplate transactionTemplate;
+
+    @AfterEach
+    void tearDown() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.execute("DELETE FROM main.sec");
+            return null;
+        });
+    }
 
     @Test
     void contextLoads() {

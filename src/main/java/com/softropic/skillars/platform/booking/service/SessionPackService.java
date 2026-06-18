@@ -140,6 +140,20 @@ public class SessionPackService {
     }
 
     @Transactional(readOnly = true)
+    public boolean hasActivePack(Long playerId, UUID coachId) {
+        return repository.hasActiveCredits(playerId, coachId, Instant.now());
+    }
+
+    @Transactional(readOnly = true)
+    public UUID getActivePackId(Long playerId, UUID coachId) {
+        List<SessionPackPurchased> packs = repository.findActivePacks(playerId, coachId, Instant.now());
+        if (!packs.isEmpty()) return packs.get(0).getId();
+        return repository.findTopByPlayerIdAndCoachIdOrderByPurchasedAtDesc(playerId, coachId)
+            .map(SessionPackPurchased::getId)
+            .orElse(null);
+    }
+
+    @Transactional(readOnly = true)
     public boolean hasCredits(Long playerId, UUID coachId) {
         int creditsRemaining = repository.sumActiveCredits(playerId, coachId, Instant.now());
         long inFlight = bookingRepository.countInFlightBookings(playerId, coachId);

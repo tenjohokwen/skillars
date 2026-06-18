@@ -23,8 +23,10 @@ import org.springframework.security.core.context.SecurityContextImpl;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -57,6 +59,12 @@ class UserProfileServiceIT {
     @Autowired
     private AccountChangeEventCaptor eventCaptor;
 
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private TransactionTemplate transactionTemplate;
+
     @BeforeEach
     void setUp() {
         initSecurityContext();
@@ -66,6 +74,10 @@ class UserProfileServiceIT {
     @AfterEach
     void tearDown() {
         SecurityContextHolder.clearContext();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.execute("DELETE FROM main.sec");
+            return null;
+        });
     }
 
     // -------------------------------------------------------------------------

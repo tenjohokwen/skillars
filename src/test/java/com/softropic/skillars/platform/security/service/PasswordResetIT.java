@@ -15,6 +15,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.junit.jupiter.api.AfterEach;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
@@ -52,7 +54,18 @@ public class PasswordResetIT {
     @Autowired
     private TransactionTemplate transactionTemplate;
 
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
     private ChangePasswordDto changePasswordDto;
+
+    @AfterEach
+    void tearDown() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.execute("DELETE FROM main.sec");
+            return null;
+        });
+    }
 
     @BeforeEach
     void setUp() {

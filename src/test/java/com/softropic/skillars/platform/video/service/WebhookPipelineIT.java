@@ -17,7 +17,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 @TestPropertySource(properties = {
     "app.video.webhook.max-attempts=2",
-    "app.video.webhook.processor-delay-ms=86400000"  // prevent background scheduler from racing with manual calls
+    "app.video.webhook.processor-delay-ms=86400000",         // prevent background webhook scheduler from racing
+    "app.video.reconciliation.fixed-delay-ms=86400000",      // prevent background reconciliation scheduler
+    "app.video.upload.expiry-scheduler-delay-ms=86400000"    // prevent background upload-expiry scheduler
 })
 class WebhookPipelineIT extends BaseVideoIT {
 

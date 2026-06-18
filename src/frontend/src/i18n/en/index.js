@@ -100,6 +100,12 @@ export default {
   player: {
     lockerRoomTitle: 'Player Locker Room',
     lockerRoomBody: 'Your training content and homework will appear here.',
+    homeworkEmptyTitle: 'No homework yet',
+    homeworkEmptySubtitle: "Your coach hasn't set homework yet — check back after your next session",
+    homeworkCompleted: 'Done!',
+    homeworkMarkDone: "I've done this",
+    assignedBy: 'Assigned by {coach}',
+    viewLockerRoom: 'Locker Room',
     createTitle: 'Add Player Profile',
     nameLabel: 'Player name',
     dobLabel: 'Date of birth',

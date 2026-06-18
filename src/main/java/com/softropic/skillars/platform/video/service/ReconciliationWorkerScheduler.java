@@ -35,7 +35,8 @@ public class ReconciliationWorkerScheduler {
     private final VideoMetrics videoMetrics;
 
     @Observed(name = "video.reconciliation.runCycle")
-    @Scheduled(fixedDelayString = "${app.video.reconciliation.fixed-delay-ms:60000}")
+    @Scheduled(fixedDelayString = "${app.video.reconciliation.fixed-delay-ms:60000}",
+               initialDelayString = "${app.video.reconciliation.fixed-delay-ms:60000}")
     public void reconcile() {
         long cycleStart = System.nanoTime();
         try {
