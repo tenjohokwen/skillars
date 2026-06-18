@@ -8,7 +8,6 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
-import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -21,24 +20,21 @@ import java.util.List;
 import java.util.UUID;
 
 @Entity
-@Table(schema = "session", name = "sessions")
+@Table(schema = "session", name = "session_templates")
 @Getter
 @Setter
 @NoArgsConstructor
-public class Session {
+public class SessionTemplate {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    @Column(name = "booking_id", nullable = false)
-    private UUID bookingId;
-
     @Column(name = "coach_id", nullable = false)
     private UUID coachId;
 
-    @Column(name = "player_id", nullable = false)
-    private Long playerId;
+    @Column(nullable = false, length = 200)
+    private String name;
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(nullable = false, columnDefinition = "jsonb")
@@ -56,29 +52,21 @@ public class Session {
     @Column(name = "development_focus", nullable = false, columnDefinition = "jsonb")
     private List<String> developmentFocus;
 
+    @Column(name = "last_deployed_at")
+    private Instant lastDeployedAt;
+
+    @Column(name = "deploy_count", nullable = false)
+    private int deployCount;
+
     @Column(nullable = false, length = 20)
     private String status;
-
-    @Column(name = "source_template_id")
-    private UUID sourceTemplateId;
-
-    @Column(name = "source_template_name", length = 200)
-    private String sourceTemplateName;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
-    @Column(name = "updated_at", nullable = false)
-    private Instant updatedAt;
-
     @PrePersist
     void onCreate() {
         createdAt = Instant.now();
-        updatedAt = Instant.now();
-    }
-
-    @PreUpdate
-    void onUpdate() {
-        updatedAt = Instant.now();
+        if (status == null) status = "ACTIVE";
     }
 }

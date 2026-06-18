@@ -1,3 +1,16 @@
+## Deferred from: code review of skillars-4-5-intelligent-drill-suggestions-session-templates — Round 2 (2026-06-18)
+- W1: `deleteTemplate()` no ARCHIVED guard — idempotent re-archive silently succeeds (204) on already-archived template; acceptable behavior [`SessionTemplateService.java:deleteTemplate`]
+- W2: `deployTemplate()` passes `t.getBlocks()` by reference not defensive copy — safe in current code path; no mutation after save in same transaction [`SessionTemplateService.java:deployTemplate`]
+- W3: `computeFocusScore()` returns 0 for all-unsupported focus values — random subset within age-fit tier (0.10 base score); by-design stub behavior [`DrillSuggestionService.java:computeFocusScore`]
+- W4: Template name inputs missing `maxlength="200"` client-side — server `@Size(max=200)` catches it; generic error is acceptable UX [`SessionTemplateVault.vue`, `SessionBuilderPage.vue`]
+- W5: `createTemplate()` store action never sets `error.value` on failure — callers handle errors; minimal impact on store error state [`sessionTemplate.store.js`]
+- W6: `SessionTemplate.blocks` null risk if `session.getBlocks()` null — `Session.blocks` is NOT NULL in DB so sessions should never have null blocks; constraint prevents [`SessionTemplateService.java:createTemplate`]
+- W7: V44 migration no index on `source_template_id` — performance concern for future analytics queries on deployed sessions per template; not needed for current functionality [`V44__session_templates.sql`]
+- W8: `deployTemplate()` race condition (duplicate booking, `existsByBookingId` + `save` not atomic) — pre-existing pattern identical to `SessionPlanService.createSession`; deferred from Round 1 [`SessionTemplateService.java:deployTemplate`]
+
+## Deferred from: code review of skillars-4-5-intelligent-drill-suggestions-session-templates (2026-06-18)
+- W1: Race condition: `existsByBookingId` check and `save` not atomic in `SessionTemplateService.deployTemplate` — same pre-existing pattern as `SessionPlanService.createSession`; no DB unique constraint on `session.sessions(booking_id)`; concurrent deploys to the same booking could both succeed [`SessionTemplateService.java:deployTemplate`]
+
 ## Deferred from: code review of skillars-4-4-session-builder-block-structure-dna — round 2 (2026-06-18)
 - W8: `isBookingPlannable` accepts `"UPCOMING"` but no known code path transitions a Booking to this status — proactive future-proofing, harmless if UPCOMING is never set [`SessionPlanService.java:167`]
 - W9: `updateSession` does not re-validate booking plannable status at update time — a booking cancelled after session plan creation can still be updated freely; outside story scope [`SessionPlanService.java:updateSession`]

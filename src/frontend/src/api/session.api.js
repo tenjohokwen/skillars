@@ -52,4 +52,28 @@ export const sessionApi = {
   getSessionPlanByBooking(bookingId) {
     return api.get(`/api/session/sessions/by-booking/${bookingId}`)
   },
+
+  getSuggestions(sessionId, limit = 10) {
+    return api.get('/api/session/drills/suggestions', { params: { sessionId, limit } })
+  },
+
+  listTemplates() {
+    return api.get('/api/session/templates')
+  },
+
+  createTemplate(payload) {
+    return api.post('/api/session/templates', payload)
+  },
+
+  renameTemplate(templateId, payload) {
+    return api.put(`/api/session/templates/${templateId}`, payload)
+  },
+
+  deleteTemplate(templateId) {
+    return api.delete(`/api/session/templates/${templateId}`)
+  },
+
+  deployTemplate(templateId, bookingId) {
+    return api.post(`/api/session/templates/${templateId}/deploy`, null, { params: { bookingId } })
+  },
 }

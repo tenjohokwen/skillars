@@ -250,7 +250,8 @@ public class SessionPlanService {
             session.getId(), session.getBookingId(), session.getCoachId(),
             session.getPlayerId(), blockResponses, session.getSessionDna(),
             session.getEquipmentList(), session.getDevelopmentFocus(),
-            session.getStatus(), session.getCreatedAt(), session.getUpdatedAt()
+            session.getStatus(), session.getCreatedAt(), session.getUpdatedAt(),
+            session.getSourceTemplateId(), session.getSourceTemplateName()
         );
     }
 }

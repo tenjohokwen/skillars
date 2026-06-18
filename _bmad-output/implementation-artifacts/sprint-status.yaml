@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-06-18 # Story 4.4 done
+last_updated: 2026-06-18 # Story 4.5 review Round 2 — all patches resolved, story done
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -192,7 +192,7 @@ development_status:
   skillars-4-2-drill-card-operations: done
   skillars-4-3-custom-drill-uploads: done
   skillars-4-4-session-builder-block-structure-dna: done
-  skillars-4-5-intelligent-drill-suggestions-session-templates: backlog
+  skillars-4-5-intelligent-drill-suggestions-session-templates: done
   skillars-4-6-homework-assignment-player-locker-room: backlog
   skillars-epic-4-retrospective: optional
 

@@ -156,6 +156,12 @@ const routes = [
         meta: { requiresAuth: true, requiresCoach: true },
       },
       {
+        path: 'coach/session-templates',
+        name: 'coach-session-templates',
+        component: () => import('pages/coach/SessionTemplateVault.vue'),
+        meta: { requiresAuth: true, requiresCoach: true },
+      },
+      {
         path: 'player/locker-room',
         component: () => import('pages/player/PlayerLockerRoomPlaceholderPage.vue'),
         meta: { requiresAuth: true },

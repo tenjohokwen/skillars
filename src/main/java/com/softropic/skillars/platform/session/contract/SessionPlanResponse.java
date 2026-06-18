@@ -15,5 +15,7 @@ public record SessionPlanResponse(
     List<String> developmentFocus,
     String status,
     Instant createdAt,
-    Instant updatedAt
+    Instant updatedAt,
+    UUID sourceTemplateId,
+    String sourceTemplateName
 ) {}

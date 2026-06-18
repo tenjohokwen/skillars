@@ -26,8 +26,8 @@
         :y1="cy"
         :x2="outerPoint(i).x"
         :y2="outerPoint(i).y"
-        stroke="var(--border-subtle, rgba(255,255,255,0.15))"
-        stroke-width="1"
+        :stroke="props.highlightAxes.includes(axis.key) ? 'var(--accent-secondary)' : 'var(--border-subtle, rgba(255,255,255,0.15))'"
+        :stroke-width="props.highlightAxes.includes(axis.key) ? 2 : 1"
       />
 
       <!-- Data polygon -->
@@ -97,6 +97,7 @@ const props = defineProps({
   variant: { type: String, default: 'compact' },
   showConfirmation: { type: Boolean, default: false },
   bookingId: { type: String, default: null },
+  highlightAxes: { type: Array, default: () => [] },
 })
 
 const { t } = useI18n()

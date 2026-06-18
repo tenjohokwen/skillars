@@ -16,6 +16,22 @@
         <div class="text-h6 q-ml-sm">{{ t('session.builder.title') }}</div>
         <q-space />
         <q-btn
+          flat
+          icon="bookmark_border"
+          :label="t('session.templates.browseTemplates')"
+          :to="{ name: 'coach-session-templates' }"
+          class="q-mr-xs"
+        />
+        <q-btn
+          v-if="builderStore.sessionId && !builderStore.isGated"
+          flat
+          icon="bookmark_add"
+          :label="t('session.templates.saveAsTemplate')"
+          :disable="builderStore.saving"
+          class="q-mr-sm"
+          @click="saveAsTemplateDialog = true"
+        />
+        <q-btn
           outline
           :label="t('session.builder.saveDraft')"
           :loading="builderStore.saving"
@@ -44,34 +60,47 @@
           <q-tabs v-model="selectedLibrary" dense class="q-mb-sm" @update:model-value="fetchDrills">
             <q-tab name="PLATFORM" :label="t('session.drillLibrary.platformTab')" />
             <q-tab name="PRIVATE" :label="t('session.drillLibrary.myLibraryTab')" />
+            <q-tab name="SUGGESTED" :label="t('session.suggestions.tabLabel')" />
           </q-tabs>
 
-          <q-input
-            v-model="drillSearch"
-            dense
-            outlined
-            clearable
-            :placeholder="t('session.drillLibrary.searchPlaceholder')"
-            class="q-mb-sm"
-            @update:model-value="fetchDrills"
-          >
-            <template #prepend><q-icon name="search" /></template>
-          </q-input>
+          <DrillSuggestionPanel
+            v-if="selectedLibrary === 'SUGGESTED'"
+            :suggestions="builderStore.suggestedDrills"
+            :loading="builderStore.suggestionsLoading"
+            :is-personalized="builderStore.developmentFocus.length > 0"
+            @close="selectedLibrary = 'PLATFORM'"
+            @add-drill="addDrillToActiveBlock"
+            @open-detail="openDrillDetail"
+          />
 
-          <div v-if="sessionStore.loading" class="flex flex-center q-pa-lg">
-            <q-spinner-dots size="36px" color="primary" />
-          </div>
+          <template v-else>
+            <q-input
+              v-model="drillSearch"
+              dense
+              outlined
+              clearable
+              :placeholder="t('session.drillLibrary.searchPlaceholder')"
+              class="q-mb-sm"
+              @update:model-value="fetchDrills"
+            >
+              <template #prepend><q-icon name="search" /></template>
+            </q-input>
 
-          <div v-else class="session-builder-page__drill-list">
-            <DrillCard
-              v-for="drill in sessionStore.drills"
-              :key="drill.id"
-              :drill="drill"
-              context="session-builder"
-              @open-detail="openDrillDetail(drill)"
-              @add-to-session="addDrillToActiveBlock(drill)"
-            />
-          </div>
+            <div v-if="sessionStore.loading" class="flex flex-center q-pa-lg">
+              <q-spinner-dots size="36px" color="primary" />
+            </div>
+
+            <div v-else class="session-builder-page__drill-list">
+              <DrillCard
+                v-for="drill in sessionStore.drills"
+                :key="drill.id"
+                :drill="drill"
+                context="session-builder"
+                @open-detail="openDrillDetail(drill)"
+                @add-to-session="addDrillToActiveBlock(drill)"
+              />
+            </div>
+          </template>
         </div>
 
         <!-- Col 2: Session Blocks -->
@@ -89,19 +118,42 @@
             />
           </div>
 
+          <!-- Template provenance banner (AC 8) -->
+          <div
+            v-if="builderStore.sourceTemplateName && !builderStore.templateBannerDismissed"
+            class="session-builder-page__template-banner row items-center q-mb-sm q-pa-sm"
+          >
+            <q-icon name="bookmark" color="primary" class="q-mr-sm" />
+            <router-link
+              :to="{ name: 'coach-session-templates' }"
+              class="text-caption col text-primary"
+              style="text-decoration: none"
+            >
+              {{ t('session.templates.templateIndicator', { name: builderStore.sourceTemplateName }) }}
+            </router-link>
+            <q-btn flat dense round icon="close" size="xs"
+                   @click="builderStore.templateBannerDismissed = true" />
+          </div>
+
           <draggable
             v-model="builderStore.blocks"
             item-key="_uid"
             handle="[data-drag-handle]"
           >
             <template #item="{ element, index }">
-              <SessionBlockView
-                :block="element"
-                :block-index="index"
-                :slu-subtotal="builderStore.blockSlu(element)"
-                @update:block="(b) => (builderStore.blocks[index] = b)"
-                @remove="removeBlock(index)"
-              />
+              <div
+                class="cursor-pointer"
+                :class="{ 'session-builder-page__block--active': builderStore.activeBlockIndex === index }"
+                @click="builderStore.setActiveBlock(index)"
+              >
+                <SessionBlockView
+                  :block="element"
+                  :block-index="index"
+                  :slu-subtotal="builderStore.blockSlu(element)"
+                  @update:block="(b) => (builderStore.blocks[index] = b)"
+                  @remove="removeBlock(index)"
+                />
+              </div>
             </template>
           </draggable>
 
@@ -120,7 +172,7 @@
           <q-separator />
           <q-tab-panels v-model="sidebarTab" animated class="q-pa-md">
             <q-tab-panel name="dna" class="q-pa-none">
-              <SessionDNAChart :session-dna="builderStore.sessionDna" variant="full" />
+              <SessionDNAChart :session-dna="builderStore.sessionDna" variant="full" :highlight-axes="highlightAxes" />
             </q-tab-panel>
             <q-tab-panel name="focus" class="q-pa-none">
               <DevelopmentFocusSelector v-model="builderStore.developmentFocus" />
@@ -148,21 +200,39 @@
       @close="isDrillDetailOpen = false"
       @add-to-session="onAddToSession"
     />
+
+    <!-- Save as Template dialog -->
+    <q-dialog v-model="saveAsTemplateDialog">
+      <q-card style="min-width: 320px">
+        <q-card-section>
+          <div class="text-subtitle1">{{ t('session.templates.nameDialogTitle') }}</div>
+        </q-card-section>
+        <q-card-section>
+          <q-input v-model="templateNameInput" dense autofocus :label="t('session.templates.nameLabel')" />
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat :label="t('common.cancel')" v-close-popup />
+          <q-btn color="primary" :label="t('session.templates.saveAction')" @click="saveTemplate" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import draggable from 'vuedraggable'
 import { useSessionStore } from 'src/stores/session.store'
 import { useSessionBuilderStore } from 'src/stores/sessionBuilder.store'
+import { useSessionTemplateStore } from 'src/stores/sessionTemplate.store'
 import SessionBlockView from 'src/components/session/SessionBlockView.vue'
 import DevelopmentFocusSelector from 'src/components/session/DevelopmentFocusSelector.vue'
 import DrillDetailPanel from 'src/components/session/DrillDetailPanel.vue'
 import DrillCard from 'src/components/session/DrillCard.vue'
+import DrillSuggestionPanel from 'src/components/session/DrillSuggestionPanel.vue'
 import SessionDNAChart from 'src/components/booking/SessionDNAChart.vue'
 
 defineOptions({ name: 'SessionBuilderPage' })
@@ -173,6 +243,7 @@ const { t } = useI18n()
 const $q = useQuasar()
 const sessionStore = useSessionStore()
 const builderStore = useSessionBuilderStore()
+const templateStore = useSessionTemplateStore()
 
 const bookingId = route.params.bookingId
 const selectedLibrary = ref('PLATFORM')
@@ -180,8 +251,21 @@ const drillSearch = ref('')
 const sidebarTab = ref('dna')
 const selectedDrill = ref(null)
 const isDrillDetailOpen = ref(false)
-const activeBlockIndex = ref(0)
+const saveAsTemplateDialog = ref(false)
+const templateNameInput = ref('')
 let hasUnsavedChanges = false
+
+const focusAxisMap = {
+  technical: 'technical',
+  physical: 'physical',
+  cognitive: 'cognitive',
+  matchRealism: 'matchRealism',
+  weakFoot: 'weakFootFocus',
+  possession: 'cognitive',
+}
+const highlightAxes = computed(() =>
+  [...new Set(builderStore.developmentFocus.map(f => focusAxisMap[f]).filter(Boolean))]
+)
 
 onMounted(async () => {
   await builderStore.fetchExistingPlan(bookingId)
@@ -191,6 +275,15 @@ onMounted(async () => {
 })
 
 async function fetchDrills() {
+  if (selectedLibrary.value === 'SUGGESTED') {
+    if (!builderStore.sessionId) {
+      $q.notify({ type: 'warning', message: t('session.builder.saveDraftFirst') })
+      selectedLibrary.value = 'PLATFORM'
+      return
+    }
+    await builderStore.fetchSuggestions()
+    return
+  }
   sessionStore.searchQuery = drillSearch.value
   await sessionStore.searchDrills(selectedLibrary.value)
 }
@@ -201,10 +294,21 @@ function openDrillDetail(drill) {
 }
 
 function addDrillToActiveBlock(drill) {
-  const idx = activeBlockIndex.value < builderStore.blocks.length ? activeBlockIndex.value : 0
-  builderStore.addDrillToBlock(idx, drill)
+  builderStore.addDrillToBlock(builderStore.activeBlockIndex, drill)
   hasUnsavedChanges = true
   $q.notify({ type: 'positive', message: t('session.builder.drillAdded'), timeout: 1500 })
+}
+
+async function saveTemplate() {
+  if (!templateNameInput.value.trim()) return
+  try {
+    await templateStore.createTemplate(builderStore.sessionId, templateNameInput.value.trim())
+    saveAsTemplateDialog.value = false
+    templateNameInput.value = ''
+    $q.notify({ type: 'positive', message: t('session.templates.saved') })
+  } catch {
+    $q.notify({ type: 'negative', message: t('common.errorGeneric') })
+  }
 }
 
 function onAddToSession(drill) {
@@ -226,6 +330,7 @@ function addBlock() {
 
 function removeBlock(index) {
   builderStore.blocks.splice(index, 1)
+  builderStore.setActiveBlock(Math.min(index, builderStore.blocks.length - 1))
   hasUnsavedChanges = true
 }
 
@@ -323,6 +428,17 @@ onBeforeRouteLeave((_to, _from, next) => {
   &__drill-list {
     max-height: calc(100vh - 220px);
     overflow-y: auto;
+  }
+
+  &__template-banner {
+    border-radius: 6px;
+    background: var(--surface-elevated, rgba(139, 92, 246, 0.08));
+    border: 1px solid var(--accent-primary, rgba(139, 92, 246, 0.3));
+  }
+
+  &__block--active {
+    outline: 2px solid var(--accent-primary, #8b5cf6);
+    border-radius: 8px;
   }
 }
 </style>

@@ -12,6 +12,12 @@ export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
   const saving = ref(false)
   const error = ref(null)
   const isGated = ref(false)
+  const activeBlockIndex = ref(0)
+  const suggestedDrills = ref([])
+  const suggestionsLoading = ref(false)
+  const sourceTemplateId = ref(null)
+  const sourceTemplateName = ref(null)
+  const templateBannerDismissed = ref(false)
 
   const sessionDna = computed(() => {
     const allDrills = blocks.value.flatMap((b) => b.drills.map((d) => d.drill?.metadata).filter(Boolean))
@@ -67,6 +73,11 @@ export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
     developmentFocus.value = []
     error.value = null
     isGated.value = false
+    activeBlockIndex.value = 0
+    suggestedDrills.value = []
+    sourceTemplateId.value = null
+    sourceTemplateName.value = null
+    templateBannerDismissed.value = false
   }
 
   async function fetchExistingPlan(bId) {
@@ -86,6 +97,8 @@ export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
         drills: b.drills.map((d) => ({ drillId: d.drillId, order: d.order, drill: d.drill })),
       }))
       developmentFocus.value = [...plan.developmentFocus]
+      sourceTemplateId.value = plan.sourceTemplateId ?? null
+      sourceTemplateName.value = plan.sourceTemplateName ?? null
     } catch (e) {
       if (e?.response?.status === 404) {
         initForBooking(bId)
@@ -132,6 +145,23 @@ export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
     }
   }
 
+  async function fetchSuggestions() {
+    if (!sessionId.value) return
+    suggestionsLoading.value = true
+    try {
+      const res = await sessionApi.getSuggestions(sessionId.value, 10)
+      suggestedDrills.value = res.data
+    } catch {
+      suggestedDrills.value = []
+    } finally {
+      suggestionsLoading.value = false
+    }
+  }
+
+  function setActiveBlock(index) {
+    if (index >= 0 && index < blocks.value.length) activeBlockIndex.value = index
+  }
+
   function addDrillToBlock(blockIndex, drill) {
     if (blockIndex < 0 || blockIndex >= blocks.value.length) return
     const block = blocks.value[blockIndex]
@@ -160,12 +190,20 @@ export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
     saving,
     error,
     isGated,
+    activeBlockIndex,
+    suggestedDrills,
+    suggestionsLoading,
+    sourceTemplateId,
+    sourceTemplateName,
+    templateBannerDismissed,
     sessionDna,
     equipmentList,
     blockSlu,
     initForBooking,
     fetchExistingPlan,
     savePlan,
+    fetchSuggestions,
+    setActiveBlock,
     addDrillToBlock,
     removeDrillFromBlock,
     updateBlockMeta,

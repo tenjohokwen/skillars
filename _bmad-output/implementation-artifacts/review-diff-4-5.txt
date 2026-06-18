@@ -1,0 +1,2396 @@
+=== TRACKED FILE CHANGES (git diff HEAD) ===
+diff --git a/src/frontend/src/api/session.api.js b/src/frontend/src/api/session.api.js
+index f1584a0..0ee3c52 100644
+--- a/src/frontend/src/api/session.api.js
++++ b/src/frontend/src/api/session.api.js
+@@ -52,4 +52,28 @@ export const sessionApi = {
+   getSessionPlanByBooking(bookingId) {
+     return api.get(`/api/session/sessions/by-booking/${bookingId}`)
+   },
++
++  getSuggestions(sessionId, limit = 10) {
++    return api.get('/api/session/drills/suggestions', { params: { sessionId, limit } })
++  },
++
++  listTemplates() {
++    return api.get('/api/session/templates')
++  },
++
++  createTemplate(payload) {
++    return api.post('/api/session/templates', payload)
++  },
++
++  renameTemplate(templateId, payload) {
++    return api.put(`/api/session/templates/${templateId}`, payload)
++  },
++
++  deleteTemplate(templateId) {
++    return api.delete(`/api/session/templates/${templateId}`)
++  },
++
++  deployTemplate(templateId, bookingId) {
++    return api.post(`/api/session/templates/${templateId}/deploy`, null, { params: { bookingId } })
++  },
+ }
+diff --git a/src/frontend/src/components/booking/SessionDNAChart.vue b/src/frontend/src/components/booking/SessionDNAChart.vue
+index f46168e..3575146 100644
+--- a/src/frontend/src/components/booking/SessionDNAChart.vue
++++ b/src/frontend/src/components/booking/SessionDNAChart.vue
+@@ -26,8 +26,8 @@
+         :y1="cy"
+         :x2="outerPoint(i).x"
+         :y2="outerPoint(i).y"
+-        stroke="var(--border-subtle, rgba(255,255,255,0.15))"
+-        stroke-width="1"
++        :stroke="props.highlightAxes.includes(axis.key) ? 'var(--accent-secondary)' : 'var(--border-subtle, rgba(255,255,255,0.15))'"
++        :stroke-width="props.highlightAxes.includes(axis.key) ? 2 : 1"
+       />
+ 
+       <!-- Data polygon -->
+@@ -97,6 +97,7 @@ const props = defineProps({
+   variant: { type: String, default: 'compact' },
+   showConfirmation: { type: Boolean, default: false },
+   bookingId: { type: String, default: null },
++  highlightAxes: { type: Array, default: () => [] },
+ })
+ 
+ const { t } = useI18n()
+diff --git a/src/frontend/src/i18n/de/index.js b/src/frontend/src/i18n/de/index.js
+index 1472a5f..67a3b91 100644
+--- a/src/frontend/src/i18n/de/index.js
++++ b/src/frontend/src/i18n/de/index.js
+@@ -7,6 +7,9 @@ export default {
+     loading: 'Wird geladen...',
+     confirm: 'Bestätigen',
+     delete: 'Löschen',
++    leave: 'Verlassen',
++    stay: 'Bleiben',
++    errorGeneric: 'Etwas ist schiefgelaufen. Bitte erneut versuchen.',
+   },
+   theme: {
+     toggle: 'Design wechseln',
+@@ -223,6 +226,7 @@ export default {
+       unsavedChangesMsg: 'Du hast ungespeicherte Änderungen. Ohne Speichern verlassen?',
+       gatedTitle: 'Trainingsplaner',
+       gatedSubtitle: 'Der Trainingsplaner ist in den Paketen Instructor und Academy verfügbar.',
++      saveDraftFirst: 'Bitte zuerst die Session speichern, um personalisierte Vorschläge zu erhalten',
+       blockType: {
+         WARM_UP: 'Aufwärmen',
+         TECHNICAL_FOUNDATION: 'Technische Grundlagen',
+@@ -240,6 +244,42 @@ export default {
+         possession: 'Ballbesitz',
+       },
+     },
++    suggestions: {
++      tabLabel: 'Vorschläge',
++      personalizedTitle: 'Personalisierte Vorschläge',
++      fallbackTitle: 'Für diese Altersgruppe empfohlen',
++      empty: 'Noch keine Vorschläge verfügbar',
++    },
++    templates: {
++      title: 'Session-Vorlagen',
++      browseTemplates: 'Vorlagen',
++      saveAsTemplate: 'Als Vorlage speichern',
++      nameDialogTitle: 'Vorlage benennen',
++      nameLabel: 'Vorlagenname',
++      saveAction: 'Vorlage speichern',
++      loadFromTemplate: 'Aus Vorlage laden',
++      useThisSession: 'Für diese Session verwenden',
++      templateIndicator: 'Basierend auf Vorlage: {name}',
++      deployDialogTitle: 'Für diese Session verwenden',
++      deployDialogSubtitle: 'Gib die Buchungs-ID für die zu planende Session ein.',
++      deployBookingIdLabel: 'Buchungs-ID',
++      deployBookingIdRequired: 'Bitte eine Buchungs-ID eingeben',
++      deployAction: 'Session-Plan erstellen',
++      deployAlreadyExists: 'Für diese Buchung gibt es bereits einen Session-Plan',
++      deployBookingInvalid: 'Buchung nicht gefunden oder nicht bestätigt',
++      deployCount: '{count} Verwendungen',
++      lastDeployed: 'Zuletzt verwendet am {date}',
++      drillCount: '{count} Übungen',
++      rename: 'Umbenennen',
++      delete: 'Löschen',
++      confirmDelete: 'Vorlage löschen? Bereits erstellte Sessions werden nicht beeinflusst.',
++      emptyTitle: 'Noch keine Vorlagen',
++      emptySubtitle: 'Speichere deine erste Session als Vorlage',
++      saved: 'Vorlage gespeichert',
++      renamed: 'Vorlage umbenannt',
++      deleted: 'Vorlage gelöscht',
++      deployed: 'Session-Plan aus Vorlage erstellt',
++    },
+     dna: {
+       chartAriaLabel: 'Einheits-DNA-Radardiagramm',
+       axis: {
+diff --git a/src/frontend/src/i18n/en/index.js b/src/frontend/src/i18n/en/index.js
+index dccf436..ac4be0b 100644
+--- a/src/frontend/src/i18n/en/index.js
++++ b/src/frontend/src/i18n/en/index.js
+@@ -14,6 +14,9 @@ export default {
+     endDate: 'End Date',
+     reason: 'Reason',
+     optional: 'optional',
++    leave: 'Leave',
++    stay: 'Stay',
++    errorGeneric: 'Something went wrong. Please try again.',
+   },
+   theme: {
+     toggle: 'Toggle theme',
+@@ -453,6 +456,7 @@ export default {
+       unsavedChangesMsg: 'You have unsaved changes. Leave without saving?',
+       gatedTitle: 'Session Builder',
+       gatedSubtitle: 'Session Builder is available on Instructor and Academy plans.',
++      saveDraftFirst: 'Save the session first to get personalised suggestions',
+       blockType: {
+         WARM_UP: 'Warm-Up',
+         TECHNICAL_FOUNDATION: 'Technical Foundation',
+@@ -470,6 +474,42 @@ export default {
+         possession: 'Possession',
+       },
+     },
++    suggestions: {
++      tabLabel: 'Suggested',
++      personalizedTitle: 'Personalised Suggestions',
++      fallbackTitle: 'Suggested for this age group',
++      empty: 'No suggestions available yet',
++    },
++    templates: {
++      title: 'Session Templates',
++      browseTemplates: 'Templates',
++      saveAsTemplate: 'Save as Template',
++      nameDialogTitle: 'Name this template',
++      nameLabel: 'Template name',
++      saveAction: 'Save Template',
++      loadFromTemplate: 'Load from Template',
++      useThisSession: 'Use for this session',
++      templateIndicator: 'Based on template: {name}',
++      deployDialogTitle: 'Use for this session',
++      deployDialogSubtitle: 'Enter the booking ID for the session you want to plan.',
++      deployBookingIdLabel: 'Booking ID',
++      deployBookingIdRequired: 'Please enter a booking ID',
++      deployAction: 'Create session plan',
++      deployAlreadyExists: 'A session plan already exists for this booking',
++      deployBookingInvalid: 'Booking not found or not confirmed',
++      deployCount: '{count} uses',
++      lastDeployed: 'Last used {date}',
++      drillCount: '{count} drills',
++      rename: 'Rename',
++      delete: 'Delete',
++      confirmDelete: 'Delete this template? Sessions created from it will not be affected.',
++      emptyTitle: 'No templates yet',
++      emptySubtitle: 'Save your first session as a template',
++      saved: 'Template saved',
++      renamed: 'Template renamed',
++      deleted: 'Template deleted',
++      deployed: 'Session plan created from template',
++    },
+     dna: {
+       chartAriaLabel: 'Session DNA radar chart',
+       axis: {
+diff --git a/src/frontend/src/pages/coach/SessionBuilderPage.vue b/src/frontend/src/pages/coach/SessionBuilderPage.vue
+index 7b80c84..1af4b77 100644
+--- a/src/frontend/src/pages/coach/SessionBuilderPage.vue
++++ b/src/frontend/src/pages/coach/SessionBuilderPage.vue
+@@ -15,6 +15,22 @@
+         <q-btn flat round icon="arrow_back" @click="handleBack" />
+         <div class="text-h6 q-ml-sm">{{ t('session.builder.title') }}</div>
+         <q-space />
++        <q-btn
++          flat
++          icon="bookmark_border"
++          :label="t('session.templates.browseTemplates')"
++          :to="{ name: 'coach-session-templates' }"
++          class="q-mr-xs"
++        />
++        <q-btn
++          v-if="builderStore.sessionId"
++          flat
++          icon="bookmark_add"
++          :label="t('session.templates.saveAsTemplate')"
++          :disable="builderStore.saving"
++          class="q-mr-sm"
++          @click="saveAsTemplateDialog = true"
++        />
+         <q-btn
+           outline
+           :label="t('session.builder.saveDraft')"
+@@ -44,34 +60,47 @@
+           <q-tabs v-model="selectedLibrary" dense class="q-mb-sm" @update:model-value="fetchDrills">
+             <q-tab name="PLATFORM" :label="t('session.drillLibrary.platformTab')" />
+             <q-tab name="PRIVATE" :label="t('session.drillLibrary.myLibraryTab')" />
++            <q-tab name="SUGGESTED" :label="t('session.suggestions.tabLabel')" />
+           </q-tabs>
+ 
+-          <q-input
+-            v-model="drillSearch"
+-            dense
+-            outlined
+-            clearable
+-            :placeholder="t('session.drillLibrary.searchPlaceholder')"
+-            class="q-mb-sm"
+-            @update:model-value="fetchDrills"
+-          >
+-            <template #prepend><q-icon name="search" /></template>
+-          </q-input>
+-
+-          <div v-if="sessionStore.loading" class="flex flex-center q-pa-lg">
+-            <q-spinner-dots size="36px" color="primary" />
+-          </div>
+-
+-          <div v-else class="session-builder-page__drill-list">
+-            <DrillCard
+-              v-for="drill in sessionStore.drills"
+-              :key="drill.id"
+-              :drill="drill"
+-              context="session-builder"
+-              @open-detail="openDrillDetail(drill)"
+-              @add-to-session="addDrillToActiveBlock(drill)"
+-            />
+-          </div>
++          <DrillSuggestionPanel
++            v-if="selectedLibrary === 'SUGGESTED'"
++            :suggestions="builderStore.suggestedDrills"
++            :loading="builderStore.suggestionsLoading"
++            :is-personalized="builderStore.developmentFocus.length > 0"
++            @close="selectedLibrary = 'PLATFORM'"
++            @add-drill="addDrillToActiveBlock"
++            @open-detail="openDrillDetail"
++          />
++
++          <template v-else>
++            <q-input
++              v-model="drillSearch"
++              dense
++              outlined
++              clearable
++              :placeholder="t('session.drillLibrary.searchPlaceholder')"
++              class="q-mb-sm"
++              @update:model-value="fetchDrills"
++            >
++              <template #prepend><q-icon name="search" /></template>
++            </q-input>
++
++            <div v-if="sessionStore.loading" class="flex flex-center q-pa-lg">
++              <q-spinner-dots size="36px" color="primary" />
++            </div>
++
++            <div v-else class="session-builder-page__drill-list">
++              <DrillCard
++                v-for="drill in sessionStore.drills"
++                :key="drill.id"
++                :drill="drill"
++                context="session-builder"
++                @open-detail="openDrillDetail(drill)"
++                @add-to-session="addDrillToActiveBlock(drill)"
++              />
++            </div>
++          </template>
+         </div>
+ 
+         <!-- Col 2: Session Blocks -->
+@@ -89,19 +118,42 @@
+             />
+           </div>
+ 
++          <!-- Template provenance banner (AC 8) -->
++          <div
++            v-if="builderStore.sourceTemplateName && !builderStore.templateBannerDismissed"
++            class="session-builder-page__template-banner row items-center q-mb-sm q-pa-sm"
++          >
++            <q-icon name="bookmark" color="primary" class="q-mr-sm" />
++            <router-link
++              :to="{ name: 'coach-session-templates' }"
++              class="text-caption col text-primary"
++              style="text-decoration: none"
++            >
++              {{ t('session.templates.templateIndicator', { name: builderStore.sourceTemplateName }) }}
++            </router-link>
++            <q-btn flat dense round icon="close" size="xs"
++                   @click="builderStore.templateBannerDismissed = true" />
++          </div>
++
+           <draggable
+             v-model="builderStore.blocks"
+             item-key="_uid"
+             handle="[data-drag-handle]"
+           >
+             <template #item="{ element, index }">
+-              <SessionBlockView
+-                :block="element"
+-                :block-index="index"
+-                :slu-subtotal="builderStore.blockSlu(element)"
+-                @update:block="(b) => (builderStore.blocks[index] = b)"
+-                @remove="removeBlock(index)"
+-              />
++              <div
++                class="cursor-pointer"
++                :class="{ 'session-builder-page__block--active': builderStore.activeBlockIndex === index }"
++                @click="builderStore.setActiveBlock(index)"
++              >
++                <SessionBlockView
++                  :block="element"
++                  :block-index="index"
++                  :slu-subtotal="builderStore.blockSlu(element)"
++                  @update:block="(b) => (builderStore.blocks[index] = b)"
++                  @remove="removeBlock(index)"
++                />
++              </div>
+             </template>
+           </draggable>
+ 
+@@ -120,7 +172,7 @@
+           <q-separator />
+           <q-tab-panels v-model="sidebarTab" animated class="q-pa-md">
+             <q-tab-panel name="dna" class="q-pa-none">
+-              <SessionDNAChart :session-dna="builderStore.sessionDna" variant="full" />
++              <SessionDNAChart :session-dna="builderStore.sessionDna" variant="full" :highlight-axes="highlightAxes" />
+             </q-tab-panel>
+             <q-tab-panel name="focus" class="q-pa-none">
+               <DevelopmentFocusSelector v-model="builderStore.developmentFocus" />
+@@ -148,21 +200,39 @@
+       @close="isDrillDetailOpen = false"
+       @add-to-session="onAddToSession"
+     />
++
++    <!-- Save as Template dialog -->
++    <q-dialog v-model="saveAsTemplateDialog">
++      <q-card style="min-width: 320px">
++        <q-card-section>
++          <div class="text-subtitle1">{{ t('session.templates.nameDialogTitle') }}</div>
++        </q-card-section>
++        <q-card-section>
++          <q-input v-model="templateNameInput" dense autofocus :label="t('session.templates.nameLabel')" />
++        </q-card-section>
++        <q-card-actions align="right">
++          <q-btn flat :label="t('common.cancel')" v-close-popup />
++          <q-btn color="primary" :label="t('session.templates.saveAction')" @click="saveTemplate" />
++        </q-card-actions>
++      </q-card>
++    </q-dialog>
+   </q-page>
+ </template>
+ 
+ <script setup>
+-import { ref, onMounted } from 'vue'
++import { ref, computed, onMounted } from 'vue'
+ import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
+ import { useI18n } from 'vue-i18n'
+ import { useQuasar } from 'quasar'
+ import draggable from 'vuedraggable'
+ import { useSessionStore } from 'src/stores/session.store'
+ import { useSessionBuilderStore } from 'src/stores/sessionBuilder.store'
++import { useSessionTemplateStore } from 'src/stores/sessionTemplate.store'
+ import SessionBlockView from 'src/components/session/SessionBlockView.vue'
+ import DevelopmentFocusSelector from 'src/components/session/DevelopmentFocusSelector.vue'
+ import DrillDetailPanel from 'src/components/session/DrillDetailPanel.vue'
+ import DrillCard from 'src/components/session/DrillCard.vue'
++import DrillSuggestionPanel from 'src/components/session/DrillSuggestionPanel.vue'
+ import SessionDNAChart from 'src/components/booking/SessionDNAChart.vue'
+ 
+ defineOptions({ name: 'SessionBuilderPage' })
+@@ -173,6 +243,7 @@ const { t } = useI18n()
+ const $q = useQuasar()
+ const sessionStore = useSessionStore()
+ const builderStore = useSessionBuilderStore()
++const templateStore = useSessionTemplateStore()
+ 
+ const bookingId = route.params.bookingId
+ const selectedLibrary = ref('PLATFORM')
+@@ -180,9 +251,22 @@ const drillSearch = ref('')
+ const sidebarTab = ref('dna')
+ const selectedDrill = ref(null)
+ const isDrillDetailOpen = ref(false)
+-const activeBlockIndex = ref(0)
++const saveAsTemplateDialog = ref(false)
++const templateNameInput = ref('')
+ let hasUnsavedChanges = false
+ 
++const focusAxisMap = {
++  technical: 'technical',
++  physical: 'physical',
++  cognitive: 'cognitive',
++  matchRealism: 'matchRealism',
++  weakFoot: 'weakFootFocus',
++  possession: 'cognitive',
++}
++const highlightAxes = computed(() =>
++  [...new Set(builderStore.developmentFocus.map(f => focusAxisMap[f]).filter(Boolean))]
++)
++
+ onMounted(async () => {
+   await builderStore.fetchExistingPlan(bookingId)
+   if (!builderStore.isGated) {
+@@ -191,6 +275,15 @@ onMounted(async () => {
+ })
+ 
+ async function fetchDrills() {
++  if (selectedLibrary.value === 'SUGGESTED') {
++    if (!builderStore.sessionId) {
++      $q.notify({ type: 'warning', message: t('session.builder.saveDraftFirst') })
++      selectedLibrary.value = 'PLATFORM'
++      return
++    }
++    await builderStore.fetchSuggestions()
++    return
++  }
+   sessionStore.searchQuery = drillSearch.value
+   await sessionStore.searchDrills(selectedLibrary.value)
+ }
+@@ -201,12 +294,19 @@ function openDrillDetail(drill) {
+ }
+ 
+ function addDrillToActiveBlock(drill) {
+-  const idx = activeBlockIndex.value < builderStore.blocks.length ? activeBlockIndex.value : 0
+-  builderStore.addDrillToBlock(idx, drill)
++  builderStore.addDrillToBlock(builderStore.activeBlockIndex, drill)
+   hasUnsavedChanges = true
+   $q.notify({ type: 'positive', message: t('session.builder.drillAdded'), timeout: 1500 })
+ }
+ 
++async function saveTemplate() {
++  if (!templateNameInput.value.trim()) return
++  await templateStore.createTemplate(builderStore.sessionId, templateNameInput.value.trim())
++  saveAsTemplateDialog.value = false
++  templateNameInput.value = ''
++  $q.notify({ type: 'positive', message: t('session.templates.saved') })
++}
++
+ function onAddToSession(drill) {
+   isDrillDetailOpen.value = false
+   addDrillToActiveBlock(drill)
+@@ -324,5 +424,16 @@ onBeforeRouteLeave((_to, _from, next) => {
+     max-height: calc(100vh - 220px);
+     overflow-y: auto;
+   }
++
++  &__template-banner {
++    border-radius: 6px;
++    background: var(--surface-elevated, rgba(139, 92, 246, 0.08));
++    border: 1px solid var(--accent-primary, rgba(139, 92, 246, 0.3));
++  }
++
++  &__block--active {
++    outline: 2px solid var(--accent-primary, #8b5cf6);
++    border-radius: 8px;
++  }
+ }
+ </style>
+diff --git a/src/frontend/src/router/routes.js b/src/frontend/src/router/routes.js
+index 695f779..70a4cf7 100644
+--- a/src/frontend/src/router/routes.js
++++ b/src/frontend/src/router/routes.js
+@@ -155,6 +155,12 @@ const routes = [
+         component: () => import('pages/coach/SessionBuilderPage.vue'),
+         meta: { requiresAuth: true, requiresCoach: true },
+       },
++      {
++        path: 'coach/session-templates',
++        name: 'coach-session-templates',
++        component: () => import('pages/coach/SessionTemplateVault.vue'),
++        meta: { requiresAuth: true, requiresCoach: true },
++      },
+       {
+         path: 'player/locker-room',
+         component: () => import('pages/player/PlayerLockerRoomPlaceholderPage.vue'),
+diff --git a/src/frontend/src/stores/sessionBuilder.store.js b/src/frontend/src/stores/sessionBuilder.store.js
+index b67e01b..2e2b6bf 100644
+--- a/src/frontend/src/stores/sessionBuilder.store.js
++++ b/src/frontend/src/stores/sessionBuilder.store.js
+@@ -12,6 +12,12 @@ export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
+   const saving = ref(false)
+   const error = ref(null)
+   const isGated = ref(false)
++  const activeBlockIndex = ref(0)
++  const suggestedDrills = ref([])
++  const suggestionsLoading = ref(false)
++  const sourceTemplateId = ref(null)
++  const sourceTemplateName = ref(null)
++  const templateBannerDismissed = ref(false)
+ 
+   const sessionDna = computed(() => {
+     const allDrills = blocks.value.flatMap((b) => b.drills.map((d) => d.drill?.metadata).filter(Boolean))
+@@ -67,6 +73,11 @@ export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
+     developmentFocus.value = []
+     error.value = null
+     isGated.value = false
++    activeBlockIndex.value = 0
++    suggestedDrills.value = []
++    sourceTemplateId.value = null
++    sourceTemplateName.value = null
++    templateBannerDismissed.value = false
+   }
+ 
+   async function fetchExistingPlan(bId) {
+@@ -86,6 +97,8 @@ export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
+         drills: b.drills.map((d) => ({ drillId: d.drillId, order: d.order, drill: d.drill })),
+       }))
+       developmentFocus.value = [...plan.developmentFocus]
++      sourceTemplateId.value = plan.sourceTemplateId ?? null
++      sourceTemplateName.value = plan.sourceTemplateName ?? null
+     } catch (e) {
+       if (e?.response?.status === 404) {
+         initForBooking(bId)
+@@ -132,6 +145,23 @@ export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
+     }
+   }
+ 
++  async function fetchSuggestions() {
++    if (!sessionId.value) return
++    suggestionsLoading.value = true
++    try {
++      const res = await sessionApi.getSuggestions(sessionId.value, 10)
++      suggestedDrills.value = res.data
++    } catch {
++      suggestedDrills.value = []
++    } finally {
++      suggestionsLoading.value = false
++    }
++  }
++
++  function setActiveBlock(index) {
++    if (index >= 0 && index < blocks.value.length) activeBlockIndex.value = index
++  }
++
+   function addDrillToBlock(blockIndex, drill) {
+     if (blockIndex < 0 || blockIndex >= blocks.value.length) return
+     const block = blocks.value[blockIndex]
+@@ -160,12 +190,20 @@ export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
+     saving,
+     error,
+     isGated,
++    activeBlockIndex,
++    suggestedDrills,
++    suggestionsLoading,
++    sourceTemplateId,
++    sourceTemplateName,
++    templateBannerDismissed,
+     sessionDna,
+     equipmentList,
+     blockSlu,
+     initForBooking,
+     fetchExistingPlan,
+     savePlan,
++    fetchSuggestions,
++    setActiveBlock,
+     addDrillToBlock,
+     removeDrillFromBlock,
+     updateBlockMeta,
+diff --git a/src/main/java/com/softropic/skillars/platform/session/api/DrillLibraryResource.java b/src/main/java/com/softropic/skillars/platform/session/api/DrillLibraryResource.java
+index 66c49ec..d8cee3c 100644
+--- a/src/main/java/com/softropic/skillars/platform/session/api/DrillLibraryResource.java
++++ b/src/main/java/com/softropic/skillars/platform/session/api/DrillLibraryResource.java
+@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.session.contract.DrillResponse;
+ import com.softropic.skillars.platform.session.contract.DrillTagRequest;
+ import com.softropic.skillars.platform.session.contract.InvalidParamException;
+ import com.softropic.skillars.platform.session.service.DrillLibraryService;
++import com.softropic.skillars.platform.session.service.DrillSuggestionService;
+ import com.softropic.skillars.platform.session.service.DrillUploadService;
+ import io.micrometer.observation.annotation.Observed;
+ import jakarta.validation.Valid;
+@@ -33,9 +34,20 @@ import java.util.UUID;
+ public class DrillLibraryResource {
+ 
+     private final DrillLibraryService drillLibraryService;
++    private final DrillSuggestionService drillSuggestionService;
+     private final DrillUploadService drillUploadService;
+     private final SecurityUtil securityUtil;
+ 
++    @GetMapping("/suggestions")
++    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
++    public ResponseEntity<List<DrillResponse>> getSuggestions(
++        @RequestParam UUID sessionId,
++        @RequestParam(defaultValue = "10") int limit
++    ) {
++        if (limit < 1 || limit > 20) throw new InvalidParamException("limit");
++        return ResponseEntity.ok(drillSuggestionService.suggest(sessionId, currentCoachUserId(), limit));
++    }
++
+     @GetMapping
+     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+     public ResponseEntity<List<DrillResponse>> getDrills(
+diff --git a/src/main/java/com/softropic/skillars/platform/session/contract/SessionErrorCode.java b/src/main/java/com/softropic/skillars/platform/session/contract/SessionErrorCode.java
+index 8ff197a..ba2569e 100644
+--- a/src/main/java/com/softropic/skillars/platform/session/contract/SessionErrorCode.java
++++ b/src/main/java/com/softropic/skillars/platform/session/contract/SessionErrorCode.java
+@@ -9,7 +9,8 @@ public enum SessionErrorCode implements ErrorCode {
+     DRILL_UPLOAD_NOT_ALLOWED,
+     SESSION_ALREADY_EXISTS,
+     SESSION_BOOKING_NOT_OWNED,
+-    SESSION_PLAN_LOCKED;
++    SESSION_PLAN_LOCKED,
++    TEMPLATE_NOT_OWNED;
+ 
+     @Override
+     public String getErrorCode() {
+diff --git a/src/main/java/com/softropic/skillars/platform/session/contract/SessionPlanResponse.java b/src/main/java/com/softropic/skillars/platform/session/contract/SessionPlanResponse.java
+index 2c80c08..bc69618 100644
+--- a/src/main/java/com/softropic/skillars/platform/session/contract/SessionPlanResponse.java
++++ b/src/main/java/com/softropic/skillars/platform/session/contract/SessionPlanResponse.java
+@@ -15,5 +15,7 @@ public record SessionPlanResponse(
+     List<String> developmentFocus,
+     String status,
+     Instant createdAt,
+-    Instant updatedAt
++    Instant updatedAt,
++    UUID sourceTemplateId,
++    String sourceTemplateName
+ ) {}
+diff --git a/src/main/java/com/softropic/skillars/platform/session/repo/Session.java b/src/main/java/com/softropic/skillars/platform/session/repo/Session.java
+index 0ba951c..ae38e15 100644
+--- a/src/main/java/com/softropic/skillars/platform/session/repo/Session.java
++++ b/src/main/java/com/softropic/skillars/platform/session/repo/Session.java
+@@ -59,6 +59,12 @@ public class Session {
+     @Column(nullable = false, length = 20)
+     private String status;
+ 
++    @Column(name = "source_template_id")
++    private UUID sourceTemplateId;
++
++    @Column(name = "source_template_name", length = 200)
++    private String sourceTemplateName;
++
+     @Column(name = "created_at", nullable = false, updatable = false)
+     private Instant createdAt;
+ 
+diff --git a/src/main/java/com/softropic/skillars/platform/session/repo/SessionRepository.java b/src/main/java/com/softropic/skillars/platform/session/repo/SessionRepository.java
+index 63362f7..97f70d5 100644
+--- a/src/main/java/com/softropic/skillars/platform/session/repo/SessionRepository.java
++++ b/src/main/java/com/softropic/skillars/platform/session/repo/SessionRepository.java
+@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.session.repo;
+ 
+ import org.springframework.data.jpa.repository.JpaRepository;
+ 
++import java.util.List;
+ import java.util.Optional;
+ import java.util.UUID;
+ 
+@@ -12,4 +13,6 @@ public interface SessionRepository extends JpaRepository<Session, UUID> {
+     Optional<Session> findByBookingIdAndCoachId(UUID bookingId, UUID coachId);
+ 
+     boolean existsByBookingId(UUID bookingId);
++
++    List<Session> findTop5ByPlayerIdOrderByCreatedAtDesc(Long playerId);
+ }
+diff --git a/src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java b/src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java
+index c17ef64..fb86f97 100644
+--- a/src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java
++++ b/src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java
+@@ -250,7 +250,8 @@ public class SessionPlanService {
+             session.getId(), session.getBookingId(), session.getCoachId(),
+             session.getPlayerId(), blockResponses, session.getSessionDna(),
+             session.getEquipmentList(), session.getDevelopmentFocus(),
+-            session.getStatus(), session.getCreatedAt(), session.getUpdatedAt()
++            session.getStatus(), session.getCreatedAt(), session.getUpdatedAt(),
++            session.getSourceTemplateId(), session.getSourceTemplateName()
+         );
+     }
+ }
+
+=== NEW FILES (git diff --no-index /dev/null <file>) ===
+diff --git a/src/frontend/src/components/session/DrillSuggestionPanel.vue b/src/frontend/src/components/session/DrillSuggestionPanel.vue
+new file mode 100644
+index 0000000..9d2a7a7
+--- /dev/null
++++ b/src/frontend/src/components/session/DrillSuggestionPanel.vue
+@@ -0,0 +1,44 @@
++<template>
++  <div class="drill-suggestion-panel">
++    <div class="row items-center q-mb-sm">
++      <div class="text-subtitle2 col">
++        {{ isPersonalized ? t('session.suggestions.personalizedTitle') : t('session.suggestions.fallbackTitle') }}
++      </div>
++      <q-btn flat dense round icon="close" size="xs" @click="emit('close')" />
++    </div>
++
++    <div v-if="loading" class="flex flex-center q-pa-md">
++      <q-spinner-dots size="24px" color="primary" />
++    </div>
++
++    <div v-else-if="!suggestions.length" class="text-caption text-secondary q-pa-md text-center">
++      {{ t('session.suggestions.empty') }}
++    </div>
++
++    <div v-else class="drill-suggestion-panel__list">
++      <DrillCard
++        v-for="drill in suggestions"
++        :key="drill.id"
++        :drill="drill"
++        context="session-builder"
++        class="q-mb-xs"
++        @add-to-session="emit('add-drill', drill)"
++        @open-detail="emit('open-detail', drill)"
++      />
++    </div>
++  </div>
++</template>
++
++<script setup>
++import { useI18n } from 'vue-i18n'
++import DrillCard from 'src/components/session/DrillCard.vue'
++
++defineProps({
++  suggestions: { type: Array, default: () => [] },
++  loading: { type: Boolean, default: false },
++  isPersonalized: { type: Boolean, default: false },
++})
++
++const emit = defineEmits(['close', 'add-drill', 'open-detail'])
++const { t } = useI18n()
++</script>
+diff --git a/src/frontend/src/pages/coach/SessionTemplateVault.vue b/src/frontend/src/pages/coach/SessionTemplateVault.vue
+new file mode 100644
+index 0000000..7fa02e9
+--- /dev/null
++++ b/src/frontend/src/pages/coach/SessionTemplateVault.vue
+@@ -0,0 +1,194 @@
++<template>
++  <q-page class="q-pa-md">
++    <div class="row items-center q-mb-md">
++      <q-btn flat round icon="arrow_back" :to="{ name: 'coach-session-templates' }" @click="$router.back()" />
++      <div class="text-h6 q-ml-sm">{{ t('session.templates.title') }}</div>
++    </div>
++
++    <div v-if="templateStore.loading" class="flex flex-center q-pa-xl">
++      <q-spinner-dots size="36px" color="primary" />
++    </div>
++
++    <div v-else-if="!templateStore.templates.length" class="text-center q-pa-xl">
++      <q-icon name="bookmark_border" size="64px" color="grey-5" />
++      <div class="text-h6 q-mt-md">{{ t('session.templates.emptyTitle') }}</div>
++      <div class="text-body2 text-secondary q-mt-sm">{{ t('session.templates.emptySubtitle') }}</div>
++    </div>
++
++    <q-list v-else separator>
++      <q-item v-for="tmpl in templateStore.templates" :key="tmpl.id">
++        <q-item-section>
++          <q-item-label class="text-weight-medium">{{ tmpl.name }}</q-item-label>
++          <q-item-label caption>
++            {{ t('session.templates.drillCount', { count: tmpl.drillCount }) }}
++            · {{ t('session.templates.deployCount', { count: tmpl.deployCount }) }}
++            <template v-if="tmpl.lastDeployedAt">
++              · {{ t('session.templates.lastDeployed', { date: formatDate(tmpl.lastDeployedAt) }) }}
++            </template>
++          </q-item-label>
++        </q-item-section>
++        <q-item-section side>
++          <SessionDNAChart :session-dna="tmpl.sessionDna ?? defaultDna" variant="compact" />
++        </q-item-section>
++        <q-item-section side>
++          <q-btn flat dense round icon="more_vert">
++            <q-menu>
++              <q-list>
++                <q-item clickable v-close-popup @click="startDeploy(tmpl)">
++                  <q-item-section>{{ t('session.templates.useThisSession') }}</q-item-section>
++                </q-item>
++                <q-item clickable v-close-popup @click="startRename(tmpl)">
++                  <q-item-section>{{ t('session.templates.rename') }}</q-item-section>
++                </q-item>
++                <q-item clickable v-close-popup @click="confirmDelete(tmpl)">
++                  <q-item-section class="text-negative">{{ t('session.templates.delete') }}</q-item-section>
++                </q-item>
++              </q-list>
++            </q-menu>
++          </q-btn>
++        </q-item-section>
++      </q-item>
++    </q-list>
++
++    <!-- Rename dialog -->
++    <q-dialog v-model="renameDialog">
++      <q-card style="min-width: 320px">
++        <q-card-section>
++          <div class="text-subtitle1">{{ t('session.templates.nameDialogTitle') }}</div>
++        </q-card-section>
++        <q-card-section>
++          <q-input v-model="renameValue" dense autofocus :label="t('session.templates.nameLabel')" />
++        </q-card-section>
++        <q-card-actions align="right">
++          <q-btn flat :label="t('common.cancel')" v-close-popup />
++          <q-btn color="primary" :label="t('session.templates.saveAction')" @click="saveRename" />
++        </q-card-actions>
++      </q-card>
++    </q-dialog>
++
++    <!-- Deploy dialog -->
++    <q-dialog v-model="deployDialog">
++      <q-card style="min-width: 320px">
++        <q-card-section>
++          <div class="text-subtitle1">{{ t('session.templates.deployDialogTitle') }}</div>
++          <div class="text-caption text-secondary q-mt-xs">{{ t('session.templates.deployDialogSubtitle') }}</div>
++        </q-card-section>
++        <q-card-section>
++          <q-input
++            v-model="deployBookingId"
++            dense
++            autofocus
++            :label="t('session.templates.deployBookingIdLabel')"
++            :error="!!deployError"
++            :error-message="deployError"
++          />
++        </q-card-section>
++        <q-card-actions align="right">
++          <q-btn flat :label="t('common.cancel')" v-close-popup />
++          <q-btn
++            color="primary"
++            :label="t('session.templates.deployAction')"
++            :loading="deploying"
++            @click="confirmDeploy"
++          />
++        </q-card-actions>
++      </q-card>
++    </q-dialog>
++  </q-page>
++</template>
++
++<script setup>
++import { ref, onMounted } from 'vue'
++import { useI18n } from 'vue-i18n'
++import { useQuasar } from 'quasar'
++import { useSessionTemplateStore } from 'src/stores/sessionTemplate.store'
++import SessionDNAChart from 'src/components/booking/SessionDNAChart.vue'
++
++defineOptions({ name: 'SessionTemplateVault' })
++
++const { t } = useI18n()
++const $q = useQuasar()
++const templateStore = useSessionTemplateStore()
++
++const renameDialog = ref(false)
++const renameValue = ref('')
++const renamingTemplate = ref(null)
++const deployDialog = ref(false)
++const deployBookingId = ref('')
++const deployingTemplate = ref(null)
++const deploying = ref(false)
++const deployError = ref('')
++const defaultDna = { technical: 0, physical: 0, cognitive: 0, matchRealism: 0, weakFootFocus: 0 }
++
++onMounted(() => templateStore.fetchTemplates())
++
++function formatDate(iso) {
++  return new Date(iso).toLocaleDateString()
++}
++
++function startRename(tmpl) {
++  renamingTemplate.value = tmpl
++  renameValue.value = tmpl.name
++  renameDialog.value = true
++}
++
++async function saveRename() {
++  if (!renameValue.value.trim()) return
++  try {
++    await templateStore.renameTemplate(renamingTemplate.value.id, renameValue.value.trim())
++    renameDialog.value = false
++    $q.notify({ type: 'positive', message: t('session.templates.renamed') })
++  } catch {
++    $q.notify({ type: 'negative', message: t('common.errorGeneric') })
++  }
++}
++
++function confirmDelete(tmpl) {
++  $q.dialog({
++    title: t('session.templates.delete'),
++    message: t('session.templates.confirmDelete'),
++    cancel: true,
++    persistent: true,
++  }).onOk(async () => {
++    try {
++      await templateStore.deleteTemplate(tmpl.id)
++      $q.notify({ type: 'positive', message: t('session.templates.deleted') })
++    } catch {
++      $q.notify({ type: 'negative', message: t('common.errorGeneric') })
++    }
++  })
++}
++
++function startDeploy(tmpl) {
++  deployingTemplate.value = tmpl
++  deployBookingId.value = ''
++  deployError.value = ''
++  deployDialog.value = true
++}
++
++async function confirmDeploy() {
++  const bookingId = deployBookingId.value.trim()
++  if (!bookingId) {
++    deployError.value = t('session.templates.deployBookingIdRequired')
++    return
++  }
++  deploying.value = true
++  deployError.value = ''
++  try {
++    await templateStore.deployTemplate(deployingTemplate.value.id, bookingId)
++    deployDialog.value = false
++    $q.notify({ type: 'positive', message: t('session.templates.deployed') })
++  } catch (e) {
++    const code = e?.response?.data?.helpCode
++    if (code === 'SESSION_ALREADY_EXISTS') {
++      deployError.value = t('session.templates.deployAlreadyExists')
++    } else if (code === 'SESSION_BOOKING_NOT_OWNED') {
++      deployError.value = t('session.templates.deployBookingInvalid')
++    } else {
++      deployError.value = t('common.errorGeneric')
++    }
++  } finally {
++    deploying.value = false
++  }
++}
++</script>
+diff --git a/src/frontend/src/stores/sessionTemplate.store.js b/src/frontend/src/stores/sessionTemplate.store.js
+new file mode 100644
+index 0000000..8bbe93e
+--- /dev/null
++++ b/src/frontend/src/stores/sessionTemplate.store.js
+@@ -0,0 +1,65 @@
++import { defineStore } from 'pinia'
++import { ref } from 'vue'
++import { sessionApi } from 'src/api/session.api'
++
++export const useSessionTemplateStore = defineStore('sessionTemplate', () => {
++  const templates = ref([])
++  const loading = ref(false)
++  const error = ref(null)
++
++  async function fetchTemplates() {
++    loading.value = true
++    try {
++      const res = await sessionApi.listTemplates()
++      templates.value = res.data
++    } catch (e) {
++      error.value = e
++    } finally {
++      loading.value = false
++    }
++  }
++
++  async function createTemplate(sessionId, name) {
++    const res = await sessionApi.createTemplate({ sessionId, name })
++    templates.value.unshift(res.data)
++    return res.data
++  }
++
++  async function renameTemplate(templateId, name) {
++    try {
++      await sessionApi.renameTemplate(templateId, { name })
++      const t = templates.value.find(t => t.id === templateId)
++      if (t) t.name = name
++    } catch (e) {
++      error.value = e
++      throw e
++    }
++  }
++
++  async function deleteTemplate(templateId) {
++    try {
++      await sessionApi.deleteTemplate(templateId)
++      templates.value = templates.value.filter(t => t.id !== templateId)
++    } catch (e) {
++      error.value = e
++      throw e
++    }
++  }
++
++  async function deployTemplate(templateId, bookingId) {
++    try {
++      const res = await sessionApi.deployTemplate(templateId, bookingId)
++      const t = templates.value.find(t => t.id === templateId)
++      if (t) {
++        t.deployCount = (t.deployCount ?? 0) + 1
++        t.lastDeployedAt = new Date().toISOString()
++      }
++      return res.data
++    } catch (e) {
++      error.value = e
++      throw e
++    }
++  }
++
++  return { templates, loading, error, fetchTemplates, createTemplate, renameTemplate, deleteTemplate, deployTemplate }
++})
+diff --git a/src/main/java/com/softropic/skillars/platform/session/api/SessionTemplateResource.java b/src/main/java/com/softropic/skillars/platform/session/api/SessionTemplateResource.java
+new file mode 100644
+index 0000000..cf75c46
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/session/api/SessionTemplateResource.java
+@@ -0,0 +1,83 @@
++package com.softropic.skillars.platform.session.api;
++
++import com.softropic.skillars.infrastructure.security.SecurityConstants;
++import com.softropic.skillars.platform.security.service.SecurityUtil;
++import com.softropic.skillars.platform.session.contract.CreateTemplateRequest;
++import com.softropic.skillars.platform.session.contract.RenameTemplateRequest;
++import com.softropic.skillars.platform.session.contract.SessionPlanResponse;
++import com.softropic.skillars.platform.session.contract.SessionTemplateResponse;
++import com.softropic.skillars.platform.session.service.SessionTemplateService;
++import io.micrometer.observation.annotation.Observed;
++import jakarta.validation.Valid;
++import lombok.RequiredArgsConstructor;
++import org.springframework.http.HttpStatus;
++import org.springframework.http.ResponseEntity;
++import org.springframework.security.access.prepost.PreAuthorize;
++import org.springframework.web.bind.annotation.DeleteMapping;
++import org.springframework.web.bind.annotation.GetMapping;
++import org.springframework.web.bind.annotation.PathVariable;
++import org.springframework.web.bind.annotation.PostMapping;
++import org.springframework.web.bind.annotation.PutMapping;
++import org.springframework.web.bind.annotation.RequestBody;
++import org.springframework.web.bind.annotation.RequestMapping;
++import org.springframework.web.bind.annotation.RequestParam;
++import org.springframework.web.bind.annotation.RestController;
++
++import java.util.List;
++import java.util.UUID;
++
++@Observed(name = "session.templates")
++@RestController
++@RequestMapping("/api/session/templates")
++@RequiredArgsConstructor
++public class SessionTemplateResource {
++
++    private final SessionTemplateService sessionTemplateService;
++    private final SecurityUtil securityUtil;
++
++    @GetMapping
++    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
++    public ResponseEntity<List<SessionTemplateResponse>> listTemplates() {
++        return ResponseEntity.ok(sessionTemplateService.listTemplates(currentCoachUserId()));
++    }
++
++    @PostMapping
++    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
++    public ResponseEntity<SessionTemplateResponse> createTemplate(
++        @RequestBody @Valid CreateTemplateRequest req
++    ) {
++        return ResponseEntity.status(HttpStatus.CREATED)
++            .body(sessionTemplateService.createTemplate(req, currentCoachUserId()));
++    }
++
++    @PutMapping("/{templateId}")
++    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
++    public ResponseEntity<Void> renameTemplate(
++        @PathVariable UUID templateId,
++        @RequestBody @Valid RenameTemplateRequest req
++    ) {
++        sessionTemplateService.renameTemplate(templateId, req, currentCoachUserId());
++        return ResponseEntity.noContent().build();
++    }
++
++    @DeleteMapping("/{templateId}")
++    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
++    public ResponseEntity<Void> deleteTemplate(@PathVariable UUID templateId) {
++        sessionTemplateService.deleteTemplate(templateId, currentCoachUserId());
++        return ResponseEntity.noContent().build();
++    }
++
++    @PostMapping("/{templateId}/deploy")
++    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
++    public ResponseEntity<SessionPlanResponse> deployTemplate(
++        @PathVariable UUID templateId,
++        @RequestParam UUID bookingId
++    ) {
++        return ResponseEntity.status(HttpStatus.CREATED)
++            .body(sessionTemplateService.deployTemplate(templateId, bookingId, currentCoachUserId()));
++    }
++
++    private Long currentCoachUserId() {
++        return securityUtil.getCurrentCoachUserId();
++    }
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/session/contract/CreateTemplateRequest.java b/src/main/java/com/softropic/skillars/platform/session/contract/CreateTemplateRequest.java
+new file mode 100644
+index 0000000..dada3be
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/session/contract/CreateTemplateRequest.java
+@@ -0,0 +1,12 @@
++package com.softropic.skillars.platform.session.contract;
++
++import jakarta.validation.constraints.NotBlank;
++import jakarta.validation.constraints.NotNull;
++import jakarta.validation.constraints.Size;
++
++import java.util.UUID;
++
++public record CreateTemplateRequest(
++    @NotNull UUID sessionId,
++    @NotBlank @Size(max = 200) String name
++) {}
+diff --git a/src/main/java/com/softropic/skillars/platform/session/contract/RenameTemplateRequest.java b/src/main/java/com/softropic/skillars/platform/session/contract/RenameTemplateRequest.java
+new file mode 100644
+index 0000000..c9c4140
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/session/contract/RenameTemplateRequest.java
+@@ -0,0 +1,8 @@
++package com.softropic.skillars.platform.session.contract;
++
++import jakarta.validation.constraints.NotBlank;
++import jakarta.validation.constraints.Size;
++
++public record RenameTemplateRequest(
++    @NotBlank @Size(max = 200) String name
++) {}
+diff --git a/src/main/java/com/softropic/skillars/platform/session/contract/SessionTemplateResponse.java b/src/main/java/com/softropic/skillars/platform/session/contract/SessionTemplateResponse.java
+new file mode 100644
+index 0000000..2c34e26
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/session/contract/SessionTemplateResponse.java
+@@ -0,0 +1,17 @@
++package com.softropic.skillars.platform.session.contract;
++
++import java.time.Instant;
++import java.util.List;
++import java.util.UUID;
++
++public record SessionTemplateResponse(
++    UUID id,
++    UUID coachId,
++    String name,
++    int drillCount,
++    SessionDnaScore sessionDna,
++    List<String> developmentFocus,
++    Instant lastDeployedAt,
++    int deployCount,
++    Instant createdAt
++) {}
+diff --git a/src/main/java/com/softropic/skillars/platform/session/repo/SessionTemplate.java b/src/main/java/com/softropic/skillars/platform/session/repo/SessionTemplate.java
+new file mode 100644
+index 0000000..4a83968
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/session/repo/SessionTemplate.java
+@@ -0,0 +1,72 @@
++package com.softropic.skillars.platform.session.repo;
++
++import com.softropic.skillars.platform.session.contract.SessionBlockData;
++import com.softropic.skillars.platform.session.contract.SessionDnaScore;
++import jakarta.persistence.Column;
++import jakarta.persistence.Entity;
++import jakarta.persistence.GeneratedValue;
++import jakarta.persistence.GenerationType;
++import jakarta.persistence.Id;
++import jakarta.persistence.PrePersist;
++import jakarta.persistence.Table;
++import lombok.Getter;
++import lombok.NoArgsConstructor;
++import lombok.Setter;
++import org.hibernate.annotations.JdbcTypeCode;
++import org.hibernate.type.SqlTypes;
++
++import java.time.Instant;
++import java.util.List;
++import java.util.UUID;
++
++@Entity
++@Table(schema = "session", name = "session_templates")
++@Getter
++@Setter
++@NoArgsConstructor
++public class SessionTemplate {
++
++    @Id
++    @GeneratedValue(strategy = GenerationType.UUID)
++    private UUID id;
++
++    @Column(name = "coach_id", nullable = false)
++    private UUID coachId;
++
++    @Column(nullable = false, length = 200)
++    private String name;
++
++    @JdbcTypeCode(SqlTypes.JSON)
++    @Column(nullable = false, columnDefinition = "jsonb")
++    private List<SessionBlockData> blocks;
++
++    @JdbcTypeCode(SqlTypes.JSON)
++    @Column(name = "session_dna", columnDefinition = "jsonb")
++    private SessionDnaScore sessionDna;
++
++    @JdbcTypeCode(SqlTypes.JSON)
++    @Column(name = "equipment_list", nullable = false, columnDefinition = "jsonb")
++    private List<String> equipmentList;
++
++    @JdbcTypeCode(SqlTypes.JSON)
++    @Column(name = "development_focus", nullable = false, columnDefinition = "jsonb")
++    private List<String> developmentFocus;
++
++    @Column(name = "last_deployed_at")
++    private Instant lastDeployedAt;
++
++    @Column(name = "deploy_count", nullable = false)
++    private int deployCount;
++
++    @Column(nullable = false, length = 20)
++    private String status;
++
++    @Column(name = "created_at", nullable = false, updatable = false)
++    private Instant createdAt;
++
++    @PrePersist
++    void onCreate() {
++        createdAt = Instant.now();
++        if (status == null) status = "ACTIVE";
++    }
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/session/repo/SessionTemplateRepository.java b/src/main/java/com/softropic/skillars/platform/session/repo/SessionTemplateRepository.java
+new file mode 100644
+index 0000000..0a14fe7
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/session/repo/SessionTemplateRepository.java
+@@ -0,0 +1,22 @@
++package com.softropic.skillars.platform.session.repo;
++
++import org.springframework.data.jpa.repository.JpaRepository;
++import org.springframework.data.jpa.repository.Modifying;
++import org.springframework.data.jpa.repository.Query;
++import org.springframework.data.repository.query.Param;
++
++import java.time.Instant;
++import java.util.List;
++import java.util.Optional;
++import java.util.UUID;
++
++public interface SessionTemplateRepository extends JpaRepository<SessionTemplate, UUID> {
++
++    List<SessionTemplate> findByCoachIdAndStatus(UUID coachId, String status);
++
++    Optional<SessionTemplate> findByIdAndCoachId(UUID id, UUID coachId);
++
++    @Modifying(clearAutomatically = true)
++    @Query("UPDATE SessionTemplate t SET t.deployCount = t.deployCount + 1, t.lastDeployedAt = :now WHERE t.id = :id")
++    void incrementDeployCount(@Param("id") UUID id, @Param("now") Instant now);
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/session/service/DrillSuggestionService.java b/src/main/java/com/softropic/skillars/platform/session/service/DrillSuggestionService.java
+new file mode 100644
+index 0000000..3b6606d
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/session/service/DrillSuggestionService.java
+@@ -0,0 +1,130 @@
++package com.softropic.skillars.platform.session.service;
++
++import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
++import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
++import com.softropic.skillars.platform.session.contract.DrillMetadata;
++import com.softropic.skillars.platform.session.contract.DrillResponse;
++import com.softropic.skillars.platform.session.contract.SessionBlockData;
++import com.softropic.skillars.platform.session.contract.SessionDrillRef;
++import com.softropic.skillars.platform.session.repo.Drill;
++import com.softropic.skillars.platform.session.repo.DrillRepository;
++import com.softropic.skillars.platform.session.repo.Session;
++import com.softropic.skillars.platform.session.repo.SessionRepository;
++import lombok.RequiredArgsConstructor;
++import lombok.extern.slf4j.Slf4j;
++import org.springframework.stereotype.Service;
++import org.springframework.transaction.annotation.Transactional;
++
++import java.util.ArrayList;
++import java.util.Comparator;
++import java.util.List;
++import java.util.Set;
++import java.util.UUID;
++import java.util.stream.Collectors;
++import java.util.stream.Stream;
++
++@Service
++@Transactional(readOnly = true)
++@Slf4j
++@RequiredArgsConstructor
++public class DrillSuggestionService {
++
++    private final SessionRepository sessionRepository;
++    private final DrillRepository drillRepository;
++    private final DrillLibraryService drillLibraryService;
++    private final CoachProfileService coachProfileService;
++
++    public List<DrillResponse> suggest(UUID sessionId, Long coachUserId, int limit) {
++        drillLibraryService.checkSessionBuilderGate(coachUserId);
++        UUID coachId = coachProfileService.getCoachIdByUserId(coachUserId);
++
++        Session session = sessionRepository.findById(sessionId)
++            .orElseThrow(() -> new ResourceNotFoundException("Session not found", "session"));
++
++        if (!session.getCoachId().equals(coachId)) {
++            throw new ResourceNotFoundException("Session not found", "session");
++        }
++
++        List<String> focus = session.getDevelopmentFocus();
++        Long playerId = session.getPlayerId();
++
++        if (focus == null || focus.isEmpty()) {
++            return fallback(limit);
++        }
++
++        List<Drill> candidates = allCandidates(coachId);
++        Set<UUID> recentIds = getRecentDrillIds(playerId);
++        Set<UUID> alreadyUsed = extractUsedDrills(session.getBlocks());
++
++        List<DrillResponse> result = candidates.stream()
++            .filter(d -> !alreadyUsed.contains(d.getId()))
++            .map(d -> new DrillScore(d, score(d.getMetadata(), focus, recentIds, d.getId())))
++            .sorted(Comparator.comparingDouble(DrillScore::score).reversed())
++            .limit(limit)
++            .map(ds -> drillLibraryService.toResponse(ds.drill(), false, List.of(), null, null, null))
++            .toList();
++
++        return result;
++    }
++
++    private double score(DrillMetadata meta, List<String> focus, Set<UUID> recentIds, UUID drillId) {
++        if (meta == null) return 0.0;
++        double focusScore = computeFocusScore(meta, focus);
++        double neglectedScore = 0.0;
++        double ageFitScore = 0.5;
++        double recencyScore = recentIds.contains(drillId) ? 0.0 : 1.0;
++        return focusScore * 0.40 + neglectedScore * 0.30 + ageFitScore * 0.20 + recencyScore * 0.10;
++    }
++
++    private double computeFocusScore(DrillMetadata meta, List<String> focus) {
++        double total = 0.0;
++        for (String f : focus) {
++            total += switch (f) {
++                case "technical"    -> ((meta.intensity() + meta.pressureLevel()) / 2.0 - 1.0) / 4.0;
++                case "physical"     -> (meta.intensity() - 1.0) / 4.0;
++                case "cognitive"    -> (meta.cognitiveLoad() - 1.0) / 4.0;
++                case "matchRealism" -> (meta.matchRealism() - 1.0) / 4.0;
++                case "weakFoot"     -> meta.weakFootBias() ? 1.0 : 0.0;
++                case "set_pieces"   -> (meta.pressureLevel() - 1.0) / 4.0;
++                case "possession"   -> ((meta.cognitiveLoad() + meta.matchRealism()) / 2.0 - 1.0) / 4.0;
++                case "goalkeeping"  -> 0.5;
++                default             -> 0.0;
++            };
++        }
++        return Math.min(1.0, total / focus.size());
++    }
++
++    private List<DrillResponse> fallback(int limit) {
++        return drillRepository.findByLibraryTypeAndStatus("PLATFORM", "ACTIVE")
++            .stream()
++            .sorted(Comparator.comparing(Drill::getCreatedAt))
++            .limit(limit)
++            .map(d -> drillLibraryService.toResponse(d, false, List.of(), null, null, null))
++            .toList();
++    }
++
++    private List<Drill> allCandidates(UUID coachId) {
++        List<Drill> all = new ArrayList<>(drillRepository.findByLibraryTypeAndStatus("PLATFORM", "ACTIVE"));
++        all.addAll(drillRepository.findByOwnerCoachIdAndStatus(coachId, "ACTIVE"));
++        return all;
++    }
++
++    private Set<UUID> getRecentDrillIds(Long playerId) {
++        return sessionRepository.findTop5ByPlayerIdOrderByCreatedAtDesc(playerId)
++            .stream()
++            .flatMap(s -> s.getBlocks() != null ? s.getBlocks().stream() : Stream.empty())
++            .flatMap(b -> b.drills() != null ? b.drills().stream() : Stream.empty())
++            .map(SessionDrillRef::drillId)
++            .collect(Collectors.toSet());
++    }
++
++    private Set<UUID> extractUsedDrills(List<SessionBlockData> blocks) {
++        if (blocks == null) return Set.of();
++        return blocks.stream()
++            .flatMap(b -> b.drills() != null ? b.drills().stream() : Stream.empty())
++            .map(SessionDrillRef::drillId)
++            .collect(Collectors.toSet());
++    }
++
++    private record DrillScore(Drill drill, double score) {}
++}
+diff --git a/src/main/java/com/softropic/skillars/platform/session/service/SessionTemplateService.java b/src/main/java/com/softropic/skillars/platform/session/service/SessionTemplateService.java
+new file mode 100644
+index 0000000..987eecd
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/session/service/SessionTemplateService.java
+@@ -0,0 +1,208 @@
++package com.softropic.skillars.platform.session.service;
++
++import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
++import com.softropic.skillars.platform.booking.contract.BookingSnapshot;
++import com.softropic.skillars.platform.booking.service.BookingQueryService;
++import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
++import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
++import com.softropic.skillars.platform.session.contract.CreateTemplateRequest;
++import com.softropic.skillars.platform.session.contract.DrillResponse;
++import com.softropic.skillars.platform.session.contract.RenameTemplateRequest;
++import com.softropic.skillars.platform.session.contract.SessionBlockData;
++import com.softropic.skillars.platform.session.contract.SessionBlockDrillResponse;
++import com.softropic.skillars.platform.session.contract.SessionBlockResponse;
++import com.softropic.skillars.platform.session.contract.SessionDrillRef;
++import com.softropic.skillars.platform.session.contract.SessionErrorCode;
++import com.softropic.skillars.platform.session.contract.SessionPlanResponse;
++import com.softropic.skillars.platform.session.contract.SessionTemplateResponse;
++import com.softropic.skillars.platform.session.repo.Drill;
++import com.softropic.skillars.platform.session.repo.DrillRepository;
++import com.softropic.skillars.platform.session.repo.Session;
++import com.softropic.skillars.platform.session.repo.SessionRepository;
++import com.softropic.skillars.platform.session.repo.SessionTemplate;
++import com.softropic.skillars.platform.session.repo.SessionTemplateRepository;
++import lombok.RequiredArgsConstructor;
++import lombok.extern.slf4j.Slf4j;
++import org.springframework.stereotype.Service;
++import org.springframework.transaction.annotation.Transactional;
++
++import java.time.Instant;
++import java.util.Comparator;
++import java.util.List;
++import java.util.Map;
++import java.util.UUID;
++import java.util.stream.Collectors;
++import java.util.stream.Stream;
++
++@Service
++@Transactional
++@Slf4j
++@RequiredArgsConstructor
++public class SessionTemplateService {
++
++    private final SessionTemplateRepository sessionTemplateRepository;
++    private final SessionRepository sessionRepository;
++    private final DrillRepository drillRepository;
++    private final CoachProfileService coachProfileService;
++    private final DrillLibraryService drillLibraryService;
++    private final BookingQueryService bookingQueryService;
++
++    public SessionTemplateResponse createTemplate(CreateTemplateRequest req, Long coachUserId) {
++        drillLibraryService.checkSessionBuilderGate(coachUserId);
++        UUID coachId = resolveCoachId(coachUserId);
++
++        Session session = sessionRepository.findById(req.sessionId())
++            .orElseThrow(() -> new ResourceNotFoundException("Session not found", "session"));
++
++        if (!session.getCoachId().equals(coachId)) {
++            throw new ResourceNotFoundException("Session not found", "session");
++        }
++
++        SessionTemplate template = new SessionTemplate();
++        template.setCoachId(coachId);
++        template.setName(req.name());
++        template.setBlocks(session.getBlocks());
++        template.setSessionDna(session.getSessionDna());
++        template.setEquipmentList(session.getEquipmentList());
++        template.setDevelopmentFocus(session.getDevelopmentFocus());
++        template.setDeployCount(0);
++        template.setStatus("ACTIVE");
++
++        SessionTemplate saved = sessionTemplateRepository.save(template);
++        return toResponse(saved);
++    }
++
++    @Transactional(readOnly = true)
++    public List<SessionTemplateResponse> listTemplates(Long coachUserId) {
++        drillLibraryService.checkSessionBuilderGate(coachUserId);
++        UUID coachId = resolveCoachId(coachUserId);
++        return sessionTemplateRepository.findByCoachIdAndStatus(coachId, "ACTIVE")
++            .stream().map(this::toResponse).toList();
++    }
++
++    public void renameTemplate(UUID templateId, RenameTemplateRequest req, Long coachUserId) {
++        drillLibraryService.checkSessionBuilderGate(coachUserId);
++        UUID coachId = resolveCoachId(coachUserId);
++
++        SessionTemplate t = sessionTemplateRepository.findByIdAndCoachId(templateId, coachId)
++            .orElseThrow(() -> new OperationNotAllowedException("Template not owned", SessionErrorCode.TEMPLATE_NOT_OWNED));
++
++        if ("ARCHIVED".equals(t.getStatus())) {
++            throw new OperationNotAllowedException("Template has been deleted", SessionErrorCode.TEMPLATE_NOT_OWNED);
++        }
++
++        t.setName(req.name());
++        sessionTemplateRepository.save(t);
++    }
++
++    public void deleteTemplate(UUID templateId, Long coachUserId) {
++        drillLibraryService.checkSessionBuilderGate(coachUserId);
++        UUID coachId = resolveCoachId(coachUserId);
++
++        SessionTemplate t = sessionTemplateRepository.findByIdAndCoachId(templateId, coachId)
++            .orElseThrow(() -> new OperationNotAllowedException("Template not owned", SessionErrorCode.TEMPLATE_NOT_OWNED));
++
++        t.setStatus("ARCHIVED");
++        sessionTemplateRepository.save(t);
++    }
++
++    public SessionPlanResponse deployTemplate(UUID templateId, UUID bookingId, Long coachUserId) {
++        drillLibraryService.checkSessionBuilderGate(coachUserId);
++        UUID coachId = resolveCoachId(coachUserId);
++
++        SessionTemplate t = sessionTemplateRepository.findByIdAndCoachId(templateId, coachId)
++            .orElseThrow(() -> new OperationNotAllowedException("Template not owned", SessionErrorCode.TEMPLATE_NOT_OWNED));
++
++        if ("ARCHIVED".equals(t.getStatus())) {
++            throw new OperationNotAllowedException("Template has been deleted", SessionErrorCode.TEMPLATE_NOT_OWNED);
++        }
++
++        BookingSnapshot booking = bookingQueryService.getBookingSnapshot(bookingId)
++            .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking"));
++
++        if (!booking.coachId().equals(coachId)) {
++            throw new OperationNotAllowedException(
++                "Booking is not owned by this coach", SessionErrorCode.SESSION_BOOKING_NOT_OWNED);
++        }
++
++        if (!isBookingPlannable(booking.status())) {
++            throw new OperationNotAllowedException(
++                "Session plan can only be created for a confirmed or upcoming booking",
++                SessionErrorCode.SESSION_BOOKING_NOT_OWNED);
++        }
++
++        if (sessionRepository.existsByBookingId(bookingId)) {
++            throw new OperationNotAllowedException(
++                "Session plan already exists for this booking", SessionErrorCode.SESSION_ALREADY_EXISTS);
++        }
++
++        Session session = new Session();
++        session.setBookingId(bookingId);
++        session.setCoachId(coachId);
++        session.setPlayerId(booking.playerId());
++        session.setBlocks(t.getBlocks());
++        session.setSessionDna(t.getSessionDna());
++        session.setEquipmentList(t.getEquipmentList());
++        session.setDevelopmentFocus(t.getDevelopmentFocus());
++        session.setStatus("DRAFT");
++        session.setSourceTemplateId(t.getId());
++        session.setSourceTemplateName(t.getName());
++
++        Session saved = sessionRepository.save(session);
++        sessionTemplateRepository.incrementDeployCount(t.getId(), Instant.now());
++
++        return buildResponse(saved);
++    }
++
++    private boolean isBookingPlannable(String status) {
++        return "CONFIRMED".equals(status) || "UPCOMING".equals(status);
++    }
++
++    private UUID resolveCoachId(Long userId) {
++        return coachProfileService.getCoachIdByUserId(userId);
++    }
++
++    private SessionTemplateResponse toResponse(SessionTemplate t) {
++        int drillCount = t.getBlocks() == null ? 0
++            : t.getBlocks().stream().mapToInt(b -> b.drills() != null ? b.drills().size() : 0).sum();
++        return new SessionTemplateResponse(
++            t.getId(), t.getCoachId(), t.getName(), drillCount,
++            t.getSessionDna(), t.getDevelopmentFocus(),
++            t.getLastDeployedAt(), t.getDeployCount(), t.getCreatedAt()
++        );
++    }
++
++    // mirrors SessionPlanService.buildResponse — keep in sync
++    private SessionPlanResponse buildResponse(Session session) {
++        List<SessionBlockData> blocks = session.getBlocks() == null ? List.of() : session.getBlocks();
++        List<UUID> drillIds = blocks.stream()
++            .flatMap(b -> b.drills() != null ? b.drills().stream() : Stream.empty())
++            .map(SessionDrillRef::drillId)
++            .distinct()
++            .collect(Collectors.toList());
++
++        Map<UUID, DrillResponse> drillResponseMap = drillIds.isEmpty() ? Map.of()
++            : drillRepository.findAllById(drillIds).stream()
++                .collect(Collectors.toMap(Drill::getId, d ->
++                    drillLibraryService.toResponse(d, false, List.of(), null, null, null)));
++
++        List<SessionBlockResponse> blockResponses = blocks.stream().map(block -> {
++            List<SessionBlockDrillResponse> drillResponses = (block.drills() != null
++                ? block.drills() : List.<SessionDrillRef>of()).stream()
++                .sorted(Comparator.comparingInt(SessionDrillRef::order))
++                .map(ref -> new SessionBlockDrillResponse(ref.drillId(), ref.order(),
++                    drillResponseMap.get(ref.drillId())))
++                .collect(Collectors.toList());
++            return new SessionBlockResponse(block.blockType(), block.blockName(),
++                block.durationMinutes(), drillResponses, 0);
++        }).collect(Collectors.toList());
++
++        return new SessionPlanResponse(
++            session.getId(), session.getBookingId(), session.getCoachId(),
++            session.getPlayerId(), blockResponses, session.getSessionDna(),
++            session.getEquipmentList(), session.getDevelopmentFocus(),
++            session.getStatus(), session.getCreatedAt(), session.getUpdatedAt(),
++            session.getSourceTemplateId(), session.getSourceTemplateName()
++        );
++    }
++}
+diff --git a/src/main/resources/db/migration/V44__session_templates.sql b/src/main/resources/db/migration/V44__session_templates.sql
+new file mode 100644
+index 0000000..34fc69d
+--- /dev/null
++++ b/src/main/resources/db/migration/V44__session_templates.sql
+@@ -0,0 +1,20 @@
++CREATE TABLE session.session_templates (
++    id                UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
++    coach_id          UUID          NOT NULL,
++    name              VARCHAR(200)  NOT NULL,
++    blocks            JSONB         NOT NULL DEFAULT '[]',
++    session_dna       JSONB,
++    equipment_list    JSONB         NOT NULL DEFAULT '[]',
++    development_focus JSONB         NOT NULL DEFAULT '[]',
++    last_deployed_at  TIMESTAMPTZ,
++    deploy_count      INT           NOT NULL DEFAULT 0,
++    status            VARCHAR(20)   NOT NULL DEFAULT 'ACTIVE'
++                      CHECK (status IN ('ACTIVE', 'ARCHIVED')),
++    created_at        TIMESTAMPTZ   NOT NULL DEFAULT now()
++);
++CREATE INDEX idx_session_templates_coach_id ON session.session_templates (coach_id);
++
++-- Add template provenance columns to session.sessions
++ALTER TABLE session.sessions
++    ADD COLUMN source_template_id   UUID,
++    ADD COLUMN source_template_name VARCHAR(200);
+diff --git a/src/test/java/com/softropic/skillars/platform/session/api/SessionTemplateResourceIT.java b/src/test/java/com/softropic/skillars/platform/session/api/SessionTemplateResourceIT.java
+new file mode 100644
+index 0000000..a78b55a
+--- /dev/null
++++ b/src/test/java/com/softropic/skillars/platform/session/api/SessionTemplateResourceIT.java
+@@ -0,0 +1,487 @@
++package com.softropic.skillars.platform.session.api;
++
++import com.softropic.skillars.config.TestConfig;
++import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
++import com.softropic.skillars.platform.security.SecurityIT;
++import org.junit.jupiter.api.AfterEach;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.springframework.boot.test.context.SpringBootTest;
++import org.springframework.context.annotation.Import;
++import org.springframework.http.HttpMethod;
++import org.springframework.http.HttpStatus;
++import org.springframework.http.ResponseEntity;
++import org.springframework.test.context.ActiveProfiles;
++import org.springframework.test.context.TestPropertySource;
++import org.springframework.test.context.bean.override.mockito.MockitoBean;
++import org.springframework.test.context.jdbc.Sql;
++import org.springframework.web.client.HttpClientErrorException;
++
++import java.sql.Timestamp;
++import java.time.Instant;
++import java.util.List;
++import java.util.Map;
++import java.util.UUID;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.assertThatThrownBy;
++
++@ActiveProfiles({"dev", "test"})
++@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
++@Import(TestConfig.class)
++@TestPropertySource(properties = {
++    "spring.cloud.compatibility-verifier.enabled=false",
++    "rate.limiting.enabled=false",
++    "allowed.clients=testClientId"
++})
++@Sql({SecurityIT.SEC_DATA_SQL_PATH})
++class SessionTemplateResourceIT extends BaseSessionIT {
++
++    private static final String TEMPLATES_BASE = "/api/session/templates";
++
++    private static final long INSTR_COACH_USER_ID = 9580000010L;
++    private static final long SCOUT_COACH_USER_ID = 9580000020L;
++    private static final long OTHER_COACH_USER_ID = 9580000030L;
++
++    private static final String INSTR_EMAIL = "instr.template@skillars-test.com";
++    private static final String SCOUT_EMAIL = "scout.template@skillars-test.com";
++    private static final String OTHER_EMAIL = "other.template@skillars-test.com";
++
++    private UUID instrCoachId;
++    private UUID scoutCoachId;
++    private UUID otherCoachId;
++
++    private UUID confirmedBookingId;
++    private UUID otherCoachBookingId;
++    private UUID cancelledBookingId;
++    private UUID drillId;
++    private UUID sessionId;
++
++    @MockitoBean
++    VideoProviderAdapter videoProviderAdapter;
++
++    @BeforeEach
++    void setUp() {
++        String passwordHash = passwordEncoder.encode(TEST_PASSWORD);
++        transactionTemplate.execute(status -> {
++            jdbcTemplate.update(
++                "INSERT INTO main.authority (id, name, status, created_by, created_date) " +
++                "VALUES (9580, 'ROLE_COACH', 'ACTIVE', 'system', NOW()) ON CONFLICT (name) DO NOTHING"
++            );
++
++            insertUser(INSTR_COACH_USER_ID, INSTR_EMAIL, passwordHash, "COACH");
++            grantRole(INSTR_COACH_USER_ID, "ROLE_COACH");
++            instrCoachId = insertCoachProfile(INSTR_COACH_USER_ID);
++            insertSubscription(instrCoachId, "INSTRUCTOR");
++
++            insertUser(SCOUT_COACH_USER_ID, SCOUT_EMAIL, passwordHash, "COACH");
++            grantRole(SCOUT_COACH_USER_ID, "ROLE_COACH");
++            scoutCoachId = insertCoachProfile(SCOUT_COACH_USER_ID);
++            insertSubscription(scoutCoachId, "SCOUT");
++
++            insertUser(OTHER_COACH_USER_ID, OTHER_EMAIL, passwordHash, "COACH");
++            grantRole(OTHER_COACH_USER_ID, "ROLE_COACH");
++            otherCoachId = insertCoachProfile(OTHER_COACH_USER_ID);
++            insertSubscription(otherCoachId, "INSTRUCTOR");
++
++            drillId = UUID.randomUUID();
++            insertDrill(drillId, "Template Drill", "PLATFORM", null, "ACTIVE");
++
++            confirmedBookingId = UUID.randomUUID();
++            insertBooking(confirmedBookingId, instrCoachId, "CONFIRMED");
++
++            otherCoachBookingId = UUID.randomUUID();
++            insertBooking(otherCoachBookingId, otherCoachId, "CONFIRMED");
++
++            cancelledBookingId = UUID.randomUUID();
++            insertBooking(cancelledBookingId, instrCoachId, "CANCELLED");
++
++            // Create a saved session to use as template source
++            sessionId = UUID.randomUUID();
++            insertSession(sessionId, instrCoachId);
++
++            return null;
++        });
++    }
++
++    @AfterEach
++    void tearDown() {
++        transactionTemplate.execute(status -> {
++            jdbcTemplate.update("DELETE FROM session.session_templates WHERE coach_id IN (?, ?)",
++                instrCoachId, otherCoachId);
++            jdbcTemplate.update("DELETE FROM session.sessions WHERE booking_id IN (?, ?, ?)",
++                confirmedBookingId, otherCoachBookingId, cancelledBookingId);
++            jdbcTemplate.update("DELETE FROM session.sessions WHERE id = ?", sessionId);
++            jdbcTemplate.update("DELETE FROM session.drills WHERE id = ?", drillId);
++            jdbcTemplate.update("DELETE FROM booking.bookings WHERE id IN (?, ?, ?)",
++                confirmedBookingId, otherCoachBookingId, cancelledBookingId);
++            jdbcTemplate.update("DELETE FROM marketplace.coach_subscriptions WHERE coach_id IN (?, ?, ?)",
++                instrCoachId, scoutCoachId, otherCoachId);
++            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE user_id IN (?, ?, ?)",
++                INSTR_COACH_USER_ID, SCOUT_COACH_USER_ID, OTHER_COACH_USER_ID);
++            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?, ?)",
++                INSTR_COACH_USER_ID, SCOUT_COACH_USER_ID, OTHER_COACH_USER_ID);
++            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?, ?)",
++                INSTR_COACH_USER_ID, SCOUT_COACH_USER_ID, OTHER_COACH_USER_ID);
++            jdbcTemplate.update("DELETE FROM main.sec");
++            return null;
++        });
++    }
++
++    // --- createTemplate ---
++
++    @Test
++    void createTemplate_instructorCoach_validSessionId_returns201WithTemplate() {
++        String cookies = loginAndGetCookies(INSTR_EMAIL);
++
++        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE,
++            HttpMethod.POST,
++            Map.of("sessionId", sessionId.toString(), "name", "My First Template"),
++            authenticatedHeaders(cookies),
++            Map.class
++        );
++
++        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
++        assertThat(response.getBody().get("id")).isNotNull();
++        assertThat(response.getBody().get("name")).isEqualTo("My First Template");
++    }
++
++    @Test
++    void createTemplate_scoutCoach_returns403FeatureGated() {
++        String cookies = loginAndGetCookies(SCOUT_EMAIL);
++
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE,
++            HttpMethod.POST,
++            Map.of("sessionId", sessionId.toString(), "name", "Scout Template"),
++            authenticatedHeaders(cookies),
++            Map.class
++        )).isInstanceOf(HttpClientErrorException.Forbidden.class);
++    }
++
++    @Test
++    void createTemplate_sessionOwnedByOtherCoach_returns404() {
++        // Create a session owned by otherCoach
++        UUID otherSession = UUID.randomUUID();
++        transactionTemplate.execute(s -> {
++            insertSession(otherSession, otherCoachId);
++            return null;
++        });
++
++        String cookies = loginAndGetCookies(INSTR_EMAIL);
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE,
++            HttpMethod.POST,
++            Map.of("sessionId", otherSession.toString(), "name", "Stolen Template"),
++            authenticatedHeaders(cookies),
++            Map.class
++        )).isInstanceOf(HttpClientErrorException.NotFound.class);
++
++        transactionTemplate.execute(s -> {
++            jdbcTemplate.update("DELETE FROM session.sessions WHERE id = ?", otherSession);
++            return null;
++        });
++    }
++
++    // --- listTemplates ---
++
++    @Test
++    void listTemplates_emptyVault_returns200EmptyList() {
++        String cookies = loginAndGetCookies(INSTR_EMAIL);
++
++        ResponseEntity<List> response = httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE,
++            HttpMethod.GET,
++            null,
++            authenticatedHeaders(cookies),
++            List.class
++        );
++
++        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
++        assertThat(response.getBody()).isEmpty();
++    }
++
++    @Test
++    void listTemplates_scoutCoach_returns403FeatureGated() {
++        String cookies = loginAndGetCookies(SCOUT_EMAIL);
++
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE,
++            HttpMethod.GET,
++            null,
++            authenticatedHeaders(cookies),
++            List.class
++        )).isInstanceOf(HttpClientErrorException.Forbidden.class);
++    }
++
++    @Test
++    void listTemplates_afterCreate_returnsOneTemplate() {
++        String cookies = loginAndGetCookies(INSTR_EMAIL);
++        createTemplateViaApi(cookies, sessionId, "Listed Template");
++
++        ResponseEntity<List> response = httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE,
++            HttpMethod.GET,
++            null,
++            authenticatedHeaders(cookies),
++            List.class
++        );
++
++        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
++        assertThat(response.getBody()).hasSize(1);
++    }
++
++    // --- renameTemplate ---
++
++    @Test
++    void renameTemplate_ownerCoach_returns204() {
++        String cookies = loginAndGetCookies(INSTR_EMAIL);
++        String templateId = createTemplateViaApi(cookies, sessionId, "Old Name");
++
++        ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE + "/" + templateId,
++            HttpMethod.PUT,
++            Map.of("name", "New Name"),
++            authenticatedHeaders(cookies),
++            Void.class
++        );
++
++        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
++    }
++
++    @Test
++    void renameTemplate_otherCoach_returns403() {
++        String instrCookies = loginAndGetCookies(INSTR_EMAIL);
++        String templateId = createTemplateViaApi(instrCookies, sessionId, "Other Coach Rename");
++
++        String otherCookies = loginAndGetCookies(OTHER_EMAIL);
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE + "/" + templateId,
++            HttpMethod.PUT,
++            Map.of("name", "Hijacked"),
++            authenticatedHeaders(otherCookies),
++            Void.class
++        )).isInstanceOf(HttpClientErrorException.Forbidden.class);
++    }
++
++    @Test
++    void renameTemplate_scoutCoach_returns403FeatureGated() {
++        String instrCookies = loginAndGetCookies(INSTR_EMAIL);
++        String templateId = createTemplateViaApi(instrCookies, sessionId, "Scout Rename");
++
++        String scoutCookies = loginAndGetCookies(SCOUT_EMAIL);
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE + "/" + templateId,
++            HttpMethod.PUT,
++            Map.of("name", "Scout"),
++            authenticatedHeaders(scoutCookies),
++            Void.class
++        )).isInstanceOf(HttpClientErrorException.Forbidden.class);
++    }
++
++    @Test
++    void renameTemplate_archivedTemplate_returns403() {
++        String cookies = loginAndGetCookies(INSTR_EMAIL);
++        String templateId = createTemplateViaApi(cookies, sessionId, "To Archive");
++
++        // Delete (archive) it
++        httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE + "/" + templateId,
++            HttpMethod.DELETE,
++            null,
++            authenticatedHeaders(cookies),
++            Void.class
++        );
++
++        // Now try to rename the archived template
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE + "/" + templateId,
++            HttpMethod.PUT,
++            Map.of("name", "Renamed Archived"),
++            authenticatedHeaders(cookies),
++            Void.class
++        )).isInstanceOf(HttpClientErrorException.Forbidden.class);
++    }
++
++    // --- deleteTemplate ---
++
++    @Test
++    void deleteTemplate_ownerCoach_returns204_disappearsFromList() {
++        String cookies = loginAndGetCookies(INSTR_EMAIL);
++        String templateId = createTemplateViaApi(cookies, sessionId, "To Delete");
++
++        ResponseEntity<Void> deleteResp = httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE + "/" + templateId,
++            HttpMethod.DELETE,
++            null,
++            authenticatedHeaders(cookies),
++            Void.class
++        );
++        assertThat(deleteResp.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
++
++        ResponseEntity<List> listResp = httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE,
++            HttpMethod.GET,
++            null,
++            authenticatedHeaders(cookies),
++            List.class
++        );
++        assertThat(listResp.getBody()).isEmpty();
++    }
++
++    @Test
++    void deleteTemplate_otherCoach_returns403() {
++        String instrCookies = loginAndGetCookies(INSTR_EMAIL);
++        String templateId = createTemplateViaApi(instrCookies, sessionId, "Other Delete");
++
++        String otherCookies = loginAndGetCookies(OTHER_EMAIL);
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE + "/" + templateId,
++            HttpMethod.DELETE,
++            null,
++            authenticatedHeaders(otherCookies),
++            Void.class
++        )).isInstanceOf(HttpClientErrorException.Forbidden.class);
++    }
++
++    @Test
++    void deleteTemplate_scoutCoach_returns403FeatureGated() {
++        String instrCookies = loginAndGetCookies(INSTR_EMAIL);
++        String templateId = createTemplateViaApi(instrCookies, sessionId, "Scout Delete");
++
++        String scoutCookies = loginAndGetCookies(SCOUT_EMAIL);
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE + "/" + templateId,
++            HttpMethod.DELETE,
++            null,
++            authenticatedHeaders(scoutCookies),
++            Void.class
++        )).isInstanceOf(HttpClientErrorException.Forbidden.class);
++    }
++
++    // --- deployTemplate ---
++
++    @Test
++    void deployTemplate_validTemplate_validBooking_returns201WithSessionPlan() {
++        String cookies = loginAndGetCookies(INSTR_EMAIL);
++        String templateId = createTemplateViaApi(cookies, sessionId, "Deploy Template");
++
++        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE + "/" + templateId + "/deploy?bookingId=" + confirmedBookingId,
++            HttpMethod.POST,
++            null,
++            authenticatedHeaders(cookies),
++            Map.class
++        );
++
++        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
++        assertThat(response.getBody().get("status")).isEqualTo("DRAFT");
++        assertThat(response.getBody().get("sourceTemplateName")).isEqualTo("Deploy Template");
++    }
++
++    @Test
++    void deployTemplate_cancelledBooking_returns403SessionBookingNotOwned() {
++        String cookies = loginAndGetCookies(INSTR_EMAIL);
++        String templateId = createTemplateViaApi(cookies, sessionId, "Deploy Cancelled");
++
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE + "/" + templateId + "/deploy?bookingId=" + cancelledBookingId,
++            HttpMethod.POST,
++            null,
++            authenticatedHeaders(cookies),
++            Map.class
++        )).isInstanceOf(HttpClientErrorException.Forbidden.class);
++    }
++
++    @Test
++    void deployTemplate_duplicateBooking_returns403SessionAlreadyExists() {
++        String cookies = loginAndGetCookies(INSTR_EMAIL);
++        String templateId = createTemplateViaApi(cookies, sessionId, "Deploy Dup");
++
++        // First deploy
++        httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE + "/" + templateId + "/deploy?bookingId=" + confirmedBookingId,
++            HttpMethod.POST,
++            null,
++            authenticatedHeaders(cookies),
++            Map.class
++        );
++
++        // Second deploy to same booking
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE + "/" + templateId + "/deploy?bookingId=" + confirmedBookingId,
++            HttpMethod.POST,
++            null,
++            authenticatedHeaders(cookies),
++            Map.class
++        )).isInstanceOf(HttpClientErrorException.Forbidden.class);
++    }
++
++    @Test
++    void deployTemplate_scoutCoach_returns403FeatureGated() {
++        String instrCookies = loginAndGetCookies(INSTR_EMAIL);
++        String templateId = createTemplateViaApi(instrCookies, sessionId, "Scout Deploy");
++
++        String scoutCookies = loginAndGetCookies(SCOUT_EMAIL);
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE + "/" + templateId + "/deploy?bookingId=" + confirmedBookingId,
++            HttpMethod.POST,
++            null,
++            authenticatedHeaders(scoutCookies),
++            Map.class
++        )).isInstanceOf(HttpClientErrorException.Forbidden.class);
++    }
++
++    @Test
++    void deployTemplate_otherCoach_returns403TemplateNotOwned() {
++        String instrCookies = loginAndGetCookies(INSTR_EMAIL);
++        String templateId = createTemplateViaApi(instrCookies, sessionId, "Other Deploy");
++
++        String otherCookies = loginAndGetCookies(OTHER_EMAIL);
++        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE + "/" + templateId + "/deploy?bookingId=" + otherCoachBookingId,
++            HttpMethod.POST,
++            null,
++            authenticatedHeaders(otherCookies),
++            Map.class
++        )).isInstanceOf(HttpClientErrorException.Forbidden.class);
++    }
++
++    // --- helpers ---
++
++    private String createTemplateViaApi(String cookies, UUID srcSessionId, String name) {
++        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
++            baseUrl() + TEMPLATES_BASE,
++            HttpMethod.POST,
++            Map.of("sessionId", srcSessionId.toString(), "name", name),
++            authenticatedHeaders(cookies),
++            Map.class
++        );
++        return (String) response.getBody().get("id");
++    }
++
++    private void insertBooking(UUID bookingId, UUID coachId, String status) {
++        jdbcTemplate.update(
++            "INSERT INTO booking.bookings (id, parent_id, player_id, coach_id, " +
++            "requested_start_time, requested_end_time, status, canonical_timezone, " +
++            "version, created_at, updated_at) " +
++            "VALUES (?, 1, 1, ?, ?, ?, ?, 'Europe/London', 0, ?, ?)",
++            bookingId, coachId,
++            Timestamp.from(Instant.now().plusSeconds(86400)),
++            Timestamp.from(Instant.now().plusSeconds(90000)),
++            status,
++            Timestamp.from(Instant.now()),
++            Timestamp.from(Instant.now())
++        );
++    }
++
++    private void insertSession(UUID id, UUID coachId) {
++        jdbcTemplate.update(
++            "INSERT INTO session.sessions (id, booking_id, coach_id, player_id, blocks, " +
++            "equipment_list, development_focus, status, created_at, updated_at) " +
++            "VALUES (?, gen_random_uuid(), ?, 1, '[]'::jsonb, '[]'::jsonb, '[\"technical\"]'::jsonb, 'SAVED', NOW(), NOW())",
++            id, coachId
++        );
++    }
++}
+diff --git a/src/test/java/com/softropic/skillars/platform/session/service/DrillSuggestionServiceTest.java b/src/test/java/com/softropic/skillars/platform/session/service/DrillSuggestionServiceTest.java
+new file mode 100644
+index 0000000..748e23d
+--- /dev/null
++++ b/src/test/java/com/softropic/skillars/platform/session/service/DrillSuggestionServiceTest.java
+@@ -0,0 +1,263 @@
++package com.softropic.skillars.platform.session.service;
++
++import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
++import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
++import com.softropic.skillars.platform.security.contract.exception.FeatureGatedException;
++import com.softropic.skillars.platform.session.contract.DrillMetadata;
++import com.softropic.skillars.platform.session.contract.DrillResponse;
++import com.softropic.skillars.platform.session.contract.SessionBlockData;
++import com.softropic.skillars.platform.session.contract.SessionDrillRef;
++import com.softropic.skillars.platform.session.repo.Drill;
++import com.softropic.skillars.platform.session.repo.DrillRepository;
++import com.softropic.skillars.platform.session.repo.Session;
++import com.softropic.skillars.platform.session.repo.SessionRepository;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.junit.jupiter.api.extension.ExtendWith;
++import org.mockito.Mock;
++import org.mockito.junit.jupiter.MockitoExtension;
++import org.mockito.junit.jupiter.MockitoSettings;
++import org.mockito.quality.Strictness;
++
++import java.time.Instant;
++import java.util.List;
++import java.util.Map;
++import java.util.Optional;
++import java.util.UUID;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.assertThatThrownBy;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.ArgumentMatchers.anyLong;
++import static org.mockito.ArgumentMatchers.anyString;
++import static org.mockito.ArgumentMatchers.eq;
++import static org.mockito.Mockito.doThrow;
++import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
++
++@ExtendWith(MockitoExtension.class)
++@MockitoSettings(strictness = Strictness.LENIENT)
++class DrillSuggestionServiceTest {
++
++    @Mock private SessionRepository sessionRepository;
++    @Mock private DrillRepository drillRepository;
++    @Mock private DrillLibraryService drillLibraryService;
++    @Mock private CoachProfileService coachProfileService;
++
++    private DrillSuggestionService service;
++
++    private static final Long COACH_USER_ID = 9900000001L;
++    private static final UUID COACH_ID = UUID.randomUUID();
++    private static final UUID SESSION_ID = UUID.randomUUID();
++    private static final Long PLAYER_ID = 1234L;
++
++    @BeforeEach
++    void setUp() {
++        service = new DrillSuggestionService(sessionRepository, drillRepository, drillLibraryService, coachProfileService);
++        when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
++    }
++
++    @Test
++    void suggest_noFocus_returnsFallbackPlatformDrills() {
++        Session session = buildSession(COACH_ID, List.of());
++        when(sessionRepository.findById(SESSION_ID)).thenReturn(Optional.of(session));
++
++        Drill early = buildDrill(UUID.randomUUID(), "PLATFORM", null, Instant.ofEpochSecond(1000));
++        Drill late  = buildDrill(UUID.randomUUID(), "PLATFORM", null, Instant.ofEpochSecond(2000));
++        when(drillRepository.findByLibraryTypeAndStatus("PLATFORM", "ACTIVE")).thenReturn(List.of(late, early));
++        when(drillLibraryService.toResponse(any(), eq(false), any(), any(), any(), any()))
++            .thenAnswer(inv -> mockDrillResponse(((Drill) inv.getArgument(0)).getId()));
++
++        List<DrillResponse> result = service.suggest(SESSION_ID, COACH_USER_ID, 5);
++
++        assertThat(result).hasSize(2);
++        assertThat(result.get(0).id()).isEqualTo(early.getId());
++        assertThat(result.get(1).id()).isEqualTo(late.getId());
++    }
++
++    @Test
++    void suggest_withTechnicalFocus_ranksHighIntensityDrillsFirst() {
++        Session session = buildSession(COACH_ID, List.of("technical"));
++        when(sessionRepository.findById(SESSION_ID)).thenReturn(Optional.of(session));
++
++        UUID highIntensityId = UUID.randomUUID();
++        UUID lowIntensityId  = UUID.randomUUID();
++        Drill highDrill = buildDrillWithMetadata(highIntensityId, 5, 5, 1, 1, false);
++        Drill lowDrill  = buildDrillWithMetadata(lowIntensityId,  1, 1, 1, 1, false);
++
++        when(drillRepository.findByLibraryTypeAndStatus("PLATFORM", "ACTIVE")).thenReturn(List.of(lowDrill, highDrill));
++        when(drillRepository.findByOwnerCoachIdAndStatus(COACH_ID, "ACTIVE")).thenReturn(List.of());
++        when(sessionRepository.findTop5ByPlayerIdOrderByCreatedAtDesc(PLAYER_ID)).thenReturn(List.of());
++        when(drillLibraryService.toResponse(any(), eq(false), any(), any(), any(), any()))
++            .thenAnswer(inv -> mockDrillResponse(((Drill) inv.getArgument(0)).getId()));
++
++        List<DrillResponse> result = service.suggest(SESSION_ID, COACH_USER_ID, 10);
++
++        assertThat(result.get(0).id()).isEqualTo(highIntensityId);
++    }
++
++    @Test
++    void suggest_recentlyUsedDrill_isRankedLower() {
++        Session session = buildSession(COACH_ID, List.of("technical"));
++        when(sessionRepository.findById(SESSION_ID)).thenReturn(Optional.of(session));
++
++        UUID recentId = UUID.randomUUID();
++        UUID freshId  = UUID.randomUUID();
++        Drill recentDrill = buildDrillWithMetadata(recentId, 5, 5, 1, 1, false);
++        Drill freshDrill  = buildDrillWithMetadata(freshId,  5, 5, 1, 1, false);
++
++        when(drillRepository.findByLibraryTypeAndStatus("PLATFORM", "ACTIVE")).thenReturn(List.of(recentDrill, freshDrill));
++        when(drillRepository.findByOwnerCoachIdAndStatus(COACH_ID, "ACTIVE")).thenReturn(List.of());
++
++        Session recentSession = buildSession(COACH_ID, List.of("technical"));
++        SessionDrillRef ref = new SessionDrillRef(recentId, 0);
++        SessionBlockData block = new SessionBlockData("WARM_UP", "Warm-Up", 10, List.of(ref));
++        recentSession.setBlocks(List.of(block));
++        when(sessionRepository.findTop5ByPlayerIdOrderByCreatedAtDesc(PLAYER_ID)).thenReturn(List.of(recentSession));
++
++        when(drillLibraryService.toResponse(any(), eq(false), any(), any(), any(), any()))
++            .thenAnswer(inv -> mockDrillResponse(((Drill) inv.getArgument(0)).getId()));
++
++        List<DrillResponse> result = service.suggest(SESSION_ID, COACH_USER_ID, 10);
++
++        assertThat(result.get(0).id()).isEqualTo(freshId);
++    }
++
++    @Test
++    void suggest_scoutCoach_throwsFeatureGatedException() {
++        doThrow(new FeatureGatedException("session_builder", "INSTRUCTOR"))
++            .when(drillLibraryService).checkSessionBuilderGate(COACH_USER_ID);
++
++        assertThatThrownBy(() -> service.suggest(SESSION_ID, COACH_USER_ID, 10))
++            .isInstanceOf(FeatureGatedException.class);
++
++        verify(sessionRepository, never()).findById(any());
++    }
++
++    @Test
++    void suggest_sessionNotFound_throws404() {
++        when(sessionRepository.findById(SESSION_ID)).thenReturn(Optional.empty());
++
++        assertThatThrownBy(() -> service.suggest(SESSION_ID, COACH_USER_ID, 10))
++            .isInstanceOf(ResourceNotFoundException.class);
++    }
++
++    @Test
++    void suggest_sessionOwnedByOtherCoach_throws404() {
++        UUID otherCoachId = UUID.randomUUID();
++        Session session = buildSession(otherCoachId, List.of("technical"));
++        when(sessionRepository.findById(SESSION_ID)).thenReturn(Optional.of(session));
++
++        assertThatThrownBy(() -> service.suggest(SESSION_ID, COACH_USER_ID, 10))
++            .isInstanceOf(ResourceNotFoundException.class);
++    }
++
++    @Test
++    void suggest_includesPrivateDrills() {
++        Session session = buildSession(COACH_ID, List.of("cognitive"));
++        when(sessionRepository.findById(SESSION_ID)).thenReturn(Optional.of(session));
++
++        UUID privateDrillId = UUID.randomUUID();
++        Drill platformDrill = buildDrillWithMetadata(UUID.randomUUID(), 1, 1, 3, 1, false);
++        Drill privateDrill  = buildDrillWithMetadata(privateDrillId,    1, 1, 5, 1, false);
++
++        when(drillRepository.findByLibraryTypeAndStatus("PLATFORM", "ACTIVE")).thenReturn(List.of(platformDrill));
++        when(drillRepository.findByOwnerCoachIdAndStatus(COACH_ID, "ACTIVE")).thenReturn(List.of(privateDrill));
++        when(sessionRepository.findTop5ByPlayerIdOrderByCreatedAtDesc(PLAYER_ID)).thenReturn(List.of());
++        when(drillLibraryService.toResponse(any(), eq(false), any(), any(), any(), any()))
++            .thenAnswer(inv -> mockDrillResponse(((Drill) inv.getArgument(0)).getId()));
++
++        List<DrillResponse> result = service.suggest(SESSION_ID, COACH_USER_ID, 10);
++
++        assertThat(result.stream().map(DrillResponse::id)).contains(privateDrillId);
++    }
++
++    @Test
++    void suggest_drillsAlreadyInSession_areExcluded() {
++        UUID usedDrillId = UUID.randomUUID();
++        Session session = buildSession(COACH_ID, List.of("physical"));
++        SessionBlockData block = new SessionBlockData("WARM_UP", "Warm-Up", 10,
++            List.of(new SessionDrillRef(usedDrillId, 0)));
++        session.setBlocks(List.of(block));
++        when(sessionRepository.findById(SESSION_ID)).thenReturn(Optional.of(session));
++
++        Drill usedDrill  = buildDrillWithMetadata(usedDrillId,         5, 1, 1, 1, false);
++        Drill freshDrill = buildDrillWithMetadata(UUID.randomUUID(),    3, 1, 1, 1, false);
++
++        when(drillRepository.findByLibraryTypeAndStatus("PLATFORM", "ACTIVE")).thenReturn(List.of(usedDrill, freshDrill));
++        when(drillRepository.findByOwnerCoachIdAndStatus(COACH_ID, "ACTIVE")).thenReturn(List.of());
++        when(sessionRepository.findTop5ByPlayerIdOrderByCreatedAtDesc(PLAYER_ID)).thenReturn(List.of());
++        when(drillLibraryService.toResponse(any(), eq(false), any(), any(), any(), any()))
++            .thenAnswer(inv -> mockDrillResponse(((Drill) inv.getArgument(0)).getId()));
++
++        List<DrillResponse> result = service.suggest(SESSION_ID, COACH_USER_ID, 10);
++
++        assertThat(result.stream().map(DrillResponse::id)).doesNotContain(usedDrillId);
++    }
++
++    // --- helpers ---
++
++    private Session buildSession(UUID coachId, List<String> focus) {
++        Session s = new Session();
++        s.setCoachId(coachId);
++        s.setPlayerId(PLAYER_ID);
++        s.setDevelopmentFocus(focus);
++        s.setBlocks(List.of());
++        return s;
++    }
++
++    private Drill buildDrill(UUID id, String library, UUID ownerCoachId, Instant createdAt) {
++        Drill d = new Drill();
++        setDrillId(d, id);
++        d.setLibraryType(library);
++        d.setOwnerCoachId(ownerCoachId);
++        d.setStatus("ACTIVE");
++        d.setMetadata(buildMeta(1, 1, 1, 1, false));
++        setDrillCreatedAt(d, createdAt);
++        return d;
++    }
++
++    private Drill buildDrillWithMetadata(UUID id, int intensity, int pressure, int cognitive, int matchRealism, boolean weakFoot) {
++        Drill d = new Drill();
++        setDrillId(d, id);
++        d.setLibraryType("PLATFORM");
++        d.setStatus("ACTIVE");
++        d.setMetadata(buildMeta(intensity, pressure, cognitive, matchRealism, weakFoot));
++        setDrillCreatedAt(d, Instant.now());
++        return d;
++    }
++
++    private DrillMetadata buildMeta(int intensity, int pressure, int cognitive, int matchRealism, boolean weakFoot) {
++        return new DrillMetadata(
++            List.of("dribbling"), List.of(), Map.of("dribbling", 100),
++            10, intensity, pressure, cognitive, matchRealism,
++            weakFoot, "U12", List.of("ball"), "2", List.of("Keep simple"), null
++        );
++    }
++
++    private DrillResponse mockDrillResponse(UUID id) {
++        return new DrillResponse(id, "Drill " + id, null, "PLATFORM", null, "ACTIVE",
++            null, false, null, null, Instant.now(), List.of(), null, null);
++    }
++
++    private void setDrillId(Drill d, UUID id) {
++        try {
++            var field = Drill.class.getDeclaredField("id");
++            field.setAccessible(true);
++            field.set(d, id);
++        } catch (Exception e) {
++            throw new RuntimeException(e);
++        }
++    }
++
++    private void setDrillCreatedAt(Drill d, Instant createdAt) {
++        try {
++            var field = Drill.class.getDeclaredField("createdAt");
++            field.setAccessible(true);
++            field.set(d, createdAt);
++        } catch (Exception e) {
++            throw new RuntimeException(e);
++        }
++    }
++}

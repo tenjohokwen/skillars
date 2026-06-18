@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.session.contract.DrillResponse;
 import com.softropic.skillars.platform.session.contract.DrillTagRequest;
 import com.softropic.skillars.platform.session.contract.InvalidParamException;
 import com.softropic.skillars.platform.session.service.DrillLibraryService;
+import com.softropic.skillars.platform.session.service.DrillSuggestionService;
 import com.softropic.skillars.platform.session.service.DrillUploadService;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.Valid;
@@ -33,8 +34,19 @@ import java.util.UUID;
 public class DrillLibraryResource {
 
     private final DrillLibraryService drillLibraryService;
+    private final DrillSuggestionService drillSuggestionService;
     private final DrillUploadService drillUploadService;
     private final SecurityUtil securityUtil;
+
+    @GetMapping("/suggestions")
+    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+    public ResponseEntity<List<DrillResponse>> getSuggestions(
+        @RequestParam UUID sessionId,
+        @RequestParam(defaultValue = "10") int limit
+    ) {
+        if (limit < 1 || limit > 20) throw new InvalidParamException("limit");
+        return ResponseEntity.ok(drillSuggestionService.suggest(sessionId, currentCoachUserId(), limit));
+    }
 
     @GetMapping
     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
