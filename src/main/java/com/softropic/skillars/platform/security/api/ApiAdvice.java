@@ -247,7 +247,10 @@ public class ApiAdvice {
     @ResponseStatus(HttpStatus.FORBIDDEN) //could occur when method security throws exception
     public ErrorDto operationDeniedHandler(final OperationNotAllowedException exception) {
         final String defaultMsg = "The operation is not granted. You can contact help desk";
-        return handleSecErrorAndReturnDTO(exception, defaultMsg, "security.opForbidden");
+        String helpCode = exception.getErrorCode() != null
+            ? exception.getErrorCode().getErrorCode()
+            : "security.opForbidden";
+        return handleSecErrorAndReturnDTO(exception, defaultMsg, helpCode);
     }
 
     @ExceptionHandler({

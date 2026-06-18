@@ -150,6 +150,12 @@ const routes = [
         meta: { requiresAuth: true, requiresCoach: true },
       },
       {
+        path: 'coach/session-builder/:bookingId',
+        name: 'coach-session-builder',
+        component: () => import('pages/coach/SessionBuilderPage.vue'),
+        meta: { requiresAuth: true, requiresCoach: true },
+      },
+      {
         path: 'player/locker-room',
         component: () => import('pages/player/PlayerLockerRoomPlaceholderPage.vue'),
         meta: { requiresAuth: true },

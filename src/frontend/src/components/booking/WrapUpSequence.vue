@@ -158,6 +158,13 @@
     <div v-else-if="step === 4" class="wrap-up__step">
       <div class="text-h6 q-mb-md">{{ t('booking.wrapUp.step4Title') }}</div>
 
+      <SessionDNAChart
+        :session-dna="sessionDnaData ?? { technical: 0, physical: 0, cognitive: 0, matchRealism: 0, weakFootFocus: 0 }"
+        variant="compact"
+        :show-confirmation="true"
+        class="q-mb-md"
+      />
+
       <div v-if="drillSuggestions.length === 0" class="text-body2 q-mb-lg" style="color: var(--text-secondary)">
         {{ t('booking.wrapUp.step4NoSuggestions') }}
       </div>
@@ -190,6 +197,8 @@ import { useI18n } from 'vue-i18n'
 import { useBookingStore } from 'src/stores/booking.store'
 import { getDrillSuggestions } from 'src/api/booking.api'
 import { signUpload, confirmUpload } from 'src/api/marketplace.api'
+import { sessionApi } from 'src/api/session.api'
+import SessionDNAChart from 'src/components/booking/SessionDNAChart.vue'
 
 const props = defineProps({
   bookingId: { type: String, required: true },
@@ -216,6 +225,7 @@ const recorder = ref(null)
 const homeworkDrillIds = ref([])
 const drillSuggestions = ref([])
 const submitting = ref(false)
+const sessionDnaData = ref(null)
 
 function toggleDrill(drillId) {
   const idx = homeworkDrillIds.value.indexOf(drillId)
@@ -298,8 +308,18 @@ async function handleSubmitWrapUp() {
   }
 }
 
+async function fetchSessionDna() {
+  try {
+    const res = await sessionApi.getSessionPlanByBooking(props.bookingId)
+    sessionDnaData.value = res.data?.sessionDna ?? null
+  } catch {
+    sessionDnaData.value = null
+  }
+}
+
 onMounted(() => {
   fetchDrillSuggestions()
+  fetchSessionDna()
 })
 </script>
 

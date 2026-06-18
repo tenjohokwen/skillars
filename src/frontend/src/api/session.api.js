@@ -36,4 +36,20 @@ export const sessionApi = {
   deleteVideo(drillId) {
     return api.delete(`/api/session/drills/${drillId}/video`)
   },
+
+  createSessionPlan(payload) {
+    return api.post('/api/session/sessions', payload)
+  },
+
+  updateSessionPlan(sessionId, payload) {
+    return api.put(`/api/session/sessions/${sessionId}`, payload)
+  },
+
+  getSessionPlan(sessionId) {
+    return api.get(`/api/session/sessions/${sessionId}`)
+  },
+
+  getSessionPlanByBooking(bookingId) {
+    return api.get(`/api/session/sessions/by-booking/${bookingId}`)
+  },
 }

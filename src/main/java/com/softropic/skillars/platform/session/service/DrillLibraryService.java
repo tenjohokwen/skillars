@@ -291,7 +291,7 @@ public class DrillLibraryService {
         return result;
     }
 
-    private DrillResponse toResponse(Drill drill, boolean hasVideo, List<String> tags, Boolean isClonedByMe, UUID cloneId, String videoUrl) {
+    DrillResponse toResponse(Drill drill, boolean hasVideo, List<String> tags, Boolean isClonedByMe, UUID cloneId, String videoUrl) {
         return new DrillResponse(
             drill.getId(),
             drill.getName(),

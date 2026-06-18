@@ -80,6 +80,16 @@
           </div>
         </div>
 
+        <!-- Add to session button (session-builder context only) -->
+        <q-btn
+          v-if="props.context === 'session-builder'"
+          color="primary"
+          icon="add"
+          :label="t('session.builder.addToSession')"
+          class="full-width q-mt-md"
+          @click="emit('add-to-session', props.drill)"
+        />
+
         <!-- Upload section (COACH drills only, INSTRUCTOR+ tier) -->
         <div v-if="props.drill.libraryType === 'COACH' && sessionStore.canUploadVideo === true"
              class="detail-panel__upload q-mt-md">
@@ -217,6 +227,16 @@
               </div>
             </div>
 
+            <!-- Add to session button (session-builder context only) -->
+            <q-btn
+              v-if="props.context === 'session-builder'"
+              color="primary"
+              icon="add"
+              :label="t('session.builder.addToSession')"
+              class="full-width q-mt-md"
+              @click="emit('add-to-session', props.drill)"
+            />
+
             <!-- Upload section (COACH drills only, INSTRUCTOR+ tier) -->
             <div v-if="props.drill.libraryType === 'COACH' && sessionStore.canUploadVideo === true"
                  class="detail-panel__upload q-mt-md">
@@ -278,9 +298,10 @@ defineOptions({ name: 'DrillDetailPanel' })
 const props = defineProps({
   drill: { type: Object, default: null },
   isOpen: { type: Boolean, default: false },
+  context: { type: String, default: null },
 })
 
-const emit = defineEmits(['close'])
+const emit = defineEmits(['close', 'add-to-session'])
 
 const $q = useQuasar()
 const { t } = useI18n()

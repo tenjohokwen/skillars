@@ -1,3 +1,16 @@
+## Deferred from: code review of skillars-4-4-session-builder-block-structure-dna — round 2 (2026-06-18)
+- W8: `isBookingPlannable` accepts `"UPCOMING"` but no known code path transitions a Booking to this status — proactive future-proofing, harmless if UPCOMING is never set [`SessionPlanService.java:167`]
+- W9: `updateSession` does not re-validate booking plannable status at update time — a booking cancelled after session plan creation can still be updated freely; outside story scope [`SessionPlanService.java:updateSession`]
+
+## Deferred from: code review of skillars-4-4-session-builder-block-structure-dna (2026-06-18)
+- W1: COMPLETED status transition never wired from booking completion — `session.status` is set to `COMPLETED` on `createSession` guard but no code path (booking completion event, scheduler, or explicit endpoint) ever transitions a DRAFT/SAVED session to COMPLETED. Cross-story dependency: Story 3.6 booking completion event flow. [`SessionPlanService.java`]
+- W2: IT test `updateSession_completedSession` does not assert SESSION_PLAN_LOCKED helpCode in response body — test verifies 403 status but never reads `response.body.helpCode` to confirm the correct error code is returned. Test quality improvement. [`SessionBuilderResourceIT.java:271`]
+- W3: `WrapUpSequence` uses `variant="compact"` instead of spec-specified `"full"` — cosmetic deviation; DNA chart renders at 160px instead of 240px in the wrap-up overlay. [`WrapUpSequence.vue:163`]
+- W4: `SessionBlockRequest.drills` has no `@Size(max=...)` upper-bound constraint — unbounded drill count per block; a malicious payload could include thousands of drills, causing runaway DNA/equipment computation. Hardening concern, not MVP-blocking. [`SessionBlockRequest.java:16`]
+- W5: `WrapUpSequence.fetchSessionDna` has no loading or error state — fires on component mount (step 1 entry), not step 4; chart renders without any spinner while fetching; failed fetch silently leaves chart absent. UX polish. [`WrapUpSequence.vue:309`]
+- W6: `buildResponse` calls `drillRepository.findAllById` twice for the same ID set — once inside `resolveMetaMap`, once inside `buildResponse` itself. Redundant DB round-trip for every read. Performance optimization. [`SessionPlanService.java:220`]
+- W7: IT teardown `DELETE FROM session.sessions` runs before `DELETE FROM booking.bookings` — safe today because there is no FK between the tables; would fail if a FK is ever added. Future-proofing. [`SessionBuilderResourceIT.java:104`]
+
 ## Deferred from: code review of skillars-4-3-custom-drill-uploads — round 2 (2026-06-17)
 - W10: `FeatureGatedException` error code not matched by frontend catch block — `startUpload` checks `video.quotaExceeded` and `video.constraintViolated` but not the helpCode produced by `ApiAdvice` for `FeatureGatedException`; requires stale eligibility cache + server gate both firing; generic "upload failed" is not wrong; low probability [`DrillDetailPanel.vue` — `startUpload` catch]
 

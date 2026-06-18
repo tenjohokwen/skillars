@@ -33,8 +33,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
 class DrillLibraryResourceIT extends BaseSessionIT {
 
-    private static final String PLANS_BASE = "/api/session/plans";
-
     private static final long COACH_USER_ID        = 9550000010L;
     private static final long COACH_USER_ID2       = 9550000020L;
     private static final long PARENT_USER_ID       = 9550000030L;
@@ -286,37 +284,5 @@ class DrillLibraryResourceIT extends BaseSessionIT {
         ))
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
-    }
-
-    // ── POST /api/session/plans as Scout returns 403 ─────────────────────────
-
-    @Test
-    void createSessionPlan_scoutTier_returns403WithFeatureGatedError() {
-        String cookies = loginAndGetCookies(SCOUT_EMAIL);
-
-        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
-            baseUrl() + PLANS_BASE,
-            HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class
-        ))
-            .isInstanceOf(HttpClientErrorException.class)
-            .satisfies(e -> {
-                HttpClientErrorException ex = (HttpClientErrorException) e;
-                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
-                assertThat(ex.getResponseBodyAsString()).contains("security.featureGated");
-            });
-    }
-
-    // ── POST /api/session/plans as Instructor returns 201 ────────────────────
-
-    @Test
-    void createSessionPlan_instructorTier_returns201() {
-        String cookies = loginAndGetCookies(INSTR_EMAIL);
-
-        ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
-            baseUrl() + PLANS_BASE,
-            HttpMethod.POST, null, authenticatedHeaders(cookies), Void.class
-        );
-
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
     }
 }

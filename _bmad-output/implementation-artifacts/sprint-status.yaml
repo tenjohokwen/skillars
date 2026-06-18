@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-06-13
+# last_updated: 2026-06-18
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-06-17 # Story 4.3 code-review patches applied
+last_updated: 2026-06-18 # Story 4.4 done
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -191,7 +191,7 @@ development_status:
   skillars-4-1-drill-library-foundation: done
   skillars-4-2-drill-card-operations: done
   skillars-4-3-custom-drill-uploads: done
-  skillars-4-4-session-builder-block-structure-dna: backlog
+  skillars-4-4-session-builder-block-structure-dna: done
   skillars-4-5-intelligent-drill-suggestions-session-templates: backlog
   skillars-4-6-homework-assignment-player-locker-room: backlog
   skillars-epic-4-retrospective: optional

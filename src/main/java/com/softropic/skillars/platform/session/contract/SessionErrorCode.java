@@ -6,7 +6,10 @@ public enum SessionErrorCode implements ErrorCode {
 
     CLONE_NOT_ALLOWED,
     SESSION_CANNOT_TAG_UNAUTHORIZED,
-    DRILL_UPLOAD_NOT_ALLOWED;
+    DRILL_UPLOAD_NOT_ALLOWED,
+    SESSION_ALREADY_EXISTS,
+    SESSION_BOOKING_NOT_OWNED,
+    SESSION_PLAN_LOCKED;
 
     @Override
     public String getErrorCode() {
