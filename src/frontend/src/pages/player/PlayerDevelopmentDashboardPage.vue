@@ -97,6 +97,24 @@
           <RadarAssessmentHistoryList :radar-entries="store.radarEntries" />
         </q-card-section>
       </q-card>
+
+      <!-- Performance Reports -->
+      <q-card v-if="tierLoaded" class="q-mt-md">
+        <q-card-section>
+          <PerformanceReportsPanel
+            :player-id="playerId"
+            :player-name="playerName"
+            :is-coach="isCoach"
+          />
+        </q-card-section>
+      </q-card>
+
+      <!-- Player Timeline -->
+      <q-card class="q-mt-md">
+        <q-card-section>
+          <PlayerTimelinePanel :player-id="playerId" />
+        </q-card-section>
+      </q-card>
     </template>
 
     <SluTargetEditor
@@ -128,12 +146,15 @@ import SluTargetEditor from 'src/components/development/SluTargetEditor.vue'
 import SluNarrativeSummary from 'src/components/development/SluNarrativeSummary.vue'
 import SkillsRadarAssessmentPanel from 'src/components/development/SkillsRadarAssessmentPanel.vue'
 import RadarAssessmentHistoryList from 'src/components/development/RadarAssessmentHistoryList.vue'
+import PerformanceReportsPanel from 'src/components/development/PerformanceReportsPanel.vue'
+import PlayerTimelinePanel from 'src/components/development/PlayerTimelinePanel.vue'
 
 const route = useRoute()
 const authStore = useAuthStore()
 const store = useDevelopmentStore()
 
 const playerId = computed(() => Number(route.params.playerId))
+const playerName = computed(() => route.query.playerName ?? '')
 const isCoach = computed(() => authStore.isCoach)
 const isParent = computed(() => authStore.isParent)
 const RADAR_ALLOWED_TIERS = ['INSTRUCTOR', 'ACADEMY']

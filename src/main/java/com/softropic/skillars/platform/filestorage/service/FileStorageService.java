@@ -28,9 +28,12 @@ import org.slf4j.MDC;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
+import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest;
@@ -260,6 +263,73 @@ public class FileStorageService {
             MDC.remove("operation");
             MDC.remove("provider");
         }
+    }
+
+    public String storeBytes(byte[] bytes, String storageKey, String contentType) {
+        return storeBytes(bytes, storageKey, contentType, null);
+    }
+
+    public String storeBytes(byte[] bytes, String storageKey, String contentType, String contentDisposition) {
+        if (bytes == null || bytes.length == 0) {
+            throw new IllegalArgumentException("Cannot store null or empty bytes for key: " + storageKey);
+        }
+        try {
+            PutObjectRequest.Builder reqBuilder = PutObjectRequest.builder()
+                .bucket(storageProperties.getBucket())
+                .key(storageKey)
+                .contentType(contentType)
+                .contentLength((long) bytes.length);
+            if (contentDisposition != null) {
+                reqBuilder.contentDisposition(contentDisposition);
+            }
+            s3Client.putObject(reqBuilder.build(), RequestBody.fromBytes(bytes));
+            log.info("Stored programmatic file: key={}, bytes={}", storageKey, bytes.length);
+            return storageKey;
+        } catch (Exception e) {
+            log.error("Failed to store bytes: key={}", storageKey, e);
+            throw new RuntimeException("Failed to store file: " + storageKey, e);
+        }
+    }
+
+    public String signedDownloadUrl(String storageKey) {
+        PresignedGetObjectRequest presigned = s3Presigner.presignGetObject(
+            GetObjectPresignRequest.builder()
+                .signatureDuration(Duration.ofSeconds(storageProperties.getPresignTtlSeconds()))
+                .getObjectRequest(r -> r.bucket(storageProperties.getBucket()).key(storageKey))
+                .build());
+        return presigned.url().toString();
+    }
+
+    public byte[] downloadBytes(String storageKey) {
+        try {
+            GetObjectRequest req = GetObjectRequest.builder()
+                .bucket(storageProperties.getBucket())
+                .key(storageKey)
+                .build();
+            return s3Client.getObjectAsBytes(req).asByteArray();
+        } catch (Exception e) {
+            log.error("Failed to download bytes: key={}", storageKey, e);
+            throw new RuntimeException("Failed to download file: " + storageKey, e);
+        }
+    }
+
+    public void deleteRawBytes(String storageKey) {
+        try {
+            s3Client.deleteObject(r -> r.bucket(storageProperties.getBucket()).key(storageKey));
+            log.info("Deleted raw S3 object: key={}", storageKey);
+        } catch (Exception e) {
+            log.error("Failed to delete raw S3 object: key={}", storageKey, e);
+            throw new RuntimeException("Failed to delete S3 object: " + storageKey, e);
+        }
+    }
+
+    public void assertOwnership(String key, String expectedOwnerId) {
+        fileStorageObjectRepository.findByKey(key)
+            .ifPresent(fso -> {
+                if (!expectedOwnerId.equals(fso.getOwnerId())) {
+                    throw new AuthorizationException("File does not belong to caller", SecurityError.MISSING_RIGHTS);
+                }
+            });
     }
 
     private String resolveOriginalFilename(ConfirmUploadRequest request, String key) {

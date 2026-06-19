@@ -49,6 +49,7 @@ public class RadarDisplayService {
             PlayerRadarBaseline  base = baselineMap.get(def.getCode());
             return new SkillRadarEntry(
                 def.getCode(),
+                def.getDisplayName(),
                 comp != null ? comp.getCompositeScore() : null,
                 base != null ? base.getBaselineScore()  : null,
                 comp != null ? comp.getEntryCount()     : null,

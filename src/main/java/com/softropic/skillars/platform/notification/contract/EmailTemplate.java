@@ -34,7 +34,8 @@ public enum EmailTemplate {
     SESSION_PACK_EXPIRY_WARNING("email.session_pack.expiry_warning.title"),
     SESSION_PACK_EXPIRED("email.session_pack.expired.title"),
     BOOKING_CANCELLED_DUE_TO_PAUSE("email.booking.cancelled_due_to_pause.title"),
-    PACK_PAUSED("email.session_pack.paused.title");
+    PACK_PAUSED("email.session_pack.paused.title"),
+    PERFORMANCE_REPORT_SHARED("email.report.shared.title");
 
     private final String subjectKey;
     EmailTemplate(final String subjectKey) {

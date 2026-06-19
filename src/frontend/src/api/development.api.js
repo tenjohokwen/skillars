@@ -33,3 +33,18 @@ export const putRadarPreferences = (playerId, selectedSkillCodes) =>
 
 export const getCorrelationInsights = (playerId) =>
   api.get(`/api/development/players/${playerId}/radar/correlation`)
+
+export const generateReport = (playerId, nextSteps) =>
+  api.post(`/api/development/players/${playerId}/reports`, { nextSteps })
+
+export const listReports = (playerId) =>
+  api.get(`/api/development/players/${playerId}/reports`)
+
+export const getTimeline = (playerId) =>
+  api.get(`/api/development/players/${playerId}/timeline`)
+
+export const getCoachBranding = () =>
+  api.get('/api/development/coaches/me/branding')
+
+export const saveCoachBranding = (logoKey, brandColour) =>
+  api.put('/api/development/coaches/me/branding', { logoKey, brandColour })

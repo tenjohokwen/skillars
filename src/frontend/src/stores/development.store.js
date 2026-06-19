@@ -12,6 +12,9 @@ import {
   getRadarPreferences,
   putRadarPreferences,
   getCorrelationInsights,
+  generateReport as apiGenerateReport,
+  listReports,
+  getTimeline,
 } from 'src/api/development.api'
 
 export const useDevelopmentStore = defineStore('development', () => {
@@ -28,6 +31,13 @@ export const useDevelopmentStore = defineStore('development', () => {
   const correlationInsights = ref(null)
   const radarDisplayLoading = ref(false)
   const correlationLoading = ref(false)
+  const reports = ref([])
+  const timeline = ref(null)
+  const reportsLoading = ref(false)
+  const timelineLoading = ref(false)
+  const reportGenerating = ref(false)
+  const reportsError = ref(null)
+  const timelineError = ref(null)
 
   const neglectedCodes = computed(() => exposure.value?.neglectedSkillCodes ?? [])
 
@@ -155,6 +165,46 @@ export const useDevelopmentStore = defineStore('development', () => {
     }
   }
 
+  async function fetchReports(playerId) {
+    reportsLoading.value = true
+    reportsError.value = null
+    try {
+      const response = await listReports(playerId)
+      reports.value = response.data
+    } catch (err) {
+      reportsError.value = err?.response?.data?.message ?? 'Failed to load reports'
+    } finally {
+      reportsLoading.value = false
+    }
+  }
+
+  async function generateReport(playerId, nextSteps) {
+    reportGenerating.value = true
+    reportsError.value = null
+    try {
+      await apiGenerateReport(playerId, nextSteps)
+      await fetchReports(playerId)
+    } catch (err) {
+      reportsError.value = err?.response?.data?.message ?? 'Failed to generate report'
+      throw err
+    } finally {
+      reportGenerating.value = false
+    }
+  }
+
+  async function fetchTimeline(playerId) {
+    timelineLoading.value = true
+    timelineError.value = null
+    try {
+      const response = await getTimeline(playerId)
+      timeline.value = response.data
+    } catch (err) {
+      timelineError.value = err?.response?.data?.message ?? 'Failed to load timeline'
+    } finally {
+      timelineLoading.value = false
+    }
+  }
+
   return {
     skillDefinitions,
     exposure,
@@ -170,6 +220,13 @@ export const useDevelopmentStore = defineStore('development', () => {
     correlationInsights,
     radarDisplayLoading,
     correlationLoading,
+    reports,
+    timeline,
+    reportsLoading,
+    timelineLoading,
+    reportGenerating,
+    reportsError,
+    timelineError,
     fetchSkillDefinitions,
     fetchExposure,
     fetchNarrative,
@@ -181,5 +238,8 @@ export const useDevelopmentStore = defineStore('development', () => {
     fetchRadarPreferences,
     saveRadarPreferences,
     fetchCorrelationInsights,
+    fetchReports,
+    generateReport,
+    fetchTimeline,
   }
 })

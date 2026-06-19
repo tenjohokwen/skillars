@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.report.shared.title}">Performance Report Shared</title>
+</head>
+<body>
+    <h2>A performance report has been shared with you</h2>
+    <p>Coach <strong th:text="${map.coachName}">Coach</strong> has generated a performance report for <strong th:text="${map.playerName}">your child</strong> on <strong th:text="${map.reportDate}">date</strong>.</p>
+    <p>Log in to Skillars to view and download the report:</p>
+    <p><a th:href="${map.reportsPageUrl}" th:text="${map.reportsPageUrl}">View Reports</a></p>
+</body>
+</html>
