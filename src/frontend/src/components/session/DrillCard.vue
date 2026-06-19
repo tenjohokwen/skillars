@@ -27,6 +27,9 @@
           <q-badge :color="difficultyColor" class="drill-card__difficulty">
             {{ drill.metadata?.difficultyTier }}
           </q-badge>
+          <q-badge v-if="drill.addressesNeglectedSkill" color="warning">
+            {{ t('development.neglectedSkillTag') }}
+          </q-badge>
           <q-icon v-if="drill.metadata?.weakFootBias" name="swap_horiz" size="18px" color="amber">
             <q-tooltip>{{ t('session.drillLibrary.weakFootLabel') }}</q-tooltip>
           </q-icon>

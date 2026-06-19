@@ -1,6 +1,9 @@
 package com.softropic.skillars.platform.session.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.platform.development.repo.NeglectedSkillFlag;
+import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagRepository;
+import org.mockito.ArgumentCaptor;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.security.contract.exception.FeatureGatedException;
 import org.instancio.Instancio;
@@ -31,6 +34,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -47,6 +51,7 @@ class DrillSuggestionServiceTest {
     @Mock private DrillRepository drillRepository;
     @Mock private DrillLibraryService drillLibraryService;
     @Mock private CoachProfileService coachProfileService;
+    @Mock private NeglectedSkillFlagRepository neglectedSkillFlagRepository;
 
     private DrillSuggestionService service;
 
@@ -57,7 +62,8 @@ class DrillSuggestionServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new DrillSuggestionService(sessionRepository, drillRepository, drillLibraryService, coachProfileService);
+        service = new DrillSuggestionService(sessionRepository, drillRepository, drillLibraryService, coachProfileService, neglectedSkillFlagRepository);
+        when(neglectedSkillFlagRepository.findByPlayerIdAndResolvedAtIsNull(any())).thenReturn(List.of());
         when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
     }
 
@@ -69,7 +75,7 @@ class DrillSuggestionServiceTest {
         Drill early = buildDrill(UUID.randomUUID(), "PLATFORM", null, Instant.ofEpochSecond(1000));
         Drill late  = buildDrill(UUID.randomUUID(), "PLATFORM", null, Instant.ofEpochSecond(2000));
         when(drillRepository.findByLibraryTypeAndStatus("PLATFORM", "ACTIVE")).thenReturn(List.of(late, early));
-        when(drillLibraryService.toResponse(any(), eq(false), any(), any(), any(), any()))
+        when(drillLibraryService.toResponse(any(), eq(false), any(), any(), any(), any(), anyBoolean()))
             .thenAnswer(inv -> mockDrillResponse(((Drill) inv.getArgument(0)).getId()));
 
         List<DrillResponse> result = service.suggest(SESSION_ID, COACH_USER_ID, 5);
@@ -92,7 +98,7 @@ class DrillSuggestionServiceTest {
         when(drillRepository.findByLibraryTypeAndStatus("PLATFORM", "ACTIVE")).thenReturn(List.of(lowDrill, highDrill));
         when(drillRepository.findByOwnerCoachIdAndStatus(COACH_ID, "ACTIVE")).thenReturn(List.of());
         when(sessionRepository.findTop5ByPlayerIdOrderByCreatedAtDesc(PLAYER_ID)).thenReturn(List.of());
-        when(drillLibraryService.toResponse(any(), eq(false), any(), any(), any(), any()))
+        when(drillLibraryService.toResponse(any(), eq(false), any(), any(), any(), any(), anyBoolean()))
             .thenAnswer(inv -> mockDrillResponse(((Drill) inv.getArgument(0)).getId()));
 
         List<DrillResponse> result = service.suggest(SESSION_ID, COACH_USER_ID, 10);
@@ -119,7 +125,7 @@ class DrillSuggestionServiceTest {
         recentSession.setBlocks(List.of(block));
         when(sessionRepository.findTop5ByPlayerIdOrderByCreatedAtDesc(PLAYER_ID)).thenReturn(List.of(recentSession));
 
-        when(drillLibraryService.toResponse(any(), eq(false), any(), any(), any(), any()))
+        when(drillLibraryService.toResponse(any(), eq(false), any(), any(), any(), any(), anyBoolean()))
             .thenAnswer(inv -> mockDrillResponse(((Drill) inv.getArgument(0)).getId()));
 
         List<DrillResponse> result = service.suggest(SESSION_ID, COACH_USER_ID, 10);
@@ -168,7 +174,7 @@ class DrillSuggestionServiceTest {
         when(drillRepository.findByLibraryTypeAndStatus("PLATFORM", "ACTIVE")).thenReturn(List.of(platformDrill));
         when(drillRepository.findByOwnerCoachIdAndStatus(COACH_ID, "ACTIVE")).thenReturn(List.of(privateDrill));
         when(sessionRepository.findTop5ByPlayerIdOrderByCreatedAtDesc(PLAYER_ID)).thenReturn(List.of());
-        when(drillLibraryService.toResponse(any(), eq(false), any(), any(), any(), any()))
+        when(drillLibraryService.toResponse(any(), eq(false), any(), any(), any(), any(), anyBoolean()))
             .thenAnswer(inv -> mockDrillResponse(((Drill) inv.getArgument(0)).getId()));
 
         List<DrillResponse> result = service.suggest(SESSION_ID, COACH_USER_ID, 10);
@@ -191,12 +197,56 @@ class DrillSuggestionServiceTest {
         when(drillRepository.findByLibraryTypeAndStatus("PLATFORM", "ACTIVE")).thenReturn(List.of(usedDrill, freshDrill));
         when(drillRepository.findByOwnerCoachIdAndStatus(COACH_ID, "ACTIVE")).thenReturn(List.of());
         when(sessionRepository.findTop5ByPlayerIdOrderByCreatedAtDesc(PLAYER_ID)).thenReturn(List.of());
-        when(drillLibraryService.toResponse(any(), eq(false), any(), any(), any(), any()))
+        when(drillLibraryService.toResponse(any(), eq(false), any(), any(), any(), any(), anyBoolean()))
             .thenAnswer(inv -> mockDrillResponse(((Drill) inv.getArgument(0)).getId()));
 
         List<DrillResponse> result = service.suggest(SESSION_ID, COACH_USER_ID, 10);
 
         assertThat(result.stream().map(DrillResponse::id)).doesNotContain(usedDrillId);
+    }
+
+    @Test
+    void suggest_withNeglectedSkill_tagsMatchingDrills() {
+        when(neglectedSkillFlagRepository.findByPlayerIdAndResolvedAtIsNull(PLAYER_ID))
+            .thenReturn(List.of(makeNeglectedFlag("PAC")));
+
+        Session session = buildSession(COACH_ID, List.of("technical"));
+        when(sessionRepository.findById(SESSION_ID)).thenReturn(Optional.of(session));
+
+        UUID drillId = UUID.randomUUID();
+        Drill drill = buildDrillWithSkill(drillId, "PAC");
+        when(drillRepository.findByLibraryTypeAndStatus("PLATFORM", "ACTIVE")).thenReturn(List.of(drill));
+        when(drillRepository.findByOwnerCoachIdAndStatus(COACH_ID, "ACTIVE")).thenReturn(List.of());
+        when(sessionRepository.findTop5ByPlayerIdOrderByCreatedAtDesc(PLAYER_ID)).thenReturn(List.of());
+        when(drillLibraryService.toResponse(any(), eq(false), any(), any(), any(), any(), anyBoolean()))
+            .thenAnswer(inv -> mockDrillResponse(((Drill) inv.getArgument(0)).getId()));
+
+        service.suggest(SESSION_ID, COACH_USER_ID, 10);
+
+        ArgumentCaptor<Boolean> neglectedCaptor = ArgumentCaptor.forClass(Boolean.class);
+        verify(drillLibraryService).toResponse(any(), eq(false), any(), any(), any(), any(), neglectedCaptor.capture());
+        assertThat(neglectedCaptor.getValue()).isTrue();
+    }
+
+    @Test
+    void suggest_noFocus_withNeglectedSkill_fallbackTagsMatchingDrills() {
+        when(neglectedSkillFlagRepository.findByPlayerIdAndResolvedAtIsNull(PLAYER_ID))
+            .thenReturn(List.of(makeNeglectedFlag("PAC")));
+
+        Session session = buildSession(COACH_ID, List.of());
+        when(sessionRepository.findById(SESSION_ID)).thenReturn(Optional.of(session));
+
+        UUID drillId = UUID.randomUUID();
+        Drill drill = buildDrillWithSkill(drillId, "PAC");
+        when(drillRepository.findByLibraryTypeAndStatus("PLATFORM", "ACTIVE")).thenReturn(List.of(drill));
+        when(drillLibraryService.toResponse(any(), eq(false), any(), any(), any(), any(), anyBoolean()))
+            .thenAnswer(inv -> mockDrillResponse(((Drill) inv.getArgument(0)).getId()));
+
+        service.suggest(SESSION_ID, COACH_USER_ID, 10);
+
+        ArgumentCaptor<Boolean> neglectedCaptor = ArgumentCaptor.forClass(Boolean.class);
+        verify(drillLibraryService).toResponse(any(), eq(false), any(), any(), any(), any(), neglectedCaptor.capture());
+        assertThat(neglectedCaptor.getValue()).isTrue();
     }
 
     // --- helpers ---
@@ -238,9 +288,31 @@ class DrillSuggestionServiceTest {
         );
     }
 
+    private Drill buildDrillWithSkill(UUID id, String skillCode) {
+        DrillMetadata meta = new DrillMetadata(
+            List.of(skillCode), List.of(), Map.of(skillCode, 1),
+            10, 3, 3, 3, 3, false, "U12", List.of("ball"), "2", List.of(), null
+        );
+        return Instancio.of(Drill.class)
+            .set(field(Drill.class, "id"), id)
+            .set(field(Drill.class, "libraryType"), "PLATFORM")
+            .set(field(Drill.class, "status"), "ACTIVE")
+            .set(field(Drill.class, "metadata"), meta)
+            .set(field(Drill.class, "createdAt"), Instant.ofEpochSecond(1000))
+            .create();
+    }
+
+    private NeglectedSkillFlag makeNeglectedFlag(String skillCode) {
+        NeglectedSkillFlag f = new NeglectedSkillFlag();
+        f.setPlayerId(PLAYER_ID);
+        f.setSkillCode(skillCode);
+        f.setDetectedAt(Instant.now().minusSeconds(3600));
+        return f;
+    }
+
     private DrillResponse mockDrillResponse(UUID id) {
         return new DrillResponse(id, "Drill " + id, null, "PLATFORM", null, "ACTIVE",
-            null, false, null, null, Instant.now(), List.of(), null, null);
+            null, false, null, null, Instant.now(), List.of(), null, null, false);
     }
 
 }

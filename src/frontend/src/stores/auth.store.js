@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { authApi } from 'src/api/auth.api'
+import { api } from 'src/boot/axios'
 
 const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
 
@@ -9,6 +10,7 @@ export const useAuthStore = defineStore('auth', () => {
   const role = ref(null)
   const displayName = ref(null)
   const timezoneNoticeDismissed = ref(false)
+  const coachTier = ref(null)
 
   const isAuthenticated = computed(() => !!userId.value)
   const isCoach = computed(() => role.value === 'COACH')
@@ -26,6 +28,16 @@ export const useAuthStore = defineStore('auth', () => {
     userId.value = null
     role.value = null
     displayName.value = null
+    coachTier.value = null
+  }
+
+  async function fetchCoachTier() {
+    try {
+      const response = await api.get('/api/marketplace/coaches/me/tier')
+      coachTier.value = response.data.tier
+    } catch {
+      coachTier.value = null
+    }
   }
 
   async function logout() {
@@ -70,6 +82,7 @@ export const useAuthStore = defineStore('auth', () => {
     userId,
     role,
     displayName,
+    coachTier,
     isAuthenticated,
     isCoach,
     isParent,
@@ -82,5 +95,6 @@ export const useAuthStore = defineStore('auth', () => {
     logout,
     hydrateFromCookie,
     dismissTimezoneNotice,
+    fetchCoachTier,
   }
 })

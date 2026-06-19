@@ -5,6 +5,7 @@ import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.development.repo.PlayerSkillStat;
 import com.softropic.skillars.platform.development.repo.SkillDefinitionRepository;
 import com.softropic.skillars.platform.development.repo.SluRepository;
+import com.softropic.skillars.platform.development.repo.SnapshotBatchWriter;
 import com.softropic.skillars.platform.session.contract.SessionBlockData;
 import com.softropic.skillars.platform.session.contract.SessionDrillRef;
 import com.softropic.skillars.platform.session.repo.Drill;
@@ -20,6 +21,9 @@ import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.temporal.IsoFields;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -40,6 +44,7 @@ public class SluCalculationService {
     private final SluRepository sluRepository;
     private final SkillDefinitionRepository skillDefinitionRepository;
     private final ConfigService configService;
+    private final SnapshotBatchWriter snapshotBatchWriter;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Async
@@ -172,5 +177,13 @@ public class SluCalculationService {
         sluRepository.saveAll(stats);
         log.info("SLU recorded: {} skill entries for session {} player {}",
             stats.size(), session.getId(), event.getPlayerId());
+
+        // Update weekly snapshot for sub-second dashboard queries (NFR-001)
+        ZonedDateTime calcWeek = ZonedDateTime.ofInstant(now, ZoneOffset.UTC);
+        short isoYear = (short) calcWeek.get(IsoFields.WEEK_BASED_YEAR);
+        short isoWeek = (short) calcWeek.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
+        snapshotBatchWriter.writeAll(stats, isoYear, isoWeek);
+        log.debug("Weekly snapshot updated: {} skill entries for player {} week {}/{}",
+            stats.size(), event.getPlayerId(), isoYear, isoWeek);
     }
 }

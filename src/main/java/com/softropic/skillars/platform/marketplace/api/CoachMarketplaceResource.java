@@ -4,9 +4,11 @@ import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileDto;
 import com.softropic.skillars.platform.marketplace.contract.CoachSearchParams;
 import com.softropic.skillars.platform.marketplace.contract.CoachSearchResponse;
+import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.marketplace.service.CoachSearchService;
 import com.softropic.skillars.platform.security.contract.AgeTier;
+import com.softropic.skillars.platform.security.service.SecurityUtil;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -23,6 +25,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
+import java.util.Map;
 import java.util.UUID;
 
 @Validated
@@ -34,6 +37,7 @@ public class CoachMarketplaceResource {
 
     private final CoachSearchService coachSearchService;
     private final CoachProfileService coachProfileService;
+    private final SecurityUtil securityUtil;
 
     @GetMapping
     @Observed(name = "marketplace.search")
@@ -62,5 +66,14 @@ public class CoachMarketplaceResource {
     @PreAuthorize(SecurityConstants.IS_PERMIT_ALL)
     public ResponseEntity<CoachProfileDto> getCoachProfile(@PathVariable UUID coachId) {
         return ResponseEntity.ok(coachProfileService.getPublicProfile(coachId));
+    }
+
+    @GetMapping("/me/tier")
+    @Observed(name = "marketplace.coach.tier")
+    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+    public ResponseEntity<Map<String, String>> getMyTier() {
+        UUID coachId = coachProfileService.getCoachIdByUserId(securityUtil.getCurrentCoachUserId());
+        CoachSubscriptionTier tier = coachProfileService.getCoachSubscriptionTier(coachId);
+        return ResponseEntity.ok(Map.of("tier", tier.name()));
     }
 }

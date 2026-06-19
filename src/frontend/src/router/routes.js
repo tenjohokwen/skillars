@@ -167,6 +167,12 @@ const routes = [
         component: () => import('pages/player/PlayerLockerRoomPlaceholderPage.vue'),
         meta: { requiresAuth: true },
       },
+      {
+        path: 'player/development/:playerId',
+        name: 'player-development',
+        component: () => import('pages/player/PlayerDevelopmentDashboardPage.vue'),
+        meta: { requiresAuth: true },
+      },
 
       // Marketplace — public (guests can browse, AC 5, FR-MKT-005)
       {

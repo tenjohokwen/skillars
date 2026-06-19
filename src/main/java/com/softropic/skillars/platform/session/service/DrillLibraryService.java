@@ -292,6 +292,10 @@ public class DrillLibraryService {
     }
 
     DrillResponse toResponse(Drill drill, boolean hasVideo, List<String> tags, Boolean isClonedByMe, UUID cloneId, String videoUrl) {
+        return toResponse(drill, hasVideo, tags, isClonedByMe, cloneId, videoUrl, false);
+    }
+
+    DrillResponse toResponse(Drill drill, boolean hasVideo, List<String> tags, Boolean isClonedByMe, UUID cloneId, String videoUrl, boolean addressesNeglectedSkill) {
         return new DrillResponse(
             drill.getId(),
             drill.getName(),
@@ -306,7 +310,8 @@ public class DrillLibraryService {
             drill.getCreatedAt(),
             tags,
             isClonedByMe,
-            cloneId
+            cloneId,
+            addressesNeglectedSkill
         );
     }
 }

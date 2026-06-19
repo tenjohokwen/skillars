@@ -1,6 +1,7 @@
 export default {
   auth: {
-    accountNotVerified: 'Your account is not yet verified. Please complete phone verification first.',
+    accountNotVerified:
+      'Your account is not yet verified. Please complete phone verification first.',
     accountLocked: 'Too many login attempts. Please try again in a few minutes.',
     invalidCredentials: 'Invalid email or password.',
     login: 'Login',
@@ -98,7 +99,8 @@ export default {
       resendOtp: 'Resend Code',
       contactDetailWarning: 'Contact details will be removed on save',
       dashboardTitle: 'Account Verified',
-      dashboardBody: 'Your account is verified! Sign in to create player profiles and start managing sessions.',
+      dashboardBody:
+        'Your account is verified! Sign in to create player profiles and start managing sessions.',
     },
   },
   coach: {
@@ -109,7 +111,8 @@ export default {
     lockerRoomTitle: 'Player Locker Room',
     lockerRoomBody: 'Your training content and homework will appear here.',
     homeworkEmptyTitle: 'No homework yet',
-    homeworkEmptySubtitle: "Your coach hasn't set homework yet — check back after your next session",
+    homeworkEmptySubtitle:
+      "Your coach hasn't set homework yet — check back after your next session",
     homeworkCompleted: 'Done!',
     homeworkMarkDone: "I've done this",
     assignedBy: 'Assigned by {coach}',
@@ -120,7 +123,8 @@ export default {
     positionLabel: 'Position',
     ageTierLabel: 'Age tier',
     consentTitle: 'Parent Consent',
-    consentBody: 'By creating this profile for a minor, you confirm you are their legal guardian and accept responsibility for all activity on this account.',
+    consentBody:
+      'By creating this profile for a minor, you confirm you are their legal guardian and accept responsibility for all activity on this account.',
     consentLabel: 'I consent on behalf of this minor player',
     createButton: 'Create Profile',
     switcher: {
@@ -183,7 +187,7 @@ export default {
     continueQuestion: 'Would you like to continue your session?',
     continueSession: 'Continue Session',
     refreshed: 'Session refreshed successfully',
-    expired: 'Your session has expired. Please log in again.'
+    expired: 'Your session has expired. Please log in again.',
   },
   validation: {
     required: 'This field is required',
@@ -191,21 +195,23 @@ export default {
     minLength: 'Must be at least {min} characters',
     maxLength: 'Must be no more than {max} characters',
     passwordMatch: 'Passwords do not match',
-    passwordStrength: 'Password must contain at least one uppercase letter, one lowercase letter, and one number',
+    passwordStrength:
+      'Password must contain at least one uppercase letter, one lowercase letter, and one number',
     invalidDate: 'Please enter a valid date',
     pastDate: 'Date must be in the past',
-    badRequest: 'The request is not valid. Check method argument mismatch, missing parameters e.t.c.',
+    badRequest:
+      'The request is not valid. Check method argument mismatch, missing parameters e.t.c.',
     invalidData: 'Invalid Data',
     phone: {
       invalid: 'Invalid phone number format',
       blank: 'Phone number cannot be blank',
       digitCount: 'Phone number must have exactly 9 digits',
       firstDigit: 'Phone number must start with digit 6',
-      operator: 'Phone number does not match any valid operator (MTN, Orange, NextTel)'
+      operator: 'Phone number does not match any valid operator (MTN, Orange, NextTel)',
     },
     sameEmail: 'New email must be different from current email',
     samePassword: 'New password must be different from current password',
-    samePhone: 'New phone number must be different from current phone number'
+    samePhone: 'New phone number must be different from current phone number',
   },
   error: {
     generic: 'An unexpected error occurred. Please try again.',
@@ -216,7 +222,7 @@ export default {
     unknown: 'An unknown Exception has occurred',
     dataError: 'Data integrity error',
     notFound: 'The requested resource was not found',
-    verificationFailed: 'Verification failed'
+    verificationFailed: 'Verification failed',
   },
   featureGate: {
     requiredTier: 'Requires {tier} plan',
@@ -229,7 +235,8 @@ export default {
     accountExpired: 'Your account has expired.',
     credExpired: 'Your credentials have expired.',
     accNotEnabled: 'Your account is not enabled.',
-    accLocked: 'There is an issue with your account. Check your email and contact the support team. Remember to save the help code.',
+    accLocked:
+      'There is an issue with your account. Check your email and contact the support team. Remember to save the help code.',
     badCreds: 'The login and password combination does not exist',
     opForbidden: 'Access has been denied. You can contact help desk',
     sessionExpired: 'Your session is no longer valid. You need to sign-in again',
@@ -249,7 +256,7 @@ export default {
     addressChanged: 'Your address has been updated.',
     infoChanged: 'Your profile information has been updated.',
     twoFactorEnabled: 'Two-factor authentication has been enabled.',
-    twoFactorDisabled: 'Two-factor authentication has been disabled.'
+    twoFactorDisabled: 'Two-factor authentication has been disabled.',
   },
   common: {
     submit: 'Submit',
@@ -260,7 +267,7 @@ export default {
     loading: 'Loading...',
     or: 'or',
     menu: 'Menu',
-    new: 'New'
+    new: 'New',
   },
   profile: {
     title: 'My Profile',
@@ -299,6 +306,42 @@ export default {
     disable2fa: 'Disable Two-Factor Authentication',
     confirm2faEnable: 'Enter your password to enable two-factor authentication.',
     confirm2faDisable: 'Enter your password to disable two-factor authentication.',
-    emailChangeWarning: 'Changing your email address will also change your login credentials. You will be automatically signed out and will need to log in again with your new email address.'
-  }
+    emailChangeWarning:
+      'Changing your email address will also change your login credentials. You will be automatically signed out and will need to log in again with your new email address.',
+  },
+  development: {
+    dashboardTitle: 'Player Development',
+    skillExposureTitle: 'Skill Exposure',
+    currentWeekLabel: 'This Week',
+    trendChartTitle: 'Weekly Trend (last {weeks} weeks)',
+    setTargetsLabel: 'Set weekly targets',
+    neglectedSkillTag: 'Addresses neglected skill',
+    neglectedSkillAlert: '{skill} below target this week',
+    noExposureYet: 'No exposure yet',
+    saveTargets: 'Save Targets',
+    targetLabel: 'Weekly SLU target ({skill})',
+    narrative: {
+      increased: '{skill} exposure increased {percent}% this month',
+      decreased: '{skill} exposure decreased {percent}% this month',
+    },
+    radar: {
+      addAssessmentLabel: 'Add Radar Assessment',
+      assessmentPanelTitle: 'Skills Radar Assessment',
+      assessmentTypeLabelObjective: 'Objective Test',
+      assessmentTypeLabelMatchObs: 'Match Observation',
+      assessmentTypeLabelCoachEval: 'Coach Evaluation',
+      assessmentDateLabel: 'Assessment Date',
+      scoreLabel: 'Score (1–100)',
+      notesLabel: 'Notes (optional)',
+      assessmentTypeLabel: 'Assessment Type',
+      scoreTierReference: 'Score reference: Elite 90–100 | Excellent 80–89 | Good 70–79 | Above Average 60–69 | Average 50–59 | Below Average 40–49 | Very Weak <40',
+      submitLabel: 'Submit Assessment',
+      historyTitle: 'My Assessment History',
+      noEntriesYet: 'No assessments recorded yet',
+      otherCoachCount: '{count} other coach(es) assessed {skill}',
+      submitSuccess: 'Assessment submitted successfully',
+      submitErrorFeatureGated: 'Skills Radar assessment requires Instructor tier or above',
+      submitError: 'Failed to submit assessment. Please try again.',
+    },
+  },
 }

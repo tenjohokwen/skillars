@@ -1,6 +1,8 @@
 package com.softropic.skillars.platform.session.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.platform.development.repo.NeglectedSkillFlag;
+import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagRepository;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.session.contract.DrillMetadata;
 import com.softropic.skillars.platform.session.contract.DrillResponse;
@@ -33,6 +35,7 @@ public class DrillSuggestionService {
     private final DrillRepository drillRepository;
     private final DrillLibraryService drillLibraryService;
     private final CoachProfileService coachProfileService;
+    private final NeglectedSkillFlagRepository neglectedSkillFlagRepository;
 
     public List<DrillResponse> suggest(UUID sessionId, Long coachUserId, int limit) {
         drillLibraryService.checkSessionBuilderGate(coachUserId);
@@ -48,8 +51,13 @@ public class DrillSuggestionService {
         List<String> focus = session.getDevelopmentFocus();
         Long playerId = session.getPlayerId();
 
+        Set<String> neglectedCodes = playerId != null
+            ? neglectedSkillFlagRepository.findByPlayerIdAndResolvedAtIsNull(playerId)
+                  .stream().map(NeglectedSkillFlag::getSkillCode).collect(Collectors.toSet())
+            : Set.of();
+
         if (focus == null || focus.isEmpty()) {
-            return fallback(limit);
+            return fallback(limit, neglectedCodes);
         }
 
         List<Drill> candidates = allCandidates(coachId);
@@ -58,19 +66,34 @@ public class DrillSuggestionService {
 
         List<DrillResponse> result = candidates.stream()
             .filter(d -> !alreadyUsed.contains(d.getId()))
-            .map(d -> new DrillScore(d, score(d.getMetadata(), focus, recentIds, d.getId())))
+            .map(d -> new DrillScore(d, score(d.getMetadata(), focus, recentIds, d.getId(), neglectedCodes)))
             .sorted(Comparator.comparingDouble(DrillScore::score).reversed())
             .limit(limit)
-            .map(ds -> drillLibraryService.toResponse(ds.drill(), false, List.of(), null, null, null))
+            .map(ds -> {
+                boolean addressesNeglected = !neglectedCodes.isEmpty()
+                    && ds.drill().getMetadata() != null
+                    && ds.drill().getMetadata().skillWeighting() != null
+                    && ds.drill().getMetadata().skillWeighting().entrySet().stream()
+                        .anyMatch(e -> e.getValue() != null && e.getValue() > 0
+                            && neglectedCodes.contains(e.getKey()));
+                return drillLibraryService.toResponse(
+                    ds.drill(), false, List.of(), null, null, null, addressesNeglected);
+            })
             .toList();
 
         return result;
     }
 
-    private double score(DrillMetadata meta, List<String> focus, Set<UUID> recentIds, UUID drillId) {
+    private double score(DrillMetadata meta, List<String> focus, Set<UUID> recentIds, UUID drillId,
+                         Set<String> neglectedCodes) {
         if (meta == null) return 0.0;
         double focusScore = computeFocusScore(meta, focus);
         double neglectedScore = 0.0;
+        if (!neglectedCodes.isEmpty() && meta.skillWeighting() != null) {
+            neglectedScore = meta.skillWeighting().entrySet().stream()
+                .anyMatch(e -> e.getValue() != null && e.getValue() > 0
+                    && neglectedCodes.contains(e.getKey())) ? 1.0 : 0.0;
+        }
         double ageFitScore = 0.5;
         double recencyScore = recentIds.contains(drillId) ? 0.0 : 1.0;
         return focusScore * 0.40 + neglectedScore * 0.30 + ageFitScore * 0.20 + recencyScore * 0.10;
@@ -94,12 +117,20 @@ public class DrillSuggestionService {
         return Math.min(1.0, total / focus.size());
     }
 
-    private List<DrillResponse> fallback(int limit) {
+    private List<DrillResponse> fallback(int limit, Set<String> neglectedCodes) {
         return drillRepository.findByLibraryTypeAndStatus("PLATFORM", "ACTIVE")
             .stream()
             .sorted(Comparator.comparing(Drill::getCreatedAt))
             .limit(limit)
-            .map(d -> drillLibraryService.toResponse(d, false, List.of(), null, null, null))
+            .map(d -> {
+                boolean addressesNeglected = !neglectedCodes.isEmpty()
+                    && d.getMetadata() != null
+                    && d.getMetadata().skillWeighting() != null
+                    && d.getMetadata().skillWeighting().entrySet().stream()
+                        .anyMatch(e -> e.getValue() != null && e.getValue() > 0
+                            && neglectedCodes.contains(e.getKey()));
+                return drillLibraryService.toResponse(d, false, List.of(), null, null, null, addressesNeglected);
+            })
             .toList();
     }
 

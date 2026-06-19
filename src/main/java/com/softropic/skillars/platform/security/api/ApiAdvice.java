@@ -70,6 +70,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import jakarta.persistence.EntityNotFoundException;
@@ -133,20 +134,29 @@ public class ApiAdvice {
         "user_email_key", "user.email.duplicate"
     );
 
+    // Unique constraints that represent idempotent-retry collisions → 409 Conflict (not 400 Bad Request)
+    private static final Set<String> CONFLICT_CONSTRAINTS = Set.of(
+        "uq_radar_entries_group_coach_skill"
+    );
+
     @ExceptionHandler(DataIntegrityViolationException.class)
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
-    public ErrorDto integrityViolationHandler(final DataIntegrityViolationException dive) {
+    public ResponseEntity<ErrorDto> integrityViolationHandler(final DataIntegrityViolationException dive) {
         final Throwable throwable = dive.getCause();
         if (throwable instanceof org.hibernate.exception.ConstraintViolationException cve) {
             final String constraintName = cve.getConstraintName();
             final String messageKey = CONSTRAINT_MAPPINGS.getOrDefault(constraintName, "generic.dataError");
-            
+
             // Log the raw constraint name for internal debugging, but return a sanitized DTO
             log.warn("Database constraint violation", kv("constraint", constraintName));
-            
-            return logErrorAndReturnDTO(dive, "Data integrity error", messageKey);
+
+            HttpStatus status = CONFLICT_CONSTRAINTS.contains(constraintName)
+                ? HttpStatus.CONFLICT
+                : HttpStatus.BAD_REQUEST;
+            return ResponseEntity.status(status)
+                .body(logErrorAndReturnDTO(dive, "Data integrity error", messageKey));
         }
-        return logErrorAndReturnDTO(throwable, "Data integrity error", "generic.dataError");
+        return ResponseEntity.badRequest()
+            .body(logErrorAndReturnDTO(throwable, "Data integrity error", "generic.dataError"));
     }
 
     /**

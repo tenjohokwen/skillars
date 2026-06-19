@@ -17,18 +17,21 @@ export default {
     light: 'Hellmodus',
   },
   auth: {
-    accountNotVerified: 'Ihr Konto ist noch nicht verifiziert. Bitte schließen Sie zunächst die Telefonverifizierung ab.',
+    accountNotVerified:
+      'Ihr Konto ist noch nicht verifiziert. Bitte schließen Sie zunächst die Telefonverifizierung ab.',
     accountLocked: 'Zu viele Anmeldeversuche. Versuchen Sie es in einigen Minuten erneut.',
     invalidCredentials: 'Ungültige E-Mail-Adresse oder Passwort.',
     coach: {
       registerTitle: 'Trainer-Konto erstellen',
       registerSubtitle: 'Bei Skillars registrieren und mit dem Training beginnen',
       emailPendingTitle: 'E-Mail prüfen',
-      emailPendingBody: 'Wir haben einen Bestätigungslink an {email} gesendet. Klicke darauf, um fortzufahren.',
+      emailPendingBody:
+        'Wir haben einen Bestätigungslink an {email} gesendet. Klicke darauf, um fortzufahren.',
       resendEmail: 'E-Mail erneut senden',
       resendCooldown: 'Erneut senden in {seconds}s',
       phoneVerifyTitle: 'Telefon verifizieren',
-      phoneVerifySubtitle: 'Gib den 6-stelligen Code ein, der an deine E-Mail-Adresse gesendet wurde',
+      phoneVerifySubtitle:
+        'Gib den 6-stelligen Code ein, der an deine E-Mail-Adresse gesendet wurde',
       tosLabel: 'Ich akzeptiere die Nutzungsbedingungen',
       privacyLabel: 'Ich akzeptiere die Datenschutzrichtlinie',
       signInInstead: 'Stattdessen anmelden',
@@ -63,32 +66,38 @@ export default {
       registerTitle: 'Elternkonto erstellen',
       registerSubtitle: 'Verwalte die Coaching-Reise deines Kindes',
       emailPendingTitle: 'E-Mail prüfen',
-      emailPendingBody: 'Wir haben einen Bestätigungslink an {email} gesendet. Klicke darauf, um fortzufahren.',
+      emailPendingBody:
+        'Wir haben einen Bestätigungslink an {email} gesendet. Klicke darauf, um fortzufahren.',
       resendEmail: 'E-Mail erneut senden',
       resendCooldown: 'Erneut senden in {seconds}s',
       phoneVerifyTitle: 'Telefon verifizieren',
-      phoneVerifySubtitle: 'Gib den 6-stelligen Code ein, der an deine E-Mail-Adresse gesendet wurde',
+      phoneVerifySubtitle:
+        'Gib den 6-stelligen Code ein, der an deine E-Mail-Adresse gesendet wurde',
       tosLabel: 'Ich akzeptiere die Nutzungsbedingungen',
       privacyLabel: 'Ich akzeptiere die Datenschutzrichtlinie',
-      parentConsentLabel: 'Ich akzeptiere die Eltern-Einwilligungsrichtlinie und bestätige, dass ich der gesetzliche Vormund bin',
+      parentConsentLabel:
+        'Ich akzeptiere die Eltern-Einwilligungsrichtlinie und bestätige, dass ich der gesetzliche Vormund bin',
       signInInstead: 'Stattdessen anmelden',
       emailInUse: 'Diese E-Mail-Adresse ist bereits registriert.',
       phoneInUse: 'Diese Telefonnummer ist bereits registriert.',
       resendOtp: 'Code erneut senden',
       contactDetailWarning: 'Kontaktdaten werden beim Speichern entfernt',
       dashboardTitle: 'Konto verifiziert',
-      dashboardBody: 'Ihr Konto ist verifiziert! Melden Sie sich an, um Spielerprofile zu erstellen und Sitzungen zu verwalten.',
+      dashboardBody:
+        'Ihr Konto ist verifiziert! Melden Sie sich an, um Spielerprofile zu erstellen und Sitzungen zu verwalten.',
     },
   },
   coach: {
     commandCenterTitle: 'Trainer-Kommandozentrale',
-    commandCenterBody: 'Ihr Trainings-Dashboard erscheint hier, sobald Sitzungen eingerichtet sind.',
+    commandCenterBody:
+      'Ihr Trainings-Dashboard erscheint hier, sobald Sitzungen eingerichtet sind.',
   },
   player: {
     lockerRoomTitle: 'Umkleideraum des Spielers',
     lockerRoomBody: 'Ihr Trainingsinhalt und Ihre Hausaufgaben erscheinen hier.',
     homeworkEmptyTitle: 'Noch keine Hausaufgaben',
-    homeworkEmptySubtitle: 'Dein Trainer hat noch keine Hausaufgaben gegeben — schau nach deiner nächsten Einheit wieder rein',
+    homeworkEmptySubtitle:
+      'Dein Trainer hat noch keine Hausaufgaben gegeben — schau nach deiner nächsten Einheit wieder rein',
     homeworkCompleted: 'Erledigt!',
     homeworkMarkDone: 'Ich habe das gemacht',
     assignedBy: 'Zugewiesen von {coach}',
@@ -99,7 +108,8 @@ export default {
     positionLabel: 'Position',
     ageTierLabel: 'Altersgruppe',
     consentTitle: 'Elterliche Einwilligung',
-    consentBody: 'Mit der Erstellung dieses Profils für einen Minderjährigen bestätigen Sie, dass Sie deren gesetzlicher Vormund sind und die Verantwortung für alle Aktivitäten auf diesem Konto übernehmen.',
+    consentBody:
+      'Mit der Erstellung dieses Profils für einen Minderjährigen bestätigen Sie, dass Sie deren gesetzlicher Vormund sind und die Verantwortung für alle Aktivitäten auf diesem Konto übernehmen.',
     consentLabel: 'Ich stimme im Namen dieses minderjährigen Spielers zu',
     createButton: 'Profil erstellen',
     switcher: {
@@ -200,8 +210,10 @@ export default {
         removeConfirm: 'Entfernen',
         uploadStarted: 'Video-Upload gestartet – die Verarbeitung kann einige Minuten dauern',
         videoRemoved: 'Video entfernt',
-        quotaExceeded: 'Speicherkontingent erschöpft. Upgrade dein Paket, um weitere Videos hochzuladen.',
-        constraintViolated: 'Das Video überschreitet das 120-Sekunden- oder 500-MB-Limit für Demo-Übungen.',
+        quotaExceeded:
+          'Speicherkontingent erschöpft. Upgrade dein Paket, um weitere Videos hochzuladen.',
+        constraintViolated:
+          'Das Video überschreitet das 120-Sekunden- oder 500-MB-Limit für Demo-Übungen.',
         uploadFailed: 'Upload fehlgeschlagen. Bitte erneut versuchen.',
         removeFailed: 'Video konnte nicht entfernt werden. Bitte erneut versuchen.',
       },
@@ -232,7 +244,8 @@ export default {
       unsavedChangesMsg: 'Du hast ungespeicherte Änderungen. Ohne Speichern verlassen?',
       gatedTitle: 'Trainingsplaner',
       gatedSubtitle: 'Der Trainingsplaner ist in den Paketen Instructor und Academy verfügbar.',
-      saveDraftFirst: 'Bitte zuerst die Session speichern, um personalisierte Vorschläge zu erhalten',
+      saveDraftFirst:
+        'Bitte zuerst die Session speichern, um personalisierte Vorschläge zu erhalten',
       blockType: {
         WARM_UP: 'Aufwärmen',
         TECHNICAL_FOUNDATION: 'Technische Grundlagen',
@@ -380,13 +393,48 @@ export default {
       desc: 'Spieler geht dem Ball entgegen und empfängt zwischen den Linien in einer halb gedrehten Position, um das Spiel vorwärts zu halten.',
     },
   },
-  development: {},
+  development: {
+    dashboardTitle: 'Player Development',
+    skillExposureTitle: 'Skill Exposure',
+    currentWeekLabel: 'This Week',
+    trendChartTitle: 'Weekly Trend (last {weeks} weeks)',
+    setTargetsLabel: 'Set weekly targets',
+    neglectedSkillTag: 'Addresses neglected skill',
+    neglectedSkillAlert: '{skill} below target this week',
+    noExposureYet: 'No exposure yet',
+    saveTargets: 'Save Targets',
+    targetLabel: 'Weekly SLU target ({skill})',
+    narrative: {
+      increased: '{skill} exposure increased {percent}% this month',
+      decreased: '{skill} exposure decreased {percent}% this month',
+    },
+    radar: {
+      addAssessmentLabel: 'Add Radar Assessment',
+      assessmentPanelTitle: 'Skills Radar Assessment',
+      assessmentTypeLabelObjective: 'Objective Test',
+      assessmentTypeLabelMatchObs: 'Match Observation',
+      assessmentTypeLabelCoachEval: 'Coach Evaluation',
+      assessmentDateLabel: 'Assessment Date',
+      scoreLabel: 'Score (1–100)',
+      notesLabel: 'Notes (optional)',
+      assessmentTypeLabel: 'Bewertungstyp',
+      scoreTierReference: 'Score reference: Elite 90–100 | Excellent 80–89 | Good 70–79 | Above Average 60–69 | Average 50–59 | Below Average 40–49 | Very Weak <40',
+      submitLabel: 'Submit Assessment',
+      historyTitle: 'My Assessment History',
+      noEntriesYet: 'No assessments recorded yet',
+      otherCoachCount: '{count} other coach(es) assessed {skill}',
+      submitSuccess: 'Assessment submitted successfully',
+      submitErrorFeatureGated: 'Skills Radar assessment requires Instructor tier or above',
+      submitError: 'Failed to submit assessment. Please try again.',
+    },
+  },
   payment: {},
   messaging: {},
   admin: {},
   featureGate: {
     requiredTier: 'Erfordert {tier}-Plan',
-    description: 'Upgraden Sie auf {tier}, um diese Funktion freizuschalten und Ihr Coaching zu beschleunigen.',
+    description:
+      'Upgraden Sie auf {tier}, um diese Funktion freizuschalten und Ihr Coaching zu beschleunigen.',
     upgradeCTA: 'Plan upgraden',
   },
   security: {

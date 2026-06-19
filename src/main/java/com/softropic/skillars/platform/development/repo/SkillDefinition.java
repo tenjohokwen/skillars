@@ -24,4 +24,7 @@ public class SkillDefinition {
 
     @Column(nullable = false)
     private Boolean active = true;
+
+    @Column(name = "rubric_criteria", length = 500)
+    private String rubricCriteria;
 }

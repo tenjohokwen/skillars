@@ -18,5 +18,6 @@ public record DrillResponse(
     Instant createdAt,
     List<String> tags,
     Boolean isClonedByMe,
-    UUID cloneId
+    UUID cloneId,
+    boolean addressesNeglectedSkill
 ) {}
