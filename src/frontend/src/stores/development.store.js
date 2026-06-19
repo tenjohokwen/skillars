@@ -8,6 +8,10 @@ import {
   setMyTargets,
   postRadarAssessment,
   getMyRadarEntries,
+  getRadarDisplay,
+  getRadarPreferences,
+  putRadarPreferences,
+  getCorrelationInsights,
 } from 'src/api/development.api'
 
 export const useDevelopmentStore = defineStore('development', () => {
@@ -19,6 +23,11 @@ export const useDevelopmentStore = defineStore('development', () => {
   const error = ref(null)
   const radarEntries = ref(null)
   const radarLoading = ref(false)
+  const radarDisplay = ref(null)
+  const radarPreferences = ref(null)
+  const correlationInsights = ref(null)
+  const radarDisplayLoading = ref(false)
+  const correlationLoading = ref(false)
 
   const neglectedCodes = computed(() => exposure.value?.neglectedSkillCodes ?? [])
 
@@ -99,6 +108,53 @@ export const useDevelopmentStore = defineStore('development', () => {
     }
   }
 
+  async function fetchRadarDisplay(playerId) {
+    radarDisplayLoading.value = true
+    error.value = null
+    try {
+      const response = await getRadarDisplay(playerId)
+      radarDisplay.value = response.data
+    } catch (err) {
+      error.value = err?.response?.data?.message ?? 'Failed to load radar display'
+    } finally {
+      radarDisplayLoading.value = false
+    }
+  }
+
+  async function fetchRadarPreferences(playerId) {
+    try {
+      const response = await getRadarPreferences(playerId)
+      radarPreferences.value = response.data
+    } catch {
+      radarPreferences.value = { selectedSkillCodes: [] }
+    }
+  }
+
+  async function saveRadarPreferences(playerId, selectedSkillCodes) {
+    try {
+      await putRadarPreferences(playerId, selectedSkillCodes)
+      radarPreferences.value = { selectedSkillCodes }
+    } catch (err) {
+      error.value = err?.response?.data?.message ?? 'Failed to save preferences'
+    }
+  }
+
+  async function fetchCorrelationInsights(playerId) {
+    correlationLoading.value = true
+    try {
+      const response = await getCorrelationInsights(playerId)
+      correlationInsights.value = response.data
+    } catch (err) {
+      // Non-Academy coaches get 403 here — store null silently; UI shows teaser
+      if (err?.response?.status !== 403) {
+        error.value = err?.response?.data?.message ?? 'Failed to load correlation insights'
+      }
+      correlationInsights.value = null
+    } finally {
+      correlationLoading.value = false
+    }
+  }
+
   return {
     skillDefinitions,
     exposure,
@@ -109,6 +165,11 @@ export const useDevelopmentStore = defineStore('development', () => {
     error,
     radarEntries,
     radarLoading,
+    radarDisplay,
+    radarPreferences,
+    correlationInsights,
+    radarDisplayLoading,
+    correlationLoading,
     fetchSkillDefinitions,
     fetchExposure,
     fetchNarrative,
@@ -116,5 +177,9 @@ export const useDevelopmentStore = defineStore('development', () => {
     saveTargets,
     fetchRadarEntries,
     submitRadarAssessment,
+    fetchRadarDisplay,
+    fetchRadarPreferences,
+    saveRadarPreferences,
+    fetchCorrelationInsights,
   }
 })

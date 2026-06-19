@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.development.service;
 
 import com.softropic.skillars.platform.development.contract.AssessmentType;
 import com.softropic.skillars.platform.development.contract.RadarEntrySubmittedEvent;
+import com.softropic.skillars.platform.development.repo.PlayerRadarBaselineRepository;
 import com.softropic.skillars.platform.development.repo.PlayerRadarCompositeRepository;
 import com.softropic.skillars.platform.development.repo.RadarAssessmentRepository;
 import lombok.RequiredArgsConstructor;
@@ -28,6 +29,7 @@ public class RadarCompositeCalculationService {
 
     private final RadarAssessmentRepository radarRepository;
     private final PlayerRadarCompositeRepository compositeRepository;
+    private final PlayerRadarBaselineRepository baselineRepository;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Async
@@ -72,6 +74,7 @@ public class RadarCompositeCalculationService {
                 BigDecimal compositeScore = BigDecimal.valueOf(composite)
                     .setScale(2, java.math.RoundingMode.HALF_UP);
                 compositeRepository.upsertComposite(playerId, skill, compositeScore, totalCount);
+                baselineRepository.insertBaselineIfAbsent(playerId, skill, compositeScore);
                 log.debug("Composite updated: player={} skill={} score={} entries={}",
                     playerId, skill, compositeScore, totalCount);
             }

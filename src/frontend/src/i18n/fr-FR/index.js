@@ -351,6 +351,39 @@ export default {
       submitSuccess: 'Assessment submitted successfully',
       submitErrorFeatureGated: 'Skills Radar assessment requires Instructor tier or above',
       submitError: 'Failed to submit assessment. Please try again.',
+      displayTitle: 'Skills Radar',
+      compareBaselineLabel: 'Compare to baseline',
+      noAssessmentsYet: 'No assessments recorded yet',
+      minSkillsRequired: 'Select at least 3 skills to display the radar',
+      correlationTitle: 'Development Correlation Engine',
+      confidenceFilled: 'High confidence (3+ assessments)',
+      confidenceHalf: 'Low confidence (1–2 assessments)',
+      confidenceEmpty: 'No assessments yet',
+      lastUpdatedTooltip: 'Last assessed: {date}',
+      correlationError: 'Could not load correlation data. Try refreshing.',
+      accessibleTable: {
+        skill: 'Skill',
+        currentScore: 'Current Score',
+        baselineScore: 'Baseline Score',
+        delta: 'Delta',
+      },
+      correlation: {
+        insufficientData:
+          'Not enough data yet — keep logging sessions. Minimum {count} sessions required.',
+        academyFeatureTeaser: 'Academy feature — upgrade to unlock',
+        upgradeButton: 'Upgrade to Academy',
+        noInsightsYet:
+          'No correlation insights yet — log more sessions with different skills.',
+        excludedSkills:
+          '{count} skill | {count} skills not shown — no training data recorded yet.',
+        insight: {
+          highSluImprovement: 'High training volume → Score improving',
+          highSluNoImprovement:
+            'High training volume → No improvement yet (technique focus needed?)',
+          lowSluImprovement: 'Low training volume → Score improving (natural talent!)',
+          lowSluStable: 'Low training volume → Score stable (natural ability?)',
+        },
+      },
     },
   },
 }

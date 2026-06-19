@@ -21,3 +21,15 @@ export const postRadarAssessment = (playerId, assessment) =>
 
 export const getMyRadarEntries = (playerId) =>
   api.get(`/api/development/players/${playerId}/radar/entries`)
+
+export const getRadarDisplay = (playerId) =>
+  api.get(`/api/development/players/${playerId}/radar/display`)
+
+export const getRadarPreferences = (playerId) =>
+  api.get(`/api/development/players/${playerId}/radar/preferences`)
+
+export const putRadarPreferences = (playerId, selectedSkillCodes) =>
+  api.put(`/api/development/players/${playerId}/radar/preferences`, { selectedSkillCodes })
+
+export const getCorrelationInsights = (playerId) =>
+  api.get(`/api/development/players/${playerId}/radar/correlation`)

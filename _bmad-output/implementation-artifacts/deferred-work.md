@@ -1,3 +1,14 @@
+## Deferred from: code review of skillars-5-4-skills-radar-display-development-correlation (2026-06-19)
+- W1: No FK from `player_radar_baselines.player_id` / `coach_radar_preferences.player_id` to `main.player_profiles` — accepted limitation per spec dev notes; consistent with Stories 5.1–5.3 no-FK pattern across `development.*` tables [`V51__radar_display_correlation.sql`]
+- W2: Rapid skill-toggle fires a PUT per click — no debounce; last-write-wins for fast toggling; low risk [`PlayerDevelopmentDashboardPage.vue`]
+- W3: `insertBaselineIfAbsent` `@Transactional` participates in outer transaction — `ON CONFLICT DO NOTHING` cannot protect across a rollback on first-ever baseline write; documented MVP limitation in spec dev notes [`PlayerRadarBaselineRepository.java`]
+- W4: Skill deactivation silently drops baseline from display — `findAllByActiveTrueOrderByDisplayOrderAsc` excludes inactive skills; baseline re-appears on reactivation [`RadarDisplayService.java:39`]
+- W5: IT `assertThat(minimumSessionCount).isEqualTo(5L)` hardcodes config value — low risk with Testcontainers; `ON CONFLICT DO NOTHING` in V51 migration [`RadarDisplayResourceIT.java:333`]
+- W6: Any ACADEMY coach can call `GET /radar/correlation` for any player — no player-coach ownership check; consistent with `GET /radar/display`; platform-wide security hardening needed (see also DEF5) [`RadarDisplayResource.java:64-69`]
+- W7: `IMPROVEMENT_THRESHOLD = 3.0` hardcoded — exactly-3-point improvement classified as "no improvement"; explicitly accepted in spec dev notes; configurable in a future story [`DevelopmentCorrelationService.java:33`]
+- W8: `(int)` cast on `totalCount` in `RadarCompositeCalculationService` — pre-existing silent overflow for very high entry counts; not introduced in this diff (see DEF6) [`RadarCompositeCalculationService.java`]
+- W9: `SkillsRadarChartSpec.js` tests cannot run — vitest / `@vue/test-utils` not installed; explicitly accepted in story completion notes; frontend test-runner setup is a separate initiative
+
 ## Deferred from: code review of skillars-5-3-skills-radar-assessment-entry-multi-coach-cumulation — Pass 2 (2026-06-19)
 - DEF5: No coach-player relationship check on radar endpoints — any INSTRUCTOR+ coach can submit/read assessments for any player; `parentId` JOIN only provides cross-family isolation (FR-TSC-009), not coach-to-player assignment enforcement; same architectural gap as Story 5.2 narrative access (DEF0); address in a platform-wide security hardening story auditing all coach-scoped development endpoints [`RadarAssessmentService.java`, `RadarAssessmentResource.java`]
 - DEF6: `entry_count` long→double→int narrowing in composite calculator — count from native SQL is cast double→int; silently overflows above Integer.MAX_VALUE; irrelevant at current volumes [`RadarCompositeCalculationService.java:61-69`]

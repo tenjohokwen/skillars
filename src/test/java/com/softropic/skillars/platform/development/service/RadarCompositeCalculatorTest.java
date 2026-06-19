@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.development.service;
 
 import com.softropic.skillars.platform.development.contract.AssessmentType;
 import com.softropic.skillars.platform.development.contract.RadarEntrySubmittedEvent;
+import com.softropic.skillars.platform.development.repo.PlayerRadarBaselineRepository;
 import com.softropic.skillars.platform.development.repo.PlayerRadarCompositeRepository;
 import com.softropic.skillars.platform.development.repo.RadarAssessmentRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,6 +35,9 @@ class RadarCompositeCalculatorTest {
     @Mock
     private PlayerRadarCompositeRepository compositeRepository;
 
+    @Mock
+    private PlayerRadarBaselineRepository baselineRepository;
+
     private RadarCompositeCalculationService service;
 
     private static final Long PLAYER_ID = 9580000001L;
@@ -41,7 +45,7 @@ class RadarCompositeCalculatorTest {
 
     @BeforeEach
     void setUp() {
-        service = new RadarCompositeCalculationService(radarRepository, compositeRepository);
+        service = new RadarCompositeCalculationService(radarRepository, compositeRepository, baselineRepository);
     }
 
     @Test
