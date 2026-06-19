@@ -127,6 +127,12 @@ const routes = [
         meta: { requiresAuth: true, role: 'PARENT' },
       },
       {
+        path: 'parent/players/:playerId/development',
+        name: 'parent-development',
+        component: () => import('pages/parent/ParentDevelopmentPortalPage.vue'),
+        meta: { requiresAuth: true, role: 'PARENT' },
+      },
+      {
         path: 'parent/coaches/:coachId/request-booking',
         component: () => import('pages/parent/BookingRequestPage.vue'),
         meta: { requiresAuth: true, role: 'PARENT' },

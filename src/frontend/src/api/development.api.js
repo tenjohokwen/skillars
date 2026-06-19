@@ -48,3 +48,6 @@ export const getCoachBranding = () =>
 
 export const saveCoachBranding = (logoKey, brandColour) =>
   api.put('/api/development/coaches/me/branding', { logoKey, brandColour })
+
+export const getCoachContributions = (playerId, days = 30) =>
+  api.get(`/api/development/players/${playerId}/slu/coach-contributions`, { params: { days } })

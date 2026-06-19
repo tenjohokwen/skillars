@@ -43,9 +43,11 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import { usePlayerStore } from 'src/stores/playerStore'
 
 const { t } = useI18n()
+const router = useRouter()
 const playerStore = usePlayerStore()
 const drawerOpen = ref(false)
 
@@ -59,6 +61,7 @@ function initials(name) {
 function selectPlayer(id) {
   playerStore.setActivePlayer(id)
   drawerOpen.value = false
+  router.push({ name: 'parent-development', params: { playerId: id } })
 }
 </script>
 

@@ -206,7 +206,7 @@ export const useBookingStore = defineStore('booking', () => {
       const res = await getPlayerPacks(playerId)
       sessionPacks.value = res.data ?? []
     } catch (e) {
-      packsError.value = e
+      packsError.value = e?.response?.data?.message ?? e?.message ?? 'Failed to load session packs'
     } finally {
       packsLoading.value = false
     }

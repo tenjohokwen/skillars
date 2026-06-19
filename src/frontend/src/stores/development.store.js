@@ -15,6 +15,7 @@ import {
   generateReport as apiGenerateReport,
   listReports,
   getTimeline,
+  getCoachContributions,
 } from 'src/api/development.api'
 
 export const useDevelopmentStore = defineStore('development', () => {
@@ -38,6 +39,9 @@ export const useDevelopmentStore = defineStore('development', () => {
   const reportGenerating = ref(false)
   const reportsError = ref(null)
   const timelineError = ref(null)
+  const coachContributions = ref([])
+  const coachContributionsLoading = ref(false)
+  const coachContributionsError = ref(null)
 
   const neglectedCodes = computed(() => exposure.value?.neglectedSkillCodes ?? [])
 
@@ -205,6 +209,29 @@ export const useDevelopmentStore = defineStore('development', () => {
     }
   }
 
+  let _coachContributionsSeq = 0
+
+  async function fetchCoachContributions(playerId) {
+    if (!playerId) return
+    const seq = ++_coachContributionsSeq
+    coachContributionsLoading.value = true
+    coachContributionsError.value = null
+    try {
+      const response = await getCoachContributions(playerId)
+      if (seq === _coachContributionsSeq) {
+        coachContributions.value = response.data
+      }
+    } catch (err) {
+      if (seq === _coachContributionsSeq) {
+        coachContributionsError.value = err?.response?.data?.message ?? 'development.portal.contributionsLoadError'
+      }
+    } finally {
+      if (seq === _coachContributionsSeq) {
+        coachContributionsLoading.value = false
+      }
+    }
+  }
+
   return {
     skillDefinitions,
     exposure,
@@ -241,5 +268,9 @@ export const useDevelopmentStore = defineStore('development', () => {
     fetchReports,
     generateReport,
     fetchTimeline,
+    coachContributions,
+    coachContributionsLoading,
+    coachContributionsError,
+    fetchCoachContributions,
   }
 })

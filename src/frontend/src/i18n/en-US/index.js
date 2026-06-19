@@ -402,5 +402,14 @@ export default {
         REVIEW_LEFT: 'Review Left',
       },
     },
+    portal: {
+      title: 'Development Portal',
+      sessionPacksTitle: 'Session Credits',
+      noPacksState: 'No active session packs.',
+      findCoachCta: 'Find a coach',
+      coachContribution: '{coachName} contributed {pct}% of {skill} exposure in the last 30 days',
+      neglectedAlert: 'Neglected skills detected: {skills}. Ask your coach about extra focus.',
+      contributionsLoadError: 'Failed to load coach contributions',
+    },
   },
 }

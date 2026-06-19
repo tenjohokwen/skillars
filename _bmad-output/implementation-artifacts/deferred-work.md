@@ -1,3 +1,23 @@
+## Deferred from: adversarial code review of skillars-5-6-parent-development-portal (2026-06-19)
+- AD1: Stale error state between player switches — each store action resets its own error ref at call-start; fully resolved when route.params.playerId watch patch is applied [`ParentDevelopmentPortalPage.vue`]
+- AD2: MapStruct not used for `Object[]` → `CoachContributionDto` mapping — MapStruct cannot transform raw JDBC Object[] projections; inherent native query limitation [`SluContributionService.java`]
+- AD3: `@Testcontainers` annotation absent from IT class — tests pass (6/6); infrastructure activated via TestConfig; add annotation for explicitness in future test-hardening pass [`ParentDevelopmentPortalResourceIT.java`]
+- AD4: Instancio not used in IT — FK-constrained integration seeding requires fixed IDs; project-wide IT pattern [`ParentDevelopmentPortalResourceIT.java`]
+- AD5: `SecurityConstants` not used in `@PreAuthorize` — pre-existing convention in the file; new endpoint follows the same pattern as existing endpoints [`SkillExposureResource.java`]
+- AD6: Triple null guard inconsistency in service — `AND coach_id IS NOT NULL` in SQL already prevents nulls; guards are over-defensive but harmless [`SluContributionService.java`]
+- AD7: `BigDecimal` vs JS number comparison in `CoachContributionSection` — speculative risk only if Jackson serialization changes to string representation [`CoachContributionSection.vue`]
+- AD8: Authority row `id=9612` not cleaned up in `asCoach` test — `ON CONFLICT DO NOTHING` prevents failure on re-run [`ParentDevelopmentPortalResourceIT.java`]
+- AD9: Route path naming inconsistency (`/parent/players/` plural) — cosmetic; consistent with existing sibling route in the same block [`routes.js`]
+- AD10: `neglectedSkillNames` shows raw skill codes if `skillDefinitions` not yet loaded — transient window; `q-inner-loading` overlays content during load [`ParentDevelopmentPortalPage.vue`]
+- AD11: Dual-counter race between `loadGeneration` (page) and `_coachContributionsSeq` (store) — `finally` in `loadPortal` always fires; loading flag cannot hang [`ParentDevelopmentPortalPage.vue`]
+- AD12: Mock state override inside `transactionTemplate` in percentages test — Spring Boot 3.4+ automatically resets `@MockitoBean` between test methods [`ParentDevelopmentPortalResourceIT.java`]
+
+## Deferred from: code review of skillars-5-6-parent-development-portal (2026-06-19)
+- D1: `IllegalArgumentException` if `row[0]` (coach_id from native query) is not a valid UUID string — unlikely under DB schema constraints but unguarded [`SluContributionService.java`]
+- D2: No exception wrapping around `coachProfileService.getDisplayNamesByIds` — propagates as 500 on failure; consistent with general project error-handling convention [`SluContributionService.java`]
+- D3: Double iteration of `rows` list in `getCoachContributions` — could use SQL window function for in-DB percentage calculation; optimisation, not a correctness issue [`SluContributionService.java`]
+- D4: `PerformanceReportsPanel` wrapped in extra `q-card` in parent portal may produce a double-card visual artifact — requires runtime visual verification [`ParentDevelopmentPortalPage.vue`]
+
 ## Deferred from: code review of skillars-5-5-pdf-performance-report-unified-player-timeline — Round 3 (2026-06-19)
 - R3-D1: Orphaned `player_timeline_events` PERFORMANCE_REPORT row when outer `generateReport` transaction rolls back after `writeTimelineEvent` REQUIRES_NEW commit — timeline shows an event with a dead `referenceId`; accepted MVP trade-off per spec dev notes [`ReportGenerationService.java:144-153`]
 - R3-D2: `findLastSessionDate` queries `MAX(calculated_at)` over all `player_skill_stats` rows without filtering for session-only writes — if `RadarAssessmentService` writes SLU rows to `player_skill_stats` (to be confirmed), radar assessments could reset the coach timeline-access expiry window, contradicting the design comment in `TimelineQueryService` [`SluRepository.java:43-48`]

@@ -46,4 +46,17 @@ public interface SluRepository extends JpaRepository<PlayerSkillStat, UUID> {
         WHERE player_id = :playerId AND coach_id = :coachId
         """)
     Instant findLastSessionDate(@Param("playerId") Long playerId, @Param("coachId") UUID coachId);
+
+    @Query(nativeQuery = true, value = """
+        SELECT coach_id, skill_code, SUM(slu_value) AS total_slu
+        FROM development.player_skill_stats
+        WHERE player_id = :playerId
+          AND calculated_at >= :since
+          AND coach_id IS NOT NULL
+        GROUP BY coach_id, skill_code
+        ORDER BY skill_code, total_slu DESC
+        """)
+    List<Object[]> findCoachContributionsByPlayerId(
+        @Param("playerId") Long playerId,
+        @Param("since") Instant since);
 }
