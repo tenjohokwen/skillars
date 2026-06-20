@@ -190,6 +190,7 @@ app:
       base-dir: ${APP_STORAGE_LOCAL_BASE_DIR:/tmp/skillars-storage}
   video:
     provider: bunny
+    reservation-check-interval-ms: 60000
     upload:
       max-bytes: 5368709120
       allowed-mime-types:

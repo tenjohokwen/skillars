@@ -9,6 +9,9 @@ import com.softropic.skillars.platform.session.contract.DrillUploadInitiateReque
 import com.softropic.skillars.platform.session.contract.DrillUploadInitiateResponse;
 import com.softropic.skillars.platform.session.contract.VideoPhysicalDeletionEvent;
 import com.softropic.skillars.platform.session.contract.exception.DrillConstraintViolationException;
+import com.softropic.skillars.platform.video.contract.VideoType;
+import com.softropic.skillars.platform.video.contract.exception.VideoValidationException;
+import com.softropic.skillars.platform.video.service.VideoTypeConstraints;
 import com.softropic.skillars.platform.session.repo.Drill;
 import com.softropic.skillars.platform.session.repo.DrillRepository;
 import com.softropic.skillars.platform.session.repo.DrillVideoRef;
@@ -33,6 +36,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -47,6 +51,7 @@ class DrillUploadServiceTest {
     @Mock private ConfigService configService;
     @Mock private CoachProfileService coachProfileService;
     @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private VideoTypeConstraints videoTypeConstraints;
 
     private DrillUploadService service;
 
@@ -58,7 +63,7 @@ class DrillUploadServiceTest {
     void setUp() {
         service = new DrillUploadService(
             drillRepository, drillVideoRefRepository, videoService,
-            videoRepository, configService, coachProfileService, eventPublisher
+            videoRepository, configService, coachProfileService, eventPublisher, videoTypeConstraints
         );
         when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
     }
@@ -71,8 +76,7 @@ class DrillUploadServiceTest {
         when(drillRepository.findById(DRILL_ID)).thenReturn(Optional.of(drill));
         when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.INSTRUCTOR);
         when(configService.getBoolean("feature.drillVideoUpload.enabled.INSTRUCTOR")).thenReturn(true);
-        when(configService.find("video.drillDemo.maxSizeBytes")).thenReturn(Optional.of("524288000"));
-        when(configService.find("video.drillDemo.maxDurationSeconds")).thenReturn(Optional.of("120"));
+        // videoTypeConstraints.validate() does nothing by default (no stub needed — returns void)
 
         UUID videoId = UUID.randomUUID();
         UUID sessionId = UUID.randomUUID();
@@ -97,8 +101,6 @@ class DrillUploadServiceTest {
         when(drillRepository.findById(DRILL_ID)).thenReturn(Optional.of(drill));
         when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.INSTRUCTOR);
         when(configService.getBoolean("feature.drillVideoUpload.enabled.INSTRUCTOR")).thenReturn(true);
-        when(configService.find("video.drillDemo.maxSizeBytes")).thenReturn(Optional.of("524288000"));
-        when(configService.find("video.drillDemo.maxDurationSeconds")).thenReturn(Optional.of("120"));
 
         UUID videoId = UUID.randomUUID();
         when(videoService.initializeUpload(any())).thenReturn(
@@ -119,8 +121,6 @@ class DrillUploadServiceTest {
         when(drillRepository.findById(DRILL_ID)).thenReturn(Optional.of(drill));
         when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.INSTRUCTOR);
         when(configService.getBoolean("feature.drillVideoUpload.enabled.INSTRUCTOR")).thenReturn(true);
-        when(configService.find("video.drillDemo.maxSizeBytes")).thenReturn(Optional.of("524288000"));
-        when(configService.find("video.drillDemo.maxDurationSeconds")).thenReturn(Optional.of("120"));
 
         UUID existingVideoId = UUID.randomUUID();
         DrillVideoRef existing = buildRef(DRILL_ID, existingVideoId);
@@ -177,33 +177,31 @@ class DrillUploadServiceTest {
     // ── initiateUpload constraint checks ─────────────────────────────────────
 
     @Test
-    void initiateUpload_sizeExceedsLimit_throwsDrillConstraintViolationException() {
+    void initiateUpload_sizeExceedsLimit_throwsDrillConstraintViolation() {
         Drill drill = coachDrill(DRILL_ID, COACH_ID);
         when(drillRepository.findById(DRILL_ID)).thenReturn(Optional.of(drill));
         when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.INSTRUCTOR);
         when(configService.getBoolean("feature.drillVideoUpload.enabled.INSTRUCTOR")).thenReturn(true);
-        when(configService.find("video.drillDemo.maxSizeBytes")).thenReturn(Optional.of("524288000"));
-        when(configService.find("video.drillDemo.maxDurationSeconds")).thenReturn(Optional.of("120"));
+        doThrow(new VideoValidationException("File size exceeds limit"))
+            .when(videoTypeConstraints).validate(VideoType.DRILL_DEMO, 600_000_000L, 10);
 
         assertThatThrownBy(() -> service.initiateUpload(DRILL_ID, COACH_USER_ID,
                 new DrillUploadInitiateRequest("v.mp4", 600_000_000L, "video/mp4", 10)))
-            .isInstanceOf(DrillConstraintViolationException.class)
-            .hasMessageContaining("500 MB");
+            .isInstanceOf(DrillConstraintViolationException.class);
     }
 
     @Test
-    void initiateUpload_durationExceedsLimit_throwsDrillConstraintViolationException() {
+    void initiateUpload_durationExceedsLimit_throwsDrillConstraintViolation() {
         Drill drill = coachDrill(DRILL_ID, COACH_ID);
         when(drillRepository.findById(DRILL_ID)).thenReturn(Optional.of(drill));
         when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.INSTRUCTOR);
         when(configService.getBoolean("feature.drillVideoUpload.enabled.INSTRUCTOR")).thenReturn(true);
-        when(configService.find("video.drillDemo.maxSizeBytes")).thenReturn(Optional.of("524288000"));
-        when(configService.find("video.drillDemo.maxDurationSeconds")).thenReturn(Optional.of("120"));
+        doThrow(new VideoValidationException("Duration exceeds limit"))
+            .when(videoTypeConstraints).validate(VideoType.DRILL_DEMO, 1024L, 150);
 
         assertThatThrownBy(() -> service.initiateUpload(DRILL_ID, COACH_USER_ID,
                 new DrillUploadInitiateRequest("v.mp4", 1024L, "video/mp4", 150)))
-            .isInstanceOf(DrillConstraintViolationException.class)
-            .hasMessageContaining("120 second");
+            .isInstanceOf(DrillConstraintViolationException.class);
     }
 
     @Test
@@ -212,14 +210,12 @@ class DrillUploadServiceTest {
         when(drillRepository.findById(DRILL_ID)).thenReturn(Optional.of(drill));
         when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.INSTRUCTOR);
         when(configService.getBoolean("feature.drillVideoUpload.enabled.INSTRUCTOR")).thenReturn(true);
-        when(configService.find("video.drillDemo.maxSizeBytes")).thenReturn(Optional.of("524288000"));
-        when(configService.find("video.drillDemo.maxDurationSeconds")).thenReturn(Optional.of("120"));
         when(videoService.initializeUpload(any())).thenReturn(
             new InitializeUploadResponse(UUID.randomUUID(), UUID.randomUUID(), "p", "https://tus.example.com/upload", Instant.now())
         );
         when(drillVideoRefRepository.findByDrillId(DRILL_ID)).thenReturn(Optional.empty());
 
-        // durationSeconds=0 should NOT throw even when maxDuration=120
+        // durationSeconds=0 should NOT throw — videoTypeConstraints.validate() is a no-op by default
         service.initiateUpload(DRILL_ID, COACH_USER_ID, new DrillUploadInitiateRequest("v.mp4", 1024L, "video/mp4", 0));
 
         verify(videoService).initializeUpload(any());
@@ -231,8 +227,6 @@ class DrillUploadServiceTest {
         when(drillRepository.findById(DRILL_ID)).thenReturn(Optional.of(drill));
         when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.INSTRUCTOR);
         when(configService.getBoolean("feature.drillVideoUpload.enabled.INSTRUCTOR")).thenReturn(true);
-        when(configService.find("video.drillDemo.maxSizeBytes")).thenReturn(Optional.of("524288000"));
-        when(configService.find("video.drillDemo.maxDurationSeconds")).thenReturn(Optional.of("120"));
 
         UUID videoId = UUID.randomUUID();
         when(videoService.initializeUpload(any())).thenReturn(

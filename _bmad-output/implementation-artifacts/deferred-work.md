@@ -472,3 +472,26 @@
 ## Deferred from: code review of skillars-3-10-session-pack-expiry-pause-management (2026-06-17)
 - D1: No distributed locking on `SessionPackExpiryScheduler` — multi-instance deployments will concurrently process packs, causing duplicate status transitions and duplicate warning emails. Requires Shedlock or a DB advisory lock. Pre-existing pattern across all project schedulers. [`SessionPackExpiryScheduler.java`]
 - D2: `@TransactionalEventListener(AFTER_COMMIT)` failure silently loses coach cancellation notifications — if email dispatch fails after commit, the coach is never notified even though bookings are `CANCELLED`. Event delivery reliability (retry/DLQ) is an infrastructure-wide concern not introduced by this change. [`BookingEmailListener.java`, `SessionPackEmailListener.java`]
+
+## Deferred from: code review of skillars-6-1-video-module-foundation-quota-system (2026-06-20)
+- Def1: `expireStaleReservations()` loop has no circuit breaker — sustained high rate of new expired reservations could delay other scheduled work indefinitely; no max-iteration or max-time guard. [`QuotaReservationTimeoutService.java:expireStaleReservations`]
+- Def2: `VideoQuotaReservation.status` as raw String vs enum — intentional per story notes to avoid JPA enum binding complexity with raw SQL paths; values DB-constrained via CHECK constraint. [`VideoQuotaReservation.java:status`]
+- Def3: Long arithmetic overflow in `storageUsedBytes + requestedBytes` — theoretical at practical quota sizes (max ~9.2 EB); no guard exists. [`QuotaService.java:check`, `QuotaService.java:reserve`]
+- Def4: `commit()` no-op on already-COMMITTED is indistinguishable from not-found — `updated == 0` is logged as debug; callers cannot differentiate idempotent from non-existent handle; intentional idempotency design. [`QuotaService.java:commit`]
+- Def5: `expireBatch()` exception mid-loop not caught — exception terminates the do-while; Spring `@Scheduled` catches it at the framework level; next firing will retry. [`QuotaReservationTimeoutService.java:expireStaleReservations`]
+- Def6: `BandwidthResetService` has no distributed locking — multi-instance deployments can fire the cron simultaneously; data is idempotent but wasteful; single-instance deploy assumed for now. [`BandwidthResetService.java`]
+- Def7: `VideoConfig.quotaProviderValidator` consistency guarantee logging — AC 10 requires logging the guarantee at startup; validator not in this diff; needs verification that it calls `getConsistencyGuarantee()` and logs it. [Out-of-diff verification needed]
+- Def8: `BandwidthResetService` period drift when job runs late — `bandwidth_period_start` set to `NOW()` on actual run date, not 1st of month; next period boundary shifts accordingly; acceptable drift for non-billing context. [`BandwidthResetService.java:resetMonthlyBandwidth`]
+
+## Deferred from: code review of skillars-6-1-video-module-foundation-quota-system Run 2 (2026-06-20)
+- Def9: `sumActiveReservedBytes` includes expired-but-unreaped ACTIVE rows — brief (<60s) window between expiry and reaper firing causes conservative over-reporting; intentional design. [`VideoQuotaReservationRepository.java:22`]
+- Def10: `BandwidthResetService` full-table lock risk at month boundary — single unpartitioned UPDATE locks all video_quotas rows, blocking concurrent `reserve()` calls; scaling concern. [`BandwidthResetService.java`]
+- Def11: `bandwidth_used_bytes` never incremented — tracking deferred to Story 6.3 (streaming/playback pipeline); schema and reset job created now so schema is ready. [`QuotaService.java`]
+- Def12: `QuotaConfigService.resolveTierKey()` exhaustive switch will throw `MatchException` if `CoachSubscriptionTier` enum grows — safe now but fragile if a new coach tier is added. [`QuotaConfigService.java:39`]
+- Def13: `DrillUploadService` video replacement orphans old quota reservation — pre-existing; replacing a non-READY video's `DrillVideoRef` does not call `release()` on the old reservation; orphaned bytes held until reaper. [`DrillUploadService.java:~69-85`]
+- Def14: `DrillUploadService.deleteVideo()` TOCTOU on `clearVideoId`/`existsByVideoId` — pre-existing; concurrent deletes on different drills sharing the same `videoId` can publish `VideoPhysicalDeletionEvent` twice. [`DrillUploadService.java:~104-108`]
+- Def15: PII logging in `AccountManagementFacade` (user login at INFO level) — pre-existing; `user.getLogin()` logged at INFO; GDPR concern. [`AccountManagementFacade.java:~204-206`]
+- Def16: `AccountManagementFacade` phone registration NullPointerException — pre-existing; `getEmail().toLowerCase()` throws NPE for phone-only registrations. [`AccountManagementFacade.java:~231`]
+- Def17: `AdminVideoService.deleteVideo()` — `release()` exception inside `TransactionTemplate` kills delete transaction — pre-existing. [`AdminVideoService.java`]
+- Def18: V53 platform_config IDs 117-132 hardcoded — verify against all intermediate migrations (V43–V52) before deploying; any ID conflict causes Flyway failure. [`V53__video_quota_system.sql:32-50`]
+- Def19: `sumActiveReservedBytes` theoretical `ClassCastException` — PostgreSQL BIGINT SUM typically maps to Long via JDBC but no compile-time guarantee. [`VideoQuotaReservationRepository.java:22`]

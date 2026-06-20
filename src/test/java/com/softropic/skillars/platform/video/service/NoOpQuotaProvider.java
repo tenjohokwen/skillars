@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.video.service;
 
 import com.softropic.skillars.platform.video.contract.ConsistencyGuarantee;
 import com.softropic.skillars.platform.video.contract.QuotaProvider;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.stereotype.Component;
 import java.util.UUID;
 
@@ -20,6 +21,7 @@ import java.util.UUID;
  * <p>This implementation is stateless and therefore thread-safe.
  */
 @Component
+@ConditionalOnMissingBean(QuotaProvider.class)
 public class NoOpQuotaProvider implements QuotaProvider {
 
     @Override

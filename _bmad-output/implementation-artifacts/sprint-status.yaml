@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-06-19 # Story 5.6 adversarial review patches applied
+last_updated: 2026-06-20 # Story 6.1 code review patches applied → done
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -207,8 +207,8 @@ development_status:
   skillars-epic-5-retrospective: optional
 
   # Epic 6: Video Module
-  skillars-epic-6: backlog
-  skillars-6-1-video-module-foundation-quota-system: backlog
+  skillars-epic-6: in-progress
+  skillars-6-1-video-module-foundation-quota-system: done
   skillars-6-2-tus-upload-pipeline: backlog
   skillars-6-3-content-moderation-pipeline: backlog
   skillars-6-4-streaming-security-video-lifecycle: backlog

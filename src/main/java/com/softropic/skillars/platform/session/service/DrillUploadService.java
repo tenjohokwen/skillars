@@ -11,6 +11,7 @@ import com.softropic.skillars.platform.session.contract.DrillUploadInitiateRespo
 import com.softropic.skillars.platform.session.contract.SessionErrorCode;
 import com.softropic.skillars.platform.session.contract.VideoPhysicalDeletionEvent;
 import com.softropic.skillars.platform.session.contract.exception.DrillConstraintViolationException;
+import com.softropic.skillars.platform.video.contract.exception.VideoValidationException;
 import com.softropic.skillars.platform.session.repo.Drill;
 import com.softropic.skillars.platform.session.repo.DrillRepository;
 import com.softropic.skillars.platform.session.repo.DrillVideoRef;
@@ -18,6 +19,8 @@ import com.softropic.skillars.platform.session.repo.DrillVideoRefRepository;
 import com.softropic.skillars.platform.video.contract.InitializeUploadRequest;
 import com.softropic.skillars.platform.video.contract.InitializeUploadResponse;
 import com.softropic.skillars.platform.video.contract.OperationalState;
+import com.softropic.skillars.platform.video.contract.VideoType;
+import com.softropic.skillars.platform.video.service.VideoTypeConstraints;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
 import com.softropic.skillars.platform.video.service.VideoService;
 import lombok.RequiredArgsConstructor;
@@ -42,6 +45,7 @@ public class DrillUploadService {
     private final ConfigService configService;
     private final CoachProfileService coachProfileService;
     private final ApplicationEventPublisher eventPublisher;
+    private final VideoTypeConstraints videoTypeConstraints;
 
     public DrillUploadInitiateResponse initiateUpload(UUID drillId, Long coachUserId, DrillUploadInitiateRequest req) {
         UUID coachId = resolveCoachId(coachUserId);
@@ -55,13 +59,13 @@ public class DrillUploadService {
 
         checkDrillUploadGate(coachId);
 
-        long maxBytes = Long.parseLong(configService.find("video.drillDemo.maxSizeBytes").orElse("524288000"));
-        int maxDuration = Integer.parseInt(configService.find("video.drillDemo.maxDurationSeconds").orElse("120"));
-        if (req.fileSizeBytes() > maxBytes) {
-            throw new DrillConstraintViolationException("file.size", "File size exceeds 500 MB limit");
-        }
-        if (req.durationSeconds() > 0 && req.durationSeconds() > maxDuration) {
-            throw new DrillConstraintViolationException("video.duration", "Duration exceeds 120 second limit");
+        // Delegates to platform.video module — single source of truth for type constraints.
+        // VideoValidationException is translated here so it surfaces as a drill constraint violation
+        // rather than falling through to ApiAdvice's catch-all Throwable handler.
+        try {
+            videoTypeConstraints.validate(VideoType.DRILL_DEMO, req.fileSizeBytes(), req.durationSeconds());
+        } catch (VideoValidationException e) {
+            throw new DrillConstraintViolationException("video", e.getMessage());
         }
 
         Optional<DrillVideoRef> existing = drillVideoRefRepository.findByDrillId(drillId);

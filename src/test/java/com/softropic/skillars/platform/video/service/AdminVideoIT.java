@@ -14,6 +14,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -63,7 +64,7 @@ class AdminVideoIT extends BaseVideoIT {
     @Test
     void deleteVideo_readyVideo_marksDeletedReleasesQuotaForPendingSession() {
         Video video = seedVideo(OperationalState.READY, AccessState.ACTIVE, "asset-admin-delete");
-        UploadSession pendingSession = seedPendingSession(video, "quota-handle-admin-1");
+        UploadSession pendingSession = seedPendingSession(video, UUID.randomUUID().toString());
         doNothing().when(videoProviderAdapter).deleteAsset("asset-admin-delete");
 
         adminVideoService.deleteVideo(video.getId());

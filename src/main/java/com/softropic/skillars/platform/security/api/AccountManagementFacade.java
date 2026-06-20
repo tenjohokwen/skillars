@@ -17,6 +17,7 @@ import com.softropic.skillars.platform.security.contract.UserDto;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.infrastructure.security.ClientContextProvider;
 import com.softropic.skillars.platform.security.contract.util.ShortCode;
+import com.softropic.skillars.platform.security.contract.event.UserRegisteredEvent;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.service.UserService;
 import com.softropic.skillars.platform.security.service.UserRegistrationService;
@@ -148,6 +149,7 @@ public class AccountManagementFacade {
             return strategy.notifyUserExists(optionalUser.get());
         } else {
             final User user = persistUser(userDTO);
+            publisher.publishEvent(new UserRegisteredEvent(user.getLogin(), userDTO.getLoginIdType().name()));
             return strategy.notifyNewUser(user);
         }
         // Note: The notification works only when login matches the notification channel
