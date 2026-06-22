@@ -81,7 +81,8 @@ class DrillUploadServiceTest {
         UUID videoId = UUID.randomUUID();
         UUID sessionId = UUID.randomUUID();
         when(videoService.initializeUpload(any())).thenReturn(
-            new InitializeUploadResponse(videoId, sessionId, "provider-id", "https://tus.example.com/upload", Instant.now().plusSeconds(3600))
+            new InitializeUploadResponse(videoId, sessionId, "provider-id", "https://tus.example.com/upload",
+                Instant.now().plusSeconds(3600), "test-sig", 9_999_999_999L, 12345L)
         );
         when(drillVideoRefRepository.findByDrillId(DRILL_ID)).thenReturn(Optional.empty());
 
@@ -104,7 +105,8 @@ class DrillUploadServiceTest {
 
         UUID videoId = UUID.randomUUID();
         when(videoService.initializeUpload(any())).thenReturn(
-            new InitializeUploadResponse(videoId, UUID.randomUUID(), "p", "https://tus.example.com/upload", Instant.now())
+            new InitializeUploadResponse(videoId, UUID.randomUUID(), "p", "https://tus.example.com/upload",
+                Instant.now(), "test-sig", 9_999_999_999L, 12345L)
         );
         DrillVideoRef existing = buildRef(DRILL_ID, UUID.randomUUID());
         when(drillVideoRefRepository.findByDrillId(DRILL_ID)).thenReturn(Optional.of(existing));
@@ -211,7 +213,8 @@ class DrillUploadServiceTest {
         when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.INSTRUCTOR);
         when(configService.getBoolean("feature.drillVideoUpload.enabled.INSTRUCTOR")).thenReturn(true);
         when(videoService.initializeUpload(any())).thenReturn(
-            new InitializeUploadResponse(UUID.randomUUID(), UUID.randomUUID(), "p", "https://tus.example.com/upload", Instant.now())
+            new InitializeUploadResponse(UUID.randomUUID(), UUID.randomUUID(), "p", "https://tus.example.com/upload",
+                Instant.now(), "test-sig", 9_999_999_999L, 12345L)
         );
         when(drillVideoRefRepository.findByDrillId(DRILL_ID)).thenReturn(Optional.empty());
 
@@ -230,7 +233,8 @@ class DrillUploadServiceTest {
 
         UUID videoId = UUID.randomUUID();
         when(videoService.initializeUpload(any())).thenReturn(
-            new InitializeUploadResponse(videoId, UUID.randomUUID(), "p", "https://tus.example.com/upload", Instant.now())
+            new InitializeUploadResponse(videoId, UUID.randomUUID(), "p", "https://tus.example.com/upload",
+                Instant.now(), "test-sig", 9_999_999_999L, 12345L)
         );
         when(drillVideoRefRepository.findByDrillId(DRILL_ID)).thenReturn(Optional.empty());
 

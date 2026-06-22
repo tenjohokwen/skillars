@@ -495,3 +495,14 @@
 - Def17: `AdminVideoService.deleteVideo()` — `release()` exception inside `TransactionTemplate` kills delete transaction — pre-existing. [`AdminVideoService.java`]
 - Def18: V53 platform_config IDs 117-132 hardcoded — verify against all intermediate migrations (V43–V52) before deploying; any ID conflict causes Flyway failure. [`V53__video_quota_system.sql:32-50`]
 - Def19: `sumActiveReservedBytes` theoretical `ClassCastException` — PostgreSQL BIGINT SUM typically maps to Long via JDBC but no compile-time guarantee. [`VideoQuotaReservationRepository.java:22`]
+
+## Deferred from: code review of skillars-6-2 (2026-06-22)
+
+- Def20: `retryUpload()` does not transition `videos.operational_state` back to UPLOADING — video stays FAILED during retry; ReconciliationWorkerScheduler may re-FAIL it before the new upload registers. Pre-existing design gap. [`VideoService.java:retryUpload`]
+- Def21: `confirmUpload()` writes `PROCESSING` directly via `videoRepository.save()`, bypassing `VideoLifecycleService.VALID_TRANSITIONS` enforcement — silent regression risk on future state refactors. Pre-existing gap. [`VideoService.java:confirmUpload`]
+- Def22: `UploadSessionExpiryScheduler` releases quota outside TX then marks session EXPIRED in separate TX — non-atomic; safe because `release()` is idempotent, but ordering is fragile to future refactors. Pre-existing design decision. [`UploadSessionExpiryScheduler.java`]
+- Def23: No unique index on `videos.provider_asset_id` — `findByProviderAssetId()` could throw `IncorrectResultSizeDataAccessException` if a duplicate is ever stored. Pre-existing schema gap. [`VideoRepository.java`]
+
+## Deferred from: code review of skillars-6-2 pass 5 (2026-06-22)
+
+- Def24: `failTranscoding()` state-transition rollback on `quotaProvider.release()` exception — `failTranscoding()` is `@Transactional`; if `QuotaService.release()` throws (DB connection loss), the entire TX rolls back including `transitionOperationalState(FAILED)`, leaving the video in `PROCESSING`. Scheduler retries recover normally; only fails permanently if max-attempts exhaust during a persistent quota DB outage. Architectural fix: separate state transition and quota release into independent TXs (same pattern as `completeTranscoding()`). [`VideoService.java:failTranscoding`]

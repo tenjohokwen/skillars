@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.video.repo;
 
 import com.softropic.skillars.platform.video.contract.AccessState;
 import com.softropic.skillars.platform.video.contract.OperationalState;
+import com.softropic.skillars.platform.video.contract.VideoType;
 import com.softropic.skillars.platform.video.contract.Visibility;
 import jakarta.persistence.*;
 import lombok.Getter;
@@ -55,6 +56,10 @@ public class Video {
     @Enumerated(EnumType.STRING)
     @Column(name = "visibility", nullable = false)
     private Visibility visibility;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "video_type", nullable = true)
+    private VideoType videoType;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

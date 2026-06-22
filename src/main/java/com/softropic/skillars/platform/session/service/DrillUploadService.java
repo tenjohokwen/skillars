@@ -83,7 +83,8 @@ public class DrillUploadService {
         }
 
         InitializeUploadResponse resp = videoService.initializeUpload(
-            new InitializeUploadRequest(coachId.toString(), req.fileName(), req.fileSizeBytes(), req.mimeType()));
+            new InitializeUploadRequest(coachId.toString(), req.fileName(), req.fileSizeBytes(),
+                req.mimeType(), VideoType.DRILL_DEMO));
 
         if (existing.isPresent()) {
             drillVideoRefRepository.setVideoId(drillId, resp.videoId());
@@ -91,7 +92,7 @@ public class DrillUploadService {
             drillVideoRefRepository.upsertVideoId(drillId, resp.videoId());
         }
 
-        return new DrillUploadInitiateResponse(resp.videoId(), resp.uploadSessionId(), resp.signedUploadUrl(), resp.expiresAt());
+        return new DrillUploadInitiateResponse(resp.videoId(), resp.sessionId(), resp.signedUploadUrl(), resp.expiresAt());
     }
 
     public void deleteVideo(UUID drillId, Long coachUserId) {

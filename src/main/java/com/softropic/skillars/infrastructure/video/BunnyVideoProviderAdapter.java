@@ -23,9 +23,12 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.Map;
+import java.util.Objects;
 
 @Slf4j
 public class BunnyVideoProviderAdapter implements VideoProviderAdapter {
+
+    private static final String TUS_ENDPOINT = "https://video.bunnycdn.com/tusupload";
 
     private final RestTemplate restTemplate;
     private final String apiKey;
@@ -33,26 +36,41 @@ public class BunnyVideoProviderAdapter implements VideoProviderAdapter {
     private final String cdnHostname;
     private final String apiBaseUrl;
     private final ObjectMapper objectMapper;
+    private final long sessionTtlSeconds;
+    private final String webhookSigningSecret;
+    private final long libraryIdLong;
 
     public BunnyVideoProviderAdapter(RestTemplate restTemplate,
                                      String apiKey,
                                      String libraryId,
                                      String cdnHostname,
                                      String apiBaseUrl,
-                                     ObjectMapper objectMapper) {
+                                     ObjectMapper objectMapper,
+                                     long sessionTtlSeconds,
+                                     String webhookSigningSecret) {
         this.restTemplate = restTemplate;
         this.apiKey = apiKey;
         this.libraryId = libraryId;
         this.cdnHostname = cdnHostname;
         this.apiBaseUrl = apiBaseUrl;
         this.objectMapper = objectMapper;
+        this.sessionTtlSeconds = sessionTtlSeconds;
+        this.webhookSigningSecret = Objects.requireNonNull(webhookSigningSecret,
+            "webhookSigningSecret must not be null — set app.video.bunny.webhook-signing-secret");
+        if (webhookSigningSecret.isBlank()) throw new IllegalArgumentException(
+            "BunnyVideoProviderAdapter: webhookSigningSecret must not be blank — set app.video.bunny.webhook-signing-secret to the Bunny Read-Only API key");
+        try {
+            this.libraryIdLong = Long.parseLong(libraryId);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(
+                "BunnyVideoProviderAdapter: app.video.bunny.library-id must be numeric, got: " + libraryId, e);
+        }
     }
 
     @Override
     public UploadCredentials initializeUpload(String fileName, long fileSizeBytes) {
         HttpHeaders headers = buildHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(Map.of("title", fileName), headers);
         try {
             var response = restTemplate.postForEntity(
@@ -61,7 +79,9 @@ public class BunnyVideoProviderAdapter implements VideoProviderAdapter {
                 BunnyCreateVideoResponse.class
             );
             String guid = response.getBody().guid();
-            return new UploadCredentials(guid, apiBaseUrl + "/tusupload");
+            long expireEpoch = Instant.now().getEpochSecond() + sessionTtlSeconds;
+            String tusSignature = computeTusSignature(libraryId, apiKey, expireEpoch, guid);
+            return new UploadCredentials(guid, TUS_ENDPOINT, tusSignature, expireEpoch, libraryIdLong);
         } catch (RestClientException e) {
             throw new VideoProviderException("initializeUpload", e);
         }
@@ -82,6 +102,34 @@ public class BunnyVideoProviderAdapter implements VideoProviderAdapter {
             return AssetStatus.DELETED;
         } catch (RestClientException e) {
             throw new VideoProviderException("getAssetStatus", e);
+        }
+    }
+
+    @Override
+    public VideoMetadata getVideoMetadata(String providerAssetId) {
+        HttpEntity<Void> entity = new HttpEntity<>(buildHeaders());
+        try {
+            var response = restTemplate.exchange(
+                apiBaseUrl + "/library/" + libraryId + "/videos/" + providerAssetId,
+                HttpMethod.GET,
+                entity,
+                BunnyVideoResponse.class
+            );
+            BunnyVideoResponse body = response.getBody();
+            // Guard: getBody() can return null on a 200 with empty body during Bunny infrastructure issues.
+            if (body == null) {
+                throw new VideoProviderException(
+                    "getVideoMetadata: empty response body for providerAssetId=" + providerAssetId, null);
+            }
+            // Verified field names: "length" (int, seconds) and "storageSize" (long, bytes)
+            // per Bunny.net Get Video API. If absent (video still encoding), Jackson returns null.
+            long durationMs = body.length() != null ? body.length() * 1000L : 0L;
+            long storageBytes = body.storageSize() != null ? body.storageSize() : 0L;
+            return new VideoMetadata(durationMs, storageBytes);
+        } catch (HttpClientErrorException.NotFound e) {
+            throw new VideoProviderException("getVideoMetadata: asset not found " + providerAssetId, e);
+        } catch (RestClientException e) {
+            throw new VideoProviderException("getVideoMetadata", e);
         }
     }
 
@@ -128,21 +176,29 @@ public class BunnyVideoProviderAdapter implements VideoProviderAdapter {
     public WebhookEvent verifyWebhook(String payload, String signature) {
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
-            mac.init(new SecretKeySpec(apiKey.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            mac.init(new SecretKeySpec(webhookSigningSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
             byte[] expected = mac.doFinal(payload.getBytes(StandardCharsets.UTF_8));
 
-            byte[] provided = HexFormat.of().parseHex(signature.toLowerCase());
+            byte[] provided;
+            try {
+                provided = HexFormat.of().parseHex(signature.toLowerCase());
+            } catch (IllegalArgumentException e) {
+                throw new VideoProviderException("verifyWebhook: malformed signature header", e);
+            }
 
             if (!MessageDigest.isEqual(expected, provided)) {
                 throw new VideoProviderException("verifyWebhook: invalid signature", null);
             }
 
             BunnyWebhookPayload webhookPayload = objectMapper.readValue(payload, BunnyWebhookPayload.class);
-            return new WebhookEvent(
-                webhookPayload.eventType(),
-                webhookPayload.videoGuid(),
-                Instant.ofEpochSecond(webhookPayload.timestamp())
-            );
+            String eventType = switch (webhookPayload.status()) {
+                case 7 -> "video.upload.success";
+                case 3 -> "video.encoding.success";
+                case 5 -> "video.encoding.failed";
+                case 8 -> "video.upload.failed";
+                default -> "video.status." + webhookPayload.status();
+            };
+            return new WebhookEvent(webhookPayload.videoLibraryId(), eventType, webhookPayload.videoGuid(), Instant.now());
         } catch (VideoProviderException e) {
             throw e;
         } catch (NoSuchAlgorithmException | InvalidKeyException e) {
@@ -181,23 +237,36 @@ public class BunnyVideoProviderAdapter implements VideoProviderAdapter {
         return headers;
     }
 
+    private String computeTusSignature(String libId, String key, long expireEpoch, String videoGuid) {
+        try {
+            String input = libId + key + expireEpoch + videoGuid;
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(input.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(hash);
+        } catch (NoSuchAlgorithmException e) {
+            throw new VideoProviderException("computeTusSignature", e);
+        }
+    }
+
     private AssetStatus mapBunnyStatus(int bunnyStatus) {
         return switch (bunnyStatus) {
-            case 0, 1 -> AssetStatus.UPLOADING;
-            case 2, 3, 7 -> AssetStatus.PROCESSING;
-            case 4, 8 -> AssetStatus.READY;
-            case 5, 6 -> AssetStatus.FAILED;
+            case 0, 6 -> AssetStatus.UPLOADING;
+            case 1, 2, 7 -> AssetStatus.PROCESSING;
+            case 3, 4 -> AssetStatus.READY;
+            case 5, 8 -> AssetStatus.FAILED;
             default -> AssetStatus.PROCESSING;
         };
     }
 
     private record BunnyCreateVideoResponse(String guid) {}
 
-    private record BunnyVideoResponse(String guid, int status) {}
+    // Shared by getAssetStatus() and getVideoMetadata(); length/storageSize are null when
+    // the video is still processing (Jackson maps absent JSON fields to null for boxed types).
+    private record BunnyVideoResponse(String guid, int status, Integer length, Long storageSize) {}
 
     private record BunnyWebhookPayload(
-        @JsonProperty("EventType") String eventType,
+        @JsonProperty("VideoLibraryId") long videoLibraryId,
         @JsonProperty("VideoGuid") String videoGuid,
-        @JsonProperty("Timestamp") long timestamp
+        @JsonProperty("Status") int status
     ) {}
 }

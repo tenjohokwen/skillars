@@ -27,6 +27,8 @@ app:
   video:
     playback:
       signing-secret: "${APP_VIDEO_PLAYBACK_SIGNING_SECRET:dGVzdC1wbGF5YmFjay1zaWduaW5nLXNlY3JldC0zMi1ieXRlcyEh}"
+    bunny:
+      webhook-signing-secret: "${APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET:dev-webhook-signing-secret}"
 
 skillars:
   platform:

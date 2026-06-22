@@ -34,7 +34,8 @@ public final class AppEndpoints {
         "/api/auth/refresh**",
         "/api/auth/logout**",
         "/api/marketplace/coaches**",    // guests can browse the marketplace (FR-MKT-005)
-        "/api/marketplace/coaches/**"   // guest access to individual coach profiles (FR-MKT-005)
+        "/api/marketplace/coaches/**",   // guest access to individual coach profiles (FR-MKT-005)
+        "/api/video/webhooks/**"         // HMAC signature is the auth mechanism; no session required
     );
     public static final List<String> PUBLIC_MGMT_ENDPOINTS = List.of("/manage/prometheus", "/manage/health", "/manage/info");
     public static final List<String> ALL_UNRESTRICTED;

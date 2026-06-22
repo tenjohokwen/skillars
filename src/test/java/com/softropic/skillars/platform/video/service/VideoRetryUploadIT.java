@@ -25,6 +25,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
@@ -55,8 +56,10 @@ class VideoRetryUploadIT extends BaseVideoIT {
         wireMockServer.resetAll();
         when(quotaProvider.check(anyString(), anyLong())).thenReturn(true);
         when(quotaProvider.reserve(anyString(), anyLong())).thenReturn("retry-handle");
+        when(quotaProvider.reserve(anyString(), anyLong(), any())).thenReturn("retry-handle");
         when(videoProviderAdapter.initializeUpload(anyString(), anyLong()))
-            .thenReturn(new UploadCredentials("new-bunny-guid", "https://bunny/tus/retry"));
+            .thenReturn(new UploadCredentials("new-bunny-guid", "https://bunny/tus/retry",
+                "0".repeat(64), 9_999_999_999L, 0L));
     }
 
     private Video seedFailedVideo(String ownerId) {

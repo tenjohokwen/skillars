@@ -42,6 +42,12 @@ public interface QuotaProvider {
     @Observed(name = "video.quota.reserve")
     String reserve(@NotBlank String ownerId, @Min(1) long bytes);
 
+    // Do NOT add @Observed here — Spring AOP cannot proxy interface default methods.
+    // The @Observed on QuotaService's concrete override covers the 3-arg path.
+    default String reserve(@NotBlank String ownerId, @Min(1) long bytes, VideoType videoType) {
+        return reserve(ownerId, bytes);
+    }
+
     @Observed(name = "video.quota.commit")
     void commit(@NotBlank String reservationHandle);
 

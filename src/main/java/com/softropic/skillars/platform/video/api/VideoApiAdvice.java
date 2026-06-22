@@ -8,6 +8,8 @@ import com.softropic.skillars.platform.video.contract.VideoErrorCode;
 import com.softropic.skillars.platform.video.contract.exception.PlaybackDeniedException;
 import com.softropic.skillars.platform.video.contract.exception.QuotaExceededException;
 import com.softropic.skillars.platform.video.contract.exception.TerminalStateViolationException;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import com.softropic.skillars.platform.video.contract.exception.VideoNotFoundException;
 import com.softropic.skillars.platform.video.contract.exception.VideoProviderException;
 import com.softropic.skillars.platform.video.contract.exception.VideoSessionExpiredException;
@@ -32,6 +34,7 @@ import java.util.UUID;
 import static net.logstash.logback.argument.StructuredArguments.entries;
 
 @Slf4j
+@Order(Ordered.HIGHEST_PRECEDENCE)
 @RestControllerAdvice
 public class VideoApiAdvice {
 

@@ -24,7 +24,9 @@ public class VideoProviderConfig {
             bunny.getLibraryId(),
             bunny.getCdnHostname(),
             bunny.getApiBaseUrl(),
-            objectMapper
+            objectMapper,
+            (long) properties.getUpload().getSessionTtlMinutes() * 60L,
+            bunny.getWebhookSigningSecret()
         );
     }
 

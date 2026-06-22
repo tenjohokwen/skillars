@@ -26,6 +26,8 @@ class BunnyVideoProviderAdapterTest {
     private static final String API_KEY = "test-api-key";
     private static final String LIBRARY_ID = "123";
     private static final String CDN_HOSTNAME = "test.b-cdn.net";
+    private static final String WEBHOOK_SIGNING_SECRET = "test-webhook-secret";
+    private static final long SESSION_TTL_SECONDS = 3600L;
 
     private BunnyVideoProviderAdapter adapter;
 
@@ -37,7 +39,9 @@ class BunnyVideoProviderAdapterTest {
             LIBRARY_ID,
             CDN_HOSTNAME,
             wireMock.getHttpBaseUrl(),
-            new ObjectMapper()
+            new ObjectMapper(),
+            SESSION_TTL_SECONDS,
+            WEBHOOK_SIGNING_SECRET
         );
     }
 
@@ -50,20 +54,26 @@ class BunnyVideoProviderAdapterTest {
         UploadCredentials credentials = adapter.initializeUpload("test.mp4", 1024L);
 
         assertThat(credentials.providerUploadId()).isEqualTo("abc-guid");
-        assertThat(credentials.signedUploadUrl()).contains("/tusupload");
+        assertThat(credentials.signedUploadUrl()).isEqualTo("https://video.bunnycdn.com/tusupload");
+        assertThat(credentials.tusLibraryId()).isEqualTo(123L);
+        // TUS signature = SHA-256(libraryId + apiKey + expireEpoch + videoGuid), always 64 hex chars
+        assertThat(credentials.tusAuthorizationSignature()).hasSize(64).matches("[0-9a-f]+");
+        // Expire must be at least SESSION_TTL_SECONDS from now
+        assertThat(credentials.tusAuthorizationExpire())
+            .isGreaterThanOrEqualTo(Instant.now().getEpochSecond() + SESSION_TTL_SECONDS - 5);
     }
 
     @ParameterizedTest(name = "Bunny status {0} maps to {1}")
     @CsvSource({
         "0, UPLOADING",
-        "1, UPLOADING",
+        "1, PROCESSING",
         "2, PROCESSING",
-        "3, PROCESSING",
-        "7, PROCESSING",
+        "3, READY",
         "4, READY",
-        "8, READY",
         "5, FAILED",
-        "6, FAILED",
+        "6, UPLOADING",
+        "7, PROCESSING",
+        "8, FAILED",
         "99, PROCESSING"
     })
     void getAssetStatus_mapsStatusCorrectly(int bunnyStatus, AssetStatus expected) {
@@ -79,6 +89,39 @@ class BunnyVideoProviderAdapterTest {
             .willReturn(aResponse().withStatus(404)));
 
         assertThat(adapter.getAssetStatus("deleted-vid")).isEqualTo(AssetStatus.DELETED);
+    }
+
+    @Test
+    void getVideoMetadata_success_returnsDurationAndStorage() {
+        stubFor(get(urlEqualTo("/library/123/videos/vid-meta"))
+            .withHeader("AccessKey", equalTo(API_KEY))
+            .willReturn(okJson("{\"guid\":\"vid-meta\",\"status\":3,\"length\":120,\"storageSize\":10485760}")));
+
+        VideoMetadata meta = adapter.getVideoMetadata("vid-meta");
+
+        assertThat(meta.durationMs()).isEqualTo(120_000L); // 120s * 1000
+        assertThat(meta.storageBytes()).isEqualTo(10_485_760L);
+    }
+
+    @Test
+    void getVideoMetadata_nullFields_returnsZeros() {
+        // Video still encoding — length and storageSize absent (Jackson maps to null for boxed types)
+        stubFor(get(urlEqualTo("/library/123/videos/vid-encoding"))
+            .willReturn(okJson("{\"guid\":\"vid-encoding\",\"status\":2}")));
+
+        VideoMetadata meta = adapter.getVideoMetadata("vid-encoding");
+
+        assertThat(meta.durationMs()).isZero();
+        assertThat(meta.storageBytes()).isZero();
+    }
+
+    @Test
+    void getVideoMetadata_returns404_throwsVideoProviderException() {
+        stubFor(get(urlEqualTo("/library/123/videos/missing"))
+            .willReturn(aResponse().withStatus(404)));
+
+        assertThatThrownBy(() -> adapter.getVideoMetadata("missing"))
+            .isInstanceOf(VideoProviderException.class);
     }
 
     @Test
@@ -107,23 +150,72 @@ class BunnyVideoProviderAdapterTest {
     }
 
     @Test
-    void verifyWebhook_validHmac_returnsWebhookEvent() throws Exception {
-        String payload = "{\"EventType\":\"video.upload.success\",\"VideoGuid\":\"abc-guid\",\"Timestamp\":1717000000}";
-        String signature = computeHmac(API_KEY, payload);
+    void verifyWebhook_validHmac_status7_returnsUploadSuccess() throws Exception {
+        // Actual Bunny webhook payload format: three fixed fields
+        String payload = "{\"VideoLibraryId\":123,\"VideoGuid\":\"abc-guid\",\"Status\":7}";
+        String signature = computeHmac(WEBHOOK_SIGNING_SECRET, payload);
 
         WebhookEvent event = adapter.verifyWebhook(payload, signature);
 
+        assertThat(event.videoLibraryId()).isEqualTo(123L);
         assertThat(event.eventType()).isEqualTo("video.upload.success");
         assertThat(event.providerAssetId()).isEqualTo("abc-guid");
-        assertThat(event.timestamp()).isEqualTo(Instant.ofEpochSecond(1717000000));
+        // verifyWebhook() uses Instant.now() as timestamp — assert it is recent
+        assertThat(event.timestamp()).isAfter(Instant.now().minusSeconds(5));
+    }
+
+    @Test
+    void verifyWebhook_validHmac_status3_returnsEncodingSuccess() throws Exception {
+        String payload = "{\"VideoLibraryId\":123,\"VideoGuid\":\"abc-guid\",\"Status\":3}";
+        String signature = computeHmac(WEBHOOK_SIGNING_SECRET, payload);
+
+        WebhookEvent event = adapter.verifyWebhook(payload, signature);
+
+        assertThat(event.eventType()).isEqualTo("video.encoding.success");
+    }
+
+    @Test
+    void verifyWebhook_validHmac_status5_returnsEncodingFailed() throws Exception {
+        String payload = "{\"VideoLibraryId\":123,\"VideoGuid\":\"abc-guid\",\"Status\":5}";
+        String signature = computeHmac(WEBHOOK_SIGNING_SECRET, payload);
+
+        WebhookEvent event = adapter.verifyWebhook(payload, signature);
+
+        assertThat(event.eventType()).isEqualTo("video.encoding.failed");
+    }
+
+    @Test
+    void verifyWebhook_validHmac_status8_returnsUploadFailed() throws Exception {
+        String payload = "{\"VideoLibraryId\":123,\"VideoGuid\":\"abc-guid\",\"Status\":8}";
+        String signature = computeHmac(WEBHOOK_SIGNING_SECRET, payload);
+
+        WebhookEvent event = adapter.verifyWebhook(payload, signature);
+
+        assertThat(event.eventType()).isEqualTo("video.upload.failed");
+    }
+
+    @Test
+    void verifyWebhook_validHmac_informationalStatus_returnsStatusEvent() throws Exception {
+        // Informational statuses (e.g., Status=1 = video queued) produce a generic event type
+        String payload = "{\"VideoLibraryId\":123,\"VideoGuid\":\"abc-guid\",\"Status\":1}";
+        String signature = computeHmac(WEBHOOK_SIGNING_SECRET, payload);
+
+        WebhookEvent event = adapter.verifyWebhook(payload, signature);
+
+        assertThat(event.eventType()).startsWith("video.status.");
     }
 
     @Test
     void verifyWebhook_invalidHmac_throwsVideoProviderException() {
-        String payload = "{\"EventType\":\"video.upload.success\",\"VideoGuid\":\"abc-guid\",\"Timestamp\":1717000000}";
-        String wrongSignature = "0".repeat(64);
+        String payload = "{\"VideoLibraryId\":123,\"VideoGuid\":\"abc-guid\",\"Status\":3}";
+        assertThatThrownBy(() -> adapter.verifyWebhook(payload, "0".repeat(64)))
+            .isInstanceOf(VideoProviderException.class);
+    }
 
-        assertThatThrownBy(() -> adapter.verifyWebhook(payload, wrongSignature))
+    @Test
+    void verifyWebhook_malformedSignatureHeader_throwsVideoProviderException() {
+        String payload = "{\"VideoLibraryId\":123,\"VideoGuid\":\"abc-guid\",\"Status\":3}";
+        assertThatThrownBy(() -> adapter.verifyWebhook(payload, "not-hex!!!"))
             .isInstanceOf(VideoProviderException.class);
     }
 

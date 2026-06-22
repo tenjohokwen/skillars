@@ -2030,43 +2030,49 @@ And so that the platform tracks each upload through its full lifecycle from init
 
 **Acceptance Criteria:**
 
-**Given** a user has passed the pre-flight quota and constraint check (Story 6.1)
-**When** they call `POST /api/video/uploads/initiate`
-**Then** a `videos` record is created with `status = PENDING` and `ownerId` set to the authenticated user
-**And** a TUS upload session is created on Bunny.net via `infrastructure.bunny` — the response includes a TUS upload URL returned to the client
-**And** the `video_quota_reservations` record transitions to `ACTIVE` at this point (reservation was created in 6.1's pre-flight; this step links it to the new `videos.id`)
+**Given** a user calls `POST /api/video/uploads/initiate` with `fileName`, `fileSizeBytes`, `mimeType`, and `videoType`
+**When** the request is processed
+**Then** a `videos` record is created with `operational_state = UPLOADING` and `video_type` populated from the request
+**And** a `video_quota_reservations` record is created in ACTIVE status with `video_type` populated (reservation is ACTIVE from creation — it does not "transition to active" at a later step)
+**And** the response includes `videoId`, `uploadSessionId`, `providerUploadId` (Bunny.net video GUID), `signedUploadUrl` (always `https://video.bunnycdn.com/tusupload`), `tusAuthorizationSignature`, `tusAuthorizationExpire`, and `tusLibraryId`
+**And** the Bunny.net video is created via `BunnyVideoProviderAdapter.initializeUpload()` (existing `VideoProviderAdapter` implementation in `infrastructure.video` — do NOT create a new `BunnyTusClient` in `infrastructure.bunny`)
 
 **Given** a TUS upload session is active
-**When** the client uploads the file using `tus-js-client` directly to the Bunny.net TUS endpoint
-**Then** the upload is resumable — if interrupted, the client can resume from the last confirmed byte offset without restarting
-**And** the `videos` record status remains `PENDING` until the `video.transcoded` webhook is received — the server does not poll Bunny.net for progress
-**And** on upload receipt by Bunny.net, status advances to `UPLOADED` (via webhook from Bunny.net)
+**When** the client uploads the file using `tus-js-client` directly to `https://video.bunnycdn.com/tusupload`
+**Then** the upload is resumable — interrupted uploads resume from the last confirmed byte offset without restarting
+**And** `tus-js-client` sends four required Bunny.net TUS headers: `AuthorizationSignature`, `AuthorizationExpire`, `LibraryId`, `VideoId` — all computed server-side and returned in the initiate response
+**And** the TUS Upload-Metadata includes `title` (NOT `filename`) and `filetype` — Bunny.net requires `title`
 
-**Given** Bunny.net fires the `video.uploaded` webhook
+**Given** Bunny.net fires a status-change webhook (JSON body: `{"VideoLibraryId": N, "VideoGuid": "guid", "Status": N}`)
 **When** the webhook reaches `POST /api/video/webhooks/bunny`
-**Then** HMAC-SHA256 signature is verified against the Bunny.net secret before any processing begins — unverified webhooks return `401` and are discarded
-**And** idempotency is enforced: the webhook payload hash is stored in `processed_webhooks` (webhookId VARCHAR UNIQUE, processedAt TIMESTAMPTZ) — duplicate deliveries are silently acknowledged with `200` and not reprocessed
-**And** on successful verification and idempotency check, `videos.status` transitions to `UPLOADED` and the moderation pipeline is triggered (Story 6.3)
+**Then** HMAC-SHA256 signature in the `X-BunnyStream-Signature` header is verified — unverified webhooks return `400` and are discarded
+**And** idempotency is enforced via the `video_webhook_events.event_id` UNIQUE constraint (existing outbox table from Story 6.1 infrastructure — do NOT create a separate `processed_webhooks` table)
+**And** `BunnyVideoProviderAdapter.verifyWebhook()` maps the numeric `Status` to internal event strings: 7 → `"video.upload.success"`, 3 → `"video.encoding.success"`, 5 → `"video.encoding.failed"`
 
-**Given** the `video.transcoded` webhook arrives after moderation clears
-**When** the webhook is processed
-**Then** `videos.status` transitions to `TRANSCODING` → `PUBLISHED`
-**And** `videos.fileSizeBytes` and `videos.durationSeconds` are set from the webhook payload
-**And** `QuotaService.commitReservation(reservationId)` is called — the reserved bytes become permanently committed storage
-**And** a `VideoPublishedEvent` is published via `ApplicationEventPublisher` (AFTER_COMMIT) for downstream listeners
+**Given** Bunny.net fires Status=7 (PresignedUploadFinished), mapped to `"video.upload.success"`
+**When** `WebhookEventProcessorScheduler.processPending()` fires
+**Then** `videos.operational_state` transitions `UPLOADING → PROCESSING`
+**And** a `VideoUploadedEvent` is published for downstream listeners (Story 6.3 moderation pipeline)
 
-**Given** any webhook processing step fails (moderation service unavailable, DB write fails)
+**Given** Bunny.net fires Status=3 (Finished / encoding complete), mapped to `"video.encoding.success"`
+**When** `WebhookEventProcessorScheduler.processPending()` fires
+**Then** `VideoService.completeTranscoding(videoId)` is called (no duration/storage params — the Bunny webhook body carries only `VideoLibraryId`, `VideoGuid`, `Status`)
+**And** `completeTranscoding()` calls `VideoProviderAdapter.getVideoMetadata(providerAssetId)` — a `GET /library/{id}/videos/{id}` request to Bunny.net — to retrieve `length` (seconds, → `videos.duration_ms` × 1000) and `storageSize` (bytes, → `videos.storage_bytes`)
+**And** `videos.operational_state` transitions `PROCESSING → READY`
+**And** `QuotaProvider.commit(reservationHandle)` is called — reserved bytes become permanently committed storage
+**And** a `VideoPublishedEvent(videoId, ownerId)` is published via `ApplicationEventPublisher` (AFTER_COMMIT) for downstream listeners
+
+**Given** Bunny.net fires Status=5 (Failed), mapped to `"video.encoding.failed"`
+**When** `WebhookEventProcessorScheduler.processPending()` fires
+**Then** `videos.operational_state` transitions `PROCESSING → FAILED`
+**And** `QuotaProvider.release(reservationHandle)` is called — reserved quota is restored
+
+**Given** any webhook processing step fails (DB write fails, provider API unreachable)
 **When** the failure occurs
-**Then** the `videos` record is left in its current state — it does not auto-advance
-**And** if `status = SCANNING` and Arachnid is unavailable, the video stays in `SCANNING` — it is never auto-published (fail-closed, FR-TSC-004)
-**And** an admin alert is sent for videos stuck in `SCANNING` beyond the configurable SLA window (from ConfigService)
+**Then** the `video_webhook_events` outbox entry is retried up to `app.video.webhook.max-attempts` times with PENDING status reset
+**And** after max attempts the event is dead-lettered to FAILED status and an alert is emitted
 
-**Given** an upload fails at any stage (network drop, quota exceeded mid-upload, constraint violation detected post-upload)
-**When** the failure is detected
-**Then** `videos.status` is set to a terminal failure state and the owner is notified: "Your upload could not be completed"
-**And** `QuotaService.releaseReservation(reservationId)` is called to restore the reserved quota
-
-*Dev notes: `platform.video` + `infrastructure.bunny`. `VideoUploadResource`: POST /api/video/uploads/initiate, POST /api/video/webhooks/bunny. `BunnyTusClient` in `infrastructure.bunny`: wraps Bunny.net Stream API for TUS session creation. `BunnyWebhookVerifier`: HMAC-SHA256 using `javax.crypto.Mac` — called before any state change. `processed_webhooks` table: (webhookId VARCHAR PK, processedAt TIMESTAMPTZ) — INSERT with ON CONFLICT DO NOTHING returns affected rows; if 0 rows, skip. All Bunny.net API calls outside `@Transactional`; DB writes in separate `@Transactional` after. Frontend: `tus-js-client` initialised in `video.api.js`; upload progress tracked in `video.store.js`. Test: `BunnyWebhookVerifierTest` (unit — valid/invalid HMAC), `VideoUploadPipelineIT` (integration — full PENDING→PUBLISHED flow with mocked Bunny.net).*
+*Dev notes: All implementation lives in `platform.video` (service, api, contract) and `infrastructure.video` — reuse existing `BunnyVideoProviderAdapter`, `VideoWebhookResource`, `WebhookEventProcessorScheduler`, `VideoLifecycleService`, and the `video_webhook_events` outbox. V54 migration adds `videos.video_type` column. `QuotaProvider.reserve()` gets a default 3-arg override (adds `videoType` param) — `QuotaService` overrides to populate `video_quota_reservations.video_type`. `WebhookEventProcessorScheduler.dispatchEvent()` switch: `"video.upload.success"` → transition UPLOADING→PROCESSING; `"video.encoding.success"` → `videoService.completeTranscoding(videoId)`; `"video.encoding.failed"` → `videoService.failTranscoding(videoId)`. `VideoService.completeTranscoding()` fetches duration/storage via `videoProviderAdapter.getVideoMetadata()` (non-fatal if call fails), then transitions to READY, commits quota, publishes `VideoPublishedEvent`. Bunny.net TUS auth: SHA-256 (plain, NOT HMAC) of `libraryId + apiKey + expireEpoch + videoGuid` — computed in `BunnyVideoProviderAdapter.computeTusSignature()`. Webhook signature verification: HMAC-SHA256(rawBody, apiKey) read from `X-BunnyStream-Signature` header (not `BunnyCDN-Signature`). Frontend: `tus-js-client` in `video.api.js`; progress + state tracked in `video.store.js`. Test: `VideoUploadPipelineIT` (integration — full UPLOADING→READY flow, encoding.failed release path, metadata-fetch failure non-fatal path).*
 
 ### Story 6.3: Content Moderation Pipeline
 

@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.video.service;
 
 import com.softropic.skillars.infrastructure.security.RateLimitingService;
 import com.softropic.skillars.infrastructure.video.UploadCredentials;
+import com.softropic.skillars.infrastructure.video.VideoMetadata;
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.video.config.VideoProperties;
 import com.softropic.skillars.platform.video.contract.AccessState;
@@ -14,11 +15,14 @@ import com.softropic.skillars.platform.video.contract.UploadSessionStatus;
 import com.softropic.skillars.platform.video.contract.UploadValidationRequest;
 import com.softropic.skillars.platform.video.contract.Visibility;
 import com.softropic.skillars.platform.video.contract.ConfirmUploadResponse;
+import com.softropic.skillars.platform.video.contract.event.VideoPublishedEvent;
+import com.softropic.skillars.platform.video.contract.event.VideoUploadedEvent;
 import com.softropic.skillars.platform.video.contract.exception.QuotaExceededException;
 import com.softropic.skillars.platform.video.contract.exception.VideoNotFoundException;
 import com.softropic.skillars.platform.video.contract.exception.VideoSessionExpiredException;
 import com.softropic.skillars.platform.video.contract.exception.VideoValidationException;
 import io.micrometer.observation.annotation.Observed;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 import com.softropic.skillars.platform.video.repo.UploadSession;
 import com.softropic.skillars.platform.video.repo.UploadSessionRepository;
@@ -50,6 +54,9 @@ public class VideoService {
     private final TransactionTemplate transactionTemplate;
     private final RateLimitingService rateLimitingService;
     private final VideoMetrics videoMetrics;
+    private final VideoLifecycleService videoLifecycleService;
+    private final ApplicationEventPublisher publisher;
+    private final VideoTypeConstraints videoTypeConstraints;
 
     @Observed(name = "video.upload.confirm")
     @Transactional
@@ -108,6 +115,11 @@ public class VideoService {
             throw new VideoValidationException("Retry is only permitted for videos in FAILED state");
         }
 
+        // Enforce video-type-specific size limits on retry
+        if (video.getVideoType() != null) {
+            videoTypeConstraints.validate(video.getVideoType(), request.fileSizeBytes(), 0);
+        }
+
         String ext = video.getTitle().contains(".")
             ? video.getTitle().substring(video.getTitle().lastIndexOf('.') + 1)
             : "";
@@ -122,10 +134,9 @@ public class VideoService {
         boolean success = false;
         long start = System.nanoTime();
         try {
-            reservationHandle = quotaProvider.reserve(request.ownerId(), request.fileSizeBytes());
+            reservationHandle = quotaProvider.reserve(request.ownerId(), request.fileSizeBytes(),
+                video.getVideoType());
 
-            Instant expiresAt = Instant.now().plus(
-                properties.getUpload().getSessionTtlMinutes(), ChronoUnit.MINUTES);
             final String handle = reservationHandle;
 
             UUID[] ids = Objects.requireNonNull(transactionTemplate.execute(status -> {
@@ -134,7 +145,10 @@ public class VideoService {
                 session.setStatus(UploadSessionStatus.PENDING);
                 session.setReservedBytes(request.fileSizeBytes());
                 session.setReservationHandle(handle);
-                session.setExpiresAt(expiresAt);
+                // Placeholder to satisfy NOT NULL constraint; overwritten in second TX with
+                // the exact credential expiry from the provider response
+                session.setExpiresAt(Instant.now().plus(
+                    properties.getUpload().getSessionTtlMinutes(), ChronoUnit.MINUTES));
                 UploadSession saved = uploadSessionRepository.save(session);
                 return new UUID[]{request.videoId(), saved.getId()};
             }));
@@ -145,6 +159,9 @@ public class VideoService {
             UploadCredentials credentials = videoProviderAdapter.initializeUpload(
                 video.getTitle(), request.fileSizeBytes());
 
+            // expiresAt derived from TUS credential expiry to avoid clock-drift between the two values
+            Instant expiresAt = Instant.ofEpochSecond(credentials.tusAuthorizationExpire());
+
             transactionTemplate.execute(status -> {
                 Video v = videoRepository.findById(videoId).orElseThrow();
                 v.setProviderAssetId(credentials.providerUploadId());
@@ -152,6 +169,7 @@ public class VideoService {
 
                 UploadSession s = uploadSessionRepository.findById(sessionId).orElseThrow();
                 s.setProviderUploadId(credentials.providerUploadId());
+                s.setExpiresAt(expiresAt);
                 uploadSessionRepository.save(s);
                 return null;
             });
@@ -160,7 +178,10 @@ public class VideoService {
             return new InitializeUploadResponse(
                 videoId, sessionId,
                 credentials.providerUploadId(), credentials.signedUploadUrl(),
-                expiresAt);
+                expiresAt,
+                credentials.tusAuthorizationSignature(),
+                credentials.tusAuthorizationExpire(),
+                credentials.tusLibraryId());
 
         } finally {
             if (!success && reservationHandle != null) {
@@ -198,7 +219,12 @@ public class VideoService {
             new UploadValidationRequest(request.fileName(), request.fileSizeBytes(),
                                         request.mimeType(), ext.toUpperCase()));
 
-        // 3. Quota availability check (no reservation yet)
+        // 3. Enforce video-type-specific size limits (e.g., COACH_REVIEW ≤ 1 GB, HOMEWORK ≤ 250 MB)
+        if (request.videoType() != null) {
+            videoTypeConstraints.validate(request.videoType(), request.fileSizeBytes(), 0);
+        }
+
+        // 4. Quota availability check (no reservation yet)
         if (!quotaProvider.check(request.ownerId(), request.fileSizeBytes())) {
             throw new QuotaExceededException(request.ownerId(), 0L, request.fileSizeBytes());
         }
@@ -207,15 +233,13 @@ public class VideoService {
         boolean success = false;
         long start = System.nanoTime();
         try {
-            // 4. Reserve quota
-            reservationHandle = quotaProvider.reserve(request.ownerId(), request.fileSizeBytes());
+            // 5. Reserve quota with videoType
+            reservationHandle = quotaProvider.reserve(request.ownerId(), request.fileSizeBytes(),
+                request.videoType());
 
-            Instant expiresAt = Instant.now().plus(
-                properties.getUpload().getSessionTtlMinutes(), ChronoUnit.MINUTES);
             final String handle = reservationHandle;
 
-            // 5. Commit Video + UploadSession to DB before calling provider
-            //    (AC-6: orphaned records stay if provider fails — expiry scheduler handles them in Story 2.3)
+            // 6. Commit Video + UploadSession to DB before calling provider
             UUID[] ids = Objects.requireNonNull(transactionTemplate.execute(status -> {
                 Video video = new Video();
                 video.setOwnerId(request.ownerId());
@@ -224,6 +248,7 @@ public class VideoService {
                 video.setOperationalState(OperationalState.UPLOADING);
                 video.setAccessState(AccessState.ACTIVE);
                 video.setVisibility(Visibility.PRIVATE);
+                video.setVideoType(request.videoType());
                 Video savedVideo = videoRepository.save(video);
 
                 UploadSession session = new UploadSession();
@@ -231,7 +256,10 @@ public class VideoService {
                 session.setStatus(UploadSessionStatus.PENDING);
                 session.setReservedBytes(request.fileSizeBytes());
                 session.setReservationHandle(handle);
-                session.setExpiresAt(expiresAt);
+                // Placeholder to satisfy NOT NULL constraint; overwritten in second TX with
+                // the exact credential expiry from the provider response
+                session.setExpiresAt(Instant.now().plus(
+                    properties.getUpload().getSessionTtlMinutes(), ChronoUnit.MINUTES));
                 uploadSessionRepository.save(session);
 
                 MDC.put("videoId", savedVideo.getId().toString());
@@ -241,11 +269,14 @@ public class VideoService {
             UUID videoId = ids[0];
             UUID sessionId = ids[1];
 
-            // 6. Call provider — outside any transaction
+            // 7. Call provider — outside any transaction
             UploadCredentials credentials = videoProviderAdapter.initializeUpload(
                 request.fileName(), request.fileSizeBytes());
 
-            // 7. Persist provider IDs now that we have them
+            // expiresAt derived from TUS credential expiry to avoid drift between two separate Instant.now() calls
+            Instant expiresAt = Instant.ofEpochSecond(credentials.tusAuthorizationExpire());
+
+            // 8. Persist provider IDs now that we have them
             transactionTemplate.execute(status -> {
                 Video video = videoRepository.findById(videoId).orElseThrow();
                 video.setProviderAssetId(credentials.providerUploadId());
@@ -253,6 +284,7 @@ public class VideoService {
 
                 UploadSession session = uploadSessionRepository.findById(sessionId).orElseThrow();
                 session.setProviderUploadId(credentials.providerUploadId());
+                session.setExpiresAt(expiresAt);
                 uploadSessionRepository.save(session);
                 return null;
             });
@@ -261,7 +293,10 @@ public class VideoService {
             return new InitializeUploadResponse(
                 videoId, sessionId,
                 credentials.providerUploadId(), credentials.signedUploadUrl(),
-                expiresAt);
+                expiresAt,
+                credentials.tusAuthorizationSignature(),
+                credentials.tusAuthorizationExpire(),
+                credentials.tusLibraryId());
 
         } finally {
             if (!success && reservationHandle != null) {
@@ -276,6 +311,80 @@ public class VideoService {
             MDC.remove("ownerId");
             MDC.remove("videoId");
             MDC.remove("provider");
+        }
+    }
+
+    @Observed(name = "video.transcoding.complete")
+    public void completeTranscoding(UUID videoId) {
+        // Phase 1: read providerAssetId in a short transaction, release the connection immediately
+        String providerAssetId = transactionTemplate.execute(status ->
+            videoRepository.findById(videoId)
+                .orElseThrow(() -> new VideoNotFoundException(videoId))
+                .getProviderAssetId());
+
+        // Phase 2: fetch metadata from Bunny with NO active DB transaction.
+        // Avoids holding a connection from the pool during the 30-second RestTemplate read timeout.
+        VideoMetadata meta = null;
+        if (providerAssetId != null) {
+            try {
+                meta = videoProviderAdapter.getVideoMetadata(providerAssetId);
+            } catch (Exception e) {
+                log.warn("Could not fetch metadata from provider for videoId={}: {}", videoId, e.getMessage());
+                // Non-fatal: video still advances to READY; metadata can be reconciled later
+            }
+        }
+
+        // Phase 3: write in a single transaction — metadata, state transition, quota commit, event
+        // IMPORTANT: VideoLifecycleService.transitionOperationalState() uses findById()+save(entity),
+        // which reuses the L1-cached entity. The durationMs/storageBytes mutations above are flushed
+        // when the transaction commits via JPA dirty-checking. Verified: transitionOperationalState()
+        // calls findById()+save(), NOT a @Modifying @Query.
+        final VideoMetadata finalMeta = meta;
+        transactionTemplate.execute(status -> {
+            Video video = videoRepository.findById(videoId)
+                .orElseThrow(() -> new VideoNotFoundException(videoId));
+            if (finalMeta != null) {
+                if (finalMeta.durationMs() > 0) video.setDurationMs(finalMeta.durationMs());
+                if (finalMeta.storageBytes() > 0) video.setStorageBytes(finalMeta.storageBytes());
+            }
+            videoRepository.save(video); // explicit save so mutations persist before lifecycle transition
+            videoLifecycleService.transitionOperationalState(videoId, OperationalState.READY);
+
+            // Anchor to providerAssetId so retries don't cause the wrong session's handle to be committed
+            UploadSession session = (providerAssetId != null)
+                ? uploadSessionRepository.findFirstByVideoIdAndProviderUploadIdOrderByCreatedAtDesc(videoId, providerAssetId).orElse(null)
+                : uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId).orElse(null);
+            if (session != null && session.getReservationHandle() != null) {
+                quotaProvider.commit(session.getReservationHandle());
+            } else {
+                log.warn("No reservation handle found for videoId={} during transcoding commit — quota not committed", videoId);
+            }
+            // Publish both events inside the TX so @TransactionalEventListener(AFTER_COMMIT) fires after commit
+            publisher.publishEvent(new VideoPublishedEvent(videoId, video.getOwnerId()));
+            publisher.publishEvent(new VideoUploadedEvent(videoId, video.getOwnerId()));
+            return null;
+        });
+    }
+
+    @Observed(name = "video.transcoding.failed")
+    @Transactional
+    public void failTranscoding(UUID videoId) {
+        // Read providerAssetId before state transition so we can anchor session lookup below
+        String providerAssetId = videoRepository.findById(videoId)
+            .map(Video::getProviderAssetId)
+            .orElse(null);
+
+        videoLifecycleService.transitionOperationalState(videoId, OperationalState.FAILED);
+
+        // Anchor to providerAssetId to avoid releasing the retry session's quota when a late
+        // webhook fires for the original failed upload after a retryUpload() has started
+        UploadSession session = (providerAssetId != null)
+            ? uploadSessionRepository.findFirstByVideoIdAndProviderUploadIdOrderByCreatedAtDesc(videoId, providerAssetId).orElse(null)
+            : uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId).orElse(null);
+        if (session != null && session.getReservationHandle() != null) {
+            quotaProvider.release(session.getReservationHandle());
+        } else {
+            log.warn("No reservation handle found for videoId={} during transcoding failure — quota not released", videoId);
         }
     }
 }

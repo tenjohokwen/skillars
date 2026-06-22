@@ -13,6 +13,8 @@ public interface UploadSessionRepository extends JpaRepository<UploadSession, UU
 
     Optional<UploadSession> findFirstByVideoIdOrderByCreatedAtDesc(UUID videoId);
 
+    Optional<UploadSession> findFirstByVideoIdAndProviderUploadIdOrderByCreatedAtDesc(UUID videoId, String providerUploadId);
+
     long countByStatus(UploadSessionStatus status);
 
     List<UploadSession> findAllByVideoIdOrderByCreatedAtDesc(UUID videoId);

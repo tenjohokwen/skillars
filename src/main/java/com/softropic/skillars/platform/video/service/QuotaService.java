@@ -2,7 +2,9 @@ package com.softropic.skillars.platform.video.service;
 
 import com.softropic.skillars.platform.video.contract.ConsistencyGuarantee;
 import com.softropic.skillars.platform.video.contract.QuotaProvider;
+import com.softropic.skillars.platform.video.contract.VideoType;
 import com.softropic.skillars.platform.video.contract.exception.QuotaExceededException;
+import io.micrometer.observation.annotation.Observed;
 import com.softropic.skillars.platform.video.repo.VideoQuota;
 import com.softropic.skillars.platform.video.repo.VideoQuotaRepository;
 import com.softropic.skillars.platform.video.repo.VideoQuotaReservation;
@@ -44,8 +46,18 @@ public class QuotaService implements QuotaProvider {
     }
 
     @Override
+    @Observed(name = "video.quota.reserve")
     @Transactional
+    // 2-arg callers (DrillUploadService) go through the Spring proxy so @Observed fires here;
+    // the self-call to 3-arg bypasses the proxy, so @Observed on 3-arg alone would miss this path.
     public String reserve(String ownerId, long bytes) {
+        return reserve(ownerId, bytes, null);
+    }
+
+    @Override
+    @Observed(name = "video.quota.reserve")
+    @Transactional
+    public String reserve(String ownerId, long bytes, VideoType videoType) {
         // 1. Lazy init
         ensureQuotaRowExists(ownerId);
         // 2. SELECT FOR UPDATE — serialises concurrent reservations for this ownerId
@@ -63,15 +75,16 @@ public class QuotaService implements QuotaProvider {
         if (storageQuota == 0 || quota.getStorageUsedBytes() + activeReservedBytes + bytes > storageQuota) {
             throw new QuotaExceededException(ownerId, storageQuota, bytes);
         }
-        // 5. Insert reservation — videoType is null; QuotaProvider interface has no videoType param.
-        //    Story 6.2 extends InitializeUploadRequest to carry VideoType and populates it here.
+        // 5. Insert reservation with videoType populated (null = no type constraint)
         VideoQuotaReservation reservation = new VideoQuotaReservation();
         reservation.setUserId(ownerId);
         reservation.setReservedBytes(bytes);
         reservation.setStatus("ACTIVE");
+        reservation.setVideoType(videoType);
         reservation.setExpiresAt(Instant.now().plus(timeoutMinutes, ChronoUnit.MINUTES));
         VideoQuotaReservation saved = reservationRepository.save(reservation);
-        log.debug("Quota reserved: ownerId={} bytes={} reservationId={}", ownerId, bytes, saved.getId());
+        log.debug("Quota reserved: ownerId={} bytes={} type={} reservationId={}",
+                  ownerId, bytes, videoType, saved.getId());
         return saved.getId().toString();
     }
 

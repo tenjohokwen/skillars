@@ -4,5 +4,6 @@ public record InitializeUploadRequest(
     String ownerId,
     String fileName,
     long fileSizeBytes,
-    String mimeType
+    String mimeType,
+    VideoType videoType   // nullable — null means no type constraint applies
 ) {}

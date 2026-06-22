@@ -2,4 +2,4 @@ package com.softropic.skillars.infrastructure.video;
 
 import java.time.Instant;
 
-public record WebhookEvent(String eventType, String providerAssetId, Instant timestamp) {}
+public record WebhookEvent(long videoLibraryId, String eventType, String providerAssetId, Instant timestamp) {}

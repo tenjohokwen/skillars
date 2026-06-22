@@ -4,6 +4,7 @@ import com.softropic.skillars.platform.video.config.VideoProperties;
 import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.contract.UploadSessionStatus;
 import com.softropic.skillars.platform.video.contract.VideoWebhookStatus;
+import com.softropic.skillars.platform.video.contract.exception.TerminalStateViolationException;
 import com.softropic.skillars.platform.video.repo.UploadSessionRepository;
 import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
@@ -47,6 +48,7 @@ public class WebhookEventProcessorScheduler {
     private final TransactionTemplate transactionTemplate;
     private final VideoMetrics videoMetrics;
     private final UploadSessionRepository uploadSessionRepository;
+    private final VideoService videoService;
 
     @Observed(name = "video.webhook.processQueue")
     @Scheduled(fixedDelayString = "${app.video.webhook.processor-delay-ms:5000}",
@@ -110,14 +112,39 @@ public class WebhookEventProcessorScheduler {
             log.warn("No video found for providerAssetId={}, skipping event", event.getProviderAssetId());
             return;
         }
-        UUID videoId = videoOpt.get().getId();
+        Video video = videoOpt.get();
+        UUID videoId = video.getId();
         switch (event.getEventType()) {
-            case "video.upload.success" ->
-                videoLifecycleService.transitionOperationalState(videoId, OperationalState.PROCESSING);
-            case "video.encoding.success" ->
-                videoLifecycleService.transitionOperationalState(videoId, OperationalState.READY);
+            case "video.upload.success" -> {
+                transactionTemplate.execute(status -> {
+                    videoLifecycleService.transitionOperationalState(videoId, OperationalState.PROCESSING);
+                    return null;
+                });
+            }
+            case "video.encoding.success" -> {
+                // Compensate for out-of-order delivery: if Status=3 arrives before Status=7,
+                // the video is still UPLOADING. Advance through PROCESSING first so that
+                // completeTranscoding()'s PROCESSING→READY transition is valid.
+                if (video.getOperationalState() == OperationalState.UPLOADING) {
+                    log.warn("video.encoding.success arrived before video.upload.success for videoId={} — compensating", videoId);
+                    transactionTemplate.execute(status -> {
+                        try {
+                            videoLifecycleService.transitionOperationalState(videoId, OperationalState.PROCESSING);
+                        } catch (TerminalStateViolationException e) {
+                            // Another node already advanced the state — safe to proceed
+                            log.debug("Compensating UPLOADING→PROCESSING skipped — state already advanced for videoId={}", videoId);
+                        }
+                        return null;
+                    });
+                }
+                videoService.completeTranscoding(videoId);
+            }
+            case "video.upload.failed" ->
+                // Bunny Status=8: TUS upload failed at the provider
+                // failTranscoding() handles both FAILED state transition and quota release
+                videoService.failTranscoding(videoId);
             case "video.encoding.failed" ->
-                videoLifecycleService.transitionOperationalState(videoId, OperationalState.FAILED);
+                videoService.failTranscoding(videoId);
             default ->
                 log.warn("Unknown webhook event type '{}', completing without state change", event.getEventType());
         }

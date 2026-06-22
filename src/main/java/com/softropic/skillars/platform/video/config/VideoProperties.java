@@ -67,6 +67,7 @@ public class VideoProperties {
         private String libraryId = "${APP_VIDEO_BUNNY_LIBRARY_ID:}";
         private String cdnHostname = "${APP_VIDEO_BUNNY_CDN_HOSTNAME:}";
         private String apiBaseUrl = "https://video.bunnycdn.com";
+        private String webhookSigningSecret = "${APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET:}";
 
         @Override
         public String toString() {

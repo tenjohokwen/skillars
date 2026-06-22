@@ -5,8 +5,11 @@ import java.util.UUID;
 
 public record InitializeUploadResponse(
     UUID videoId,
-    UUID uploadSessionId,
+    UUID sessionId,
     String providerUploadId,
     String signedUploadUrl,
-    Instant expiresAt
+    Instant expiresAt,
+    String tusAuthorizationSignature,
+    long tusAuthorizationExpire,
+    long tusLibraryId
 ) {}

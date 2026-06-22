@@ -63,7 +63,8 @@ class DrillUploadResourceIT extends BaseSessionIT {
     @BeforeEach
     void setUp() {
         when(videoProviderAdapter.initializeUpload(anyString(), anyLong())).thenReturn(
-            new UploadCredentials("bunny-upload-id", "https://tus.bunny.net/upload/test")
+            new UploadCredentials("bunny-upload-id", "https://tus.bunny.net/upload/test",
+                "0".repeat(64), Instant.now().plusSeconds(3600).getEpochSecond(), 0L)
         );
         when(videoProviderAdapter.generatePlaybackUrl(anyString(), any()))
             .thenReturn(new com.softropic.skillars.infrastructure.video.SignedPlaybackUrl("https://cdn.example.com/play", Instant.now().plusSeconds(7200)));

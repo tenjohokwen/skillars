@@ -13,6 +13,8 @@ import com.softropic.skillars.platform.video.repo.UploadSession;
 import com.softropic.skillars.platform.video.repo.UploadSessionRepository;
 import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
+
+import static org.mockito.ArgumentMatchers.any;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -51,22 +53,23 @@ class VideoUploadConfirmationIT extends BaseVideoIT {
         uploadSessionRepository.deleteAll();
         videoRepository.deleteAll();
         when(quotaProvider.check(anyString(), anyLong())).thenReturn(true);
-        when(quotaProvider.reserve(anyString(), anyLong())).thenReturn("test-handle");
+        when(quotaProvider.reserve(anyString(), anyLong(), any())).thenReturn("test-handle");
         when(videoProviderAdapter.initializeUpload(anyString(), anyLong()))
-            .thenReturn(new UploadCredentials("guid-123", "http://bunny/tusupload"));
+            .thenReturn(new UploadCredentials("guid-123", "https://video.bunnycdn.com/tusupload",
+                "test-tus-sig", 9_999_999_999L, 12345L));
     }
 
     @Test
     void confirmUpload_happyPath_transitionsToProcessing() {
         InitializeUploadResponse init = videoService.initializeUpload(
-            new InitializeUploadRequest("owner-1", "vid.mp4", 1024L, "video/mp4"));
+            new InitializeUploadRequest("owner-1", "vid.mp4", 1024L, "video/mp4", null));
 
         ConfirmUploadResponse confirm = videoService.confirmUpload(init.videoId());
 
         assertThat(confirm.operationalState()).isEqualTo(OperationalState.PROCESSING);
         Video video = videoRepository.findById(init.videoId()).orElseThrow();
         assertThat(video.getOperationalState()).isEqualTo(OperationalState.PROCESSING);
-        UploadSession session = uploadSessionRepository.findById(init.uploadSessionId()).orElseThrow();
+        UploadSession session = uploadSessionRepository.findById(init.sessionId()).orElseThrow();
         assertThat(session.getStatus()).isEqualTo(UploadSessionStatus.COMMITTED);
         verify(quotaProvider).commit("test-handle");
     }
@@ -74,7 +77,7 @@ class VideoUploadConfirmationIT extends BaseVideoIT {
     @Test
     void confirmUpload_duplicate_idempotentNoDuplicateCommit() {
         InitializeUploadResponse init = videoService.initializeUpload(
-            new InitializeUploadRequest("owner-2", "vid.mp4", 1024L, "video/mp4"));
+            new InitializeUploadRequest("owner-2", "vid.mp4", 1024L, "video/mp4", null));
 
         videoService.confirmUpload(init.videoId());
         ConfirmUploadResponse second = videoService.confirmUpload(init.videoId());
@@ -86,15 +89,15 @@ class VideoUploadConfirmationIT extends BaseVideoIT {
     @Test
     void processExpired_expiresSessionAndReleasesQuota() {
         InitializeUploadResponse init = videoService.initializeUpload(
-            new InitializeUploadRequest("owner-3", "vid.mp4", 1024L, "video/mp4"));
+            new InitializeUploadRequest("owner-3", "vid.mp4", 1024L, "video/mp4", null));
 
-        UploadSession session = uploadSessionRepository.findById(init.uploadSessionId()).orElseThrow();
+        UploadSession session = uploadSessionRepository.findById(init.sessionId()).orElseThrow();
         session.setExpiresAt(Instant.now().minusSeconds(60));
         uploadSessionRepository.save(session);
 
         expiryScheduler.processExpired();
 
-        UploadSession expired = uploadSessionRepository.findById(init.uploadSessionId()).orElseThrow();
+        UploadSession expired = uploadSessionRepository.findById(init.sessionId()).orElseThrow();
         assertThat(expired.getStatus()).isEqualTo(UploadSessionStatus.EXPIRED);
         Video video = videoRepository.findById(init.videoId()).orElseThrow();
         assertThat(video.getOperationalState()).isEqualTo(OperationalState.FAILED);
@@ -104,9 +107,9 @@ class VideoUploadConfirmationIT extends BaseVideoIT {
     @Test
     void processExpired_quotaReleaseFails_sessionRemainsUnchanged() {
         InitializeUploadResponse init = videoService.initializeUpload(
-            new InitializeUploadRequest("owner-4", "vid.mp4", 1024L, "video/mp4"));
+            new InitializeUploadRequest("owner-4", "vid.mp4", 1024L, "video/mp4", null));
 
-        UploadSession session = uploadSessionRepository.findById(init.uploadSessionId()).orElseThrow();
+        UploadSession session = uploadSessionRepository.findById(init.sessionId()).orElseThrow();
         session.setExpiresAt(Instant.now().minusSeconds(60));
         uploadSessionRepository.save(session);
 
@@ -114,7 +117,7 @@ class VideoUploadConfirmationIT extends BaseVideoIT {
 
         expiryScheduler.processExpired();
 
-        UploadSession unchanged = uploadSessionRepository.findById(init.uploadSessionId()).orElseThrow();
+        UploadSession unchanged = uploadSessionRepository.findById(init.sessionId()).orElseThrow();
         assertThat(unchanged.getStatus()).isEqualTo(UploadSessionStatus.PENDING);
         Video video = videoRepository.findById(init.videoId()).orElseThrow();
         assertThat(video.getOperationalState()).isEqualTo(OperationalState.UPLOADING);

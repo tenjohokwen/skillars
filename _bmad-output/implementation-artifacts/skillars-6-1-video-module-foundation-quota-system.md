@@ -687,6 +687,16 @@ V15 (`V15__video_schema.sql`) creates `main.videos` with columns: `operational_s
 
 `bandwidth_used_bytes` in `video_quotas` is never incremented in Story 6.1. Bandwidth tracking is streaming/download bandwidth (FR-VID-005), not upload-time bandwidth — it requires the playback/CDN infrastructure from Story 6.3. The config entries (IDs 74–79) and `BandwidthResetService` are created now so the schema is ready. `QuotaConfigService.getBandwidthQuotaBytesMonthly()` exists but is not called from `QuotaService` in this story. Story 6.3 adds `incrementBandwidthUsed(ownerId, bytes)` and the enforcement check.
 
+### `VideoService.confirmUpload()` is NOT part of the TUS flow
+
+`VideoService.confirmUpload()` exists for non-TUS legacy flows where the client signals completion explicitly. In the TUS pipeline (Story 6.2), the full upload-to-published lifecycle is driven exclusively by Bunny.net webhooks:
+
+- Upload complete: Bunny Status=7 → `"video.upload.success"` → `UPLOADING → PROCESSING`
+- Encoding complete: Bunny Status=3 → `"video.encoding.success"` → `VideoService.completeTranscoding()` → `PROCESSING → READY` + `QuotaProvider.commit()`
+- Encoding failed: Bunny Status=5 → `"video.encoding.failed"` → `VideoService.failTranscoding()` → `PROCESSING → FAILED` + `QuotaProvider.release()`
+
+**`confirmUpload()` must NOT be called for TUS uploads.** The quota commit (`QuotaProvider.commit()`) happens inside `completeTranscoding()` when encoding succeeds, NOT at upload receipt. If `confirmUpload()` were called (e.g., by a misdirected client), it would commit the quota reservation prematurely — before encoding confirms the bytes are durably stored. `confirmUpload()` is left in the codebase for backward compatibility with any non-TUS path but the TUS frontend does not call it.
+
 ### Project Structure Summary
 
 | Component | Location | Status |

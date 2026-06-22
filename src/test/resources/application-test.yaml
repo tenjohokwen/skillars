@@ -8,8 +8,11 @@ app:
     playback:
       signing-secret: "dGVzdC1wbGF5YmFjay1zaWduaW5nLXNlY3JldC0zMi1ieXRlcyEh"  # Base64("test-playback-signing-secret-32-bytes!!")
     bunny:
+      api-key: "test-api-key"
+      library-id: "123456"
       cdn-hostname: ${wiremock.server.bunny-service.baseUrl:http://localhost}
       api-base-url: ${wiremock.server.bunny-service.baseUrl}
+      webhook-signing-secret: "test-webhook-signing-secret"
 
 management:
   tracing:

@@ -20,6 +20,10 @@ public interface VideoProviderAdapter {
         throw new UnsupportedOperationException("restoreAsset not supported");
     }
 
+    default VideoMetadata getVideoMetadata(String providerAssetId) {
+        throw new UnsupportedOperationException("getVideoMetadata not supported by this provider");
+    }
+
     default String getThumbnailUrl(String providerAssetId) {
         throw new UnsupportedOperationException("thumbnails not supported");
     }

@@ -2,11 +2,21 @@ package com.softropic.skillars.platform.video.config;
 
 import com.softropic.skillars.platform.video.contract.QuotaProvider;
 import com.softropic.skillars.platform.video.service.NoOpQuotaProvider;
+import com.softropic.skillars.platform.video.service.QuotaConfigService;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class QuotaProviderWiringTest {
+
+    private static QuotaConfigService quotaConfigServiceWith(long reservationTimeoutMinutes) {
+        QuotaConfigService stub = mock(QuotaConfigService.class);
+        when(stub.getReservationTimeoutMinutes()).thenReturn(reservationTimeoutMinutes);
+        return stub;
+    }
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
         .withUserConfiguration(VideoConfig.class)
@@ -29,17 +39,34 @@ class QuotaProviderWiringTest {
 
     @Test
     void failsAtStartupWhenNoQuotaProviderBeanRegistered() {
-        contextRunner.run(context ->
-            assertThat(context).hasFailed()
-                .getFailure()
-                .hasMessageContaining("QuotaProvider")
-        );
+        contextRunner
+            .withBean(QuotaConfigService.class, () -> quotaConfigServiceWith(60L))
+            .run(context ->
+                assertThat(context).hasFailed()
+                    .getFailure()
+                    .hasMessageContaining("QuotaProvider")
+            );
     }
 
     @Test
     void startsWhenNoOpQuotaProviderRegistered() {
         contextRunner
+            .withBean(QuotaConfigService.class, () -> quotaConfigServiceWith(60L))
             .withBean(QuotaProvider.class, NoOpQuotaProvider::new)
             .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    @Test
+    void failsAtStartupWhenReservationTimeoutBelowSessionTtl() {
+        // reservationTimeout=30 < sessionTtl=60 → quota reaper fires before TUS upload completes
+        contextRunner
+            .withBean(QuotaConfigService.class, () -> quotaConfigServiceWith(30L))
+            .withBean(QuotaProvider.class, NoOpQuotaProvider::new)
+            .run(context ->
+                assertThat(context).hasFailed()
+                    .getFailure()
+                    .cause()
+                    .hasMessageContaining("platform.video_reservation_timeout_minutes")
+            );
     }
 }
