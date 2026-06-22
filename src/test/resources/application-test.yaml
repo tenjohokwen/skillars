@@ -13,6 +13,24 @@ app:
       cdn-hostname: ${wiremock.server.bunny-service.baseUrl:http://localhost}
       api-base-url: ${wiremock.server.bunny-service.baseUrl}
       webhook-signing-secret: "test-webhook-signing-secret"
+    moderation:
+      sla-monitor-delay-ms: 3600000
+
+features:
+  toggles:
+    arachnid-enabled: false
+    videointel-enabled: false
+
+infrastructure:
+  arachnid:
+    api-key: "test-arachnid-key"
+    api-base-url: ${wiremock.server.bunny-service.baseUrl:http://localhost}
+    timeout-seconds: 5
+  videointel:
+    project-id: "test-project"
+    credentials-path: ""
+    flag-threshold: 0.7
+    timeout-seconds: 5
 
 management:
   tracing:

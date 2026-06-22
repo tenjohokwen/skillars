@@ -412,4 +412,22 @@ export default {
       contributionsLoadError: 'Failed to load coach contributions',
     },
   },
+  video: {
+    status: {
+      UPLOADING: 'Uploading',
+      PROCESSING: 'Processing',
+      SCANNING: 'Under review',
+      TRANSCODING: 'Preparing video',
+      READY: 'Ready',
+      LOCKED: 'Under review',
+      HIDDEN: 'Awaiting approval',
+      FAILED: 'Upload failed',
+      DELETED: 'Deleted',
+      unknown: 'Unknown',
+    },
+    statusCard: {
+      title: 'Video Status',
+      reconnecting: 'Reconnecting…',
+    },
+  },
 }

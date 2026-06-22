@@ -214,6 +214,31 @@ public class BunnyVideoProviderAdapter implements VideoProviderAdapter {
     }
 
     @Override
+    public void triggerTranscoding(String providerAssetId) {
+        // CRITICAL pre-deploy: Verify whether /reencode is correct for first-time encoding or only re-encoding.
+        // Bunny auto-encodes on upload by default; this may be a no-op for the normal path.
+        HttpEntity<Void> entity = new HttpEntity<>(buildHeaders());
+        try {
+            restTemplate.postForEntity(
+                apiBaseUrl + "/library/" + libraryId + "/videos/" + providerAssetId + "/reencode",
+                entity,
+                Void.class
+            );
+        } catch (HttpClientErrorException.NotFound e) {
+            throw new VideoProviderException(
+                "triggerTranscoding: video not found in Bunny, providerAssetId=" + providerAssetId, e);
+        } catch (RestClientException e) {
+            throw new VideoProviderException("triggerTranscoding", e);
+        }
+    }
+
+    @Override
+    public String getRawVideoUrl(String providerAssetId) {
+        // CRITICAL pre-deploy: Verify this URL pattern gives access to the raw uploaded video before transcoding.
+        return "https://" + cdnHostname + "/" + providerAssetId + "/original";
+    }
+
+    @Override
     public void addCaptionTrack(String providerAssetId, String language, String captionFileUrl) {
         HttpHeaders headers = buildHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);

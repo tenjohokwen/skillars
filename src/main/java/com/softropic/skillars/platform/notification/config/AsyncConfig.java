@@ -22,6 +22,19 @@ import io.micrometer.core.instrument.Tag;
 @EnableAsync
 @EnableScheduling
 public class AsyncConfig {
+    @Bean(name = "moderationTaskExecutor")
+    public Executor moderationTaskExecutor() {
+        ThreadPoolTaskExecutor taskExecutor = new ThreadPoolTaskExecutor();
+        taskExecutor.setCorePoolSize(2);
+        taskExecutor.setQueueCapacity(200);
+        taskExecutor.setMaxPoolSize(5);
+        taskExecutor.setThreadNamePrefix("modPool");
+        taskExecutor.setTaskDecorator(new MdcDecorator());
+        taskExecutor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        taskExecutor.afterPropertiesSet();
+        return taskExecutor;
+    }
+
     @Bean(name = "sendMailPool")
     public Executor threadPoolTaskExecutor() {
         ThreadPoolTaskExecutor taskExecutor = new ThreadPoolTaskExecutor();

@@ -31,4 +31,13 @@ public interface VideoProviderAdapter {
     default void addCaptionTrack(String providerAssetId, String language, String captionFileUrl) {
         throw new UnsupportedOperationException("captions not supported");
     }
+
+    default void triggerTranscoding(String providerAssetId) {
+        throw new UnsupportedOperationException("triggerTranscoding not supported by this provider");
+    }
+
+    /** Returns a URL to the raw uploaded video (pre-transcoding) accessible for moderation scanning. */
+    default String getRawVideoUrl(String providerAssetId) {
+        throw new UnsupportedOperationException("getRawVideoUrl not supported by this provider");
+    }
 }

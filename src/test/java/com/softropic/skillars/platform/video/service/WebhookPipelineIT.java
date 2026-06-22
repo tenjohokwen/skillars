@@ -26,6 +26,13 @@ class WebhookPipelineIT extends BaseVideoIT {
     @MockitoBean
     VideoProviderAdapter videoProviderAdapter;
 
+    // Mocked to isolate webhook pipeline tests from the async moderation pipeline.
+    // Without this mock, VideoUploadedEvent triggers ModerationOrchestrationService which:
+    //   (a) races the PROCESSING→SCANNING transition against test assertions, and
+    //   (b) creates video_moderation_scans rows (ON DELETE RESTRICT) that block setUp's deleteAll().
+    @MockitoBean
+    ModerationOrchestrationService moderationOrchestrationService;
+
     @Autowired WebhookEventProcessorScheduler scheduler;
     @Autowired VideoWebhookEventRepository webhookEventRepository;
     @Autowired VideoRepository videoRepository;
@@ -42,7 +49,7 @@ class WebhookPipelineIT extends BaseVideoIT {
 
     @Test
     void processPending_encodingSuccess_advancesVideoToReady() {
-        Video video = seedVideo(OperationalState.PROCESSING, "asset-encode-ok");
+        Video video = seedVideo(OperationalState.TRANSCODING, "asset-encode-ok");
         VideoWebhookEvent seeded = seedWebhookEvent("asset-encode-ok:video.encoding.success:1000", "video.encoding.success", "asset-encode-ok");
 
         scheduler.processPending();

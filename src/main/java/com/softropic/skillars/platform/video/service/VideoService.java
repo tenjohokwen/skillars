@@ -58,6 +58,12 @@ public class VideoService {
     private final ApplicationEventPublisher publisher;
     private final VideoTypeConstraints videoTypeConstraints;
 
+    @Transactional(readOnly = true)
+    public Video findById(UUID videoId) {
+        return videoRepository.findById(videoId)
+            .orElseThrow(() -> new VideoNotFoundException(videoId));
+    }
+
     @Observed(name = "video.upload.confirm")
     @Transactional
     public ConfirmUploadResponse confirmUpload(UUID videoId) {
@@ -359,9 +365,10 @@ public class VideoService {
             } else {
                 log.warn("No reservation handle found for videoId={} during transcoding commit — quota not committed", videoId);
             }
-            // Publish both events inside the TX so @TransactionalEventListener(AFTER_COMMIT) fires after commit
+            // Publish inside the TX so @TransactionalEventListener(AFTER_COMMIT) fires after commit
+            // Note: VideoUploadedEvent is intentionally NOT published here — it would re-trigger the
+            // moderation pipeline for an already-READY video, causing TerminalStateViolationException.
             publisher.publishEvent(new VideoPublishedEvent(videoId, video.getOwnerId()));
-            publisher.publishEvent(new VideoUploadedEvent(videoId, video.getOwnerId()));
             return null;
         });
     }

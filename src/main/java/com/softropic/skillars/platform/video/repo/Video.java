@@ -61,6 +61,18 @@ public class Video {
     @Column(name = "video_type", nullable = true)
     private VideoType videoType;
 
+    @Column(name = "encoding_completed_at")
+    private Instant encodingCompletedAt;
+
+    @Column(name = "scanning_started_at")
+    private Instant scanningStartedAt;
+
+    @Column(name = "moderation_lock_until")
+    private Instant moderationLockUntil;
+
+    @Column(name = "moderation_retry_count", nullable = false)
+    private int moderationRetryCount = 0;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

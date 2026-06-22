@@ -2082,14 +2082,14 @@ So that CSAM, explicit content, and unsafe minor player videos are blocked autom
 
 **Acceptance Criteria:**
 
-**Given** a video transitions to `UPLOADED` status
+**Given** a video transitions to `PROCESSING` state (via `video.upload.success` webhook and `VideoUploadedEvent` publication)
 **When** the moderation pipeline is triggered
-**Then** `videos.status` transitions to `SCANNING` and Layer 1 (Arachnid CSAM hash check) is initiated asynchronously via `infrastructure.arachnid`
+**Then** `videos.operational_state` transitions to `SCANNING` and Layer 1 (Arachnid CSAM hash check) is initiated asynchronously via `infrastructure.arachnid`
 **And** the Arachnid API call is made outside any `@Transactional` boundary — the DB write recording the result happens in a separate `@Transactional` after
 
 **Given** Arachnid returns a CSAM match
 **When** the result is processed
-**Then** `videos.status` transitions to `LOCKED` immediately
+**Then** `videos.operational_state` transitions to `LOCKED` immediately
 **And** the video owner's account is suspended pending admin review
 **And** an urgent admin notification is sent — Arachnid matches are treated as severe and bypass the standard moderation queue
 **And** the video is never advanced to Layer 2 — pipeline stops at Layer 1
@@ -2097,33 +2097,48 @@ So that CSAM, explicit content, and unsafe minor player videos are blocked autom
 **Given** Arachnid returns a clean result
 **When** Layer 1 clears
 **Then** Layer 2 (Google Cloud VideoIntel explicit content detection) is initiated via `infrastructure.videointel`
-**And** VideoIntel scanning runs asynchronously — `videos.status` remains `SCANNING` throughout
+**And** VideoIntel scanning runs asynchronously — `videos.operational_state` remains `SCANNING` throughout
 
 **Given** VideoIntel flags explicit content with high confidence
 **When** the result is processed
-**Then** `videos.status` transitions to `LOCKED` and the video is queued in the admin content moderation queue
+**Then** `videos.operational_state` transitions to `LOCKED` and the video is queued in the admin content moderation queue
 **And** the owner receives a notification: "Your video has been flagged for review"
 **And** the video is not advanced to transcoding
 
 **Given** VideoIntel returns clean
 **When** Layer 2 clears
-**Then** Layer 3 (minor safety gate) is evaluated: if the video's `ownerId` belongs to a player with age tier < 18, `videos.status` is set to `HIDDEN` and a parental approval request is created (Story 6.6)
-**And** if the owner is 18+ or a coach, the video advances directly to `TRANSCODING` — Bunny.net transcoding is triggered via `infrastructure.bunny`
+**Then** Layer 3 (minor safety gate) is evaluated: if the video's `ownerId` belongs to a player with age tier < 18, `videos.operational_state` is set to `HIDDEN` and a parental approval request is created (Story 6.6)
+**And** if the owner is 18+ or a coach, the video advances directly to `TRANSCODING` — Bunny.net transcoding is triggered via `infrastructure.video`
 
 **Given** any moderation service (Arachnid, VideoIntel) is unavailable
 **When** the call fails or times out
 **Then** the video stays in `SCANNING` — it is never auto-advanced regardless of timeout duration (fail-closed)
 **And** for Arachnid: hold in SCANNING, do not advance, alert admin
 **And** for VideoIntel: keep in SCANNING, alert admin, do not auto-publish (FR-TSC-004)
-**And** a `@Scheduled` job detects videos stuck in `SCANNING` beyond the SLA window (from ConfigService) and re-queues them for retry
+**And** a `@Scheduled` job detects videos stuck in `SCANNING` beyond the SLA window (from ConfigService) and re-queues them for retry; an in-flight lock (`moderation_lock_until` column) prevents the SLA monitor from re-queuing a video whose moderation thread is still actively running
 
-**Given** a video's status changes at any pipeline stage
+**Given** Arachnid is disabled via feature flag for the current deployment environment
+**When** the moderation pipeline reaches Layer 1
+**Then** the Arachnid scan is skipped entirely and the pipeline advances directly to Layer 2 (VideoIntel)
+**And** no admin alert is raised for the skipped layer — bypass is the expected behaviour in that environment
+
+**Given** VideoIntel is disabled via feature flag for the current deployment environment
+**When** the moderation pipeline reaches Layer 2
+**Then** the VideoIntel scan is skipped entirely and the pipeline advances directly to Layer 3 (minor safety gate)
+**And** no admin alert is raised for the skipped layer — bypass is the expected behaviour in that environment
+
+**Given** both Arachnid and VideoIntel are disabled via feature flags
+**When** a video is uploaded and the moderation pipeline is triggered
+**Then** the pipeline proceeds through Layer 3 (minor safety gate) only and the video advances to `TRANSCODING` (or `HIDDEN`) as normal
+**And** the application functions correctly with no errors, missing routes, or degraded behaviour
+
+**Given** a video's `operational_state` changes at any pipeline stage
 **When** the transition completes
 **Then** an SSE event is pushed to all connected clients subscribed to that video's status stream (`GET /api/video/{id}/events`)
 **And** the `VideoStatusCard` component updates reactively without page reload (FR-VID-020, UX-DR13)
 **And** exponential backoff and 2-second polling fallback apply — same pattern as booking SSE (Story 3.4)
 
-*Dev notes: `platform.video` + `infrastructure.arachnid` + `infrastructure.videointel`. `ModerationOrchestrationService` triggered by `@TransactionalEventListener(AFTER_COMMIT)` on `VideoUploadedEvent`. Layer execution sequence: Arachnid → VideoIntel → minor safety gate — each layer's result dispatched via `ApplicationEventPublisher` to decouple. All external calls (`ArachnidClient`, `VideoIntelClient`) outside `@Transactional`; state transitions in separate `@Transactional` after. `VideoSseService`: `ConcurrentHashMap<UUID, List<SseEmitter>>` keyed by videoId — same pattern as `BookingSseService`. `VideoEventResource`: GET /api/video/{id}/events (SSE). `ModerationSlaMonitorService`: `@Scheduled`, queries videos in `SCANNING` older than SLA window from ConfigService, re-queues via outbox. Frontend: `VideoStatusCard.vue` with `aria-live="polite"` — distinct visual per pipeline state (UX-DR13). Test: `ModerationOrchestrationServiceTest` (unit — all layer outcomes + fail-closed behaviour), `VideoSseIT` (integration).*
+*Dev notes: `platform.video` + `infrastructure.arachnid` + `infrastructure.videointel` + `infrastructure.feature`. `ModerationOrchestrationService` triggered by `@TransactionalEventListener(AFTER_COMMIT)` on `VideoUploadedEvent`. Layer execution sequence: Arachnid → VideoIntel → minor safety gate — each layer's result dispatched via `ApplicationEventPublisher` to decouple. All external calls (`ArachnidClient`, `VideoIntelClient`) outside `@Transactional`; state transitions in separate `@Transactional` after. Feature toggles: `infrastructure.feature` controls `ARACHNID_ENABLED` and `VIDEOINTEL_ENABLED` flags — both are per-environment (dev/test/prod) and can be set independently. `ModerationOrchestrationService` checks each flag before invoking the corresponding layer; a disabled layer is silently skipped and the pipeline continues to the next layer as if the layer returned clean. Application must be fully operational with either or both flags off — no fallback stubs, missing beans, or startup failures. `VideoSseService`: `ConcurrentHashMap<UUID, List<SseEmitter>>` keyed by videoId — same pattern as `BookingSseService`. `VideoEventResource`: GET /api/video/{id}/events (SSE). `ModerationSlaMonitorService`: `@Scheduled`, queries videos in `SCANNING` older than SLA window from ConfigService, re-queues via outbox. Frontend: `VideoStatusCard.vue` with `aria-live="polite"` — distinct visual per pipeline state (UX-DR13). Test: `ModerationOrchestrationServiceTest` (unit — all layer outcomes + fail-closed behaviour + both flags off/on combinations), `VideoSseIT` (integration).*
 
 ### Story 6.4: Streaming Security & Video Lifecycle
 

@@ -2,9 +2,12 @@ package com.softropic.skillars.platform.video.service;
 
 import com.softropic.skillars.platform.video.config.VideoProperties;
 import com.softropic.skillars.platform.video.contract.OperationalState;
+import com.softropic.skillars.platform.video.contract.QuotaProvider;
 import com.softropic.skillars.platform.video.contract.UploadSessionStatus;
 import com.softropic.skillars.platform.video.contract.VideoWebhookStatus;
+import com.softropic.skillars.platform.video.contract.event.VideoUploadedEvent;
 import com.softropic.skillars.platform.video.contract.exception.TerminalStateViolationException;
+import com.softropic.skillars.platform.video.repo.UploadSession;
 import com.softropic.skillars.platform.video.repo.UploadSessionRepository;
 import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
@@ -14,6 +17,7 @@ import io.micrometer.observation.annotation.Observed;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -49,6 +53,8 @@ public class WebhookEventProcessorScheduler {
     private final VideoMetrics videoMetrics;
     private final UploadSessionRepository uploadSessionRepository;
     private final VideoService videoService;
+    private final ApplicationEventPublisher publisher;
+    private final QuotaProvider quotaProvider;
 
     @Observed(name = "video.webhook.processQueue")
     @Scheduled(fixedDelayString = "${app.video.webhook.processor-delay-ms:5000}",
@@ -116,37 +122,117 @@ public class WebhookEventProcessorScheduler {
         UUID videoId = video.getId();
         switch (event.getEventType()) {
             case "video.upload.success" -> {
+                // Publish event inside the TX so @TransactionalEventListener(AFTER_COMMIT) fires correctly.
                 transactionTemplate.execute(status -> {
                     videoLifecycleService.transitionOperationalState(videoId, OperationalState.PROCESSING);
+                    publisher.publishEvent(new VideoUploadedEvent(videoId, video.getOwnerId()));
                     return null;
                 });
             }
             case "video.encoding.success" -> {
                 // Compensate for out-of-order delivery: if Status=3 arrives before Status=7,
-                // the video is still UPLOADING. Advance through PROCESSING first so that
-                // completeTranscoding()'s PROCESSING→READY transition is valid.
+                // the video is still UPLOADING. Advance through PROCESSING first.
                 if (video.getOperationalState() == OperationalState.UPLOADING) {
                     log.warn("video.encoding.success arrived before video.upload.success for videoId={} — compensating", videoId);
                     transactionTemplate.execute(status -> {
                         try {
                             videoLifecycleService.transitionOperationalState(videoId, OperationalState.PROCESSING);
                         } catch (TerminalStateViolationException e) {
-                            // Another node already advanced the state — safe to proceed
                             log.debug("Compensating UPLOADING→PROCESSING skipped — state already advanced for videoId={}", videoId);
+                        }
+                        // Record encoding completion so moderation's advanceToTranscoding() uses the
+                        // fast-path instead of calling triggerTranscoding() redundantly.
+                        videoRepository.findById(videoId).ifPresent(v -> {
+                            v.setEncodingCompletedAt(Instant.now());
+                            videoRepository.save(v);
+                        });
+                        return null;
+                    });
+                    // In-memory video is stale (still shows UPLOADING); stop here — moderation pipeline
+                    // will pick up encodingCompletedAt once the PROCESSING→SCANNING transition fires.
+                    return;
+                }
+                // If still in PROCESSING: moderation listener is queued. Record encodingCompletedAt
+                // so advanceToTranscoding() uses the fast-path. Do NOT call completeTranscoding() —
+                // that would bypass all three moderation layers.
+                if (video.getOperationalState() == OperationalState.PROCESSING) {
+                    log.info("Encoding completed while video still in PROCESSING for videoId={} — recording to prevent moderation bypass", videoId);
+                    transactionTemplate.execute(status -> {
+                        Video v = videoRepository.findById(videoId).orElse(null);
+                        if (v != null) {
+                            v.setEncodingCompletedAt(Instant.now());
+                            videoRepository.save(v);
                         }
                         return null;
                     });
+                    return;
+                }
+                // If video is in SCANNING (moderation in progress), record encoding completion.
+                if (video.getOperationalState() == OperationalState.SCANNING) {
+                    log.info("Encoding completed while video in SCANNING state for videoId={} — recording completion", videoId);
+                    transactionTemplate.execute(status -> {
+                        Video v = videoRepository.findById(videoId).orElse(null);
+                        if (v != null) {
+                            v.setEncodingCompletedAt(Instant.now());
+                            videoRepository.save(v);
+                        }
+                        return null;
+                    });
+                    // Self-heal: re-read state after encoding completion is persisted.
+                    // If moderation already advanced to TRANSCODING, complete it now.
+                    OperationalState currentState = transactionTemplate.execute(status ->
+                        videoRepository.findById(videoId).map(Video::getOperationalState).orElse(null));
+                    if (currentState == OperationalState.TRANSCODING) {
+                        log.info("Video {} now in TRANSCODING after encoding.success — completing TRANSCODING→READY", videoId);
+                        videoService.completeTranscoding(videoId);
+                    }
+                    // If still SCANNING: moderation will pick up encodingCompletedAt and use fast-path.
+                    return;
                 }
                 videoService.completeTranscoding(videoId);
             }
             case "video.upload.failed" ->
                 // Bunny Status=8: TUS upload failed at the provider
-                // failTranscoding() handles both FAILED state transition and quota release
                 videoService.failTranscoding(videoId);
-            case "video.encoding.failed" ->
+            case "video.encoding.failed" -> {
+                // If encoding fails while moderation is running, fail the video immediately.
+                if (video.getOperationalState() == OperationalState.SCANNING) {
+                    log.error("Encoding failed while video in SCANNING state for videoId={} — transitioning to FAILED", videoId);
+                    boolean transitioned;
+                    try {
+                        transactionTemplate.execute(status -> {
+                            videoLifecycleService.transitionOperationalState(videoId, OperationalState.FAILED);
+                            return null;
+                        });
+                        transitioned = true;
+                    } catch (TerminalStateViolationException e) {
+                        log.debug("encoding.failed FAILED transition skipped — video already in terminal state for videoId={}", videoId);
+                        transitioned = false;
+                    }
+                    // Only release quota if we won the SCANNING→FAILED race to avoid double-release.
+                    // Re-read providerAssetId from DB — pre-loop video object may be stale.
+                    if (transitioned) {
+                        String freshAssetId = transactionTemplate.execute(status ->
+                            videoRepository.findById(videoId).map(Video::getProviderAssetId).orElse(null));
+                        releaseQuota(videoId, freshAssetId);
+                    }
+                    return;
+                }
                 videoService.failTranscoding(videoId);
+            }
             default ->
                 log.warn("Unknown webhook event type '{}', completing without state change", event.getEventType());
+        }
+    }
+
+    private void releaseQuota(UUID videoId, String providerAssetId) {
+        UploadSession session = (providerAssetId != null)
+            ? uploadSessionRepository.findFirstByVideoIdAndProviderUploadIdOrderByCreatedAtDesc(videoId, providerAssetId).orElse(null)
+            : uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId).orElse(null);
+        if (session != null && session.getReservationHandle() != null) {
+            quotaProvider.release(session.getReservationHandle());
+        } else {
+            log.warn("No reservation handle found for videoId={} — quota not released", videoId);
         }
     }
 

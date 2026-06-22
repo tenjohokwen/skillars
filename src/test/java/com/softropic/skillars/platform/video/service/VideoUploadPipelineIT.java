@@ -48,6 +48,13 @@ class VideoUploadPipelineIT extends BaseVideoIT {
     @MockitoBean
     QuotaProvider quotaProvider;
 
+    // Mocked to isolate upload pipeline tests from the async moderation pipeline.
+    // upload.success publishes VideoUploadedEvent which triggers ModerationOrchestrationService;
+    // without this mock the async pipeline races test assertions and creates video_moderation_scans
+    // rows (ON DELETE RESTRICT) that would block setUp's deleteAll().
+    @MockitoBean
+    ModerationOrchestrationService moderationOrchestrationService;
+
     @Autowired WebhookEventProcessorScheduler scheduler;
     @Autowired VideoRepository videoRepository;
     @Autowired VideoWebhookEventRepository webhookEventRepository;
@@ -67,7 +74,9 @@ class VideoUploadPipelineIT extends BaseVideoIT {
 
     @Test
     void encodingSuccess_setsMetadataCommitsQuotaTransitionsToReady() {
-        Video video = seedVideo(OperationalState.PROCESSING, "asset-1");
+        // Video must be in TRANSCODING for encoding.success to call completeTranscoding().
+        // PROCESSING videos record encodingCompletedAt and wait for the moderation pipeline.
+        Video video = seedVideo(OperationalState.TRANSCODING, "asset-1");
         seedUploadSession(video.getId(), "test-handle-1");
         seedWebhookEvent("asset-1:video.encoding.success", "video.encoding.success", "asset-1");
 
@@ -81,12 +90,6 @@ class VideoUploadPipelineIT extends BaseVideoIT {
 
         VideoWebhookEvent evt = webhookEventRepository.findAll().iterator().next();
         assertThat(evt.getStatus()).isEqualTo(VideoWebhookStatus.COMPLETED);
-
-        // VideoUploadedEvent is now published from completeTranscoding() Phase 3
-        long uploadedEventCount = applicationEvents.stream(VideoUploadedEvent.class)
-            .filter(e -> e.videoId().equals(video.getId()))
-            .count();
-        assertThat(uploadedEventCount).isEqualTo(1);
     }
 
     @Test
@@ -94,7 +97,7 @@ class VideoUploadPipelineIT extends BaseVideoIT {
         when(videoProviderAdapter.getVideoMetadata(anyString()))
             .thenThrow(new VideoProviderException("getVideoMetadata", new RuntimeException("network error")));
 
-        Video video = seedVideo(OperationalState.PROCESSING, "asset-2");
+        Video video = seedVideo(OperationalState.TRANSCODING, "asset-2");
         seedUploadSession(video.getId(), "test-handle-2");
         seedWebhookEvent("asset-2:video.encoding.success", "video.encoding.success", "asset-2");
 
@@ -133,7 +136,7 @@ class VideoUploadPipelineIT extends BaseVideoIT {
 
     @Test
     void encodingSuccess_sessionHasNullReservationHandle_stillTransitionsToReady() {
-        Video video = seedVideo(OperationalState.PROCESSING, "asset-5");
+        Video video = seedVideo(OperationalState.TRANSCODING, "asset-5");
         seedUploadSessionWithNullHandle(video.getId());
         seedWebhookEvent("asset-5:video.encoding.success", "video.encoding.success", "asset-5");
 
@@ -145,9 +148,9 @@ class VideoUploadPipelineIT extends BaseVideoIT {
     }
 
     @Test
-    void videoUploadSuccess_transitionsToProcessingWithoutPublishingVideoUploadedEvent() {
-        // VideoUploadedEvent is now published from completeTranscoding() Phase 3 (encoding.success),
-        // not from the upload.success handler; upload.success only advances the state machine.
+    void videoUploadSuccess_transitionsToProcessingAndPublishesVideoUploadedEvent() {
+        // upload.success advances UPLOADING→PROCESSING and publishes VideoUploadedEvent,
+        // which triggers the moderation pipeline (mocked in this test class).
         Video video = seedVideo(OperationalState.UPLOADING, "asset-6");
         seedWebhookEvent("asset-6:video.upload.success", "video.upload.success", "asset-6");
 
@@ -159,7 +162,7 @@ class VideoUploadPipelineIT extends BaseVideoIT {
         long eventCount = applicationEvents.stream(VideoUploadedEvent.class)
             .filter(e -> e.videoId().equals(video.getId()))
             .count();
-        assertThat(eventCount).isZero();
+        assertThat(eventCount).isEqualTo(1);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

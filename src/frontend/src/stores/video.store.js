@@ -2,6 +2,93 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { videoApi } from 'src/api/video.api'
 
+const SSE_BACKOFF_DELAYS = [1000, 2000, 4000, 8000]
+const TERMINAL_SSE_STATES = new Set(['READY', 'LOCKED', 'HIDDEN', 'FAILED', 'DELETED'])
+const POLLING_INTERVAL_MS = 2000
+
+export function useVideoStatusSse(videoId, { onStatusChange, onTerminal } = {}) {
+  let eventSource = null
+  let retryIndex = 0
+  let retryTimer = null
+  let pollTimer = null
+  let active = true
+
+  function startPolling() {
+    if (pollTimer) return
+    pollTimer = setInterval(async () => {
+      if (!active) return
+      try {
+        const res = await fetch(`/api/video/${videoId}/status`)
+        if (res.status === 401 || res.status === 403) {
+          onStatusChange?.('AUTH_ERROR')
+          stop()
+          return
+        }
+        if (!res.ok) return
+        const data = await res.json()
+        const state = data.operationalState
+        onStatusChange?.(state)
+        if (TERMINAL_SSE_STATES.has(state)) {
+          onTerminal?.(state)
+          stop()
+        }
+      } catch {
+        // network error during polling — ignore and retry next tick
+      }
+    }, POLLING_INTERVAL_MS)
+  }
+
+  function stopPolling() {
+    if (pollTimer) {
+      clearInterval(pollTimer)
+      pollTimer = null
+    }
+  }
+
+  function connect() {
+    if (!active) return
+    eventSource = new EventSource(`/api/video/${videoId}/events`)
+    stopPolling() // SSE connected — stop polling fallback
+
+    eventSource.addEventListener('status', (event) => {
+      retryIndex = 0
+      const state = event.data
+      onStatusChange?.(state)
+      if (TERMINAL_SSE_STATES.has(state)) {
+        onTerminal?.(state)
+        stop()
+      }
+    })
+
+    eventSource.onerror = () => {
+      if (eventSource) {
+        eventSource.close()
+        eventSource = null
+      }
+      if (active) {
+        startPolling()
+        const delay = SSE_BACKOFF_DELAYS[Math.min(retryIndex, SSE_BACKOFF_DELAYS.length - 1)]
+        retryIndex++
+        clearTimeout(retryTimer)
+        retryTimer = setTimeout(connect, delay)
+      }
+    }
+  }
+
+  function stop() {
+    active = false
+    if (eventSource) {
+      eventSource.close()
+      eventSource = null
+    }
+    clearTimeout(retryTimer)
+    stopPolling()
+  }
+
+  connect()
+  return { stop }
+}
+
 export const useVideoStore = defineStore('video', () => {
   const uploadProgress = ref(0)
   const uploadState = ref('idle') // 'idle' | 'initiating' | 'uploading' | 'processing' | 'error'

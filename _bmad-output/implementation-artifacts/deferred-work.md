@@ -506,3 +506,15 @@
 ## Deferred from: code review of skillars-6-2 pass 5 (2026-06-22)
 
 - Def24: `failTranscoding()` state-transition rollback on `quotaProvider.release()` exception — `failTranscoding()` is `@Transactional`; if `QuotaService.release()` throws (DB connection loss), the entire TX rolls back including `transitionOperationalState(FAILED)`, leaving the video in `PROCESSING`. Scheduler retries recover normally; only fails permanently if max-attempts exhaust during a persistent quota DB outage. Architectural fix: separate state transition and quota release into independent TXs (same pattern as `completeTranscoding()`). [`VideoService.java:failTranscoding`]
+
+## Deferred from: code review of skillars-6-3-content-moderation-pipeline (2026-06-22)
+
+- W1: Feature flags default false in all environments — the spec explicitly documents this as the sprint completion criterion: "story is complete for sprint purposes when the placeholder compiles and the feature flag gates it off in all environments." Deployment enablement is an ops concern outside this story's scope. [`application.yaml`, `AppFeature.java`]
+- W2: VideoIntelClientImpl blocking RestTemplate thread exhaustion — if VideoIntelClientImpl is ever implemented using RestTemplate (synchronous polling of a 5-minute GCP async operation), it will hold async thread pool threads for the full duration. This concern is subsumed by D2 (VideoIntelClientImpl scope decision); if D2 resolves to implement in Story 6.3, a proper non-blocking implementation must address thread exhaustion. [`VideoIntelClientImpl.java`, `VideoIntelConfig.java`]
+- W3: SLA monitor re-queues via Spring events, not outbox — `ModerationSlaMonitorService` publishes `VideoModerationRetryEvent` directly via `ApplicationEventPublisher`. If the app crashes after `findScanningOlderThan()` returns but before events publish, retry intents for that cycle are lost; next cycle recovers. Full outbox support deferred to a future hardening story. [`ModerationSlaMonitorService.java`]
+
+## Deferred from: post-implementation review of skillars-6-3 (2026-06-22)
+
+- RW1: SSE subscribe → onStatusChanged race — state transition committed between `videoService.findById()` and `emitter.send(currentStatus)` is missed. Polling fallback mitigates. Architectural limitation of SSE without event sourcing. [`VideoSseService.java:39`, `VideoEventResource.java:39`]
+- RW2: scanned_at misleading on upsert retry path — `@Column(updatable=false)` retains original failed-attempt timestamp even when SLA retry overwrites outcome to PASSED. Fix requires append-only per-attempt rows (architectural scope beyond this story). [`VideoModerationScan.java:39`]
+- RW3: Quota release outside transaction on encoding.failed in SCANNING — same pattern as Def24; `quotaProvider.release()` after committed SCANNING→FAILED transition; if release throws, quota is permanently leaked. [`WebhookEventProcessorScheduler.java:185-187`]

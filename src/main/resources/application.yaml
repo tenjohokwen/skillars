@@ -221,6 +221,24 @@ app:
       library-id: ${APP_VIDEO_BUNNY_LIBRARY_ID:}
       cdn-hostname: ${APP_VIDEO_BUNNY_CDN_HOSTNAME:}
       api-base-url: https://video.bunnycdn.com
+    moderation:
+      sla-monitor-delay-ms: 300000
+
+features:
+  toggles:
+    arachnid-enabled: false
+    videointel-enabled: false
+
+infrastructure:
+  arachnid:
+    api-key: ${ARACHNID_API_KEY:}
+    api-base-url: ${ARACHNID_API_BASE_URL:https://api.c3p.ca}
+    timeout-seconds: 30
+  videointel:
+    project-id: ${VIDEOINTEL_PROJECT_ID:}
+    credentials-path: ${VIDEOINTEL_CREDENTIALS_PATH:}
+    flag-threshold: 0.7
+    timeout-seconds: 300
 
 platform:
   filestorage:
