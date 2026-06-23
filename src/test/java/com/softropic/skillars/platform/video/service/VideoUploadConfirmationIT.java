@@ -7,7 +7,7 @@ import com.softropic.skillars.platform.video.contract.ConfirmUploadResponse;
 import com.softropic.skillars.platform.video.contract.InitializeUploadRequest;
 import com.softropic.skillars.platform.video.contract.InitializeUploadResponse;
 import com.softropic.skillars.platform.video.contract.OperationalState;
-import com.softropic.skillars.platform.video.contract.QuotaProvider;
+import com.softropic.skillars.platform.video.service.QuotaService;
 import com.softropic.skillars.platform.video.contract.UploadSessionStatus;
 import com.softropic.skillars.platform.video.repo.UploadSession;
 import com.softropic.skillars.platform.video.repo.UploadSessionRepository;
@@ -30,7 +30,7 @@ import static org.mockito.Mockito.*;
 class VideoUploadConfirmationIT extends BaseVideoIT {
 
     @MockitoBean
-    QuotaProvider quotaProvider;
+    QuotaService quotaProvider;
 
     @MockitoBean
     VideoProviderAdapter videoProviderAdapter;

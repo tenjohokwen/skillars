@@ -16,6 +16,10 @@ public interface VideoProviderAdapter {
         throw new UnsupportedOperationException("archiveAsset not supported");
     }
 
+    default java.util.Optional<String> generateDownloadUrl(String providerAssetId, PlaybackTokenClaims claims) {
+        return java.util.Optional.empty();
+    }
+
     default void restoreAsset(String providerAssetId) {
         throw new UnsupportedOperationException("restoreAsset not supported");
     }

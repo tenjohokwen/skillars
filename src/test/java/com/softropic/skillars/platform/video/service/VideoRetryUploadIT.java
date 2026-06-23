@@ -7,7 +7,7 @@ import com.softropic.skillars.platform.video.contract.AccessState;
 import com.softropic.skillars.platform.video.contract.ConfirmUploadResponse;
 import com.softropic.skillars.platform.video.contract.InitializeUploadResponse;
 import com.softropic.skillars.platform.video.contract.OperationalState;
-import com.softropic.skillars.platform.video.contract.QuotaProvider;
+import com.softropic.skillars.platform.video.service.QuotaService;
 import com.softropic.skillars.platform.video.contract.RetryUploadRequest;
 import com.softropic.skillars.platform.video.contract.UploadSessionStatus;
 import com.softropic.skillars.platform.video.contract.Visibility;
@@ -35,7 +35,7 @@ import static org.mockito.Mockito.when;
 class VideoRetryUploadIT extends BaseVideoIT {
 
     @MockitoBean
-    QuotaProvider quotaProvider;
+    QuotaService quotaProvider;
 
     @MockitoBean
     VideoProviderAdapter videoProviderAdapter;

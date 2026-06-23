@@ -3,12 +3,15 @@ package com.softropic.skillars.platform.video.service;
 import com.softropic.skillars.infrastructure.video.PlaybackTokenClaims;
 import com.softropic.skillars.infrastructure.video.SignedPlaybackUrl;
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
+import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.video.config.VideoProperties;
 import com.softropic.skillars.platform.video.contract.AccessState;
 import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.contract.PlaybackAuthorizationResponse;
+import com.softropic.skillars.platform.video.contract.VideoType;
 import com.softropic.skillars.platform.video.contract.exception.PlaybackDeniedException;
 import com.softropic.skillars.platform.video.contract.exception.VideoNotFoundException;
+import jakarta.annotation.Nullable;
 import com.softropic.skillars.platform.video.repo.PlaybackToken;
 import com.softropic.skillars.platform.video.repo.PlaybackTokenRepository;
 import com.softropic.skillars.platform.video.repo.Video;
@@ -39,10 +42,11 @@ public class PlaybackService {
     private final VideoProviderAdapter videoProviderAdapter;
     private final VideoProperties properties;
     private final VideoMetrics videoMetrics;
+    private final ConfigService configService;
 
     @Observed(name = "video.playback.authorize")
     @Transactional
-    public PlaybackAuthorizationResponse authorizePlayback(UUID videoId, String viewerId) {
+    public PlaybackAuthorizationResponse authorizePlayback(UUID videoId, String viewerId, @Nullable String clientIp) {
         long start = System.nanoTime();
         boolean success = false;
         MDC.put("videoId", videoId.toString());
@@ -52,8 +56,17 @@ public class PlaybackService {
             Video video = videoRepository.findById(videoId)
                 .orElseThrow(() -> new VideoNotFoundException(videoId));
 
-            if (!(video.getOperationalState() == OperationalState.READY
-                    && video.getAccessState() == AccessState.ACTIVE)) {
+            // Story 6.5 will expand access to coaches/admins via @videoAccessGuard.
+            boolean ineligible =
+                video.getOperationalState() == OperationalState.LOCKED
+                || video.getOperationalState() == OperationalState.HIDDEN
+                || video.getOperationalState() == OperationalState.DELETED
+                || video.getAccessState() == AccessState.BLOCKED
+                || video.getAccessState() == AccessState.ARCHIVED
+                || !(video.getOperationalState() == OperationalState.READY
+                     && video.getAccessState() == AccessState.ACTIVE);
+
+            if (ineligible) {
                 throw new PlaybackDeniedException(videoId, viewerId,
                     video.getOperationalState(), video.getAccessState());
             }
@@ -66,15 +79,29 @@ public class PlaybackService {
                 }
             }
 
-            int ttlMinutes = Math.min(
-                properties.getPlayback().getTokenTtlMinutes(),
+            long ttlMinutes = Math.min(
+                configService.getLong("platform.video.playback.signed_url_ttl_minutes", 120L),
                 properties.getPlayback().getTokenMaxTtlMinutes());
             Instant expiresAt = Instant.now().plus(ttlMinutes, ChronoUnit.MINUTES);
 
+            boolean ipBindingEnabled = configService.getBoolean("platform.video.playback.ip_binding_enabled", false);
+            String boundIp = ipBindingEnabled ? clientIp : null;
+
             SignedPlaybackUrl signedUrl = videoProviderAdapter.generatePlaybackUrl(
                 video.getProviderAssetId(),
-                new PlaybackTokenClaims(viewerId, expiresAt));
+                new PlaybackTokenClaims(viewerId, expiresAt, boundIp));
 
+            // Generate download URL for owner of downloadable video types (HOMEWORK, DRILL_DEMO).
+            // COACH_REVIEW: no download URL per FR-VID-009 — only signedHlsUrl is returned.
+            // See AC 4 note: confirm DRILL_DEMO ownership model with platform.session before enabling.
+            String downloadUrl = null;
+            if (video.getVideoType() != VideoType.COACH_REVIEW && viewerId.equals(video.getOwnerId())) {
+                downloadUrl = videoProviderAdapter
+                    .generateDownloadUrl(video.getProviderAssetId(), new PlaybackTokenClaims(viewerId, expiresAt, boundIp))
+                    .orElse(null);
+            }
+
+            // Retain playback token write: revocation window check still works, and tokens serve as audit trail.
             PlaybackToken token = new PlaybackToken();
             token.setVideoId(videoId);
             token.setViewerId(viewerId);
@@ -85,13 +112,19 @@ public class PlaybackService {
 
             log.debug("Playback token issued: tokenId={}", saved.getId());
             success = true;
-            return new PlaybackAuthorizationResponse(jwt, signedUrl.url(), expiresAt);
+            return new PlaybackAuthorizationResponse(jwt, signedUrl.url(), expiresAt, downloadUrl);
         } finally {
             videoMetrics.recordPlaybackAuthorizeLatency(success ? "success" : "error", System.nanoTime() - start);
             MDC.remove("videoId");
             MDC.remove("viewerId");
             MDC.remove("operation");
         }
+    }
+
+    @Observed(name = "video.playback.authorize")
+    @Transactional
+    public PlaybackAuthorizationResponse authorizePlayback(UUID videoId, String viewerId) {
+        return authorizePlayback(videoId, viewerId, null);
     }
 
     @Observed(name = "video.playback.revokeTokens")

@@ -4,6 +4,7 @@ import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
+import com.softropic.skillars.platform.video.contract.AccessState;
 import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.service.VideoService;
 import com.softropic.skillars.platform.video.service.VideoSseService;
@@ -44,7 +45,14 @@ public class VideoEventResource {
     @PreAuthorize(SecurityConstants.IS_AUTHENTICATED)
     public ResponseEntity<VideoStatusResponse> getStatus(@PathVariable UUID id) {
         Video video = findAndVerifyOwnership(id);
-        return ResponseEntity.ok(new VideoStatusResponse(id, video.getOperationalState().name()));
+        String displayState = computeDisplayState(video);
+        return ResponseEntity.ok(new VideoStatusResponse(id, video.getOperationalState().name(), displayState));
+    }
+
+    private String computeDisplayState(Video video) {
+        if (video.getAccessState() == AccessState.BLOCKED)  return "SUBSCRIPTION_LOCKED";
+        if (video.getAccessState() == AccessState.ARCHIVED) return "ARCHIVED";
+        return video.getOperationalState().name();
     }
 
     private Video findAndVerifyOwnership(UUID videoId) {
@@ -57,5 +65,5 @@ public class VideoEventResource {
         return video;
     }
 
-    public record VideoStatusResponse(UUID videoId, String operationalState) {}
+    public record VideoStatusResponse(UUID videoId, String operationalState, String displayState) {}
 }

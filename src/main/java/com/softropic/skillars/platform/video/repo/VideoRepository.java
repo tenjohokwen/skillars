@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+
 public interface VideoRepository extends JpaRepository<Video, UUID> {
 
     Optional<Video> findByProviderAssetId(String providerAssetId);
@@ -37,4 +38,46 @@ public interface VideoRepository extends JpaRepository<Video, UUID> {
         """, nativeQuery = true)
     @Transactional
     List<Video> findScanningOlderThan(@Param("threshold") Instant threshold, @Param("now") Instant now, @Param("batchSize") int batchSize);
+
+    @Query(value = """
+        SELECT * FROM main.videos
+        WHERE access_state = 'BLOCKED'
+          AND lifecycle_locked_at < :threshold
+        ORDER BY lifecycle_locked_at ASC
+        LIMIT :batchSize
+        FOR UPDATE SKIP LOCKED
+        """, nativeQuery = true)
+    List<Video> findBlockedExceedingThreshold(@Param("threshold") Instant threshold, @Param("batchSize") int batchSize);
+
+    @Query(value = """
+        SELECT * FROM main.videos
+        WHERE access_state = 'ARCHIVED'
+          AND archived_at < :threshold
+        ORDER BY archived_at ASC
+        LIMIT :batchSize
+        FOR UPDATE SKIP LOCKED
+        """, nativeQuery = true)
+    List<Video> findArchivedExceedingThreshold(@Param("threshold") Instant threshold, @Param("batchSize") int batchSize);
+
+    @Query(value = """
+        SELECT * FROM main.videos
+        WHERE owner_id = :ownerId
+          AND operational_state = 'READY'
+          AND access_state = 'ACTIVE'
+        ORDER BY created_at ASC
+        LIMIT :batchSize
+        FOR UPDATE SKIP LOCKED
+        """, nativeQuery = true)
+    List<Video> findActiveReadyByOwner(@Param("ownerId") String ownerId, @Param("batchSize") int batchSize);
+
+    @Query(value = """
+        SELECT * FROM main.videos
+        WHERE owner_id = :ownerId
+          AND operational_state = 'READY'
+          AND access_state = 'BLOCKED'
+        ORDER BY lifecycle_locked_at ASC NULLS LAST
+        LIMIT :batchSize
+        FOR UPDATE SKIP LOCKED
+        """, nativeQuery = true)
+    List<Video> findBlockedReadyByOwner(@Param("ownerId") String ownerId, @Param("batchSize") int batchSize);
 }

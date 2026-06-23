@@ -77,7 +77,7 @@ public class VideoApiAdvice {
     @ExceptionHandler(PlaybackDeniedException.class)
     @ResponseStatus(HttpStatus.FORBIDDEN)
     public ErrorDto playbackDeniedHandler(final PlaybackDeniedException ex) {
-        ErrorDto dto = logErrorAndReturnDTO(ex, "video.playbackDenied", VideoErrorCode.PLAYBACK_DENIED.getErrorCode());
+        ErrorDto dto = logErrorAndReturnDTO(ex, "video.notAccessible", "video.notAccessible");
         videoMetrics.recordError(operationFromMdc(), VideoErrorCode.PLAYBACK_DENIED.getErrorCode());
         Map<String, Object> ctx = ex.getLogContext();
         if (ctx.containsKey("operationalState")) {

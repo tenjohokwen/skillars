@@ -93,6 +93,9 @@ public class VideoLifecycleService {
         }
 
         video.setAccessState(newAccessState);
+        if (newAccessState == AccessState.BLOCKED && video.getLifecycleLockedAt() == null) {
+            video.setLifecycleLockedAt(Instant.now());
+        }
         return videoRepository.save(video);
     }
 
@@ -104,5 +107,64 @@ public class VideoLifecycleService {
 
         return video.getOperationalState() == OperationalState.READY
             && video.getAccessState() == AccessState.ACTIVE;
+    }
+
+    /**
+     * Atomically sets accessState=BLOCKED and lifecycleLockedAt in one transaction.
+     * Must not be split into two calls — the check constraint fires if lifecycleLockedAt is null on a BLOCKED row.
+     */
+    @Transactional
+    public void blockForSubscriptionExpiry(UUID videoId, Instant lockedAt) {
+        Video video = videoRepository.findById(videoId)
+            .orElseThrow(() -> new VideoNotFoundException(videoId));
+        video.setAccessState(AccessState.BLOCKED);
+        video.setLifecycleLockedAt(lockedAt);
+        videoRepository.save(video);
+    }
+
+    /**
+     * Atomically sets accessState=ARCHIVED and archivedAt in one transaction.
+     * archivedAt is the Phase 2 reference clock — committed in the same transaction to
+     * prevent Phase 2 from selecting a video archived in Phase 1 of the same scheduler run.
+     */
+    @Transactional
+    public void archiveForLifecycle(UUID videoId) {
+        Video video = videoRepository.findById(videoId)
+            .orElseThrow(() -> new VideoNotFoundException(videoId));
+        video.setAccessState(AccessState.ARCHIVED);
+        video.setArchivedAt(Instant.now());
+        videoRepository.save(video);
+    }
+
+    /**
+     * Lifecycle escape hatch for READY→DELETED. Does not go through VALID_TRANSITIONS (which blocks READY→*).
+     * Sets operationalState=DELETED and storageBytes=0, fires VideoStatusChangedEvent, returns prior storageBytes.
+     */
+    @Transactional
+    public long markPurged(UUID videoId) {
+        Video video = videoRepository.findById(videoId)
+            .orElseThrow(() -> new VideoNotFoundException(videoId));
+        if (video.getOperationalState() != OperationalState.READY) {
+            throw new IllegalStateException(
+                "markPurged requires operationalState=READY, got " + video.getOperationalState() + " for videoId=" + videoId);
+        }
+        long priorBytes = video.getStorageBytes() != null ? video.getStorageBytes() : 0L;
+        video.setOperationalState(OperationalState.DELETED);
+        video.setStorageBytes(0L);
+        videoRepository.save(video);
+        publisher.publishEvent(new VideoStatusChangedEvent(videoId, OperationalState.DELETED));
+        return priorBytes;
+    }
+
+    /**
+     * Resets lifecycleLockedAt to newClock (yearly expiry clock reset — AC 9 Path A).
+     * Does not change accessState — the video remains BLOCKED; the 30-day window simply restarts.
+     */
+    @Transactional
+    public void resetLifecycleClock(UUID videoId, Instant newClock) {
+        Video video = videoRepository.findById(videoId)
+            .orElseThrow(() -> new VideoNotFoundException(videoId));
+        video.setLifecycleLockedAt(newClock);
+        videoRepository.save(video);
     }
 }

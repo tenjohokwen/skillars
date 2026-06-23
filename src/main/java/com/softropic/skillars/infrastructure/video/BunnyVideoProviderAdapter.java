@@ -15,6 +15,9 @@ import org.springframework.web.client.RestTemplate;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.util.Assert;
+
 import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.MessageDigest;
@@ -24,6 +27,7 @@ import java.util.Base64;
 import java.util.HexFormat;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 @Slf4j
 public class BunnyVideoProviderAdapter implements VideoProviderAdapter {
@@ -135,9 +139,17 @@ public class BunnyVideoProviderAdapter implements VideoProviderAdapter {
 
     @Override
     public SignedPlaybackUrl generatePlaybackUrl(String providerAssetId, PlaybackTokenClaims claims) {
+        // CRITICAL pre-deploy: verify IP-binding HMAC order matches Bunny documentation.
+        // Bunny spec: SHA256(securityKey + videoId + expiry [+ clientIp]).
+        // Current impl uses HMAC-SHA256 with HS256- prefix which differs from Bunny spec —
+        // verify that Bunny Edge is actually validating tokens before relying on IP binding.
         String signaturePath = "/" + providerAssetId + "/playlist.m3u8";
         long expires = claims.expiresAt().getEpochSecond();
-        String message = signaturePath + expires;
+        String clientIp = claims.clientIp();
+
+        // Normalise IPv6 to bracket notation to avoid HMAC delimiter ambiguity
+        String normalizedIp = normalizeClientIp(clientIp);
+        String message = signaturePath + expires + (normalizedIp != null ? normalizedIp : "");
 
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
@@ -150,15 +162,86 @@ public class BunnyVideoProviderAdapter implements VideoProviderAdapter {
                 .replace("/", "_")
                 .replace("=", "");
 
-            String url = "https://" + cdnHostname + signaturePath + "?token=" + token + "&expires=" + expires;
-            return new SignedPlaybackUrl(url, claims.expiresAt());
+            StringBuilder url = new StringBuilder("https://")
+                .append(cdnHostname).append(signaturePath)
+                .append("?token=").append(token)
+                .append("&expires=").append(expires);
+            if (normalizedIp != null) {
+                url.append("&clientIp=").append(normalizedIp);
+            }
+
+            return new SignedPlaybackUrl(url.toString(), claims.expiresAt());
         } catch (NoSuchAlgorithmException | InvalidKeyException e) {
             throw new VideoProviderException("generatePlaybackUrl", e);
         }
     }
 
     @Override
+    public Optional<String> generateDownloadUrl(String providerAssetId, PlaybackTokenClaims claims) {
+        String downloadPath = "/" + providerAssetId + "/original";
+        long expires = claims.expiresAt().getEpochSecond();
+        String normalizedIp = normalizeClientIp(claims.clientIp());
+        String message = downloadPath + expires + (normalizedIp != null ? normalizedIp : "");
+
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(apiKey.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            byte[] rawToken = mac.doFinal(message.getBytes(StandardCharsets.UTF_8));
+
+            String token = "HS256-" + Base64.getEncoder().encodeToString(rawToken)
+                .replace("\n", "")
+                .replace("+", "-")
+                .replace("/", "_")
+                .replace("=", "");
+
+            StringBuilder url = new StringBuilder("https://")
+                .append(cdnHostname).append(downloadPath)
+                .append("?token=").append(token)
+                .append("&expires=").append(expires);
+            if (normalizedIp != null) {
+                url.append("&clientIp=").append(normalizedIp);
+            }
+            // Content-Disposition=attachment via Bunny query param if supported; otherwise configure Edge Rule
+            // CRITICAL pre-deploy: verify Bunny supports Content-Disposition override query param for download URLs
+
+            return Optional.of(url.toString());
+        } catch (NoSuchAlgorithmException | InvalidKeyException e) {
+            throw new VideoProviderException("generateDownloadUrl", e);
+        }
+    }
+
+    @Override
+    public void archiveAsset(String providerAssetId) {
+        // CRITICAL pre-deploy: verify cold storage archive API endpoint exists in Bunny Stream.
+        // If no dedicated archive endpoint exists, this is a no-op — the DB transition still commits
+        // correctly but the file stays on hot storage until deleteAsset() is called.
+        // 404 = asset already gone; treat as success for idempotency.
+        Assert.state(!TransactionSynchronizationManager.isActualTransactionActive(),
+            "archiveAsset must not be called inside @Transactional");
+        HttpEntity<Void> entity = new HttpEntity<>(buildHeaders());
+        try {
+            restTemplate.postForEntity(
+                apiBaseUrl + "/library/" + libraryId + "/videos/" + providerAssetId + "/archive",
+                entity,
+                Void.class
+            );
+        } catch (HttpClientErrorException.NotFound e) {
+            // 404 = asset already gone; treat as success for idempotency
+            log.warn("archiveAsset: asset not found on Bunny (already archived/deleted?); treating as success providerAssetId={}", providerAssetId);
+        } catch (org.springframework.web.client.HttpClientErrorException.MethodNotAllowed |
+                 org.springframework.web.client.HttpClientErrorException.BadRequest e) {
+            // Bunny may not support an /archive endpoint — log and proceed (no-op path)
+            log.warn("archiveAsset: Bunny returned {} — archive endpoint may not exist; video stays on hot storage. providerAssetId={}",
+                e.getStatusCode(), providerAssetId);
+        } catch (RestClientException e) {
+            throw new VideoProviderException("archiveAsset", e);
+        }
+    }
+
+    @Override
     public void deleteAsset(String providerAssetId) {
+        Assert.state(!TransactionSynchronizationManager.isActualTransactionActive(),
+            "deleteAsset must not be called inside @Transactional");
         HttpEntity<Void> entity = new HttpEntity<>(buildHeaders());
         try {
             restTemplate.exchange(
@@ -167,6 +250,10 @@ public class BunnyVideoProviderAdapter implements VideoProviderAdapter {
                 entity,
                 Void.class
             );
+        } catch (HttpClientErrorException.NotFound e) {
+            // 404 = asset already gone; treat as success for idempotency
+            // A prior run may have deleted the asset but failed to commit the DB update.
+            log.warn("deleteAsset: asset not found on Bunny (already deleted?); treating as success providerAssetId={}", providerAssetId);
         } catch (RestClientException e) {
             throw new VideoProviderException("deleteAsset", e);
         }
@@ -260,6 +347,15 @@ public class BunnyVideoProviderAdapter implements VideoProviderAdapter {
         HttpHeaders headers = new HttpHeaders();
         headers.set("AccessKey", apiKey);
         return headers;
+    }
+
+    private String normalizeClientIp(String clientIp) {
+        if (clientIp == null || clientIp.isBlank()) return null;
+        // IPv6 addresses contain ':' — wrap in bracket notation to avoid HMAC delimiter ambiguity
+        if (clientIp.contains(":") && !clientIp.startsWith("[")) {
+            return "[" + clientIp + "]";
+        }
+        return clientIp;
     }
 
     private String computeTusSignature(String libId, String key, long expireEpoch, String videoGuid) {

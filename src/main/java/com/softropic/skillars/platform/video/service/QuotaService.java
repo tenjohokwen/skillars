@@ -139,6 +139,15 @@ public class QuotaService implements QuotaProvider {
         // storage_used_bytes is NOT decremented on release — only COMMITTED increments it
     }
 
+    @Transactional
+    public void decrementStorageBytes(String ownerId, long bytes) {
+        if (bytes <= 0) return;
+        jdbcTemplate.update(
+            "UPDATE main.video_quotas SET storage_used_bytes = GREATEST(0, storage_used_bytes - ?) WHERE user_id = ?",
+            bytes, ownerId);
+        log.debug("Quota decremented: ownerId={} bytes={}", ownerId, bytes);
+    }
+
     @Override
     public ConsistencyGuarantee getConsistencyGuarantee() {
         return ConsistencyGuarantee.STRICT;

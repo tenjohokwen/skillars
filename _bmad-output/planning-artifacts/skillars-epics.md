@@ -2586,6 +2586,24 @@ So that each party has access to exactly the features their tier entitles them t
 
 *Dev notes: `platform.payment`. New table: `coach_subscription_changes` (changeId UUID PK, coachId UUID NOT NULL, fromTier ENUM NOT NULL, toTier ENUM NOT NULL, effectiveAt TIMESTAMPTZ NOT NULL, applied BOOLEAN NOT NULL DEFAULT false, voidedAt TIMESTAMPTZ nullable). `SubscriptionResource`: POST /api/payment/subscriptions/coach/subscribe, POST /api/payment/subscriptions/coach/change-tier, DELETE /api/payment/subscriptions/coach, GET /api/payment/subscriptions/coach/tiers, GET /api/payment/subscriptions/coach/me — all `@PreAuthorize` coach. Mirror endpoints under `/player/` — `@PreAuthorize` parent + PlayerOwnershipGuard. `SubscriptionChangeApplicator`: `@Scheduled` daily, `SELECT … FOR UPDATE SKIP LOCKED` on `coach_subscription_changes`. Stripe `priceId` values per tier + interval stored in ConfigService — never hardcoded in service layer. Webhook handler reuses existing `StripeWebhookResource` (Story 7.1); new event types added to the routing switch. Past-due grace period enforced by `SubscriptionGracePeriodChecker` `@Scheduled` daily. Test: `SubscriptionLifecycleIT` (subscribe, upgrade, downgrade with pending change, cancel, webhook processing), `PastDueGracePeriodTest` (unit — grace period boundary, auto-downgrade), `TierEntitlementGatingTest` (unit — PAST_DUE treated as FREE), `PlayerSubscriptionOwnershipIT` (403 on cross-parent access).*
 
+**Cross-story handoffs from Story 6.4 (moved here because `platform.payment` was not yet available):**
+
+The following work was defined in Story 6.4 (`skillars-6-4-streaming-security-video-lifecycle`) but deferred because it requires `platform.payment`. This story must implement all items below before being marked done.
+
+1. **Create `platform.payment.contract.event.SubscriptionExpiredEvent`** — record (or class) with fields: `UUID subscriberId`, `String subscriptionTier` (e.g. `"YEARLY"`, `"MONTHLY"`), `Instant expiredAt`. The `tier` field is critical — `VideoSubscriptionLifecycleListener` routes YEARLY vs non-YEARLY expiry through different code paths (clock reset vs BLOCKED transition). A null `tier` must be treated as non-YEARLY (Path B) with a WARN log.
+
+2. **Implement `VideoSubscriptionLifecycleListener`** (`platform.video.service`) — full Task 4 spec from Story 6.4: `@TransactionalEventListener(AFTER_COMMIT)` on `SubscriptionExpiredEvent`; writes to `subscription_lifecycle_outbox`; `@Scheduled(fixedDelay=60_000)` outbox processor; Path A (YEARLY tier — resets `lifecycle_locked_at`); Path B (non-YEARLY — transitions videos to BLOCKED if no other active subscription). Full spec including pagination, dead-letter handling, and ID bridge between `subscriberId (UUID)` and `video.ownerId (String)` is in Story 6.4 Task 4 notes.
+
+3. **Replace stub `PlayerSubscriptionQueryAdapter`** — the current stub in `platform.booking.adapter.PlayerSubscriptionQueryAdapter` returns `false` for both `hasAnyActiveSubscription()` and `hasActiveYearlySubscription()`. This story must move the adapter to `platform.payment` (or a new `platform.payment.adapter` package) and implement both methods against the `coach_subscriptions` / `player_subscriptions` tables created here. The interface (`PlayerSubscriptionQueryPort`) stays in `platform.video.contract` — no cross-module package imports.
+
+4. **Confirm subscriber ID ↔ video owner ID bridge** — `SubscriptionExpiredEvent.subscriberId` is a `UUID`; `Video.ownerId` is a `String`. Confirm that `subscriberId.toString()` matches the format stored in `videos.owner_id` before calling `videoRepository.findActiveReadyByOwner(ownerId, batchSize)`. If `ownerId` stores a username rather than a UUID string, the lookup will silently return zero results. Document the verified bridge in the Story 6.4 dev notes and in the outbox processor code.
+
+5. **Run the three deferred integration tests from Story 6.4 Task 13** — all depend on `SubscriptionExpiredEvent` existing:
+   - `VideoSubscriptionLifecycleListenerIT` — outbox insert, BLOCKED transition, concurrent-subscription guard, clock-reset for YEARLY, outbox at-least-once, dead-letter
+   - `YearlyExemptionRenewalIT` — monthly expiry → BLOCKED; yearly active → no ARCHIVED; yearly expires → clock reset to T1; scheduler after T1+30d → ARCHIVED; scheduler-before-outbox race behavior documented
+   - `SimultaneousExpiryIT` — MONTHLY+YEARLY concurrent expiry race; documents permanent ACTIVE gap; asserts alert/log produced
+   Full test specs are in Story 6.4 Task 13 (`_bmad-output/implementation-artifacts/skillars-6-4-streaming-security-video-lifecycle.md`).
+
 ---
 
 ### Story 7.5: Revenue Dashboard & Financial Reporting

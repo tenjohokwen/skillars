@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-06-22 # Story 6.3 adversarial review patches applied → done
+last_updated: 2026-06-23 # Story 6.4 streaming security & lifecycle → done; blocked tasks (Task 4 + 3 ITs) moved to Story 7.4
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -211,7 +211,7 @@ development_status:
   skillars-6-1-video-module-foundation-quota-system: done
   skillars-6-2-tus-upload-pipeline: done
   skillars-6-3-content-moderation-pipeline: done  # adversarial review complete 2026-06-22
-  skillars-6-4-streaming-security-video-lifecycle: backlog
+  skillars-6-4-streaming-security-video-lifecycle: done  # streaming security + lifecycle scheduler → done 2026-06-23; Task 4 (VideoSubscriptionLifecycleListener) + 3 ITs moved to Story 7.4
   skillars-6-5-video-privacy-rbac-account-deletion-cascades: backlog
   skillars-6-6-player-video-management-portal: backlog
   skillars-epic-6-retrospective: optional

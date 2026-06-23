@@ -5,7 +5,7 @@ import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.video.BaseVideoIT;
 import com.softropic.skillars.platform.video.contract.AccessState;
 import com.softropic.skillars.platform.video.contract.OperationalState;
-import com.softropic.skillars.platform.video.contract.QuotaProvider;
+import com.softropic.skillars.platform.video.service.QuotaService;
 import com.softropic.skillars.platform.video.contract.UploadSessionStatus;
 import com.softropic.skillars.platform.video.contract.VideoWebhookStatus;
 import com.softropic.skillars.platform.video.contract.Visibility;
@@ -46,7 +46,7 @@ class VideoUploadPipelineIT extends BaseVideoIT {
     VideoProviderAdapter videoProviderAdapter;
 
     @MockitoBean
-    QuotaProvider quotaProvider;
+    QuotaService quotaProvider;
 
     // Mocked to isolate upload pipeline tests from the async moderation pipeline.
     // upload.success publishes VideoUploadedEvent which triggers ModerationOrchestrationService;

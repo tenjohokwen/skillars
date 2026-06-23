@@ -2,6 +2,10 @@ import { api } from 'src/boot/axios'
 import * as tus from 'tus-js-client'
 
 export const videoApi = {
+  getPlayUrl(videoId) {
+    return api.get(`/api/video/${videoId}/play`)
+  },
+
   // signal is an AbortSignal from AbortController — passed by video.store.js for cancel-during-initiation support
   initiateUpload(payload, signal) {
     return api.post('/api/video/uploads/initiate', payload, { signal })

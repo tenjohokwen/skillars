@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.video.service;
 import com.softropic.skillars.infrastructure.video.PlaybackTokenClaims;
 import com.softropic.skillars.infrastructure.video.SignedPlaybackUrl;
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
+import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.video.config.VideoProperties;
 import com.softropic.skillars.platform.video.contract.AccessState;
 import com.softropic.skillars.platform.video.contract.OperationalState;
@@ -34,6 +35,7 @@ class PlaybackRevocationWindowUnitTest {
     @Mock PlaybackTokenRepository playbackTokenRepository;
     @Mock VideoProviderAdapter videoProviderAdapter;
     @Mock VideoMetrics videoMetrics;
+    @Mock ConfigService configService;
 
     PlaybackService playbackService;
 
@@ -45,7 +47,10 @@ class PlaybackRevocationWindowUnitTest {
         // Valid signing secret (Base64 of 32+ bytes)
         properties.getPlayback().setSigningSecret("dGVzdC1wbGF5YmFjay1zaWduaW5nLXNlY3JldC0zMi1ieXRlcyEh");
 
-        playbackService = new PlaybackService(videoRepository, playbackTokenRepository, videoProviderAdapter, properties, videoMetrics);
+        when(configService.getLong("platform.video.playback.signed_url_ttl_minutes", 120L)).thenReturn(120L);
+        when(configService.getBoolean("platform.video.playback.ip_binding_enabled", false)).thenReturn(false);
+
+        playbackService = new PlaybackService(videoRepository, playbackTokenRepository, videoProviderAdapter, properties, videoMetrics, configService);
     }
 
     @Test
@@ -54,6 +59,7 @@ class PlaybackRevocationWindowUnitTest {
         String viewerId = "viewer-zero-window";
 
         Video video = new Video();
+        video.setOwnerId(viewerId);
         video.setOperationalState(OperationalState.READY);
         video.setAccessState(AccessState.ACTIVE);
         video.setProviderAssetId("bunny-asset-zero-window");

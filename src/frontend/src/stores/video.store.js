@@ -3,7 +3,11 @@ import { ref } from 'vue'
 import { videoApi } from 'src/api/video.api'
 
 const SSE_BACKOFF_DELAYS = [1000, 2000, 4000, 8000]
-const TERMINAL_SSE_STATES = new Set(['READY', 'LOCKED', 'HIDDEN', 'FAILED', 'DELETED'])
+// ARCHIVED: defensive — SSE is inactive after READY so ARCHIVED will not arrive via SSE in practice.
+// DELETED: markPurged() fires VideoStatusChangedEvent(DELETED) which reaches SSE subscribers.
+//   Without DELETED here, the SSE connection stays open indefinitely after purge.
+// SUBSCRIPTION_LOCKED is intentionally excluded — it is reversible (player may renew within 30 days).
+const TERMINAL_SSE_STATES = new Set(['READY', 'LOCKED', 'HIDDEN', 'FAILED', 'DELETED', 'ARCHIVED'])
 const POLLING_INTERVAL_MS = 2000
 
 export function useVideoStatusSse(videoId, { onStatusChange, onTerminal } = {}) {
@@ -26,7 +30,9 @@ export function useVideoStatusSse(videoId, { onStatusChange, onTerminal } = {}) 
         }
         if (!res.ok) return
         const data = await res.json()
-        const state = data.operationalState
+        // displayState bridges the two-axis model (operationalState + accessState) to a single
+        // render-ready value. Fall back to operationalState for backward compat with old API responses.
+        const state = data.displayState ?? data.operationalState
         onStatusChange?.(state)
         if (TERMINAL_SSE_STATES.has(state)) {
           onTerminal?.(state)

@@ -73,6 +73,12 @@ public class Video {
     @Column(name = "moderation_retry_count", nullable = false)
     private int moderationRetryCount = 0;
 
+    @Column(name = "lifecycle_locked_at")
+    private Instant lifecycleLockedAt;
+
+    @Column(name = "archived_at")
+    private Instant archivedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

@@ -423,6 +423,8 @@ export default {
       HIDDEN: 'Awaiting approval',
       FAILED: 'Upload failed',
       DELETED: 'Deleted',
+      SUBSCRIPTION_LOCKED: 'Subscription required',
+      ARCHIVED: 'Archived',
       unknown: 'Unknown',
     },
     statusCard: {

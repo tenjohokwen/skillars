@@ -67,6 +67,20 @@ public class ConfigService {
         }
     }
 
+    public long getLong(String key, long defaultValue) {
+        return find(key).map(v -> {
+            try { return Long.parseLong(v); }
+            catch (NumberFormatException e) {
+                log.warn("Config key '{}' is not a valid long '{}'; using default {}", key, v, defaultValue);
+                return defaultValue;
+            }
+        }).orElse(defaultValue);
+    }
+
+    public int getInt(String key, int defaultValue) {
+        return (int) getLong(key, defaultValue);
+    }
+
     public boolean getBoolean(String key) {
         return find(key)
             .map(v -> "true".equalsIgnoreCase(v))
@@ -74,6 +88,12 @@ public class ConfigService {
                 log.warn("Feature gate config key '{}' not found in platform config; defaulting to false", key);
                 return false;
             });
+    }
+
+    public boolean getBoolean(String key, boolean defaultValue) {
+        return find(key)
+            .map(v -> "true".equalsIgnoreCase(v))
+            .orElse(defaultValue);
     }
 
     public Optional<String> find(String key) {
