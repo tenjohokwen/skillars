@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.security.infrastructure.jwt.JwtSecretServ
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.platform.video.contract.InitializeUploadResponse;
 import com.softropic.skillars.platform.video.contract.exception.VideoValidationException;
+import com.softropic.skillars.platform.video.service.VideoDeletionService;
 import com.softropic.skillars.platform.video.service.VideoMetrics;
 import com.softropic.skillars.platform.video.service.VideoService;
 import org.junit.jupiter.api.Test;
@@ -64,6 +65,9 @@ class VideoUploadResourceIT {
 
     @MockitoBean
     private VideoService videoService;
+
+    @MockitoBean
+    private VideoDeletionService videoDeletionService;
 
     @MockitoBean
     private CoachProfileService coachProfileService;

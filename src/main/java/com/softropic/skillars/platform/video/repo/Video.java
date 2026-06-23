@@ -24,6 +24,10 @@ public class Video {
     @Column(name = "id", updatable = false, nullable = false)
     private UUID id;
 
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
+
     @Column(name = "owner_id", nullable = false)
     private String ownerId;
 

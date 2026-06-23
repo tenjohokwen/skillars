@@ -9,7 +9,8 @@ public enum VideoErrorCode implements ErrorCode {
     PLAYBACK_DENIED,
     PROVIDER_ERROR,
     SESSION_EXPIRED,
-    TERMINAL_STATE_VIOLATION;
+    TERMINAL_STATE_VIOLATION,
+    DELETION_NOT_AUTHORISED;
 
     @Override
     public String getErrorCode() {

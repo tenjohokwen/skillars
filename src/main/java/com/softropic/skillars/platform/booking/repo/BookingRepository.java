@@ -83,6 +83,19 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     List<Object[]> countByBatchIdIn(@Param("batchIds") Set<UUID> batchIds);
 
     @Query("""
+        SELECT CASE WHEN COUNT(b) > 0 THEN true ELSE false END
+        FROM Booking b
+        WHERE b.coachId = :coachId
+          AND b.playerId = :playerId
+          AND b.status = 'COMPLETED'
+          AND b.updatedAt >= :windowStart
+        """)
+    boolean existsRecentCompletedBooking(
+        @Param("coachId") UUID coachId,
+        @Param("playerId") Long playerId,
+        @Param("windowStart") java.time.Instant windowStart);
+
+    @Query("""
         SELECT b FROM Booking b
         WHERE b.playerId = :playerId
           AND b.coachId = :coachId

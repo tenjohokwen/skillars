@@ -431,5 +431,7 @@ export default {
       title: 'Video Status',
       reconnecting: 'Reconnecting…',
     },
+    deletionNotAuthorised: 'You are not authorised to delete this video',
+    deletionFailed: 'Video deletion failed. Please try again.',
   },
 }

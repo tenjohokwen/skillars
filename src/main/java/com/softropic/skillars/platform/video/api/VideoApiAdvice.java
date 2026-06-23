@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.video.contract.VideoErrorCode;
 import com.softropic.skillars.platform.video.contract.exception.PlaybackDeniedException;
 import com.softropic.skillars.platform.video.contract.exception.QuotaExceededException;
 import com.softropic.skillars.platform.video.contract.exception.TerminalStateViolationException;
+import com.softropic.skillars.platform.video.contract.exception.VideoDeletionNotAuthorisedException;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import com.softropic.skillars.platform.video.contract.exception.VideoNotFoundException;
@@ -113,6 +114,13 @@ public class VideoApiAdvice {
         ErrorDto dto = logErrorAndReturnDTO(ex, "video.terminalStateViolation", VideoErrorCode.TERMINAL_STATE_VIOLATION.getErrorCode());
         videoMetrics.recordError(operationFromMdc(), VideoErrorCode.TERMINAL_STATE_VIOLATION.getErrorCode());
         return dto;
+    }
+
+    @ExceptionHandler(VideoDeletionNotAuthorisedException.class)
+    @ResponseStatus(HttpStatus.FORBIDDEN)
+    public ErrorDto videoDeletionNotAuthorisedHandler(final VideoDeletionNotAuthorisedException ex) {
+        videoMetrics.recordError(operationFromMdc(), VideoErrorCode.DELETION_NOT_AUTHORISED.getErrorCode());
+        return logErrorAndReturnDTO(ex, "video.deletionNotAuthorised", "video.deletionNotAuthorised");
     }
 
     private String operationFromMdc() {

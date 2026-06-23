@@ -1,5 +1,8 @@
 package com.softropic.skillars.platform.video.repo;
 
+import com.softropic.skillars.platform.video.contract.OperationalState;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -80,4 +83,6 @@ public interface VideoRepository extends JpaRepository<Video, UUID> {
         FOR UPDATE SKIP LOCKED
         """, nativeQuery = true)
     List<Video> findBlockedReadyByOwner(@Param("ownerId") String ownerId, @Param("batchSize") int batchSize);
+
+    Page<Video> findByOwnerIdAndOperationalStateNot(String ownerId, OperationalState state, Pageable pageable);
 }

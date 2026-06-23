@@ -51,6 +51,12 @@ public class VideoLifecycleService {
 
         OperationalState current = video.getOperationalState();
 
+        // Silently discard lifecycle events for purged videos (e.g., encoding webhook firing after user deletion)
+        if (current == OperationalState.PURGED) {
+            log.warn("[LIFECYCLE_TRANSITION_BLOCKED_PURGED videoId={}]", videoId);
+            return video;
+        }
+
         if (current == OperationalState.DELETED) {
             throw new TerminalStateViolationException(videoId, current.name());
         }

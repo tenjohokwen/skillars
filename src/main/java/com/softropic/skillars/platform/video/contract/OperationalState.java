@@ -9,5 +9,6 @@ public enum OperationalState {
     LOCKED,       // content violation or lifecycle lock
     HIDDEN,       // minor safety gate: awaiting parent approval (Story 6.6)
     FAILED,
-    DELETED
+    DELETED,
+    PURGED        // logically deleted; physical Bunny deletion pending in video_deletion_outbox
 }

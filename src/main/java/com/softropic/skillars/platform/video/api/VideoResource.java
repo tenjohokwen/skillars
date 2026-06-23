@@ -9,6 +9,7 @@ import com.softropic.skillars.platform.video.contract.InitializeUploadResponse;
 import com.softropic.skillars.platform.video.contract.VideoType;
 import com.softropic.skillars.platform.video.contract.VideoUploadInitiateRequest;
 import com.softropic.skillars.platform.video.contract.exception.VideoValidationException;
+import com.softropic.skillars.platform.video.service.VideoDeletionService;
 import com.softropic.skillars.platform.video.service.VideoService;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.Valid;
@@ -16,9 +17,12 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -34,6 +38,7 @@ public class VideoResource {
     private final VideoService videoService;
     private final SecurityUtil securityUtil;
     private final CoachProfileService coachProfileService;
+    private final VideoDeletionService videoDeletionService;
 
     // Coaches may only upload coach-scoped types; HOMEWORK is a player-only type
     private static final Set<VideoType> COACH_ALLOWED_VIDEO_TYPES =
@@ -61,5 +66,14 @@ public class VideoResource {
                 coachId.toString(), req.fileName(), req.fileSizeBytes(),
                 req.mimeType(), req.videoType()));
         return ResponseEntity.status(HttpStatus.CREATED).body(resp);
+    }
+
+    @DeleteMapping("/{id}")
+    @PreAuthorize("@videoAccessGuard.canDelete(authentication, #id)")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @Observed(name = "video.delete")
+    public void deleteVideo(@PathVariable UUID id) {
+        String currentUser = securityUtil.getCurrentUserName();
+        videoDeletionService.deleteByUser(id, currentUser);
     }
 }

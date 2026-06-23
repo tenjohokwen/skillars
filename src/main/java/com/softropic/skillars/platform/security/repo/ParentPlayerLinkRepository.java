@@ -12,4 +12,6 @@ public interface ParentPlayerLinkRepository extends JpaRepository<ParentPlayerLi
     Optional<ParentPlayerLink> findByPlayerId(Long playerId);
 
     List<ParentPlayerLink> findByParentId(Long parentId);
+
+    List<ParentPlayerLink> findAllByPlayerId(Long playerId);
 }

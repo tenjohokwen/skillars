@@ -44,9 +44,14 @@ public class PlaybackService {
     private final VideoMetrics videoMetrics;
     private final ConfigService configService;
 
-    @Observed(name = "video.playback.authorize")
     @Transactional
     public PlaybackAuthorizationResponse authorizePlayback(UUID videoId, String viewerId, @Nullable String clientIp) {
+        return authorizePlayback(videoId, viewerId, clientIp, false);
+    }
+
+    @Observed(name = "video.playback.authorize")
+    @Transactional
+    public PlaybackAuthorizationResponse authorizePlayback(UUID videoId, String viewerId, @Nullable String clientIp, boolean skipHiddenCheck) {
         long start = System.nanoTime();
         boolean success = false;
         MDC.put("videoId", videoId.toString());
@@ -56,15 +61,26 @@ public class PlaybackService {
             Video video = videoRepository.findById(videoId)
                 .orElseThrow(() -> new VideoNotFoundException(videoId));
 
-            // Story 6.5 will expand access to coaches/admins via @videoAccessGuard.
-            boolean ineligible =
-                video.getOperationalState() == OperationalState.LOCKED
-                || video.getOperationalState() == OperationalState.HIDDEN
-                || video.getOperationalState() == OperationalState.DELETED
-                || video.getAccessState() == AccessState.BLOCKED
-                || video.getAccessState() == AccessState.ARCHIVED
-                || !(video.getOperationalState() == OperationalState.READY
-                     && video.getAccessState() == AccessState.ACTIVE);
+            boolean isHidden = video.getOperationalState() == OperationalState.HIDDEN;
+
+            boolean ineligible;
+            if (skipHiddenCheck && isHidden) {
+                // Parent approval path: bypass HIDDEN block but still block terminal operational states
+                ineligible = video.getOperationalState() == OperationalState.DELETED
+                    || video.getOperationalState() == OperationalState.PURGED
+                    || video.getAccessState() == AccessState.BLOCKED
+                    || video.getAccessState() == AccessState.ARCHIVED;
+            } else {
+                ineligible =
+                    video.getOperationalState() == OperationalState.LOCKED
+                    || isHidden
+                    || video.getOperationalState() == OperationalState.DELETED
+                    || video.getOperationalState() == OperationalState.PURGED
+                    || video.getAccessState() == AccessState.BLOCKED
+                    || video.getAccessState() == AccessState.ARCHIVED
+                    || !(video.getOperationalState() == OperationalState.READY
+                         && video.getAccessState() == AccessState.ACTIVE);
+            }
 
             if (ineligible) {
                 throw new PlaybackDeniedException(videoId, viewerId,
@@ -121,7 +137,6 @@ public class PlaybackService {
         }
     }
 
-    @Observed(name = "video.playback.authorize")
     @Transactional
     public PlaybackAuthorizationResponse authorizePlayback(UUID videoId, String viewerId) {
         return authorizePlayback(videoId, viewerId, null);

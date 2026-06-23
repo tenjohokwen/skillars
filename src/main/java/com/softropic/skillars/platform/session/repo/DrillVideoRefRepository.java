@@ -35,6 +35,16 @@ public interface DrillVideoRefRepository extends JpaRepository<DrillVideoRef, UU
     @Query("SELECT CASE WHEN COUNT(d) > 0 THEN true ELSE false END FROM DrillVideoRef d WHERE d.videoId = :videoId")
     boolean existsByVideoId(@Param("videoId") UUID videoId);
 
+    Optional<DrillVideoRef> findByVideoId(@Param("videoId") UUID videoId);
+
+    @Query(value = "SELECT d.* FROM session.drill_video_refs d JOIN main.videos v ON d.video_id = v.id WHERE v.provider_asset_id = :bunnyVideoId", nativeQuery = true)
+    Optional<DrillVideoRef> findByBunnyVideoId(@Param("bunnyVideoId") String bunnyVideoId);
+
+    @Modifying(clearAutomatically = true)
+    @Transactional
+    @Query("UPDATE DrillVideoRef d SET d.refCount = d.refCount - 1 WHERE d.drillId = :drillId AND d.refCount > 0")
+    int decrementRefCount(@Param("drillId") UUID drillId);
+
     @Modifying(clearAutomatically = true)
     @Transactional
     @Query(value = "INSERT INTO session.drill_video_refs (drill_id, video_id, ref_count) VALUES (:drillId, :videoId, 1) ON CONFLICT (drill_id) DO UPDATE SET video_id = :videoId", nativeQuery = true)
