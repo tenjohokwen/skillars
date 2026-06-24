@@ -38,7 +38,7 @@ public class VideoLifecycleService {
         OperationalState.TRANSCODING,  Set.of(OperationalState.READY, OperationalState.FAILED),
         OperationalState.FAILED,       Set.of(OperationalState.UPLOADING),
         OperationalState.LOCKED,       Set.of(),  // terminal — admin action required in Story 10
-        OperationalState.HIDDEN,       Set.of(),  // terminal in Story 6.3 ONLY — Story 6.6 MUST add HIDDEN → {TRANSCODING, FAILED, DELETED}
+        OperationalState.HIDDEN,       Set.of(OperationalState.TRANSCODING, OperationalState.REJECTED),  // Story 6.6: approval paths
         OperationalState.READY,        Set.of(),
         OperationalState.DELETED,      Set.of()
     );

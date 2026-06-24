@@ -58,7 +58,9 @@ public class AdminVideoResource {
 
     private VideoSummaryResponse toSummary(Video v) {
         return new VideoSummaryResponse(v.getId(), v.getTitle(), v.getOperationalState(),
-                v.getAccessState(), v.getOwnerId(), v.getVisibility(), v.getUpdatedAt());
+                v.getAccessState(), v.getOwnerId(), v.getVisibility(),
+                v.getVideoType() != null ? v.getVideoType().name() : null,
+                v.getCreatedAt(), v.getUpdatedAt());
     }
 
     private UploadSessionDto toSessionDto(UploadSession s) {

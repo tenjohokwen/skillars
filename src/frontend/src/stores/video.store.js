@@ -7,7 +7,10 @@ const SSE_BACKOFF_DELAYS = [1000, 2000, 4000, 8000]
 // DELETED: markPurged() fires VideoStatusChangedEvent(DELETED) which reaches SSE subscribers.
 //   Without DELETED here, the SSE connection stays open indefinitely after purge.
 // SUBSCRIPTION_LOCKED is intentionally excluded — it is reversible (player may renew within 30 days).
-const TERMINAL_SSE_STATES = new Set(['READY', 'LOCKED', 'HIDDEN', 'FAILED', 'DELETED', 'ARCHIVED'])
+// HIDDEN is NOT terminal: a video awaiting parental approval will transition to TRANSCODING or REJECTED;
+//   the SSE connection must stay open so the VideoStatusCard receives the follow-up state push.
+// REJECTED is terminal: parental approval is final.
+const TERMINAL_SSE_STATES = new Set(['READY', 'LOCKED', 'REJECTED', 'FAILED', 'DELETED', 'ARCHIVED'])
 const POLLING_INTERVAL_MS = 2000
 
 export function useVideoStatusSse(videoId, { onStatusChange, onTerminal } = {}) {

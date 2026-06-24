@@ -11,6 +11,34 @@ export const videoApi = {
     return api.post('/api/video/uploads/initiate', payload, { signal })
   },
 
+  initiatePlayerUpload(payload, signal) {
+    return api.post('/api/video/player/uploads/initiate', payload, { signal })
+  },
+
+  getMyVideos() {
+    return api.get('/api/video/my')
+  },
+
+  getMyQuota() {
+    return api.get('/api/video/quotas/me')
+  },
+
+  deleteVideo(videoId) {
+    return api.delete(`/api/video/${videoId}`)
+  },
+
+  getMyApprovals() {
+    return api.get('/api/video/approvals')
+  },
+
+  approveVideo(approvalId) {
+    return api.put(`/api/video/approvals/${approvalId}/approve`)
+  },
+
+  rejectVideo(approvalId) {
+    return api.put(`/api/video/approvals/${approvalId}/reject`)
+  },
+
   createTusUpload({
     file,
     signedUploadUrl,

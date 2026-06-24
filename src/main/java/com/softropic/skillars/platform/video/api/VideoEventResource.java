@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.video.api;
 
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.infrastructure.security.SecurityError;
+import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.platform.video.contract.AccessState;
@@ -57,12 +58,27 @@ public class VideoEventResource {
 
     private Video findAndVerifyOwnership(UUID videoId) {
         Video video = videoService.findById(videoId);
-        String currentUser = securityUtil.getCurrentUserName();
-        if (!video.getOwnerId().equals(currentUser)) {
+        if (!isCurrentUserOwner(video.getOwnerId())) {
             throw new OperationNotAllowedException(
                 "Not the owner of this video", SecurityError.MISSING_RIGHTS);
         }
         return video;
+    }
+
+    private boolean isCurrentUserOwner(String ownerId) {
+        try {
+            Long.parseLong(ownerId);
+            // Player video: ownerId is a Long TSID string — compare with the authenticated user's businessId
+            org.springframework.security.core.userdetails.User user = securityUtil.getCurrentUser();
+            if (user instanceof Principal principal) {
+                String businessId = principal.getBusinessId();
+                return businessId != null && businessId.equals(ownerId);
+            }
+            return false;
+        } catch (NumberFormatException e) {
+            // Coach video: ownerId is a UUID string — fall back to username
+            return ownerId.equals(securityUtil.getCurrentUserName());
+        }
     }
 
     public record VideoStatusResponse(UUID videoId, String operationalState, String displayState) {}

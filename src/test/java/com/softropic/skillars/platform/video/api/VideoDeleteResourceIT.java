@@ -2,7 +2,11 @@ package com.softropic.skillars.platform.video.api;
 
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.security.infrastructure.jwt.JwtSecretService;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
+import com.softropic.skillars.platform.video.repo.VideoQuotaRepository;
+import com.softropic.skillars.platform.video.repo.VideoRepository;
+import com.softropic.skillars.platform.video.service.QuotaConfigService;
 import com.softropic.skillars.platform.video.contract.exception.VideoDeletionNotAuthorisedException;
 import com.softropic.skillars.platform.video.contract.exception.VideoNotFoundException;
 import com.softropic.skillars.platform.video.service.VideoAccessGuard;
@@ -65,6 +69,10 @@ class VideoDeleteResourceIT {
     @MockitoBean CoachProfileService coachProfileService;
     @MockitoBean VideoMetrics videoMetrics;
     @MockitoBean JwtSecretService jwtSecretService;
+    @MockitoBean PlayerProfileRepository playerProfileRepository;
+    @MockitoBean VideoRepository videoRepository;
+    @MockitoBean VideoQuotaRepository videoQuotaRepository;
+    @MockitoBean QuotaConfigService quotaConfigService;
 
     private static final UUID VIDEO_ID = UUID.fromString("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
     private static final String OWNER = "player-42";

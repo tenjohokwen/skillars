@@ -8,6 +8,7 @@ public enum OperationalState {
     READY,        // transcoding complete, playable
     LOCKED,       // content violation or lifecycle lock
     HIDDEN,       // minor safety gate: awaiting parent approval (Story 6.6)
+    REJECTED,     // parental approval rejected; video invisible to player
     FAILED,
     DELETED,
     PURGED        // logically deleted; physical Bunny deletion pending in video_deletion_outbox

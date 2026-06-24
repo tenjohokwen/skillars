@@ -37,7 +37,10 @@ const { t } = useI18n()
 // SUBSCRIPTION_LOCKED and ARCHIVED are reversible — do NOT add to TERMINAL_STATES.
 // A subscription-locked video can return to ACTIVE on renewal; polling must continue.
 // ARCHIVED is defensive — SSE is inactive after READY so this state will not arrive via SSE.
-const TERMINAL_STATES = new Set(['READY', 'LOCKED', 'HIDDEN', 'FAILED', 'DELETED', 'ARCHIVED'])
+// HIDDEN is NOT terminal: a video awaiting parental approval transitions to TRANSCODING (approved)
+// or REJECTED (rejected) — removing HIDDEN keeps the SSE connection open for the follow-up push.
+// REJECTED is terminal: parental approval is final; no further state changes are expected.
+const TERMINAL_STATES = new Set(['READY', 'LOCKED', 'REJECTED', 'FAILED', 'DELETED', 'ARCHIVED'])
 
 const currentStatus = ref(props.initialStatus)
 
@@ -49,6 +52,7 @@ const statusConfigs = {
   READY:               { icon: 'check_circle',  color: 'positive', done: true      },
   LOCKED:              { icon: 'lock',          color: 'negative', error: true     },
   HIDDEN:              { icon: 'visibility_off',color: 'warning'                   },
+  REJECTED:            { icon: 'cancel',        color: 'negative', error: true     },
   FAILED:              { icon: 'error',         color: 'negative', error: true     },
   // DELETED: no config — card is removed from parent list immediately on DELETED; never rendered
   SUBSCRIPTION_LOCKED: { icon: 'lock_clock',    color: 'warning',  error: true     },

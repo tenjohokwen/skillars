@@ -85,4 +85,7 @@ public interface VideoRepository extends JpaRepository<Video, UUID> {
     List<Video> findBlockedReadyByOwner(@Param("ownerId") String ownerId, @Param("batchSize") int batchSize);
 
     Page<Video> findByOwnerIdAndOperationalStateNot(String ownerId, OperationalState state, Pageable pageable);
+
+    List<Video> findByOwnerIdAndOperationalStateNotInOrderByCreatedAtDesc(
+        String ownerId, java.util.Collection<OperationalState> excludedStates);
 }

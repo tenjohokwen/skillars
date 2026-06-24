@@ -179,6 +179,19 @@ const routes = [
         component: () => import('pages/player/PlayerDevelopmentDashboardPage.vue'),
         meta: { requiresAuth: true },
       },
+      {
+        path: 'player/videos',
+        name: 'player-video-management',
+        component: () => import('pages/VideoManagementPage.vue'),
+        meta: { requiresAuth: true, role: 'PLAYER' },
+      },
+      {
+        // Canonical path — do not change without updating Story 7.x notification deep-link
+        path: 'parent/approvals',
+        name: 'parent-approvals',
+        component: () => import('pages/parent/ParentApprovalPage.vue'),
+        meta: { requiresAuth: true, role: 'PARENT' },
+      },
 
       // Marketplace — public (guests can browse, AC 5, FR-MKT-005)
       {

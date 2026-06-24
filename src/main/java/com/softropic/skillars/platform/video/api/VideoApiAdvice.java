@@ -9,6 +9,8 @@ import com.softropic.skillars.platform.video.contract.exception.PlaybackDeniedEx
 import com.softropic.skillars.platform.video.contract.exception.QuotaExceededException;
 import com.softropic.skillars.platform.video.contract.exception.TerminalStateViolationException;
 import com.softropic.skillars.platform.video.contract.exception.VideoDeletionNotAuthorisedException;
+import com.softropic.skillars.platform.video.contract.exception.VideoApprovalNotFoundException;
+import com.softropic.skillars.platform.video.contract.exception.VideoAlreadyResolvedException;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import com.softropic.skillars.platform.video.contract.exception.VideoNotFoundException;
@@ -121,6 +123,22 @@ public class VideoApiAdvice {
     public ErrorDto videoDeletionNotAuthorisedHandler(final VideoDeletionNotAuthorisedException ex) {
         videoMetrics.recordError(operationFromMdc(), VideoErrorCode.DELETION_NOT_AUTHORISED.getErrorCode());
         return logErrorAndReturnDTO(ex, "video.deletionNotAuthorised", "video.deletionNotAuthorised");
+    }
+
+    @ExceptionHandler(VideoApprovalNotFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public ErrorDto videoApprovalNotFoundHandler(final VideoApprovalNotFoundException ex) {
+        ErrorDto dto = logErrorAndReturnDTO(ex, "video.approvalNotFound", VideoErrorCode.VIDEO_APPROVAL_NOT_FOUND.getErrorCode());
+        videoMetrics.recordError(operationFromMdc(), VideoErrorCode.VIDEO_APPROVAL_NOT_FOUND.getErrorCode());
+        return dto;
+    }
+
+    @ExceptionHandler(VideoAlreadyResolvedException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ErrorDto videoAlreadyResolvedHandler(final VideoAlreadyResolvedException ex) {
+        ErrorDto dto = logErrorAndReturnDTO(ex, "video.approvalAlreadyResolved", VideoErrorCode.VIDEO_APPROVAL_ALREADY_RESOLVED.getErrorCode());
+        videoMetrics.recordError(operationFromMdc(), VideoErrorCode.VIDEO_APPROVAL_ALREADY_RESOLVED.getErrorCode());
+        return dto;
     }
 
     private String operationFromMdc() {

@@ -138,14 +138,15 @@ class VideoLifecycleServiceTest {
     }
 
     @Test
-    void hiddenState_isTerminalInStory63_throwsOnAnyTransition() {
+    void hiddenState_story66_allowsTranscodingAndRejected() {
+        // Story 6.6: HIDDEN is no longer terminal — parental approval drives HIDDEN→TRANSCODING or HIDDEN→REJECTED
         UUID id = UUID.randomUUID();
         Video v = videoWith(id, OperationalState.HIDDEN, AccessState.ACTIVE);
         when(videoRepository.findById(id)).thenReturn(Optional.of(v));
+        when(videoRepository.save(v)).thenReturn(v);
 
-        assertThatThrownBy(() -> service.transitionOperationalState(id, OperationalState.TRANSCODING))
-            .isInstanceOf(TerminalStateViolationException.class);
-        verify(videoRepository, never()).save(any());
+        Video result = service.transitionOperationalState(id, OperationalState.TRANSCODING);
+        assertThat(result.getOperationalState()).isEqualTo(OperationalState.TRANSCODING);
     }
 
     @Test

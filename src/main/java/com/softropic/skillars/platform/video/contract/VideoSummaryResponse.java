@@ -10,4 +10,6 @@ public record VideoSummaryResponse(
         AccessState accessState,
         String ownerId,
         Visibility visibility,
+        String videoType,
+        Instant createdAt,
         Instant updatedAt) {}

@@ -3,7 +3,11 @@ package com.softropic.skillars.platform.video.api;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.security.infrastructure.jwt.JwtSecretService;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
+import com.softropic.skillars.platform.video.repo.VideoQuotaRepository;
+import com.softropic.skillars.platform.video.repo.VideoRepository;
+import com.softropic.skillars.platform.video.service.QuotaConfigService;
 import com.softropic.skillars.platform.video.contract.InitializeUploadResponse;
 import com.softropic.skillars.platform.video.contract.exception.VideoValidationException;
 import com.softropic.skillars.platform.video.service.VideoDeletionService;
@@ -82,6 +86,16 @@ class VideoUploadResourceIT {
     // Required by SecurityAdviceFilter which is picked up by the @WebMvcTest web slice
     @MockitoBean
     private JwtSecretService jwtSecretService;
+
+    // Required by VideoResource constructor (added Story 6.6)
+    @MockitoBean
+    private PlayerProfileRepository playerProfileRepository;
+    @MockitoBean
+    private VideoRepository videoRepository;
+    @MockitoBean
+    private VideoQuotaRepository videoQuotaRepository;
+    @MockitoBean
+    private QuotaConfigService quotaConfigService;
 
     private static final InitializeUploadResponse STUB_RESPONSE = new InitializeUploadResponse(
         UUID.fromString("11111111-1111-1111-1111-111111111111"),

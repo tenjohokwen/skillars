@@ -54,6 +54,7 @@ export default defineRouter(function (/* { store, ssrContext } */) {
     const requiresGuest = to.matched.some((r) => r.meta.requiresGuest)
     const requiresCoach = to.matched.some((r) => r.meta.requiresCoach)
     const requiresParent = to.matched.some((r) => r.meta.role === 'PARENT')
+    const requiresPlayer = to.matched.some((r) => r.meta.role === 'PLAYER')
     const isAuthenticated = authStore.isAuthenticated
 
     if (requiresAuth && !isAuthenticated) {
@@ -72,6 +73,11 @@ export default defineRouter(function (/* { store, ssrContext } */) {
     }
 
     if (requiresParent && isAuthenticated && !authStore.isParent) {
+      next(ROLE_ROUTES[authStore.role] || '/dashboard')
+      return
+    }
+
+    if (requiresPlayer && isAuthenticated && !authStore.isPlayer) {
       next(ROLE_ROUTES[authStore.role] || '/dashboard')
       return
     }

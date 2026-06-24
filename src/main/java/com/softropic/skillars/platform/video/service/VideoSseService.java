@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.video.service;
 
 import com.softropic.skillars.platform.video.contract.OperationalState;
+import com.softropic.skillars.platform.video.contract.event.VideoPhysicalDeletionEvent;
 import com.softropic.skillars.platform.video.contract.event.VideoStatusChangedEvent;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
@@ -21,12 +22,13 @@ public class VideoSseService {
 
     private static final long SSE_TIMEOUT_MS = 5 * 60 * 1000L;
 
-    // HIDDEN is terminal here because VALID_TRANSITIONS makes it terminal in Story 6.3 (Set.of() = no exits).
-    // Story 6.6 DEPENDENCY: when parent approval drives HIDDEN → TRANSCODING, the emitter for HIDDEN
-    // videos will already be closed. Story 6.6 must NOT rely on SSE for the HIDDEN → TRANSCODING transition.
+    // HIDDEN is NOT terminal — a video awaiting parental approval will subsequently transition to
+    // TRANSCODING (approved) or REJECTED (rejected); the SSE connection must stay open so the
+    // player's VideoStatusCard receives the follow-up push without a page refresh.
+    // REJECTED is terminal — parent approval is resolved; no further state changes are expected.
     private static final Set<OperationalState> TERMINAL_STATES = Set.of(
-        OperationalState.READY, OperationalState.LOCKED,
-        OperationalState.HIDDEN, OperationalState.FAILED, OperationalState.DELETED);
+        OperationalState.READY, OperationalState.LOCKED, OperationalState.REJECTED,
+        OperationalState.FAILED, OperationalState.DELETED);
 
     private final ConcurrentHashMap<UUID, CopyOnWriteArrayList<SseEmitter>> emitters = new ConcurrentHashMap<>();
 
@@ -64,6 +66,21 @@ public class VideoSseService {
             } catch (IOException | IllegalStateException e) {
                 log.warn("Failed to push status update for video {}, removing emitter", event.videoId());
                 removeEmitter(event.videoId(), emitter);
+            }
+        }
+    }
+
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onPhysicalDeletion(VideoPhysicalDeletionEvent event) {
+        CopyOnWriteArrayList<SseEmitter> list = emitters.remove(event.videoId());
+        if (list == null || list.isEmpty()) return;
+        for (SseEmitter emitter : list) {
+            try {
+                emitter.send(SseEmitter.event().name("status").data(OperationalState.DELETED.name()));
+                emitter.complete();
+            } catch (IOException | IllegalStateException e) {
+                log.warn("Failed to push deletion event for video {}", event.videoId());
             }
         }
     }

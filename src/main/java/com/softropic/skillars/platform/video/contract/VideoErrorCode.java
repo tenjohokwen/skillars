@@ -10,7 +10,9 @@ public enum VideoErrorCode implements ErrorCode {
     PROVIDER_ERROR,
     SESSION_EXPIRED,
     TERMINAL_STATE_VIOLATION,
-    DELETION_NOT_AUTHORISED;
+    DELETION_NOT_AUTHORISED,
+    VIDEO_APPROVAL_NOT_FOUND,
+    VIDEO_APPROVAL_ALREADY_RESOLVED;
 
     @Override
     public String getErrorCode() {
