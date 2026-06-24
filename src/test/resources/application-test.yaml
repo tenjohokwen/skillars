@@ -1,7 +1,19 @@
 logging:
   config: classpath:logback-test.xml
 
+platform:
+  video:
+    deletion:
+      outbox_initial_delay_ms: 31536000000  # 1 year — prevents background firing in tests
+
 app:
+  payment:
+    stripe:
+      api-key: test_key
+      webhook-secret: whsec_test
+      oauth-client-id: ca_test
+      oauth-callback-url: /api/payment/coaches/me/stripe/callback
+      callback-success-url: /coach/payment-settings
   video:
     upload:
       expiry-scheduler-delay-ms: 3600000

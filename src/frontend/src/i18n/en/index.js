@@ -716,7 +716,25 @@ export default {
       contributionsLoadError: 'Failed to load coach contributions', // TODO: translate
     },
   },
-  payment: {},
+  payment: {
+    stripe: {
+      title: 'Payment Settings',
+      connectCta: 'Connect with Stripe',
+      connected: 'Stripe account connected',
+      notConnected: 'Stripe account not connected',
+      bannerWarning: 'Complete your Stripe setup to accept bookings',
+      chargesEnabled: 'Charges enabled',
+      payoutsEnabled: 'Payouts enabled',
+      setupPending: 'Setup pending — follow Stripe instructions',
+      setupRestricted: 'Account restricted — contact Stripe support',
+    },
+    error: {
+      coachStripeNotConfigured: 'This coach has not completed their payment setup yet',
+      providerUnavailable: 'Payment service unavailable. Please try again.',
+      statusLoadFailed: 'Could not load your payment status. Please refresh the page.',
+      connectFailed: 'Could not start Stripe onboarding. Please try again.',
+    },
+  },
   messaging: {},
   admin: {},
 }

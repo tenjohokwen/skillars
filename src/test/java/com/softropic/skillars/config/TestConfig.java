@@ -1,6 +1,7 @@
 package com.softropic.skillars.config;
 
 import com.softropic.skillars.platform.notification.service.MailManager;
+import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.utils.TestMailManager;
 import com.softropic.skillars.utils.sql.EntityFetchAsserter;
 import com.softropic.skillars.utils.sql.QueryRecorderListener;
@@ -102,6 +103,12 @@ public class TestConfig {
     @ConditionalOnProperty(name = "enable.test.mail", havingValue = "true")
     public MailManager mailManager() {
         return new TestMailManager();
+    }
+
+    @Bean
+    @Primary
+    public PaymentGateway paymentGateway() {
+        return new StubPaymentGateway();
     }
 
     @Bean

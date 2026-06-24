@@ -497,7 +497,25 @@ export default {
       contributionsLoadError: 'Failed to load coach contributions', // TODO: translate
     },
   },
-  payment: {},
+  payment: {
+    stripe: {
+      title: 'Zahlungseinstellungen',
+      connectCta: 'Mit Stripe verbinden',
+      connected: 'Stripe-Konto verbunden',
+      notConnected: 'Stripe-Konto nicht verbunden',
+      bannerWarning: 'Schließen Sie Ihre Stripe-Einrichtung ab, um Buchungen anzunehmen',
+      chargesEnabled: 'Abbuchungen aktiviert',
+      payoutsEnabled: 'Auszahlungen aktiviert',
+      setupPending: 'Einrichtung ausstehend — folgen Sie den Stripe-Anweisungen',
+      setupRestricted: 'Konto eingeschränkt — kontaktieren Sie den Stripe-Support',
+    },
+    error: {
+      coachStripeNotConfigured: 'Dieser Coach hat seine Zahlungseinrichtung noch nicht abgeschlossen',
+      providerUnavailable: 'Zahlungsdienst nicht verfügbar. Bitte versuchen Sie es erneut.',
+      statusLoadFailed: 'Zahlungsstatus konnte nicht geladen werden. Bitte Seite neu laden.',
+      connectFailed: 'Stripe-Onboarding konnte nicht gestartet werden. Bitte erneut versuchen.',
+    },
+  },
   messaging: {},
   admin: {},
   featureGate: {

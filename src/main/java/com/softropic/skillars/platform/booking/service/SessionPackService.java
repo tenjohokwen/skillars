@@ -8,7 +8,7 @@ import com.softropic.skillars.platform.booking.contract.ConflictingBookingItem;
 import com.softropic.skillars.platform.booking.contract.PackPausedEvent;
 import com.softropic.skillars.platform.booking.contract.PauseConflictResponse;
 import com.softropic.skillars.platform.booking.contract.PausePackRequest;
-import com.softropic.skillars.platform.booking.contract.PaymentGateway;
+import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.booking.contract.SessionPackExhaustedEvent;
 import com.softropic.skillars.platform.booking.contract.SessionPackMapper;
 import com.softropic.skillars.platform.booking.contract.SessionPackPurchasedResponse;
@@ -104,8 +104,6 @@ public class SessionPackService {
 
         CoachPricing pricing = coachPricingRepository.findByCoachId(coachId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach pricing not found", "coach_pricing"));
-        // TODO(7.1): Add idempotency key to prevent duplicate charges on rapid retry or double-submit
-        paymentGateway.capturePayment(offered.getTotalPrice(), pricing.getCurrency());
 
         SessionPackPurchased pack = new SessionPackPurchased();
         pack.setParentId(parentId);
@@ -114,7 +112,10 @@ public class SessionPackService {
         pack.setSessionCount(offered.getSessionCount());
         pack.setCreditsRemaining(offered.getSessionCount());
         pack.setExpiresAt(computeExpiresAt(offered.getSessionCount(), Instant.now()));
-        return mapper.toResponse(repository.save(pack), coach.getDisplayName());
+        pack = repository.save(pack);
+        // TODO(7.1): Add idempotency key to prevent duplicate charges on rapid retry or double-submit
+        paymentGateway.capturePayment(pack.getId(), pack.getCoachId(), offered.getTotalPrice());
+        return mapper.toResponse(pack, coach.getDisplayName());
     }
 
     @Transactional
@@ -126,9 +127,6 @@ public class SessionPackService {
         CoachPricing pricing = coachPricingRepository.findByCoachId(coachId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach pricing not found", "coach_pricing"));
 
-        // TODO(7.1): Add idempotency key to prevent duplicate charges on rapid retry or double-submit
-        paymentGateway.capturePayment(pricing.getPerSessionPrice(), pricing.getCurrency());
-
         SessionPackPurchased pack = new SessionPackPurchased();
         pack.setParentId(parentId);
         pack.setPlayerId(playerId);
@@ -136,7 +134,10 @@ public class SessionPackService {
         pack.setSessionCount(1);
         pack.setCreditsRemaining(1);
         pack.setExpiresAt(computeExpiresAt(1, Instant.now()));
-        return mapper.toResponse(repository.save(pack), coach.getDisplayName());
+        pack = repository.save(pack);
+        // TODO(7.1): Add idempotency key to prevent duplicate charges on rapid retry or double-submit
+        paymentGateway.capturePayment(pack.getId(), pack.getCoachId(), pricing.getPerSessionPrice());
+        return mapper.toResponse(pack, coach.getDisplayName());
     }
 
     @Transactional(readOnly = true)

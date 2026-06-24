@@ -16,21 +16,20 @@ import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
-import org.instancio.Instancio;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
-import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalTime;
 import java.time.ZoneId;
@@ -42,9 +41,10 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.instancio.Select.field;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class BookingServiceTest {
@@ -52,6 +52,7 @@ class BookingServiceTest {
     @Mock private BookingRepository bookingRepository;
     @Mock private SessionPackService sessionPackService;
     @Mock private CoachProfileRepository coachProfileRepository;
+    @Mock private PaymentGateway paymentGateway;
     @Mock private CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
     @Mock private PlayerProfileRepository playerProfileRepository;
     @Mock private UserRepository userRepository;
@@ -73,7 +74,7 @@ class BookingServiceTest {
         bookingStateMachine = new BookingStateMachine();
         bookingService = new BookingService(
             bookingRepository, bookingStateMachine, sessionPackService, coachProfileRepository,
-            coachAvailabilityWindowRepository, playerProfileRepository,
+            paymentGateway, coachAvailabilityWindowRepository, playerProfileRepository,
             userRepository, eventPublisher, sessionPackPurchasedRepository,
             rescheduleRequestRepository, bookingBatchRepository
         );
@@ -90,6 +91,7 @@ class BookingServiceTest {
 
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
         when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
         when(sessionPackPurchasedRepository.findActivePacksForDeduction(any(Long.class), any(UUID.class), any(Instant.class))).thenReturn(List.of());
         when(sessionPackService.hasCredits(PLAYER_ID, COACH_ID)).thenReturn(true);
@@ -114,6 +116,7 @@ class BookingServiceTest {
 
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
         when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
         when(sessionPackPurchasedRepository.findActivePacksForDeduction(any(Long.class), any(UUID.class), any(Instant.class))).thenReturn(List.of());
         when(sessionPackService.hasCredits(PLAYER_ID, COACH_ID)).thenReturn(false);
@@ -158,6 +161,7 @@ class BookingServiceTest {
 
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
         when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(Collections.emptyList());
 
         CreateBookingRequest req = makeValidRequest(COACH_ID, PLAYER_ID, makeCoveringWindow(COACH_ID));
@@ -173,6 +177,7 @@ class BookingServiceTest {
 
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
 
         // Request with past start time — service throws before reaching window check
         Instant pastTime = Instant.now().minusSeconds(3600);

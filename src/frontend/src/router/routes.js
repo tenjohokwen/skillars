@@ -168,6 +168,12 @@ const routes = [
         meta: { requiresAuth: true, requiresCoach: true },
       },
       {
+        path: 'coach/payment-settings',
+        name: 'coach-payment-settings',
+        component: () => import('pages/coach/CoachPaymentSettingsPage.vue'),
+        meta: { requiresAuth: true, requiresCoach: true },
+      },
+      {
         path: 'player/locker-room/:playerId',
         name: 'player-locker-room',
         component: () => import('pages/player/PlayerLockerRoomPlaceholderPage.vue'),

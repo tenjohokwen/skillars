@@ -223,6 +223,13 @@ app:
       api-base-url: https://video.bunnycdn.com
     moderation:
       sla-monitor-delay-ms: 300000
+  payment:
+    stripe:
+      api-key: ${APP_PAYMENT_STRIPE_API_KEY:}
+      webhook-secret: ${APP_PAYMENT_STRIPE_WEBHOOK_SECRET:}
+      oauth-client-id: ${APP_PAYMENT_STRIPE_OAUTH_CLIENT_ID:}
+      oauth-callback-url: ${APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL:/api/payment/coaches/me/stripe/callback}
+      callback-success-url: ${APP_PAYMENT_STRIPE_CALLBACK_SUCCESS_URL:/coach/payment-settings}
 
 features:
   toggles:

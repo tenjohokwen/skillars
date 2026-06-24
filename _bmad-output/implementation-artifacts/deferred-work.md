@@ -1,3 +1,9 @@
+## Deferred from: code review of skillars-7-1-stripe-connect-onboarding-commission-engine (2026-06-24)
+- D1: `capturePayment` called inside `@Transactional` in `purchasePack`/`purchaseSingleSession` — DB connection held open during Stripe I/O; will cause connection pool exhaustion when Story 7.2 enables real charges [`SessionPackService.java`]
+- D2: Session pack purchase always fails with `payment.providerUnavailable` in Story 7.1 — intentional stub behaviour per spec; Story 7.2 implements real charging [`StripePaymentGateway.java`]
+- D3: Unbounded `VARCHAR` on `stripe_webhook_events.event_id` — Stripe event IDs are well-formed in practice; low B-tree risk [`V61__payment_module_init.sql`]
+- D4: `acceptBooking` fires `INITIATE_PAYMENT` → `PAYMENT_CAPTURED` state transitions without performing actual payment — pre-existing state machine flow, not introduced by Story 7.1; Story 7.2 must retrofit a failure path and prevent the state being committed before capture succeeds [`BookingService.java:203-204`]
+
 ## Deferred from: adversarial code review of skillars-5-6-parent-development-portal (2026-06-19)
 - AD1: Stale error state between player switches — each store action resets its own error ref at call-start; fully resolved when route.params.playerId watch patch is applied [`ParentDevelopmentPortalPage.vue`]
 - AD2: MapStruct not used for `Object[]` → `CoachContributionDto` mapping — MapStruct cannot transform raw JDBC Object[] projections; inherent native query limitation [`SluContributionService.java`]

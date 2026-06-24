@@ -32,6 +32,8 @@ import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowR
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import com.softropic.skillars.platform.payment.contract.PaymentGateway;
+import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
@@ -92,6 +94,7 @@ public class BookingService {
     private final BookingStateMachine bookingStateMachine;
     private final SessionPackService sessionPackService;
     private final CoachProfileRepository coachProfileRepository;
+    private final PaymentGateway paymentGateway;
     private final CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
     private final PlayerProfileRepository playerProfileRepository;
     private final UserRepository userRepository;
@@ -139,6 +142,10 @@ public class BookingService {
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
         if (coach.getStatus() != CoachProfileStatus.ACTIVE) {
             throw new OperationNotAllowedException("Coach profile is not active", SecurityError.MISSING_RIGHTS);
+        }
+
+        if (!paymentGateway.isCoachPaymentReady(coach.getId())) {
+            throw new PaymentGatewayException("payment.coachStripeNotConfigured");
         }
 
         if (!req.requestedStartTime().isAfter(Instant.now())) {

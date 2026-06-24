@@ -1,6 +1,6 @@
 package com.softropic.skillars.platform.booking.service;
 
-import com.softropic.skillars.platform.booking.contract.PaymentGateway;
+import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.booking.contract.SessionPackExhaustedEvent;
 import com.softropic.skillars.platform.booking.contract.SessionPackMapper;
 import com.softropic.skillars.platform.booking.contract.SessionPackPurchasedResponse;
@@ -168,7 +168,7 @@ class SessionPackServiceTest {
         when(sessionPackRepository.findById(packId)).thenReturn(Optional.of(offered));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile));
         when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(pricing));
-        when(paymentGateway.capturePayment(any(), any())).thenReturn("stub-ref");
+        when(paymentGateway.capturePayment(any(), any(), any())).thenReturn("stub-ref");
         when(configService.getLong("pack.expiry.days.tier2")).thenReturn(180L);
         when(repository.save(any())).thenAnswer(inv -> {
             SessionPackPurchased saved = inv.getArgument(0);
@@ -215,7 +215,7 @@ class SessionPackServiceTest {
         when(sessionPackRepository.findById(packId)).thenReturn(Optional.of(offered));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile));
         when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(pricing));
-        when(paymentGateway.capturePayment(any(), any())).thenReturn("stub-ref");
+        when(paymentGateway.capturePayment(any(), any(), any())).thenReturn("stub-ref");
         when(configService.getLong("pack.expiry.days.tier2")).thenReturn(180L);
 
         ArgumentCaptor<SessionPackPurchased> captor = ArgumentCaptor.forClass(SessionPackPurchased.class);

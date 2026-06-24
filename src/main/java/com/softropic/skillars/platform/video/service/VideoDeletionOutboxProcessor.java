@@ -37,7 +37,8 @@ public class VideoDeletionOutboxProcessor {
     private final ConfigService configService;
     private final TransactionTemplate transactionTemplate;
 
-    @Scheduled(fixedDelayString = "${platform.video.deletion.outbox_poll_delay_ms:60000}")
+    @Scheduled(fixedDelayString   = "${platform.video.deletion.outbox_poll_delay_ms:60000}",
+               initialDelayString = "${platform.video.deletion.outbox_initial_delay_ms:0}")
     public void process() {
         // Reset any rows stuck in CLAIMED state for > 10 minutes (crashed run recovery)
         outboxRepository.resetStaleClaimed(Instant.now().minus(10, ChronoUnit.MINUTES));
