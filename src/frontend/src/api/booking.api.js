@@ -69,3 +69,9 @@ export const acceptAllBatch = (batchId) => api.post(`/api/bookings/batches/${bat
 
 export const pauseSessionPack = (playerId, packId, data) =>
   api.post(`/api/bookings/players/${playerId}/packs/${packId}/pause`, data)
+
+export const cancelBooking = (bookingId) => api.post(`/api/bookings/${bookingId}/cancel`)
+export const coachCancelBooking = (bookingId, cancelReason) =>
+  api.post(`/api/bookings/${bookingId}/coach-cancel`, { cancelReason })
+export const recordNoShowPlayer = (bookingId) => api.post(`/api/bookings/${bookingId}/no-show-player`)
+export const recordNoShowCoach = (bookingId) => api.post(`/api/bookings/${bookingId}/no-show-coach`)

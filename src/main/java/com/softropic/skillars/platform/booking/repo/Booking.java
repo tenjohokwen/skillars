@@ -80,6 +80,9 @@ public class Booking {
     @Column(name = "session_pack_purchase_id", updatable = false)
     private UUID sessionPackPurchaseId;
 
+    @Column(name = "cancel_reason", length = 50)
+    private String cancelReason;
+
     @PrePersist
     void onCreate() {
         if (createdAt == null) createdAt = Instant.now();

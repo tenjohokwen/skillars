@@ -1,7 +1,11 @@
 package com.softropic.skillars.platform.notification.infrastructure.listener;
 
 import com.softropic.skillars.platform.booking.contract.BatchBookingAcceptedEvent;
+import com.softropic.skillars.platform.booking.contract.BookingCancelledByCoachEvent;
+import com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledDueToPauseEvent;
+import com.softropic.skillars.platform.booking.contract.CoachNoShowEvent;
+import com.softropic.skillars.platform.booking.contract.PlayerNoShowEvent;
 import com.softropic.skillars.platform.booking.contract.BatchBookingRequestedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingConfirmedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingDeclinedEvent;
@@ -292,6 +296,74 @@ public class BookingEmailListener {
 
         publisher.publishEvent(new Envelope(
             List.of(recipient), EmailTemplate.BOOKING_CANCELLED_DUE_TO_PAUSE,
+            Instant.now().plus(Duration.ofDays(1)), data,
+            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+        ));
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onBookingCancelledByParent(BookingCancelledByParentEvent event) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
+        data.put("canonicalTimezone", event.getCanonicalTimezone());
+
+        Recipient recipient = new Recipient();
+        recipient.setEmail(event.getCoachEmail());
+        recipient.setLangKey("en");
+
+        publisher.publishEvent(new Envelope(
+            List.of(recipient), EmailTemplate.BOOKING_CANCELLED_BY_PARENT,
+            Instant.now().plus(Duration.ofDays(1)), data,
+            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+        ));
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onBookingCancelledByCoach(BookingCancelledByCoachEvent event) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
+        data.put("canonicalTimezone", event.getCanonicalTimezone());
+
+        Recipient recipient = new Recipient();
+        recipient.setEmail(event.getParentEmail());
+        recipient.setLangKey("en");
+
+        publisher.publishEvent(new Envelope(
+            List.of(recipient), EmailTemplate.BOOKING_CANCELLED_BY_COACH,
+            Instant.now().plus(Duration.ofDays(1)), data,
+            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+        ));
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onCoachNoShow(CoachNoShowEvent event) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
+        data.put("canonicalTimezone", event.getCanonicalTimezone());
+
+        Recipient recipient = new Recipient();
+        recipient.setEmail(event.getParentEmail());
+        recipient.setLangKey("en");
+
+        publisher.publishEvent(new Envelope(
+            List.of(recipient), EmailTemplate.COACH_NO_SHOW,
+            Instant.now().plus(Duration.ofDays(1)), data,
+            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+        ));
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onPlayerNoShow(PlayerNoShowEvent event) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
+        data.put("canonicalTimezone", event.getCanonicalTimezone());
+
+        Recipient recipient = new Recipient();
+        recipient.setEmail(event.getCoachEmail());
+        recipient.setLangKey("en");
+
+        publisher.publishEvent(new Envelope(
+            List.of(recipient), EmailTemplate.PLAYER_NO_SHOW,
             Instant.now().plus(Duration.ofDays(1)), data,
             ShortCode.shortenInt(UUID.randomUUID().hashCode())
         ));

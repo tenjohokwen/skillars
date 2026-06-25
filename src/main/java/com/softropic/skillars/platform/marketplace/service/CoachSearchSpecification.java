@@ -34,7 +34,8 @@ public final class CoachSearchSpecification {
     }
 
     private static Specification<CoachProfile> isActive() {
-        return (root, q, cb) -> cb.equal(root.get("status"), CoachProfileStatus.ACTIVE);
+        // REDUCED coaches appear in search results but are sorted after ACTIVE coaches (AC 9 / Task 7.1)
+        return (root, q, cb) -> root.get("status").in(CoachProfileStatus.ACTIVE, CoachProfileStatus.REDUCED);
     }
 
     private static Specification<CoachProfile> inCity(String city) {

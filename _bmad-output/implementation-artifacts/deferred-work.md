@@ -596,3 +596,10 @@
 - D17: `loadStripe(undefined)` if publishable key is null — `confirmPackPayment`/`confirmCardSetup` accept the key from callers; if caller passes `undefined`, `loadStripe(null)` throws a TypeError in the payment confirmation path; fix belongs in the component that owns `stripeStatus` state, not in the API module [`payment.api.js: confirmPackPayment`, `confirmCardSetup`]
 - D18: Shared `loading`/`error` flags across concurrent store actions — all three actions race on a single `loading` boolean; premature spinner dismissal when two actions are in-flight; no current page calls multiple actions concurrently; defer to a store architecture pass [`payment.store.js`]
 - D19: `selectedSlot` not cleared when entering batch mode — stale slot persists; on exiting batch mode without re-selecting, `canSubmit` is immediately `true`; LOW severity, no data loss [`BookingRequestPage.vue: toggleBatchMode()`]
+
+## Deferred from: code review of skillars-7-3-cancellation-refund-reliability-strikes (2026-06-25)
+- D1: `buildSort()` has identical branches for "price" and "rating" — pre-existing; both fall back to `displayName`; price sort is applied in Java post-enrichment [`CoachSearchService.java:buildSort`]
+- D2: `processAdminRefund` has no auth check or amount validation — stub; admin endpoint wired in Story 10.x [`CancellationRefundService.java:processAdminRefund`]
+- D3: `GET /coaches/me/strikes` has no pagination — unbounded list; low risk at current scale [`ReliabilityStrikeResource.java`]
+- D4: Concurrent strike issuance race — two simultaneous events for the same coach may both read count=N and both fire the threshold event; inherent to non-locking count approach [`ReliabilityStrikeService.java:issue`]
+- D5: `CoachCancellationHistory.createdAt` with `@Column(updatable=false)` + `@PrePersist` — in-memory entity is null until DB round-trip if ever used with batch `saveAll`; low risk given single-save usage [`CoachCancellationHistory.java`]

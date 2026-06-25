@@ -13,8 +13,11 @@ import com.softropic.skillars.platform.booking.contract.BookingResponse;
 import com.softropic.skillars.platform.booking.contract.BookingStatus;
 import com.softropic.skillars.platform.booking.contract.BookingStatusChangedEvent;
 import com.softropic.skillars.platform.booking.contract.CoachInboxResponse;
-import com.softropic.skillars.platform.booking.contract.CoachReliabilityStrikeQueuedEvent;
+import com.softropic.skillars.platform.booking.contract.BookingCancelledByCoachEvent;
+import com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent;
+import com.softropic.skillars.platform.booking.contract.CoachNoShowEvent;
 import com.softropic.skillars.platform.booking.contract.CreateBookingRequest;
+import com.softropic.skillars.platform.booking.contract.PlayerNoShowEvent;
 import com.softropic.skillars.platform.booking.contract.ParentScheduleItem;
 import com.softropic.skillars.platform.booking.contract.ParentScheduleResponse;
 import com.softropic.skillars.platform.booking.contract.RescheduleRequestResponse;
@@ -146,7 +149,7 @@ public class BookingService {
 
         CoachProfile coach = coachProfileRepository.findById(req.coachId())
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
-        if (coach.getStatus() != CoachProfileStatus.ACTIVE) {
+        if (coach.getStatus() != CoachProfileStatus.ACTIVE && coach.getStatus() != CoachProfileStatus.REDUCED) {
             throw new OperationNotAllowedException("Coach profile is not active", SecurityError.MISSING_RIGHTS);
         }
 
@@ -475,6 +478,122 @@ public class BookingService {
         }
     }
 
+    @Transactional
+    public void cancelBookingAsParent(UUID bookingId, Long parentUserId) {
+        Booking booking = getBookingOrThrow(bookingId);
+        if (!Objects.equals(booking.getParentId(), parentUserId)) {
+            throw new OperationNotAllowedException("Parent does not own this booking", SecurityError.MISSING_RIGHTS);
+        }
+        long hoursBeforeSession = ChronoUnit.HOURS.between(Instant.now(), booking.getRequestedStartTime());
+        boolean refundEligible = booking.getRequestedStartTime().isAfter(Instant.now().plus(24, ChronoUnit.HOURS));
+        BigDecimal sessionPrice = resolveSessionPrice(booking);
+        String parentEmail = resolveEmail(parentUserId);
+        String coachEmail = resolveCoachEmail(booking.getCoachId());
+
+        transition(bookingId, BookingEvent.CANCEL_PARENT, new TransitionContext(ActorRole.PARENT, parentUserId));
+
+        eventPublisher.publishEvent(new BookingCancelledByParentEvent(
+            this, bookingId, parentUserId, booking.getCoachId(),
+            booking.getSessionPackPurchaseId(), hoursBeforeSession, refundEligible,
+            sessionPrice, parentEmail, coachEmail,
+            booking.getRequestedStartTime(), booking.getCanonicalTimezone()
+        ));
+    }
+
+    private static final Set<String> VALID_CANCEL_REASONS = Set.of(
+        "MUTUAL_AGREEMENT", "HEALTH_MEDICAL", "FAMILY_EMERGENCY",
+        "WEATHER", "SCHEDULING_PREFERENCE", "OTHER_UNEXCUSED"
+    );
+
+    @Transactional
+    public void cancelBookingAsCoach(UUID bookingId, Long coachUserId, String cancelReason) {
+        Booking booking = getBookingOrThrow(bookingId);
+        CoachProfile coach = coachProfileRepository.findByUserId(coachUserId)
+            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+        if (!Objects.equals(booking.getCoachId(), coach.getId())) {
+            throw new OperationNotAllowedException("Coach does not own this booking", SecurityError.MISSING_RIGHTS);
+        }
+        if (cancelReason != null && !VALID_CANCEL_REASONS.contains(cancelReason)) {
+            throw new OperationNotAllowedException("Invalid cancel reason: " + cancelReason, SecurityError.MISSING_RIGHTS);
+        }
+
+        BigDecimal sessionPrice = resolveSessionPrice(booking);
+        String parentEmail = resolveEmail(booking.getParentId());
+
+        boolean packExpired = false;
+        if (booking.getSessionPackPurchaseId() != null) {
+            packExpired = sessionPackPurchaseRepository.findById(booking.getSessionPackPurchaseId())
+                .map(p -> p.getExpiresAt().isBefore(Instant.now()))
+                .orElse(false);
+        }
+
+        transition(bookingId, BookingEvent.CANCEL_COACH, new TransitionContext(ActorRole.COACH, coachUserId));
+
+        String resolvedReason = cancelReason != null ? cancelReason : "OTHER_UNEXCUSED";
+        booking.setCancelReason(resolvedReason);
+        bookingRepository.save(booking);
+
+        eventPublisher.publishEvent(new BookingCancelledByCoachEvent(
+            this, bookingId, booking.getParentId(), booking.getCoachId(),
+            resolvedReason, booking.getSessionPackPurchaseId(),
+            sessionPrice, packExpired, parentEmail,
+            booking.getRequestedStartTime(), booking.getCanonicalTimezone()
+        ));
+    }
+
+    @Transactional
+    public void recordNoShowPlayer(UUID bookingId, Long coachUserId) {
+        Booking booking = getBookingOrThrow(bookingId);
+        CoachProfile coach = coachProfileRepository.findByUserId(coachUserId)
+            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+        if (!Objects.equals(booking.getCoachId(), coach.getId())) {
+            throw new OperationNotAllowedException("Coach does not own this booking", SecurityError.MISSING_RIGHTS);
+        }
+        String coachEmail = resolveCoachEmail(booking.getCoachId());
+
+        transition(bookingId, BookingEvent.NO_SHOW_PLAYER, new TransitionContext(ActorRole.COACH, coachUserId));
+
+        eventPublisher.publishEvent(new PlayerNoShowEvent(
+            this, bookingId, booking.getParentId(), booking.getCoachId(),
+            coachEmail, booking.getRequestedStartTime(), booking.getCanonicalTimezone()
+        ));
+    }
+
+    @Transactional
+    public void recordNoShowCoach(UUID bookingId, Long parentUserId) {
+        Booking booking = getBookingOrThrow(bookingId);
+        if (!Objects.equals(booking.getParentId(), parentUserId)) {
+            throw new OperationNotAllowedException("Parent does not own this booking", SecurityError.MISSING_RIGHTS);
+        }
+        BigDecimal sessionPrice = resolveSessionPrice(booking);
+        String parentEmail = resolveEmail(parentUserId);
+
+        boolean packExpired = false;
+        if (booking.getSessionPackPurchaseId() != null) {
+            packExpired = sessionPackPurchaseRepository.findById(booking.getSessionPackPurchaseId())
+                .map(p -> p.getExpiresAt().isBefore(Instant.now()))
+                .orElse(false);
+        }
+
+        transition(bookingId, BookingEvent.NO_SHOW_COACH, new TransitionContext(ActorRole.PARENT, parentUserId));
+
+        eventPublisher.publishEvent(new CoachNoShowEvent(
+            this, bookingId, parentUserId, booking.getCoachId(),
+            booking.getSessionPackPurchaseId(), sessionPrice,
+            packExpired, parentEmail,
+            booking.getRequestedStartTime(), booking.getCanonicalTimezone()
+        ));
+    }
+
+    private String resolveCoachEmail(UUID coachId) {
+        return coachProfileRepository.findById(coachId)
+            .map(coach -> resolveEmail(coach.getUserId()))
+            .orElseGet(() -> {
+                log.warn("resolveCoachEmail: no coach profile found for coachId={} — notification will not be sent", coachId);
+                return "";
+            });
+    }
+
     private void applyRefundLogic(Booking booking, BookingEvent event, BookingStatus currentStatus) {
         switch (event) {
             case CANCEL_PARENT -> {
@@ -485,22 +604,9 @@ public class BookingService {
                     booking.setRefundEligibility(eligibility);
                 }
             }
-            case CANCEL_COACH -> {
-                booking.setRefundEligibility("FULL");
-                long hoursUntilSession = ChronoUnit.HOURS.between(Instant.now(), booking.getRequestedStartTime());
-                if (hoursUntilSession <= 24) {
-                    eventPublisher.publishEvent(new CoachReliabilityStrikeQueuedEvent(
-                        this, booking.getId(), booking.getCoachId(), "CANCEL_WITHIN_24H"
-                    ));
-                }
-            }
+            case CANCEL_COACH -> booking.setRefundEligibility("FULL");
             case NO_SHOW_PLAYER -> booking.setRefundEligibility("NONE");
-            case NO_SHOW_COACH -> {
-                booking.setRefundEligibility("FULL");
-                eventPublisher.publishEvent(new CoachReliabilityStrikeQueuedEvent(
-                    this, booking.getId(), booking.getCoachId(), "NO_SHOW_COACH"
-                ));
-            }
+            case NO_SHOW_COACH -> booking.setRefundEligibility("FULL");
             default -> { /* no refund logic for other events */ }
         }
     }

@@ -1,5 +1,8 @@
 <template>
-  <span :class="['reliability-indicator', stateClass]">
+  <span
+    :class="['reliability-indicator', stateClass, { 'reliability-indicator--clickable': props.coachContext }]"
+    @click="handleClick"
+  >
     <q-icon :name="iconName" size="14px" class="q-mr-xs" />
     {{ label }}
   </span>
@@ -8,12 +11,21 @@
 <script setup>
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 
 const props = defineProps({
   strikeCount: { type: Number, required: true },
+  coachContext: { type: Boolean, default: false },
 })
 
 const { t } = useI18n()
+const router = useRouter()
+
+function handleClick() {
+  if (props.coachContext) {
+    router.push({ name: 'coach-reliability' })
+  }
+}
 
 const stateClass = computed(() => {
   if (props.strikeCount === 0) return 'reliability-indicator--ok'
@@ -44,5 +56,6 @@ const label = computed(() => {
   &--ok      { color: var(--accent-success); }
   &--warning { color: var(--accent-warning); }
   &--danger  { color: var(--accent-danger); }
+  &--clickable { cursor: pointer; }
 }
 </style>

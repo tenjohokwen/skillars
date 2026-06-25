@@ -174,6 +174,12 @@ const routes = [
         meta: { requiresAuth: true, requiresCoach: true },
       },
       {
+        path: 'coach/reliability',
+        name: 'coach-reliability',
+        component: () => import('pages/coach/CoachReliabilityPage.vue'),
+        meta: { requiresAuth: true, requiresCoach: true },
+      },
+      {
         path: 'player/locker-room/:playerId',
         name: 'player-locker-room',
         component: () => import('pages/player/PlayerLockerRoomPlaceholderPage.vue'),

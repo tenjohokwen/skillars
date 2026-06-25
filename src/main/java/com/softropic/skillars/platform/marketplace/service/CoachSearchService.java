@@ -111,9 +111,11 @@ public class CoachSearchService {
 
     private Sort buildSort(String sortBy) {
         // price sort is applied in Java after enrichment (perSessionPrice lives in a separate table)
+        // ACTIVE coaches sort before REDUCED within any other sort criteria
+        Sort statusSort = Sort.by(Sort.Order.asc("status"));
         return switch (StringUtils.hasText(sortBy) ? sortBy : "displayName") {
-            case "price", "rating" -> Sort.by(Sort.Direction.ASC, "displayName");
-            default                -> Sort.by(Sort.Direction.ASC, "displayName");
+            case "price", "rating" -> statusSort.and(Sort.by(Sort.Direction.ASC, "displayName"));
+            default                -> statusSort.and(Sort.by(Sort.Direction.ASC, "displayName"));
         };
     }
 

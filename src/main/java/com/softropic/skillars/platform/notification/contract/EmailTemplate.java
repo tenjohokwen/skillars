@@ -37,7 +37,12 @@ public enum EmailTemplate {
     PACK_PAUSED("email.session_pack.paused.title"),
     PERFORMANCE_REPORT_SHARED("email.report.shared.title"),
     VIDEO_MODERATION_ADMIN_ALERT("email.video.moderation.admin_alert.title"),
-    VIDEO_MODERATION_OWNER_FLAGGED("email.video.moderation.owner_flagged.title");
+    VIDEO_MODERATION_OWNER_FLAGGED("email.video.moderation.owner_flagged.title"),
+    BOOKING_CANCELLED_BY_PARENT("email.booking.cancelled_by_parent.title"),
+    BOOKING_CANCELLED_BY_COACH("email.booking.cancelled_by_coach.title"),
+    COACH_NO_SHOW("email.booking.coach_no_show.title"),
+    PLAYER_NO_SHOW("email.booking.player_no_show.title"),
+    COACH_VISIBILITY_REDUCED("email.reliability.visibility_reduced.title");
 
     private final String subjectKey;
     EmailTemplate(final String subjectKey) {

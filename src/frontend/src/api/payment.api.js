@@ -47,3 +47,8 @@ export const confirmCardSetup = async (stripePublishableKey, clientSecret) => {
   const stripe = await loadStripe(stripePublishableKey)
   return stripe.confirmCardSetup(clientSecret)
 }
+
+// Coach reliability strikes
+export const fetchMyStrikes = () => api.get('/api/payment/coaches/me/strikes')
+export const acknowledgeStrike = (strikeId) =>
+  api.put(`/api/payment/coaches/strikes/${strikeId}/acknowledge`)

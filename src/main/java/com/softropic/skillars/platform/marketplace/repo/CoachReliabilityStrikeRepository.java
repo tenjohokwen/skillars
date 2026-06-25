@@ -19,4 +19,6 @@ public interface CoachReliabilityStrikeRepository extends JpaRepository<CoachRel
     );
 
     long countByCoachIdAndCreatedAtAfter(UUID coachId, OffsetDateTime since);
+
+    List<CoachReliabilityStrike> findByCoachIdOrderByCreatedAtDesc(UUID coachId);
 }
