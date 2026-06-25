@@ -9,6 +9,8 @@ public interface ParentPlayerLinkRepository extends JpaRepository<ParentPlayerLi
 
     boolean existsByPlayerId(Long playerId);
 
+    boolean existsByParentIdAndPlayerId(Long parentId, Long playerId);
+
     Optional<ParentPlayerLink> findByPlayerId(Long playerId);
 
     List<ParentPlayerLink> findByParentId(Long parentId);

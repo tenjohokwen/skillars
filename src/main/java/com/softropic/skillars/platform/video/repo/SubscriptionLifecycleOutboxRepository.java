@@ -15,4 +15,7 @@ public interface SubscriptionLifecycleOutboxRepository extends JpaRepository<Sub
         FOR UPDATE SKIP LOCKED
         """, nativeQuery = true)
     List<SubscriptionLifecycleOutbox> findPendingForProcessing();
+
+    List<SubscriptionLifecycleOutbox> findTop100ByStatusAndAttemptsLessThanOrderByCreatedAtAsc(
+        String status, int maxAttempts);
 }

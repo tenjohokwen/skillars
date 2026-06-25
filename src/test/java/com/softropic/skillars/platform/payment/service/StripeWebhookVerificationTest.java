@@ -5,6 +5,8 @@ import com.softropic.skillars.platform.payment.contract.event.CoachStripeOnboard
 import com.softropic.skillars.platform.payment.contract.exception.WebhookSignatureException;
 import com.softropic.skillars.platform.payment.repo.CoachStripeAccount;
 import com.softropic.skillars.platform.payment.repo.CoachStripeAccountRepository;
+import com.softropic.skillars.platform.payment.repo.PaymentCoachSubscriptionRepository;
+import com.softropic.skillars.platform.payment.repo.PaymentPlayerSubscriptionRepository;
 import com.softropic.skillars.platform.payment.repo.StripeWebhookEventRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -40,6 +42,8 @@ class StripeWebhookVerificationTest {
     @Mock CoachStripeAccountRepository coachStripeAccountRepository;
     @Mock StripeWebhookEventRepository webhookEventRepository;
     @Mock ApplicationEventPublisher eventPublisher;
+    @Mock PaymentCoachSubscriptionRepository paymentCoachSubscriptionRepository;
+    @Mock PaymentPlayerSubscriptionRepository paymentPlayerSubscriptionRepository;
 
     PaymentProperties paymentProperties;
     StripeWebhookService webhookService;
@@ -49,7 +53,8 @@ class StripeWebhookVerificationTest {
         paymentProperties = new PaymentProperties();
         paymentProperties.setWebhookSecret(WEBHOOK_SECRET);
         webhookService = new StripeWebhookService(
-            coachStripeAccountRepository, webhookEventRepository, paymentProperties, eventPublisher);
+            coachStripeAccountRepository, webhookEventRepository, paymentProperties, eventPublisher,
+            paymentCoachSubscriptionRepository, paymentPlayerSubscriptionRepository);
         // Wire the self-reference so @Transactional dispatch works in unit tests without a Spring context
         ReflectionTestUtils.setField(webhookService, "self", webhookService);
     }

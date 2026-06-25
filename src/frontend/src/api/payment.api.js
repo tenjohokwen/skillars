@@ -52,3 +52,22 @@ export const confirmCardSetup = async (stripePublishableKey, clientSecret) => {
 export const fetchMyStrikes = () => api.get('/api/payment/coaches/me/strikes')
 export const acknowledgeStrike = (strikeId) =>
   api.put(`/api/payment/coaches/strikes/${strikeId}/acknowledge`)
+
+// Coach subscriptions
+export const fetchCoachTiers = () => api.get('/api/payment/subscriptions/coach/tiers')
+export const fetchMyCoachSubscription = () => api.get('/api/payment/subscriptions/coach/me')
+export const subscribeCoach = (payload) => api.post('/api/payment/subscriptions/coach/subscribe', payload)
+export const changeCoachTier = (payload) =>
+  api.post('/api/payment/subscriptions/coach/change-tier', payload)
+export const cancelCoachSubscription = () => api.delete('/api/payment/subscriptions/coach')
+
+// Player subscriptions
+export const fetchPlayerTiers = () => api.get('/api/payment/subscriptions/player/tiers')
+export const fetchMyPlayerSubscription = (playerId) =>
+  api.get('/api/payment/subscriptions/player/me', { params: { playerId } })
+export const subscribePlayer = (payload) =>
+  api.post('/api/payment/subscriptions/player/subscribe', payload)
+export const changePlayerTier = (payload) =>
+  api.post('/api/payment/subscriptions/player/change-tier', payload)
+export const cancelPlayerSubscription = (playerId) =>
+  api.delete('/api/payment/subscriptions/player', { params: { playerId } })

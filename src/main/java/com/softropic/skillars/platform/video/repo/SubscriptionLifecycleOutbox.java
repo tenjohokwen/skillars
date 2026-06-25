@@ -1,6 +1,10 @@
 package com.softropic.skillars.platform.video.repo;
 
-import jakarta.persistence.*;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
+import jakarta.persistence.PrePersist;
+import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -8,6 +12,7 @@ import lombok.Setter;
 import java.time.Instant;
 import java.util.UUID;
 
+// subscriber_id was UUID in V58; altered to BIGINT in V64 (player IDs are Long TSID)
 @Getter
 @Setter
 @NoArgsConstructor
@@ -20,7 +25,7 @@ public class SubscriptionLifecycleOutbox {
     private UUID id;
 
     @Column(name = "subscriber_id", nullable = false, updatable = false)
-    private UUID subscriberId;
+    private Long subscriberId;
 
     @Column(name = "subscription_tier", nullable = false, updatable = false)
     private String subscriptionTier;

@@ -20,6 +20,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 
+
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -52,13 +53,13 @@ public class VideoLifecycleScheduler {
         int count = 0;
         for (Video video : candidates) {
             try {
-                UUID playerId = UUID.fromString(video.getOwnerId());
+                Long playerId = Long.parseLong(video.getOwnerId());
                 if (playerSubscriptionQueryPort.hasActiveYearlySubscription(playerId)) {
                     log.debug("Yearly exemption: skipping BLOCKED→ARCHIVED for videoId={} ownerId={}", video.getId(), video.getOwnerId());
                     continue;
                 }
-            } catch (IllegalArgumentException e) {
-                log.warn("Cannot parse ownerId as UUID for yearly check, proceeding: videoId={} ownerId={}", video.getId(), video.getOwnerId());
+            } catch (NumberFormatException e) {
+                log.warn("Cannot parse ownerId as Long for yearly check, proceeding: videoId={} ownerId={}", video.getId(), video.getOwnerId());
             }
 
             // External Bunny call outside @Transactional — 404 treated as success (idempotency)

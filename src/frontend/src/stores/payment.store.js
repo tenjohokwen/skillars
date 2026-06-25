@@ -5,6 +5,16 @@ import {
   fetchMySessionPackTiers,
   fetchMyStrikes,
   acknowledgeStrike,
+  fetchCoachTiers,
+  fetchMyCoachSubscription,
+  subscribeCoach,
+  changeCoachTier,
+  cancelCoachSubscription,
+  fetchPlayerTiers,
+  fetchMyPlayerSubscription,
+  subscribePlayer,
+  changePlayerTier,
+  cancelPlayerSubscription,
 } from 'src/api/payment.api'
 
 export const usePaymentStore = defineStore('payment', {
@@ -13,6 +23,10 @@ export const usePaymentStore = defineStore('payment', {
     creditBalance: null,
     sessionPackTiers: [],
     coachStrikes: [],
+    coachSubscription: null,
+    coachTiers: [],
+    playerSubscription: null,
+    playerTiers: [],
     loading: false,
     error: null,
   }),
@@ -65,6 +79,80 @@ export const usePaymentStore = defineStore('payment', {
       await acknowledgeStrike(strikeId)
       const strike = this.coachStrikes.find((s) => s.strikeId === strikeId)
       if (strike) strike.acknowledged = true
+    },
+
+    // Coach subscription actions
+    async fetchCoachSubscription() {
+      this.loading = true
+      this.error = null
+      try {
+        this.coachSubscription = (await fetchMyCoachSubscription()).data
+      } catch (err) {
+        this.error = err
+      } finally {
+        this.loading = false
+      }
+    },
+    async fetchCoachTiers() {
+      this.loading = true
+      this.error = null
+      try {
+        this.coachTiers = (await fetchCoachTiers()).data
+      } catch (err) {
+        this.error = err
+      } finally {
+        this.loading = false
+      }
+    },
+    async subscribeCoach(payload) {
+      const { data } = await subscribeCoach(payload)
+      this.coachSubscription = data
+      return data
+    },
+    async changeCoachTier(newTier) {
+      await changeCoachTier({ newTier })
+      await this.fetchCoachSubscription()
+    },
+    async cancelCoachSubscription() {
+      await cancelCoachSubscription()
+      await this.fetchCoachSubscription()
+    },
+
+    // Player subscription actions
+    async fetchPlayerSubscription(playerId) {
+      this.loading = true
+      this.error = null
+      try {
+        this.playerSubscription = (await fetchMyPlayerSubscription(playerId)).data
+      } catch (err) {
+        this.error = err
+      } finally {
+        this.loading = false
+      }
+    },
+    async fetchPlayerTiers() {
+      this.loading = true
+      this.error = null
+      try {
+        this.playerTiers = (await fetchPlayerTiers()).data
+      } catch (err) {
+        this.error = err
+      } finally {
+        this.loading = false
+      }
+    },
+    async subscribePlayer(payload) {
+      const { data } = await subscribePlayer(payload)
+      this.playerSubscription = data
+      return data
+    },
+    async changePlayerTier(payload) {
+      await changePlayerTier(payload)
+      await this.fetchPlayerSubscription(payload.playerId)
+    },
+    async cancelPlayerSubscription(playerId) {
+      await cancelPlayerSubscription(playerId)
+      await this.fetchPlayerSubscription(playerId)
     },
   },
 })

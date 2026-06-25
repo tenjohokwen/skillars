@@ -180,6 +180,18 @@ const routes = [
         meta: { requiresAuth: true, requiresCoach: true },
       },
       {
+        path: 'coach/subscription',
+        name: 'coach-subscription',
+        component: () => import('pages/coach/CoachSubscriptionPage.vue'),
+        meta: { requiresAuth: true, requiresCoach: true },
+      },
+      {
+        path: 'parent/player/:playerId/subscription',
+        name: 'player-subscription',
+        component: () => import('pages/parent/PlayerSubscriptionPage.vue'),
+        meta: { requiresAuth: true, requiresParent: true },
+      },
+      {
         path: 'player/locker-room/:playerId',
         name: 'player-locker-room',
         component: () => import('pages/player/PlayerLockerRoomPlaceholderPage.vue'),

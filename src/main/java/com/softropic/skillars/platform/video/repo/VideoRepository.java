@@ -4,6 +4,7 @@ import com.softropic.skillars.platform.video.contract.OperationalState;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
@@ -88,4 +89,8 @@ public interface VideoRepository extends JpaRepository<Video, UUID> {
 
     List<Video> findByOwnerIdAndOperationalStateNotInOrderByCreatedAtDesc(
         String ownerId, java.util.Collection<OperationalState> excludedStates);
+
+    @Modifying
+    @Query("UPDATE Video v SET v.lifecycleLockedAt = CURRENT_TIMESTAMP WHERE v.ownerId = :ownerId AND v.accessState = com.softropic.skillars.platform.video.contract.AccessState.BLOCKED")
+    void resetLifecycleLockedAt(@Param("ownerId") String ownerId);
 }

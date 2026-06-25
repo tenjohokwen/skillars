@@ -64,7 +64,7 @@ class VideoLifecycleSchedulerTest {
 
     @Test
     void runLifecycleJob_blockedVideoExceedingThreshold_transitionsToArchived() {
-        Video video = blockedVideo(UUID.randomUUID(), UUID.randomUUID().toString(), Instant.now().minus(35, ChronoUnit.DAYS));
+        Video video = blockedVideo(UUID.randomUUID(), "11001", Instant.now().minus(35, ChronoUnit.DAYS));
         when(videoRepository.findBlockedExceedingThreshold(any(), anyInt())).thenReturn(List.of(video));
         when(playerSubscriptionQueryPort.hasActiveYearlySubscription(any())).thenReturn(false);
 
@@ -107,7 +107,7 @@ class VideoLifecycleSchedulerTest {
 
     @Test
     void runLifecycleJob_blockedVideoWithActiveYearlySub_skipsArchivedTransition() {
-        Video video = blockedVideo(UUID.randomUUID(), UUID.randomUUID().toString(), Instant.now().minus(35, ChronoUnit.DAYS));
+        Video video = blockedVideo(UUID.randomUUID(), "11001", Instant.now().minus(35, ChronoUnit.DAYS));
         when(videoRepository.findBlockedExceedingThreshold(any(), anyInt())).thenReturn(List.of(video));
         when(playerSubscriptionQueryPort.hasActiveYearlySubscription(any())).thenReturn(true);
 
@@ -119,7 +119,7 @@ class VideoLifecycleSchedulerTest {
 
     @Test
     void runLifecycleJob_archiveAssetFails_videoRemainsBlockedAndRetryableNextRun() {
-        Video video = blockedVideo(UUID.randomUUID(), UUID.randomUUID().toString(), Instant.now().minus(35, ChronoUnit.DAYS));
+        Video video = blockedVideo(UUID.randomUUID(), "11001", Instant.now().minus(35, ChronoUnit.DAYS));
         when(videoRepository.findBlockedExceedingThreshold(any(), anyInt())).thenReturn(List.of(video));
         when(playerSubscriptionQueryPort.hasActiveYearlySubscription(any())).thenReturn(false);
         doThrow(new com.softropic.skillars.platform.video.contract.exception.VideoProviderException("archiveAsset", null))
@@ -138,7 +138,7 @@ class VideoLifecycleSchedulerTest {
         // Phase 2 uses archived_at (set to now() by archiveForLifecycle) — not lifecycle_locked_at.
         // Mockito returns empty list by default for Phase 2, simulating the just-archived video NOT appearing.
         UUID videoId = UUID.randomUUID();
-        Video video = blockedVideo(videoId, UUID.randomUUID().toString(), Instant.now().minus(91, ChronoUnit.DAYS));
+        Video video = blockedVideo(videoId, "11001", Instant.now().minus(91, ChronoUnit.DAYS));
         when(videoRepository.findBlockedExceedingThreshold(any(), anyInt())).thenReturn(List.of(video));
         when(playerSubscriptionQueryPort.hasActiveYearlySubscription(any())).thenReturn(false);
 
