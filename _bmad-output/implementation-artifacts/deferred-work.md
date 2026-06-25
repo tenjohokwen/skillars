@@ -1,3 +1,16 @@
+## Deferred from: adversarial code review of skillars-7-2 Group 2 Service Layer (2026-06-24)
+- D1: Non-atomic idempotency check in `onBookingAccepted` (`existsById` bare SELECT outside TX) — root cause addressed by P3 (TX boundary restructure); revisit if duplicate event replay observed in production [`PaymentLifecycleService.java:52-55`]
+- D2: `SessionPackExpiryNotifier` sends up to 14 daily warning emails per pack — no notification-sent guard; requires `last_warned_at` column on `session_pack_purchases` (V63+ migration) [`SessionPackExpiryNotifier.java`]
+- D3: `createTier` TOCTOU under concurrent coach requests — two active tiers briefly possible; DB UNIQUE partial index `idx_spt_one_active_per_coach` enforces constraint at commit, causing one to fail with constraint violation; low probability in production [`SessionPackPaymentService.java:createTier`]
+
+## Deferred from: adversarial code review of skillars-7-2 Group 1 DB+Entities (2026-06-24)
+- D1: `parent_credit_balance` VIEW returns 0 rows (not a zero-balance row) for parents with no ledger history — safe via JPQL path; latent trap for native SQL consumers [`V62__session_payment_credit_wallet.sql`]
+- D2: Duplicate expiry query methods — `findByCoachIdAndExpiresAtBetween...` (coach-scoped) and `findExpiringWithinWindowAndSessionsRemaining` (JPQL all-coaches) overlap; coach-scoped method appears unused; verify in Group 2 service review [`SessionPackPurchaseRepository.java:21-25`]
+- D3: `SessionPackPurchase.expiresAt` mutable with no `updatable=false` — service-layer enforced via `extendPack()` business rules; open setter is a footgun [`SessionPackPurchase.java`]
+- D4: No DB-level append-only enforcement on `parent_credit_ledger` (no trigger or RLS blocking UPDATE/DELETE) — AC 1 intent; application-layer invariant only; harden in a later migration [`V62__session_payment_credit_wallet.sql`]
+- D5: `stripe_customers.last_payment_intent_id` not in AC 1 spec schema — intentional addition to support cash-out refund flow (Group 2 Decision D1 resolution); AC 1 should be updated to document this column [`V62__session_payment_credit_wallet.sql`, `StripeCustomer.java`]
+- D6: No `CHECK (stripe_customer_id LIKE 'cus_%')` format guard on `stripe_customers` — would catch placeholder IDs at DB boundary; application-layer only today [`V62__session_payment_credit_wallet.sql`]
+
 ## Deferred from: code review of skillars-7-1-stripe-connect-onboarding-commission-engine (2026-06-24)
 - D1: `capturePayment` called inside `@Transactional` in `purchasePack`/`purchaseSingleSession` — DB connection held open during Stripe I/O; will cause connection pool exhaustion when Story 7.2 enables real charges [`SessionPackService.java`]
 - D2: Session pack purchase always fails with `payment.providerUnavailable` in Story 7.1 — intentional stub behaviour per spec; Story 7.2 implements real charging [`StripePaymentGateway.java`]
@@ -546,3 +559,40 @@
 - W6: `PURGED` in `VideoManagementPage.onStatusChanged()` is dead code — `VideoSseService.TERMINAL_STATES` does not include PURGED; this state is never pushed via SSE; handler branch is unreachable. [`VideoManagementPage.vue:onStatusChanged()`]
 - W7: `@Observed(name = "video.approvals")` at class level on `VideoApprovalResource` — loses per-operation observability granularity vs. per-method `@Observed` pattern used throughout `VideoResource`; minor deviation from project pattern. [`VideoApprovalResource.java`]
 - W8: `resolveCurrentOwnerId()` casts `securityUtil.getCurrentUser()` to `Principal` without `instanceof` guard — pre-existing established pattern from coach upload endpoint (`BookingResource.currentParentId()` same cast); works within current Spring Security config; risk only if auth principal type changes. [`VideoResource.java:resolveCurrentOwnerId()`]
+
+## Deferred from: code review of skillars-7-2-session-payment-lifecycle-credit-wallet (2026-06-24)
+- D1: `extendPack` missing pessimistic lock — two concurrent coach requests can both read `extendedAt = null` and commit a double extension (+30+30 days) [`SessionPackPaymentService.java`]
+- D2: Pack ownership not validated in `BookingService.createBooking()` — authenticated parent can supply another parent's `sessionPackPurchaseId` to deduct from their pack [`BookingService.java`]
+- D3: Missing indexes on `session_pack_purchases(parent_id)` and `(coach_id, expires_at)` — full-table scans on expiry scheduler and parent-scoped lookups as table grows [`V62__session_payment_credit_wallet.sql`]
+- D4: Raw `String` fields for `type` (ParentCreditLedger) and `status` (BookingPayment) instead of Java enums — DB constraint guards correctness; higher migration cost to add enum mapping
+
+### Group 2 deferred (Services) — 2026-06-24
+- D5: `@Transactional` proxy bypass on `persistPaymentSuccess`, `persistPaymentFailure`, `persistPackBatchPayment`, `persistCreditBatchPayment`, `writeCashOutLedgerEntries`, `getOrCreateStripeCustomer`, `createPurchase` — acknowledged in Dev Notes; fix: extract to sibling @Service beans — Story 7.3 [`PaymentLifecycleService.java`, `SessionPackPaymentService.java`, `CashOutService.java`]
+- D6: `BookingDisputedEvent` handler not implemented — Dev Notes defer to Story 10.x [`PaymentLifecycleService.java`]
+- D7: `SessionPackExhaustedEvent.playerId` contains parentId semantically — pre-existing event contract; Story 7.3 [`PackSessionService.java`]
+- D8: `extendPack` missing pessimistic lock on `SessionPackPurchase` — Story 7.3 [`SessionPackPaymentService.java`]
+- D9: EUR currency hardcoded in `chargeAndCapture` — single-currency now; make configurable later [`StripePaymentGateway.java`]
+
+### Group 4 deferred (Booking module) — 2026-06-24
+- D10: `sessionPackPurchasedRepository.findActivePacksForDeduction()` acquires pessimistic write locks on ALL legacy pack rows even when `sessionPackPurchaseId != null` (new pack path has its own lock in `PackSessionService`) — unnecessary I/O; remove the call when `sessionPackPurchaseId != null` in Story 7.3 [`BookingService.java:createBookingRequest()`]
+
+### Group 4 adversarial deferred (Booking module) — 2026-06-24
+- D12: `getBooking(UUID)` has no caller authorization check — any authenticated user can read any booking by UUID; Story 7.3 [`BookingService.java:271`]
+- D13: `getParentBookings` does not clamp negative `effectiveCredits` to 0 — inconsistency with `getParentPlayerSchedule`; pre-existing [`BookingService.java:316`]
+- D14: `CANCEL_PARENT` not permitted from `PAYMENT_PENDING` — booking stuck if Stripe webhook never fires; design gap; MVP acceptable; Story 7.3 [`BookingStateMachine.java:30`]
+- D15: Past-elapsed `requestedStartTime` at CANCEL_PARENT gives NONE refund eligibility — correct path is NO_SHOW_COACH event; edge case [`BookingService.java:471`]
+- D16: `Booking` identity columns (`parentId`, `playerId`, `coachId`) lack `updatable = false` — defence-in-depth; no current mutation path; pre-existing [`Booking.java:31-37`]
+
+### Group 3 adversarial deferred (API + Contracts) — 2026-06-24
+- D11: `getActiveCoachTier` returns 204 No Content when no active tier found — spec says "returns empty if none" (ambiguous); 204 is unusual for a typed GET endpoint; more idiomatic would be 404 or 200/null; defer until client null-handling issues surface [`SessionPackPaymentResource.java:101-105`]
+
+### Group 6 adversarial deferred (Tests) — 2026-06-24
+- D20: `CashOutServiceTest` happy-path sets `lastPaymentIntentId` but `CashOutService.processCashOut()` may read `stripePaymentMethodId` for the refund; if field mismatch is confirmed, the happy-path test is verifying a null PI and must be corrected [`CashOutServiceTest.java:54`, `CashOutService.java`]
+- D21: Pack deduction failure path (`PackSessionService.deductSession()` throws) entirely untested at unit level — requires new mock infrastructure for `persistenceService` in `CreditRoutingTest` (or a dedicated `PackBasedBookingDeclineTest`); deferred to Story 7.3 [`CreditRoutingTest.java`, `PaymentLifecycleService.java:60-64`]
+- D22: Credit routing boundary: `balance == sessionPrice` (Case A/B boundary, stripeAmount=0) and cashout `amount == balance` (wallet goes to -feeAmount) — low severity, current behaviour correct; no test pins the boundary [`CreditRoutingTest.java`, `CashOutServiceTest.java`]
+- D23: Unit-level idempotency ledger-count guard (`duplicateEvent_idempotencyNoOp` verifies skip but not that ledger mock was never called) — covered by `PaymentWebhookIdempotencyIT`; low value to add unit-level assertion
+
+### Group 5 adversarial deferred (Frontend) — 2026-06-24
+- D17: `loadStripe(undefined)` if publishable key is null — `confirmPackPayment`/`confirmCardSetup` accept the key from callers; if caller passes `undefined`, `loadStripe(null)` throws a TypeError in the payment confirmation path; fix belongs in the component that owns `stripeStatus` state, not in the API module [`payment.api.js: confirmPackPayment`, `confirmCardSetup`]
+- D18: Shared `loading`/`error` flags across concurrent store actions — all three actions race on a single `loading` boolean; premature spinner dismissal when two actions are in-flight; no current page calls multiple actions concurrently; defer to a store architecture pass [`payment.store.js`]
+- D19: `selectedSlot` not cleared when entering batch mode — stale slot persists; on exiting batch mode without re-selecting, `canSubmit` is immediately `true`; LOW severity, no data loss [`BookingRequestPage.vue: toggleBatchMode()`]

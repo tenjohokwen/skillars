@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-06-24 # Story 7.1 stripe-connect-onboarding-commission-engine → done (25 review patches applied)
+last_updated: 2026-06-24 # Story 7.2 session-payment-lifecycle-credit-wallet → done (Group 2 adversarial patches applied)
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -219,7 +219,7 @@ development_status:
   # Epic 7: Payments & Subscriptions
   skillars-epic-7: in-progress
   skillars-7-1-stripe-connect-onboarding-commission-engine: done  # 16 review patches applied 2026-06-24
-  skillars-7-2-session-payment-lifecycle-credit-wallet: backlog
+  skillars-7-2-session-payment-lifecycle-credit-wallet: done  # Groups 1–6 adversarial review complete; 33 patches applied 2026-06-24
   skillars-7-3-cancellation-refund-reliability-strikes: backlog
   skillars-7-4-coach-player-subscription-tiers: backlog
   skillars-7-5-revenue-dashboard-financial-reporting: backlog

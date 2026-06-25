@@ -14,6 +14,9 @@ app:
       oauth-client-id: ca_test
       oauth-callback-url: /api/payment/coaches/me/stripe/callback
       callback-success-url: /coach/payment-settings
+      fee-rate: "0.025"
+      fee-fixed: "0.25"
+      base-url: ${wiremock.server.stripe-service.baseUrl:https://api.stripe.com}
   video:
     upload:
       expiry-scheduler-delay-ms: 3600000

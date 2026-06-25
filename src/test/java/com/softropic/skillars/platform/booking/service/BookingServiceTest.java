@@ -1,6 +1,6 @@
 package com.softropic.skillars.platform.booking.service;
 
-import com.softropic.skillars.platform.booking.contract.BookingConfirmedEvent;
+import com.softropic.skillars.platform.booking.contract.BookingAcceptedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingDeclinedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingRequestedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingResponse;
@@ -15,8 +15,11 @@ import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
+import com.softropic.skillars.platform.marketplace.repo.CoachPricing;
+import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
+import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
@@ -30,6 +33,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalTime;
 import java.time.ZoneId;
@@ -60,6 +64,8 @@ class BookingServiceTest {
     @Mock private SessionPackPurchasedRepository sessionPackPurchasedRepository;
     @Mock private BookingRescheduleRequestRepository rescheduleRequestRepository;
     @Mock private BookingBatchRepository bookingBatchRepository;
+    @Mock private SessionPackPurchaseRepository sessionPackPurchaseRepository;
+    @Mock private CoachPricingRepository coachPricingRepository;
 
     private BookingStateMachine bookingStateMachine;
     private BookingService bookingService;
@@ -76,7 +82,8 @@ class BookingServiceTest {
             bookingRepository, bookingStateMachine, sessionPackService, coachProfileRepository,
             paymentGateway, coachAvailabilityWindowRepository, playerProfileRepository,
             userRepository, eventPublisher, sessionPackPurchasedRepository,
-            rescheduleRequestRepository, bookingBatchRepository
+            rescheduleRequestRepository, bookingBatchRepository,
+            sessionPackPurchaseRepository, coachPricingRepository
         );
     }
 
@@ -94,7 +101,6 @@ class BookingServiceTest {
         when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
         when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
         when(sessionPackPurchasedRepository.findActivePacksForDeduction(any(Long.class), any(UUID.class), any(Instant.class))).thenReturn(List.of());
-        when(sessionPackService.hasCredits(PLAYER_ID, COACH_ID)).thenReturn(true);
         when(sessionPackService.getCreditsRemaining(PLAYER_ID, COACH_ID)).thenReturn(3);
         when(bookingRepository.countInFlightBookings(PLAYER_ID, COACH_ID)).thenReturn(0L);
         when(bookingRepository.save(any(Booking.class))).thenReturn(savedBooking);
@@ -109,23 +115,27 @@ class BookingServiceTest {
     }
 
     @Test
-    void createBookingRequest_noCredits_throwsOperationNotAllowedException() {
+    void createBookingRequest_succeeds_paymentDeferredWhenNoLegacyCredits() {
         PlayerProfile player = makePlayer(PLAYER_ID, PARENT_ID);
         CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
         CoachAvailabilityWindow window = makeCoveringWindow(COACH_ID);
+        Booking savedBooking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
 
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
         when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
         when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
         when(sessionPackPurchasedRepository.findActivePacksForDeduction(any(Long.class), any(UUID.class), any(Instant.class))).thenReturn(List.of());
-        when(sessionPackService.hasCredits(PLAYER_ID, COACH_ID)).thenReturn(false);
+        when(sessionPackService.getCreditsRemaining(PLAYER_ID, COACH_ID)).thenReturn(0);
+        when(bookingRepository.countInFlightBookings(PLAYER_ID, COACH_ID)).thenReturn(0L);
+        when(bookingRepository.save(any(Booking.class))).thenReturn(savedBooking);
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
 
         CreateBookingRequest req = makeValidRequest(COACH_ID, PLAYER_ID, window);
+        BookingResponse response = bookingService.createBookingRequest(PARENT_ID, req);
 
-        assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
-            .isInstanceOf(OperationNotAllowedException.class);
-        verify(bookingRepository, never()).save(any());
+        assertThat(response).isNotNull();
+        verify(bookingRepository).save(any(Booking.class));
     }
 
     @Test
@@ -183,7 +193,7 @@ class BookingServiceTest {
         Instant pastTime = Instant.now().minusSeconds(3600);
         CreateBookingRequest req = new CreateBookingRequest(
             COACH_ID, PLAYER_ID, pastTime, pastTime.plusSeconds(3600),
-            "Europe/Berlin", null
+            "Europe/Berlin", null, null
         );
 
         assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
@@ -193,7 +203,7 @@ class BookingServiceTest {
     // ---- acceptBooking tests ----
 
     @Test
-    void acceptBooking_requestedBooking_transitionsToConfirmed() {
+    void acceptBooking_requestedBooking_transitionsToPaymentPending() {
         Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
         CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
 
@@ -202,11 +212,12 @@ class BookingServiceTest {
         when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(makePlayer(PLAYER_ID, PARENT_ID)));
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
 
-        BookingResponse response = bookingService.acceptBooking(booking.getId(), COACH_USER_ID);
+        bookingService.acceptBooking(booking.getId(), COACH_USER_ID);
 
-        assertThat(booking.getStatus()).isEqualTo("CONFIRMED");
-        verify(eventPublisher).publishEvent(any(BookingConfirmedEvent.class));
+        assertThat(booking.getStatus()).isEqualTo("PAYMENT_PENDING");
+        verify(eventPublisher).publishEvent(any(BookingAcceptedEvent.class));
     }
 
     @Test
@@ -316,7 +327,7 @@ class BookingServiceTest {
             .withHour(10).withMinute(0).withSecond(0).withNano(0);
         Instant start = slotStart.toInstant();
         Instant end = slotStart.plusHours(1).toInstant();
-        return new CreateBookingRequest(coachId, playerId, start, end, "Europe/Berlin", "test notes");
+        return new CreateBookingRequest(coachId, playerId, start, end, "Europe/Berlin", "test notes", null);
     }
 
     private Booking makeBooking(Long parentId, Long playerId, UUID coachId, String status) {
@@ -334,6 +345,13 @@ class BookingServiceTest {
         b.setRequestedEndTime(Instant.now().plusSeconds(10800));
         b.setCanonicalTimezone("Europe/Berlin");
         return b;
+    }
+
+    private CoachPricing makeCoachPricing(BigDecimal price) {
+        CoachPricing p = new CoachPricing();
+        p.setCoachId(COACH_ID);
+        p.setPerSessionPrice(price);
+        return p;
     }
 
     private User makeUser(String email) {

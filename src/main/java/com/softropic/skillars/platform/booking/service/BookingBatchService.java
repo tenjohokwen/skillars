@@ -56,7 +56,7 @@ public class BookingBatchService {
     private final BookingService bookingService;
 
     private static final Set<String> POST_ACCEPTANCE_STATUSES = Set.of(
-        "ACCEPTED", "CONFIRMED", "UPCOMING", "IN_PROGRESS",
+        "ACCEPTED", "PAYMENT_PENDING", "CONFIRMED", "UPCOMING", "IN_PROGRESS",
         "COMPLETED_PENDING_CONFIRMATION", "COMPLETED"
     );
 

@@ -17,6 +17,7 @@
   "dependencies": {
     "@quasar/extras": "^1.16.4",
     "@rajesh896/broprint.js": "^2.2.0",
+    "@stripe/stripe-js": "^9.8.0",
     "axios": "^1.2.1",
     "echarts": "^6.1.0",
     "pinia": "^3.0.1",

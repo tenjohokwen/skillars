@@ -4,8 +4,8 @@ import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.booking.contract.ActorRole;
 import com.softropic.skillars.platform.booking.contract.BatchGroupedBookingResponse;
+import com.softropic.skillars.platform.booking.contract.BookingAcceptedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledDueToPauseEvent;
-import com.softropic.skillars.platform.booking.contract.BookingConfirmedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingDeclinedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingEvent;
 import com.softropic.skillars.platform.booking.contract.BookingRequestedEvent;
@@ -34,6 +34,9 @@ import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
+import com.softropic.skillars.platform.payment.repo.SessionPackPurchase;
+import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
+import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
@@ -44,6 +47,7 @@ import org.springframework.security.authentication.InsufficientAuthenticationExc
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.DateTimeException;
 import java.time.DayOfWeek;
 import java.time.Instant;
@@ -102,6 +106,8 @@ public class BookingService {
     private final com.softropic.skillars.platform.booking.repo.SessionPackPurchasedRepository sessionPackPurchasedRepository;
     private final BookingRescheduleRequestRepository rescheduleRequestRepository;
     private final BookingBatchRepository batchRepository;
+    private final SessionPackPurchaseRepository sessionPackPurchaseRepository;
+    private final CoachPricingRepository coachPricingRepository;
 
     @Transactional
     public void transition(UUID bookingId, BookingEvent event, TransitionContext context) {
@@ -155,16 +161,38 @@ public class BookingService {
             throw new OperationNotAllowedException("Requested end time must be after start time", SecurityError.MISSING_RIGHTS);
         }
 
+        try {
+            ZoneId.of(req.canonicalTimezone());
+        } catch (DateTimeException e) {
+            throw new OperationNotAllowedException("Invalid timezone: " + req.canonicalTimezone(), SecurityError.MISSING_RIGHTS);
+        }
+
         List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachId(req.coachId());
         if (!isSlotWithinAvailabilityWindow(req.requestedStartTime(), req.requestedEndTime(), windows)) {
             throw new OperationNotAllowedException("Requested slot is not within coach availability", SecurityError.MISSING_RIGHTS);
         }
 
-        // Acquire pessimistic lock on pack rows before credit check to prevent concurrent double-booking
-        sessionPackPurchasedRepository.findActivePacksForDeduction(req.playerId(), req.coachId(), Instant.now());
-        if (!sessionPackService.hasCredits(req.playerId(), req.coachId())) {
-            throw new OperationNotAllowedException("No effective session credits available for this coach", SecurityError.MISSING_RIGHTS);
+        // Validate session pack purchase if provided (AC 8)
+        if (req.sessionPackPurchaseId() != null) {
+            SessionPackPurchase pack = sessionPackPurchaseRepository.findById(req.sessionPackPurchaseId())
+                .orElseThrow(() -> new ResourceNotFoundException("Session pack purchase not found", "session_pack_purchase"));
+            if (pack.getExpiresAt().isBefore(Instant.now())) {
+                throw new PaymentGatewayException("payment.packExpired");
+            }
+            if (!pack.getParentId().equals(parentId)) {
+                throw new OperationNotAllowedException("Pack does not belong to this parent", SecurityError.MISSING_RIGHTS);
+            }
+            if (!pack.getCoachId().equals(req.coachId())) {
+                throw new PaymentGatewayException("payment.packCoachMismatch");
+            }
+            if (pack.getRemainingSessions() <= 0) {
+                throw new PaymentGatewayException("payment.packExhausted");
+            }
         }
+
+        // Acquire pessimistic lock on legacy pack rows to prevent concurrent double-booking on the old system.
+        // Note: new payment.session_pack_purchases path uses PackSessionService.deductSession() for its own lock.
+        sessionPackPurchasedRepository.findActivePacksForDeduction(req.playerId(), req.coachId(), Instant.now());
 
         Booking booking = new Booking();
         booking.setParentId(parentId);
@@ -174,6 +202,7 @@ public class BookingService {
         booking.setRequestedEndTime(req.requestedEndTime());
         booking.setCanonicalTimezone(req.canonicalTimezone());
         booking.setNotes(req.notes());
+        booking.setSessionPackPurchaseId(req.sessionPackPurchaseId());
         bookingRepository.save(booking);
 
         String coachEmail = resolveEmail(coach.getUserId());
@@ -200,18 +229,34 @@ public class BookingService {
 
         TransitionContext ctx = new TransitionContext(ActorRole.COACH, coachUserId);
         transitionInternal(bookingId, BookingEvent.ACCEPT, ctx, false);
-        transitionInternal(bookingId, BookingEvent.INITIATE_PAYMENT, ctx, false);
-        transitionInternal(bookingId, BookingEvent.PAYMENT_CAPTURED, ctx, true);
+        transitionInternal(bookingId, BookingEvent.INITIATE_PAYMENT, ctx, true);
 
-        // Reload to get updated status
         Booking updated = getBookingOrThrow(bookingId);
+        BigDecimal sessionPrice = resolveSessionPrice(updated);
         String parentEmail = resolveEmail(updated.getParentId());
-        eventPublisher.publishEvent(new BookingConfirmedEvent(
-            this, updated.getId(), updated.getParentId(), parentEmail,
-            coach.getDisplayName(), updated.getRequestedStartTime(), updated.getCanonicalTimezone()
+
+        // Publish inside @Transactional — @TransactionalEventListener(AFTER_COMMIT) ensures
+        // PaymentLifecycleService runs only after DB commit
+        eventPublisher.publishEvent(new BookingAcceptedEvent(
+            this, updated.getId(), updated.getParentId(), updated.getCoachId(),
+            sessionPrice, updated.getSessionPackPurchaseId(),
+            parentEmail, coach.getDisplayName(),
+            updated.getRequestedStartTime(), updated.getCanonicalTimezone()
         ));
 
+        // Return PAYMENT_PENDING status — PaymentLifecycleService handles CONFIRMED/DECLINED
         return toResponse(updated, coach.getDisplayName(), resolvePlayerName(updated.getPlayerId()), null, 0, null, null, null);
+    }
+
+    private BigDecimal resolveSessionPrice(Booking booking) {
+        if (booking.getSessionPackPurchaseId() != null) {
+            return sessionPackPurchaseRepository.findById(booking.getSessionPackPurchaseId())
+                .map(p -> p.getPricePerSession())
+                .orElseThrow(() -> new ResourceNotFoundException("Session pack purchase not found", "session_pack_purchase"));
+        }
+        return coachPricingRepository.findByCoachId(booking.getCoachId())
+            .map(p -> p.getPerSessionPrice())
+            .orElseThrow(() -> new ResourceNotFoundException("Coach pricing not found", "coach_pricing"));
     }
 
     @Transactional
@@ -488,15 +533,15 @@ public class BookingService {
 
             ZonedDateTime startZdt = startTime.atZone(zoneId);
             ZonedDateTime endZdt = endTime.atZone(zoneId);
+            // Anchor window boundaries to the session's start date in the coach's timezone.
+            // ZonedDateTime comparison handles cross-midnight sessions correctly without
+            // the date-equality guard that previously rejected all late-night sessions.
+            ZonedDateTime windowStart = w.getStartTime().atDate(startZdt.toLocalDate()).atZone(zoneId);
+            ZonedDateTime windowEnd   = w.getEndTime().atDate(startZdt.toLocalDate()).atZone(zoneId);
 
-            int requestedDow = startZdt.getDayOfWeek().getValue();
-            LocalTime requestedStart = startZdt.toLocalTime();
-            LocalTime requestedEnd = endZdt.toLocalTime();
-
-            if (w.getDayOfWeek() == (short) requestedDow
-                && startZdt.toLocalDate().equals(endZdt.toLocalDate())
-                && !requestedStart.isBefore(w.getStartTime())
-                && !requestedEnd.isAfter(w.getEndTime())) {
+            if (w.getDayOfWeek() == (short) startZdt.getDayOfWeek().getValue()
+                && !startZdt.isBefore(windowStart)
+                && !endZdt.isAfter(windowEnd)) {
                 return true;
             }
         }

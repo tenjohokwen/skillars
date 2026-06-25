@@ -209,8 +209,8 @@ const bookedStartTimes = computed(
       bookingStore.parentBookings
         .filter(
           (b) =>
-            b.coachId === coachId &&
-            b.playerId === playerId.value &&
+            String(b.coachId) === String(coachId) &&
+            String(b.playerId) === String(playerId.value) &&
             ACTIVE_BOOKING_STATUSES.has(b.status),
         )
         .map((b) => b.requestedStartTime),
@@ -218,7 +218,9 @@ const bookedStartTimes = computed(
 )
 
 const canSubmit = computed(
-  () => hasCredits.value && selectedSlot.value !== null && !submitting.value,
+  // Do NOT gate on hasCredits: AC 3 allows booking via platform credit (Cases A/B) or full
+  // Stripe charge (Case C). The backend handles payment failure gracefully (→ DECLINED).
+  () => selectedSlot.value !== null && !submitting.value,
 )
 
 function selectSlot(slot) {
@@ -263,6 +265,8 @@ async function submit() {
       notes: notes.value || null,
     })
     router.push('/parent/bookings')
+  } catch {
+    $q.notify({ type: 'negative', message: t('booking.requests.submitError') })
   } finally {
     submitting.value = false
   }
@@ -274,7 +278,7 @@ async function submitBatchRequest() {
     return
   }
   try {
-    await bookingStore.submitBatch(coachId, playerId.value, 0)
+    await bookingStore.submitBatch(coachId, playerId.value, Intl.DateTimeFormat().resolvedOptions().timeZone)
     batchReviewOpen.value = false
     $q.notify({ message: t('booking.batch.submitted'), type: 'positive' })
     router.push('/parent/bookings')

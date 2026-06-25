@@ -60,7 +60,7 @@ class BookingStateMachineTest {
             Arguments.of(ACCEPTED, CANCEL_COACH, CANCELLED_COACH),
             Arguments.of(ACCEPTED, CANCEL_PARENT, CANCELLED_PARENT),
             Arguments.of(PAYMENT_PENDING, PAYMENT_CAPTURED, CONFIRMED),
-            Arguments.of(PAYMENT_PENDING, PAYMENT_FAILED, REFUND_PENDING),
+            Arguments.of(PAYMENT_PENDING, PAYMENT_FAILED, DECLINED),
             Arguments.of(CONFIRMED, CANCEL_COACH, CANCELLED_COACH),
             Arguments.of(CONFIRMED, CANCEL_PARENT, CANCELLED_PARENT),
             Arguments.of(UPCOMING, START, IN_PROGRESS),

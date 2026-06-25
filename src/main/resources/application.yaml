@@ -230,6 +230,8 @@ app:
       oauth-client-id: ${APP_PAYMENT_STRIPE_OAUTH_CLIENT_ID:}
       oauth-callback-url: ${APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL:/api/payment/coaches/me/stripe/callback}
       callback-success-url: ${APP_PAYMENT_STRIPE_CALLBACK_SUCCESS_URL:/coach/payment-settings}
+      fee-rate: ${APP_PAYMENT_STRIPE_FEE_RATE:0.025}
+      fee-fixed: ${APP_PAYMENT_STRIPE_FEE_FIXED:0.25}
 
 features:
   toggles:

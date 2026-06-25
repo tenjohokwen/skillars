@@ -74,8 +74,10 @@ public class SessionPackExpiryScheduler {
                 try {
                     transactionTemplate.execute(status -> {
                         CoachProfile coach = coachProfileRepository.findById(pack.getCoachId()).orElse(null);
+                        String coachEmail30d = coach != null ? resolveEmailByUserId(coach.getUserId()) : "";
                         eventPublisher.publishEvent(new SessionPackExpiryWarningEvent(
                             this, pack.getId(), pack.getParentId(), resolveEmail(pack.getParentId()),
+                            pack.getCoachId(), coachEmail30d,
                             coach != null ? coach.getDisplayName() : "Coach",
                             pack.getCreditsRemaining(), pack.getExpiresAt(), "30d",
                             coach != null ? coach.getCanonicalTimezone() : "UTC"
@@ -97,8 +99,10 @@ public class SessionPackExpiryScheduler {
                 try {
                     transactionTemplate.execute(status -> {
                         CoachProfile coach = coachProfileRepository.findById(pack.getCoachId()).orElse(null);
+                        String coachEmail7d = coach != null ? resolveEmailByUserId(coach.getUserId()) : "";
                         eventPublisher.publishEvent(new SessionPackExpiryWarningEvent(
                             this, pack.getId(), pack.getParentId(), resolveEmail(pack.getParentId()),
+                            pack.getCoachId(), coachEmail7d,
                             coach != null ? coach.getDisplayName() : "Coach",
                             pack.getCreditsRemaining(), pack.getExpiresAt(), "7d",
                             coach != null ? coach.getCanonicalTimezone() : "UTC"
@@ -115,6 +119,11 @@ public class SessionPackExpiryScheduler {
     }
 
     private String resolveEmail(Long userId) {
+        return userRepository.findById(userId).map(u -> u.getEmail()).orElse("");
+    }
+
+    private String resolveEmailByUserId(Long userId) {
+        if (userId == null) return "";
         return userRepository.findById(userId).map(u -> u.getEmail()).orElse("");
     }
 }

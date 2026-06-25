@@ -198,6 +198,12 @@ const routes = [
         component: () => import('pages/parent/ParentApprovalPage.vue'),
         meta: { requiresAuth: true, role: 'PARENT' },
       },
+      {
+        path: 'parent/credit-wallet',
+        name: 'parent-credit-wallet',
+        component: () => import('pages/parent/ParentCreditWalletPage.vue'),
+        meta: { requiresAuth: true, role: 'PARENT' },
+      },
 
       // Marketplace — public (guests can browse, AC 5, FR-MKT-005)
       {

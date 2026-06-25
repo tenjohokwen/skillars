@@ -77,6 +77,9 @@ public class Booking {
     @Column(name = "batch_id")
     private UUID batchId;
 
+    @Column(name = "session_pack_purchase_id", updatable = false)
+    private UUID sessionPackPurchaseId;
+
     @PrePersist
     void onCreate() {
         if (createdAt == null) createdAt = Instant.now();

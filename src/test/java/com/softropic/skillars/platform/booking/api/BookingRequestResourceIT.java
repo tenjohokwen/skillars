@@ -175,6 +175,8 @@ class BookingRequestResourceIT {
     @AfterEach
     void tearDown() {
         transactionTemplate.execute(status -> {
+            jdbcTemplate.update("DELETE FROM payment.booking_payments WHERE booking_id IN (SELECT id FROM booking.bookings WHERE parent_id = ?)", PARENT_ID);
+            jdbcTemplate.update("DELETE FROM payment.parent_credit_ledger WHERE parent_id = ?", PARENT_ID);
             jdbcTemplate.update("DELETE FROM booking.bookings WHERE parent_id = ?", PARENT_ID);
             jdbcTemplate.update("DELETE FROM booking.session_packs_purchased WHERE parent_id = ?", PARENT_ID);
             jdbcTemplate.update("DELETE FROM marketplace.coach_availability_windows WHERE coach_id = ?", coachProfileId);
@@ -217,8 +219,8 @@ class BookingRequestResourceIT {
     }
 
     @Test
-    void createBookingRequest_noCredits_returns403() {
-        // Remove the session pack
+    void createBookingRequest_noCredits_succeeds_paymentDeferred() {
+        // Remove the legacy session pack — Sprint 7.2: credit depletion no longer blocks booking
         transactionTemplate.execute(status -> {
             jdbcTemplate.update("DELETE FROM booking.session_packs_purchased WHERE parent_id = ?", PARENT_ID);
             return null;
@@ -226,7 +228,7 @@ class BookingRequestResourceIT {
 
         String cookies = loginAndGetCookies(PARENT_EMAIL);
 
-        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
             baseUrl() + BOOKINGS_BASE,
             HttpMethod.POST,
             Map.of(
@@ -238,20 +240,21 @@ class BookingRequestResourceIT {
             ),
             authenticatedHeaders(cookies),
             Map.class
-        ))
-            .isInstanceOf(HttpClientErrorException.class)
-            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(response.getBody().get("status")).isEqualTo("REQUESTED");
     }
 
     @Test
-    void createBookingRequest_secondRequestWhenSingleCreditAlreadyInFlight_returns403() {
-        // Set session pack to 1 credit
+    void createBookingRequest_secondRequestWhenCreditExhausted_succeeds_paymentDeferred() {
+        // Sprint 7.2: second booking when credits exhausted is allowed; payment is deferred to accept time
         transactionTemplate.execute(status -> {
             jdbcTemplate.update(
                 "UPDATE booking.session_packs_purchased SET credits_remaining = 1 WHERE parent_id = ?",
                 PARENT_ID
             );
-            // Insert an in-flight booking consuming the single credit
+            // Insert an in-flight booking consuming the single legacy credit
             jdbcTemplate.update(
                 "INSERT INTO booking.bookings " +
                 "(id, parent_id, player_id, coach_id, requested_start_time, requested_end_time, status, canonical_timezone, version, created_at, updated_at) " +
@@ -265,7 +268,7 @@ class BookingRequestResourceIT {
 
         String cookies = loginAndGetCookies(PARENT_EMAIL);
 
-        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
             baseUrl() + BOOKINGS_BASE,
             HttpMethod.POST,
             Map.of(
@@ -277,9 +280,10 @@ class BookingRequestResourceIT {
             ),
             authenticatedHeaders(cookies),
             Map.class
-        ))
-            .isInstanceOf(HttpClientErrorException.class)
-            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(response.getBody().get("status")).isEqualTo("REQUESTED");
     }
 
     @Test

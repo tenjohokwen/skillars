@@ -14,5 +14,6 @@ public record CreateBookingRequest(
     @NotNull @Future Instant requestedStartTime,
     @NotNull Instant requestedEndTime,
     @NotBlank String canonicalTimezone,
-    @Size(max = 500) String notes
+    @Size(max = 500) String notes,
+    UUID sessionPackPurchaseId
 ) {}

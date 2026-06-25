@@ -29,7 +29,7 @@ public class BookingStateMachine {
         ));
         t.put(BookingStatus.PAYMENT_PENDING, Map.of(
             BookingEvent.PAYMENT_CAPTURED, BookingStatus.CONFIRMED,
-            BookingEvent.PAYMENT_FAILED,   BookingStatus.REFUND_PENDING
+            BookingEvent.PAYMENT_FAILED,   BookingStatus.DECLINED   // was REFUND_PENDING — see Story 7.2
         ));
         t.put(BookingStatus.CONFIRMED, Map.of(
             BookingEvent.SCHEDULE_UPCOMING,   BookingStatus.UPCOMING,

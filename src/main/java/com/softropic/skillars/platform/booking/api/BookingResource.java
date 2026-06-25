@@ -57,7 +57,10 @@ public class BookingResource {
     @PutMapping("/{id}/accept")
     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
     public ResponseEntity<BookingResponse> acceptBooking(@PathVariable UUID id) {
-        return ResponseEntity.ok(bookingService.acceptBooking(id, currentCoachUserId()));
+        bookingService.acceptBooking(id, currentCoachUserId());
+        // Re-fetch after accept: the @TransactionalEventListener(AFTER_COMMIT) payment lifecycle
+        // runs synchronously before this returns, so the booking is already at its final status.
+        return ResponseEntity.ok(bookingService.getBooking(id));
     }
 
     @PutMapping("/{id}/decline")
