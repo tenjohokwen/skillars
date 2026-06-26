@@ -539,7 +539,6 @@ export default {
       noActiveTier: 'Dieser Coach hat kein aktives Sitzungspaket verfügbar.',
     },
   },
-  messaging: {},
   admin: {},
   featureGate: {
     requiredTier: 'Erfordert {tier}-Plan',
@@ -664,5 +663,17 @@ export default {
     amount: 'Betrag',
     balance: 'Saldo',
     receipt: 'Quittung',
+  },
+  messaging: {
+    pageTitle: 'Nachrichten',
+    conversations: 'Gespräche',
+    noConversations: 'Noch keine Gespräche.',
+    noMessages: 'Noch keine Nachrichten.',
+    selectConversation: 'Wähle ein Gespräch aus.',
+    typeMessage: 'Nachricht eingeben...',
+    contentRemoved: '[Inhalt entfernt]',
+    send: 'Senden',
+    loadMore: 'Mehr laden',
+    unread: '{count} ungelesen',
   },
 }

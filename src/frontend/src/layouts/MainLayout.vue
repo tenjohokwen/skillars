@@ -137,6 +137,15 @@
               <q-item-label class="nav-label">{{ t('revenue.pageTitle') }}</q-item-label>
             </q-item-section>
           </q-item>
+
+          <q-item clickable to="/messaging" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="chat" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('messaging.pageTitle') }}</q-item-label>
+            </q-item-section>
+          </q-item>
         </template>
 
         <!-- Parent section -->
@@ -149,6 +158,15 @@
             </q-item-section>
             <q-item-section>
               <q-item-label class="nav-label">{{ t('creditStatement.pageTitle') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item clickable to="/messaging" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="chat" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('messaging.pageTitle') }}</q-item-label>
             </q-item-section>
           </q-item>
         </template>

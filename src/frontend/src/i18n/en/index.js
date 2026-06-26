@@ -801,7 +801,6 @@ export default {
     balance: 'Balance',
     receipt: 'Receipt',
   },
-  messaging: {},
   admin: {},
   cancellation: {
     title: 'Cancel Session',
@@ -870,5 +869,17 @@ export default {
       cancelPending: 'Player subscription ends on {date}.',
       paymentMethodRequired: 'Please enter a payment method ID.',
     },
+  },
+  messaging: {
+    pageTitle: 'Messages',
+    conversations: 'Conversations',
+    noConversations: 'No conversations yet.',
+    noMessages: 'No messages yet.',
+    selectConversation: 'Select a conversation to start messaging.',
+    typeMessage: 'Type a message...',
+    contentRemoved: '[Content removed]',
+    send: 'Send',
+    loadMore: 'Load more',
+    unread: '{count} unread',
   },
 }

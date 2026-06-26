@@ -115,4 +115,16 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     Optional<Booking> findByIdAndCoachId(UUID bookingId, UUID coachId);
 
     Optional<Booking> findByIdAndParentId(UUID bookingId, Long parentId);
+
+    @Query("""
+        SELECT CASE WHEN COUNT(b) > 0 THEN true ELSE false END
+        FROM Booking b
+        WHERE b.coachId = :coachId
+          AND b.playerId = :playerId
+          AND b.status IN :statuses
+        """)
+    boolean existsByCoachIdAndPlayerIdAndStatusIn(
+        @Param("coachId") UUID coachId,
+        @Param("playerId") Long playerId,
+        @Param("statuses") List<String> statuses);
 }

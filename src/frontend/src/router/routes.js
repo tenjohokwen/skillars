@@ -241,6 +241,12 @@ const routes = [
         meta: { requiresAuth: true, role: 'COACH' },
       },
       {
+        path: 'messaging',
+        name: 'messaging',
+        component: () => import('pages/messaging/MessagingPage.vue'),
+        meta: { requiresAuth: true },
+      },
+      {
         path: 'coach/bookings/:bookingId/receipt',
         name: 'coach-receipt',
         component: () => import('pages/coach/ReceiptView.vue'),
