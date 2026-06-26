@@ -7,7 +7,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.math.BigDecimal;
 import java.sql.Timestamp;
@@ -20,9 +19,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 class PackCancellationRefundIT extends BasePaymentIT {
 
     @Autowired CancellationRefundService cancellationRefundService;
-
-    // Mock strike service — not testing strikes here
-    @MockitoBean ReliabilityStrikeService reliabilityStrikeService;
 
     private static final long PARENT_ID    = 80001L;
     private static final long COACH_USER_ID = 80002L;

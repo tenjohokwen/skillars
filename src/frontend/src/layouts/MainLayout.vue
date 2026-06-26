@@ -125,26 +125,56 @@
           </q-item-section>
         </q-item>
 
+        <!-- Coach section -->
+        <template v-if="authStore.isCoach">
+          <div class="text-label q-px-md q-mt-lg q-mb-sm">{{ t('coach.nav') }}</div>
+
+          <q-item clickable to="/coach/revenue" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="bar_chart" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('revenue.pageTitle') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+        </template>
+
+        <!-- Parent section -->
+        <template v-if="authStore.isParent">
+          <div class="text-label q-px-md q-mt-lg q-mb-sm">{{ t('parent.nav') }}</div>
+
+          <q-item clickable to="/parent/credit-statement" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="receipt_long" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('creditStatement.pageTitle') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+        </template>
+
         <!-- Admin section -->
-        <div class="text-label q-px-md q-mt-lg q-mb-sm">Admin</div>
+        <template v-if="authStore.isAdmin">
+          <div class="text-label q-px-md q-mt-lg q-mb-sm">Admin</div>
 
-        <q-item clickable to="/admin/tenants" class="nav-item">
-          <q-item-section avatar>
-            <q-icon name="group" class="nav-icon" />
-          </q-item-section>
-          <q-item-section>
-            <q-item-label class="nav-label">Tenants</q-item-label>
-          </q-item-section>
-        </q-item>
+          <q-item clickable to="/admin/tenants" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="group" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">Tenants</q-item-label>
+            </q-item-section>
+          </q-item>
 
-        <q-item clickable to="/admin/health-dashboard" class="nav-item">
-          <q-item-section avatar>
-            <q-icon name="monitor_heart" class="nav-icon" />
-          </q-item-section>
-          <q-item-section>
-            <q-item-label class="nav-label">Health Dashboard</q-item-label>
-          </q-item-section>
-        </q-item>
+          <q-item clickable to="/admin/health-dashboard" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="monitor_heart" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">Health Dashboard</q-item-label>
+            </q-item-section>
+          </q-item>
+        </template>
       </q-list>
 
       <!-- Drawer footer -->
@@ -176,10 +206,12 @@ import { authApi } from 'src/api/auth.api';
 import { useSession } from 'src/composables/useSession';
 import { toggleTheme as bootToggleTheme, isDarkMode } from 'src/boot/theme';
 import ParentChildSwitcher from 'src/components/ParentChildSwitcher.vue';
+import { useAuthStore } from 'src/stores/auth.store';
 
 const router = useRouter();
 const { t, locale } = useI18n();
 const { destroySession } = useSession();
+const authStore = useAuthStore();
 
 const leftDrawerOpen = ref(false);
 const darkMode = ref(isDarkMode());

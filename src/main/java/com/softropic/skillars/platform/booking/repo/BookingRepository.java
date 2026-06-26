@@ -6,6 +6,7 @@ import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -110,4 +111,8 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
         @Param("pauseStart") Instant pauseStart,
         @Param("pauseEnd")   Instant pauseEnd,
         @Param("statuses")   List<String> statuses);
+
+    Optional<Booking> findByIdAndCoachId(UUID bookingId, UUID coachId);
+
+    Optional<Booking> findByIdAndParentId(UUID bookingId, Long parentId);
 }

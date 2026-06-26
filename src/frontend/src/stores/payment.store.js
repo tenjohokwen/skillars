@@ -15,6 +15,9 @@ import {
   subscribePlayer,
   changePlayerTier,
   cancelPlayerSubscription,
+  fetchCoachRevenueSummary,
+  fetchCoachTransactions,
+  fetchCreditStatement,
 } from 'src/api/payment.api'
 
 export const usePaymentStore = defineStore('payment', {
@@ -27,6 +30,11 @@ export const usePaymentStore = defineStore('payment', {
     coachTiers: [],
     playerSubscription: null,
     playerTiers: [],
+    revenueSummary: null,
+    transactions: [],
+    transactionPage: null,
+    creditStatement: [],
+    creditStatementPage: null,
     loading: false,
     error: null,
   }),
@@ -153,6 +161,44 @@ export const usePaymentStore = defineStore('payment', {
     async cancelPlayerSubscription(playerId) {
       await cancelPlayerSubscription(playerId)
       await this.fetchPlayerSubscription(playerId)
+    },
+
+    async fetchRevenueSummary(from, to) {
+      this.loading = true
+      this.error = null
+      try {
+        this.revenueSummary = (await fetchCoachRevenueSummary(from, to)).data
+      } catch (err) {
+        this.error = err
+      } finally {
+        this.loading = false
+      }
+    },
+    async fetchTransactions(from, to, page = 0) {
+      this.loading = true
+      this.error = null
+      try {
+        const res = await fetchCoachTransactions(from, to, page)
+        this.transactionPage = res.data
+        this.transactions = res.data.content
+      } catch (err) {
+        this.error = err
+      } finally {
+        this.loading = false
+      }
+    },
+    async fetchCreditStatement(from, to, page = 0) {
+      this.loading = true
+      this.error = null
+      try {
+        const res = await fetchCreditStatement(from, to, page)
+        this.creditStatementPage = res.data
+        this.creditStatement = res.data.content
+      } catch (err) {
+        this.error = err
+      } finally {
+        this.loading = false
+      }
     },
   },
 })

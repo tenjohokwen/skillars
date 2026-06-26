@@ -71,3 +71,19 @@ export const changePlayerTier = (payload) =>
   api.post('/api/payment/subscriptions/player/change-tier', payload)
 export const cancelPlayerSubscription = (playerId) =>
   api.delete('/api/payment/subscriptions/player', { params: { playerId } })
+
+// Revenue dashboard (coach)
+export const fetchCoachRevenueSummary = (from, to) =>
+  api.get('/api/payment/coaches/me/revenue', { params: { from, to } })
+export const fetchCoachTransactions = (from, to, page = 0, size = 20) =>
+  api.get('/api/payment/coaches/me/transactions', { params: { from, to, page, size } })
+export const fetchCoachReceipt = (bookingId) =>
+  api.get(`/api/payment/coaches/bookings/${bookingId}/receipt`)
+
+// Receipts (parent)
+export const fetchParentReceipt = (bookingId) =>
+  api.get(`/api/payment/parents/bookings/${bookingId}/receipt`)
+
+// Credit statement (parent)
+export const fetchCreditStatement = (from, to, page = 0, size = 20) =>
+  api.get('/api/payment/credits/statement', { params: { from, to, page, size } })

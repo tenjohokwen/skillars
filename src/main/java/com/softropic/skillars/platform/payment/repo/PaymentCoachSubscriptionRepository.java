@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.payment.repo;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
 
 import java.time.Instant;
 import java.util.List;
@@ -14,4 +15,7 @@ public interface PaymentCoachSubscriptionRepository extends JpaRepository<Paymen
     Optional<PaymentCoachSubscription> findByStripeSubscriptionId(String stripeSubscriptionId);
 
     List<PaymentCoachSubscription> findByStatusAndPastDueSinceBefore(String status, Instant cutoff);
+
+    @Query("SELECT p.tier, COUNT(p) FROM PaymentCoachSubscription p WHERE p.status IN ('ACTIVE', 'TRIALLING') GROUP BY p.tier")
+    List<Object[]> countActiveByTier();
 }

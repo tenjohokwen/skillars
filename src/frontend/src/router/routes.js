@@ -222,6 +222,30 @@ const routes = [
         component: () => import('pages/parent/ParentCreditWalletPage.vue'),
         meta: { requiresAuth: true, role: 'PARENT' },
       },
+      {
+        path: 'parent/credit-statement',
+        name: 'parent-credit-statement',
+        component: () => import('pages/parent/CreditStatementPage.vue'),
+        meta: { requiresAuth: true, role: 'PARENT' },
+      },
+      {
+        path: 'parent/bookings/:bookingId/receipt',
+        name: 'parent-receipt',
+        component: () => import('pages/parent/ParentReceiptView.vue'),
+        meta: { requiresAuth: true, role: 'PARENT' },
+      },
+      {
+        path: 'coach/revenue',
+        name: 'coach-revenue',
+        component: () => import('pages/coach/RevenueDashboardPage.vue'),
+        meta: { requiresAuth: true, role: 'COACH' },
+      },
+      {
+        path: 'coach/bookings/:bookingId/receipt',
+        name: 'coach-receipt',
+        component: () => import('pages/coach/ReceiptView.vue'),
+        meta: { requiresAuth: true, role: 'COACH' },
+      },
 
       // Marketplace — public (guests can browse, AC 5, FR-MKT-005)
       {

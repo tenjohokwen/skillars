@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-06-25 # Story 7.4 coach-player-subscription-tiers → in-progress (code review: 7 confirmed + 1 likely defect)
+last_updated: 2026-06-26 # Story 7.5 revenue-dashboard-financial-reporting → done; 2 review patches applied 2026-06-26
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -222,7 +222,7 @@ development_status:
   skillars-7-2-session-payment-lifecycle-credit-wallet: done  # Groups 1–6 adversarial review complete; 33 patches applied 2026-06-24
   skillars-7-3-cancellation-refund-reliability-strikes: done  # 5 review patches applied 2026-06-25
   skillars-7-4-coach-player-subscription-tiers: done  # 8 review patches applied 2026-06-25
-  skillars-7-5-revenue-dashboard-financial-reporting: backlog
+  skillars-7-5-revenue-dashboard-financial-reporting: done  # 4 review patches applied 2026-06-26
   skillars-epic-7-retrospective: optional
 
   # Epic 8: Messaging
