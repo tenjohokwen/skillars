@@ -20,4 +20,8 @@ public interface ConversationRepository extends JpaRepository<Conversation, Long
 
     @Query("SELECT c FROM Conversation c WHERE c.playerId = :playerId AND c.status != 'BLOCKED'")
     List<Conversation> findActiveByPlayerId(@Param("playerId") Long playerId);
+
+    /** Returns all conversations for a player regardless of status — used by parental oversight so BLOCKED history is visible. */
+    @Query("SELECT c FROM Conversation c WHERE c.playerId = :playerId")
+    List<Conversation> findAllByPlayerId(@Param("playerId") Long playerId);
 }

@@ -1,3 +1,7 @@
+## Deferred from: code review of skillars-8-2 (2026-06-26)
+- D1: `resolveOtherPartyName()` COACH branch — `agePolicyService.getMessagingPolicy()` throws `UserNotFoundException` for deleted players, crashing coach's entire `getConversations()` call; blast radius expanded from send-path (8.1 deferral) to read-path [`MessagingService.java:311`]
+- D2: `getConversations()` PARENT stream filter — same `UserNotFoundException` propagation for deleted players crashes parent's entire conversation list [`MessagingService.java:103-105`]
+
 ## Deferred from: adversarial code review of skillars-7-2 Group 2 Service Layer (2026-06-24)
 - D1: Non-atomic idempotency check in `onBookingAccepted` (`existsById` bare SELECT outside TX) — root cause addressed by P3 (TX boundary restructure); revisit if duplicate event replay observed in production [`PaymentLifecycleService.java:52-55`]
 - D2: `SessionPackExpiryNotifier` sends up to 14 daily warning emails per pack — no notification-sent guard; requires `last_warned_at` column on `session_pack_purchases` (V63+ migration) [`SessionPackExpiryNotifier.java`]

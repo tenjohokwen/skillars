@@ -17,6 +17,7 @@ import com.softropic.skillars.platform.messaging.repo.Message;
 import com.softropic.skillars.platform.messaging.repo.MessageRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import com.softropic.skillars.platform.security.service.AgePolicyService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -53,6 +54,7 @@ public class MessagingService {
     private final ModerationService moderationService;
     private final MessagingEmitterRegistry messagingEmitterRegistry;
     private final ConversationCreationHelper conversationCreationHelper;
+    private final AgePolicyService agePolicyService;
 
     public ConversationSummaryDto initiateConversation(UUID coachId, Long playerId, Long callerUserId, String role) {
         boolean hasBooking = bookingRepository.existsByCoachIdAndPlayerIdAndStatusIn(coachId, playerId, CONFIRMED_STATES);
@@ -64,6 +66,15 @@ public class MessagingService {
 
         var player = playerProfileRepository.findById(playerId)
             .orElseThrow(() -> new ResourceNotFoundException("Player not found", "player"));
+
+        if ("PARENT".equals(role)) {
+            AgeMessagingPolicy agePolicy = AgeMessagingPolicy.from(agePolicyService.getMessagingPolicy(playerId));
+            if (!agePolicy.parentHasAccess()) {
+                throw new OperationNotAllowedException(
+                    "Parent cannot initiate conversations for adult players",
+                    MessagingErrorCode.PARENTAL_OVERSIGHT_NOT_APPLICABLE);
+            }
+        }
 
         Conversation conversation;
         try {
@@ -85,9 +96,20 @@ public class MessagingService {
                 .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach"));
             conversations = conversationRepository.findActiveByCoachId(coach.getId());
         } else if ("PARENT".equals(role)) {
-            conversations = conversationRepository.findActiveByParentId(callerUserId);
+            List<Conversation> all = conversationRepository.findActiveByParentId(callerUserId);
+            // N+1 note: getMessagingPolicy is called once here to filter, then again in resolveOtherPartyName —
+            // 2 lookups per surviving conversation. Acceptable for MVP; reduce in a later optimisation story.
+            conversations = all.stream()
+                .filter(c -> AgeMessagingPolicy.from(
+                    agePolicyService.getMessagingPolicy(c.getPlayerId())).parentHasAccess())
+                .toList();
         } else {
-            conversations = conversationRepository.findActiveByPlayerId(callerUserId);
+            // PLAYER: all conversations belong to the same player (callerUserId), one policy lookup suffices
+            AgeMessagingPolicy callerPolicy = AgeMessagingPolicy.from(
+                agePolicyService.getMessagingPolicy(callerUserId));
+            conversations = callerPolicy.visibleToPlayer()
+                ? conversationRepository.findActiveByPlayerId(callerUserId)
+                : List.of();
         }
 
         return conversations.stream()
@@ -108,6 +130,19 @@ public class MessagingService {
             .orElseThrow(() -> new ResourceNotFoundException("Conversation not found", "conversation"));
 
         verifyIsParty(conv, senderUserId, role);
+
+        AgeMessagingPolicy agePolicy = AgeMessagingPolicy.from(
+            agePolicyService.getMessagingPolicy(conv.getPlayerId()));
+        if ("PLAYER".equals(role) && agePolicy.playerIsBlocked()) {
+            throw new OperationNotAllowedException(
+                "Player direct messaging is restricted for this age tier",
+                MessagingErrorCode.PLAYER_DIRECT_MESSAGING_RESTRICTED);
+        }
+        if ("PARENT".equals(role) && agePolicy.parentIsBlocked()) {
+            throw new OperationNotAllowedException(
+                "Parent cannot send messages in adult player conversations",
+                MessagingErrorCode.PARENT_MESSAGING_RESTRICTED_FOR_ADULT);
+        }
 
         var message = new Message();
         message.setConversationId(conversationId);
@@ -153,6 +188,62 @@ public class MessagingService {
         updateLastRead(conv, role);
         conversationRepository.save(conv);
 
+        return page.map(this::toMessageDto);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ConversationSummaryDto> getConversationsForPlayer(Long playerId, Long parentUserId) {
+        // 1. Ownership guard — always 403, never 404
+        playerProfileRepository.findByIdAndParentId(playerId, parentUserId)
+            .orElseThrow(() -> new OperationNotAllowedException(
+                "Parent does not own this player", MessagingErrorCode.NOT_A_PARTY));
+
+        // 2. Age check — adult player conversations not surfaced to parents
+        AgeMessagingPolicy agePolicy = AgeMessagingPolicy.from(
+            agePolicyService.getMessagingPolicy(playerId));
+        if (!agePolicy.parentHasAccess()) {
+            throw new OperationNotAllowedException(
+                "Parental oversight is not applicable for adult players",
+                MessagingErrorCode.PARENTAL_OVERSIGHT_NOT_APPLICABLE);
+        }
+
+        // 3. Return ALL conversations including BLOCKED — oversight view must not hide safety-flagged history
+        List<Conversation> conversations = conversationRepository.findAllByPlayerId(playerId);
+        return conversations.stream()
+            .map(c -> toSummary(c, parentUserId, "PARENT"))
+            .sorted(Comparator.comparing(ConversationSummaryDto::lastMessageAt,
+                Comparator.nullsLast(Comparator.reverseOrder())))
+            .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public Page<MessageDto> getMessagesForPlayerConversation(
+            Long playerId, Long conversationId, Long parentUserId, Pageable pageable) {
+        // 1. Ownership guard — always 403, never 404
+        playerProfileRepository.findByIdAndParentId(playerId, parentUserId)
+            .orElseThrow(() -> new OperationNotAllowedException(
+                "Parent does not own this player", MessagingErrorCode.NOT_A_PARTY));
+
+        // 2. Age check
+        AgeMessagingPolicy agePolicy = AgeMessagingPolicy.from(
+            agePolicyService.getMessagingPolicy(playerId));
+        if (!agePolicy.parentHasAccess()) {
+            throw new OperationNotAllowedException(
+                "Parental oversight is not applicable for adult players",
+                MessagingErrorCode.PARENTAL_OVERSIGHT_NOT_APPLICABLE);
+        }
+
+        // 3. Load conversation and verify it belongs to this player
+        var conv = conversationRepository.findById(conversationId)
+            .orElseThrow(() -> new OperationNotAllowedException(
+                "Conversation not found or access denied", MessagingErrorCode.NOT_A_PARTY));
+        if (!conv.getPlayerId().equals(playerId)) {
+            throw new OperationNotAllowedException(
+                "Conversation does not belong to this player", MessagingErrorCode.NOT_A_PARTY);
+        }
+
+        // 4. Return messages — do NOT update lastReadAt (AC6: oversight view is read-only for tracking)
+        Page<Message> page = messageRepository.findByConversationIdAndNotDeleted(conversationId, pageable);
         return page.map(this::toMessageDto);
     }
 
@@ -211,10 +302,46 @@ public class MessagingService {
 
     private String resolveOtherPartyName(Conversation conv, String role) {
         if ("COACH".equals(role)) {
-            return playerProfileRepository.findById(conv.getPlayerId())
-                .map(p -> p.getName())
-                .orElse("Unknown Player");
+            String playerName = playerProfileRepository.findById(conv.getPlayerId())
+                .map(p -> p.getName()).orElse("Unknown Player");
+            String playerFirstName = playerName.contains(" ")
+                ? playerName.substring(0, playerName.indexOf(' '))
+                : playerName;
+            AgeMessagingPolicy agePolicy = AgeMessagingPolicy.from(
+                agePolicyService.getMessagingPolicy(conv.getPlayerId()));
+            return switch (agePolicy) {
+                case PROHIBITED, PARENT_MANAGED -> "Parent of " + playerFirstName;
+                case SUPERVISED -> playerFirstName + " & parent";
+                case UNRESTRICTED -> playerFirstName;
+            };
+        } else if ("PARENT".equals(role)) {
+            AgeMessagingPolicy agePolicy = AgeMessagingPolicy.from(
+                agePolicyService.getMessagingPolicy(conv.getPlayerId()));
+            return switch (agePolicy) {
+                case PROHIBITED, PARENT_MANAGED ->
+                    coachProfileRepository.findById(conv.getCoachId())
+                        .map(CoachProfile::getDisplayName).orElse("Unknown Coach");
+                case SUPERVISED -> {
+                    String playerName = playerProfileRepository.findById(conv.getPlayerId())
+                        .map(p -> p.getName()).orElse("Unknown Player");
+                    String playerFirstName = playerName.contains(" ")
+                        ? playerName.substring(0, playerName.indexOf(' '))
+                        : playerName;
+                    String coachName = coachProfileRepository.findById(conv.getCoachId())
+                        .map(CoachProfile::getDisplayName).orElse("Unknown Coach");
+                    yield playerFirstName + "'s conversation with " + coachName;
+                }
+                case UNRESTRICTED -> {
+                    // initiateConversation() gates this path; safe fallback if reached unexpectedly
+                    String playerName = playerProfileRepository.findById(conv.getPlayerId())
+                        .map(p -> p.getName()).orElse("Unknown Player");
+                    yield playerName.contains(" ")
+                        ? playerName.substring(0, playerName.indexOf(' '))
+                        : playerName;
+                }
+            };
         } else {
+            // PLAYER role: show coach name
             return coachProfileRepository.findById(conv.getCoachId())
                 .map(CoachProfile::getDisplayName)
                 .orElse("Unknown Coach");
@@ -240,6 +367,14 @@ public class MessagingService {
 
     private Long resolveRecipient(Conversation conv, String role) {
         if ("COACH".equals(role)) {
+            AgeMessagingPolicy agePolicy = AgeMessagingPolicy.from(
+                agePolicyService.getMessagingPolicy(conv.getPlayerId()));
+            // For UNRESTRICTED (18+): parent has no access — SSE goes to the player, not the parent.
+            // For all other tiers: parent is primary or oversight — SSE goes to parent.
+            // TODO: SUPERVISED (13-17) multi-recipient SSE (player + parent) is deferred to a future story.
+            if (agePolicy.parentIsBlocked()) {
+                return conv.getPlayerId();
+            }
             return conv.getParentId();
         } else {
             return coachProfileRepository.findById(conv.getCoachId())
@@ -249,7 +384,9 @@ public class MessagingService {
     }
 
     private MessageDto toMessageDto(Message msg) {
-        String content = msg.getModerationStatus() == MessageModerationStatus.BLOCKED ? null : msg.getContent();
+        boolean contentHidden = msg.getModerationStatus() == MessageModerationStatus.BLOCKED
+            || msg.getModerationStatus() == MessageModerationStatus.UNDER_REVIEW;
+        String content = contentHidden ? null : msg.getContent();
         return new MessageDto(
             msg.getId(),
             msg.getSenderId(),

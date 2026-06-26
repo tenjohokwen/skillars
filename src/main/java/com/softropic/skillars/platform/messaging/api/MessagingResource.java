@@ -107,6 +107,28 @@ public class MessagingResource {
                 PageRequest.of(Math.max(0, page), Math.min(size, 100))));
     }
 
+    @GetMapping("/players/{playerId}/conversations")
+    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    public ResponseEntity<List<ConversationSummaryDto>> getPlayerConversations(
+            @PathVariable Long playerId) {
+        Long parentUserId = resolveUserId();
+        return ResponseEntity.ok(messagingService.getConversationsForPlayer(playerId, parentUserId));
+    }
+
+    @GetMapping("/players/{playerId}/conversations/{conversationId}/messages")
+    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    public ResponseEntity<Page<MessageDto>> getPlayerConversationMessages(
+            @PathVariable Long playerId,
+            @PathVariable Long conversationId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        Long parentUserId = resolveUserId();
+        return ResponseEntity.ok(
+            messagingService.getMessagesForPlayerConversation(
+                playerId, conversationId, parentUserId,
+                PageRequest.of(Math.max(0, page), Math.min(size, 100))));
+    }
+
     @GetMapping("/conversations/{conversationId}/events")
     @PreAuthorize(SecurityConstants.IS_AUTHENTICATED)
     public ResponseEntity<SseEmitter> subscribeToEvents(

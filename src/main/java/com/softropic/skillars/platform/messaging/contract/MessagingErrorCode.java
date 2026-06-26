@@ -6,7 +6,10 @@ public enum MessagingErrorCode implements ErrorCode {
     NO_BOOKING_RELATIONSHIP("messaging.noBookingRelationship"),
     INVALID_CONTENT("messaging.invalidContent"),
     NOT_A_PARTY("messaging.notAParty"),
-    CONVERSATION_NOT_FOUND("messaging.conversationNotFound");
+    CONVERSATION_NOT_FOUND("messaging.conversationNotFound"),
+    PLAYER_DIRECT_MESSAGING_RESTRICTED("messaging.playerDirectMessagingRestricted"),
+    PARENTAL_OVERSIGHT_NOT_APPLICABLE("messaging.parentalOversightNotApplicable"),
+    PARENT_MESSAGING_RESTRICTED_FOR_ADULT("messaging.parentMessagingRestrictedForAdult");
 
     private final String code;
 
