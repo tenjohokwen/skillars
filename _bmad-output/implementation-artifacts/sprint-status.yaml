@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-06-26 # Story 7.5 revenue-dashboard-financial-reporting → done; 2 review patches applied 2026-06-26; Story 8.1 messaging-module-foundation-conversation-threads → done (9 review patches applied); Story 8.2 age-tiered-messaging-access-parent-visibility → done (1 review patch applied)
+last_updated: 2026-06-26 # Story 7.5 revenue-dashboard-financial-reporting → done; 2 review patches applied 2026-06-26; Story 8.1 messaging-module-foundation-conversation-threads → done (9 review patches applied); Story 8.2 age-tiered-messaging-access-parent-visibility → done (1 review patch applied); Story 8.3 gemini-content-moderation → done (6 review patches applied)
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -229,7 +229,7 @@ development_status:
   skillars-epic-8: in-progress
   skillars-8-1-messaging-module-foundation-conversation-threads: done  # 9 review patches applied 2026-06-26
   skillars-8-2-age-tiered-messaging-access-parent-visibility: done  # 1 review patch applied 2026-06-26
-  skillars-8-3-gemini-content-moderation: backlog
+  skillars-8-3-gemini-content-moderation: done  # 6 review patches applied 2026-06-26
   skillars-8-4-abuse-reporting-message-retention-scheduler: backlog
   skillars-epic-8-retrospective: optional
 

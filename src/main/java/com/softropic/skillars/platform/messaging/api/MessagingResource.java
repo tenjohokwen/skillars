@@ -31,6 +31,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
 import java.util.List;
 import java.util.Objects;
 
@@ -89,7 +91,7 @@ public class MessagingResource {
         Long userId = resolveUserId();
         String role = resolveRole(auth, roleHint);
         MessageDto result = messagingService.sendMessage(conversationId, request.content(), userId, role);
-        return ResponseEntity.status(HttpStatus.CREATED).body(result);
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(result);
     }
 
     @GetMapping("/conversations/{conversationId}/messages")
@@ -134,12 +136,21 @@ public class MessagingResource {
     public ResponseEntity<SseEmitter> subscribeToEvents(
             @PathVariable Long conversationId,
             @RequestParam(name = "role", required = false) String roleHint,
-            Authentication auth) {
+            Authentication auth,
+            HttpServletResponse httpResponse) throws IOException {
         Long userId = resolveUserId();
         String role = resolveRole(auth, roleHint);
         // Verify caller is a party before registering (throws ResourceNotFoundException / OperationNotAllowedException)
         messagingService.getConversationForSse(conversationId, userId, role);
         SseEmitter emitter = messagingService.registerSse(userId);
+        // Flush the 200 + text/event-stream headers to the client immediately from the
+        // container thread. Without this, Tomcat's async context buffers the response until
+        // the first SSE event is written from a non-container thread, which it never actually
+        // commits to the socket — so the client would block indefinitely waiting for the
+        // HTTP status line.
+        httpResponse.setContentType("text/event-stream;charset=UTF-8");
+        httpResponse.setHeader("Cache-Control", "no-cache");
+        httpResponse.flushBuffer();
         return ResponseEntity.ok()
             .contentType(MediaType.TEXT_EVENT_STREAM)
             .body(emitter);

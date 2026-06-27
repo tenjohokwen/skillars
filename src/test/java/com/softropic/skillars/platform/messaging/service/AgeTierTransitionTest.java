@@ -18,19 +18,18 @@ import com.softropic.skillars.platform.security.contract.MessagingPolicy;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.service.AgePolicyService;
-import org.junit.jupiter.api.AfterEach;
-import org.springframework.data.domain.Pageable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.data.domain.Pageable;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -38,8 +37,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -54,6 +53,7 @@ class AgeTierTransitionTest {
     @Mock private MessagingEmitterRegistry messagingEmitterRegistry;
     @Mock private ConversationCreationHelper conversationCreationHelper;
     @Mock private AgePolicyService agePolicyService;
+    @Mock private TransactionTemplate transactionTemplate;
 
     @InjectMocks
     private MessagingService messagingService;
@@ -68,19 +68,16 @@ class AgeTierTransitionTest {
 
     @BeforeEach
     void setUp() {
-        // Enable synchronization tracking so TransactionSynchronizationManager works without a real transaction
-        TransactionSynchronizationManager.initSynchronization();
+        lenient().when(transactionTemplate.execute(any())).thenAnswer(inv -> {
+            TransactionCallback<?> cb = inv.getArgument(0);
+            return cb.doInTransaction(null);
+        });
 
         conversation = new Conversation();
         conversation.setId(CONVERSATION_ID);
         conversation.setCoachId(COACH_PROFILE_ID);
         conversation.setPlayerId(PLAYER_ID);
         conversation.setParentId(PARENT_ID);
-    }
-
-    @AfterEach
-    void tearDown() {
-        TransactionSynchronizationManager.clearSynchronization();
     }
 
     // ── sendMessage: PLAYER role blocked ──
@@ -113,12 +110,12 @@ class AgeTierTransitionTest {
     void sendMessage_playerRole_supervisedPolicy_succeeds() {
         when(conversationRepository.findById(CONVERSATION_ID)).thenReturn(Optional.of(conversation));
         when(agePolicyService.getMessagingPolicy(PLAYER_ID)).thenReturn(MessagingPolicy.supervised());
-        when(messageRepository.save(any())).thenReturn(stubMessage(SenderRole.PLAYER, 999L));
+        Message savedMsg = stubMessage(SenderRole.PLAYER, 999L);
+        when(messageRepository.save(any())).thenReturn(savedMsg);
         when(conversationRepository.save(any())).thenReturn(conversation);
         when(moderationService.moderate(anyLong(), any()))
             .thenReturn(new ModerationResult(MessageModerationStatus.APPROVED, Instant.now()));
-        // resolveRecipient for PLAYER role: coachProfileRepository.findById returns empty → no SSE, no throw
-        when(coachProfileRepository.findById(COACH_PROFILE_ID)).thenReturn(Optional.empty());
+        when(messageRepository.findById(999L)).thenReturn(Optional.of(savedMsg));
 
         messagingService.sendMessage(CONVERSATION_ID, "Hello", PLAYER_ID, "PLAYER");
         // No exception = success
@@ -142,12 +139,12 @@ class AgeTierTransitionTest {
     void sendMessage_parentRole_supervisedPolicy_succeeds() {
         when(conversationRepository.findById(CONVERSATION_ID)).thenReturn(Optional.of(conversation));
         when(agePolicyService.getMessagingPolicy(PLAYER_ID)).thenReturn(MessagingPolicy.supervised());
-        when(messageRepository.save(any())).thenReturn(stubMessage(SenderRole.PARENT, 999L));
+        Message savedMsg = stubMessage(SenderRole.PARENT, 999L);
+        when(messageRepository.save(any())).thenReturn(savedMsg);
         when(conversationRepository.save(any())).thenReturn(conversation);
         when(moderationService.moderate(anyLong(), any()))
             .thenReturn(new ModerationResult(MessageModerationStatus.APPROVED, Instant.now()));
-        // resolveRecipient for PARENT role: coachProfileRepository.findById returns empty → no SSE
-        when(coachProfileRepository.findById(COACH_PROFILE_ID)).thenReturn(Optional.empty());
+        when(messageRepository.findById(999L)).thenReturn(Optional.of(savedMsg));
 
         messagingService.sendMessage(CONVERSATION_ID, "Hello", PARENT_ID, "PARENT");
         // No exception = success
@@ -174,52 +171,6 @@ class AgeTierTransitionTest {
         List<ConversationSummaryDto> result = messagingService.getConversations(PARENT_ID, "PARENT");
 
         assertThat(result).isEmpty();
-    }
-
-    // ── resolveRecipient: COACH role SSE routing ──
-
-    @Test
-    void sendMessage_coachRole_unrestrictedPolicy_sseGoesToPlayer() {
-        CoachProfile coachProfile = mock(CoachProfile.class);
-        when(coachProfile.getId()).thenReturn(COACH_PROFILE_ID);
-        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coachProfile));
-        when(conversationRepository.findById(CONVERSATION_ID)).thenReturn(Optional.of(conversation));
-        when(agePolicyService.getMessagingPolicy(PLAYER_ID)).thenReturn(MessagingPolicy.unrestricted());
-        when(messageRepository.save(any())).thenReturn(stubMessage(SenderRole.COACH, 997L));
-        when(conversationRepository.save(any())).thenReturn(conversation);
-        when(moderationService.moderate(anyLong(), any()))
-            .thenReturn(new ModerationResult(MessageModerationStatus.APPROVED, Instant.now()));
-
-        messagingService.sendMessage(CONVERSATION_ID, "Hi", COACH_USER_ID, "COACH");
-
-        // Trigger afterCommit callbacks (simulates transaction commit)
-        TransactionSynchronizationManager.getSynchronizations().forEach(s -> s.afterCommit());
-
-        // UNRESTRICTED: parent has no access → SSE must go to the player
-        verify(messagingEmitterRegistry).emit(PLAYER_ID,
-            Map.of("type", "NEW_MESSAGE", "messageId", 997L, "conversationId", CONVERSATION_ID));
-    }
-
-    @Test
-    void sendMessage_coachRole_supervisedPolicy_sseGoesToParent() {
-        CoachProfile coachProfile = mock(CoachProfile.class);
-        when(coachProfile.getId()).thenReturn(COACH_PROFILE_ID);
-        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coachProfile));
-        when(conversationRepository.findById(CONVERSATION_ID)).thenReturn(Optional.of(conversation));
-        when(agePolicyService.getMessagingPolicy(PLAYER_ID)).thenReturn(MessagingPolicy.supervised());
-        when(messageRepository.save(any())).thenReturn(stubMessage(SenderRole.COACH, 996L));
-        when(conversationRepository.save(any())).thenReturn(conversation);
-        when(moderationService.moderate(anyLong(), any()))
-            .thenReturn(new ModerationResult(MessageModerationStatus.APPROVED, Instant.now()));
-
-        messagingService.sendMessage(CONVERSATION_ID, "Hi", COACH_USER_ID, "COACH");
-
-        // Trigger afterCommit callbacks
-        TransactionSynchronizationManager.getSynchronizations().forEach(s -> s.afterCommit());
-
-        // SUPERVISED: parent has oversight access → SSE goes to parent
-        verify(messagingEmitterRegistry).emit(PARENT_ID,
-            Map.of("type", "NEW_MESSAGE", "messageId", 996L, "conversationId", CONVERSATION_ID));
     }
 
     // ── initiateConversation: PARENT age gate (Finding 2) ──
@@ -302,10 +253,14 @@ class AgeTierTransitionTest {
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coachProfile));
         when(conversationRepository.findById(CONVERSATION_ID)).thenReturn(Optional.of(conversation));
         when(agePolicyService.getMessagingPolicy(PLAYER_ID)).thenReturn(MessagingPolicy.unrestricted());
-        when(messageRepository.save(any())).thenReturn(stubMessage(SenderRole.COACH, 995L));
+        Message savedMsg = stubMessage(SenderRole.COACH, 995L);
+        savedMsg.setModerationStatus(MessageModerationStatus.UNDER_REVIEW);
+        savedMsg.setContent(null);
+        when(messageRepository.save(any())).thenReturn(savedMsg);
         when(conversationRepository.save(any())).thenReturn(conversation);
         when(moderationService.moderate(anyLong(), any()))
             .thenReturn(new ModerationResult(MessageModerationStatus.UNDER_REVIEW, null));
+        when(messageRepository.findById(995L)).thenReturn(Optional.of(savedMsg));
 
         com.softropic.skillars.platform.messaging.contract.MessageDto result =
             messagingService.sendMessage(CONVERSATION_ID, "Flagged content", COACH_USER_ID, "COACH");

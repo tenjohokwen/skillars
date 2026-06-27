@@ -37,6 +37,10 @@ features:
     arachnid-enabled: false
     videointel-enabled: false
 
+infrastructure:
+  gemini:
+    api-key: ${GEMINI_API_KEY:dev-key}
+
 skillars:
   platform:
     pin-encryption-secret: "${PLATFORM_PIN_ENCRYPTION_SECRET:S3CR3TW0RD}"

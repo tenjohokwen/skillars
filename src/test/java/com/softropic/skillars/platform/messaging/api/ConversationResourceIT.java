@@ -2,13 +2,19 @@ package com.softropic.skillars.platform.messaging.api;
 
 import com.softropic.skillars.config.TestConfig;
 import com.softropic.skillars.e2e.HttpTestClient;
+import com.softropic.skillars.infrastructure.gemini.GeminiClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.messaging.contract.ModerationVerdict;
 import com.softropic.skillars.platform.security.SecurityIT;
+import org.apache.hc.client5.http.config.RequestConfig;
+import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.core5.util.Timeout;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
@@ -16,6 +22,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
@@ -23,7 +30,12 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.RestTemplate;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
+
+import java.io.IOException;
 import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -62,6 +74,8 @@ class ConversationResourceIT {
     private static final String PARENT_EMAIL = "parent.messaging@skillars-test.com";
     private static final String COACH_EMAIL  = "coach.messaging@skillars-test.com";
 
+    @MockitoBean private GeminiClient geminiClient;
+
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private HttpTestClient httpTestClient;
@@ -73,6 +87,8 @@ class ConversationResourceIT {
 
     @BeforeEach
     void setUp() {
+        when(geminiClient.evaluate(any())).thenReturn(ModerationVerdict.SAFE);
+
         String passwordHash = passwordEncoder.encode(TEST_PASSWORD);
         transactionTemplate.execute(status -> {
             jdbcTemplate.update(
@@ -181,7 +197,7 @@ class ConversationResourceIT {
     // ── AC4: Send message ──
 
     @Test
-    void sendMessage_validContent_returns201WithMessageDto() {
+    void sendMessage_validContent_returns202WithMessageDto() {
         String coachCookies = loginAndGetCookies(COACH_EMAIL);
         Long conversationId = ensureConversation(coachCookies);
 
@@ -192,7 +208,7 @@ class ConversationResourceIT {
             authenticatedHeaders(coachCookies),
             Map.class);
 
-        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
         assertThat(resp.getBody()).containsKey("messageId");
         assertThat(resp.getBody().get("moderationStatus")).isEqualTo("APPROVED");
     }
@@ -350,23 +366,38 @@ class ConversationResourceIT {
         String coachCookies = loginAndGetCookies(COACH_EMAIL);
         Long conversationId = ensureConversation(coachCookies);
 
-        HttpHeaders headers = authenticatedHeaders(coachCookies);
-        headers.set(HttpHeaders.ACCEPT, MediaType.TEXT_EVENT_STREAM_VALUE);
+        HttpHeaders requestHeaders = authenticatedHeaders(coachCookies);
+        requestHeaders.set(HttpHeaders.ACCEPT, MediaType.TEXT_EVENT_STREAM_VALUE);
 
-        // SSE keeps the connection open; RestTemplate will time out reading the stream body.
-        // If auth or access fails we get HttpClientErrorException (4xx) — that's the only failure mode we care about.
-        try {
-            httpTestClient.makeHttpRequest(
-                baseUrl() + MESSAGING_BASE + "/conversations/" + conversationId + "/events",
-                HttpMethod.GET, null, headers, String.class);
-        } catch (HttpClientErrorException e) {
-            // 4xx means the server rejected the request — fail the test
-            org.junit.jupiter.api.Assertions.fail(
-                "Expected SSE 200, got " + e.getStatusCode() + ": " + e.getResponseBodyAsString());
-        } catch (Exception e) {
-            // Any other exception (read timeout, stream truncation) is acceptable —
-            // it means the server accepted the connection with 200 text/event-stream
-        }
+        // Use the same Apache HC5 stack as login so the User-Agent hash in the JWT matches
+        // (isTokenFixed check). ResponseTimeout bounds the body-drain in RestTemplate's finally
+        // close() — without it, EntityUtils.consume() blocks until the 5-minute SSE timeout.
+        var requestConfig = RequestConfig.custom()
+            .setResponseTimeout(Timeout.ofSeconds(5))
+            .build();
+        var sseTemplate = new RestTemplate(new HttpComponentsClientHttpRequestFactory(
+            HttpClients.custom()
+                .disableCookieManagement()
+                .setDefaultRequestConfig(requestConfig)
+                .build()));
+
+        AtomicReference<Integer> statusRef = new AtomicReference<>();
+        AtomicReference<MediaType> contentTypeRef = new AtomicReference<>();
+        sseTemplate.execute(
+            baseUrl() + MESSAGING_BASE + "/conversations/" + conversationId + "/events",
+            HttpMethod.GET,
+            req -> requestHeaders.forEach((name, values) -> values.forEach(v -> req.getHeaders().add(name, v))),
+            resp -> {
+                statusRef.set(resp.getStatusCode().value());
+                contentTypeRef.set(resp.getHeaders().getContentType());
+                try { resp.getBody().close(); } catch (IOException ignored) {}
+                return null;
+            }
+        );
+
+        assertThat(statusRef.get()).isEqualTo(200);
+        assertThat(contentTypeRef.get()).isNotNull();
+        assertThat(contentTypeRef.get().toString()).startsWith(MediaType.TEXT_EVENT_STREAM_VALUE);
     }
 
     // ── Concurrent conversation creation (upsert correctness) ──

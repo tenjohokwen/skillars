@@ -248,8 +248,18 @@ infrastructure:
     credentials-path: ${VIDEOINTEL_CREDENTIALS_PATH:}
     flag-threshold: 0.7
     timeout-seconds: 300
+  gemini:
+    api-key: ${GEMINI_API_KEY:}
+    api-base-url: https://generativelanguage.googleapis.com
+    model: gemini-2.0-flash
+    timeout-seconds: 30
 
 platform:
+  messaging:
+    moderation:
+      gemini:
+        prompt-template: "Evaluate the following message for harmful content. Reply with exactly one word: SAFE, UNSAFE, or UNCERTAIN.\n\nContent is UNSAFE if it contains: hate speech, sexual content, threats or violence, personal contact information solicitation, advertising or spam, content inappropriate for minors.\n\nUNCERTAIN means you cannot clearly determine safety.\n\nMessage:\n"
+        max-input-chars: 4000
   filestorage:
     quota:
       default-bytes: 10737418240

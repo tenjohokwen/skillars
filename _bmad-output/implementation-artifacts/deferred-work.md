@@ -1,3 +1,10 @@
+## Deferred from: code review of skillars-8-3 (2026-06-26)
+- W1: TOCTOU — age policy + party checks run without a transaction before committed message save; spec-designed (NOT_SUPPORTED), window is narrow [`MessagingService.java:129-145`]
+- W2: Message orphaned in PENDING on JVM crash or `applyResult()` DB exception after initial tx commit; no cleanup path or retry mechanism [`MessagingService.java:167` / `GeminiModerationService.java:53`]
+- W3: `conv.getParentId()` returned without null guard for SUPERVISED policy in `ModerationResultApplier.resolveRecipient()` — same pattern in `MessagingService.resolveRecipient()` [`ModerationResultApplier.java:104`]
+- W4: Prompt injection — user message content appended directly to Gemini instruction prompt with no structural separation; future hardening story [`GeminiModerationService.java:46`]
+- W5: `content` dereferenced before null check in `GeminiModerationService.moderate()`; guarded only at the single current call-site [`GeminiModerationService.java:35`]
+
 ## Deferred from: code review of skillars-8-2 (2026-06-26)
 - D1: `resolveOtherPartyName()` COACH branch — `agePolicyService.getMessagingPolicy()` throws `UserNotFoundException` for deleted players, crashing coach's entire `getConversations()` call; blast radius expanded from send-path (8.1 deferral) to read-path [`MessagingService.java:311`]
 - D2: `getConversations()` PARENT stream filter — same `UserNotFoundException` propagation for deleted players crashes parent's entire conversation list [`MessagingService.java:103-105`]

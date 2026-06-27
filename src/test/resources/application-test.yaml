@@ -5,6 +5,12 @@ platform:
   video:
     deletion:
       outbox_initial_delay_ms: 31536000000  # 1 year — prevents background firing in tests
+  messaging:
+    sse-timeout-ms: 8000  # 8 s — lets the async context close before JVM shutdown in tests
+    moderation:
+      gemini:
+        prompt-template: "Test: evaluate content. Reply SAFE, UNSAFE, or UNCERTAIN.\n\nMessage:\n"
+        max-input-chars: 100
 
 app:
   payment:
@@ -40,6 +46,11 @@ infrastructure:
   arachnid:
     api-key: "test-arachnid-key"
     api-base-url: ${wiremock.server.bunny-service.baseUrl:http://localhost}
+    timeout-seconds: 5
+  gemini:
+    api-key: "test-gemini-key"
+    api-base-url: "${wiremock.server.baseUrl:http://localhost:9999}"
+    model: gemini-test
     timeout-seconds: 5
   videointel:
     project-id: "test-project"

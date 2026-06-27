@@ -2,13 +2,16 @@ package com.softropic.skillars.platform.messaging.api;
 
 import com.softropic.skillars.config.TestConfig;
 import com.softropic.skillars.e2e.HttpTestClient;
+import com.softropic.skillars.infrastructure.gemini.GeminiClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.messaging.contract.ModerationVerdict;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
@@ -23,6 +26,9 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 import java.sql.Date;
 import java.sql.Timestamp;
@@ -70,6 +76,8 @@ class ParentalOversightResourceIT {
     private static final String COACH_EMAIL  = "coach.oversight@skillars-test.com";
     private static final String COACH_DISPLAY_NAME = "Oversight Coach";
 
+    @MockitoBean private GeminiClient geminiClient;
+
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private HttpTestClient httpTestClient;
@@ -81,6 +89,8 @@ class ParentalOversightResourceIT {
 
     @BeforeEach
     void setUp() {
+        when(geminiClient.evaluate(any())).thenReturn(ModerationVerdict.SAFE);
+
         String passwordHash = passwordEncoder.encode(TEST_PASSWORD);
         coachProfileId = UUID.randomUUID();
 

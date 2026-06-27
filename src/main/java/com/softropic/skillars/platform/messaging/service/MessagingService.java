@@ -8,7 +8,6 @@ import com.softropic.skillars.platform.messaging.contract.ConversationSummaryDto
 import com.softropic.skillars.platform.messaging.contract.MessageDto;
 import com.softropic.skillars.platform.messaging.contract.MessageModerationStatus;
 import com.softropic.skillars.platform.messaging.contract.MessagingErrorCode;
-import com.softropic.skillars.platform.messaging.contract.ModerationResult;
 import com.softropic.skillars.platform.messaging.contract.ModerationService;
 import com.softropic.skillars.platform.messaging.contract.SenderRole;
 import com.softropic.skillars.platform.messaging.repo.Conversation;
@@ -25,15 +24,14 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -55,6 +53,7 @@ public class MessagingService {
     private final MessagingEmitterRegistry messagingEmitterRegistry;
     private final ConversationCreationHelper conversationCreationHelper;
     private final AgePolicyService agePolicyService;
+    private final TransactionTemplate transactionTemplate;
 
     public ConversationSummaryDto initiateConversation(UUID coachId, Long playerId, Long callerUserId, String role) {
         boolean hasBooking = bookingRepository.existsByCoachIdAndPlayerIdAndStatusIn(coachId, playerId, CONFIRMED_STATES);
@@ -119,6 +118,7 @@ public class MessagingService {
             .toList();
     }
 
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public MessageDto sendMessage(Long conversationId, String content, Long senderUserId, String role) {
         if (content == null || content.isBlank() || content.length() > 2000) {
             throw new OperationNotAllowedException(
@@ -144,36 +144,30 @@ public class MessagingService {
                 MessagingErrorCode.PARENT_MESSAGING_RESTRICTED_FOR_ADULT);
         }
 
-        var message = new Message();
-        message.setConversationId(conversationId);
-        message.setSenderId(senderUserId);
-        message.setSenderRole(SenderRole.valueOf(role));
-        message.setContent(content);
-        message.setModerationStatus(MessageModerationStatus.PENDING);
-        message.setCreatedAt(Instant.now());
-        message = messageRepository.save(message);
+        // Save message PENDING — commits immediately so ModerationResultApplier can see it
+        final long[] savedMessageId = {0L};
+        transactionTemplate.execute(status -> {
+            Conversation c = conversationRepository.findById(conversationId)
+                .orElseThrow(() -> new ResourceNotFoundException("Conversation not found", "conversation"));
+            var message = new Message();
+            message.setConversationId(conversationId);
+            message.setSenderId(senderUserId);
+            message.setSenderRole(SenderRole.valueOf(role));
+            message.setContent(content);
+            message.setModerationStatus(MessageModerationStatus.PENDING);
+            message.setCreatedAt(Instant.now());
+            Message saved = messageRepository.save(message);
+            c.setLastMessageAt(Instant.now());
+            conversationRepository.save(c);
+            savedMessageId[0] = saved.getId();
+            return null;
+        });
+        long messageId = savedMessageId[0];
 
-        conv.setLastMessageAt(Instant.now());
-        conversationRepository.save(conv);
-
-        ModerationResult moderation = moderationService.moderate(message.getId(), content);
-        message.setModerationStatus(moderation.moderationStatus());
-        message.setDeliveredAt(moderation.deliveredAt());
-
-        Long recipientUserId = resolveRecipient(conv, role);
-        if (recipientUserId != null) {
-            final Long finalRecipientId = recipientUserId;
-            final Long finalMessageId = message.getId();
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    messagingEmitterRegistry.emit(finalRecipientId,
-                        Map.of("type", "NEW_MESSAGE", "messageId", finalMessageId, "conversationId", conversationId));
-                }
-            });
-        }
-
-        return toMessageDto(message);
+        moderationService.moderate(messageId, content);
+        Message finalMessage = messageRepository.findById(messageId)
+            .orElseThrow(() -> new ResourceNotFoundException("Message not found", "message"));
+        return toMessageDto(finalMessage);
     }
 
     public Page<MessageDto> getMessages(Long conversationId, Long callerUserId, String role, Pageable pageable) {
@@ -362,24 +356,6 @@ public class MessagingService {
             case "COACH" -> conv.setCoachLastReadAt(now);
             case "PARENT" -> conv.setParentLastReadAt(now);
             default -> conv.setPlayerLastReadAt(now);
-        }
-    }
-
-    private Long resolveRecipient(Conversation conv, String role) {
-        if ("COACH".equals(role)) {
-            AgeMessagingPolicy agePolicy = AgeMessagingPolicy.from(
-                agePolicyService.getMessagingPolicy(conv.getPlayerId()));
-            // For UNRESTRICTED (18+): parent has no access — SSE goes to the player, not the parent.
-            // For all other tiers: parent is primary or oversight — SSE goes to parent.
-            // TODO: SUPERVISED (13-17) multi-recipient SSE (player + parent) is deferred to a future story.
-            if (agePolicy.parentIsBlocked()) {
-                return conv.getPlayerId();
-            }
-            return conv.getParentId();
-        } else {
-            return coachProfileRepository.findById(conv.getCoachId())
-                .map(CoachProfile::getUserId)
-                .orElse(null);
         }
     }
 

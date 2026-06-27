@@ -54,6 +54,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 import org.springframework.security.web.authentication.www.BasicAuthenticationFilter;
 import org.springframework.security.web.context.request.async.WebAsyncManagerIntegrationFilter;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import jakarta.servlet.DispatcherType;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.filter.ForwardedHeaderFilter;
 import org.springframework.web.servlet.HandlerExceptionResolver;
@@ -210,6 +211,10 @@ public class SecurityConfiguration {
     private static Customizer<AuthorizeHttpRequestsConfigurer<HttpSecurity>.AuthorizationManagerRequestMatcherRegistry> configureRequestMatching(
             AuthorizationManager<RequestAuthorizationContext> authorizationManager, Environment env) {
         return (customizer) -> {
+            // Async dispatches (e.g. SSE error-path Tomcat re-dispatch) must not be re-authorized;
+            // the original request already passed security, and the response is already committed.
+            customizer.dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll();
+
             //permit scraper
             customizer.requestMatchers(AppEndpoints.PUBLIC_MGMT_ENDPOINTS.toArray(new String[0])).permitAll();
 
