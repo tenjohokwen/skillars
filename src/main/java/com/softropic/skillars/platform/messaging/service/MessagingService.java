@@ -4,6 +4,7 @@ import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.messaging.contract.ConversationStatus;
 import com.softropic.skillars.platform.messaging.contract.ConversationSummaryDto;
 import com.softropic.skillars.platform.messaging.contract.MessageDto;
 import com.softropic.skillars.platform.messaging.contract.MessageModerationStatus;
@@ -131,6 +132,12 @@ public class MessagingService {
 
         verifyIsParty(conv, senderUserId, role);
 
+        if (conv.getStatus() == ConversationStatus.BLOCKED) {
+            throw new OperationNotAllowedException(
+                "Conversation is blocked — no new messages can be sent",
+                MessagingErrorCode.CONVERSATION_BLOCKED);
+        }
+
         AgeMessagingPolicy agePolicy = AgeMessagingPolicy.from(
             agePolicyService.getMessagingPolicy(conv.getPlayerId()));
         if ("PLAYER".equals(role) && agePolicy.playerIsBlocked()) {
@@ -149,6 +156,13 @@ public class MessagingService {
         transactionTemplate.execute(status -> {
             Conversation c = conversationRepository.findById(conversationId)
                 .orElseThrow(() -> new ResourceNotFoundException("Conversation not found", "conversation"));
+            // Re-check inside the transaction: a concurrent reportConversation() may have committed BLOCKED
+            // between the outer check (line ~135, runs outside any transaction) and here
+            if (c.getStatus() == ConversationStatus.BLOCKED) {
+                throw new OperationNotAllowedException(
+                    "Conversation is blocked — no new messages can be sent",
+                    MessagingErrorCode.CONVERSATION_BLOCKED);
+            }
             var message = new Message();
             message.setConversationId(conversationId);
             message.setSenderId(senderUserId);
@@ -239,6 +253,32 @@ public class MessagingService {
         // 4. Return messages — do NOT update lastReadAt (AC6: oversight view is read-only for tracking)
         Page<Message> page = messageRepository.findByConversationIdAndNotDeleted(conversationId, pageable);
         return page.map(this::toMessageDto);
+    }
+
+    @Transactional
+    public void softDeleteMessage(Long conversationId, Long messageId, Long callerUserId) {
+        Message message = messageRepository.findById(messageId)
+            .orElseThrow(() -> new ResourceNotFoundException("Message not found", "message"));
+        if (!message.getConversationId().equals(conversationId)) {
+            throw new OperationNotAllowedException(
+                "Message does not belong to this conversation", MessagingErrorCode.NOT_A_PARTY);
+        }
+        if (!message.getSenderId().equals(callerUserId)) {
+            throw new OperationNotAllowedException(
+                "Only the original sender may delete this message", MessagingErrorCode.NOT_A_PARTY);
+        }
+        if (message.getModerationStatus() == MessageModerationStatus.UNDER_REVIEW
+                || message.getModerationStatus() == MessageModerationStatus.BLOCKED) {
+            throw new OperationNotAllowedException(
+                "Message under active moderation cannot be deleted",
+                MessagingErrorCode.MODERATION_PENDING);
+        }
+        if (message.getDeletedAt() != null) {
+            throw new OperationNotAllowedException(
+                "Message is already deleted", MessagingErrorCode.ALREADY_DELETED);
+        }
+        message.setDeletedAt(Instant.now());
+        messageRepository.save(message);
     }
 
     public SseEmitter registerSse(Long callerUserId) {

@@ -1,9 +1,11 @@
 package com.softropic.skillars.platform.messaging.repo;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -24,4 +26,12 @@ public interface ConversationRepository extends JpaRepository<Conversation, Long
     /** Returns all conversations for a player regardless of status — used by parental oversight so BLOCKED history is visible. */
     @Query("SELECT c FROM Conversation c WHERE c.playerId = :playerId")
     List<Conversation> findAllByPlayerId(@Param("playerId") Long playerId);
+
+    @Modifying
+    @Query(value = """
+        DELETE FROM messaging.conversations
+        WHERE last_message_at < :cutoff
+          AND NOT EXISTS (SELECT 1 FROM messaging.messages m WHERE m.conversation_id = conversations.id)
+        """, nativeQuery = true)
+    int deleteOrphanConversations(@Param("cutoff") Instant cutoff);
 }

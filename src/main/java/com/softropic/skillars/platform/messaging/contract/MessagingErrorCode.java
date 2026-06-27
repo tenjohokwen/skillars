@@ -9,7 +9,11 @@ public enum MessagingErrorCode implements ErrorCode {
     CONVERSATION_NOT_FOUND("messaging.conversationNotFound"),
     PLAYER_DIRECT_MESSAGING_RESTRICTED("messaging.playerDirectMessagingRestricted"),
     PARENTAL_OVERSIGHT_NOT_APPLICABLE("messaging.parentalOversightNotApplicable"),
-    PARENT_MESSAGING_RESTRICTED_FOR_ADULT("messaging.parentMessagingRestrictedForAdult");
+    PARENT_MESSAGING_RESTRICTED_FOR_ADULT("messaging.parentMessagingRestrictedForAdult"),
+    CONVERSATION_BLOCKED("messaging.conversationBlocked"),
+    ALREADY_REPORTED("messaging.alreadyReported"),
+    ALREADY_DELETED("messaging.alreadyDeleted"),
+    MODERATION_PENDING("messaging.moderationPending");
 
     private final String code;
 

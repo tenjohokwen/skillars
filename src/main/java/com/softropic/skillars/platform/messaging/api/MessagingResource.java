@@ -6,7 +6,10 @@ import com.softropic.skillars.platform.messaging.contract.ConversationRequest;
 import com.softropic.skillars.platform.messaging.contract.ConversationSummaryDto;
 import com.softropic.skillars.platform.messaging.contract.MessageDto;
 import com.softropic.skillars.platform.messaging.contract.MessagingErrorCode;
+import com.softropic.skillars.platform.messaging.contract.ReportRequest;
+import com.softropic.skillars.platform.messaging.contract.ReportResponse;
 import com.softropic.skillars.platform.messaging.contract.SendMessageRequest;
+import com.softropic.skillars.platform.messaging.service.MessagingReportService;
 import com.softropic.skillars.platform.messaging.service.MessagingService;
 import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
@@ -14,6 +17,7 @@ import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import io.micrometer.observation.annotation.Observed;
 import lombok.RequiredArgsConstructor;
+import jakarta.validation.Valid;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -22,6 +26,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -43,6 +48,7 @@ import java.util.Objects;
 public class MessagingResource {
 
     private final MessagingService messagingService;
+    private final MessagingReportService messagingReportService;
     private final SecurityUtil securityUtil;
     private final CoachProfileRepository coachProfileRepository;
     private final PlayerProfileRepository playerProfileRepository;
@@ -129,6 +135,49 @@ public class MessagingResource {
             messagingService.getMessagesForPlayerConversation(
                 playerId, conversationId, parentUserId,
                 PageRequest.of(Math.max(0, page), Math.min(size, 100))));
+    }
+
+    @DeleteMapping("/conversations/{conversationId}/messages/{messageId}")
+    @PreAuthorize(SecurityConstants.IS_AUTHENTICATED)
+    @Observed(name = "messaging.softDeleteMessage")
+    public ResponseEntity<Void> softDeleteMessage(
+            @PathVariable Long conversationId,
+            @PathVariable Long messageId,
+            Authentication auth) {
+        Long userId = resolveUserId();
+        messagingService.softDeleteMessage(conversationId, messageId, userId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/conversations/{conversationId}/messages/{messageId}/report")
+    @PreAuthorize(SecurityConstants.IS_AUTHENTICATED)
+    @Observed(name = "messaging.reportMessage")
+    public ResponseEntity<ReportResponse> reportMessage(
+            @PathVariable Long conversationId,
+            @PathVariable Long messageId,
+            @Valid @RequestBody ReportRequest request,
+            @RequestParam(name = "role", required = false) String roleHint,
+            Authentication auth) {
+        Long userId = resolveUserId();
+        String role = resolveRole(auth, roleHint);
+        ReportResponse result = messagingReportService.reportMessage(
+            conversationId, messageId, userId, role, request.reason(), request.details());
+        return ResponseEntity.status(HttpStatus.CREATED).body(result);
+    }
+
+    @PostMapping("/conversations/{conversationId}/report")
+    @PreAuthorize(SecurityConstants.IS_AUTHENTICATED)
+    @Observed(name = "messaging.reportConversation")
+    public ResponseEntity<ReportResponse> reportConversation(
+            @PathVariable Long conversationId,
+            @Valid @RequestBody ReportRequest request,
+            @RequestParam(name = "role", required = false) String roleHint,
+            Authentication auth) {
+        Long userId = resolveUserId();
+        String role = resolveRole(auth, roleHint);
+        ReportResponse result = messagingReportService.reportConversation(
+            conversationId, userId, role, request.reason(), request.details());
+        return ResponseEntity.status(HttpStatus.CREATED).body(result);
     }
 
     @GetMapping("/conversations/{conversationId}/events")

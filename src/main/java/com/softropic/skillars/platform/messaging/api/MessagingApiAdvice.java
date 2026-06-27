@@ -23,9 +23,15 @@ public class MessagingApiAdvice {
             ? ex.getErrorCode().getErrorCode()
             : "messaging.error";
         ErrorDto body = new ErrorDto(code, new ErrorMsg(code, ex.getMessage()));
-        HttpStatus status = MessagingErrorCode.INVALID_CONTENT.getErrorCode().equals(code)
-            ? HttpStatus.BAD_REQUEST
-            : HttpStatus.FORBIDDEN;
+        HttpStatus status;
+        if (MessagingErrorCode.INVALID_CONTENT.getErrorCode().equals(code)) {
+            status = HttpStatus.BAD_REQUEST;
+        } else if (MessagingErrorCode.ALREADY_REPORTED.getErrorCode().equals(code)
+                || MessagingErrorCode.ALREADY_DELETED.getErrorCode().equals(code)) {
+            status = HttpStatus.CONFLICT;
+        } else {
+            status = HttpStatus.FORBIDDEN;
+        }
         return ResponseEntity.status(status).body(body);
     }
 }

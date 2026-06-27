@@ -1,3 +1,10 @@
+## Deferred from: code review of skillars-8-4 (2026-06-27)
+- W1: CASCADE deletes open abuse reports during retention — `DELETE FROM messaging.messages WHERE created_at < :cutoff` cascades to `message_reports` via FK, destroying OPEN/UNDER_REVIEW report evidence. Spec-specified behavior (AC4). Epic 10 admin module should block retention for messages with open reports or archive reports before cascade. [`MessageRepository.java:33`, `V66__messaging_reports.sql:3`]
+- W2: `deleteOrphanConversations` never purges empty-shell conversations — `NULL < :cutoff` evaluates to NULL in SQL; conversations created but never messaged accumulate indefinitely. Low-severity. [`ConversationRepository.java:31`]
+- W3: Redundant explicit indexes in V66 — `idx_message_reports_message_id` and `idx_conversation_reports_conversation_id` are covered by the unique constraint leading column. Minor storage waste. [`V66__messaging_reports.sql:27-28`]
+- W4: `softDeleteMessage` ALREADY_DELETED race window — two concurrent soft-deletes by the same user both pass `deletedAt == null` at READ_COMMITTED; second silently succeeds instead of 409. Requires `@Version` on `Message`. [`MessagingService.java:263`]
+- W5: `@PreAuthorize(IS_AUTHENTICATED)` on report endpoints instead of party-check annotation — consistent with module pattern; 403 preserved at service layer. Architectural note for future hardening. [`MessagingResource.java:140,151,168`]
+
 ## Deferred from: code review of skillars-8-3 (2026-06-26)
 - W1: TOCTOU — age policy + party checks run without a transaction before committed message save; spec-designed (NOT_SUPPORTED), window is narrow [`MessagingService.java:129-145`]
 - W2: Message orphaned in PENDING on JVM crash or `applyResult()` DB exception after initial tx commit; no cleanup path or retry mechanism [`MessagingService.java:167` / `GeminiModerationService.java:53`]

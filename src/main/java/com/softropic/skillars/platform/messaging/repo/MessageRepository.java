@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.messaging.repo;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -27,4 +28,8 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
 
     @Query("SELECT m FROM Message m WHERE m.conversationId = :conversationId AND m.moderationStatus = 'APPROVED' AND m.deletedAt IS NULL ORDER BY m.createdAt DESC")
     Page<Message> findLastApproved(@Param("conversationId") Long conversationId, Pageable pageable);
+
+    @Modifying
+    @Query(value = "DELETE FROM messaging.messages WHERE created_at < :cutoff", nativeQuery = true)
+    int deleteExpiredMessages(@Param("cutoff") Instant cutoff);
 }
