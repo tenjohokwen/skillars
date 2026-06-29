@@ -35,6 +35,7 @@ public final class AppEndpoints {
         "/api/auth/logout**",
         "/api/marketplace/coaches**",    // guests can browse the marketplace (FR-MKT-005)
         "/api/marketplace/coaches/**",   // guest access to individual coach profiles (FR-MKT-005)
+        "/api/reviews/coaches/**",       // public review listing (method-level @PreAuthorize guards coach-only paths)
         "/api/video/webhooks/**",         // HMAC signature is the auth mechanism; no session required
         "/api/payment/webhooks/stripe"    // Stripe signature is the auth mechanism; no JWT available
     );

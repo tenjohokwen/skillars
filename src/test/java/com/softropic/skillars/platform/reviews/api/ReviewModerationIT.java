@@ -2,26 +2,30 @@ package com.softropic.skillars.platform.reviews.api;
 
 import com.softropic.skillars.config.TestConfig;
 import com.softropic.skillars.e2e.HttpTestClient;
+import com.softropic.skillars.infrastructure.gemini.GeminiClient;
+import com.softropic.skillars.infrastructure.gemini.GeminiException;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.messaging.contract.ModerationVerdict;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.web.client.HttpClientErrorException;
 
 import java.sql.Date;
 import java.sql.Timestamp;
@@ -32,7 +36,10 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @ActiveProfiles({"dev", "test"})
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -43,21 +50,22 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
     "allowed.clients=testClientId"
 })
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
-class ReviewUpdateIT {
+class ReviewModerationIT {
 
     private static final String LOGIN_ENDPOINT = "/api/auth/login";
     private static final String REVIEWS_BASE   = "/api/reviews";
     private static final String CLIENT_ID      = "testClientId";
     private static final String TEST_PASSWORD  = "TestPass@123!";
 
-    private static final long PARENT_ID      = 8010_000_001L;
-    private static final long PLAYER_ID      = 8010_000_002L;
-    private static final long COACH_USER_ID  = 8010_000_010L;
-    private static final long PARENT_ID2     = 8010_000_003L;
+    private static final long PARENT_ID     = 8030_000_001L;
+    private static final long PLAYER_ID     = 8030_000_002L;
+    private static final long COACH_USER_ID = 8030_000_010L;
 
-    private static final String PARENT_EMAIL  = "parent.revupd@skillars-test.com";
-    private static final String PARENT_EMAIL2 = "parent2.revupd@skillars-test.com";
-    private static final String COACH_EMAIL   = "coach.revupd@skillars-test.com";
+    private static final String PARENT_EMAIL = "parent.moderation@skillars-test.com";
+    private static final String COACH_EMAIL  = "coach.moderation@skillars-test.com";
+
+    @MockitoBean
+    private GeminiClient geminiClient;
 
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
@@ -67,19 +75,19 @@ class ReviewUpdateIT {
     @LocalServerPort private int randomServerPort;
 
     private UUID coachProfileId;
-    private UUID reviewId;
 
     @BeforeEach
     void setUp() {
         String passwordHash = passwordEncoder.encode(TEST_PASSWORD);
+        coachProfileId = UUID.randomUUID();
         transactionTemplate.execute(status -> {
             jdbcTemplate.update(
                 "INSERT INTO main.authority (id, name, status, created_by, created_date) " +
-                "VALUES (8010, 'ROLE_PARENT', 'ACTIVE', 'system', ?) ON CONFLICT (name) DO NOTHING",
+                "VALUES (8030, 'ROLE_PARENT', 'ACTIVE', 'system', ?) ON CONFLICT (name) DO NOTHING",
                 Timestamp.from(Instant.now()));
             jdbcTemplate.update(
                 "INSERT INTO main.authority (id, name, status, created_by, created_date) " +
-                "VALUES (8011, 'ROLE_COACH', 'ACTIVE', 'system', ?) ON CONFLICT (name) DO NOTHING",
+                "VALUES (8031, 'ROLE_COACH', 'ACTIVE', 'system', ?) ON CONFLICT (name) DO NOTHING",
                 Timestamp.from(Instant.now()));
 
             insertUser(PARENT_ID, PARENT_EMAIL, passwordHash, "PARENT");
@@ -88,16 +96,10 @@ class ReviewUpdateIT {
                 "VALUES (?, (SELECT id FROM main.authority WHERE name = 'ROLE_PARENT')) ON CONFLICT DO NOTHING",
                 PARENT_ID);
 
-            insertUser(PARENT_ID2, PARENT_EMAIL2, passwordHash, "PARENT");
-            jdbcTemplate.update(
-                "INSERT INTO main.user_authority (user_id, authority_id) " +
-                "VALUES (?, (SELECT id FROM main.authority WHERE name = 'ROLE_PARENT')) ON CONFLICT DO NOTHING",
-                PARENT_ID2);
-
             jdbcTemplate.update(
                 "INSERT INTO main.player_profiles " +
                 "(id, name, date_of_birth, position, age_tier, parent_id, independent_account_allowed, created_at, created_by) " +
-                "VALUES (?, 'Rev Update Player', ?, 'MIDFIELDER', 'ADULT', ?, true, ?, 'system')",
+                "VALUES (?, 'Mod Player', ?, 'MIDFIELDER', 'ADULT', ?, true, ?, 'system')",
                 PLAYER_ID, Date.valueOf(LocalDate.now().minusYears(18)),
                 PARENT_ID, Timestamp.from(Instant.now()));
 
@@ -107,34 +109,22 @@ class ReviewUpdateIT {
                 "VALUES (?, (SELECT id FROM main.authority WHERE name = 'ROLE_COACH')) ON CONFLICT DO NOTHING",
                 COACH_USER_ID);
 
-            coachProfileId = UUID.randomUUID();
             jdbcTemplate.update(
                 "INSERT INTO marketplace.coach_profiles " +
                 "(id, user_id, display_name, bio, city, languages, canonical_timezone, status) " +
-                "VALUES (?, ?, 'Rev Update Coach', 'Bio', 'Berlin', ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE')",
+                "VALUES (?, ?, 'Moderation Coach', 'Bio', 'Berlin', ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE')",
                 coachProfileId, COACH_USER_ID);
 
-            // COMPLETED booking within last 3 days
             jdbcTemplate.update(
                 "INSERT INTO booking.bookings " +
                 "(id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, " +
                 " version, created_at, updated_at, canonical_timezone) " +
                 "VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, 0, ?, ?, 'Europe/Berlin')",
                 UUID.randomUUID(), coachProfileId, PARENT_ID, PLAYER_ID,
-                Timestamp.from(Instant.now().minusSeconds(86400 * 3 + 3600)),
+                Timestamp.from(Instant.now().minusSeconds(7200)),
+                Timestamp.from(Instant.now().minusSeconds(3600)),
                 Timestamp.from(Instant.now().minusSeconds(86400 * 3)),
-                Timestamp.from(Instant.now().minusSeconds(86400 * 7)),
-                Timestamp.from(Instant.now().minusSeconds(86400 * 3)));
-
-            // Existing APPROVED review — last_modified_at more than 365 days ago
-            reviewId = UUID.randomUUID();
-            jdbcTemplate.update(
-                "INSERT INTO reviews.coach_reviews " +
-                "(review_id, coach_id, author_id, author_role, rating, body, moderation_status, last_modified_at, created_at) " +
-                "VALUES (?, ?, ?, 'PARENT', 4, 'Original review', 'APPROVED', ?, ?)",
-                reviewId, coachProfileId, PARENT_ID,
-                Timestamp.from(Instant.now().minusSeconds(86400L * 400)),
-                Timestamp.from(Instant.now().minusSeconds(86400L * 400)));
+                Timestamp.from(Instant.now().minusSeconds(3600)));
 
             return null;
         });
@@ -149,132 +139,112 @@ class ReviewUpdateIT {
             jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = ?", PLAYER_ID);
             jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
             jdbcTemplate.execute("DELETE FROM main.login_attempts");
-            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?, ?)",
-                PARENT_ID, PARENT_ID2, COACH_USER_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?, ?)",
-                PARENT_ID, PARENT_ID2, COACH_USER_ID);
-            jdbcTemplate.execute("DELETE FROM main.authority WHERE id IN (8010, 8011)");
+            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?)", PARENT_ID, COACH_USER_ID);
+            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?)", PARENT_ID, COACH_USER_ID);
+            jdbcTemplate.execute("DELETE FROM main.authority WHERE id IN (8030, 8031)");
             jdbcTemplate.execute("DELETE FROM main.sec");
             return null;
         });
     }
 
     @Test
-    void updateReview_afterOneYear_returns204() {
+    void geminiReturnsSafe_statusApproved_ratingRecomputed() {
+        when(geminiClient.evaluate(any())).thenReturn(ModerationVerdict.SAFE);
+
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
+            reviewsUrl("/coaches/" + coachProfileId),
+            HttpMethod.POST,
+            Map.of("rating", 4, "body", "Excellent coaching session!"),
+            authenticatedHeaders(parentCookies),
+            Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
+        String status = jdbcTemplate.queryForObject(
+            "SELECT moderation_status FROM reviews.coach_reviews WHERE coach_id = ?",
+            String.class, coachProfileId);
+        assertThat(status).isEqualTo("APPROVED");
+
+        Integer reviewCount = jdbcTemplate.queryForObject(
+            "SELECT review_count FROM marketplace.coach_profiles WHERE id = ?",
+            Integer.class, coachProfileId);
+        assertThat(reviewCount).isEqualTo(1);
+
+        Double avgRating = jdbcTemplate.queryForObject(
+            "SELECT average_rating FROM marketplace.coach_profiles WHERE id = ?",
+            Double.class, coachProfileId);
+        assertThat(avgRating).isNotNull();
+        assertThat(avgRating).isEqualTo(4.0);
+    }
+
+    @Test
+    void geminiReturnsUnsafe_statusBlocked_ratingUnchanged() {
+        when(geminiClient.evaluate(any())).thenReturn(ModerationVerdict.UNSAFE);
+
         String parentCookies = loginAndGetCookies(PARENT_EMAIL);
         httpTestClient.makeHttpRequest(
-            reviewsUrl("/" + reviewId),
-            HttpMethod.PATCH,
-            Map.of("rating", 5, "body", "Updated review"),
+            reviewsUrl("/coaches/" + coachProfileId),
+            HttpMethod.POST,
+            Map.of("rating", 1, "body", "Harmful content here"),
             authenticatedHeaders(parentCookies),
-            Void.class);
+            Map.class);
 
-        String moderationStatus = jdbcTemplate.queryForObject(
-            "SELECT moderation_status FROM reviews.coach_reviews WHERE review_id = ?::uuid",
-            String.class, reviewId.toString());
-        assertThat(moderationStatus).isEqualTo("UNDER_REVIEW");
+        String status = jdbcTemplate.queryForObject(
+            "SELECT moderation_status FROM reviews.coach_reviews WHERE coach_id = ?",
+            String.class, coachProfileId);
+        assertThat(status).isEqualTo("BLOCKED");
 
-        String coachResponseBody = jdbcTemplate.queryForObject(
-            "SELECT coach_response_body FROM reviews.coach_reviews WHERE review_id = ?::uuid",
-            String.class, reviewId.toString());
-        assertThat(coachResponseBody).isNull();
+        Integer reviewCount = jdbcTemplate.queryForObject(
+            "SELECT review_count FROM marketplace.coach_profiles WHERE id = ?",
+            Integer.class, coachProfileId);
+        assertThat(reviewCount).isEqualTo(0);
     }
 
     @Test
-    void updateReview_noRecentSession_returns403() {
-        // Move booking to 30 days ago
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update(
-                "UPDATE booking.bookings SET updated_at = ? WHERE coach_id = ?",
-                Timestamp.from(Instant.now().minusSeconds(30L * 86400)), coachProfileId);
-            return null;
-        });
+    void nullBody_noGeminiCall_statusApproved() {
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        httpTestClient.makeHttpRequest(
+            reviewsUrl("/coaches/" + coachProfileId),
+            HttpMethod.POST,
+            Map.of("rating", 5),
+            authenticatedHeaders(parentCookies),
+            Map.class);
+
+        verify(geminiClient, never()).evaluate(any());
+
+        String status = jdbcTemplate.queryForObject(
+            "SELECT moderation_status FROM reviews.coach_reviews WHERE coach_id = ?",
+            String.class, coachProfileId);
+        assertThat(status).isEqualTo("APPROVED");
+    }
+
+    @Test
+    void geminiFailure_statusUnderReview_ratingUnchanged() {
+        when(geminiClient.evaluate(any())).thenThrow(new GeminiException("simulated-timeout", null));
 
         String parentCookies = loginAndGetCookies(PARENT_EMAIL);
-        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
-            reviewsUrl("/" + reviewId),
-            HttpMethod.PATCH,
-            Map.of("rating", 5, "body", "Stale update"),
+        httpTestClient.makeHttpRequest(
+            reviewsUrl("/coaches/" + coachProfileId),
+            HttpMethod.POST,
+            Map.of("rating", 3, "body", "Some review text"),
             authenticatedHeaders(parentCookies),
-            Map.class))
-            .isInstanceOf(HttpClientErrorException.class)
-            .satisfies(e -> {
-                HttpClientErrorException ex = (HttpClientErrorException) e;
-                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
-                assertThat(ex.getResponseBodyAsString()).contains("reviews.noRecentSession");
-            });
-    }
+            Map.class);
 
-    @Test
-    void updateReview_tooSoon_returns403() {
-        // Set last_modified_at to 100 days ago (within 365-day gate)
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update(
-                "UPDATE reviews.coach_reviews SET last_modified_at = ? WHERE review_id = ?",
-                Timestamp.from(Instant.now().minusSeconds(86400L * 100)), reviewId);
-            return null;
-        });
+        String status = jdbcTemplate.queryForObject(
+            "SELECT moderation_status FROM reviews.coach_reviews WHERE coach_id = ?",
+            String.class, coachProfileId);
+        assertThat(status).isEqualTo("UNDER_REVIEW");
 
-        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
-        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
-            reviewsUrl("/" + reviewId),
-            HttpMethod.PATCH,
-            Map.of("rating", 5, "body", "Too soon"),
-            authenticatedHeaders(parentCookies),
-            Map.class))
-            .isInstanceOf(HttpClientErrorException.class)
-            .satisfies(e -> {
-                HttpClientErrorException ex = (HttpClientErrorException) e;
-                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
-                assertThat(ex.getResponseBodyAsString()).contains("reviews.updateTooSoon");
-            });
-    }
-
-    @Test
-    void updateReview_blockedStatus_returns403() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update(
-                "UPDATE reviews.coach_reviews SET moderation_status = 'BLOCKED' WHERE review_id = ?",
-                reviewId);
-            return null;
-        });
-
-        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
-        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
-            reviewsUrl("/" + reviewId),
-            HttpMethod.PATCH,
-            Map.of("rating", 5, "body", "Blocked"),
-            authenticatedHeaders(parentCookies),
-            Map.class))
-            .isInstanceOf(HttpClientErrorException.class)
-            .satisfies(e -> {
-                HttpClientErrorException ex = (HttpClientErrorException) e;
-                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
-                assertThat(ex.getResponseBodyAsString()).contains("reviews.editNotPermitted");
-            });
-    }
-
-    @Test
-    void updateReview_wrongAuthor_returns403() {
-        String parent2Cookies = loginAndGetCookies(PARENT_EMAIL2);
-        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
-            reviewsUrl("/" + reviewId),
-            HttpMethod.PATCH,
-            Map.of("rating", 1, "body", "Not mine"),
-            authenticatedHeaders(parent2Cookies),
-            Map.class))
-            .isInstanceOf(HttpClientErrorException.class)
-            .satisfies(e -> {
-                HttpClientErrorException ex = (HttpClientErrorException) e;
-                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
-                assertThat(ex.getResponseBodyAsString()).contains("reviews.authorMismatch");
-            });
+        Integer reviewCount = jdbcTemplate.queryForObject(
+            "SELECT review_count FROM marketplace.coach_profiles WHERE id = ?",
+            Integer.class, coachProfileId);
+        assertThat(reviewCount).isEqualTo(0);
     }
 
     // ── helpers ──
 
     private String loginAndGetCookies(String email) {
-        var loginResponse = httpTestClient.makeHttpRequest(
+        ResponseEntity<Map> loginResponse = httpTestClient.makeHttpRequest(
             baseUrl() + LOGIN_ENDPOINT,
             HttpMethod.POST,
             Map.of("email", email, "password", TEST_PASSWORD),
@@ -325,7 +295,7 @@ class ReviewUpdateIT {
             id,
             Timestamp.from(Instant.now()), Timestamp.from(Instant.now()),
             email, role,
-            "80" + (id % 100000000),
+            "803" + (id % 10000000),
             email, passwordHash, role);
     }
 }

@@ -329,7 +329,7 @@ class CoachMarketplaceResourceIT {
         ResponseEntity<Map> response = searchCoaches("Frankfurt", null);
 
         List<Map<String, Object>> coaches = (List<Map<String, Object>>) response.getBody().get("coaches");
-        assertThat(coaches).allMatch(c -> ((Number) c.get("aggregateRating")).doubleValue() == 0.0);
+        assertThat(coaches).allMatch(c -> ((Number) c.get("averageRating")).doubleValue() == 0.0);
         assertThat(coaches).allMatch(c -> ((Integer) c.get("reviewCount")) == 0);
     }
 

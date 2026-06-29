@@ -192,7 +192,7 @@ class CoachProfileResourceIT {
         ResponseEntity<Map> response = getProfile(activeCoachProfileId);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(((Number) response.getBody().get("aggregateRating")).doubleValue()).isEqualTo(0.0);
+        assertThat(((Number) response.getBody().get("averageRating")).doubleValue()).isEqualTo(0.0);
         assertThat(((Integer) response.getBody().get("reviewCount"))).isEqualTo(0);
     }
 

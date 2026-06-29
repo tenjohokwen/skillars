@@ -2,9 +2,12 @@ package com.softropic.skillars.platform.reviews.api;
 
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
+import com.softropic.skillars.platform.reviews.contract.CoachOwnReviewListResponse;
 import com.softropic.skillars.platform.reviews.contract.CoachResponseRequest;
+import com.softropic.skillars.platform.reviews.contract.ReviewListResponse;
 import com.softropic.skillars.platform.reviews.contract.SubmitReviewRequest;
 import com.softropic.skillars.platform.reviews.contract.SubmitReviewResponse;
+import com.softropic.skillars.platform.reviews.service.ReviewQueryService;
 import com.softropic.skillars.platform.reviews.service.ReviewSubmissionService;
 import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
@@ -16,11 +19,13 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
@@ -32,8 +37,30 @@ import java.util.UUID;
 public class ReviewResource {
 
     private final ReviewSubmissionService reviewSubmissionService;
+    private final ReviewQueryService reviewQueryService;
     private final CoachProfileService coachProfileService;
     private final SecurityUtil securityUtil;
+
+    @GetMapping("/coaches/me")
+    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+    @Observed(name = "reviews.coach-self-view")
+    public ResponseEntity<CoachOwnReviewListResponse> listMyReviews(
+            @RequestParam(defaultValue = "0") int page,
+            Authentication auth) {
+        Long userId = resolveUserId();
+        UUID coachId = coachProfileService.getCoachIdByUserId(userId);
+        return ResponseEntity.ok(reviewQueryService.listCoachOwnReviews(coachId, page));
+    }
+
+    @GetMapping("/coaches/{coachId}")
+    @PreAuthorize(SecurityConstants.IS_PERMIT_ALL)
+    @Observed(name = "reviews.list")
+    public ResponseEntity<ReviewListResponse> listCoachReviews(
+            @PathVariable UUID coachId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "newest") String sort) {
+        return ResponseEntity.ok(reviewQueryService.listApprovedReviews(coachId, page, sort));
+    }
 
     @PostMapping("/coaches/{coachId}")
     @PreAuthorize(SecurityConstants.IS_AUTHENTICATED)

@@ -1,3 +1,7 @@
+## Deferred from: code review of skillars-9-2-review-moderation-rating-aggregation (2026-06-29)
+- D1: AC3 admin resolution endpoint not implemented — intentional; Epic 10 owns admin endpoints; `ReviewModerationResolvedEvent` and `CoachRatingService.recompute()` ready for Epic 10 to call. [ReviewModerationResolvedEvent.java]
+- D2: Prompt injection in Gemini review moderation — `promptTemplate + input` concatenation with no sanitisation; same established pattern as messaging module (Story 8.3); address project-wide in a Gemini hardening pass if LLM prompt injection becomes a compliance concern. [ReviewModerationService.java]
+
 ## Deferred from: code review of skillars-9-1-review-submission-eligibility (2026-06-29)
 - W1: `eventPublisher.publishEvent(new ReviewSubmittedEvent(...))` fires synchronously inside `@Transactional` in `submitReview` and `updateReview` — if Story 9.2 registers a plain `@EventListener` (synchronous), any exception in the listener rolls back the review save; Story 9.2 must use `@TransactionalEventListener(phase = AFTER_COMMIT)` only. [ReviewSubmissionService.java:64-65, 95-96]
 - W2: `SecurityUtil.getCurrentUser()` throws `IllegalStateException` (→ 500) for non-standard auth tokens — consistent with `MessagingResource` and other resources; project-wide risk not introduced by this story; fix in a platform-wide auth hardening pass. [ReviewResource.java:78-86]

@@ -75,8 +75,8 @@ public class CoachSearchService {
             p.getVerificationTier(),
             specialtiesByCoach.getOrDefault(p.getId(), List.of()).stream().limit(2).toList(),
             priceByCoach.getOrDefault(p.getId(), BigDecimal.ZERO),
-            0.0,      // aggregateRating — wired in Epic 9
-            0,        // reviewCount     — wired in Epic 9
+            p.getAverageRating() != null ? p.getAverageRating() : 0.0,
+            p.getReviewCount(),
             strikesByCoach.getOrDefault(p.getId(), 0),
             capabilityBadgesByCoach.getOrDefault(p.getId(), List.of())
         )).toList();
@@ -114,8 +114,9 @@ public class CoachSearchService {
         // ACTIVE coaches sort before REDUCED within any other sort criteria
         Sort statusSort = Sort.by(Sort.Order.asc("status"));
         return switch (StringUtils.hasText(sortBy) ? sortBy : "displayName") {
-            case "price", "rating" -> statusSort.and(Sort.by(Sort.Direction.ASC, "displayName"));
-            default                -> statusSort.and(Sort.by(Sort.Direction.ASC, "displayName"));
+            case "price"  -> statusSort.and(Sort.by(Sort.Direction.ASC,  "displayName"));
+            case "rating" -> statusSort.and(Sort.by(Sort.Order.desc("averageRating").nullsLast()));
+            default       -> statusSort.and(Sort.by(Sort.Direction.ASC,  "displayName"));
         };
     }
 

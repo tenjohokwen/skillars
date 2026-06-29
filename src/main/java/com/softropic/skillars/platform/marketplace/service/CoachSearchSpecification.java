@@ -106,8 +106,7 @@ public final class CoachSearchSpecification {
 
     private static Specification<CoachProfile> hasMinRating(Double minRating) {
         if (minRating == null || minRating <= 0.0) return null;
-        // aggregateRating is not stored on coach_profiles — reviews table populated in Epic 9.
-        // Any minRating > 0 correctly returns 0 results at this stage.
-        return (root, q, cb) -> cb.disjunction();
+        return (root, q, cb) ->
+            cb.greaterThanOrEqualTo(root.<Double>get("averageRating"), minRating);
     }
 }

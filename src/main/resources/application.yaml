@@ -260,6 +260,11 @@ platform:
       gemini:
         prompt-template: "Evaluate the following message for harmful content. Reply with exactly one word: SAFE, UNSAFE, or UNCERTAIN.\n\nContent is UNSAFE if it contains: hate speech, sexual content, threats or violence, personal contact information solicitation, advertising or spam, content inappropriate for minors.\n\nUNCERTAIN means you cannot clearly determine safety.\n\nMessage:\n"
         max-input-chars: 4000
+  reviews:
+    moderation:
+      gemini:
+        prompt-template: "Evaluate the following review for harmful or inappropriate content. Reply with exactly one word: SAFE, UNSAFE, or UNCERTAIN.\n\nContent is UNSAFE if it contains: hate speech, threats or violence, defamation, sexually explicit content, spam or promotional content, personal contact information, or false allegations of illegal activity.\n\nUNCERTAIN means you cannot clearly determine safety.\n\nReview:\n"
+        max-input-chars: 2000
   filestorage:
     quota:
       default-bytes: 10737418240

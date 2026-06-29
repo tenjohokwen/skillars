@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.marketplace.repo;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -29,4 +30,10 @@ public interface CoachProfileRepository
                    "WHERE status = 'ACTIVE' AND lower(city) = lower(:city) AND lower(:lang) = ANY(languages)",
            nativeQuery = true)
     long countByLanguageAndCity(@Param("lang") String lang, @Param("city") String city);
+
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE CoachProfile p SET p.averageRating = :avgRating, p.reviewCount = :reviewCount WHERE p.id = :coachId")
+    void updateRatingAggregate(@Param("coachId") UUID coachId,
+                               @Param("avgRating") Double avgRating,
+                               @Param("reviewCount") int reviewCount);
 }

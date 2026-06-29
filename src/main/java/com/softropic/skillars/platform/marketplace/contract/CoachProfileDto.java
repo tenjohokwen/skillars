@@ -10,8 +10,8 @@ public record CoachProfileDto(
     String photoUrl,
     String verificationTier,
     List<String> capabilityBadges,
-    double aggregateRating,       // 0.0 until Epic 9 (reviews module)
-    int reviewCount,              // 0 until Epic 9
+    Double averageRating,
+    int reviewCount,
     String bio,
     List<String> languages,
     String city,

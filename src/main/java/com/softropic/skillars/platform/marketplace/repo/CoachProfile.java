@@ -60,6 +60,12 @@ public class CoachProfile {
     @Column(name = "verification_tier", nullable = false)
     private String verificationTier = "BASIC";
 
+    @Column(name = "average_rating", columnDefinition = "NUMERIC(3,1)")
+    private Double averageRating;
+
+    @Column(name = "review_count", nullable = false)
+    private int reviewCount;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt = OffsetDateTime.now();
 }

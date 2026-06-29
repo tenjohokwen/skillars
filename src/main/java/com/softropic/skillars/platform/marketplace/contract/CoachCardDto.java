@@ -13,7 +13,7 @@ public record CoachCardDto(
     String verificationTier,
     List<String> topSpecialties,
     BigDecimal perSessionPrice,
-    double aggregateRating,
+    Double averageRating,
     int reviewCount,
     int reliabilityStrikeCount,
     List<String> capabilityBadges  // empty at this stage; wired in Story 2.3
