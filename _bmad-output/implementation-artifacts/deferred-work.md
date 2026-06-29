@@ -1,3 +1,7 @@
+## Deferred from: code review of skillars-9-1-review-submission-eligibility (2026-06-29)
+- W1: `eventPublisher.publishEvent(new ReviewSubmittedEvent(...))` fires synchronously inside `@Transactional` in `submitReview` and `updateReview` — if Story 9.2 registers a plain `@EventListener` (synchronous), any exception in the listener rolls back the review save; Story 9.2 must use `@TransactionalEventListener(phase = AFTER_COMMIT)` only. [ReviewSubmissionService.java:64-65, 95-96]
+- W2: `SecurityUtil.getCurrentUser()` throws `IllegalStateException` (→ 500) for non-standard auth tokens — consistent with `MessagingResource` and other resources; project-wide risk not introduced by this story; fix in a platform-wide auth hardening pass. [ReviewResource.java:78-86]
+
 ## Deferred from: code review of skillars-8-4 (2026-06-27)
 - W1: CASCADE deletes open abuse reports during retention — `DELETE FROM messaging.messages WHERE created_at < :cutoff` cascades to `message_reports` via FK, destroying OPEN/UNDER_REVIEW report evidence. Spec-specified behavior (AC4). Epic 10 admin module should block retention for messages with open reports or archive reports before cascade. [`MessageRepository.java:33`, `V66__messaging_reports.sql:3`]
 - W2: `deleteOrphanConversations` never purges empty-shell conversations — `NULL < :cutoff` evaluates to NULL in SQL; conversations created but never messaged accumulate indefinitely. Low-severity. [`ConversationRepository.java:31`]

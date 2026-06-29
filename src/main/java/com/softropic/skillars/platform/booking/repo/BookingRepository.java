@@ -97,6 +97,19 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
         @Param("windowStart") java.time.Instant windowStart);
 
     @Query("""
+        SELECT CASE WHEN COUNT(b) > 0 THEN true ELSE false END
+        FROM Booking b
+        WHERE b.coachId = :coachId
+          AND (b.parentId = :authorId OR b.playerId = :authorId)
+          AND b.status = 'COMPLETED'
+          AND b.updatedAt >= :windowStart
+        """)
+    boolean existsRecentCompletedBookingByAuthor(
+        @Param("coachId") UUID coachId,
+        @Param("authorId") Long authorId,
+        @Param("windowStart") Instant windowStart);
+
+    @Query("""
         SELECT b FROM Booking b
         WHERE b.playerId = :playerId
           AND b.coachId = :coachId
