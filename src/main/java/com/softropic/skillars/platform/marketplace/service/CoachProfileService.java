@@ -233,7 +233,9 @@ public class CoachProfileService {
     @Transactional(readOnly = true)
     public CoachProfileDto getPublicProfile(UUID coachId) {
         CoachProfile profile = coachProfileRepository.findById(coachId)
-            .filter(p -> p.getStatus() == CoachProfileStatus.ACTIVE)
+            .filter(p -> p.getStatus() == CoachProfileStatus.ACTIVE
+                      || p.getStatus() == CoachProfileStatus.REDUCED
+                      || p.getStatus() == CoachProfileStatus.PENDING_REVIEW)
             .orElseThrow(() -> new CoachProfileNotFoundException(coachId));
 
         List<String> specialties = coachSpecialtyRepository.findByCoachId(profile.getId())

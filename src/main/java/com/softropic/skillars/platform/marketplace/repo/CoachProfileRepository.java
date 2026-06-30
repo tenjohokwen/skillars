@@ -1,5 +1,8 @@
 package com.softropic.skillars.platform.marketplace.repo;
 
+import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Modifying;
@@ -30,6 +33,10 @@ public interface CoachProfileRepository
                    "WHERE status = 'ACTIVE' AND lower(city) = lower(:city) AND lower(:lang) = ANY(languages)",
            nativeQuery = true)
     long countByLanguageAndCity(@Param("lang") String lang, @Param("city") String city);
+
+    @Query("SELECT p FROM CoachProfile p WHERE p.status IN :statuses ORDER BY p.statusChangedAt ASC NULLS LAST")
+    Page<CoachProfile> findByStatusInOrderByStatusChangedAtAsc(
+        @Param("statuses") List<CoachProfileStatus> statuses, Pageable pageable);
 
     @Modifying(clearAutomatically = true)
     @Query("UPDATE CoachProfile p SET p.averageRating = :avgRating, p.reviewCount = :reviewCount WHERE p.id = :coachId")

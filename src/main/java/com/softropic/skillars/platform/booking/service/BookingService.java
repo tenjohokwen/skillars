@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.booking.service;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.booking.contract.ActorRole;
+import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.BatchGroupedBookingResponse;
 import com.softropic.skillars.platform.booking.contract.BookingAcceptedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledDueToPauseEvent;
@@ -149,7 +150,12 @@ public class BookingService {
 
         CoachProfile coach = coachProfileRepository.findById(req.coachId())
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
-        if (coach.getStatus() != CoachProfileStatus.ACTIVE && coach.getStatus() != CoachProfileStatus.REDUCED) {
+        if (coach.getStatus() == CoachProfileStatus.SUSPENDED) {
+            throw new OperationNotAllowedException("Coach is suspended", BookingError.COACH_UNAVAILABLE);
+        }
+        if (coach.getStatus() != CoachProfileStatus.ACTIVE
+                && coach.getStatus() != CoachProfileStatus.REDUCED
+                && coach.getStatus() != CoachProfileStatus.PENDING_REVIEW) {
             throw new OperationNotAllowedException("Coach profile is not active", SecurityError.MISSING_RIGHTS);
         }
 

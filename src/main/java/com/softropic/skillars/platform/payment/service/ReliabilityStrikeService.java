@@ -32,13 +32,13 @@ public class ReliabilityStrikeService {
     private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
-    public void issue(UUID coachId, UUID bookingId, String reason) {
+    public CoachReliabilityStrike issue(UUID coachId, UUID bookingId, String reason) {
         CoachReliabilityStrike strike = new CoachReliabilityStrike();
         strike.setCoachId(coachId);
         strike.setBookingId(bookingId);
         strike.setReason(reason);
         strike.setAcknowledged(false);
-        strikeRepository.save(strike);
+        CoachReliabilityStrike saved = strikeRepository.save(strike);
 
         long count = strikeRepository.countByCoachIdAndCreatedAtAfter(coachId, OffsetDateTime.now().minusDays(30));
         long suspensionThreshold = Long.parseLong(configService.getString("reliability.strike.suspensionThreshold"));
@@ -51,6 +51,7 @@ public class ReliabilityStrikeService {
         if (count >= suspensionThreshold) {
             if (coach.getStatus() != CoachProfileStatus.PENDING_REVIEW) {
                 coach.setStatus(CoachProfileStatus.PENDING_REVIEW);
+                coach.setStatusChangedAt(java.time.Instant.now());
                 coachProfileRepository.save(coach);
                 eventPublisher.publishEvent(new StrikeThresholdReachedEvent(this, coachId, bookingId, count));
                 log.warn("Coach suspended for review: coachId={} rollingCount={}", coachId, count);
@@ -58,11 +59,14 @@ public class ReliabilityStrikeService {
         } else if (count >= visibilityThreshold) {
             if (coach.getStatus() != CoachProfileStatus.REDUCED && coach.getStatus() != CoachProfileStatus.PENDING_REVIEW) {
                 coach.setStatus(CoachProfileStatus.REDUCED);
+                coach.setStatusChangedAt(java.time.Instant.now());
                 coachProfileRepository.save(coach);
                 eventPublisher.publishEvent(new CoachVisibilityReducedEvent(this, coachId, count));
                 log.info("Coach visibility reduced: coachId={} rollingCount={}", coachId, count);
             }
         }
+
+        return saved;
     }
 
     @Transactional

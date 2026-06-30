@@ -15,6 +15,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.Type;
 
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -65,6 +66,9 @@ public class CoachProfile {
 
     @Column(name = "review_count", nullable = false)
     private int reviewCount;
+
+    @Column(name = "status_changed_at")
+    private Instant statusChangedAt;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt = OffsetDateTime.now();

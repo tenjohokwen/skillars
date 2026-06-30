@@ -31,4 +31,7 @@ public interface AdminAlertRepository extends JpaRepository<AdminAlert, UUID> {
 
     Optional<AdminAlert> findFirstByReferenceIdAndTypeAndStatus(
         String referenceId, AdminAlertType type, AdminAlertStatus status);
+
+    @Query("SELECT COUNT(a) FROM AdminAlert a WHERE a.referenceId = :referenceId AND a.status = 'OPEN'")
+    long countOpenByReferenceId(@Param("referenceId") String referenceId);
 }

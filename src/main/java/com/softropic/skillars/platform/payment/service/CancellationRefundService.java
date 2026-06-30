@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.payment.service;
 
+import com.softropic.skillars.platform.booking.contract.BookingCancelledByAdminEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByCoachEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent;
 import com.softropic.skillars.platform.booking.contract.CoachNoShowEvent;
@@ -108,6 +109,22 @@ public class CancellationRefundService {
 
         reliabilityStrikeService.issue(event.getCoachId(), event.getBookingId(), "COACH_NO_SHOW");
         log.info("Coach no-show processed: bookingId={}", event.getBookingId());
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void onBookingCancelledByAdmin(BookingCancelledByAdminEvent event) {
+        if (event.getSessionPackPurchaseId() != null) {
+            packSessionService.restoreSession(event.getSessionPackPurchaseId());
+            log.info("Pack session restored for admin suspension: bookingId={}", event.getBookingId());
+        } else {
+            creditWalletService.writeLedgerEntry(
+                event.getParentId(), event.getSessionPrice(),
+                "BOOKING_REFUND", event.getBookingId(),
+                "Admin coach suspension — full refund"
+            );
+            log.info("BOOKING_REFUND issued for admin suspension: bookingId={}", event.getBookingId());
+        }
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)

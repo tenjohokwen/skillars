@@ -58,6 +58,7 @@ import org.springframework.validation.BindingResult;
 import org.springframework.validation.FieldError;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -111,6 +112,12 @@ public class ApiAdvice {
     public ErrorDto methodNotSupportedHandler(final HttpRequestMethodNotSupportedException exception) {
         final String defaultMsg = "HTTP method not supported";
         return logErrorAndReturnDTO(exception, defaultMsg, "generic.methodNotAllowed");
+    }
+
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<ErrorDto> responseStatusExceptionHandler(final ResponseStatusException ex) {
+        return ResponseEntity.status(ex.getStatusCode())
+            .body(logErrorAndReturnDTO(ex, ex.getReason() != null ? ex.getReason() : "Request error", "generic.requestError"));
     }
 
     /**
