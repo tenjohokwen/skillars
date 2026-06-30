@@ -42,7 +42,7 @@ public final class AppEndpoints {
     public static final List<String> PUBLIC_MGMT_ENDPOINTS = List.of("/manage/prometheus", "/manage/health", "/manage/info");
     public static final List<String> ALL_UNRESTRICTED;
 
-    private static final String[] SECURED_AUTHORITIES = new String[]{AuthoritiesConstants.ADMIN, AuthoritiesConstants.USER, AuthoritiesConstants.LTD_ADMIN, AuthoritiesConstants.COACH, AuthoritiesConstants.PARENT};
+    private static final String[] SECURED_AUTHORITIES = new String[]{AuthoritiesConstants.ADMIN, AuthoritiesConstants.USER, AuthoritiesConstants.LTD_ADMIN, AuthoritiesConstants.COACH, AuthoritiesConstants.PARENT, AuthoritiesConstants.PLAYER};
 
 
     static {

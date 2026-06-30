@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.admin.service;
 import com.softropic.skillars.platform.admin.contract.AdminAlertReferenceType;
 import com.softropic.skillars.platform.admin.contract.AdminAlertStatus;
 import com.softropic.skillars.platform.admin.contract.AdminAlertType;
+import com.softropic.skillars.platform.admin.contract.DisputeRaisedEvent;
 import com.softropic.skillars.platform.admin.repo.AdminAlert;
 import com.softropic.skillars.platform.admin.repo.AdminAlertRepository;
 import com.softropic.skillars.platform.messaging.contract.ConversationReportedEvent;
@@ -53,6 +54,14 @@ public class AdminAlertEventListener {
         insertAlert(AdminAlertType.STRIKE_THRESHOLD,
             event.getCoachId().toString(),
             AdminAlertReferenceType.COACH);
+    }
+
+    @EventListener
+    @Transactional
+    public void onDisputeRaised(DisputeRaisedEvent event) {
+        insertAlert(AdminAlertType.DISPUTE_RAISED,
+            event.getBookingId().toString(),
+            AdminAlertReferenceType.BOOKING);
     }
 
     private void insertAlert(AdminAlertType type, String referenceId, AdminAlertReferenceType referenceType) {

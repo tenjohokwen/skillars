@@ -8,4 +8,6 @@ import java.util.UUID;
 public interface CoachCancellationHistoryRepository extends JpaRepository<CoachCancellationHistory, UUID> {
 
     List<CoachCancellationHistory> findByCoachIdOrderByCreatedAtDesc(UUID coachId);
+
+    List<CoachCancellationHistory> findByBookingId(UUID bookingId);
 }

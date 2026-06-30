@@ -17,9 +17,11 @@ public final class AuthoritiesConstants {
 
     public static final String PARENT = "ROLE_PARENT";
 
+    public static final String PLAYER = "ROLE_PLAYER";
+
     public static final String ANONYMOUS = "ROLE_ANONYMOUS";
 
-    public static final Set<String> CORE_ROLES = Set.of(ADMIN, LTD_ADMIN, USER, COACH, PARENT, ANONYMOUS);
+    public static final Set<String> CORE_ROLES = Set.of(ADMIN, LTD_ADMIN, USER, COACH, PARENT, PLAYER, ANONYMOUS);
 
     private AuthoritiesConstants() {
     }
