@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-06-30 # Story 9.3 review-visibility-flagging-admin-resolution → in-progress (5 patches applied)
+last_updated: 2026-06-30 # Story 10.1 admin-moderation-queue-message-content-actions → done (3 patches applied)
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -241,8 +241,8 @@ development_status:
   skillars-epic-9-retrospective: optional
 
   # Epic 10: Admin & Platform Safety
-  skillars-epic-10: backlog
-  skillars-10-1-admin-moderation-queue-message-content-actions: backlog
+  skillars-epic-10: in-progress
+  skillars-10-1-admin-moderation-queue-message-content-actions: done  # 3 review patches applied 2026-06-30
   skillars-10-2-coach-enforcement-strike-management: backlog
   skillars-10-3-dispute-resolution: backlog
   skillars-10-4-gdpr-data-tools-account-deletion: backlog

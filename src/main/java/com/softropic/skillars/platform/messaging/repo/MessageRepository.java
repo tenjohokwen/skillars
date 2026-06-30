@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.List;
 
 public interface MessageRepository extends JpaRepository<Message, Long> {
 
@@ -29,7 +30,16 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
     @Query("SELECT m FROM Message m WHERE m.conversationId = :conversationId AND m.moderationStatus = 'APPROVED' AND m.deletedAt IS NULL ORDER BY m.createdAt DESC")
     Page<Message> findLastApproved(@Param("conversationId") Long conversationId, Pageable pageable);
 
-    @Modifying
+    @Query("SELECT m FROM Message m WHERE m.conversationId = :convId AND m.createdAt < :pivot AND m.deletedAt IS NULL ORDER BY m.createdAt DESC")
+    List<Message> findBeforePivot(@Param("convId") Long convId, @Param("pivot") Instant pivot, Pageable pageable);
+
+    @Query("SELECT m FROM Message m WHERE m.conversationId = :convId AND m.createdAt > :pivot AND m.deletedAt IS NULL ORDER BY m.createdAt ASC")
+    List<Message> findAfterPivot(@Param("convId") Long convId, @Param("pivot") Instant pivot, Pageable pageable);
+
+    @Query("SELECT m FROM Message m WHERE m.conversationId = :convId ORDER BY m.createdAt ASC")
+    List<Message> findAllForAdmin(@Param("convId") Long convId, Pageable pageable);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query(value = "DELETE FROM messaging.messages WHERE created_at < :cutoff", nativeQuery = true)
     int deleteExpiredMessages(@Param("cutoff") Instant cutoff);
 }

@@ -1,3 +1,11 @@
+## Deferred from: code review of skillars-10-1 patches (2026-06-30)
+- D1: `findBeforePivot`/`findAfterPivot` return empty context when pivot message `createdAt` is null at JPA layer — DB NOT NULL prevents this in production; only affects test fixtures that construct Message in-memory without setCreatedAt(). [MessageRepository.java:33-37]
+- D2: Context window (`findBeforePivot`/`findAfterPivot`) excludes soft-deleted messages while `findAllForAdmin` includes them — chronological gap in admin message detail view with no indication; intentional spec asymmetry between views; UX concern for service layer mapping. [MessageRepository.java:33-40]
+
+## Deferred from: code review of skillars-10-1-admin-moderation-queue-message-content-actions (2026-06-30)
+- D1: `buildSummary()` MESSAGE_REPORT returns null `summary` when `message.content` is null — JSON serializes as `"summary": null` instead of a fallback string; depends on whether messages can have null content in this schema. [AdminQueueService.java:59]
+- D2: `findBeforePivot` / `findAfterPivot` strict `<`/`>` on `createdAt` excludes messages sharing the exact pivot timestamp from context window — low-probability collision but possible when two messages arrive within the same millisecond. [MessageRepository.java:33-37]
+
 ## Deferred from: code review of skillars-9-3-review-visibility-flagging-admin-resolution (2026-06-30)
 - D1: Double-approve produces spurious audit log + event — No guard in `AdminReviewService.approveReview()` against re-approving an already-APPROVED review. Idempotent on state but creates duplicate `review_moderation_log` entries and fires duplicate `ReviewModerationResolvedEvent`. Defer to Epic 10 when admin UI enforces valid state transitions. [AdminReviewService.java:72-94]
 - D2: `ReviewApiAdvice` scope excludes `AdminReviewResource` — Advice covers `platform.reviews.api` only; admin controller is in `platform.admin.api`. `ResourceNotFoundException` from approve/block falls to the global handler, which may return a different error shape than the reviews API. Acceptable if global handler is consistent; verify before Epic 10 admin UI integration. [ReviewApiAdvice.java:21]

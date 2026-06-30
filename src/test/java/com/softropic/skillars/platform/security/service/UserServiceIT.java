@@ -243,10 +243,14 @@ class UserServiceIT {
 
     private PhoneNumber generatePhone() {
         final String prefix = "65";
-        final Optional<String> strOpt = new Random().ints(7, 0, 9)
-                                                            .mapToObj(String::valueOf)
-                                                            .reduce((x, y) -> x + y);
-        return new PhoneNumber(prefix+strOpt.get(), Provider.MTN, "DE");
+        String suffix;
+        do {
+            suffix = new Random().ints(7, 0, 9)
+                                 .mapToObj(String::valueOf)
+                                 .reduce((x, y) -> x + y)
+                                 .get();
+        } while (suffix.contains("000"));
+        return new PhoneNumber(prefix + suffix, Provider.MTN, "DE");
     }
 
     private Principal createPrincipal() {
