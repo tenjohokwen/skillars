@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-06-30 # Story 10.3 dispute-resolution → done
+last_updated: 2026-06-30 # Story 10.4 gdpr-data-tools-account-deletion review patches applied
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -245,5 +245,5 @@ development_status:
   skillars-10-1-admin-moderation-queue-message-content-actions: done  # 3 review patches applied 2026-06-30
   skillars-10-2-coach-enforcement-strike-management: done  # 5 review patches applied 2026-06-30
   skillars-10-3-dispute-resolution: done  # 9 review patches applied 2026-06-30
-  skillars-10-4-gdpr-data-tools-account-deletion: backlog
+  skillars-10-4-gdpr-data-tools-account-deletion: in-progress
   skillars-epic-10-retrospective: optional

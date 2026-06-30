@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.development.repo;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -9,7 +10,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
-// IMMUTABLE: append-only — do NOT add delete() or update-path methods
+// IMMUTABLE: append-only — do NOT add delete() or update-path methods EXCEPT for GDPR Article 17 erasure
 public interface SluRepository extends JpaRepository<PlayerSkillStat, UUID> {
 
     List<PlayerSkillStat> findByPlayerIdOrderByCalculatedAtDesc(Long playerId);
@@ -59,4 +60,8 @@ public interface SluRepository extends JpaRepository<PlayerSkillStat, UUID> {
     List<Object[]> findCoachContributionsByPlayerId(
         @Param("playerId") Long playerId,
         @Param("since") Instant since);
+
+    @Modifying
+    @Query("DELETE FROM PlayerSkillStat s WHERE s.playerId = :playerId")
+    int deleteAllByPlayerId(@Param("playerId") Long playerId);
 }

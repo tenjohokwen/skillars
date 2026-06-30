@@ -21,6 +21,7 @@ import com.softropic.skillars.platform.security.infrastructure.SecuredHttpEndpoi
 import com.softropic.skillars.platform.security.service.TwoFactorLoginService;
 import com.softropic.skillars.platform.security.infrastructure.UnanimousAuthorizationManager;
 import com.softropic.skillars.platform.security.service.DaoAuthProvider;
+import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.service.LoadUserByUserNameService;
 
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -157,6 +158,7 @@ public class SecurityConfiguration {
                                            LoginTokenManager loginTokenManager,
                                            SecurityUtil securityUtil,
                                            CorsConfiguration corsConfiguration,
+                                           RefreshTokenRepository refreshTokenRepository,
                                            @Qualifier("loginAttemptService") LoginDecisionManager<RequestMetadata> loginDecisionManager,
                                            Environment env) throws Exception {
         //TODO test first, then remove the following line
@@ -197,7 +199,8 @@ public class SecurityConfiguration {
                                                        new SecuredHttpEndpointGuard(AppEndpoints.SECURED_MAPPINGS, AppEndpoints.ALL_UNRESTRICTED),
                                                        loginTokenManager,
                                                        securityUtil,
-                                                       env),
+                                                       env,
+                                                       refreshTokenRepository),
                             BasicAuthenticationFilter.class)
             .addFilterBefore(securityAdviceFilter, WebAsyncManagerIntegrationFilter.class)
             .addFilterBefore(new LoggingFilter(PUBLIC_STATIC_RESOURCES),

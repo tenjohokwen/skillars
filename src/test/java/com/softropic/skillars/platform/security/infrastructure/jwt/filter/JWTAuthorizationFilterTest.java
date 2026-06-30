@@ -1,20 +1,18 @@
 package com.softropic.skillars.platform.security.infrastructure.jwt.filter;
 
 
-
-import com.softropic.skillars.infrastructure.security.event.PreAuthEvent;
-import com.softropic.skillars.platform.security.service.LoginTokenManager;
-import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.infrastructure.security.AuthorizationException;
+import com.softropic.skillars.infrastructure.security.SecurityError;
+import com.softropic.skillars.infrastructure.security.event.PreAuthEvent;
+import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.contract.exception.InvalidJWTDataException;
 import com.softropic.skillars.platform.security.contract.exception.JWTExpiredException;
-import com.softropic.skillars.platform.security.contract.exception.JWTTheftException;
-import com.softropic.skillars.platform.security.contract.exception.MissingAuthenticationException;
-import com.softropic.skillars.infrastructure.security.SecurityError;
-import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.platform.security.infrastructure.SecuredHttpEndpointGuard;
+import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.service.DaoAuthProvider;
 import com.softropic.skillars.platform.security.service.LoadUserByUserNameService;
+import com.softropic.skillars.platform.security.service.LoginTokenManager;
+import com.softropic.skillars.platform.security.service.SecurityUtil;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -88,6 +86,9 @@ class JWTAuthorizationFilterTest {
     @Mock
     private Environment environment;
 
+    @Mock
+    private RefreshTokenRepository refreshTokenRepository;
+
     @Spy
     private UserDetails userDetails = principal; //new User("testuser", "", List.of(new SimpleGrantedAuthority("ROLE_USER"))); // Mocked, returned by daoAuthProvider
 
@@ -106,7 +107,8 @@ class JWTAuthorizationFilterTest {
                 securedHttpEndpointGuard,
                 loginTokenManager,
                 securityUtil,
-                environment
+                environment,
+                refreshTokenRepository
         );
 
         when(environment.getProperty("activate.security", Boolean.class, true)).thenReturn(true);

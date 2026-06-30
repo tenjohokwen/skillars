@@ -35,4 +35,6 @@ public interface ParentCreditLedgerRepository extends JpaRepository<ParentCredit
 
     @Query("SELECT COALESCE(SUM(ABS(l.amount)), 0) FROM ParentCreditLedger l WHERE l.type = 'CASH_OUT_DEBIT' AND l.createdAt BETWEEN :from AND :to")
     BigDecimal sumTotalCashOuts(@Param("from") Instant from, @Param("to") Instant to);
+
+    List<ParentCreditLedger> findAllByParentId(Long parentId);
 }

@@ -11,4 +11,8 @@ public interface NeglectedSkillFlagRepository extends JpaRepository<NeglectedSki
     List<NeglectedSkillFlag> findByPlayerIdAndResolvedAtIsNull(Long playerId);
 
     Optional<NeglectedSkillFlag> findByPlayerIdAndSkillCodeAndResolvedAtIsNull(Long playerId, String skillCode);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("DELETE FROM NeglectedSkillFlag n WHERE n.playerId = :playerId")
+    int deleteAllByPlayerId(@org.springframework.data.repository.query.Param("playerId") Long playerId);
 }

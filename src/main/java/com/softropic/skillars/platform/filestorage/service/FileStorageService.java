@@ -300,6 +300,15 @@ public class FileStorageService {
         return presigned.url().toString();
     }
 
+    public String signedDownloadUrl(String storageKey, Duration duration) {
+        PresignedGetObjectRequest presigned = s3Presigner.presignGetObject(
+            GetObjectPresignRequest.builder()
+                .signatureDuration(duration)
+                .getObjectRequest(r -> r.bucket(storageProperties.getBucket()).key(storageKey))
+                .build());
+        return presigned.url().toString();
+    }
+
     public byte[] downloadBytes(String storageKey) {
         try {
             GetObjectRequest req = GetObjectRequest.builder()

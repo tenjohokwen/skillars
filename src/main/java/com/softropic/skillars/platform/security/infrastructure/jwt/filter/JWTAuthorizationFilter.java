@@ -1,8 +1,10 @@
 package com.softropic.skillars.platform.security.infrastructure.jwt.filter;
 
 
+import com.softropic.skillars.infrastructure.security.CookieUtil;
 import com.softropic.skillars.infrastructure.security.event.AuthenticationAction;
 import com.softropic.skillars.infrastructure.security.event.PreAuthEvent;
+import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.service.LoginTokenManager;
 import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.infrastructure.security.AuthorizationException;
@@ -25,11 +27,14 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.time.Instant;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+
+import static com.softropic.skillars.infrastructure.security.SecurityConstants.REFRESH_TOKEN_COOKIE;
 
 
 /**
@@ -56,13 +61,15 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
     private final LoginTokenManager loginTokenManager;
     private final SecurityUtil     securityUtil;
     private final Environment       env;
+    private final RefreshTokenRepository refreshTokenRepository;
 
     public JWTAuthorizationFilter(DaoAuthProvider daoAuthProvider,
                                   ApplicationEventPublisher applicationEventPublisher,
                                   SecuredHttpEndpointGuard httpEndpointGuard,
                                   LoginTokenManager loginTokenManager,
                                   SecurityUtil securityUtil,
-                                  Environment env
+                                  Environment env,
+                                  RefreshTokenRepository refreshTokenRepository
     ) {
         super();
         this.publisher = applicationEventPublisher;
@@ -71,6 +78,7 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
         this.loginTokenManager = loginTokenManager;
         this.securityUtil = securityUtil;
         this.env = env;
+        this.refreshTokenRepository = refreshTokenRepository;
     }
 
     @Override
@@ -119,12 +127,36 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
             loginTokenManager.renewLoginToken(res, (Principal) auth.getDetails());
         } else {
             final Principal principal = loginTokenManager.extractPrincipal(req);
-            var authorities = CollectionUtils.emptyIfNull(principal == null ? null : principal.getAuthorities());
-            daoAuthProvider.checkAuthorities(httpEndpointGuard.requiredAuthorities(req), authorities);
-            //Emulates HttpSession ttl extension in which each request renews the ttl by X minutes
-            // Just the ttl is extended. The dbRefreshToken is not touched.
-            //Once the db refresh token expires, a call to the db is done whereas it is not done here.
-            loginTokenManager.extendTtlOfToken(req, res);
+            // If the request carries a refresh-token cookie but all tokens for this user
+            // have been revoked (e.g. GDPR erasure, force-logout), skip the TTL extension
+            // and force a DB re-auth so the locked/deactivated state is detected immediately.
+            if (isRefreshTokenRevoked(req, principal)) {
+                final Authentication auth = daoAuthProvider.authorize(authentication,
+                                                                      httpEndpointGuard.requiredAuthorities(req));
+                loginTokenManager.renewLoginToken(res, (Principal) auth.getDetails());
+            } else {
+                var authorities = CollectionUtils.emptyIfNull(principal == null ? null : principal.getAuthorities());
+                daoAuthProvider.checkAuthorities(httpEndpointGuard.requiredAuthorities(req), authorities);
+                //Emulates HttpSession ttl extension in which each request renews the ttl by X minutes
+                // Just the ttl is extended. The dbRefreshToken is not touched.
+                //Once the db refresh token expires, a call to the db is done whereas it is not done here.
+                loginTokenManager.extendTtlOfToken(req, res);
+            }
+        }
+    }
+
+    private boolean isRefreshTokenRevoked(HttpServletRequest req, Principal principal) {
+        final String rtkn = CookieUtil.getCookieValue(req, REFRESH_TOKEN_COOKIE);
+        if (rtkn == null || rtkn.isBlank() || principal == null) {
+            return false;
+        }
+        try {
+            Long userId = Long.parseLong(principal.getBusinessId());
+            return refreshTokenRepository
+                    .findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(userId, Instant.now())
+                    .isEmpty();
+        } catch (NumberFormatException e) {
+            return false;
         }
     }
 

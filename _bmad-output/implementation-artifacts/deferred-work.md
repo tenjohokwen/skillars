@@ -658,3 +658,7 @@
 - D4: Instant.EPOCH as "never read" sentinel is undocumented — all messages with createdAt > epoch count as unread, which is correct for current data; fragile if a historical data migration backfills timestamps at or before epoch. [MessagingService.java:toSummary]
 - D5: Two separate Instant.now() calls in sendMessage — message.createdAt is captured before conv.lastMessageAt, creating a few-millisecond gap. Any consumer using lastMessageAt as a cursor may miss the just-sent message if createdAt < lastMessageAt. [MessagingService.java:sendMessage]
 - D6: Default role arm (else/default → "PLAYER") silently absorbs unknown or null role values across verifyIsParty, resolveLastReadAt, and updateLastRead. Safe while resolveRole() is the sole producer; add an explicit throw for unknown roles in a hardening pass. [MessagingService.java]
+
+## Deferred from: code review of skillars-10-4-gdpr-data-tools-account-deletion (2026-06-30)
+- D1: DB connection held during S3 upload — `GdprExportService.buildExport()` annotated `@Transactional` keeps a DB connection checked out from the pool for the entire ZIP build + S3 put. Resolved if Patch 1 (remove `@Transactional`) is applied; defer this entry only if Patch 1 is skipped. [GdprExportService.java:180]
+- D2: `.distinct()` on Booking list may silently no-op — if `Booking` entity doesn't override `equals()`/`hashCode()`, stream `.distinct()` uses object identity and won't deduplicate. Unlikely to manifest given role separation, but address in a JPA entity hygiene pass. [GdprExportService.java:250]

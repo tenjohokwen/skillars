@@ -14,4 +14,8 @@ public interface HomeworkCompletionRepository extends JpaRepository<HomeworkComp
 
     @Query("SELECT c.assignmentId FROM HomeworkCompletion c WHERE c.playerId = :playerId AND c.assignmentId IN :ids")
     Set<UUID> findAssignmentIdsByPlayerIdAndAssignmentIdIn(@Param("playerId") Long playerId, @Param("ids") Collection<UUID> ids);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("DELETE FROM HomeworkCompletion h WHERE h.playerId = :playerId")
+    int deleteAllByPlayerId(@Param("playerId") Long playerId);
 }

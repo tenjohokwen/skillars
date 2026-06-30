@@ -42,4 +42,12 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query(value = "DELETE FROM messaging.messages WHERE created_at < :cutoff", nativeQuery = true)
     int deleteExpiredMessages(@Param("cutoff") Instant cutoff);
+
+    // Deletes ALL messages by sender — including soft-deleted rows — for GDPR Article 17 erasure
+    @Modifying
+    @Query(value = "DELETE FROM messaging.messages WHERE sender_id = :senderId", nativeQuery = true)
+    int deleteAllBySenderId(@Param("senderId") Long senderId);
+
+    @Query("SELECT m FROM Message m WHERE m.senderId = :senderId AND m.deletedAt IS NULL ORDER BY m.createdAt ASC")
+    List<Message> findNonDeletedBySenderId(@Param("senderId") Long senderId);
 }

@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.development.repo;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -56,4 +57,10 @@ public interface RadarAssessmentRepository extends JpaRepository<RadarAssessment
         @Param("playerId") Long playerId,
         @Param("parentId") Long parentId,
         @Param("excludeCoachId") UUID excludeCoachId);
+
+    List<RadarAssessmentEntry> findByPlayerId(Long playerId);
+
+    @Modifying
+    @Query("DELETE FROM RadarAssessmentEntry r WHERE r.playerId = :playerId")
+    int deleteAllByPlayerId(@Param("playerId") Long playerId);
 }

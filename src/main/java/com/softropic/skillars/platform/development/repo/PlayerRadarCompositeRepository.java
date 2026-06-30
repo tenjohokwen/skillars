@@ -29,4 +29,8 @@ public interface PlayerRadarCompositeRepository extends JpaRepository<PlayerRada
         @Param("entryCount") int entryCount);
 
     List<PlayerRadarComposite> findByIdPlayerId(Long playerId);
+
+    @Modifying
+    @Query("DELETE FROM PlayerRadarComposite c WHERE c.id.playerId = :playerId")
+    int deleteAllByPlayerId(@Param("playerId") Long playerId);
 }

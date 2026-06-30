@@ -38,4 +38,8 @@ public interface SluTargetRepository
 
     @Query("SELECT DISTINCT t.id.playerId FROM PlayerSluTarget t")
     List<Long> findDistinctPlayerIds();
+
+    @Modifying
+    @Query("DELETE FROM PlayerSluTarget t WHERE t.id.playerId = :playerId")
+    int deleteAllByPlayerId(@Param("playerId") Long playerId);
 }

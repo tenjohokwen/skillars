@@ -39,4 +39,8 @@ public interface SluWeeklySnapshotRepository
     List<PlayerSluWeeklySnapshot> findByPlayerIdAndWeek(@Param("playerId") Long playerId,
                                                          @Param("isoYear") short isoYear,
                                                          @Param("isoWeek") short isoWeek);
+
+    @Modifying
+    @Query("DELETE FROM PlayerSluWeeklySnapshot s WHERE s.id.playerId = :playerId")
+    int deleteAllByPlayerId(@Param("playerId") Long playerId);
 }

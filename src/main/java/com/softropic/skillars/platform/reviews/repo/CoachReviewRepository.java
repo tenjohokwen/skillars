@@ -6,6 +6,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -45,4 +46,16 @@ public interface CoachReviewRepository extends JpaRepository<CoachReview, UUID> 
 
     Page<CoachReview> findByModerationStatusOrderByLastModifiedAtAsc(
         ReviewModerationStatus status, Pageable pageable);
+
+    List<CoachReview> findAllByAuthorId(Long authorId);
+
+    @Modifying
+    @Query("DELETE FROM CoachReview r WHERE r.authorId = :authorId AND r.moderationStatus <> :approved")
+    int deleteNonApprovedByAuthorId(@Param("authorId") Long authorId,
+                                    @Param("approved") ReviewModerationStatus approved);
+
+    // Sets author_id = 0 (sentinel for "deleted user") on APPROVED reviews — authorId is BIGINT, not UUID
+    @Modifying
+    @Query(value = "UPDATE reviews.coach_reviews SET author_id = 0 WHERE author_id = :authorId AND moderation_status = 'APPROVED'", nativeQuery = true)
+    int anonymiseApprovedReviews(@Param("authorId") Long authorId);
 }

@@ -26,4 +26,8 @@ public interface PlayerRadarBaselineRepository extends JpaRepository<PlayerRadar
         @Param("playerId") Long playerId,
         @Param("skillCode") String skillCode,
         @Param("baselineScore") BigDecimal baselineScore);
+
+    @Modifying
+    @Query("DELETE FROM PlayerRadarBaseline b WHERE b.id.playerId = :playerId")
+    int deleteAllByPlayerId(@Param("playerId") Long playerId);
 }
