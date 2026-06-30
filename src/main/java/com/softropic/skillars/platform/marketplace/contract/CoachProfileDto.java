@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.marketplace.contract;
 
+import com.softropic.skillars.platform.reviews.contract.ReviewListResponse;
+
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
@@ -21,7 +23,8 @@ public record CoachProfileDto(
     BigDecimal perSessionPrice,
     String currency,
     List<SessionPackDto> sessionPacks,
-    boolean available,            // true if coach has ≥1 availability window
+    boolean available,
     int reliabilityStrikeCount,
-    List<CoachMediaItemDto> mediaGallery
+    List<CoachMediaItemDto> mediaGallery,
+    ReviewListResponse reviews
 ) {}

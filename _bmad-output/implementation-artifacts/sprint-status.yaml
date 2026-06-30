@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-06-25 # Story 7.4 coach-player-subscription-tiers → ready-for-dev
+# last_updated: 2026-06-29 # Story 9.3 review-visibility-flagging-admin-resolution → review
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-06-29 # Story 9.2 review-moderation-rating-aggregation → done (7 review patches applied)
+last_updated: 2026-06-30 # Story 9.3 review-visibility-flagging-admin-resolution → in-progress (5 patches applied)
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -237,7 +237,7 @@ development_status:
   skillars-epic-9: in-progress
   skillars-9-1-review-submission-eligibility: in-progress
   skillars-9-2-review-moderation-rating-aggregation: done  # 7 review patches applied 2026-06-29
-  skillars-9-3-review-visibility-flagging-admin-resolution: backlog
+  skillars-9-3-review-visibility-flagging-admin-resolution: in-progress
   skillars-epic-9-retrospective: optional
 
   # Epic 10: Admin & Platform Safety

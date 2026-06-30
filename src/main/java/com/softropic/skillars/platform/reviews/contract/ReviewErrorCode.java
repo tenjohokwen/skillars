@@ -13,7 +13,11 @@ public enum ReviewErrorCode implements ErrorCode {
     RESPONSE_ALREADY_SUBMITTED("reviews.responseAlreadySubmitted"),
     COACH_MISMATCH("reviews.coachMismatch"),
     AUTHOR_MISMATCH("reviews.authorMismatch"),
-    AUTHOR_ROLE_NOT_ALLOWED("reviews.authorRoleNotAllowed");
+    AUTHOR_ROLE_NOT_ALLOWED("reviews.authorRoleNotAllowed"),
+    CANNOT_FLAG_OWN_REVIEW("reviews.cannotFlagOwnReview"),
+    CANNOT_FLAG_OWN_COACHED_REVIEW("reviews.cannotFlagOwnCoachedReview"),
+    ALREADY_FLAGGED("reviews.alreadyFlagged"),
+    REVIEW_NOT_FOUND("reviews.reviewNotFound");
 
     private final String code;
 

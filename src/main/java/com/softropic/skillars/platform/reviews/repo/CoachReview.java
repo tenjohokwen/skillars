@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.reviews.repo;
 
 import com.softropic.skillars.platform.reviews.contract.AuthorRole;
+import com.softropic.skillars.platform.reviews.contract.HeldReason;
 import com.softropic.skillars.platform.reviews.contract.ReviewModerationStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -48,6 +49,10 @@ public class CoachReview {
     @Enumerated(EnumType.STRING)
     @Column(name = "moderation_status", nullable = false, length = 15)
     private ReviewModerationStatus moderationStatus = ReviewModerationStatus.PENDING;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "held_reason", length = 20)
+    private HeldReason heldReason;
 
     @Column(name = "coach_response_body", length = 500)
     private String coachResponseBody;

@@ -28,12 +28,14 @@ public class ReviewApiAdvice {
         ErrorDto body = new ErrorDto(code, new ErrorMsg(code, ex.getMessage()));
         HttpStatus status;
         if (ReviewErrorCode.ALREADY_SUBMITTED.getErrorCode().equals(code)
-                || ReviewErrorCode.RESPONSE_ALREADY_SUBMITTED.getErrorCode().equals(code)) {
+                || ReviewErrorCode.RESPONSE_ALREADY_SUBMITTED.getErrorCode().equals(code)
+                || ReviewErrorCode.ALREADY_FLAGGED.getErrorCode().equals(code)) {
             status = HttpStatus.CONFLICT;
         } else if (ReviewErrorCode.BODY_TOO_LONG.getErrorCode().equals(code)
                 || ReviewErrorCode.RESPONSE_TOO_LONG.getErrorCode().equals(code)) {
             status = HttpStatus.BAD_REQUEST;
         } else {
+            // REVIEW_NOT_FOUND, CANNOT_FLAG_OWN_REVIEW, CANNOT_FLAG_OWN_COACHED_REVIEW → 403
             status = HttpStatus.FORBIDDEN;
         }
         return ResponseEntity.status(status).body(body);

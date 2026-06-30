@@ -282,7 +282,8 @@ public class CoachProfileService {
             sessionPacks,
             available,
             strikeCount,
-            mediaGallery
+            mediaGallery,
+            null  // reviews enriched at controller level to avoid circular service dependency
         );
     }
 

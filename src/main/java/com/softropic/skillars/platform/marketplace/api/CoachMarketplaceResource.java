@@ -7,6 +7,8 @@ import com.softropic.skillars.platform.marketplace.contract.CoachSearchResponse;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.marketplace.service.CoachSearchService;
+import com.softropic.skillars.platform.reviews.contract.ReviewListResponse;
+import com.softropic.skillars.platform.reviews.service.ReviewQueryService;
 import com.softropic.skillars.platform.security.contract.AgeTier;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import io.micrometer.observation.annotation.Observed;
@@ -37,6 +39,7 @@ public class CoachMarketplaceResource {
 
     private final CoachSearchService coachSearchService;
     private final CoachProfileService coachProfileService;
+    private final ReviewQueryService reviewQueryService;
     private final SecurityUtil securityUtil;
 
     @GetMapping
@@ -65,7 +68,16 @@ public class CoachMarketplaceResource {
     @Observed(name = "marketplace.profile")
     @PreAuthorize(SecurityConstants.IS_PERMIT_ALL)
     public ResponseEntity<CoachProfileDto> getCoachProfile(@PathVariable UUID coachId) {
-        return ResponseEntity.ok(coachProfileService.getPublicProfile(coachId));
+        CoachProfileDto base = coachProfileService.getPublicProfile(coachId);
+        ReviewListResponse reviews = reviewQueryService.getFirstPageForCoach(coachId);
+        return ResponseEntity.ok(new CoachProfileDto(
+            base.id(), base.displayName(), base.photoUrl(), base.verificationTier(),
+            base.capabilityBadges(), base.averageRating(), base.reviewCount(),
+            base.bio(), base.languages(), base.city(), base.district(),
+            base.specialties(), base.ageGroupsCoached(), base.perSessionPrice(),
+            base.currency(), base.sessionPacks(), base.available(),
+            base.reliabilityStrikeCount(), base.mediaGallery(),
+            reviews));
     }
 
     @GetMapping("/me/tier")

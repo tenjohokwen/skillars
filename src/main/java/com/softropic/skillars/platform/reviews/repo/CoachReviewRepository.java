@@ -40,4 +40,9 @@ public interface CoachReviewRepository extends JpaRepository<CoachReview, UUID> 
         UUID coachId, ReviewModerationStatus status, Pageable pageable);
 
     Page<CoachReview> findByCoachId(UUID coachId, Pageable pageable);
+
+    Optional<CoachReview> findByAuthorIdAndCoachId(Long authorId, UUID coachId);
+
+    Page<CoachReview> findByModerationStatusOrderByLastModifiedAtAsc(
+        ReviewModerationStatus status, Pageable pageable);
 }

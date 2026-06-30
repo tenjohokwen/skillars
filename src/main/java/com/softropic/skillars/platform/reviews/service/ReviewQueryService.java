@@ -1,10 +1,13 @@
 package com.softropic.skillars.platform.reviews.service;
 
+import com.softropic.skillars.platform.reviews.contract.AuthorReviewDto;
 import com.softropic.skillars.platform.reviews.contract.CoachOwnReviewDto;
 import com.softropic.skillars.platform.reviews.contract.CoachOwnReviewListResponse;
 import com.softropic.skillars.platform.reviews.contract.ReviewDto;
+import com.softropic.skillars.platform.reviews.contract.ReviewErrorCode;
 import com.softropic.skillars.platform.reviews.contract.ReviewListResponse;
 import com.softropic.skillars.platform.reviews.contract.ReviewModerationStatus;
+import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.reviews.repo.CoachReview;
 import com.softropic.skillars.platform.reviews.repo.CoachReviewRepository;
 import lombok.RequiredArgsConstructor;
@@ -64,6 +67,26 @@ public class ReviewQueryService {
         return new CoachOwnReviewListResponse(
             dtos, result.getNumber(), result.getTotalPages(),
             result.getTotalElements(), result.hasNext());
+    }
+
+    public AuthorReviewDto getAuthorReview(Long authorId, UUID coachId) {
+        CoachReview r = reviewRepository.findByAuthorIdAndCoachId(authorId, coachId)
+            .orElseThrow(() -> new OperationNotAllowedException(
+                "No review found for this author-coach pair", ReviewErrorCode.REVIEW_NOT_FOUND));
+        return new AuthorReviewDto(
+            r.getReviewId(),
+            r.getAuthorRole().name(),
+            r.getRating(),
+            r.getBody(),
+            r.getModerationStatus().name(),
+            r.getCoachResponseBody(),
+            r.getCoachResponseAt(),
+            r.getCreatedAt(),
+            r.getLastModifiedAt());
+    }
+
+    public ReviewListResponse getFirstPageForCoach(UUID coachId) {
+        return listApprovedReviews(coachId, 0, "newest");
     }
 
     private Sort resolvePublicSort(String sort) {

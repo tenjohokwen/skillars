@@ -2,11 +2,15 @@ package com.softropic.skillars.platform.reviews.api;
 
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
+import com.softropic.skillars.platform.reviews.contract.AuthorReviewDto;
 import com.softropic.skillars.platform.reviews.contract.CoachOwnReviewListResponse;
 import com.softropic.skillars.platform.reviews.contract.CoachResponseRequest;
+import com.softropic.skillars.platform.reviews.contract.ReviewFlagRequest;
+import com.softropic.skillars.platform.reviews.contract.ReviewFlagResponse;
 import com.softropic.skillars.platform.reviews.contract.ReviewListResponse;
 import com.softropic.skillars.platform.reviews.contract.SubmitReviewRequest;
 import com.softropic.skillars.platform.reviews.contract.SubmitReviewResponse;
+import com.softropic.skillars.platform.reviews.service.ReviewFlagService;
 import com.softropic.skillars.platform.reviews.service.ReviewQueryService;
 import com.softropic.skillars.platform.reviews.service.ReviewSubmissionService;
 import com.softropic.skillars.platform.security.contract.Principal;
@@ -30,6 +34,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
 
+import java.util.UUID;
+
 @RestController
 @RequestMapping("/api/reviews")
 @RequiredArgsConstructor
@@ -38,6 +44,7 @@ public class ReviewResource {
 
     private final ReviewSubmissionService reviewSubmissionService;
     private final ReviewQueryService reviewQueryService;
+    private final ReviewFlagService reviewFlagService;
     private final CoachProfileService coachProfileService;
     private final SecurityUtil securityUtil;
 
@@ -86,6 +93,25 @@ public class ReviewResource {
         Long userId = resolveUserId();
         reviewSubmissionService.updateReview(reviewId, userId, request.rating(), request.body());
         return ResponseEntity.noContent().build();
+    }
+
+    @GetMapping("/me/coaches/{coachId}")
+    @PreAuthorize(SecurityConstants.IS_AUTHENTICATED)
+    @Observed(name = "reviews.selfView")
+    public ResponseEntity<AuthorReviewDto> getMyReviewForCoach(@PathVariable UUID coachId) {
+        Long userId = resolveUserId();
+        return ResponseEntity.ok(reviewQueryService.getAuthorReview(userId, coachId));
+    }
+
+    @PostMapping("/{reviewId}/flag")
+    @PreAuthorize(SecurityConstants.IS_AUTHENTICATED)
+    @Observed(name = "reviews.flag")
+    public ResponseEntity<ReviewFlagResponse> flagReview(
+            @PathVariable UUID reviewId,
+            @Valid @RequestBody ReviewFlagRequest request) {
+        Long flaggedBy = resolveUserId();
+        UUID flagId = reviewFlagService.flag(reviewId, flaggedBy, request.reason(), request.details());
+        return ResponseEntity.status(HttpStatus.CREATED).body(new ReviewFlagResponse(flagId));
     }
 
     @PostMapping("/{reviewId}/response")

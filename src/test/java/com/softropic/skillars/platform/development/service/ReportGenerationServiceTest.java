@@ -83,7 +83,7 @@ class ReportGenerationServiceTest {
     private CoachProfileDto coachDto() {
         return new CoachProfileDto(COACH_ID, "Test Coach", null, "BASIC",
             List.of(), 0.0, 0, null, List.of(), null, null,
-            List.of(), List.of(), null, null, List.of(), false, 0, List.of());
+            List.of(), List.of(), null, null, List.of(), false, 0, List.of(), null);
     }
 
     private void stubGenerateReport(CoachSubscriptionTier tier) {

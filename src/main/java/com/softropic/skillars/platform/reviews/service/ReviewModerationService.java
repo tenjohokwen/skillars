@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.reviews.service;
 
 import com.softropic.skillars.infrastructure.gemini.GeminiClient;
 import com.softropic.skillars.platform.messaging.contract.ModerationVerdict;
+import com.softropic.skillars.platform.reviews.contract.HeldReason;
 import com.softropic.skillars.platform.reviews.contract.ReviewModerationStatus;
 import com.softropic.skillars.platform.reviews.contract.ReviewSubmittedEvent;
 import com.softropic.skillars.platform.reviews.repo.CoachReviewRepository;
@@ -54,6 +55,8 @@ public class ReviewModerationService {
 
         // Compute verdict outside any transaction (Gemini call must not hold a DB connection)
         ReviewModerationStatus status;
+        // Single-element array to pass geminiFailure flag into the lambda (Java lambda capture restriction)
+        boolean[] geminiFailure = { false };
         if (body == null || body.isBlank()) {
             status = ReviewModerationStatus.APPROVED;
         } else {
@@ -64,6 +67,7 @@ public class ReviewModerationService {
             } catch (Exception e) {
                 log.warn("Gemini moderation failed for reviewId={}: {}", reviewId, e.getMessage());
                 verdict = ModerationVerdict.UNCERTAIN;
+                geminiFailure[0] = true;
             }
             status = switch (verdict) {
                 case SAFE     -> ReviewModerationStatus.APPROVED;
@@ -78,6 +82,11 @@ public class ReviewModerationService {
                 reviewRepository.findById(reviewId).ifPresentOrElse(
                     review -> {
                         review.setModerationStatus(finalStatus);
+                        if (finalStatus == ReviewModerationStatus.UNDER_REVIEW) {
+                            review.setHeldReason(geminiFailure[0]
+                                ? HeldReason.GEMINI_FAILURE
+                                : HeldReason.GEMINI_UNCERTAIN);
+                        }
                         reviewRepository.save(review);
                     },
                     () -> log.warn("ReviewModerationService: review not found: {}", reviewId)
