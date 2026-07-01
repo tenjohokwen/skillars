@@ -7,7 +7,6 @@ import com.softropic.skillars.platform.filestorage.contract.SignDownloadResponse
 import com.softropic.skillars.platform.filestorage.contract.SignUploadRequest;
 import com.softropic.skillars.platform.filestorage.contract.SignUploadResponse;
 import com.softropic.skillars.platform.filestorage.service.FileStorageService;
-import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.servlet.http.HttpServletRequest;
@@ -44,8 +43,7 @@ public class StorageResource {
     public ResponseEntity<SignUploadResponse> signUpload(
         @RequestBody @Valid SignUploadRequest request) {
         if (OWNER_BOUND_ENTITIES.contains(request.entity())) {
-            String ownerId = ((Principal) securityUtil.getCurrentUser()).getBusinessId();
-            if (!ownerId.equals(request.entityId())) {
+            if (!securityUtil.requireCurrentBusinessId().equals(request.entityId())) {
                 throw new AccessDeniedException("entityId must match authenticated user");
             }
         }

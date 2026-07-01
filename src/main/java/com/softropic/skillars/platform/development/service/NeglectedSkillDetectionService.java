@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.development.service;
 
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.development.repo.SluTargetRepository;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -22,13 +23,25 @@ public class NeglectedSkillDetectionService {
     private final NeglectedSkillProcessor processor;
     private final ConfigService configService;
 
+    @PostConstruct
+    void validateThresholdOnStartup() {
+        BigDecimal threshold = readThreshold();
+        if (threshold == null || !isInValidRange(threshold)) {
+            log.warn("slu.neglected.threshold is out of valid range (0,1) or unreadable at startup: {} — "
+                + "neglected-skill detection will be skipped until corrected", threshold);
+        }
+    }
+
     @Scheduled(cron = "${app.development.neglected-detection-cron:0 0 6 * * MON}")
     public void detectNeglectedSkills() {
-        BigDecimal threshold;
-        try {
-            threshold = new BigDecimal(configService.getString("slu.neglected.threshold"));
-        } catch (IllegalStateException | NumberFormatException | NullPointerException e) {
-            log.error("Neglected skill detection aborted — invalid config: {}", e.getMessage());
+        BigDecimal threshold = readThreshold();
+        if (threshold == null) {
+            log.error("Neglected skill detection aborted — invalid or missing slu.neglected.threshold config");
+            return;
+        }
+        if (!isInValidRange(threshold)) {
+            log.error("Neglected skill detection aborted — slu.neglected.threshold {} is out of valid range (0,1)",
+                threshold);
             return;
         }
 
@@ -47,5 +60,18 @@ public class NeglectedSkillDetectionService {
                 log.error("Failed processing neglected skills for player={}: {}", playerId, e.getMessage(), e);
             }
         }
+    }
+
+    private BigDecimal readThreshold() {
+        try {
+            return new BigDecimal(configService.getString("slu.neglected.threshold"));
+        } catch (IllegalStateException | NumberFormatException | NullPointerException e) {
+            log.warn("slu.neglected.threshold is missing or malformed: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private boolean isInValidRange(BigDecimal threshold) {
+        return threshold.compareTo(BigDecimal.ZERO) > 0 && threshold.compareTo(BigDecimal.ONE) < 0;
     }
 }

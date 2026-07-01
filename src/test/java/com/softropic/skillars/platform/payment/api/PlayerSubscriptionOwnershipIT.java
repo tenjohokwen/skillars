@@ -84,6 +84,7 @@ class PlayerSubscriptionOwnershipIT {
         com.softropic.skillars.platform.security.contract.Principal principal = mock(com.softropic.skillars.platform.security.contract.Principal.class);
         when(principal.getBusinessId()).thenReturn(String.valueOf(PARENT_ID));
         when(securityUtil.getCurrentUser()).thenReturn(principal);
+        when(securityUtil.requireCurrentUserId()).thenReturn(PARENT_ID);
 
         Authentication auth = new UsernamePasswordAuthenticationToken(
             principal, null, List.of(new SimpleGrantedAuthority("ROLE_PARENT"))
@@ -140,6 +141,7 @@ class PlayerSubscriptionOwnershipIT {
         Principal principal = mock(Principal.class);
         when(principal.getBusinessId()).thenReturn(String.valueOf(parentId));
         when(securityUtil.getCurrentUser()).thenReturn(principal);
+        when(securityUtil.requireCurrentUserId()).thenReturn(parentId);
     }
 
     private void stubPlayerOwnedBy(long playerId, long parentId, boolean owned) {

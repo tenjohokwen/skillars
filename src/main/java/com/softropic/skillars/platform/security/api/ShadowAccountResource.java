@@ -3,7 +3,6 @@ package com.softropic.skillars.platform.security.api;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.contract.CreatePlayerProfileRequest;
 import com.softropic.skillars.platform.security.contract.PlayerProfileResponse;
-import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.contract.exception.ShadowAccountException;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.platform.security.service.ShadowAccountService;
@@ -36,7 +35,7 @@ public class ShadowAccountResource {
     public ResponseEntity<PlayerProfileResponse> createPlayerProfile(
         @RequestBody @Valid CreatePlayerProfileRequest request
     ) {
-        Long parentId = Long.parseLong(((Principal) securityUtil.getCurrentUser()).getBusinessId());
+        Long parentId = securityUtil.requireCurrentUserId();
         PlayerProfileResponse response = shadowAccountService.createPlayerProfile(parentId, request);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
@@ -44,14 +43,14 @@ public class ShadowAccountResource {
     @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
     @GetMapping
     public ResponseEntity<List<PlayerProfileResponse>> listPlayerProfiles() {
-        Long parentId = Long.parseLong(((Principal) securityUtil.getCurrentUser()).getBusinessId());
+        Long parentId = securityUtil.requireCurrentUserId();
         return ResponseEntity.ok(shadowAccountService.listPlayerProfiles(parentId));
     }
 
     @PreAuthorize("@playerOwnershipGuard.check(authentication, #playerId)")
     @GetMapping("/{playerId}")
     public ResponseEntity<PlayerProfileResponse> getPlayerProfile(@PathVariable Long playerId) {
-        Long parentId = Long.parseLong(((Principal) securityUtil.getCurrentUser()).getBusinessId());
+        Long parentId = securityUtil.requireCurrentUserId();
         return ResponseEntity.ok(shadowAccountService.getPlayerProfile(playerId, parentId));
     }
 

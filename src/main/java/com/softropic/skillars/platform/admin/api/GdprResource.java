@@ -3,7 +3,6 @@ package com.softropic.skillars.platform.admin.api;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.admin.contract.GdprRequestCreatedResponse;
 import com.softropic.skillars.platform.admin.service.GdprRequestService;
-import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import io.micrometer.observation.annotation.Observed;
 import lombok.RequiredArgsConstructor;
@@ -50,6 +49,6 @@ public class GdprResource {
     }
 
     private Long resolveCurrentUserId() {
-        return Long.parseLong(((Principal) securityUtil.getCurrentUser()).getBusinessId());
+        return securityUtil.requireCurrentUserId();
     }
 }

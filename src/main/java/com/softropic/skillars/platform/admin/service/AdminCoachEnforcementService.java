@@ -27,6 +27,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachReliabilityStrike;
 import com.softropic.skillars.platform.marketplace.repo.CoachReliabilityStrikeRepository;
 import com.softropic.skillars.platform.payment.repo.CoachCancellationHistoryRepository;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
+import com.softropic.skillars.platform.payment.service.ReliabilityStrikeConfig;
 import com.softropic.skillars.platform.payment.service.ReliabilityStrikeService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -209,7 +210,8 @@ public class AdminCoachEnforcementService {
         strikeRepository.deleteById(strikeId);
 
         long count = strikeRepository.countByCoachIdAndCreatedAtAfter(coachId, OffsetDateTime.now().minusDays(30));
-        long visibilityThreshold = Long.parseLong(configService.getString("reliability.strike.visibilityThreshold"));
+        long visibilityThreshold = configService.getBoundedLong(
+            ReliabilityStrikeConfig.VISIBILITY_THRESHOLD_KEY, ReliabilityStrikeConfig.DEFAULT_VISIBILITY_THRESHOLD, 1L, Long.MAX_VALUE);
 
         CoachProfile coach = coachProfileRepository.findById(coachId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));

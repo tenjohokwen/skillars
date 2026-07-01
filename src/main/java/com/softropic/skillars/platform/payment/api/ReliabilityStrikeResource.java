@@ -4,13 +4,11 @@ import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.marketplace.repo.CoachReliabilityStrike;
 import com.softropic.skillars.platform.payment.contract.ReliabilityStrikeResponse;
 import com.softropic.skillars.platform.payment.service.ReliabilityStrikeService;
-import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import io.micrometer.observation.annotation.Observed;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -53,14 +51,6 @@ public class ReliabilityStrikeResource {
     }
 
     private Long currentCoachUserId() {
-        String businessId = ((Principal) securityUtil.getCurrentUser()).getBusinessId();
-        if (businessId == null || businessId.isBlank()) {
-            throw new InsufficientAuthenticationException("Principal has no business ID");
-        }
-        try {
-            return Long.parseLong(businessId);
-        } catch (NumberFormatException e) {
-            throw new InsufficientAuthenticationException("Invalid business ID format in principal");
-        }
+        return securityUtil.requireCurrentUserId();
     }
 }

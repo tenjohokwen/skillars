@@ -3,7 +3,6 @@ package com.softropic.skillars.platform.video.api;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.infrastructure.jwt.JwtSecretService;
-import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.platform.video.contract.AccessState;
@@ -18,7 +17,7 @@ import com.softropic.skillars.platform.video.service.QuotaConfigService;
 import com.softropic.skillars.platform.video.service.VideoDeletionService;
 import com.softropic.skillars.platform.video.service.VideoMetrics;
 import com.softropic.skillars.platform.video.service.VideoService;
-import jakarta.servlet.http.HttpServletResponse;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -34,10 +33,10 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
+
+import jakarta.servlet.http.HttpServletResponse;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -184,6 +183,7 @@ class VideoListQuotaResourceIT {
         Principal principal = mock(Principal.class);
         when(principal.getBusinessId()).thenReturn(String.valueOf(playerId));
         when(securityUtil.getCurrentUser()).thenReturn(principal);
+        when(securityUtil.requireCurrentUserId()).thenReturn(playerId);
         when(securityUtil.isCurrentUserInRole(anyString())).thenReturn(false);
     }
 

@@ -3,7 +3,6 @@ package com.softropic.skillars.platform.video.api;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
-import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
@@ -28,7 +27,6 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -176,22 +174,10 @@ public class VideoResource {
             }
         }
         // Player path: businessId = PlayerProfile.id (Long TSID) as String
-        String businessId = ((Principal) securityUtil.getCurrentUser()).getBusinessId();
-        if (businessId == null || businessId.isBlank()) {
-            throw new InsufficientAuthenticationException("Principal has no business ID");
-        }
-        return businessId;
+        return String.valueOf(securityUtil.requireCurrentUserId());
     }
 
     private Long currentPlayerProfileId() {
-        String businessId = ((Principal) securityUtil.getCurrentUser()).getBusinessId();
-        if (businessId == null || businessId.isBlank()) {
-            throw new InsufficientAuthenticationException("Principal has no business ID");
-        }
-        try {
-            return Long.parseLong(businessId);
-        } catch (NumberFormatException e) {
-            throw new InsufficientAuthenticationException("Invalid player business ID format in principal");
-        }
+        return securityUtil.requireCurrentUserId();
     }
 }

@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-06-30 # Story 10.4 gdpr-data-tools-account-deletion review patches applied
+last_updated: 2026-07-01 # skillars-deferred-1 code review complete, patches applied, status done
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -235,9 +235,9 @@ development_status:
 
   # Epic 9: Reviews & Ratings
   skillars-epic-9: in-progress
-  skillars-9-1-review-submission-eligibility: in-progress
+  skillars-9-1-review-submission-eligibility: done
   skillars-9-2-review-moderation-rating-aggregation: done  # 7 review patches applied 2026-06-29
-  skillars-9-3-review-visibility-flagging-admin-resolution: in-progress
+  skillars-9-3-review-visibility-flagging-admin-resolution: done
   skillars-epic-9-retrospective: optional
 
   # Epic 10: Admin & Platform Safety
@@ -245,5 +245,41 @@ development_status:
   skillars-10-1-admin-moderation-queue-message-content-actions: done  # 3 review patches applied 2026-06-30
   skillars-10-2-coach-enforcement-strike-management: done  # 5 review patches applied 2026-06-30
   skillars-10-3-dispute-resolution: done  # 9 review patches applied 2026-06-30
-  skillars-10-4-gdpr-data-tools-account-deletion: in-progress
+  skillars-10-4-gdpr-data-tools-account-deletion: done
   skillars-epic-10-retrospective: optional
+
+  # ================================================================
+  # DEFERRED WORK
+  # Stories created: 2026-07-01
+  # Source: _bmad-output/implementation-artifacts/deferred-work.md
+  # ================================================================
+
+  # Deferred 1: Config Access & SecurityUtil Hardening
+  skillars-deferred-1-config-securityutil-hardening: done
+
+  # Deferred 2: Email Reliability Hardening
+  skillars-deferred-2-email-reliability: backlog
+
+  # Deferred 3: DB Schema Hardening
+  skillars-deferred-3-db-schema-hardening: backlog
+
+  # Deferred 4: Payment Resilience & Scheduler Distributed Locking
+  skillars-deferred-4-payment-resilience-shedlock: backlog
+
+  # Deferred 5: Platform Security — Coach-Player Authorization
+  skillars-deferred-5-coach-player-authorization: backlog
+
+  # Deferred 6: Video Module Hardening
+  skillars-deferred-6-video-module-hardening: backlog
+
+  # Deferred 7: Messaging Retention, Abuse Report Protection & Gemini Hardening
+  skillars-deferred-7-messaging-retention-gemini: backlog
+
+  # Deferred 8: Test Coverage Gaps
+  skillars-deferred-8-test-coverage-gaps: backlog
+
+  # Deferred 9: Frontend UX Polish
+  skillars-deferred-9-frontend-ux-polish: backlog
+
+  # Deferred 10: CI/CD & Deployment Hardening
+  skillars-deferred-10-cicd-deployment-hardening: backlog

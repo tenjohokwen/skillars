@@ -41,8 +41,10 @@ public class ReliabilityStrikeService {
         CoachReliabilityStrike saved = strikeRepository.save(strike);
 
         long count = strikeRepository.countByCoachIdAndCreatedAtAfter(coachId, OffsetDateTime.now().minusDays(30));
-        long suspensionThreshold = Long.parseLong(configService.getString("reliability.strike.suspensionThreshold"));
-        long visibilityThreshold = Long.parseLong(configService.getString("reliability.strike.visibilityThreshold"));
+        long suspensionThreshold = configService.getBoundedLong(
+            ReliabilityStrikeConfig.SUSPENSION_THRESHOLD_KEY, ReliabilityStrikeConfig.DEFAULT_SUSPENSION_THRESHOLD, 1L, Long.MAX_VALUE);
+        long visibilityThreshold = configService.getBoundedLong(
+            ReliabilityStrikeConfig.VISIBILITY_THRESHOLD_KEY, ReliabilityStrikeConfig.DEFAULT_VISIBILITY_THRESHOLD, 1L, Long.MAX_VALUE);
 
         CoachProfile coach = coachProfileRepository.findById(coachId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach not found", "coach_profile"));

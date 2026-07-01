@@ -181,5 +181,6 @@ class PlayerUploadResourceIT {
         Principal principal = mock(Principal.class);
         when(principal.getBusinessId()).thenReturn(String.valueOf(playerId));
         when(securityUtil.getCurrentUser()).thenReturn(principal);
+        when(securityUtil.requireCurrentUserId()).thenReturn(playerId);
     }
 }

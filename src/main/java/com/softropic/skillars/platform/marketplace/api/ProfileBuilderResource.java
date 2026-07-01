@@ -9,7 +9,6 @@ import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep4R
 import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep5Request;
 import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStepResponse;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
-import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.Valid;
@@ -82,6 +81,6 @@ public class ProfileBuilderResource {
     }
 
     private Long currentUserId() {
-        return Long.parseLong(((Principal) securityUtil.getCurrentUser()).getBusinessId());
+        return securityUtil.requireCurrentUserId();
     }
 }

@@ -24,6 +24,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -46,8 +47,8 @@ class ReliabilityStrikeServiceTest {
 
     @BeforeEach
     void setUp() {
-        when(configService.getString("reliability.strike.visibilityThreshold")).thenReturn("3");
-        when(configService.getString("reliability.strike.suspensionThreshold")).thenReturn("5");
+        when(configService.getBoundedLong(eq("reliability.strike.visibilityThreshold"), anyLong(), anyLong(), anyLong())).thenReturn(3L);
+        when(configService.getBoundedLong(eq("reliability.strike.suspensionThreshold"), anyLong(), anyLong(), anyLong())).thenReturn(5L);
         coach = new CoachProfile();
         coach.setId(COACH_ID);
         coach.setUserId(9001L);

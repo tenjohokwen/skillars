@@ -8,9 +8,7 @@ import com.softropic.skillars.platform.booking.contract.CreateBlockRequest;
 import com.softropic.skillars.platform.booking.contract.CreateWindowRequest;
 import com.softropic.skillars.platform.booking.contract.UpdateWindowRequest;
 import com.softropic.skillars.platform.booking.service.AvailabilityService;
-import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
-import org.springframework.security.authentication.InsufficientAuthenticationException;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -87,14 +85,6 @@ public class AvailabilityResource {
     }
 
     private Long currentUserId() {
-        String businessId = ((Principal) securityUtil.getCurrentUser()).getBusinessId();
-        if (businessId == null || businessId.isBlank()) {
-            throw new InsufficientAuthenticationException("Principal has no business ID");
-        }
-        try {
-            return Long.parseLong(businessId);
-        } catch (NumberFormatException e) {
-            throw new InsufficientAuthenticationException("Invalid business ID in principal: " + businessId);
-        }
+        return securityUtil.requireCurrentUserId();
     }
 }

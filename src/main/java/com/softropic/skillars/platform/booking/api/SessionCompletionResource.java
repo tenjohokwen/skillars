@@ -3,7 +3,6 @@ package com.softropic.skillars.platform.booking.api;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.booking.contract.WrapUpRequest;
 import com.softropic.skillars.platform.booking.service.BookingCompletionService;
-import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.platform.session.contract.DrillResponse;
 import com.softropic.skillars.platform.session.repo.SessionRepository;
@@ -16,7 +15,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -106,14 +104,6 @@ public class SessionCompletionResource {
     }
 
     private Long currentUserId() {
-        String businessId = ((Principal) securityUtil.getCurrentUser()).getBusinessId();
-        if (businessId == null || businessId.isBlank()) {
-            throw new InsufficientAuthenticationException("Principal has no business ID");
-        }
-        try {
-            return Long.parseLong(businessId);
-        } catch (NumberFormatException e) {
-            throw new InsufficientAuthenticationException("Invalid business ID format in principal");
-        }
+        return securityUtil.requireCurrentUserId();
     }
 }

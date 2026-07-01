@@ -11,14 +11,12 @@ import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.platform.booking.service.ProjectedRevenueService;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
-import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import io.micrometer.observation.annotation.Observed;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -77,14 +75,6 @@ public class ScheduleResource {
     }
 
     private Long resolveCurrentUserId() {
-        String businessId = ((Principal) securityUtil.getCurrentUser()).getBusinessId();
-        if (businessId == null || businessId.isBlank()) {
-            throw new InsufficientAuthenticationException("User ID not found in security context");
-        }
-        try {
-            return Long.parseLong(businessId);
-        } catch (NumberFormatException e) {
-            throw new InsufficientAuthenticationException("Invalid user identity in security context");
-        }
+        return securityUtil.requireCurrentUserId();
     }
 }

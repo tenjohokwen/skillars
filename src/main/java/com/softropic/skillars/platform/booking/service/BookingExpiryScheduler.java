@@ -26,6 +26,8 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class BookingExpiryScheduler {
 
+    private static final long MAX_WINDOW_HOURS = 24L * 365; // 1 year — guards against Duration.ofHours overflow
+
     private final BookingRepository bookingRepository;
     private final BookingService bookingService;
     private final ApplicationEventPublisher eventPublisher;
@@ -36,7 +38,7 @@ public class BookingExpiryScheduler {
     @Scheduled(fixedDelay = 5, timeUnit = TimeUnit.MINUTES)
     @Transactional
     public void expireStaleRequests() {
-        long expiryHours = configService.getLong("booking.request_expiry_hours");
+        long expiryHours = configService.getBoundedLong("booking.request_expiry_hours", 48L, 1L, MAX_WINDOW_HOURS);
         Instant threshold = Instant.now().minus(Duration.ofHours(expiryHours));
         List<Booking> stale = bookingRepository.findRequestedBookingsOlderThan(threshold);
         for (Booking booking : stale) {

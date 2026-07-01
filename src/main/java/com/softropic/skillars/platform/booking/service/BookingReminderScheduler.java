@@ -29,6 +29,8 @@ import java.util.stream.Collectors;
 @Slf4j
 public class BookingReminderScheduler {
 
+    private static final long MAX_WINDOW_HOURS = 24L * 365; // 1 year — guards against Duration.ofHours overflow
+
     private final BookingRepository bookingRepository;
     private final BookingService bookingService;
     private final ApplicationEventPublisher eventPublisher;
@@ -39,8 +41,8 @@ public class BookingReminderScheduler {
     @Scheduled(fixedDelay = 5, timeUnit = TimeUnit.MINUTES)
     @Transactional
     public void processReminderWindows() {
-        long primaryHours = configService.getLong("platform.reminder_interval_primary_hours");
-        long secondaryHours = configService.getLong("platform.reminder_interval_secondary_hours");
+        long primaryHours = configService.getBoundedLong("platform.reminder_interval_primary_hours", 24L, 1L, MAX_WINDOW_HOURS);
+        long secondaryHours = configService.getBoundedLong("platform.reminder_interval_secondary_hours", 2L, 1L, MAX_WINDOW_HOURS);
         Instant now = Instant.now();
 
         Instant primaryWindowEnd = now.plus(Duration.ofHours(primaryHours));

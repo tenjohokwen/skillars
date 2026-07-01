@@ -68,17 +68,39 @@ public class ConfigService {
     }
 
     public long getLong(String key, long defaultValue) {
-        return find(key).map(v -> {
-            try { return Long.parseLong(v); }
-            catch (NumberFormatException e) {
-                log.warn("Config key '{}' is not a valid long '{}'; using default {}", key, v, defaultValue);
+        return find(key)
+            .filter(v -> !v.isBlank())
+            .map(v -> {
+                try { return Long.parseLong(v.trim()); }
+                catch (NumberFormatException e) {
+                    log.warn("Config key '{}' has non-numeric value '{}' — using default {}", key, v, defaultValue);
+                    return defaultValue;
+                }
+            })
+            .orElseGet(() -> {
+                log.warn("Config key '{}' is absent or blank — using default {}", key, defaultValue);
                 return defaultValue;
-            }
-        }).orElse(defaultValue);
+            });
     }
 
     public int getInt(String key, int defaultValue) {
         return (int) getLong(key, defaultValue);
+    }
+
+    /**
+     * Like {@link #getLong(String, long)}, but also rejects values outside [min, max],
+     * falling back to {@code defaultValue} with a WARN log. Use for config keys where a
+     * syntactically valid but out-of-range number (negative, zero, or absurdly large) would
+     * silently corrupt scheduler or business-rule behaviour.
+     */
+    public long getBoundedLong(String key, long defaultValue, long min, long max) {
+        long value = getLong(key, defaultValue);
+        if (value < min || value > max) {
+            log.warn("Config key '{}' has out-of-range value {} (expected [{}, {}]) — using default {}",
+                key, value, min, max, defaultValue);
+            return defaultValue;
+        }
+        return value;
     }
 
     public boolean getBoolean(String key) {

@@ -45,7 +45,6 @@ import java.time.Instant;
 import java.util.Optional;
 
 import com.softropic.skillars.platform.security.service.SecurityUtil;
-import com.softropic.skillars.platform.security.contract.Principal;
 
 @Slf4j
 @Service
@@ -67,7 +66,7 @@ public class FileStorageService {
     private final SecurityUtil securityUtil;
 
     private String getOwnerId() {
-        return ((Principal) securityUtil.getCurrentUser()).getBusinessId();
+        return securityUtil.requireCurrentBusinessId();
     }
 
     public SignUploadResponse signUpload(SignUploadRequest request) {

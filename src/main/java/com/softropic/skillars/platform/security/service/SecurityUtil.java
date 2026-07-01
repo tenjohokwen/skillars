@@ -159,6 +159,43 @@ public final class SecurityUtil {
         return authentication;
     }
 
+    /**
+     * Safely resolves the current authenticated user's business ID.
+     *
+     * @return the current user's business ID
+     * @throws InsufficientAuthenticationException if the current principal is not a
+     *         {@link Principal} or its business ID is not a valid numeric ID
+     */
+    public Long requireCurrentUserId() {
+        Object principal = getCurrentUser();
+        if (!(principal instanceof Principal p)) {
+            throw new InsufficientAuthenticationException("Unexpected security principal type");
+        }
+        try {
+            return Long.parseLong(p.getBusinessId());
+        } catch (NumberFormatException e) {
+            throw new InsufficientAuthenticationException("Principal businessId is not a valid user ID");
+        }
+    }
+
+    /**
+     * Safely resolves the current authenticated user's raw business ID, without requiring it
+     * to be numeric. Use this instead of {@link #requireCurrentUserId()} when the business ID
+     * is compared/stored as an opaque owner key rather than parsed as a user ID (e.g. file
+     * storage ownership, which also accepts non-numeric owner keys like tenant identifiers).
+     *
+     * @return the current user's raw business ID
+     * @throws InsufficientAuthenticationException if the current principal is not a
+     *         {@link Principal} or has no business ID
+     */
+    public String requireCurrentBusinessId() {
+        Object principal = getCurrentUser();
+        if (!(principal instanceof Principal p) || p.getBusinessId() == null || p.getBusinessId().isBlank()) {
+            throw new InsufficientAuthenticationException("Unexpected security principal type or missing business ID");
+        }
+        return p.getBusinessId();
+    }
+
     public Long getCurrentCoachUserId() {
         User user = getCurrentUser();
         if (!(user instanceof Principal principal) || principal.getBusinessId() == null || principal.getBusinessId().isBlank()) {

@@ -195,6 +195,7 @@ class VideoApprovalResourceIT {
         Principal principal = org.mockito.Mockito.mock(Principal.class);
         when(principal.getBusinessId()).thenReturn(String.valueOf(parentId));
         when(securityUtil.getCurrentUser()).thenReturn(principal);
+        when(securityUtil.requireCurrentUserId()).thenReturn(parentId);
     }
 
     private com.softropic.skillars.platform.video.repo.VideoApprovalRequest stubApprovalRequest() {
