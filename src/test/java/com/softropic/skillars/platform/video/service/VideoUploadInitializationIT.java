@@ -14,6 +14,7 @@ import com.softropic.skillars.platform.video.repo.UploadSession;
 import com.softropic.skillars.platform.video.repo.UploadSessionRepository;
 import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
@@ -21,6 +22,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -58,6 +60,21 @@ class VideoUploadInitializationIT extends BaseVideoIT {
         when(videoProviderAdapter.initializeUpload(anyString(), anyLong()))
             .thenReturn(new UploadCredentials("test-asset-guid-123",
                 "https://video.bunnycdn.com/tusupload", "test-tus-sig", 9_999_999_999L, 12345L));
+    }
+
+    @AfterEach
+    void tearDownVideos() {
+        // provider_asset_id is now unique (V77); each test's video rows must not leak into the next.
+        // Scoped to this class's owner_id prefixes (not a blanket delete) to avoid touching unrelated rows.
+        // Hikari auto-commit is disabled project-wide, so this must run inside transactionTemplate — bare
+        // jdbcTemplate calls here never commit and silently leave rows behind.
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "DELETE FROM main.upload_sessions WHERE video_id IN (" +
+                "SELECT id FROM main.videos WHERE owner_id LIKE 'owner-%' OR owner_id LIKE 'nfr-owner-%')");
+            jdbcTemplate.update("DELETE FROM main.videos WHERE owner_id LIKE 'owner-%' OR owner_id LIKE 'nfr-owner-%'");
+            return null;
+        });
     }
 
     @Test
@@ -122,6 +139,11 @@ class VideoUploadInitializationIT extends BaseVideoIT {
     void nfr1_99thPercentileUnder500ms() {
         int callCount = 100;
         long[] latenciesNs = new long[callCount];
+        AtomicInteger assetIdSeq = new AtomicInteger();
+        when(videoProviderAdapter.initializeUpload(anyString(), anyLong()))
+            .thenAnswer(invocation -> new UploadCredentials("nfr-asset-guid-" + assetIdSeq.getAndIncrement(),
+                "https://video.bunnycdn.com/tusupload", "test-tus-sig", 9_999_999_999L, 12345L));
+
         for (int i = 0; i < callCount; i++) {
             long start = System.nanoTime();
             videoService.initializeUpload(

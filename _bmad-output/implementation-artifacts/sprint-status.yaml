@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-07-01 # skillars-deferred-2 email reliability hardening — code review complete, status done
+last_updated: 2026-07-01 # skillars-deferred-3 db schema hardening — code review complete, status done
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -261,7 +261,7 @@ development_status:
   skillars-deferred-2-email-reliability: done
 
   # Deferred 3: DB Schema Hardening
-  skillars-deferred-3-db-schema-hardening: backlog
+  skillars-deferred-3-db-schema-hardening: done
 
   # Deferred 4: Payment Resilience & Scheduler Distributed Locking
   skillars-deferred-4-payment-resilience-shedlock: backlog

@@ -674,3 +674,9 @@
 
 ## Deferred from: code review of skillars-deferred-2 (2026-07-01)
 - D1: `BookingExpiredEvent`/`BookingReminderEvent`/`BookingConfirmedEvent` constructors are invoked positionally with 6-8 raw same-typed arguments across new test files — pre-existing lack of a builder on these event classes; a future field reorder could silently miscompile or swap same-typed fields with no test catching it. [`src/main/java/com/softropic/skillars/platform/booking/contract/`]
+
+## Deferred from: code review of skillars-deferred-3 (2026-07-01)
+- D1: V76 partial index predicate hardcodes status literals (`'EXHAUSTED', 'EXPIRED'`) with no in-diff verification against the full status enum — a future added status could silently fall inside the "active" partial index instead of being excluded. [`src/main/resources/db/migration/V76__missing_indexes.sql`]
+- D2: No test verifies NULL `provider_asset_id` videos can coexist, the actual rationale for the new partial unique index; a regression turning it into a full unique index would pass current tests undetected. [`src/test/java/com/softropic/skillars/platform/video/repo/VideoRepositoryIT.java`]
+- D3: Concurrency test `deployTemplateTwiceForSameBooking_secondFails` masks `barrier.await()` failures (`catch (Exception ignored) {}`) and accepts both the pre-check 403 and DB-race 409 as valid outcomes, so it can pass without ever exercising the new `uq_sessions_booking_id` race path. [`src/test/java/com/softropic/skillars/platform/session/api/SessionTemplateResourceIT.java`]
+- D4: Story task list (Task 3) still references the old filename `V78__drill_dedup_session_booking_unique.sql`; only the Completion Notes File List reflects the actual `V78__drill_dedup_unique.sql`. [`_bmad-output/implementation-artifacts/skillars-deferred-3.md`]

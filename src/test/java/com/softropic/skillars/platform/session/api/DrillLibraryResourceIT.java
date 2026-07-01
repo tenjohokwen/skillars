@@ -53,6 +53,8 @@ class DrillLibraryResourceIT extends BaseSessionIT {
     private UUID platformDrillId;
     private UUID anotherCoachDrillId;
     private UUID archivedDrillId;
+    private UUID sameNamePlatformDrillIdA;
+    private UUID sameNamePlatformDrillIdB;
 
     @BeforeEach
     void setUp() {
@@ -131,7 +133,8 @@ class DrillLibraryResourceIT extends BaseSessionIT {
                 coachProfileId, coachProfileId2, scoutCoachProfileId, instructorCoachProfileId);
             jdbcTemplate.update("DELETE FROM session.drills WHERE owner_coach_id IN (?, ?, ?, ?)",
                 coachProfileId, coachProfileId2, scoutCoachProfileId, instructorCoachProfileId);
-            jdbcTemplate.update("DELETE FROM session.drills WHERE id IN (?, ?)", anotherCoachDrillId, archivedDrillId);
+            jdbcTemplate.update("DELETE FROM session.drills WHERE id IN (?, ?, ?, ?)",
+                anotherCoachDrillId, archivedDrillId, sameNamePlatformDrillIdA, sameNamePlatformDrillIdB);
             jdbcTemplate.update("DELETE FROM marketplace.coach_subscriptions WHERE coach_id IN (?, ?, ?, ?)",
                 coachProfileId, coachProfileId2, scoutCoachProfileId, instructorCoachProfileId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id IN (?, ?, ?, ?)",
@@ -270,6 +273,74 @@ class DrillLibraryResourceIT extends BaseSessionIT {
         ))
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    // ── POST clone twice — duplicate private drill name returns 409 ──────────
+
+    @Test
+    void cloneSameDrillTwice_returns409() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+
+        ResponseEntity<Map> firstClone = httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE + "/" + platformDrillId + "/clone",
+            HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class
+        );
+        assertThat(firstClone.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE + "/" + platformDrillId + "/clone",
+            HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    // ── POST clone two different drills sharing a name — duplicate private drill name returns 409 ──
+
+    @Test
+    void cloneTwoDifferentDrillsWithSameName_secondReturns409() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+
+        // Two distinct PLATFORM drills sharing the same name — exercises idx_drills_coach_name_unique
+        // (AC 5's "two different source drills cloned to the same name" case), which is a narrower
+        // scenario than cloning the same drill twice (that hits the pre-existing idx_drills_clone_uniqueness).
+        // Scoped to this test only (not setUp()) so it doesn't inflate the platform-drill count other tests assert on.
+        transactionTemplate.execute(status -> {
+            sameNamePlatformDrillIdA = UUID.randomUUID();
+            jdbcTemplate.update(
+                "INSERT INTO session.drills (id, name, library_type, owner_coach_id, status, metadata, version) " +
+                "VALUES (?, 'Duplicate Name Drill', 'PLATFORM', NULL, 'ACTIVE', ?::jsonb, 0)",
+                sameNamePlatformDrillIdA,
+                "{\"primarySkills\":[\"passing\"],\"secondarySkills\":[],\"skillWeighting\":{\"passing\":100}," +
+                "\"repDensity\":10,\"intensity\":2,\"pressureLevel\":1,\"cognitiveLoad\":1,\"matchRealism\":2," +
+                "\"weakFootBias\":false,\"difficultyTier\":\"U12\",\"equipmentRequired\":[\"ball\"]," +
+                "\"recommendedGroupSize\":\"2\",\"coachingPoints\":[\"Pass early\"]}"
+            );
+            sameNamePlatformDrillIdB = UUID.randomUUID();
+            jdbcTemplate.update(
+                "INSERT INTO session.drills (id, name, library_type, owner_coach_id, status, metadata, version) " +
+                "VALUES (?, 'Duplicate Name Drill', 'PLATFORM', NULL, 'ACTIVE', ?::jsonb, 0)",
+                sameNamePlatformDrillIdB,
+                "{\"primarySkills\":[\"shooting\"],\"secondarySkills\":[],\"skillWeighting\":{\"shooting\":100}," +
+                "\"repDensity\":10,\"intensity\":2,\"pressureLevel\":1,\"cognitiveLoad\":1,\"matchRealism\":2," +
+                "\"weakFootBias\":false,\"difficultyTier\":\"U12\",\"equipmentRequired\":[\"ball\"]," +
+                "\"recommendedGroupSize\":\"2\",\"coachingPoints\":[\"Shoot often\"]}"
+            );
+            return null;
+        });
+
+        ResponseEntity<Map> firstClone = httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE + "/" + sameNamePlatformDrillIdA + "/clone",
+            HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class
+        );
+        assertThat(firstClone.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE + "/" + sameNamePlatformDrillIdB + "/clone",
+            HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
     }
 
     // ── GET /api/session/drills as parent returns 403 ────────────────────────

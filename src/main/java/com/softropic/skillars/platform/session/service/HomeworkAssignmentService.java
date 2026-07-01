@@ -14,6 +14,8 @@ import com.softropic.skillars.platform.session.repo.HomeworkAssignmentRepository
 import com.softropic.skillars.platform.session.repo.HomeworkCompletion;
 import com.softropic.skillars.platform.session.repo.HomeworkCompletionRepository;
 import com.softropic.skillars.platform.session.repo.SessionRepository;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -28,6 +30,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Service
@@ -43,6 +46,9 @@ public class HomeworkAssignmentService {
     private final SessionPackService sessionPackService;
     private final CoachProfileService coachProfileService;
     private final PlayerProfileRepository playerProfileRepository;
+    private final MeterRegistry meterRegistry;
+
+    private static final String LOCKER_ROOM_DRILLS_LATENCY = "session.homework.locker_room_drills.latency";
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Async
@@ -80,44 +86,61 @@ public class HomeworkAssignmentService {
 
     @Transactional(readOnly = true)
     public List<HomeworkAssignmentResponse> getLockerRoomDrills(Long playerId) {
-        List<HomeworkAssignment> all = homeworkAssignmentRepository.findByPlayerIdOrderByAssignedAtDesc(playerId);
-        if (all.isEmpty()) return List.of();
+        long start = System.nanoTime();
+        boolean success = false;
+        try {
+            List<HomeworkAssignment> all = homeworkAssignmentRepository.findByPlayerIdOrderByAssignedAtDesc(playerId);
+            if (all.isEmpty()) {
+                success = true;
+                return List.of();
+            }
 
-        Set<UUID> activeCoachIds = all.stream()
-            .map(HomeworkAssignment::getCoachId)
-            .collect(Collectors.toSet())
-            .stream()
-            .filter(coachId -> sessionPackService.hasActivePack(playerId, coachId))
-            .collect(Collectors.toSet());
+            Set<UUID> activeCoachIds = all.stream()
+                .map(HomeworkAssignment::getCoachId)
+                .collect(Collectors.toSet())
+                .stream()
+                .filter(coachId -> sessionPackService.hasActivePack(playerId, coachId))
+                .collect(Collectors.toSet());
 
-        List<HomeworkAssignment> active = all.stream()
-            .filter(a -> activeCoachIds.contains(a.getCoachId()))
-            .collect(Collectors.toList());
+            List<HomeworkAssignment> active = all.stream()
+                .filter(a -> activeCoachIds.contains(a.getCoachId()))
+                .collect(Collectors.toList());
 
-        if (active.isEmpty()) return List.of();
+            if (active.isEmpty()) {
+                success = true;
+                return List.of();
+            }
 
-        Set<UUID> drillIds = active.stream().map(HomeworkAssignment::getDrillId).collect(Collectors.toSet());
-        Map<UUID, Drill> drillMap = drillRepository.findAllById(drillIds).stream()
-            .collect(Collectors.toMap(Drill::getId, d -> d));
+            Set<UUID> drillIds = active.stream().map(HomeworkAssignment::getDrillId).collect(Collectors.toSet());
+            Map<UUID, Drill> drillMap = drillRepository.findAllById(drillIds).stream()
+                .collect(Collectors.toMap(Drill::getId, d -> d));
 
-        Set<UUID> coachIds = active.stream().map(HomeworkAssignment::getCoachId).collect(Collectors.toSet());
-        Map<UUID, String> coachNameMap = coachProfileService.getDisplayNamesByIds(coachIds);
+            Set<UUID> coachIds = active.stream().map(HomeworkAssignment::getCoachId).collect(Collectors.toSet());
+            Map<UUID, String> coachNameMap = coachProfileService.getDisplayNamesByIds(coachIds);
 
-        Set<UUID> assignmentIds = active.stream().map(HomeworkAssignment::getId).collect(Collectors.toSet());
-        Set<UUID> completedIds = assignmentIds.isEmpty() ? Set.of()
-            : homeworkCompletionRepository.findAssignmentIdsByPlayerIdAndAssignmentIdIn(playerId, assignmentIds);
+            Set<UUID> assignmentIds = active.stream().map(HomeworkAssignment::getId).collect(Collectors.toSet());
+            Set<UUID> completedIds = assignmentIds.isEmpty() ? Set.of()
+                : homeworkCompletionRepository.findAssignmentIdsByPlayerIdAndAssignmentIdIn(playerId, assignmentIds);
 
-        return active.stream().map(a -> {
-            Drill drill = drillMap.get(a.getDrillId());
-            if (drill == null) return null;
-            DrillResponse drillResponse = drillLibraryService.toResponse(drill, false, List.of(), null, null, null);
-            String coachName = coachNameMap.getOrDefault(a.getCoachId(), "Coach");
-            return new HomeworkAssignmentResponse(
-                a.getId(), a.getDrillId(), drillResponse,
-                a.getCoachId(), coachName, a.getAssignedAt(),
-                completedIds.contains(a.getId())
-            );
-        }).filter(Objects::nonNull).collect(Collectors.toList());
+            List<HomeworkAssignmentResponse> result = active.stream().map(a -> {
+                Drill drill = drillMap.get(a.getDrillId());
+                if (drill == null) return null;
+                DrillResponse drillResponse = drillLibraryService.toResponse(drill, false, List.of(), null, null, null);
+                String coachName = coachNameMap.getOrDefault(a.getCoachId(), "Coach");
+                return new HomeworkAssignmentResponse(
+                    a.getId(), a.getDrillId(), drillResponse,
+                    a.getCoachId(), coachName, a.getAssignedAt(),
+                    completedIds.contains(a.getId())
+                );
+            }).filter(Objects::nonNull).collect(Collectors.toList());
+            success = true;
+            return result;
+        } finally {
+            Timer.builder(LOCKER_ROOM_DRILLS_LATENCY)
+                .tag("status", success ? "success" : "error")
+                .register(meterRegistry)
+                .record(System.nanoTime() - start, TimeUnit.NANOSECONDS);
+        }
     }
 
     @Transactional

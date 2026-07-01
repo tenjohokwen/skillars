@@ -137,7 +137,10 @@ class AdminDisputeResolveIT {
             jdbcTemplate.update("DELETE FROM admin.admin_action_log WHERE reference_id = ?", disputeId.toString());
             jdbcTemplate.update("DELETE FROM admin.admin_alerts WHERE alert_id = ?", alertId);
             jdbcTemplate.update("DELETE FROM admin.disputes WHERE id = ?", disputeId);
+            // parent_credit_ledger is append-only (V79 triggers); bypass for test cleanup only
+            jdbcTemplate.execute("SET SESSION session_replication_role = 'replica'");
             jdbcTemplate.update("DELETE FROM payment.parent_credit_ledger WHERE reference_id = ?", bookingId);
+            jdbcTemplate.execute("SET SESSION session_replication_role = 'origin'");
             jdbcTemplate.update("DELETE FROM payment.booking_payments WHERE booking_id = ?", bookingId);
             jdbcTemplate.update("DELETE FROM booking.bookings WHERE id = ?", bookingId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
@@ -328,7 +331,10 @@ class AdminDisputeResolveIT {
         jdbcTemplate.update(
             "UPDATE admin.admin_alerts SET status = 'OPEN', resolved_at = NULL, resolved_by = NULL WHERE alert_id = ?",
             alertId);
+        // parent_credit_ledger is append-only (V79 triggers); bypass for test cleanup only
+        jdbcTemplate.execute("SET SESSION session_replication_role = 'replica'");
         jdbcTemplate.update("DELETE FROM payment.parent_credit_ledger WHERE reference_id = ?", bookingId);
+        jdbcTemplate.execute("SET SESSION session_replication_role = 'origin'");
         jdbcTemplate.update("DELETE FROM admin.admin_action_log WHERE reference_id = ?", disputeId.toString());
     }
 

@@ -176,7 +176,10 @@ class BookingRequestResourceIT {
     void tearDown() {
         transactionTemplate.execute(status -> {
             jdbcTemplate.update("DELETE FROM payment.booking_payments WHERE booking_id IN (SELECT id FROM booking.bookings WHERE parent_id = ?)", PARENT_ID);
+            // parent_credit_ledger is append-only (V79 triggers); bypass for test cleanup only
+            jdbcTemplate.execute("SET SESSION session_replication_role = 'replica'");
             jdbcTemplate.update("DELETE FROM payment.parent_credit_ledger WHERE parent_id = ?", PARENT_ID);
+            jdbcTemplate.execute("SET SESSION session_replication_role = 'origin'");
             jdbcTemplate.update("DELETE FROM booking.bookings WHERE parent_id = ?", PARENT_ID);
             jdbcTemplate.update("DELETE FROM booking.session_packs_purchased WHERE parent_id = ?", PARENT_ID);
             jdbcTemplate.update("DELETE FROM marketplace.coach_availability_windows WHERE coach_id = ?", coachProfileId);

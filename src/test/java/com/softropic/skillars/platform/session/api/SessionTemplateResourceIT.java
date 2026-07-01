@@ -19,9 +19,15 @@ import org.springframework.web.client.HttpClientErrorException;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -416,6 +422,50 @@ class SessionTemplateResourceIT extends BaseSessionIT {
             authenticatedHeaders(cookies),
             Map.class
         )).isInstanceOf(HttpClientErrorException.Forbidden.class);
+    }
+
+    @Test
+    void deployTemplateTwiceForSameBooking_secondFails() throws Exception {
+        String cookies = loginAndGetCookies(INSTR_EMAIL);
+        String templateId = createTemplateViaApi(cookies, sessionId, "Deploy Race");
+
+        int threads = 2;
+        CyclicBarrier barrier = new CyclicBarrier(threads);
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+
+        List<Future<Integer>> futures = new ArrayList<>();
+        for (int i = 0; i < threads; i++) {
+            futures.add(pool.submit(() -> {
+                try { barrier.await(10, TimeUnit.SECONDS); } catch (Exception ignored) {}
+                try {
+                    ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+                        baseUrl() + TEMPLATES_BASE + "/" + templateId + "/deploy?bookingId=" + confirmedBookingId,
+                        HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class
+                    );
+                    return response.getStatusCode().value();
+                } catch (HttpClientErrorException e) {
+                    return e.getStatusCode().value();
+                }
+            }));
+        }
+        pool.shutdown();
+        assertThat(pool.awaitTermination(60, TimeUnit.SECONDS))
+            .as("Both deploy threads must complete within 60 seconds")
+            .isTrue();
+
+        List<Integer> outcomes = new ArrayList<>();
+        for (Future<Integer> f : futures) outcomes.add(f.get());
+
+        // The loser fails either via the DB-level race (both pass existsByBookingId() before either
+        // commits -> uq_sessions_booking_id violation -> 409, per AC 7) or, if the two requests don't
+        // truly interleave, via the pre-check (existsByBookingId() sees the winner's committed row -> 403,
+        // same as the sequential case covered by deployTemplate_duplicateBooking_returns403SessionAlreadyExists).
+        // Either way exactly one session plan must be created and the loser must never succeed.
+        assertThat(outcomes).as("Exactly one deploy must succeed with 201")
+            .filteredOn(status -> status == HttpStatus.CREATED.value()).hasSize(1);
+        assertThat(outcomes).as("The losing concurrent deploy must fail with 409 or 403, never succeed twice")
+            .filteredOn(status -> status == HttpStatus.CONFLICT.value() || status == HttpStatus.FORBIDDEN.value())
+            .hasSize(1);
     }
 
     @Test

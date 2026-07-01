@@ -15,12 +15,15 @@ import com.softropic.skillars.platform.session.repo.HomeworkCompletion;
 import com.softropic.skillars.platform.session.repo.HomeworkCompletionRepository;
 import com.softropic.skillars.platform.session.repo.Session;
 import com.softropic.skillars.platform.session.repo.SessionRepository;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.instancio.Instancio;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
@@ -50,6 +53,7 @@ class HomeworkAssignmentServiceTest {
     @Mock private SessionPackService sessionPackService;
     @Mock private CoachProfileService coachProfileService;
     @Mock private PlayerProfileRepository playerProfileRepository;
+    @Spy private MeterRegistry meterRegistry = new SimpleMeterRegistry();
 
     @InjectMocks private HomeworkAssignmentService service;
 

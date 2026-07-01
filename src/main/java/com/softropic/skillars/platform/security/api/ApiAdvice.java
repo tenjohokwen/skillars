@@ -143,7 +143,11 @@ public class ApiAdvice {
 
     // Unique constraints that represent idempotent-retry collisions → 409 Conflict (not 400 Bad Request)
     private static final Set<String> CONFLICT_CONSTRAINTS = Set.of(
-        "uq_radar_entries_group_coach_skill"
+        "uq_radar_entries_group_coach_skill",
+        "idx_drills_coach_name_unique",
+        "idx_drills_clone_uniqueness",
+        "uq_sessions_booking_id",
+        "idx_videos_provider_asset_id_unique"
     );
 
     @ExceptionHandler(DataIntegrityViolationException.class)

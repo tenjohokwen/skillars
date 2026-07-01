@@ -67,7 +67,10 @@ class PackCancellationRefundIT extends BasePaymentIT {
     void cleanPackData() {
         transactionTemplate.execute(status -> {
             jdbcTemplate.execute("DELETE FROM payment.coach_cancellation_history");
+            // parent_credit_ledger is append-only (V79 triggers); bypass for test cleanup only
+            jdbcTemplate.execute("SET SESSION session_replication_role = 'replica'");
             jdbcTemplate.execute("DELETE FROM payment.parent_credit_ledger WHERE parent_id = " + PARENT_ID);
+            jdbcTemplate.execute("SET SESSION session_replication_role = 'origin'");
             jdbcTemplate.execute("DELETE FROM payment.session_pack_purchases WHERE parent_id = " + PARENT_ID);
             jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id = ?", PARENT_ID);
             return null;

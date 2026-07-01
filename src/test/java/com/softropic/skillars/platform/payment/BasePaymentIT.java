@@ -45,7 +45,10 @@ public abstract class BasePaymentIT {
         transactionTemplate.execute(status -> {
             // Delete in FK-safe order: children before parents
             jdbcTemplate.execute("DELETE FROM payment.booking_payments");
+            // parent_credit_ledger is append-only (V79 triggers); bypass for test cleanup only
+            jdbcTemplate.execute("SET SESSION session_replication_role = 'replica'");
             jdbcTemplate.execute("DELETE FROM payment.parent_credit_ledger");
+            jdbcTemplate.execute("SET SESSION session_replication_role = 'origin'");
             // booking.bookings references payment.session_pack_purchases — clean bookings first
             jdbcTemplate.execute("DELETE FROM booking.booking_reschedule_requests");
             jdbcTemplate.execute("DELETE FROM booking.session_completion_data");
