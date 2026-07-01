@@ -11,6 +11,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -39,6 +40,8 @@ public class BookingReminderScheduler {
     private final UserRepository userRepository;
 
     @Scheduled(fixedDelay = 5, timeUnit = TimeUnit.MINUTES)
+    @SchedulerLock(name = "BookingReminderScheduler_remind",
+                   lockAtMostFor = "PT15M", lockAtLeastFor = "PT2M")
     @Transactional
     public void processReminderWindows() {
         long primaryHours = configService.getBoundedLong("platform.reminder_interval_primary_hours", 24L, 1L, MAX_WINDOW_HOURS);

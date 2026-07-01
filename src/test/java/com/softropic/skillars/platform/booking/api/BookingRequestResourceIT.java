@@ -336,6 +336,67 @@ class BookingRequestResourceIT {
     }
 
     @Test
+    void createBookingRequest_otherParentsSessionPack_returns403() {
+        long otherParentId = 9500000098L;
+        UUID packTierId = UUID.randomUUID();
+        UUID purchaseId = UUID.randomUUID();
+
+        transactionTemplate.execute(status -> {
+            insertUser(otherParentId, "other.pack.parent@skillars-test.com", passwordEncoder.encode(TEST_PASSWORD), "PARENT");
+            jdbcTemplate.update(
+                "INSERT INTO main.user_authority (user_id, authority_id) " +
+                "VALUES (?, (SELECT id FROM main.authority WHERE name = 'ROLE_PARENT')) ON CONFLICT DO NOTHING",
+                otherParentId
+            );
+            jdbcTemplate.update(
+                "INSERT INTO payment.session_pack_tiers " +
+                "(pack_tier_id, coach_id, label, session_count, total_price, price_per_session, is_active, version, created_at) " +
+                "VALUES (?, ?, '5-Pack', 5, 150.00, 30.00, true, 0, now())",
+                packTierId, coachProfileId
+            );
+            jdbcTemplate.update(
+                "INSERT INTO payment.session_pack_purchases " +
+                "(purchase_id, parent_id, coach_id, pack_tier_id, price_per_session, remaining_sessions, expires_at, version, created_at) " +
+                "VALUES (?, ?, ?, ?, 30.00, 5, ?, 0, now())",
+                purchaseId, otherParentId, coachProfileId, packTierId,
+                Timestamp.from(Instant.now().plus(30, ChronoUnit.DAYS))
+            );
+            return null;
+        });
+
+        try {
+            String cookies = loginAndGetCookies(PARENT_EMAIL);
+
+            assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+                baseUrl() + BOOKINGS_BASE,
+                HttpMethod.POST,
+                Map.of(
+                    "coachId", coachProfileId.toString(),
+                    "playerId", PLAYER_ID,
+                    "requestedStartTime", slotStart.toString(),
+                    "requestedEndTime", slotEnd.toString(),
+                    "canonicalTimezone", WINDOW_TZ,
+                    "sessionPackPurchaseId", purchaseId.toString()
+                ),
+                authenticatedHeaders(cookies),
+                Map.class
+            ))
+                .isInstanceOf(HttpClientErrorException.class)
+                .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+        } finally {
+            transactionTemplate.execute(status -> {
+                jdbcTemplate.update("DELETE FROM payment.session_pack_purchases WHERE purchase_id = ?", purchaseId);
+                jdbcTemplate.update("DELETE FROM payment.session_pack_tiers WHERE pack_tier_id = ?", packTierId);
+                jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
+                jdbcTemplate.execute("DELETE FROM main.login_attempts");
+                jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id = ?", otherParentId);
+                jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id = ?", otherParentId);
+                return null;
+            });
+        }
+    }
+
+    @Test
     void createBookingRequest_coachInDraftStatus_returns422() {
         // Set coach to DRAFT status
         transactionTemplate.execute(status -> {

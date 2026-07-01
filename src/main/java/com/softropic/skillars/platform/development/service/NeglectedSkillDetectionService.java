@@ -5,6 +5,7 @@ import com.softropic.skillars.platform.development.repo.SluTargetRepository;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -33,6 +34,8 @@ public class NeglectedSkillDetectionService {
     }
 
     @Scheduled(cron = "${app.development.neglected-detection-cron:0 0 6 * * MON}")
+    @SchedulerLock(name = "NeglectedSkillDetectionService_detect",
+                   lockAtMostFor = "PT30M", lockAtLeastFor = "PT5M")
     public void detectNeglectedSkills() {
         BigDecimal threshold = readThreshold();
         if (threshold == null) {

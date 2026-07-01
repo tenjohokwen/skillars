@@ -9,6 +9,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -31,6 +32,8 @@ public class SessionPackExpiryScheduler {
     private final TransactionTemplate transactionTemplate;
 
     @Scheduled(fixedDelay = 60, timeUnit = TimeUnit.MINUTES)
+    @SchedulerLock(name = "SessionPackExpiryScheduler_expire",
+                   lockAtMostFor = "PT15M", lockAtLeastFor = "PT2M")
     public void runExpiryAndWarnings() {
         Instant now = Instant.now();
         expireActivePacks(now);

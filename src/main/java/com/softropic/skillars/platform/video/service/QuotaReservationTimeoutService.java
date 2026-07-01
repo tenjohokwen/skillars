@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.video.service;
 import com.softropic.skillars.platform.video.repo.VideoQuotaReservation;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -17,6 +18,8 @@ public class QuotaReservationTimeoutService {
     private final QuotaReservationBatchExpirer batchExpirer;
 
     @Scheduled(fixedDelayString = "${app.video.reservation-check-interval-ms:60000}")
+    @SchedulerLock(name = "QuotaReservationTimeoutService_expire",
+                   lockAtMostFor = "PT10M", lockAtLeastFor = "PT1M")
     public void expireStaleReservations() {
         int totalExpired = 0;
         List<VideoQuotaReservation> batch;

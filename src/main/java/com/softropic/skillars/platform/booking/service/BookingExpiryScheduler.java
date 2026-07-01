@@ -11,6 +11,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -37,6 +38,8 @@ public class BookingExpiryScheduler {
     private final UserRepository userRepository;
 
     @Scheduled(fixedDelay = 5, timeUnit = TimeUnit.MINUTES)
+    @SchedulerLock(name = "BookingExpiryScheduler_expire",
+                   lockAtMostFor = "PT15M", lockAtLeastFor = "PT2M")
     @Transactional
     public void expireStaleRequests() {
         long expiryHours = configService.getBoundedLong("booking.request_expiry_hours", 48L, 1L, MAX_WINDOW_HOURS);

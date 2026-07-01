@@ -5,6 +5,7 @@ package com.softropic.skillars.platform.notification.config;
 
 import com.softropic.skillars.infrastructure.threadpool.MdcDecorator;
 
+import net.javacrumbs.shedlock.spring.annotation.EnableSchedulerLock;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableAsync;
@@ -21,6 +22,7 @@ import io.micrometer.core.instrument.Tag;
 @Configuration
 @EnableAsync
 @EnableScheduling
+@EnableSchedulerLock(defaultLockAtMostFor = "PT10M")
 public class AsyncConfig {
     @Bean(name = "moderationTaskExecutor")
     public Executor moderationTaskExecutor() {

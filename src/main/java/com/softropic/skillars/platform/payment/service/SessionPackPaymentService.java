@@ -17,8 +17,10 @@ import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -72,16 +74,25 @@ public class SessionPackPaymentService {
         CoachProfile coach = coachProfileRepository.findByUserId(coachUserId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
 
-        SessionPackPurchase purchase = sessionPackPurchaseRepository.findById(purchaseId)
+        SessionPackPurchase purchase = sessionPackPurchaseRepository.findByIdForUpdate(purchaseId)
             .orElseThrow(() -> new ResourceNotFoundException("Session pack purchase not found", "session_pack_purchase"));
 
         if (!purchase.getCoachId().equals(coach.getId())) {
             throw new OperationNotAllowedException("Coach does not own this session pack", SecurityError.MISSING_RIGHTS);
         }
 
+        if (purchase.getExtendedAt() != null) {
+            // Already extended by a concurrent request that committed first — 409, not 422:
+            // this is a conflict with existing state, not an invalid request. Must be checked
+            // before the timing window below: once extended, expiresAt has already moved forward
+            // by 30 days, which would otherwise make the recomputed window check fire instead
+            // and mask the real conflict behind a generic "not eligible" 422.
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "payment.packAlreadyExtended");
+        }
+
         Instant now = Instant.now();
         Instant windowStart = purchase.getExpiresAt().minus(14, ChronoUnit.DAYS);
-        if (now.isBefore(windowStart) || now.isAfter(purchase.getExpiresAt()) || purchase.getExtendedAt() != null) {
+        if (now.isBefore(windowStart) || now.isAfter(purchase.getExpiresAt())) {
             throw new PaymentGatewayException("payment.packExtensionNotEligible");
         }
 
