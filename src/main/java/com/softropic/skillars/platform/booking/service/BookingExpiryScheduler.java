@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 @Component
@@ -49,7 +50,7 @@ public class BookingExpiryScheduler {
                 String coachName = coach != null ? coach.getDisplayName() : "Coach";
                 eventPublisher.publishEvent(new BookingExpiredEvent(
                     this, booking.getId(), booking.getParentId(),
-                    resolveEmail(booking.getParentId()), coachName,
+                    resolveEmail(booking.getParentId(), booking.getId()), coachName,
                     booking.getRequestedStartTime(), booking.getCanonicalTimezone()
                 ));
                 log.info("Auto-expired booking {} (created at {})", booking.getId(), booking.getCreatedAt());
@@ -59,7 +60,10 @@ public class BookingExpiryScheduler {
         }
     }
 
-    private String resolveEmail(Long userId) {
-        return userRepository.findById(userId).map(u -> u.getEmail()).orElse("");
+    private String resolveEmail(Long userId, UUID bookingId) {
+        return userRepository.findById(userId).map(u -> u.getEmail()).orElseGet(() -> {
+            log.warn("Could not resolve email for userId={} bookingId={} — expiry notification will be skipped", userId, bookingId);
+            return "";
+        });
     }
 }

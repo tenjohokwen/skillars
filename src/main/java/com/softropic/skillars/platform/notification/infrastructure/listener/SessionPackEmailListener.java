@@ -6,10 +6,7 @@ import com.softropic.skillars.platform.booking.contract.SessionPackExpiryWarning
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.contract.Recipient;
-import com.softropic.skillars.platform.security.contract.util.ShortCode;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
+
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
@@ -26,6 +23,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 @Component
@@ -49,7 +49,7 @@ public class SessionPackEmailListener {
         publisher.publishEvent(new Envelope(
             List.of(recipient), EmailTemplate.SESSION_PACK_EXPIRY_WARNING,
             Instant.now().plus(Duration.ofDays(1)), data,
-            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+            UUID.randomUUID().toString()
         ));
     }
 
@@ -66,7 +66,7 @@ public class SessionPackEmailListener {
         publisher.publishEvent(new Envelope(
             List.of(recipient), EmailTemplate.SESSION_PACK_EXPIRED,
             Instant.now().plus(Duration.ofDays(1)), data,
-            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+            UUID.randomUUID().toString()
         ));
     }
 
@@ -87,7 +87,7 @@ public class SessionPackEmailListener {
         publisher.publishEvent(new Envelope(
             List.of(recipient), EmailTemplate.PACK_PAUSED,
             Instant.now().plus(Duration.ofDays(1)), data,
-            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+            UUID.randomUUID().toString()
         ));
     }
 

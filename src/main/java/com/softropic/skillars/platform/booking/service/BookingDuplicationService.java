@@ -69,7 +69,11 @@ public class BookingDuplicationService {
 
         String parentEmail = userRepository.findById(original.getParentId())
             .map(u -> u.getEmail())
-            .orElse("");
+            .orElseGet(() -> {
+                log.warn("Could not resolve email for userId={} bookingId={} — notification will be skipped",
+                        original.getParentId(), newBooking.getId());
+                return "";
+            });
 
         eventPublisher.publishEvent(new DuplicateBookingProposedEvent(
             this, newBooking.getId(), parentEmail, coach.getDisplayName(),

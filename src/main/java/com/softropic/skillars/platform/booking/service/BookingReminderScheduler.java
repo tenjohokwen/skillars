@@ -78,8 +78,8 @@ public class BookingReminderScheduler {
     private BookingReminderEvent buildReminderEvent(Booking b, String reminderType) {
         CoachProfile coach = coachProfileRepository.findById(b.getCoachId()).orElse(null);
         String coachName = coach != null ? coach.getDisplayName() : "Coach";
-        String coachEmail = coach != null ? resolveEmail(coach.getUserId()) : "";
-        String parentEmail = resolveEmail(b.getParentId());
+        String coachEmail = coach != null ? resolveEmail(coach.getUserId(), b.getId()) : "";
+        String parentEmail = resolveEmail(b.getParentId(), b.getId());
 
         return new BookingReminderEvent(
             this, b.getId(), parentEmail, coachEmail, coachName,
@@ -87,7 +87,10 @@ public class BookingReminderScheduler {
         );
     }
 
-    private String resolveEmail(Long userId) {
-        return userRepository.findById(userId).map(u -> u.getEmail()).orElse("");
+    private String resolveEmail(Long userId, UUID bookingId) {
+        return userRepository.findById(userId).map(u -> u.getEmail()).orElseGet(() -> {
+            log.warn("Could not resolve email for userId={} bookingId={} — reminder notification will be skipped", userId, bookingId);
+            return "";
+        });
     }
 }

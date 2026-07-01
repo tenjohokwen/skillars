@@ -20,7 +20,6 @@ import com.softropic.skillars.platform.booking.contract.RescheduleRequestedEvent
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.contract.Recipient;
-import com.softropic.skillars.platform.security.contract.util.ShortCode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -56,6 +55,11 @@ public class BookingEmailListener {
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onBookingRequested(BookingRequestedEvent event) {
+        if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
+            log.warn("Cannot send booking requested email: coach email is blank, bookingId={}", event.getBookingId());
+            return;
+        }
+
         Map<String, Object> data = new HashMap<>();
         data.put("coachDisplayName", event.getCoachDisplayName());
         data.put("requestedStartTime", event.getRequestedStartTime().toString());
@@ -69,12 +73,17 @@ public class BookingEmailListener {
         publisher.publishEvent(new Envelope(
             List.of(recipient), EmailTemplate.BOOKING_REQUESTED,
             Instant.now().plus(Duration.ofDays(1)), data,
-            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+            UUID.randomUUID().toString()
         ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onBookingConfirmed(BookingConfirmedEvent event) {
+        if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
+            log.warn("Cannot send booking confirmed email: parent email is blank, bookingId={}", event.getBookingId());
+            return;
+        }
+
         Map<String, Object> data = new HashMap<>();
         data.put("coachDisplayName", event.getCoachDisplayName());
         data.put("requestedStartTime", event.getRequestedStartTime().toString());
@@ -87,12 +96,17 @@ public class BookingEmailListener {
         publisher.publishEvent(new Envelope(
             List.of(recipient), EmailTemplate.BOOKING_CONFIRMED,
             Instant.now().plus(Duration.ofDays(1)), data,
-            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+            UUID.randomUUID().toString()
         ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onBookingDeclined(BookingDeclinedEvent event) {
+        if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
+            log.warn("Cannot send booking declined email: parent email is blank, bookingId={}", event.getBookingId());
+            return;
+        }
+
         Map<String, Object> data = new HashMap<>();
         data.put("coachDisplayName", event.getCoachDisplayName());
         data.put("requestedStartTime", event.getRequestedStartTime().toString());
@@ -105,12 +119,17 @@ public class BookingEmailListener {
         publisher.publishEvent(new Envelope(
             List.of(recipient), EmailTemplate.BOOKING_DECLINED,
             Instant.now().plus(Duration.ofDays(1)), data,
-            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+            UUID.randomUUID().toString()
         ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onBookingExpired(BookingExpiredEvent event) {
+        if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
+            log.warn("Cannot send booking expired email: parent email is blank, bookingId={}", event.getBookingId());
+            return;
+        }
+
         Map<String, Object> data = new HashMap<>();
         data.put("coachDisplayName", event.getCoachDisplayName());
         data.put("requestedStartTime", event.getRequestedStartTime().toString());
@@ -123,7 +142,7 @@ public class BookingEmailListener {
         publisher.publishEvent(new Envelope(
             List.of(recipient), EmailTemplate.BOOKING_EXPIRED,
             Instant.now().plus(Duration.ofDays(1)), data,
-            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+            UUID.randomUUID().toString()
         ));
     }
 
@@ -143,12 +162,17 @@ public class BookingEmailListener {
         publisher.publishEvent(new Envelope(
             List.of(recipient), EmailTemplate.BOOKING_QUICK_COMPLETE_CONFIRM,
             Instant.now().plus(Duration.ofDays(1)), data,
-            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+            UUID.randomUUID().toString()
         ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onRescheduleRequested(RescheduleRequestedEvent event) {
+        if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
+            log.warn("Cannot send reschedule requested email: coach email is blank, bookingId={}", event.getBookingId());
+            return;
+        }
+
         Map<String, Object> data = new HashMap<>();
         data.put("parentName", event.getParentName());
         data.put("originalStartTime", formatInstantInZone(event.getOriginalStartTime(), event.getCanonicalTimezone()));
@@ -162,7 +186,7 @@ public class BookingEmailListener {
         publisher.publishEvent(new Envelope(
             List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_REQUESTED,
             Instant.now().plus(Duration.ofDays(1)), data,
-            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+            UUID.randomUUID().toString()
         ));
     }
 
@@ -181,13 +205,18 @@ public class BookingEmailListener {
             publisher.publishEvent(new Envelope(
                 List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_ACCEPTED,
                 Instant.now().plus(Duration.ofDays(1)), data,
-                ShortCode.shortenInt(UUID.randomUUID().hashCode())
+                UUID.randomUUID().toString()
             ));
         }
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onRescheduleDeclined(RescheduleDeclinedEvent event) {
+        if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
+            log.warn("Cannot send reschedule declined email: parent email is blank, bookingId={}", event.getBookingId());
+            return;
+        }
+
         Map<String, Object> data = new HashMap<>();
         data.put("coachDisplayName", event.getCoachDisplayName());
         data.put("originalStartTime", formatInstantInZone(event.getOriginalStartTime(), event.getCanonicalTimezone()));
@@ -200,7 +229,7 @@ public class BookingEmailListener {
         publisher.publishEvent(new Envelope(
             List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_DECLINED,
             Instant.now().plus(Duration.ofDays(1)), data,
-            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+            UUID.randomUUID().toString()
         ));
     }
 
@@ -227,7 +256,7 @@ public class BookingEmailListener {
         publisher.publishEvent(new Envelope(
             List.of(recipient), EmailTemplate.BOOKING_BATCH_REQUESTED,
             Instant.now().plus(Duration.ofDays(1)), data,
-            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+            UUID.randomUUID().toString()
         ));
     }
 
@@ -250,12 +279,17 @@ public class BookingEmailListener {
         publisher.publishEvent(new Envelope(
             List.of(recipient), EmailTemplate.BOOKING_BATCH_ACCEPTED,
             Instant.now().plus(Duration.ofDays(1)), data,
-            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+            UUID.randomUUID().toString()
         ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onDuplicateBookingProposed(DuplicateBookingProposedEvent event) {
+        if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
+            log.warn("Cannot send duplicate booking proposed email: parent email is blank, bookingId={}", event.getNewBookingId());
+            return;
+        }
+
         Map<String, Object> data = new HashMap<>();
         data.put("coachDisplayName", event.getCoachDisplayName());
         data.put("proposedStartTime", formatInstantInZone(event.getProposedStartTime(), event.getCanonicalTimezone()));
@@ -268,7 +302,7 @@ public class BookingEmailListener {
         publisher.publishEvent(new Envelope(
             List.of(recipient), EmailTemplate.BOOKING_DUPLICATE_PROPOSED,
             Instant.now().plus(Duration.ofDays(1)), data,
-            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+            UUID.randomUUID().toString()
         ));
     }
 
@@ -297,12 +331,17 @@ public class BookingEmailListener {
         publisher.publishEvent(new Envelope(
             List.of(recipient), EmailTemplate.BOOKING_CANCELLED_DUE_TO_PAUSE,
             Instant.now().plus(Duration.ofDays(1)), data,
-            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+            UUID.randomUUID().toString()
         ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onBookingCancelledByParent(BookingCancelledByParentEvent event) {
+        if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
+            log.warn("Cannot send booking cancelled by parent email: coach email is blank, bookingId={}", event.getBookingId());
+            return;
+        }
+
         Map<String, Object> data = new HashMap<>();
         data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
         data.put("canonicalTimezone", event.getCanonicalTimezone());
@@ -314,12 +353,17 @@ public class BookingEmailListener {
         publisher.publishEvent(new Envelope(
             List.of(recipient), EmailTemplate.BOOKING_CANCELLED_BY_PARENT,
             Instant.now().plus(Duration.ofDays(1)), data,
-            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+            UUID.randomUUID().toString()
         ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onBookingCancelledByCoach(BookingCancelledByCoachEvent event) {
+        if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
+            log.warn("Cannot send booking cancelled by coach email: parent email is blank, bookingId={}", event.getBookingId());
+            return;
+        }
+
         Map<String, Object> data = new HashMap<>();
         data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
         data.put("canonicalTimezone", event.getCanonicalTimezone());
@@ -331,12 +375,17 @@ public class BookingEmailListener {
         publisher.publishEvent(new Envelope(
             List.of(recipient), EmailTemplate.BOOKING_CANCELLED_BY_COACH,
             Instant.now().plus(Duration.ofDays(1)), data,
-            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+            UUID.randomUUID().toString()
         ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onCoachNoShow(CoachNoShowEvent event) {
+        if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
+            log.warn("Cannot send coach no-show email: parent email is blank, bookingId={}", event.getBookingId());
+            return;
+        }
+
         Map<String, Object> data = new HashMap<>();
         data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
         data.put("canonicalTimezone", event.getCanonicalTimezone());
@@ -348,12 +397,17 @@ public class BookingEmailListener {
         publisher.publishEvent(new Envelope(
             List.of(recipient), EmailTemplate.COACH_NO_SHOW,
             Instant.now().plus(Duration.ofDays(1)), data,
-            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+            UUID.randomUUID().toString()
         ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPlayerNoShow(PlayerNoShowEvent event) {
+        if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
+            log.warn("Cannot send player no-show email: coach email is blank, bookingId={}", event.getBookingId());
+            return;
+        }
+
         Map<String, Object> data = new HashMap<>();
         data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
         data.put("canonicalTimezone", event.getCanonicalTimezone());
@@ -365,7 +419,7 @@ public class BookingEmailListener {
         publisher.publishEvent(new Envelope(
             List.of(recipient), EmailTemplate.PLAYER_NO_SHOW,
             Instant.now().plus(Duration.ofDays(1)), data,
-            ShortCode.shortenInt(UUID.randomUUID().hashCode())
+            UUID.randomUUID().toString()
         ));
     }
 
@@ -384,7 +438,7 @@ public class BookingEmailListener {
             publisher.publishEvent(new Envelope(
                 List.of(recipient), EmailTemplate.BOOKING_REMINDER,
                 Instant.now().plus(Duration.ofDays(1)), data,
-                ShortCode.shortenInt(UUID.randomUUID().hashCode())
+                UUID.randomUUID().toString()
             ));
         }
     }

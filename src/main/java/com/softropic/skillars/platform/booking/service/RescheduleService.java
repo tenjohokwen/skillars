@@ -74,7 +74,7 @@ public class RescheduleService {
 
         CoachProfile coach = coachProfileRepository.findById(booking.getCoachId())
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
-        String coachEmail = resolveEmail(coach.getUserId());
+        String coachEmail = resolveEmail(coach.getUserId(), bookingId);
         String parentName = userRepository.findById(parentUserId)
             .map(u -> u.getFirstName() + " " + u.getLastName())
             .orElse("Parent");
@@ -121,8 +121,8 @@ public class RescheduleService {
         req.setStatus("ACCEPTED");
         rescheduleRepo.save(req);
 
-        String parentEmail = resolveEmail(booking.getParentId());
-        String coachEmail = resolveEmail(coach.getUserId());
+        String parentEmail = resolveEmail(booking.getParentId(), bookingId);
+        String coachEmail = resolveEmail(coach.getUserId(), bookingId);
 
         eventPublisher.publishEvent(new RescheduleAcceptedEvent(
             this, bookingId, parentEmail, coachEmail, coach.getDisplayName(),
@@ -154,7 +154,7 @@ public class RescheduleService {
         req.setStatus("DECLINED");
         rescheduleRepo.save(req);
 
-        String parentEmail = resolveEmail(booking.getParentId());
+        String parentEmail = resolveEmail(booking.getParentId(), bookingId);
         eventPublisher.publishEvent(new RescheduleDeclinedEvent(
             this, bookingId, parentEmail, coach.getDisplayName(),
             booking.getRequestedStartTime(), booking.getCanonicalTimezone()
@@ -162,7 +162,10 @@ public class RescheduleService {
         log.info("Reschedule {} declined for booking {} by coach {}", rescheduleId, bookingId, coachUserId);
     }
 
-    private String resolveEmail(Long userId) {
-        return userRepository.findById(userId).map(u -> u.getEmail()).orElse("");
+    private String resolveEmail(Long userId, UUID bookingId) {
+        return userRepository.findById(userId).map(u -> u.getEmail()).orElseGet(() -> {
+            log.warn("Could not resolve email for userId={} bookingId={} — notification will be skipped", userId, bookingId);
+            return "";
+        });
     }
 }

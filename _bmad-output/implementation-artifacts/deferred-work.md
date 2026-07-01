@@ -666,3 +666,11 @@
 ## Deferred from: code review of skillars-10-4-gdpr-data-tools-account-deletion (2026-06-30)
 - D1: DB connection held during S3 upload — `GdprExportService.buildExport()` annotated `@Transactional` keeps a DB connection checked out from the pool for the entire ZIP build + S3 put. Resolved if Patch 1 (remove `@Transactional`) is applied; defer this entry only if Patch 1 is skipped. [GdprExportService.java:180]
 - D2: `.distinct()` on Booking list may silently no-op — if `Booking` entity doesn't override `equals()`/`hashCode()`, stream `.distinct()` uses object identity and won't deduplicate. Unlikely to manifest given role separation, but address in a JPA entity hygiene pass. [GdprExportService.java:250]
+
+
+
+
+# new issues
+
+## Deferred from: code review of skillars-deferred-2 (2026-07-01)
+- D1: `BookingExpiredEvent`/`BookingReminderEvent`/`BookingConfirmedEvent` constructors are invoked positionally with 6-8 raw same-typed arguments across new test files — pre-existing lack of a builder on these event classes; a future field reorder could silently miscompile or swap same-typed fields with no test catching it. [`src/main/java/com/softropic/skillars/platform/booking/contract/`]

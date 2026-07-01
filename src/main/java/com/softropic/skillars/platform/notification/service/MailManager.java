@@ -7,6 +7,8 @@ import com.softropic.skillars.platform.notification.repo.EnvelopeEntity;
 import com.softropic.skillars.platform.notification.repo.EnvelopeEntityRepository;
 
 import jakarta.mail.MessagingException;
+import jakarta.mail.internet.AddressException;
+import jakarta.mail.internet.ParseException;
 import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,6 +26,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.stream.Stream;
 
 
 public class MailManager {
@@ -36,7 +40,9 @@ public class MailManager {
     private final RetryTemplate retryTemplate;
 
     private static final List<Class<? extends Exception>> NON_REPAIRABLE_ERRORS = List.of(MailParseException.class,
-                                                                                          MailPreparationException.class);
+                                                                                          MailPreparationException.class,
+                                                                                          AddressException.class,
+                                                                                          ParseException.class);
 
     public MailManager(final MailService mailService,
                        final EnvelopeEntityRepository envelopeEntityRepository,
@@ -129,6 +135,18 @@ public class MailManager {
     }
 
     private boolean isRetryable(final Exception unknownException) {
-        return NON_REPAIRABLE_ERRORS.stream().noneMatch(exceptionClass -> exceptionClass.isInstance(unknownException));
+        // isRetryable is called at two different wrapping depths: directly on the caught MessagingException
+        // inside the retry loop (cause is 1 level down, e.g. MimeMessageHelper#setTo wraps an AddressException),
+        // and on the RuntimeException wrapper the circuit breaker/retry-template layer throws before it reaches
+        // toEnvelopeEntity (cause is 2 levels down: RuntimeException -> MessagingException -> MailParseException).
+        // Bound the check to those two known depths instead of walking the exception's full, unbounded chain, so
+        // an unrelated non-repairable type buried deeper in some other exception's chain can't be misclassified.
+        Throwable direct = unknownException;
+        Throwable cause = unknownException.getCause();
+        Throwable causeOfCause = cause != null ? cause.getCause() : null;
+
+        return Stream.of(direct, cause, causeOfCause)
+                .filter(Objects::nonNull)
+                .noneMatch(t -> NON_REPAIRABLE_ERRORS.stream().anyMatch(exceptionClass -> exceptionClass.isInstance(t)));
     }
 }

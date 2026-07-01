@@ -1,6 +1,6 @@
 # Story Deferred-2: Email Reliability Hardening
 
-Status: backlog
+Status: done
 
 ## Story
 
@@ -28,20 +28,20 @@ so that booking notifications and reminders are never silently dropped, corrupte
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Replace `ShortCode`-based send IDs with UUID-derived long** (AC: 1)
-  - [ ] Identify every place a `MailEnvelope` (or equivalent) is created with a `ShortCode.shortenInt(...)` send ID:
+- [x] **Task 1 — Replace `ShortCode`-based send IDs with UUID-derived long** (AC: 1)
+  - [x] Identify every place a `MailEnvelope` (or equivalent) is created with a `ShortCode.shortenInt(...)` send ID:
     `find src -name "*.java" | xargs grep -n "ShortCode.shortenInt"`
-  - [ ] Replace each call with a collision-safe ID. Two options — pick whichever fits `MailManager`'s ID type:
+  - [x] Replace each call with a collision-safe ID. Two options — pick whichever fits `MailManager`'s ID type:
     - **Option A — if send ID is `long`**: `ThreadLocalRandom.current().nextLong()` (64-bit, no birthday collision risk at realistic volumes)
     - **Option B — if send ID is `String`**: `UUID.randomUUID().toString()` directly
     - **Option C — if send ID is `int` (cannot change type)**: `(int)(UUID.randomUUID().getMostSignificantBits() ^ UUID.randomUUID().getLeastSignificantBits())` — still 32 bits but XOR of two independent UUIDs; this is marginally better but the real fix is to widen the type
-  - [ ] Read `MailEnvelope.java` and `MailManager.java` to confirm the `sendId` field type before deciding which option applies
-  - [ ] **Preferred**: widen the send ID to `long` or `String` in `MailEnvelope` if the type is currently `int` — the collision risk is fundamental to the bit width; a wider type is the correct fix
-  - [ ] Ensure the `MailManager` idempotency check (DB unique constraint on `sendId`) is updated if the column type changes
+  - [x] Read `MailEnvelope.java` and `MailManager.java` to confirm the `sendId` field type before deciding which option applies
+  - [x] **Preferred**: widen the send ID to `long` or `String` in `MailEnvelope` if the type is currently `int` — the collision risk is fundamental to the bit width; a wider type is the correct fix
+  - [x] Ensure the `MailManager` idempotency check (DB unique constraint on `sendId`) is updated if the column type changes
 
-- [ ] **Task 2 — Fix `MailManager.isRetryable()` to unwrap cause** (AC: 2)
-  - [ ] Read `MailManager.java` — find the `isRetryable(Exception exception)` method
-  - [ ] Update it to unwrap the exception cause before checking the type:
+- [x] **Task 2 — Fix `MailManager.isRetryable()` to unwrap cause** (AC: 2)
+  - [x] Read `MailManager.java` — find the `isRetryable(Exception exception)` method
+  - [x] Update it to unwrap the exception cause before checking the type:
     ```java
     private boolean isRetryable(Exception exception) {
         Throwable cause = exception.getCause() != null ? exception.getCause() : exception;
@@ -56,14 +56,14 @@ so that booking notifications and reminders are never silently dropped, corrupte
             || cause instanceof MessagingException;
     }
     ```
-  - [ ] Confirm the exact exception class names used in the existing `isRetryable` check — do not remove any currently-correct recoverable checks; only add the non-recoverable guard
-  - [ ] Add a unit test for `isRetryable` covering: wrapped `MailParseException` returns false; `MailConnectException` (or equivalent timeout) returns true
+  - [x] Confirm the exact exception class names used in the existing `isRetryable` check — do not remove any currently-correct recoverable checks; only add the non-recoverable guard
+  - [x] Add a unit test for `isRetryable` covering: wrapped `MailParseException` returns false; `MailConnectException` (or equivalent timeout) returns true
 
-- [ ] **Task 3 — Add WARN log and skip-on-blank in email resolvers** (AC: 3)
-  - [ ] Find all `resolveEmail(...)` calls (or inline email resolution) in booking and session pack listeners:
+- [x] **Task 3 — Add WARN log and skip-on-blank in email resolvers** (AC: 3)
+  - [x] Find all `resolveEmail(...)` calls (or inline email resolution) in booking and session pack listeners:
     `find src -name "*.java" | xargs grep -n "resolveEmail\|getEmail()"`
     — focus on `BookingEmailListener.java`, `BookingReminderScheduler.java`, `BookingExpiryScheduler.java`, `SessionPackEmailListener.java`
-  - [ ] For each resolution site, apply this pattern:
+  - [x] For each resolution site, apply this pattern:
     ```java
     String email = resolveEmail(userId, bookingId);
     if (email == null || email.isBlank()) {
@@ -72,10 +72,10 @@ so that booking notifications and reminders are never silently dropped, corrupte
         return;  // do not queue envelope
     }
     ```
-  - [ ] The existing code silently accepts a blank email and passes it to the mail sender, which then fails and may retry. The fix is to short-circuit before queuing
+  - [x] The existing code silently accepts a blank email and passes it to the mail sender, which then fails and may retry. The fix is to short-circuit before queuing
 
-- [ ] **Task 4 — Unit tests for email reliability** (AC: 1, 2, 3)
-  - [ ] Add `BookingEmailListenerTest.java` (or extend existing) with:
+- [x] **Task 4 — Unit tests for email reliability** (AC: 1, 2, 3)
+  - [x] Add `BookingEmailListenerTest.java` (or extend existing) with:
     - `sendId_hasNoCollisionAcross10kEmails()` — generate 10,000 send IDs and assert no duplicates via `Set`
     - `isRetryable_wrappedParseException_returnsFalse()`
     - `isRetryable_connectionTimeout_returnsTrue()`
@@ -122,16 +122,52 @@ Confirm table name and schema from existing migrations before writing.
 
 ### Agent Model Used
 
+Claude Sonnet 5 (claude-sonnet-5)
+
 ### Debug Log References
+
+- `mvn compile` — clean after each task's edits
+- `mvn -Dtest=MailManagerResilienceTest test` — 5/5 pass
+- `mvn -Dtest=BookingReminderSchedulerTest test` — 2/2 pass
+- `mvn -Dtest=BookingExpirySchedulerTest test` — 2/2 pass
+- `mvn -Dtest=BookingEmailListenerTest test` — 6/6 pass
+- `mvn -Dtest=SessionPackEmailListenerTest test` — 1/1 pass
+- `mvn test` (full unit suite) — 749 run, 0 failures, 0 errors, 1 skipped (pre-existing, unrelated)
 
 ### Completion Notes List
 
+- **AC1**: `Envelope.sendId` and `EnvelopeEntity.sendId` were already `String` (unique column) — no widening or Flyway migration was needed (Option B applied directly). Replaced every `ShortCode.shortenInt(UUID.randomUUID().hashCode())` call in `BookingEmailListener.java` and `SessionPackEmailListener.java` with `UUID.randomUUID().toString()` and removed the now-unused `ShortCode` import from both files. `BookingReminderScheduler.java`/`BookingExpiryScheduler.java` never called `ShortCode` themselves (they resolve emails, not send IDs), so no changes were needed there for AC1. Other `ShortCode.shortenInt` usages in the codebase (tenant/account-change/video-moderation listeners, 2FA/registration "help codes") are out of this story's file scope — the `helpCode` in those flows is a user-facing support code, and changing it to a full UUID would be a UX regression unrelated to this story's ACs, so they were left untouched.
+- **AC2**: `isRetryable()` originally checked only the top-level exception. Tracing the actual call path showed `toEnvelopeEntity()` (which sets the persisted `retry` flag consumed by `EmailRetryScheduler`) is invoked with an outer `RuntimeException` that wraps the original `MessagingException`, which in turn can wrap a `MailParseException`/`AddressException` as its own cause (JavaMail's `MessagingException.getCause()` returns the chained "next exception"). A single-level unwrap would miss that second layer, so `isRetryable()` now walks the full cause chain via `ExceptionUtils.getThrowableList(...)` and checks every exception in it against `MailParseException`, `MailPreparationException`, `AddressException`, and `jakarta.mail.internet.ParseException`. Existing recoverable checks are preserved (nothing was removed from the non-repairable list, only added to).
+- **AC3**: Added a booking-ID-aware `resolveEmail(userId, bookingId)` overload (was `resolveEmail(userId)`) in both `BookingReminderScheduler` and `BookingExpiryScheduler` that logs a `WARN` with both IDs when the user lookup misses. `BookingEmailListener.onBookingReminder(...)` already filtered blank/null emails before queuing an envelope; `onBookingExpired(...)` did not, so a blank-email guard (log + early return, no envelope published) was added there to match.
+- Ran the full `mvn test` unit suite (749 tests) after all changes — 0 failures, 0 errors, confirming no regressions.
+
 ### File List
 
-**Modified Files (expected):**
-- `src/main/java/com/softropic/skillars/platform/booking/listener/BookingEmailListener.java`
-- `src/main/java/com/softropic/skillars/platform/payment/listener/SessionPackEmailListener.java`
-- `src/main/java/com/softropic/skillars/platform/booking/scheduler/BookingReminderScheduler.java`
-- `src/main/java/com/softropic/skillars/platform/booking/scheduler/BookingExpiryScheduler.java`
-- `src/main/java/com/softropic/skillars/infrastructure/mail/MailManager.java`
-- *(Flyway migration if send_id column widened)*
+**Modified Files:**
+- `src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java`
+- `src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/SessionPackEmailListener.java`
+- `src/main/java/com/softropic/skillars/platform/booking/service/BookingReminderScheduler.java`
+- `src/main/java/com/softropic/skillars/platform/booking/service/BookingExpiryScheduler.java`
+- `src/main/java/com/softropic/skillars/platform/notification/service/MailManager.java`
+- `src/test/java/com/softropic/skillars/platform/notification/infrastructure/MailManagerResilienceTest.java`
+
+**New Files:**
+- `src/test/java/com/softropic/skillars/platform/booking/service/BookingReminderSchedulerTest.java`
+- `src/test/java/com/softropic/skillars/platform/booking/service/BookingExpirySchedulerTest.java`
+- `src/test/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListenerTest.java`
+- `src/test/java/com/softropic/skillars/platform/notification/infrastructure/listener/SessionPackEmailListenerTest.java`
+
+No Flyway migration was required — `sendId` was already a `String` column.
+
+### Review Findings
+
+- [x] [Review][Patch] Expand AC3's blank-email guard to the remaining unguarded `resolveEmail()` call sites (decision: expand scope now). Applied the WARN-log + skip-on-blank pattern to `BookingService.java` (7 call sites + `resolveEmail`/`resolveCoachEmail` helpers), `RescheduleService.java` (4 call sites + `resolveEmail` helper), and `BookingDuplicationService.java` (1 call site), and added the matching blank-email skip guard to the 9 previously-unguarded `BookingEmailListener` handlers (`onBookingRequested/onBookingConfirmed/onBookingDeclined/onRescheduleRequested/onRescheduleDeclined/onDuplicateBookingProposed/onBookingCancelledByParent/onBookingCancelledByCoach/onCoachNoShow/onPlayerNoShow`). [`BookingService.java`, `RescheduleService.java`, `BookingDuplicationService.java`, `BookingEmailListener.java`]
+- [x] [Review][Patch] Bound `MailManager.isRetryable()`'s cause-chain walk (decision: bound the walk). Replaced the unbounded `ExceptionUtils.getThrowableList(...)` walk with an explicit check of the exception, its cause, and its cause-of-cause (the two known call-site depths: 1 level from the retry loop, 2 levels via the `toEnvelopeEntity` outer-catch `RuntimeException` wrapper), so an unrelated non-repairable type buried deeper in some other exception's chain can no longer be misclassified, while still catching AC2's documented double-wrap scenario. [`MailManager.java:135`]
+- [x] [Review][Patch] Added `isRetryable_wrappedAddressException_persistsRetryFalse` and `isRetryable_wrappedJakartaParseException_persistsRetryFalse` covering the two exception types that had no direct test coverage. [`MailManagerResilienceTest.java`]
+
+Full `mvn test` suite re-run after all patches: 751 run, 0 failures, 0 errors, 1 skipped (pre-existing, unrelated) — `BUILD SUCCESS`.
+- [x] [Review][Defer] `BookingExpiredEvent`/`BookingReminderEvent`/`BookingConfirmedEvent` constructors are invoked positionally with 6-8 raw same-typed arguments across all four new test files — pre-existing lack of a builder on these event classes, not introduced by this diff; a future field reorder could silently miscompile or swap same-typed fields with no test catching it. [`src/main/java/com/softropic/skillars/platform/booking/contract/`] — deferred, pre-existing
+
+## Change Log
+
+- 2026-07-01: Implemented all 4 tasks (collision-safe send IDs, `isRetryable()` cause-chain unwrap, WARN+skip-on-blank email resolution, unit test coverage). Status moved to `review`.

@@ -214,7 +214,7 @@ public class BookingService {
         booking.setSessionPackPurchaseId(req.sessionPackPurchaseId());
         bookingRepository.save(booking);
 
-        String coachEmail = resolveEmail(coach.getUserId());
+        String coachEmail = resolveEmail(coach.getUserId(), booking.getId());
         eventPublisher.publishEvent(new BookingRequestedEvent(
             this, booking.getId(), parentId, req.playerId(), req.coachId(),
             coach.getDisplayName(), coachEmail, req.notes(),
@@ -242,7 +242,7 @@ public class BookingService {
 
         Booking updated = getBookingOrThrow(bookingId);
         BigDecimal sessionPrice = resolveSessionPrice(updated);
-        String parentEmail = resolveEmail(updated.getParentId());
+        String parentEmail = resolveEmail(updated.getParentId(), updated.getId());
 
         // Publish inside @Transactional — @TransactionalEventListener(AFTER_COMMIT) ensures
         // PaymentLifecycleService runs only after DB commit
@@ -283,7 +283,7 @@ public class BookingService {
 
         eventPublisher.publishEvent(new BookingDeclinedEvent(
             this, bookingId, booking.getParentId(),
-            resolveEmail(booking.getParentId()),
+            resolveEmail(booking.getParentId(), bookingId),
             coach.getDisplayName(), booking.getRequestedStartTime(),
             booking.getCanonicalTimezone()
         ));
@@ -459,7 +459,7 @@ public class BookingService {
         }
         transition(bookingId, BookingEvent.CANCEL_DUE_TO_PAUSE, new TransitionContext(ActorRole.SYSTEM, null));
         CoachProfile coach = coachProfileRepository.findById(coachId).orElse(null);
-        String coachEmail = coach != null ? resolveEmail(coach.getUserId()) : "";
+        String coachEmail = coach != null ? resolveEmail(coach.getUserId(), bookingId) : "";
         String coachDisplayName = coach != null ? coach.getDisplayName() : "Coach";
         String parentName = resolveParentName(parentId);
         eventPublisher.publishEvent(new BookingCancelledDueToPauseEvent(
@@ -493,8 +493,8 @@ public class BookingService {
         long hoursBeforeSession = ChronoUnit.HOURS.between(Instant.now(), booking.getRequestedStartTime());
         boolean refundEligible = booking.getRequestedStartTime().isAfter(Instant.now().plus(24, ChronoUnit.HOURS));
         BigDecimal sessionPrice = resolveSessionPrice(booking);
-        String parentEmail = resolveEmail(parentUserId);
-        String coachEmail = resolveCoachEmail(booking.getCoachId());
+        String parentEmail = resolveEmail(parentUserId, bookingId);
+        String coachEmail = resolveCoachEmail(booking.getCoachId(), bookingId);
 
         transition(bookingId, BookingEvent.CANCEL_PARENT, new TransitionContext(ActorRole.PARENT, parentUserId));
 
@@ -524,7 +524,7 @@ public class BookingService {
         }
 
         BigDecimal sessionPrice = resolveSessionPrice(booking);
-        String parentEmail = resolveEmail(booking.getParentId());
+        String parentEmail = resolveEmail(booking.getParentId(), bookingId);
 
         boolean packExpired = false;
         if (booking.getSessionPackPurchaseId() != null) {
@@ -555,7 +555,7 @@ public class BookingService {
         if (!Objects.equals(booking.getCoachId(), coach.getId())) {
             throw new OperationNotAllowedException("Coach does not own this booking", SecurityError.MISSING_RIGHTS);
         }
-        String coachEmail = resolveCoachEmail(booking.getCoachId());
+        String coachEmail = resolveCoachEmail(booking.getCoachId(), bookingId);
 
         transition(bookingId, BookingEvent.NO_SHOW_PLAYER, new TransitionContext(ActorRole.COACH, coachUserId));
 
@@ -572,7 +572,7 @@ public class BookingService {
             throw new OperationNotAllowedException("Parent does not own this booking", SecurityError.MISSING_RIGHTS);
         }
         BigDecimal sessionPrice = resolveSessionPrice(booking);
-        String parentEmail = resolveEmail(parentUserId);
+        String parentEmail = resolveEmail(parentUserId, bookingId);
 
         boolean packExpired = false;
         if (booking.getSessionPackPurchaseId() != null) {
@@ -591,11 +591,11 @@ public class BookingService {
         ));
     }
 
-    private String resolveCoachEmail(UUID coachId) {
+    private String resolveCoachEmail(UUID coachId, UUID bookingId) {
         return coachProfileRepository.findById(coachId)
-            .map(coach -> resolveEmail(coach.getUserId()))
+            .map(coach -> resolveEmail(coach.getUserId(), bookingId))
             .orElseGet(() -> {
-                log.warn("resolveCoachEmail: no coach profile found for coachId={} — notification will not be sent", coachId);
+                log.warn("resolveCoachEmail: no coach profile found for coachId={} bookingId={} — notification will not be sent", coachId, bookingId);
                 return "";
             });
     }
@@ -617,8 +617,11 @@ public class BookingService {
         }
     }
 
-    private String resolveEmail(Long userId) {
-        return userRepository.findById(userId).map(u -> u.getEmail()).orElse("");
+    private String resolveEmail(Long userId, UUID bookingId) {
+        return userRepository.findById(userId).map(u -> u.getEmail()).orElseGet(() -> {
+            log.warn("Could not resolve email for userId={} bookingId={} — notification will be skipped", userId, bookingId);
+            return "";
+        });
     }
 
     private String resolvePlayerName(Long playerId) {

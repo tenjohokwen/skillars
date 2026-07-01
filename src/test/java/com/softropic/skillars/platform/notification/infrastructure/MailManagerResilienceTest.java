@@ -10,11 +10,16 @@ import com.softropic.skillars.platform.notification.service.MailService;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JCircuitBreakerFactory;
 import org.springframework.cloud.client.circuitbreaker.CircuitBreakerFactory;
+import org.springframework.mail.MailParseException;
 import org.springframework.retry.support.RetryTemplate;
+
+import jakarta.mail.internet.AddressException;
+import jakarta.mail.internet.ParseException;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -26,6 +31,7 @@ import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import jakarta.mail.MessagingException;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.times;
@@ -125,5 +131,61 @@ public class MailManagerResilienceTest {
         // Total calls should be 5 calls * 3 retries = 15.
         // If 6th call made it, it would be 18.
         verify(mailService, times(15)).sendEmailFromTemplate(any(), any(), any());
+    }
+
+    @Test
+    void isRetryable_wrappedMailParseException_persistsRetryFalse() throws MessagingException {
+        // MailParseException nested as the cause of a MessagingException, as MimeMessageHelper does
+        // when address/template parsing fails inside a JavaMail call.
+        MessagingException wrapped = new MessagingException("template error", new MailParseException("bad template"));
+        doThrow(wrapped).when(mailService).sendEmailFromTemplate(any(), any(), any());
+
+        mailManager.sendEmailSync(envelope);
+
+        ArgumentCaptor<EnvelopeEntity> captor = ArgumentCaptor.forClass(EnvelopeEntity.class);
+        verify(envelopeEntityRepository).save(captor.capture());
+        // The EmailRetryScheduler polls on this flag — a structurally impossible parse error must
+        // not be picked up again, or it would fail forever.
+        assertThat(captor.getValue().isRetry()).isFalse();
+    }
+
+    @Test
+    void isRetryable_wrappedAddressException_persistsRetryFalse() throws MessagingException {
+        // jakarta.mail.internet.AddressException nested as the cause of a MessagingException, as
+        // InternetAddress parsing does when a recipient address is malformed.
+        MessagingException wrapped = new MessagingException("bad recipient", new AddressException("not-an-email"));
+        doThrow(wrapped).when(mailService).sendEmailFromTemplate(any(), any(), any());
+
+        mailManager.sendEmailSync(envelope);
+
+        ArgumentCaptor<EnvelopeEntity> captor = ArgumentCaptor.forClass(EnvelopeEntity.class);
+        verify(envelopeEntityRepository).save(captor.capture());
+        assertThat(captor.getValue().isRetry()).isFalse();
+    }
+
+    @Test
+    void isRetryable_wrappedJakartaParseException_persistsRetryFalse() throws MessagingException {
+        // jakarta.mail.internet.ParseException nested as the cause of a MessagingException, as
+        // header/RFC822 parsing does on a structurally malformed message.
+        MessagingException wrapped = new MessagingException("malformed header", new ParseException("bad header"));
+        doThrow(wrapped).when(mailService).sendEmailFromTemplate(any(), any(), any());
+
+        mailManager.sendEmailSync(envelope);
+
+        ArgumentCaptor<EnvelopeEntity> captor = ArgumentCaptor.forClass(EnvelopeEntity.class);
+        verify(envelopeEntityRepository).save(captor.capture());
+        assertThat(captor.getValue().isRetry()).isFalse();
+    }
+
+    @Test
+    void isRetryable_connectionTimeout_persistsRetryTrue() throws MessagingException {
+        MessagingException timeout = new MessagingException("Connection timed out");
+        doThrow(timeout).when(mailService).sendEmailFromTemplate(any(), any(), any());
+
+        mailManager.sendEmailSync(envelope);
+
+        ArgumentCaptor<EnvelopeEntity> captor = ArgumentCaptor.forClass(EnvelopeEntity.class);
+        verify(envelopeEntityRepository).save(captor.capture());
+        assertThat(captor.getValue().isRetry()).isTrue();
     }
 }
