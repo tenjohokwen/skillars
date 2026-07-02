@@ -504,6 +504,7 @@ class BookingRequestResourceIT {
             authenticatedHeaders(parentCookies),
             Map.class
         );
+        assertThat(createResp.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         String bookingId = (String) createResp.getBody().get("id");
 
         // Second coach tries to accept
@@ -535,6 +536,7 @@ class BookingRequestResourceIT {
             authenticatedHeaders(parentCookies),
             Map.class
         );
+        assertThat(createResp.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         String bookingId = (String) createResp.getBody().get("id");
 
         // Second coach tries to decline

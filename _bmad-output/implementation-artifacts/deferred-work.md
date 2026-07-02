@@ -685,14 +685,14 @@
 - D2: No log or metric is emitted when `@SchedulerLock` skips a run because another instance already holds the lock — indistinguishable in production from a job silently failing to run due to a bug. [`src/main/java/com/softropic/skillars/platform/notification/config/AsyncConfig.java`]
 - D3: `@SchedulerLock` and `@Transactional` are stacked on the same method with no explicit `@Order`, so their AOP advisor nesting order (lock vs. transaction boundary) is unspecified — plausible but unconfirmed risk that the distributed lock could release before the DB transaction commits. [`src/main/java/com/softropic/skillars/platform/booking/service/BookingExpiryScheduler.java:40`, `BookingReminderScheduler.java`, `src/main/java/com/softropic/skillars/platform/video/service/BandwidthResetService.java`]
 
-
-
-# new issues
-
 ## Deferred from: code review of skillars-deferred-8 (2026-07-02)
 - D1: `resolveParentName()` can render `"null null"` when a user's `first_name`/`last_name` are null — pre-existing behavior, not introduced by this diff; the new `parentName` assertion (AC5) only checks non-null/non-empty, so this garbage value would pass undetected. [`src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java`]
 - D2: `declineBooking_wrongCoach_returns403` reads `createResp.getBody().get("id")` without asserting the booking-creation POST succeeded first — mirrors the same pre-existing gap in `acceptBooking_wrongCoach_returns403`; a transient creation failure surfaces as an opaque NPE/404 instead of a clear assertion failure. [`src/test/java/com/softropic/skillars/platform/booking/api/BookingRequestResourceIT.java`]
 - D3: Hardcoded `PLAYER_ID = 9360000001L` in the new IT is reused against the shared `SecurityIT.SEC_DATA_SQL_PATH` fixture — possible cross-test collision risk if that fixture seeds rows for the same player ID outside the tables cleaned in `@AfterEach`; not provable from this diff alone. [`src/test/java/com/softropic/skillars/platform/development/service/NeglectedSkillDetectionServiceIT.java:41,47`]
+
+
+
+# new issues
 
 ## Deferred from: code review of skillars-deferred-10 (2026-07-02)
 - D0: `pr-build.yml`'s Docker build never runs/scans the built image (`push: false`, no `load: true`) — user decision: `deploy.yml`'s existing smoke test is the real safety net; add `load: true` + a smoke command here only if PR-time runtime validation becomes worth the added CI cost. [`.github/workflows/pr-build.yml`]

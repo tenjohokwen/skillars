@@ -633,7 +633,12 @@ public class BookingService {
 
     private String resolveParentName(Long parentId) {
         return userRepository.findById(parentId)
-            .map(u -> u.getFirstName() + " " + u.getLastName())
+            .map(u -> {
+                String firstName = u.getFirstName() != null ? u.getFirstName() : "";
+                String lastName = u.getLastName() != null ? u.getLastName() : "";
+                String fullName = (firstName + " " + lastName).trim();
+                return fullName.isEmpty() ? "Unknown Parent" : fullName;
+            })
             .orElse("Unknown Parent");
     }
 
