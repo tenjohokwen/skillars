@@ -75,7 +75,7 @@ class VideoRetryUploadIT extends BaseVideoIT {
     }
 
     @Test
-    void retryUpload_onFailedVideo_createsNewSessionVideoStaysFailed() {
+    void retryUpload_onFailedVideo_createsNewSessionVideoTransitionsToUploading() {
         Video failed = seedFailedVideo("owner-retry");
 
         InitializeUploadResponse response = videoService.retryUpload(
@@ -83,8 +83,10 @@ class VideoRetryUploadIT extends BaseVideoIT {
 
         assertThat(response.videoId()).isEqualTo(failed.getId());
 
+        // Story deferred-6, AC3: retry must move the video back to UPLOADING (via VideoLifecycleService)
+        // before the new session is initiated — otherwise the ReconciliationWorker re-FAILs it mid-retry.
         Video video = videoRepository.findById(failed.getId()).orElseThrow();
-        assertThat(video.getOperationalState()).isEqualTo(OperationalState.FAILED);
+        assertThat(video.getOperationalState()).isEqualTo(OperationalState.UPLOADING);
         assertThat(video.getProviderAssetId()).isEqualTo("new-bunny-guid");
 
         List<UploadSession> sessions = uploadSessionRepository.findAll();
@@ -149,7 +151,10 @@ class VideoRetryUploadIT extends BaseVideoIT {
         // quota.release() was attempted even though it threw
         verify(quotaProvider).release("retry-handle");
 
-        // Video remains FAILED (unchanged)
+        // Code review fix (skillars-deferred-6): the video is transitioned to UPLOADING before the
+        // reservation/session attempt, but is reverted back to FAILED in the finally block when a
+        // later step in the retry fails — so it is immediately re-triable rather than stuck in
+        // UPLOADING until the orphaned session expires (up to 60 min) or reconciliation recovers it.
         Video video = videoRepository.findById(failed.getId()).orElseThrow();
         assertThat(video.getOperationalState()).isEqualTo(OperationalState.FAILED);
 
@@ -159,5 +164,26 @@ class VideoRetryUploadIT extends BaseVideoIT {
         assertThat(sessions).hasSize(1);
         assertThat(sessions.get(0).getStatus()).isEqualTo(UploadSessionStatus.PENDING);
         assertThat(sessions.get(0).getProviderUploadId()).isNull();
+    }
+
+    @Test
+    void retryUpload_reserveFailsBeforeSessionCreated_revertsToFailed() {
+        Video failed = seedFailedVideo("owner-reserve-fail");
+
+        doThrow(new RuntimeException("quota service unavailable"))
+            .when(quotaProvider).reserve(anyString(), anyLong(), any());
+
+        assertThatThrownBy(() -> videoService.retryUpload(
+            new RetryUploadRequest(failed.getId(), "owner-reserve-fail", 1024L)))
+            .isInstanceOf(RuntimeException.class);
+
+        // Code review fix (skillars-deferred-6): even though quotaProvider.reserve() fails BEFORE any
+        // upload session is persisted (so UploadSessionExpiryScheduler has nothing to expire and
+        // recover from), the video must still revert to FAILED so retryUpload() is immediately
+        // callable again — it must not depend on ReconciliationWorkerScheduler polling the stale
+        // providerAssetId from the original failed upload for eventual recovery.
+        Video video = videoRepository.findById(failed.getId()).orElseThrow();
+        assertThat(video.getOperationalState()).isEqualTo(OperationalState.FAILED);
+        assertThat(uploadSessionRepository.findAll()).isEmpty();
     }
 }

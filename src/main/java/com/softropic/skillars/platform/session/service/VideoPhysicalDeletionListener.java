@@ -28,7 +28,7 @@ public class VideoPhysicalDeletionListener {
 
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    public void onVideoPurged(com.softropic.skillars.platform.video.contract.event.VideoPhysicalDeletionEvent event) {
+    public void onVideoPurged(com.softropic.skillars.platform.video.contract.event.VideoPurgedEvent event) {
         // Video marked PURGED via user/cascade deletion path.
         // Physical Bunny deletion and drill-ref cleanup are owned by VideoDeletionOutboxProcessor.
         log.debug("[VIDEO_PURGED_EVENT videoId={}] Physical deletion pending in outbox", event.videoId());

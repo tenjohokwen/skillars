@@ -1,7 +1,7 @@
 package com.softropic.skillars.platform.video.service;
 
 import com.softropic.skillars.platform.video.contract.OperationalState;
-import com.softropic.skillars.platform.video.contract.event.VideoPhysicalDeletionEvent;
+import com.softropic.skillars.platform.video.contract.event.VideoPurgedEvent;
 import com.softropic.skillars.platform.video.contract.event.VideoStatusChangedEvent;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
@@ -72,7 +72,7 @@ public class VideoSseService {
 
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    public void onPhysicalDeletion(VideoPhysicalDeletionEvent event) {
+    public void onVideoPurged(VideoPurgedEvent event) {
         CopyOnWriteArrayList<SseEmitter> list = emitters.remove(event.videoId());
         if (list == null || list.isEmpty()) return;
         for (SseEmitter emitter : list) {

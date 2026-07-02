@@ -92,8 +92,7 @@ public class VideoService {
             session.setStatus(UploadSessionStatus.COMMITTED);
             uploadSessionRepository.save(session);
 
-            video.setOperationalState(OperationalState.PROCESSING);
-            videoRepository.save(video);
+            videoLifecycleService.transitionOperationalState(videoId, OperationalState.PROCESSING);
 
             quotaProvider.commit(session.getReservationHandle());
 
@@ -138,8 +137,14 @@ public class VideoService {
 
         String reservationHandle = null;
         boolean success = false;
+        boolean transitionedToUploading = false;
         long start = System.nanoTime();
         try {
+            // Transition back to UPLOADING before initiating the new session so the
+            // ReconciliationWorker does not re-FAIL the video while the retry is in progress.
+            videoLifecycleService.transitionOperationalState(request.videoId(), OperationalState.UPLOADING);
+            transitionedToUploading = true;
+
             reservationHandle = quotaProvider.reserve(request.ownerId(), request.fileSizeBytes(),
                 video.getVideoType());
 
@@ -195,6 +200,15 @@ public class VideoService {
                     quotaProvider.release(reservationHandle);
                 } catch (Exception e) {
                     log.warn("Failed to release quota reservation after retry failure", e);
+                }
+            }
+            if (!success && transitionedToUploading) {
+                try {
+                    // Revert to FAILED so the video is immediately re-triable rather than stuck in
+                    // UPLOADING until the orphaned session expires or reconciliation happens to recover it.
+                    videoLifecycleService.transitionOperationalState(request.videoId(), OperationalState.FAILED);
+                } catch (Exception e) {
+                    log.warn("Failed to revert video to FAILED after retry failure", e);
                 }
             }
             videoMetrics.recordUploadInitLatency(properties.getProvider(), success ? "success" : "error", System.nanoTime() - start);

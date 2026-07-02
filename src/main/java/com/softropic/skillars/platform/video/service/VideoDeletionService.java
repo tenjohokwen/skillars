@@ -3,7 +3,7 @@ package com.softropic.skillars.platform.video.service;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.video.contract.LifecycleTrigger;
 import com.softropic.skillars.platform.video.contract.OperationalState;
-import com.softropic.skillars.platform.video.contract.event.VideoPhysicalDeletionEvent;
+import com.softropic.skillars.platform.video.contract.event.VideoPurgedEvent;
 import com.softropic.skillars.platform.video.contract.exception.VideoDeletionNotAuthorisedException;
 import com.softropic.skillars.platform.video.contract.exception.VideoNotFoundException;
 import com.softropic.skillars.platform.video.repo.Video;
@@ -46,7 +46,7 @@ public class VideoDeletionService {
 
     /**
      * Central deletion method. Atomically marks PURGED, decrements quota (if skipQuotaDecrement=false),
-     * inserts deletion log and outbox rows, and publishes VideoPhysicalDeletionEvent AFTER_COMMIT.
+     * inserts deletion log and outbox rows, and publishes VideoPurgedEvent AFTER_COMMIT.
      * Direct field mutation is used — NOT markPurged() which asserts operationalState==READY.
      */
     @Transactional
@@ -87,7 +87,7 @@ public class VideoDeletionService {
             outboxRepository.save(outbox);
         }
 
-        publisher.publishEvent(new VideoPhysicalDeletionEvent(videoId));
+        publisher.publishEvent(new VideoPurgedEvent(videoId));
     }
 
     @Transactional

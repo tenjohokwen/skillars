@@ -8,6 +8,8 @@ import com.softropic.skillars.platform.video.contract.AccessState;
 import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.contract.Visibility;
 import com.softropic.skillars.platform.video.repo.Video;
+import com.softropic.skillars.platform.video.repo.VideoApprovalRequest;
+import com.softropic.skillars.platform.video.repo.VideoApprovalRequestRepository;
 import com.softropic.skillars.platform.video.repo.VideoDeletionOutboxRepository;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,6 +32,7 @@ class AccountDeletionCascadeIT extends BaseVideoIT {
     @Autowired VideoDeletionService videoDeletionService;
     @Autowired VideoRepository videoRepository;
     @Autowired VideoDeletionOutboxRepository outboxRepository;
+    @Autowired VideoApprovalRequestRepository approvalRequestRepository;
     @Autowired ApplicationEventPublisher eventPublisher;
     @Autowired TransactionTemplate transactionTemplate;
 
@@ -37,6 +40,7 @@ class AccountDeletionCascadeIT extends BaseVideoIT {
     void setUp() {
         doNothing().when(videoProviderAdapter).deleteAsset(org.mockito.ArgumentMatchers.anyString());
         outboxRepository.deleteAll();
+        approvalRequestRepository.deleteAll();
         videoRepository.deleteAll();
     }
 
@@ -55,6 +59,26 @@ class AccountDeletionCascadeIT extends BaseVideoIT {
         assertThat(videoRepository.findById(v2.getId()).orElseThrow().getOperationalState())
             .isEqualTo(OperationalState.PURGED);
         assertThat(outboxRepository.findAll()).hasSize(2);
+    }
+
+    @Test
+    void cascadeDeleteAccount_cancelsPendingApprovals() {
+        // Story deferred-6, AC4: pending VideoApprovalRequest rows for a deleted user's videos
+        // must be cancelled once the account-deletion cascade completes.
+        String parentOwnerId = "parent-uuid-" + java.util.UUID.randomUUID();
+        Video v1 = seedVideo(parentOwnerId, "asset-a1");
+        Video v2 = seedVideo(parentOwnerId, "asset-a2");
+        VideoApprovalRequest req1 = seedPendingApproval(v1.getId(), 9340001L, 9340002L);
+        VideoApprovalRequest req2 = seedPendingApproval(v2.getId(), 9340003L, 9340002L);
+
+        AccountDeletionRequestedEvent event =
+            new AccountDeletionRequestedEvent(parentOwnerId, AccountRole.PARENT, List.of());
+        listener.onAccountDeleted(event);
+
+        assertThat(approvalRequestRepository.findById(req1.getId()).orElseThrow().getStatus())
+            .isEqualTo("CANCELLED");
+        assertThat(approvalRequestRepository.findById(req2.getId()).orElseThrow().getStatus())
+            .isEqualTo("CANCELLED");
     }
 
     @Test
@@ -152,6 +176,15 @@ class AccountDeletionCascadeIT extends BaseVideoIT {
             .hasSize(1)
             .first()
             .satisfies(row -> assertThat(row.getBunnyVideoId()).isNull());
+    }
+
+    private VideoApprovalRequest seedPendingApproval(java.util.UUID videoId, long playerId, long parentId) {
+        VideoApprovalRequest req = new VideoApprovalRequest();
+        req.setVideoId(videoId);
+        req.setPlayerId(playerId);
+        req.setParentId(parentId);
+        req.setStatus("PENDING");
+        return approvalRequestRepository.save(req);
     }
 
     private Video seedVideo(String ownerId, String providerAssetId) {

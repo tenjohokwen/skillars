@@ -1,6 +1,6 @@
 # Story Deferred-6: Video Module Hardening
 
-Status: backlog
+Status: done
 
 ## Story
 
@@ -25,85 +25,45 @@ so that videos are never stuck in wrong states, deletion consumers are safe to a
    **Then** `videos.operational_state` is transitioned back to `UPLOADING` before the new upload session is initiated — so the video is not left in `FAILED` while the retry is in progress (which causes the ReconciliationWorker to re-FAIL it)
 
 4. **Given** an account deletion cascade runs for a user who owns videos
-   **When** `VideoDeletionService.cascadeDeleteForAccount()` completes
+   **When** the account-deletion cascade completes (`AccountDeletionCascadeListener.onAccountDeleted()`, which calls `VideoDeletionService.cascadeDeleteForAccount()` for the primary account and any linked player accounts)
    **Then** all pending `VideoApprovalRequest` rows for the deleted user's videos are cancelled/deleted — parents no longer see stale approval cards for purged videos
-   **And** `VideoApprovalRequestRepository.cancelAllPendingForVideo(videoId)` is called for each video processed in the cascade
+   **And** `VideoApprovalRequestRepository.cancelAllPendingForOwners(affectedOwnerIds)` is called once, after the cascade(s) complete, scoped to the affected owner IDs — a bulk equivalent of calling `cancelAllPendingForVideo(videoId)` per video that avoids N+1 queries
+   **Note (code review, 2026-07-02):** this guarantee lives in `AccountDeletionCascadeListener`, not inside `cascadeDeleteForAccount()` itself. It is correct today because the listener is the sole production caller of `cascadeDeleteForAccount()`. Any future caller that bypasses the listener would skip approval cancellation — flagged as a latent risk, not fixed in code, since no such caller currently exists.
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Rename `VideoPhysicalDeletionEvent` → `VideoPurgedEvent`** (AC: 1)
-  - [ ] Rename the class: `src/main/java/com/softropic/skillars/platform/video/contract/VideoPhysicalDeletionEvent.java` → `VideoPurgedEvent.java`
-  - [ ] Update the class declaration: `public class VideoPurgedEvent extends ApplicationEvent { ... }` — keep the same fields (videoId, ownerId, or whatever the current payload is)
-  - [ ] Find and update all references:
-    `find src -name "*.java" | xargs grep -l "VideoPhysicalDeletionEvent"` → rename in each file
-  - [ ] Known consumers: `VideoPhysicalDeletionListener.java` (in `DrillUploadService` package or wherever Story 4.3 placed it) — rename both the import and the `@EventListener` / `@TransactionalEventListener` method parameter type
+- [x] **Task 1 — Rename `VideoPhysicalDeletionEvent` → `VideoPurgedEvent`** (AC: 1)
+  - [x] Rename the class: `src/main/java/com/softropic/skillars/platform/video/contract/event/VideoPhysicalDeletionEvent.java` → `VideoPurgedEvent.java`
+  - [x] Update the class declaration — record kept its single `videoId` field
+  - [x] Find and update all references (see Completion Notes for the two-events discovery)
+  - [x] Known consumers: `VideoPhysicalDeletionListener.java` (`platform.session.service`) — renamed the `onVideoPurged` parameter type; the unrelated `onVideoPhysicalDeletion` (drillId) method was left untouched — see Completion Notes
 
-- [ ] **Task 2 — Move `VideoPurgedEvent` publication to AFTER_COMMIT** (AC: 1)
-  - [ ] Read `VideoDeletionService.java` — find the `deleteVideo()` method (or `logicallyDelete()` — confirm the method name)
-  - [ ] Current: `eventPublisher.publishEvent(new VideoPhysicalDeletionEvent(...))` called inside `@Transactional deleteVideo()`
-  - [ ] Fix: replace with `@TransactionalEventListener(AFTER_COMMIT)` publication pattern. Two options:
-    - **Option A** (preferred): change the `publishEvent` call to use Spring's `TransactionSynchronizationManager` to fire AFTER_COMMIT:
-      ```java
-      TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-          @Override
-          public void afterCommit() {
-              eventPublisher.publishEvent(new VideoPurgedEvent(VideoDeletionService.this, videoId, ownerId));
-          }
-      });
-      ```
-    - **Option B**: annotate the consuming listener with `@TransactionalEventListener(phase = AFTER_COMMIT)` so it only fires after the TX commits (safer if multiple consumers exist or will exist)
-  - [ ] Option B is preferred if consumers are few and known — it is the existing pattern used by `AccountDeletionCascadeListener`
-  - [ ] If the existing `VideoPhysicalDeletionListener` already uses `@TransactionalEventListener`, this task may already be partially correct — verify before editing
-  - [ ] **CRITICAL**: any future consumer of `VideoPurgedEvent` MUST use `@TransactionalEventListener(phase = AFTER_COMMIT)` — add a Javadoc comment on `VideoPurgedEvent` stating this requirement
+- [x] **Task 2 — Move `VideoPurgedEvent` publication to AFTER_COMMIT** (AC: 1)
+  - [x] Read `VideoDeletionService.java` — `deleteVideo()` confirmed as the publishing method
+  - [x] Already implemented via **Option B** prior to this story: both `VideoPhysicalDeletionListener.onVideoPurged` and `VideoSseService.onVideoPurged` (renamed from `onPhysicalDeletion`) were already annotated `@TransactionalEventListener(phase = AFTER_COMMIT)` — no behavioral change needed, only the rename
+  - [x] Verified via `VideoPurgedEventIT` that a rolled-back `deleteVideo()` never reaches the listener, and a committed one does
+  - [x] Added the CRITICAL Javadoc requirement on `VideoPurgedEvent` stating future consumers MUST use `@TransactionalEventListener(phase = AFTER_COMMIT)`
 
-- [ ] **Task 3 — Fix `confirmUpload()` to go through lifecycle enforcement** (AC: 2)
-  - [ ] Read `VideoService.java` — find `confirmUpload()` — locate the line that writes `PROCESSING` via direct `videoRepository.save()`
-  - [ ] Replace:
-    ```java
-    // BEFORE: direct save bypasses VALID_TRANSITIONS
-    video.setOperationalState("PROCESSING");
-    videoRepository.save(video);
+- [x] **Task 3 — Fix `confirmUpload()` to go through lifecycle enforcement** (AC: 2)
+  - [x] Replaced the direct `video.setOperationalState(PROCESSING); videoRepository.save(video);` with `videoLifecycleService.transitionOperationalState(videoId, OperationalState.PROCESSING)` (actual method name — the story draft's `transition()` does not exist)
+  - [x] `UPLOADING → PROCESSING` was already present in `VALID_TRANSITIONS` — no state-machine change needed
 
-    // AFTER: go through lifecycle enforcement
-    videoLifecycleService.transition(videoId, OperationalState.PROCESSING);
-    ```
-  - [ ] Confirm `VideoLifecycleService.transition()` method signature and `OperationalState.PROCESSING` enum value
-  - [ ] If `UPLOADING → PROCESSING` is not in `VALID_TRANSITIONS`, add it — read `VALID_TRANSITIONS` map before editing; adding a missing transition is expected
+- [x] **Task 4 — Fix `retryUpload()` to transition back to UPLOADING** (AC: 3)
+  - [x] Added `videoLifecycleService.transitionOperationalState(request.videoId(), OperationalState.UPLOADING)` as the first statement in the retry `try` block, before quota reservation and session creation
+  - [x] `FAILED → UPLOADING` was already present in `VALID_TRANSITIONS` — no state-machine change needed
+  - [x] Corrected two pre-existing `VideoRetryUploadIT` tests that had pinned the pre-fix bug (asserted the video stayed `FAILED` during retry)
 
-- [ ] **Task 4 — Fix `retryUpload()` to transition back to UPLOADING** (AC: 3)
-  - [ ] Read `VideoService.java` — find `retryUpload()` — confirm what state it leaves the video in
-  - [ ] At the start of the retry logic, before creating a new upload session:
-    ```java
-    videoLifecycleService.transition(videoId, OperationalState.UPLOADING);
-    ```
-  - [ ] This must run before the new `UploadSession` is created so the ReconciliationWorker's `findScanningOlderThan` / `findFailedOlderThan` queries do not re-FAIL the video while it's mid-retry
-  - [ ] Add `FAILED → UPLOADING` to `VALID_TRANSITIONS` if not already present
+- [x] **Task 5 — Cancel pending approvals on account deletion cascade** (AC: 4)
+  - [x] `VideoApprovalRequestRepository.cancelAllPendingForVideo(videoId)` already existed (UPDATE-based soft cancel, not hard delete — `status` is a plain `VARCHAR` with a CHECK constraint, not an enum) and is already used by `VideoDeletionService.deleteByUser()` for the single-video user-deletion path
+  - [x] `cascadeDeleteForAccount()` itself does **not** call it per-video — see Completion Notes for why no code change was made here
+  - [x] `VideoApprovalRequestRepository` was already injected into `VideoDeletionService`
 
-- [ ] **Task 5 — Cancel pending approvals on account deletion cascade** (AC: 4)
-  - [ ] Add to `VideoApprovalRequestRepository`:
-    ```java
-    @Modifying
-    @Query("DELETE FROM VideoApprovalRequest r WHERE r.videoId = :videoId AND r.status = 'PENDING'")
-    int cancelAllPendingForVideo(@Param("videoId") UUID videoId);
-    ```
-    — or use `status = 'CANCELLED'` if the approval workflow soft-deletes rather than hard-deletes; read `VideoApprovalRequest.java` to confirm the status lifecycle
-  - [ ] In `VideoDeletionService.cascadeDeleteForAccount()`:
-    ```java
-    for (Video video : videosToDelete) {
-        // existing per-video deletion logic
-        deleteVideoPhysically(video);
-        // NEW: cancel stale approval requests
-        videoApprovalRequestRepository.cancelAllPendingForVideo(video.getId());
-    }
-    ```
-  - [ ] Inject `VideoApprovalRequestRepository` into `VideoDeletionService` if not already injected
-
-- [ ] **Task 6 — Integration tests** (AC: 1, 2, 3, 4)
-  - [ ] TSID range `9340_xxx`
-  - [ ] `confirmUpload_transitionsViaLifecycleService()` — call `confirmUpload()` on a video in `UPLOADING` state; verify `operational_state = 'PROCESSING'` was written via lifecycle (mock `VideoLifecycleService` and verify `transition()` was called, not a direct repo save)
-  - [ ] `retryUpload_setsUploadingBeforeNewSession()` — call `retryUpload()` on a FAILED video; verify `operational_state = 'UPLOADING'` immediately after the call (before the upload session is created)
-  - [ ] `cascadeDeleteAccount_cancelsPendingApprovals()` — seed: user with 2 videos, 1 pending approval request per video; run cascade; verify approval rows are deleted/cancelled
-  - [ ] `videoPurgedEvent_publishedAfterCommit()` — verify the event fires after the TX commits (verify the listener's `@TransactionalEventListener` annotation fires correctly; use `@Commit` test + event capture)
+- [x] **Task 6 — Integration tests** (AC: 1, 2, 3, 4)
+  - [x] TSID range `9340_xxx` used for the new approval-cancellation seed data
+  - [x] `confirmUpload_transitionsViaLifecycleService()` — `VideoServiceTest` (Mockito unit test): verifies `transitionOperationalState()` was called and `videoRepository.save()` was never called directly
+  - [x] `retryUpload_setsUploadingBeforeNewSession()` — `VideoServiceTest`: verifies (via `InOrder`) the transition to `UPLOADING` happens before quota reservation and session save
+  - [x] `cascadeDeleteAccount_cancelsPendingApprovals()` — added to `AccountDeletionCascadeIT`: seeds 2 videos + 1 pending approval each, runs the cascade, asserts both approvals are `CANCELLED`
+  - [x] `videoPurgedEvent_publishedAfterCommit()` — new `VideoPurgedEventIT`: asserts the listener fires after a committed `deleteVideo()`, and asserts (via `Mockito.never()` + `Awaitility`) it never fires after a rolled-back one
 
 ## Dev Notes
 
@@ -145,18 +105,74 @@ Update the import, the `@EventListener` parameter type, and the log message to r
 
 ### Agent Model Used
 
+claude-sonnet-5
+
 ### Debug Log References
 
+None — no test failures required debugging beyond the two pre-existing `VideoRetryUploadIT` assertions noted below (expected consequence of the AC3 fix, not a defect).
+
 ### Completion Notes List
+
+- **Task 1 — two distinct `VideoPhysicalDeletionEvent` classes existed.** The codebase had
+  `platform.session.contract.VideoPhysicalDeletionEvent(videoId, drillId)` — published by
+  `DrillUploadService` for drill-orphan video cleanup (Story 4.3) — and a *separate*
+  `platform.video.contract.event.VideoPhysicalDeletionEvent(videoId)` — published by
+  `VideoDeletionService.deleteVideo()` for the logical-purge notification AC1 describes. Only the
+  latter was renamed to `VideoPurgedEvent`; the drill-orphan event and its
+  `onVideoPhysicalDeletion` listener method were left untouched as they are an unrelated concept
+  outside AC1's scope. `VideoPhysicalDeletionListener` (in `platform.session.service`, not
+  `platform.session.listener` as the Dev Notes assumed) keeps both listener methods, with only the
+  `onVideoPurged` parameter type updated.
+- **Task 2 — AFTER_COMMIT was already correct.** Both consumers
+  (`VideoPhysicalDeletionListener.onVideoPurged`, `VideoSseService.onVideoPurged`) already used
+  `@TransactionalEventListener(phase = AFTER_COMMIT)` (Option B) before this story. No publication
+  logic changed; only the rename and a new Javadoc requirement on `VideoPurgedEvent`.
+- **Tasks 3/4 — method name and VALID_TRANSITIONS.** `VideoLifecycleService`'s real method is
+  `transitionOperationalState(UUID, OperationalState)`, not `transition()`. `VALID_TRANSITIONS`
+  already contained `UPLOADING→PROCESSING` and `FAILED→UPLOADING`, so no state-machine changes
+  were required — only `VideoService.confirmUpload()`/`retryUpload()` needed to route through the
+  lifecycle service instead of a direct `videoRepository.save()`.
+- **Task 4 — fixed two pre-existing tests that pinned the bug.** `VideoRetryUploadIT` had
+  `retryUpload_onFailedVideo_createsNewSessionVideoStaysFailed` (asserting the video incorrectly
+  stayed `FAILED` during retry) and an assertion in `retryUpload_quotaReleaseFails_sessionNotCreated`
+  asserting the same. Both were updated to assert `UPLOADING`, matching the AC3 fix; the first test
+  was renamed to `retryUpload_onFailedVideo_createsNewSessionVideoTransitionsToUploading`.
+- **Task 5 — AC4 was already functionally satisfied, no production code changed.**
+  `AccountDeletionCascadeListener.onAccountDeleted()` already calls
+  `VideoApprovalRequestRepository.cancelAllPendingForOwners(affectedOwnerIds)` once, after
+  `cascadeDeleteForAccount()` completes for the primary account and any linked player accounts —
+  this covers every video owned by those owners, achieving the same outcome as calling
+  `cancelAllPendingForVideo(videoId)` per video inside the cascade loop, without the N+1 query cost.
+  Adding the literal per-video call as the story draft specified would have been redundant (the
+  bulk query already cancels the same rows) so it was intentionally not added. A regression test
+  (`cascadeDeleteAccount_cancelsPendingApprovals`) was added to lock in this behavior since no test
+  previously covered it.
+- **Task 6 — full test run.** Ran the complete `video` and `session` package test suites
+  (169 test classes) plus the new/changed tests explicitly; all pass with 0 failures/errors.
 
 ### File List
 
 **Renamed Files:**
-- `VideoPhysicalDeletionEvent.java` → `VideoPurgedEvent.java`
+- `src/main/java/com/softropic/skillars/platform/video/contract/event/VideoPhysicalDeletionEvent.java` → `VideoPurgedEvent.java`
 
 **Modified Files:**
 - `src/main/java/com/softropic/skillars/platform/video/service/VideoDeletionService.java`
+- `src/main/java/com/softropic/skillars/platform/video/service/VideoSseService.java`
+- `src/main/java/com/softropic/skillars/platform/session/service/VideoPhysicalDeletionListener.java`
 - `src/main/java/com/softropic/skillars/platform/video/service/VideoService.java`
-- `src/main/java/com/softropic/skillars/platform/video/service/VideoLifecycleService.java`
-- `src/main/java/com/softropic/skillars/platform/video/repo/VideoApprovalRequestRepository.java`
-- `src/main/java/com/softropic/skillars/platform/session/listener/VideoPhysicalDeletionListener.java` → `VideoPurgedEventListener.java`
+- `src/test/java/com/softropic/skillars/platform/video/service/VideoRetryUploadIT.java` (corrected two assertions pinning the pre-fix bug)
+- `src/test/java/com/softropic/skillars/platform/video/service/AccountDeletionCascadeIT.java` (added AC4 regression test)
+
+**Added Files:**
+- `src/test/java/com/softropic/skillars/platform/video/service/VideoServiceTest.java`
+- `src/test/java/com/softropic/skillars/platform/video/service/VideoPurgedEventIT.java`
+
+### Review Findings
+
+1. - [x] [Review][Patch] `retryUpload()` left videos stuck in `UPLOADING` (up to 60min or indefinitely) when the retry itself failed after the state transition committed, contradicting AC3 — fixed by reverting to `FAILED` in the `finally` block [VideoService.java:141-224]
+2. - [x] [Review][Patch] AC4 wording said `cascadeDeleteForAccount()` calls `cancelAllPendingForVideo(videoId)` per video, but cancellation actually happens in `AccountDeletionCascadeListener` via a bulk `cancelAllPendingForOwners()` call — spec wording updated to match the actual (functionally equivalent, N+1-avoiding) implementation; no code change
+
+### Change Log
+
+- 2026-07-02 — Implemented Story deferred-6 (Video Module Hardening): renamed `VideoPhysicalDeletionEvent`→`VideoPurgedEvent`, routed `confirmUpload()`/`retryUpload()` through `VideoLifecycleService`, verified AC1/AC4 were already correctly implemented and added regression tests to lock in that behavior, fixed two pre-existing tests that pinned the AC3 bug. 6/6 tasks complete, status → review.
+- 2026-07-02 — Code review (bmad-code-review, 3-layer adversarial + spec audit): found and fixed a regression where `retryUpload()` could permanently strand a video in `UPLOADING` on failure — added catch-and-revert-to-`FAILED` logic plus a new regression test (`retryUpload_reserveFailsBeforeSessionCreated_revertsToFailed`) and updated the existing pinned test to assert the corrected behavior. Also corrected AC4's wording to describe the actual bulk-cancellation implementation. Both patches applied; status → done.
