@@ -88,15 +88,18 @@ What `provision.sh` does (all steps are idempotent — safe to re-run):
 1. Installs system packages: Docker Engine, Docker Compose plugin, fail2ban, ufw
 2. Applies SSH hardening: password authentication disabled, root login key-only
 3. Configures fail2ban: sshd jail, maxretry=5, bantime=3600s
-4. Creates directory structure: `/opt/skillars/data/postgres`, `/opt/skillars/lgtm`, `/opt/skillars/traefik`
-5. Creates `/opt/skillars/traefik/acme.json` with mode 600 (required by Traefik; no manual step needed)
-6. Mounts the Hetzner Volume (`/dev/sdb`) at `/opt/skillars/data` and creates data subdirectories with correct ownership
+4. Enables `ufw` (host-level firewall): allows SSH (22), HTTP (80), and HTTPS (443), then sets default-deny-incoming / default-allow-outgoing — SSH is allowed *before* `ufw` is enabled so the active provisioning session is not terminated
+5. Creates directory structure: `/opt/skillars/data/postgres`, `/opt/skillars/lgtm`, `/opt/skillars/traefik`
+6. Creates `/opt/skillars/traefik/acme.json` with mode 600 (required by Traefik; no manual step needed)
+7. Mounts the Hetzner Volume (`/dev/sdb`) at `/opt/skillars/data` and creates data subdirectories with correct ownership
 
-> If the Volume is not attached yet, section 6 logs a warning and skips the mount. Attach it in the Hetzner Console and re-run `provision.sh` to complete the mount.
+> If the Volume is not attached yet, section 7 logs a warning and skips the mount. Attach it in the Hetzner Console and re-run `provision.sh` to complete the mount.
 
 ---
 
 ## Step 4: Apply the Firewall
+
+> **Defence in depth:** `provision.sh` (Step 3) already enabled `ufw`, a host-level firewall running inside the VM kernel (allows 22/80/443, default-deny incoming). The Hetzner Cloud firewall applied below is the primary network perimeter — it filters traffic before it ever reaches the VM. **Note:** Docker manages iptables directly for ports it publishes (80/443, serving Traefik), which can bypass ufw's rules for those ports — today, ufw's SSH (22) rule is the port genuinely enforced host-side; the Hetzner Cloud firewall remains the real perimeter for 80/443. The two layers are otherwise independent: during a Hetzner API outage, the cloud firewall remains active (managed by Hetzner infrastructure) and ufw's SSH enforcement remains active regardless of Hetzner API state.
 
 Run this from your **local machine** (not the Node):
 
@@ -240,7 +243,7 @@ All `docker compose` commands below must be run from `/opt/skillars` on the Node
 - Confirm PostgreSQL is healthy: `docker compose ps postgres`
 
 **Volume not mounted / PostgreSQL data not on persistent storage**
-- If `provision.sh` section 6 logged a warning, the Volume was not attached at provisioning time
+- If `provision.sh` section 7 logged a warning, the Volume was not attached at provisioning time
 - Attach the Volume in the Hetzner Cloud Console, then re-run: `ssh root@<NODE_IP> "bash /opt/skillars/deploy/provision.sh"`
 
 **SSH access locked out after firewall**

@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Load SSH key
-        uses: webfactory/ssh-agent@v0.9.0
+        uses: webfactory/ssh-agent@dc588b651fe13675774614f8e6a936a468676387  # v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_DEPLOY_KEY }}
 
@@ -66,6 +66,8 @@ jobs:
       - name: Smoke test
         id: smoke
         run: |
+          echo "Waiting 60s for JVM startup (matches docker-compose start_period)..."
+          sleep 60
           RESULT="fail"
           for i in $(seq 1 12); do
             STATUS=$(ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "
@@ -104,7 +106,7 @@ jobs:
 
       - name: Notify Slack — success
         if: steps.smoke.outputs.result == 'pass'
-        uses: slackapi/slack-github-action@v2.0.0
+        uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d  # v2.0.0
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
           webhook-type: incoming-webhook
@@ -113,7 +115,7 @@ jobs:
 
       - name: Notify Slack — failure & revert
         if: steps.smoke.outputs.result == 'fail'
-        uses: slackapi/slack-github-action@v2.0.0
+        uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d  # v2.0.0
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
           webhook-type: incoming-webhook
@@ -122,7 +124,7 @@ jobs:
 
       - name: Email — success
         if: steps.smoke.outputs.result == 'pass'
-        uses: dawidd6/action-send-mail@v3
+        uses: dawidd6/action-send-mail@4226df7daafa6fc901a43789c49bf7ab309066e7  # v3.11.0
         with:
           server_address: ${{ secrets.SMTP_HOST }}
           server_port: ${{ secrets.SMTP_PORT }}
@@ -138,7 +140,7 @@ jobs:
 
       - name: Email — failure & revert
         if: steps.smoke.outputs.result == 'fail'
-        uses: dawidd6/action-send-mail@v3
+        uses: dawidd6/action-send-mail@4226df7daafa6fc901a43789c49bf7ab309066e7  # v3.11.0
         with:
           server_address: ${{ secrets.SMTP_HOST }}
           server_port: ${{ secrets.SMTP_PORT }}

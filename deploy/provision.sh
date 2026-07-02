@@ -85,7 +85,24 @@ else
 fi
 
 # ──────────────────────────────────────────────────
-# 5. Directory structure
+# 5. Host firewall (ufw)
+# ──────────────────────────────────────────────────
+log "Configuring ufw..."
+# Allow SSH first — CRITICAL: must happen before 'ufw enable' or the SSH session may terminate
+ufw allow 22/tcp comment 'SSH'
+# Traefik exposes 80 and 443 to the host
+ufw allow 80/tcp comment 'HTTP'
+ufw allow 443/tcp comment 'HTTPS'
+# Default policies
+ufw default deny incoming
+ufw default allow outgoing
+# Enable (--force skips the interactive confirmation prompt; idempotent if already enabled)
+ufw --force enable
+log "ufw status:"
+ufw status verbose
+
+# ──────────────────────────────────────────────────
+# 6. Directory structure
 # ──────────────────────────────────────────────────
 log "Creating deployment directory structure..."
 mkdir -p \
@@ -96,7 +113,7 @@ mkdir -p \
 log "Deployment directories created (or already exist)."
 
 # ──────────────────────────────────────────────────
-# 5.5 Security file permissions
+# 6.5 Security file permissions
 # ──────────────────────────────────────────────────
 
 # acme.json — Traefik refuses to start if this file is missing or has wrong permissions.
@@ -140,7 +157,7 @@ else
 fi
 
 # ──────────────────────────────────────────────────
-# 6. Hetzner Volume mount (/dev/sdb → /opt/skillars/data)
+# 7. Hetzner Volume mount (/dev/sdb → /opt/skillars/data)
 # ──────────────────────────────────────────────────
 VOLUME_DEVICE="/dev/sdb"
 MOUNT_POINT="${DEPLOY_ROOT}/data"

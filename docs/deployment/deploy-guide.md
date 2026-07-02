@@ -82,7 +82,7 @@ The workflow will:
   ```
   docker compose pull app && docker compose up -d --no-deps app
   ```
-- Run a Smoke Test via `docker exec` against `http://localhost:8367/manage/health` (up to 60 seconds / 12 attempts) — the management port is not exposed to the host; `/actuator/health` is the public path rewritten by Traefik and is not used here
+- Run a Smoke Test via `docker exec` against `http://localhost:8367/manage/health` — waits 60 seconds upfront (matching the `app` container's `start_period: 60s` health check grace window) before the first check, then retries up to 12 attempts (~60 more seconds worst case). The management port is not exposed to the host; `/actuator/health` is the public path rewritten by Traefik and is not used here
 
 ---
 

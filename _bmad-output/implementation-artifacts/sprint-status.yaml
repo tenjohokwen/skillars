@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-07-02 # skillars-deferred-9 frontend UX polish — code review complete, 7 patches applied, status done
+last_updated: 2026-07-02 # skillars-deferred-10 CI/CD & deployment hardening — code review complete, status done
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -282,4 +282,4 @@ development_status:
   skillars-deferred-9-frontend-ux-polish: done
 
   # Deferred 10: CI/CD & Deployment Hardening
-  skillars-deferred-10-cicd-deployment-hardening: backlog
+  skillars-deferred-10-cicd-deployment-hardening: done
