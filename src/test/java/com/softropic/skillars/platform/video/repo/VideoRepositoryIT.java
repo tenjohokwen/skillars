@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class VideoRepositoryIT extends BaseVideoIT {
@@ -28,6 +29,14 @@ class VideoRepositoryIT extends BaseVideoIT {
 
         assertThatThrownBy(() -> videoRepository.saveAndFlush(seedVideo("asset-9310-dup")))
             .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void nullProviderAssetId_multipleVideosCoexist() {
+        videoRepository.saveAndFlush(seedVideo(null));
+
+        assertThatCode(() -> videoRepository.saveAndFlush(seedVideo(null)))
+            .doesNotThrowAnyException();
     }
 
     private Video seedVideo(String providerAssetId) {

@@ -3,11 +3,15 @@ package com.softropic.skillars.platform.session.api;
 import com.softropic.skillars.config.TestConfig;
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.security.SecurityIT;
+import com.softropic.skillars.platform.session.repo.Session;
+import com.softropic.skillars.platform.session.repo.SessionRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -23,11 +27,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -65,6 +72,9 @@ class SessionTemplateResourceIT extends BaseSessionIT {
 
     @MockitoBean
     VideoProviderAdapter videoProviderAdapter;
+
+    @Autowired
+    SessionRepository sessionRepository;
 
     @BeforeEach
     void setUp() {
@@ -436,7 +446,7 @@ class SessionTemplateResourceIT extends BaseSessionIT {
         List<Future<Integer>> futures = new ArrayList<>();
         for (int i = 0; i < threads; i++) {
             futures.add(pool.submit(() -> {
-                try { barrier.await(10, TimeUnit.SECONDS); } catch (Exception ignored) {}
+                awaitBarrier(barrier);
                 try {
                     ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
                         baseUrl() + TEMPLATES_BASE + "/" + templateId + "/deploy?bookingId=" + confirmedBookingId,
@@ -460,12 +470,84 @@ class SessionTemplateResourceIT extends BaseSessionIT {
         // commits -> uq_sessions_booking_id violation -> 409, per AC 7) or, if the two requests don't
         // truly interleave, via the pre-check (existsByBookingId() sees the winner's committed row -> 403,
         // same as the sequential case covered by deployTemplate_duplicateBooking_returns403SessionAlreadyExists).
-        // Either way exactly one session plan must be created and the loser must never succeed.
+        // Either way exactly one session plan must be created and the loser must never succeed. The DB-level
+        // race path itself is exercised deterministically by deployTemplateRace_dbConstraintRejectsConcurrentInsert().
         assertThat(outcomes).as("Exactly one deploy must succeed with 201")
             .filteredOn(status -> status == HttpStatus.CREATED.value()).hasSize(1);
         assertThat(outcomes).as("The losing concurrent deploy must fail with 409 or 403, never succeed twice")
             .filteredOn(status -> status == HttpStatus.CONFLICT.value() || status == HttpStatus.FORBIDDEN.value())
             .hasSize(1);
+    }
+
+    @Test
+    void deployTemplateRace_dbConstraintRejectsConcurrentInsert() throws Exception {
+        // Deterministic counterpart to deployTemplateTwiceForSameBooking_secondFails(): that HTTP-level
+        // test can legitimately resolve via the pre-check (403) without ever tripping uq_sessions_booking_id
+        // if the two requests don't interleave precisely. This test drives the same check-then-insert
+        // sequence directly against the repository, with the barrier placed between the existence check and
+        // the insert, so both transactions are guaranteed to pass the check before either commits — forcing
+        // the second commit to hit the unique constraint every run.
+        int threads = 2;
+        CyclicBarrier barrier = new CyclicBarrier(threads);
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+
+        List<Future<Boolean>> futures = new ArrayList<>();
+        for (int i = 0; i < threads; i++) {
+            futures.add(pool.submit(() -> {
+                try {
+                    return Boolean.TRUE.equals(transactionTemplate.execute(status -> {
+                        sessionRepository.existsByBookingId(confirmedBookingId);
+                        awaitBarrier(barrier);
+
+                        Session session = new Session();
+                        session.setBookingId(confirmedBookingId);
+                        session.setCoachId(instrCoachId);
+                        session.setPlayerId(1L);
+                        session.setBlocks(List.of());
+                        session.setEquipmentList(List.of());
+                        session.setDevelopmentFocus(List.of());
+                        session.setStatus("DRAFT");
+                        sessionRepository.saveAndFlush(session);
+                        return true;
+                    }));
+                } catch (DataIntegrityViolationException e) {
+                    return false;
+                }
+            }));
+        }
+        pool.shutdown();
+        assertThat(pool.awaitTermination(60, TimeUnit.SECONDS))
+            .as("Both racing transactions must complete within 60 seconds")
+            .isTrue();
+
+        List<Boolean> outcomes = new ArrayList<>();
+        for (Future<Boolean> f : futures) {
+            try {
+                outcomes.add(f.get());
+            } catch (ExecutionException e) {
+                if (e.getCause() instanceof DataIntegrityViolationException) {
+                    outcomes.add(false);
+                } else {
+                    throw e;
+                }
+            }
+        }
+
+        assertThat(outcomes).as("Exactly one concurrent insert for the same booking_id must commit")
+            .filteredOn(Boolean::booleanValue).hasSize(1);
+        assertThat(outcomes).as("uq_sessions_booking_id must reject the losing concurrent insert")
+            .filteredOn(success -> !success).hasSize(1);
+    }
+
+    private static void awaitBarrier(CyclicBarrier barrier) {
+        try {
+            barrier.await(10, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("Barrier synchronization failed — threads never interleaved as required", e);
+        } catch (BrokenBarrierException | TimeoutException e) {
+            throw new AssertionError("Barrier synchronization failed — threads never interleaved as required", e);
+        }
     }
 
     @Test

@@ -79,7 +79,7 @@ so that queries are performant under production data volumes and data-integrity 
   - [x] Verify the schema name (`video`) and column name (`provider_asset_id`) from V53 or the video module init migration
 
 - [x] **Task 3 — Flyway V78: Drill dedup and session booking constraint** (AC: 5, 7)
-  - [x] Create `src/main/resources/db/migration/V78__drill_dedup_session_booking_unique.sql`:
+  - [x] Create `src/main/resources/db/migration/V78__drill_dedup_unique.sql`:
     ```sql
     -- AC 5: prevent duplicate private drill names per coach
     -- Partial: only applies to COACH-owned drills (library_type = 'COACH')
@@ -211,12 +211,14 @@ All 30 tests in the three touched/new IT classes (`DrillLibraryResourceIT`, `Ses
 - `src/main/resources/db/migration/V77__video_provider_asset_unique.sql`
 - `src/main/resources/db/migration/V78__drill_dedup_unique.sql`
 - `src/main/resources/db/migration/V79__credit_ledger_append_only.sql`
+- `src/main/resources/db/migration/V83__fix_session_packs_expiry_index_predicate.sql`
 - `src/test/java/com/softropic/skillars/platform/video/repo/VideoRepositoryIT.java`
 
 **Modified Files:**
 - `src/main/java/com/softropic/skillars/platform/security/api/ApiAdvice.java` (registered `idx_drills_coach_name_unique`, `idx_drills_clone_uniqueness`, `uq_sessions_booking_id` in `CONFLICT_CONSTRAINTS`)
 - `src/test/java/com/softropic/skillars/platform/session/api/DrillLibraryResourceIT.java` (added `cloneSameDrillTwice_returns409`)
-- `src/test/java/com/softropic/skillars/platform/session/api/SessionTemplateResourceIT.java` (added `deployTemplateTwiceForSameBooking_secondFails`)
+- `src/test/java/com/softropic/skillars/platform/session/api/SessionTemplateResourceIT.java` (added `deployTemplateTwiceForSameBooking_secondFails`, `deployTemplateRace_dbConstraintRejectsConcurrentInsert`)
+- `src/test/java/com/softropic/skillars/platform/video/repo/VideoRepositoryIT.java` (added `nullProviderAssetId_multipleVideosCoexist`)
 
 ## Change Log
 
@@ -231,7 +233,7 @@ All 30 tests in the three touched/new IT classes (`DrillLibraryResourceIT`, `Ses
 - [x] [Review][Patch] Add latency observability to `getLockerRoomDrills()` — fixed: instrumented with a Micrometer `Timer` (`session.homework.locker_room_drills.latency`, tagged by status), following the existing `VideoMetrics`-style convention. [src/main/java/com/softropic/skillars/platform/session/service/HomeworkAssignmentService.java]
 - [x] [Review][Patch] `idx_videos_provider_asset_id_unique` missing from `ApiAdvice.CONFLICT_CONSTRAINTS` — fixed: added to the set. [src/main/java/com/softropic/skillars/platform/security/api/ApiAdvice.java:145-151]
 - [x] [Review][Patch] AC 5's new drill-name-dedup constraint (`idx_drills_coach_name_unique`) has no test coverage — fixed: added `cloneTwoDifferentDrillsWithSameName_secondReturns409()`, cloning two distinct PLATFORM drills sharing a name for the same coach and asserting 409. [src/test/java/com/softropic/skillars/platform/session/api/DrillLibraryResourceIT.java]
-- [x] [Review][Defer] V76 partial index predicate hardcodes status literals (`'EXHAUSTED', 'EXPIRED'`) with no in-diff verification against the full status enum [src/main/resources/db/migration/V76__missing_indexes.sql] — deferred, pre-existing risk pattern
-- [x] [Review][Defer] No test verifies NULL `provider_asset_id` videos can coexist, the actual rationale for the partial unique index [src/test/java/com/softropic/skillars/platform/video/repo/VideoRepositoryIT.java] — deferred, test-coverage gap only
-- [x] [Review][Defer] Concurrency test masks barrier failures (`catch (Exception ignored) {}`) and may pass without ever exercising the DB-level race, since both 403 (pre-check) and 409 (DB race) are accepted outcomes [src/test/java/com/softropic/skillars/platform/session/api/SessionTemplateResourceIT.java] — deferred, test-robustness only
-- [x] [Review][Defer] Story task list (Task 3) still references the old filename `V78__drill_dedup_session_booking_unique.sql`; only the Completion Notes File List reflects the actual `V78__drill_dedup_unique.sql` — deferred, cosmetic doc drift
+- [x] [Review][Defer] V76 partial index predicate hardcodes status literals (`'EXHAUSTED', 'EXPIRED'`) with no in-diff verification against the full status enum [src/main/resources/db/migration/V76__missing_indexes.sql] — resolved via `V83__fix_session_packs_expiry_index_predicate.sql`: V76 was already applied so it was not edited in place; V83 drops and recreates the index as a whitelist (`WHERE status = 'ACTIVE'`) instead of a blacklist, matching what `SessionPackPurchasedRepository`'s queries actually filter on and making any future status added to `chk_spp_status` excluded by default rather than silently included.
+- [x] [Review][Defer] No test verifies NULL `provider_asset_id` videos can coexist, the actual rationale for the partial unique index [src/test/java/com/softropic/skillars/platform/video/repo/VideoRepositoryIT.java] — resolved: added `nullProviderAssetId_multipleVideosCoexist()`.
+- [x] [Review][Defer] Concurrency test masks barrier failures (`catch (Exception ignored) {}`) and may pass without ever exercising the DB-level race, since both 403 (pre-check) and 409 (DB race) are accepted outcomes [src/test/java/com/softropic/skillars/platform/session/api/SessionTemplateResourceIT.java] — resolved: `deployTemplateTwiceForSameBooking_secondFails()` now fails loudly (via a shared `awaitBarrier()` helper) instead of swallowing barrier exceptions, and a new deterministic test `deployTemplateRace_dbConstraintRejectsConcurrentInsert()` drives the check-then-insert sequence directly against `SessionRepository` with the barrier placed between the existence check and the insert, guaranteeing `uq_sessions_booking_id` is tripped on every run.
+- [x] [Review][Defer] Story task list (Task 3) still references the old filename `V78__drill_dedup_session_booking_unique.sql`; only the Completion Notes File List reflects the actual `V78__drill_dedup_unique.sql` — resolved: Task 3 heading now matches the actual filename.

@@ -671,11 +671,6 @@
 - D1: DB connection held during S3 upload — `GdprExportService.buildExport()` annotated `@Transactional` keeps a DB connection checked out from the pool for the entire ZIP build + S3 put. Resolved if Patch 1 (remove `@Transactional`) is applied; defer this entry only if Patch 1 is skipped. [GdprExportService.java:180]
 - D2: `.distinct()` on Booking list may silently no-op — if `Booking` entity doesn't override `equals()`/`hashCode()`, stream `.distinct()` uses object identity and won't deduplicate. Unlikely to manifest given role separation, but address in a JPA entity hygiene pass. [GdprExportService.java:250]
 
-
-
-
-# new issues
-
 ## Deferred from: code review of skillars-deferred-2 (2026-07-01)
 - D1: `BookingExpiredEvent`/`BookingReminderEvent`/`BookingConfirmedEvent` constructors are invoked positionally with 6-8 raw same-typed arguments across new test files — pre-existing lack of a builder on these event classes; a future field reorder could silently miscompile or swap same-typed fields with no test catching it. [`src/main/java/com/softropic/skillars/platform/booking/contract/`]
 
@@ -684,6 +679,10 @@
 - D2: No test verifies NULL `provider_asset_id` videos can coexist, the actual rationale for the new partial unique index; a regression turning it into a full unique index would pass current tests undetected. [`src/test/java/com/softropic/skillars/platform/video/repo/VideoRepositoryIT.java`]
 - D3: Concurrency test `deployTemplateTwiceForSameBooking_secondFails` masks `barrier.await()` failures (`catch (Exception ignored) {}`) and accepts both the pre-check 403 and DB-race 409 as valid outcomes, so it can pass without ever exercising the new `uq_sessions_booking_id` race path. [`src/test/java/com/softropic/skillars/platform/session/api/SessionTemplateResourceIT.java`]
 - D4: Story task list (Task 3) still references the old filename `V78__drill_dedup_session_booking_unique.sql`; only the Completion Notes File List reflects the actual `V78__drill_dedup_unique.sql`. [`_bmad-output/implementation-artifacts/skillars-deferred-3.md`]
+
+
+
+# new issues
 
 ## Deferred from: code review of skillars-deferred-4 (2026-07-02)
 - D1: `lockAtMostFor` timeouts on `QuotaReservationTimeoutService` and `NeglectedSkillDetectionService` are not validated against their unbounded work loops (an un-chunked `do/while` batch drain and an un-chunked per-player loop, respectively) — under data growth, ShedLock could force-expire the lock mid-run and let a second instance start an overlapping execution, reopening the exact race AC1 exists to close. [`src/main/java/com/softropic/skillars/platform/video/service/QuotaReservationTimeoutService.java:28`, `src/main/java/com/softropic/skillars/platform/development/service/NeglectedSkillDetectionService.java:58`]
