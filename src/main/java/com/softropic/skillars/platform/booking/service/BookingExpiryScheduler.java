@@ -51,11 +51,15 @@ public class BookingExpiryScheduler {
                     new TransitionContext(ActorRole.SYSTEM, null));
                 CoachProfile coach = coachProfileRepository.findById(booking.getCoachId()).orElse(null);
                 String coachName = coach != null ? coach.getDisplayName() : "Coach";
-                eventPublisher.publishEvent(new BookingExpiredEvent(
-                    this, booking.getId(), booking.getParentId(),
-                    resolveEmail(booking.getParentId(), booking.getId()), coachName,
-                    booking.getRequestedStartTime(), booking.getCanonicalTimezone()
-                ));
+                eventPublisher.publishEvent(BookingExpiredEvent.builder()
+                    .source(this)
+                    .bookingId(booking.getId())
+                    .parentId(booking.getParentId())
+                    .parentEmail(resolveEmail(booking.getParentId(), booking.getId()))
+                    .coachDisplayName(coachName)
+                    .requestedStartTime(booking.getRequestedStartTime())
+                    .canonicalTimezone(booking.getCanonicalTimezone())
+                    .build());
                 log.info("Auto-expired booking {} (created at {})", booking.getId(), booking.getCreatedAt());
             } catch (Exception e) {
                 log.error("Failed to auto-expire booking {}", booking.getId(), e);

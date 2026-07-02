@@ -42,9 +42,10 @@ class BookingEmailListenerTest {
 
     @Test
     void onBookingExpired_blankParentEmail_skipsEnvelope() {
-        BookingExpiredEvent event = new BookingExpiredEvent(
-                this, UUID.randomUUID(), 1L, "", "Coach", Instant.now(), "UTC"
-        );
+        BookingExpiredEvent event = BookingExpiredEvent.builder()
+                .source(this).bookingId(UUID.randomUUID()).parentId(1L).parentEmail("")
+                .coachDisplayName("Coach").requestedStartTime(Instant.now()).canonicalTimezone("UTC")
+                .build();
 
         listener.onBookingExpired(event);
 
@@ -53,9 +54,10 @@ class BookingEmailListenerTest {
 
     @Test
     void onBookingExpired_nullParentEmail_skipsEnvelope() {
-        BookingExpiredEvent event = new BookingExpiredEvent(
-                this, UUID.randomUUID(), 1L, null, "Coach", Instant.now(), "UTC"
-        );
+        BookingExpiredEvent event = BookingExpiredEvent.builder()
+                .source(this).bookingId(UUID.randomUUID()).parentId(1L).parentEmail(null)
+                .coachDisplayName("Coach").requestedStartTime(Instant.now()).canonicalTimezone("UTC")
+                .build();
 
         listener.onBookingExpired(event);
 
@@ -64,9 +66,10 @@ class BookingEmailListenerTest {
 
     @Test
     void onBookingExpired_validParentEmail_publishesEnvelope() {
-        BookingExpiredEvent event = new BookingExpiredEvent(
-                this, UUID.randomUUID(), 1L, "parent@example.com", "Coach", Instant.now(), "UTC"
-        );
+        BookingExpiredEvent event = BookingExpiredEvent.builder()
+                .source(this).bookingId(UUID.randomUUID()).parentId(1L).parentEmail("parent@example.com")
+                .coachDisplayName("Coach").requestedStartTime(Instant.now()).canonicalTimezone("UTC")
+                .build();
 
         listener.onBookingExpired(event);
 
@@ -76,9 +79,11 @@ class BookingEmailListenerTest {
 
     @Test
     void onBookingReminder_bothEmailsBlank_publishesNoEnvelope() {
-        BookingReminderEvent event = new BookingReminderEvent(
-                this, UUID.randomUUID(), "", "", "Coach", Instant.now(), "UTC", "PRIMARY"
-        );
+        BookingReminderEvent event = BookingReminderEvent.builder()
+                .source(this).bookingId(UUID.randomUUID()).parentEmail("").coachEmail("")
+                .coachDisplayName("Coach").requestedStartTime(Instant.now()).canonicalTimezone("UTC")
+                .reminderType("PRIMARY")
+                .build();
 
         listener.onBookingReminder(event);
 
@@ -87,9 +92,11 @@ class BookingEmailListenerTest {
 
     @Test
     void onBookingReminder_onlyParentEmailPresent_publishesOneEnvelope() {
-        BookingReminderEvent event = new BookingReminderEvent(
-                this, UUID.randomUUID(), "parent@example.com", "", "Coach", Instant.now(), "UTC", "PRIMARY"
-        );
+        BookingReminderEvent event = BookingReminderEvent.builder()
+                .source(this).bookingId(UUID.randomUUID()).parentEmail("parent@example.com").coachEmail("")
+                .coachDisplayName("Coach").requestedStartTime(Instant.now()).canonicalTimezone("UTC")
+                .reminderType("PRIMARY")
+                .build();
 
         listener.onBookingReminder(event);
 
@@ -101,9 +108,10 @@ class BookingEmailListenerTest {
     void sendId_hasNoCollisionAcross10kEmails() {
         Set<String> sendIds = new HashSet<>();
         for (int i = 0; i < 10_000; i++) {
-            BookingConfirmedEvent event = new BookingConfirmedEvent(
-                    this, UUID.randomUUID(), 1L, "parent@example.com", "Coach", Instant.now(), "UTC"
-            );
+            BookingConfirmedEvent event = BookingConfirmedEvent.builder()
+                    .source(this).bookingId(UUID.randomUUID()).parentId(1L).parentEmail("parent@example.com")
+                    .coachDisplayName("Coach").requestedStartTime(Instant.now()).canonicalTimezone("UTC")
+                    .build();
             listener.onBookingConfirmed(event);
         }
 

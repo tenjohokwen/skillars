@@ -53,8 +53,15 @@ public class BookingPaymentPersistenceService {
         bookingPaymentRepository.save(bp);
         bookingService.transition(bookingId, BookingEvent.PAYMENT_CAPTURED,
             new TransitionContext(ActorRole.SYSTEM, null));
-        eventPublisher.publishEvent(new BookingConfirmedEvent(
-            this, bookingId, parentId, parentEmail, coachDisplayName, requestedStartTime, canonicalTimezone));
+        eventPublisher.publishEvent(BookingConfirmedEvent.builder()
+            .source(this)
+            .bookingId(bookingId)
+            .parentId(parentId)
+            .parentEmail(parentEmail)
+            .coachDisplayName(coachDisplayName)
+            .requestedStartTime(requestedStartTime)
+            .canonicalTimezone(canonicalTimezone)
+            .build());
     }
 
     @Transactional
@@ -91,8 +98,15 @@ public class BookingPaymentPersistenceService {
         bookingPaymentRepository.save(bp);
         bookingService.transition(bookingId, BookingEvent.PAYMENT_CAPTURED,
             new TransitionContext(ActorRole.SYSTEM, null));
-        eventPublisher.publishEvent(new BookingConfirmedEvent(
-            this, bookingId, parentId, parentEmail, coachDisplayName, requestedStartTime, canonicalTimezone));
+        eventPublisher.publishEvent(BookingConfirmedEvent.builder()
+            .source(this)
+            .bookingId(bookingId)
+            .parentId(parentId)
+            .parentEmail(parentEmail)
+            .coachDisplayName(coachDisplayName)
+            .requestedStartTime(requestedStartTime)
+            .canonicalTimezone(canonicalTimezone)
+            .build());
     }
 
     @Transactional
@@ -111,8 +125,15 @@ public class BookingPaymentPersistenceService {
         bookingPaymentRepository.save(bp);
         bookingService.transition(bookingId, BookingEvent.PAYMENT_CAPTURED,
             new TransitionContext(ActorRole.SYSTEM, null));
-        eventPublisher.publishEvent(new BookingConfirmedEvent(
-            this, bookingId, parentId, parentEmail, coachDisplayName, requestedStartTime, canonicalTimezone));
+        eventPublisher.publishEvent(BookingConfirmedEvent.builder()
+            .source(this)
+            .bookingId(bookingId)
+            .parentId(parentId)
+            .parentEmail(parentEmail)
+            .coachDisplayName(coachDisplayName)
+            .requestedStartTime(requestedStartTime)
+            .canonicalTimezone(canonicalTimezone)
+            .build());
     }
 
     @Transactional

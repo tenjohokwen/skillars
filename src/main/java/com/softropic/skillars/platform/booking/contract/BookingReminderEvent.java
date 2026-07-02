@@ -15,17 +15,19 @@ public class BookingReminderEvent extends ApplicationEvent {
     private final String canonicalTimezone;
     private final String reminderType;
 
-    public BookingReminderEvent(Object source, UUID bookingId, String parentEmail, String coachEmail,
-                                 String coachDisplayName, Instant requestedStartTime,
-                                 String canonicalTimezone, String reminderType) {
-        super(source);
-        this.bookingId = bookingId;
-        this.parentEmail = parentEmail;
-        this.coachEmail = coachEmail;
-        this.coachDisplayName = coachDisplayName;
-        this.requestedStartTime = requestedStartTime;
-        this.canonicalTimezone = canonicalTimezone;
-        this.reminderType = reminderType;
+    private BookingReminderEvent(Builder builder) {
+        super(builder.source);
+        this.bookingId = builder.bookingId;
+        this.parentEmail = builder.parentEmail;
+        this.coachEmail = builder.coachEmail;
+        this.coachDisplayName = builder.coachDisplayName;
+        this.requestedStartTime = builder.requestedStartTime;
+        this.canonicalTimezone = builder.canonicalTimezone;
+        this.reminderType = builder.reminderType;
+    }
+
+    public static Builder builder() {
+        return new Builder();
     }
 
     public UUID getBookingId() { return bookingId; }
@@ -35,4 +37,30 @@ public class BookingReminderEvent extends ApplicationEvent {
     public Instant getRequestedStartTime() { return requestedStartTime; }
     public String getCanonicalTimezone() { return canonicalTimezone; }
     public String getReminderType() { return reminderType; }
+
+    public static final class Builder {
+        private Object source;
+        private UUID bookingId;
+        private String parentEmail;
+        private String coachEmail;
+        private String coachDisplayName;
+        private Instant requestedStartTime;
+        private String canonicalTimezone;
+        private String reminderType;
+
+        private Builder() { }
+
+        public Builder source(Object source) { this.source = source; return this; }
+        public Builder bookingId(UUID bookingId) { this.bookingId = bookingId; return this; }
+        public Builder parentEmail(String parentEmail) { this.parentEmail = parentEmail; return this; }
+        public Builder coachEmail(String coachEmail) { this.coachEmail = coachEmail; return this; }
+        public Builder coachDisplayName(String coachDisplayName) { this.coachDisplayName = coachDisplayName; return this; }
+        public Builder requestedStartTime(Instant requestedStartTime) { this.requestedStartTime = requestedStartTime; return this; }
+        public Builder canonicalTimezone(String canonicalTimezone) { this.canonicalTimezone = canonicalTimezone; return this; }
+        public Builder reminderType(String reminderType) { this.reminderType = reminderType; return this; }
+
+        public BookingReminderEvent build() {
+            return new BookingReminderEvent(this);
+        }
+    }
 }

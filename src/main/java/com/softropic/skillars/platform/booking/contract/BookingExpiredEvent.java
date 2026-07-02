@@ -14,16 +14,18 @@ public class BookingExpiredEvent extends ApplicationEvent {
     private final Instant requestedStartTime;
     private final String canonicalTimezone;
 
-    public BookingExpiredEvent(Object source, UUID bookingId, Long parentId, String parentEmail,
-                                String coachDisplayName, Instant requestedStartTime,
-                                String canonicalTimezone) {
-        super(source);
-        this.bookingId = bookingId;
-        this.parentId = parentId;
-        this.parentEmail = parentEmail;
-        this.coachDisplayName = coachDisplayName;
-        this.requestedStartTime = requestedStartTime;
-        this.canonicalTimezone = canonicalTimezone;
+    private BookingExpiredEvent(Builder builder) {
+        super(builder.source);
+        this.bookingId = builder.bookingId;
+        this.parentId = builder.parentId;
+        this.parentEmail = builder.parentEmail;
+        this.coachDisplayName = builder.coachDisplayName;
+        this.requestedStartTime = builder.requestedStartTime;
+        this.canonicalTimezone = builder.canonicalTimezone;
+    }
+
+    public static Builder builder() {
+        return new Builder();
     }
 
     public UUID getBookingId() { return bookingId; }
@@ -32,4 +34,28 @@ public class BookingExpiredEvent extends ApplicationEvent {
     public String getCoachDisplayName() { return coachDisplayName; }
     public Instant getRequestedStartTime() { return requestedStartTime; }
     public String getCanonicalTimezone() { return canonicalTimezone; }
+
+    public static final class Builder {
+        private Object source;
+        private UUID bookingId;
+        private Long parentId;
+        private String parentEmail;
+        private String coachDisplayName;
+        private Instant requestedStartTime;
+        private String canonicalTimezone;
+
+        private Builder() { }
+
+        public Builder source(Object source) { this.source = source; return this; }
+        public Builder bookingId(UUID bookingId) { this.bookingId = bookingId; return this; }
+        public Builder parentId(Long parentId) { this.parentId = parentId; return this; }
+        public Builder parentEmail(String parentEmail) { this.parentEmail = parentEmail; return this; }
+        public Builder coachDisplayName(String coachDisplayName) { this.coachDisplayName = coachDisplayName; return this; }
+        public Builder requestedStartTime(Instant requestedStartTime) { this.requestedStartTime = requestedStartTime; return this; }
+        public Builder canonicalTimezone(String canonicalTimezone) { this.canonicalTimezone = canonicalTimezone; return this; }
+
+        public BookingExpiredEvent build() {
+            return new BookingExpiredEvent(this);
+        }
+    }
 }

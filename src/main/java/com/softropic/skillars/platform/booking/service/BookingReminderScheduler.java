@@ -84,10 +84,16 @@ public class BookingReminderScheduler {
         String coachEmail = coach != null ? resolveEmail(coach.getUserId(), b.getId()) : "";
         String parentEmail = resolveEmail(b.getParentId(), b.getId());
 
-        return new BookingReminderEvent(
-            this, b.getId(), parentEmail, coachEmail, coachName,
-            b.getRequestedStartTime(), b.getCanonicalTimezone(), reminderType
-        );
+        return BookingReminderEvent.builder()
+            .source(this)
+            .bookingId(b.getId())
+            .parentEmail(parentEmail)
+            .coachEmail(coachEmail)
+            .coachDisplayName(coachName)
+            .requestedStartTime(b.getRequestedStartTime())
+            .canonicalTimezone(b.getCanonicalTimezone())
+            .reminderType(reminderType)
+            .build();
     }
 
     private String resolveEmail(Long userId, UUID bookingId) {
