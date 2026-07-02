@@ -274,6 +274,25 @@ class AdminReviewQueueIT {
     }
 
     @Test
+    void approveReview_notFound_returns404WithConsistentErrorShape() {
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+        UUID missingReviewId = UUID.randomUUID();
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/admin/reviews/" + missingReviewId + "/approve",
+            HttpMethod.POST,
+            null,
+            authenticatedHeaders(adminCookies),
+            Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException hcee = (HttpClientErrorException) e;
+                assertThat(hcee.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+                assertThat(hcee.getResponseBodyAsString()).contains("\"errorKey\":\"RESOURCE_NOT_FOUND\"");
+            });
+    }
+
+    @Test
     void blockPreviouslyApprovedReview_recomputesRatingDown() {
         // Promote the setUp review to APPROVED so blocking it triggers a rating recompute
         transactionTemplate.execute(status -> {

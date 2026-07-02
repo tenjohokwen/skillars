@@ -44,8 +44,10 @@ public class DevelopmentCorrelationService {
     private final PlayerRadarBaselineRepository baselineRepository;
     private final CoachProfileService coachProfileService;
     private final ConfigService configService;
+    private final CoachPlayerAuthorizationService coachPlayerAuthorizationService;
 
     public CorrelationResponse getInsights(Long playerId, UUID coachId) {
+        coachPlayerAuthorizationService.requireCoachPlayerRelationship(coachId, playerId);
         CoachSubscriptionTier tier = coachProfileService.getCoachSubscriptionTier(coachId);
         if (tier != CoachSubscriptionTier.ACADEMY) {
             throw new FeatureGatedException("development.correlation", "ACADEMY");

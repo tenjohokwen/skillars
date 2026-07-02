@@ -2,10 +2,12 @@ package com.softropic.skillars.platform.development.service;
 
 import com.softropic.skillars.platform.development.contract.NarrativeKeyDto;
 import com.softropic.skillars.platform.development.contract.SkillExposureResponse;
-import com.softropic.skillars.platform.development.repo.NeglectedSkillFlag;
 import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagRepository;
 import com.softropic.skillars.platform.development.repo.PlayerSluWeeklySnapshot;
 import com.softropic.skillars.platform.development.repo.SluWeeklySnapshotRepository;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import com.softropic.skillars.platform.security.service.SecurityUtil;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -13,15 +15,12 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.temporal.IsoFields;
 import java.util.List;
-import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyShort;
 import static org.mockito.Mockito.when;
@@ -32,6 +31,9 @@ class SluDashboardServiceTest {
     @Mock private SluWeeklySnapshotRepository snapshotRepository;
     @Mock private NeglectedSkillFlagRepository flagRepository;
     @Mock private SluNarrativeService narrativeService;
+    @Mock private SecurityUtil securityUtil;
+    @Mock private CoachPlayerAuthorizationService coachPlayerAuthorizationService;
+    @Mock private PlayerProfileRepository playerProfileRepository;
 
     private SluDashboardService service;
 
@@ -39,7 +41,9 @@ class SluDashboardServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new SluDashboardService(snapshotRepository, flagRepository, narrativeService);
+        service = new SluDashboardService(
+            snapshotRepository, flagRepository, narrativeService, securityUtil,
+            coachPlayerAuthorizationService, playerProfileRepository);
     }
 
     @Test

@@ -103,13 +103,30 @@ class RadarDisplayResourceIT {
                 PLAYER_ID, Date.valueOf(LocalDate.now().minusYears(10)),
                 PARENT_USER_ID, Timestamp.from(Instant.now())
             );
+            insertCompletedBooking(coachProfileId, PARENT_USER_ID, PLAYER_ID);
+            insertCompletedBooking(academyProfileId, PARENT_USER_ID, PLAYER_ID);
             return null;
         });
+    }
+
+    private void insertCompletedBooking(UUID coachId, Long parentId, Long playerId) {
+        jdbcTemplate.update(
+            "INSERT INTO booking.bookings " +
+            "(id, parent_id, player_id, coach_id, requested_start_time, requested_end_time, status, " +
+            " canonical_timezone, version, created_at, updated_at) " +
+            "VALUES (?, ?, ?, ?, ?, ?, 'COMPLETED', 'Europe/Berlin', 0, ?, ?)",
+            UUID.randomUUID(), parentId, playerId, coachId,
+            Timestamp.from(Instant.now().minusSeconds(7200)),
+            Timestamp.from(Instant.now().minusSeconds(3600)),
+            Timestamp.from(Instant.now()), Timestamp.from(Instant.now())
+        );
     }
 
     @AfterEach
     void tearDown() {
         transactionTemplate.execute(status -> {
+            jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id IN (?, ?)",
+                coachProfileId, academyProfileId);
             jdbcTemplate.update("DELETE FROM development.player_radar_baselines WHERE player_id = ?", PLAYER_ID);
             jdbcTemplate.update("DELETE FROM development.coach_radar_preferences WHERE player_id = ?", PLAYER_ID);
             jdbcTemplate.update("DELETE FROM development.player_radar_composites WHERE player_id = ?", PLAYER_ID);

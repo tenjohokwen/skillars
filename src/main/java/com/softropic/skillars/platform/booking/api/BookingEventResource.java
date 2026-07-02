@@ -61,6 +61,9 @@ public class BookingEventResource {
     }
 
     private void verifyIsParty(Booking booking, Long actorUserId) {
+        if (securityUtil.isAdmin()) {
+            return;
+        }
         boolean isParent = Objects.equals(booking.getParentId(), actorUserId);
         boolean isCoach = isCoachParty(booking.getCoachId(), actorUserId);
         if (!isParent && !isCoach) {

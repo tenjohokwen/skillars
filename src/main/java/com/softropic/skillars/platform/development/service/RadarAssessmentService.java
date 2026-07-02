@@ -41,9 +41,11 @@ public class RadarAssessmentService {
     private final PlayerProfileService playerProfileService;
     private final SkillDefinitionRepository skillDefinitionRepository;
     private final ApplicationEventPublisher publisher;
+    private final CoachPlayerAuthorizationService coachPlayerAuthorizationService;
 
     @Transactional
     public void submitAssessment(Long coachUserId, Long playerId, RadarAssessmentRequest req) {
+        coachPlayerAuthorizationService.requireCoachPlayerRelationship(coachUserId, playerId);
         UUID coachId = coachProfileService.getCoachIdByUserId(coachUserId);
 
         // Tier gate first — prevents Scout coaches from probing player existence via 404 vs 403 difference
@@ -90,6 +92,7 @@ public class RadarAssessmentService {
 
     @Transactional(readOnly = true)
     public RadarAssessmentListResponse getMyEntries(Long coachUserId, Long playerId) {
+        coachPlayerAuthorizationService.requireCoachPlayerRelationship(coachUserId, playerId);
         UUID coachId = coachProfileService.getCoachIdByUserId(coachUserId);
 
         CoachSubscriptionTier tier = coachProfileService.getCoachSubscriptionTier(coachId);

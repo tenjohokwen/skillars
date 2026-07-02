@@ -11,4 +11,6 @@ public interface PlayerProfileRepository extends JpaRepository<PlayerProfile, Lo
 
     /** Always use this instead of findById — parentId enforces family isolation. */
     Optional<PlayerProfile> findByIdAndParentId(Long id, Long parentId);
+
+    boolean existsByIdAndParentId(Long id, Long parentId);
 }

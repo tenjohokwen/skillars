@@ -121,13 +121,29 @@ class SkillExposureResourceIT {
                 WRONG_PLAYER_ID, Date.valueOf(LocalDate.now().minusYears(10)),
                 WRONG_PARENT_ID, Timestamp.from(Instant.now())
             );
+            insertCompletedBooking(coachProfileId, PARENT_USER_ID, PLAYER_ID);
+            insertCompletedBooking(coach2ProfileId, PARENT_USER_ID, PLAYER_ID);
             return null;
         });
+    }
+
+    private void insertCompletedBooking(UUID coachId, Long parentId, Long playerId) {
+        jdbcTemplate.update(
+            "INSERT INTO booking.bookings " +
+            "(id, parent_id, player_id, coach_id, requested_start_time, requested_end_time, status, " +
+            " canonical_timezone, version, created_at, updated_at) " +
+            "VALUES (?, ?, ?, ?, ?, ?, 'COMPLETED', 'Europe/Berlin', 0, ?, ?)",
+            UUID.randomUUID(), parentId, playerId, coachId,
+            Timestamp.from(Instant.now().minusSeconds(7200)),
+            Timestamp.from(Instant.now().minusSeconds(3600)),
+            Timestamp.from(Instant.now()), Timestamp.from(Instant.now())
+        );
     }
 
     @AfterEach
     void tearDown() {
         transactionTemplate.execute(status -> {
+            jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id IN (?, ?)", coachProfileId, coach2ProfileId);
             jdbcTemplate.update("DELETE FROM development.neglected_skill_flags WHERE player_id IN (?, ?)", PLAYER_ID, WRONG_PLAYER_ID);
             jdbcTemplate.update("DELETE FROM development.player_slu_targets WHERE player_id IN (?, ?)", PLAYER_ID, WRONG_PLAYER_ID);
             jdbcTemplate.update("DELETE FROM development.player_slu_weekly_snapshot WHERE player_id IN (?, ?)", PLAYER_ID, WRONG_PLAYER_ID);

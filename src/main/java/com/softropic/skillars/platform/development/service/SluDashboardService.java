@@ -6,6 +6,9 @@ import com.softropic.skillars.platform.development.contract.WeeklySkillTotals;
 import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagRepository;
 import com.softropic.skillars.platform.development.repo.PlayerSluWeeklySnapshot;
 import com.softropic.skillars.platform.development.repo.SluWeeklySnapshotRepository;
+import com.softropic.skillars.platform.security.contract.util.AuthoritiesConstants;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import com.softropic.skillars.platform.security.service.SecurityUtil;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,8 +32,12 @@ public class SluDashboardService {
     private final SluWeeklySnapshotRepository snapshotRepository;
     private final NeglectedSkillFlagRepository flagRepository;
     private final SluNarrativeService narrativeService;
+    private final SecurityUtil securityUtil;
+    private final CoachPlayerAuthorizationService coachPlayerAuthorizationService;
+    private final PlayerProfileRepository playerProfileRepository;
 
     public SkillExposureResponse getWeeklyExposure(Long playerId, int weeksBack) {
+        requireCoachPlayerRelationshipIfCoach(playerId);
         ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
         ZonedDateTime from = now.minusWeeks(weeksBack - 1).with(DayOfWeek.MONDAY);
         short fromYear = (short) from.get(IsoFields.WEEK_BASED_YEAR);
@@ -74,6 +81,15 @@ public class SluDashboardService {
     }
 
     public List<NarrativeKeyDto> getNarrativeSummary(Long playerId) {
+        requireCoachPlayerRelationshipIfCoach(playerId);
         return narrativeService.generate(playerId);
+    }
+
+    private void requireCoachPlayerRelationshipIfCoach(Long playerId) {
+        if (securityUtil.isCurrentUserInRole(AuthoritiesConstants.COACH)
+                && !playerProfileRepository.existsByIdAndParentId(playerId, securityUtil.requireCurrentUserId())) {
+            coachPlayerAuthorizationService.requireCoachPlayerRelationship(
+                securityUtil.getCurrentCoachUserId(), playerId);
+        }
     }
 }

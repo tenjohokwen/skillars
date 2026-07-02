@@ -38,6 +38,7 @@ class DevelopmentCorrelationServiceTest {
     @Mock private PlayerRadarBaselineRepository baselineRepository;
     @Mock private CoachProfileService coachProfileService;
     @Mock private ConfigService configService;
+    @Mock private CoachPlayerAuthorizationService coachPlayerAuthorizationService;
 
     private DevelopmentCorrelationService service;
 
@@ -48,7 +49,7 @@ class DevelopmentCorrelationServiceTest {
     void setUp() {
         service = new DevelopmentCorrelationService(
             sluRepository, compositeRepository, baselineRepository,
-            coachProfileService, configService
+            coachProfileService, configService, coachPlayerAuthorizationService
         );
     }
 

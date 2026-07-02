@@ -18,6 +18,8 @@ import com.softropic.skillars.platform.marketplace.service.PlayerProfileService;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.security.contract.exception.FeatureGatedException;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import com.softropic.skillars.platform.security.service.SecurityUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -62,6 +64,9 @@ class ReportGenerationServiceTest {
     @Mock private FileStorageService fileStorageService;
     @Mock private TimelineEventListener timelineEventListener;
     @Mock private ApplicationEventPublisher publisher;
+    @Mock private SecurityUtil securityUtil;
+    @Mock private CoachPlayerAuthorizationService coachPlayerAuthorizationService;
+    @Mock private PlayerProfileRepository playerProfileRepository;
 
     private ReportGenerationService service;
 
@@ -75,7 +80,8 @@ class ReportGenerationServiceTest {
             coachProfileService, playerProfileService,
             sluRepository, skillDefinitionRepository, compositeRepository, baselineRepository,
             reportRepository, brandingRepository, fileStorageService,
-            timelineEventListener, publisher
+            timelineEventListener, publisher, securityUtil, coachPlayerAuthorizationService,
+            playerProfileRepository
         );
         ReflectionTestUtils.setField(service, "baseUrl", "http://app.test");
     }

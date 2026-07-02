@@ -32,6 +32,9 @@ import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.contract.Recipient;
 import com.softropic.skillars.platform.security.contract.exception.FeatureGatedException;
+import com.softropic.skillars.platform.security.contract.util.AuthoritiesConstants;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import com.softropic.skillars.platform.security.service.SecurityUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -78,12 +81,16 @@ public class ReportGenerationService {
     private final FileStorageService fileStorageService;
     private final TimelineEventListener timelineEventListener;
     private final ApplicationEventPublisher publisher;
+    private final SecurityUtil securityUtil;
+    private final CoachPlayerAuthorizationService coachPlayerAuthorizationService;
+    private final PlayerProfileRepository playerProfileRepository;
 
     @Value("${baseurl}")
     private String baseUrl;
 
     @Transactional
     public void generateReport(Long coachUserId, Long playerId, String nextSteps) {
+        coachPlayerAuthorizationService.requireCoachPlayerRelationship(coachUserId, playerId);
         UUID coachId = coachProfileService.getCoachIdByUserId(coachUserId);
 
         CoachSubscriptionTier tier = coachProfileService.getCoachSubscriptionTier(coachId);
@@ -158,6 +165,11 @@ public class ReportGenerationService {
     }
 
     public List<PerformanceReportResponse> listReports(Long playerId) {
+        if (securityUtil.isCurrentUserInRole(AuthoritiesConstants.COACH)
+                && !playerProfileRepository.existsByIdAndParentId(playerId, securityUtil.requireCurrentUserId())) {
+            coachPlayerAuthorizationService.requireCoachPlayerRelationship(
+                securityUtil.getCurrentCoachUserId(), playerId);
+        }
         List<PerformanceReport> reports = reportRepository.findByPlayerIdOrderByGeneratedAtDesc(playerId);
         Set<UUID> coachIds = reports.stream().map(PerformanceReport::getCoachId).collect(Collectors.toSet());
         Map<UUID, String> coachNames = coachProfileService.getDisplayNamesByIds(coachIds);

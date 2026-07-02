@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-07-02 # skillars-deferred-4 payment resilience & scheduler locking — code review complete, status done
+last_updated: 2026-07-02 # skillars-deferred-5 coach-player authorization — implementation complete, status review
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -267,7 +267,7 @@ development_status:
   skillars-deferred-4-payment-resilience-shedlock: done
 
   # Deferred 5: Platform Security — Coach-Player Authorization
-  skillars-deferred-5-coach-player-authorization: backlog
+  skillars-deferred-5-coach-player-authorization: done
 
   # Deferred 6: Video Module Hardening
   skillars-deferred-6-video-module-hardening: backlog
