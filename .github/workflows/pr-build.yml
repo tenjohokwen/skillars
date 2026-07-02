@@ -35,9 +35,16 @@ jobs:
         run: mvn -B verify -q
 
       - name: Build Docker image (no push)
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
+        uses: ./.github/actions/docker-build
         with:
-          context: .
-          platforms: linux/amd64
-          push: false
+          push: 'false'
+          load: 'true'
           tags: skillars-app:pr-${{ github.event.pull_request.number }}
+
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref: skillars-app:pr-${{ github.event.pull_request.number }}
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: '1'
