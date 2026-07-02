@@ -70,15 +70,23 @@ class SluDashboardServiceTest {
     @Test
     void getWeeklyExposure_withFewerThanRequestedWeeks_returnsAvailableWeeks() {
         ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
+        ZonedDateTime prevWeekDt = now.minusWeeks(1);
+        ZonedDateTime prevPrevWeekDt = now.minusWeeks(2);
+
         short curYear = (short) now.get(IsoFields.WEEK_BASED_YEAR);
         short curWeek = (short) now.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
-        short prevWeek = curWeek > 1 ? (short) (curWeek - 1) : 52;
-        short prevPrevWeek = prevWeek > 1 ? (short) (prevWeek - 1) : 52;
+        // Derive prev/prevPrev year+week from actual calendar arithmetic (not curWeek-1/-2) so
+        // ISO week 1 (early January) correctly rolls back into the prior ISO week-based year
+        // instead of wrapping to a hardcoded week 52 of the CURRENT year.
+        short prevYear = (short) prevWeekDt.get(IsoFields.WEEK_BASED_YEAR);
+        short prevWeek = (short) prevWeekDt.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
+        short prevPrevYear = (short) prevPrevWeekDt.get(IsoFields.WEEK_BASED_YEAR);
+        short prevPrevWeek = (short) prevPrevWeekDt.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
 
         List<PlayerSluWeeklySnapshot> snapshots = List.of(
             makeSnapshot(curYear, curWeek, "PAC", new BigDecimal("10.00")),
-            makeSnapshot(curYear, prevWeek, "PAC", new BigDecimal("8.00")),
-            makeSnapshot(curYear, prevPrevWeek, "PAC", new BigDecimal("6.00"))
+            makeSnapshot(prevYear, prevWeek, "PAC", new BigDecimal("8.00")),
+            makeSnapshot(prevPrevYear, prevPrevWeek, "PAC", new BigDecimal("6.00"))
         );
         when(snapshotRepository.findByPlayerIdFromWeek(anyLong(), anyShort(), anyShort()))
             .thenReturn(snapshots);

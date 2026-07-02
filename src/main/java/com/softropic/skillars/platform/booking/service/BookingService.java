@@ -336,8 +336,11 @@ public class BookingService {
             String playerName = resolvePlayerName(b.getPlayerId());
             int effectiveCredits = (int) (sessionPackService.getCreditsRemaining(b.getPlayerId(), b.getCoachId())
                 - bookingRepository.countInFlightBookings(b.getPlayerId(), b.getCoachId()));
+            // batchSizeMap may be Map.of() (or simply lack the key) — Map.get(null) throws NPE on
+            // the JDK's immutable maps, so only look up batch size when the booking is actually batched.
+            Integer batchSize = b.getBatchId() != null ? batchSizeMap.get(b.getBatchId()) : null;
             return toResponse(b, coachName, playerName, null, effectiveCredits,
-                pendingReschedules.get(b.getId()), b.getBatchId(), batchSizeMap.get(b.getBatchId()));
+                pendingReschedules.get(b.getId()), b.getBatchId(), batchSize);
         }).toList();
     }
 

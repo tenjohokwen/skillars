@@ -4,6 +4,7 @@ import com.softropic.skillars.config.TestConfig;
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.SecurityIT;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -28,10 +29,10 @@ import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.LocalTime;
-import java.time.ZonedDateTime;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -519,6 +520,37 @@ class BookingRequestResourceIT {
     }
 
     @Test
+    void declineBooking_wrongCoach_returns403() {
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        ResponseEntity<Map> createResp = httpTestClient.makeHttpRequest(
+            baseUrl() + BOOKINGS_BASE,
+            HttpMethod.POST,
+            Map.of(
+                "coachId", coachProfileId.toString(),
+                "playerId", PLAYER_ID,
+                "requestedStartTime", slotStart.toString(),
+                "requestedEndTime", slotEnd.toString(),
+                "canonicalTimezone", WINDOW_TZ
+            ),
+            authenticatedHeaders(parentCookies),
+            Map.class
+        );
+        String bookingId = (String) createResp.getBody().get("id");
+
+        // Second coach tries to decline
+        String coach2Cookies = loginAndGetCookies(COACH_EMAIL2);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + BOOKINGS_BASE + "/" + bookingId + "/decline",
+            HttpMethod.PUT,
+            null,
+            authenticatedHeaders(coach2Cookies),
+            Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    @Test
     void declineBooking_validCoach_returns204() {
         String parentCookies = loginAndGetCookies(PARENT_EMAIL);
         ResponseEntity<Map> createResp = httpTestClient.makeHttpRequest(
@@ -552,6 +584,37 @@ class BookingRequestResourceIT {
     void getParentBookings_returnsListSortedByStartTime() {
         String cookies = loginAndGetCookies(PARENT_EMAIL);
 
+        // Booking 1, via the API, at the near-term slot
+        httpTestClient.makeHttpRequest(
+            baseUrl() + BOOKINGS_BASE,
+            HttpMethod.POST,
+            Map.of(
+                "coachId", coachProfileId.toString(),
+                "playerId", PLAYER_ID,
+                "requestedStartTime", slotStart.toString(),
+                "requestedEndTime", slotEnd.toString(),
+                "canonicalTimezone", WINDOW_TZ
+            ),
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+
+        // Booking 2, inserted directly further in the future, so the two rows exist
+        // out of natural insertion order relative to requestedStartTime
+        Instant laterStart = slotStart.plus(4, ChronoUnit.DAYS);
+        Instant laterEnd = laterStart.plusSeconds(3600);
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO booking.bookings " +
+                "(id, parent_id, player_id, coach_id, requested_start_time, requested_end_time, status, canonical_timezone, version, created_at, updated_at) " +
+                "VALUES (?, ?, ?, ?, ?, ?, 'REQUESTED', ?, 0, ?, ?)",
+                UUID.randomUUID(), PARENT_ID, PLAYER_ID, coachProfileId,
+                Timestamp.from(laterStart), Timestamp.from(laterEnd),
+                WINDOW_TZ, Timestamp.from(Instant.now()), Timestamp.from(Instant.now())
+            );
+            return null;
+        });
+
         ResponseEntity<List> response = httpTestClient.makeHttpRequest(
             baseUrl() + BOOKINGS_BASE,
             HttpMethod.GET,
@@ -561,7 +624,15 @@ class BookingRequestResourceIT {
         );
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(response.getBody()).isNotNull();
+        List<Map<String, Object>> bookings = response.getBody();
+        assertThat(bookings).hasSizeGreaterThanOrEqualTo(2);
+        // requestedStartTime is serialized as an ISO-8601 string (WRITE_DATES_AS_TIMESTAMPS: false);
+        // parse to Instant rather than comparing strings, since lexicographic order isn't
+        // guaranteed to match chronological order across differing fractional-second precision
+        List<Instant> startTimes = bookings.stream()
+            .map(b -> Instant.parse((String) b.get("requestedStartTime")))
+            .toList();
+        assertThat(startTimes).isSortedAccordingTo(Comparator.naturalOrder());
     }
 
     @Test
@@ -596,6 +667,10 @@ class BookingRequestResourceIT {
         assertThat(singleBookings).isNotEmpty();
         Map<?, ?> booking = (Map<?, ?>) singleBookings.get(0);
         assertThat(booking.get("status")).isEqualTo("REQUESTED");
+        assertThat(booking.get("parentName"))
+            .as("parentName (AC 8 of Story 3.3)")
+            .isNotNull()
+            .isNotEqualTo("");
     }
 
     // ---- helpers ----
