@@ -10,6 +10,8 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.temporal.IsoFields;
@@ -19,6 +21,14 @@ import java.util.List;
 @Slf4j
 @RequiredArgsConstructor
 public class NeglectedSkillDetectionService {
+
+    // 80% of the PT30M lockAtMostFor on detectNeglectedSkills(). The per-player loop below is
+    // un-chunked and this job only fires weekly, so — unlike a fixedDelay job — bailing out early
+    // isn't safe (the remaining players wouldn't be picked up for another week). Instead this is a
+    // runtime tripwire: crossing it logs loudly so lockAtMostFor can be raised (per-player work is
+    // idempotent, guarded by the idx_neglected_flags_open partial unique index from V49) before player
+    // growth actually lets ShedLock force-expire the lock mid-run and start an overlapping instance.
+    private static final Duration RUNTIME_WARNING_THRESHOLD = Duration.ofMinutes(24);
 
     private final SluTargetRepository sluTargetRepository;
     private final NeglectedSkillProcessor processor;
@@ -56,11 +66,22 @@ public class NeglectedSkillDetectionService {
         short evalWeek = (short) evaluated.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
 
         List<Long> playerIds = sluTargetRepository.findDistinctPlayerIds();
-        for (Long playerId : playerIds) {
+        Instant started = Instant.now();
+        boolean runtimeWarningLogged = false;
+        for (int i = 0; i < playerIds.size(); i++) {
+            Long playerId = playerIds.get(i);
             try {
                 processor.processPlayer(playerId, threshold, evalYear, evalWeek);
             } catch (Exception e) {
                 log.error("Failed processing neglected skills for player={}: {}", playerId, e.getMessage(), e);
+            }
+
+            if (!runtimeWarningLogged && Duration.between(started, Instant.now()).compareTo(RUNTIME_WARNING_THRESHOLD) > 0) {
+                runtimeWarningLogged = true;
+                log.warn("Neglected skill detection has been running for over {} (lockAtMostFor budget is PT30M) "
+                    + "after processing {}/{} players — raise lockAtMostFor on NeglectedSkillDetectionService_detect "
+                    + "before player growth lets ShedLock force-expire the lock mid-run",
+                    RUNTIME_WARNING_THRESHOLD, i + 1, playerIds.size());
             }
         }
     }

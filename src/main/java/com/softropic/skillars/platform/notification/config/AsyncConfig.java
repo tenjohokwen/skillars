@@ -8,6 +8,7 @@ import com.softropic.skillars.infrastructure.threadpool.MdcDecorator;
 import net.javacrumbs.shedlock.spring.annotation.EnableSchedulerLock;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.Ordered;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
@@ -22,7 +23,13 @@ import io.micrometer.core.instrument.Tag;
 @Configuration
 @EnableAsync
 @EnableScheduling
-@EnableSchedulerLock(defaultLockAtMostFor = "PT10M")
+// order: ShedLock's default InterceptMode.PROXY_METHOD wraps @SchedulerLock methods with a genuine
+// AOP advisor on the same proxy chain as @Transactional (see DataSourceConfig's @EnableTransactionManagement,
+// also un-ordered). Both default to Ordered.LOWEST_PRECEDENCE, so without an explicit order their relative
+// nesting is unspecified. Setting a lower (higher-precedence) order here forces the lock advisor outermost,
+// so proceed() always runs the transaction to completion (commit/rollback) before the lock is released —
+// the lock can never be freed while the DB transaction is still open.
+@EnableSchedulerLock(defaultLockAtMostFor = "PT10M", order = Ordered.LOWEST_PRECEDENCE - 100)
 public class AsyncConfig {
     @Bean(name = "moderationTaskExecutor")
     public Executor moderationTaskExecutor() {

@@ -680,14 +680,14 @@
 - D3: Concurrency test `deployTemplateTwiceForSameBooking_secondFails` masks `barrier.await()` failures (`catch (Exception ignored) {}`) and accepts both the pre-check 403 and DB-race 409 as valid outcomes, so it can pass without ever exercising the new `uq_sessions_booking_id` race path. [`src/test/java/com/softropic/skillars/platform/session/api/SessionTemplateResourceIT.java`]
 - D4: Story task list (Task 3) still references the old filename `V78__drill_dedup_session_booking_unique.sql`; only the Completion Notes File List reflects the actual `V78__drill_dedup_unique.sql`. [`_bmad-output/implementation-artifacts/skillars-deferred-3.md`]
 
-
-
-# new issues
-
 ## Deferred from: code review of skillars-deferred-4 (2026-07-02)
 - D1: `lockAtMostFor` timeouts on `QuotaReservationTimeoutService` and `NeglectedSkillDetectionService` are not validated against their unbounded work loops (an un-chunked `do/while` batch drain and an un-chunked per-player loop, respectively) — under data growth, ShedLock could force-expire the lock mid-run and let a second instance start an overlapping execution, reopening the exact race AC1 exists to close. [`src/main/java/com/softropic/skillars/platform/video/service/QuotaReservationTimeoutService.java:28`, `src/main/java/com/softropic/skillars/platform/development/service/NeglectedSkillDetectionService.java:58`]
 - D2: No log or metric is emitted when `@SchedulerLock` skips a run because another instance already holds the lock — indistinguishable in production from a job silently failing to run due to a bug. [`src/main/java/com/softropic/skillars/platform/notification/config/AsyncConfig.java`]
 - D3: `@SchedulerLock` and `@Transactional` are stacked on the same method with no explicit `@Order`, so their AOP advisor nesting order (lock vs. transaction boundary) is unspecified — plausible but unconfirmed risk that the distributed lock could release before the DB transaction commits. [`src/main/java/com/softropic/skillars/platform/booking/service/BookingExpiryScheduler.java:40`, `BookingReminderScheduler.java`, `src/main/java/com/softropic/skillars/platform/video/service/BandwidthResetService.java`]
+
+
+
+# new issues
 
 ## Deferred from: code review of skillars-deferred-8 (2026-07-02)
 - D1: `resolveParentName()` can render `"null null"` when a user's `first_name`/`last_name` are null — pre-existing behavior, not introduced by this diff; the new `parentName` assertion (AC5) only checks non-null/non-empty, so this garbage value would pass undetected. [`src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java`]
@@ -699,6 +699,6 @@
 - D1: `ci.yml`'s push trigger (`branches: [main]`, untouched by this diff) has the same branch-name mismatch flagged as a patch in `pr-build.yml` — the repo's default branch is `master`. Pre-existing, not introduced by this diff, but potentially means the image-publish pipeline has never auto-triggered on push; AC1 forbids changing `ci.yml`'s behavior in this story so this needs a dedicated follow-up. [`.github/workflows/ci.yml:4`]
 - D2: No Dependabot/Renovate config for the `github-actions` ecosystem — the new SHA pins won't receive automated update PRs and will silently rot over time. [`.github/workflows/`]
 - D3: `ci.yml` and `pr-build.yml` duplicate the same `docker/build-push-action` SHA pin with no shared/reusable workflow — future version bumps require editing both files in lockstep. [`.github/workflows/ci.yml`, `.github/workflows/pr-build.yml`]
-- D4: No vulnerability/security image scan (e.g. Trivy, Grype) in `pr-build.yml`, despite this batch of changes being framed as "hardening." [`.github/workflows/pr-build.yml`]
+- D4: No vulnerability/security image scan (e.g. Trivy, Grype) in `pr-build.yml`, despite this batch of changes being framed as "hardening." [`.github/workflows/pr-build.yml`] Prefer open source
 - D5: No Docker build-layer caching in `pr-build.yml` (only `~/.m2` is cached) — every PR triggers a fully cold image build. [`.github/workflows/pr-build.yml`]
 - D6: The new "defence in depth" doc callout asserts Hetzner's outage behavior ("the cloud firewall remains active... during a Hetzner API outage") as fact with no citation. [`docs/deployment/first-time-setup.md`]
