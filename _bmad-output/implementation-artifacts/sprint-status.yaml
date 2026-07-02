@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-07-02 # skillars-deferred-6 video module hardening — code review complete, status done
+last_updated: 2026-07-02 # skillars-deferred-7 messaging retention & gemini hardening — code review complete, 4 patches applied, status done
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -273,7 +273,7 @@ development_status:
   skillars-deferred-6-video-module-hardening: done  # code review 2026-07-02: fixed retryUpload() UPLOADING-stuck regression, corrected AC4 wording
 
   # Deferred 7: Messaging Retention, Abuse Report Protection & Gemini Hardening
-  skillars-deferred-7-messaging-retention-gemini: backlog
+  skillars-deferred-7-messaging-retention-gemini: done  # 4 review patches applied 2026-07-02
 
   # Deferred 8: Test Coverage Gaps
   skillars-deferred-8-test-coverage-gaps: backlog

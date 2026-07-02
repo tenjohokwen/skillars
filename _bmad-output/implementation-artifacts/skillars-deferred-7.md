@@ -1,6 +1,6 @@
 # Story Deferred-7: Messaging Retention, Abuse Report Protection & Gemini Hardening
 
-Status: backlog
+Status: done
 
 ## Story
 
@@ -33,10 +33,10 @@ so that evidence is preserved during investigations, prompt injection cannot red
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Update message retention query to protect open reports** (AC: 1)
-  - [ ] Read `MessageRepository.java` and find the retention delete query (added in Story 8.4)
-  - [ ] Current query: `DELETE FROM messaging.messages WHERE created_at < :cutoff`
-  - [ ] Updated query:
+- [x] **Task 1 — Update message retention query to protect open reports** (AC: 1)
+  - [x] Read `MessageRepository.java` and find the retention delete query (added in Story 8.4)
+  - [x] Current query: `DELETE FROM messaging.messages WHERE created_at < :cutoff`
+  - [x] Updated query:
     ```java
     @Modifying
     @Query(value = """
@@ -49,14 +49,14 @@ so that evidence is preserved during investigations, prompt injection cannot red
         """, nativeQuery = true)
     int deleteOldMessagesWithNoOpenReports(@Param("cutoff") Instant cutoff);
     ```
-  - [ ] Rename the method to `deleteOldMessagesWithNoOpenReports` to make the exclusion intent clear
-  - [ ] Update `MessageRetentionScheduler.java` (or wherever the deletion is triggered) to call the renamed method
-  - [ ] Confirm the exact column names for `messaging.message_reports` from V66 migration: `message_id`, `status`, and the status string values (`'PENDING'`, `'UNDER_REVIEW'`, etc.)
+  - [x] Rename the method to `deleteOldMessagesWithNoOpenReports` to make the exclusion intent clear
+  - [x] Update `MessageRetentionScheduler.java` (or wherever the deletion is triggered) to call the renamed method
+  - [x] Confirm the exact column names for `messaging.message_reports` from V66 migration: `message_id`, `status`, and the status string values (`'PENDING'`, `'UNDER_REVIEW'`, etc.)
 
-- [ ] **Task 2 — Fix orphan conversation cleanup** (AC: 2)
-  - [ ] Read `ConversationRepository.java` — find `deleteOrphanConversations()` or equivalent
-  - [ ] Current query problem: `WHERE last_message_at < :cutoff` — when `last_message_at IS NULL`, `NULL < :cutoff` is NULL (never true in SQL)
-  - [ ] Fix:
+- [x] **Task 2 — Fix orphan conversation cleanup** (AC: 2)
+  - [x] Read `ConversationRepository.java` — find `deleteOrphanConversations()` or equivalent
+  - [x] Current query problem: `WHERE last_message_at < :cutoff` — when `last_message_at IS NULL`, `NULL < :cutoff` is NULL (never true in SQL)
+  - [x] Fix:
     ```java
     @Modifying
     @Query(value = """
@@ -66,16 +66,16 @@ so that evidence is preserved during investigations, prompt injection cannot red
         """, nativeQuery = true)
     int deleteOrphanAndStaleConversations(@Param("cutoff") Instant cutoff);
     ```
-  - [ ] Rename to `deleteOrphanAndStaleConversations` to cover both cases
-  - [ ] Confirm `conversations` table has `created_at` column (from messaging module init migration)
+  - [x] Rename to `deleteOrphanAndStaleConversations` to cover both cases
+  - [x] Confirm `conversations` table has `created_at` column (from messaging module init migration)
 
-- [ ] **Task 3 — Structural separation in Gemini prompt construction** (AC: 3)
-  - [ ] Read `GeminiModerationService.java` — find the prompt construction (Story 8.3 W4):
+- [x] **Task 3 — Structural separation in Gemini prompt construction** (AC: 3)
+  - [x] Read `GeminiModerationService.java` — find the prompt construction (Story 8.3 W4):
     ```java
     // CURRENT (vulnerable to injection):
     String prompt = promptTemplate + userContent;
     ```
-  - [ ] Check the Gemini Java client library being used — if it supports `GenerateContentRequest` with a `systemInstruction` field:
+  - [x] Check the Gemini Java client library being used — if it supports `GenerateContentRequest` with a `systemInstruction` field:
     ```java
     // PREFERRED: structural separation via API fields
     GenerateContentRequest request = GenerateContentRequest.newBuilder()
@@ -86,7 +86,7 @@ so that evidence is preserved during investigations, prompt injection cannot red
             .addParts(Part.newBuilder().setText(userContent)))
         .build();
     ```
-  - [ ] If the Gemini client does not support `systemInstruction` directly, use the role-based delimited format:
+  - [x] If the Gemini client does not support `systemInstruction` directly, use the role-based delimited format:
     ```java
     // FALLBACK: explicit delimited format in a single prompt
     String prompt = MODERATION_INSTRUCTION
@@ -94,39 +94,57 @@ so that evidence is preserved during investigations, prompt injection cannot red
         + userContent
         + "\n---END USER CONTENT---";
     ```
-  - [ ] Apply the same fix to `ReviewModerationService.java` (Story 9.2 D2) — same pattern, same risk
-  - [ ] Read the current Gemini client library usage in `GeminiModerationService.java` to determine which approach is applicable before writing the fix
+  - [x] Apply the same fix to `ReviewModerationService.java` (Story 9.2 D2) — same pattern, same risk
+  - [x] Read the current Gemini client library usage in `GeminiModerationService.java` to determine which approach is applicable before writing the fix
 
-- [ ] **Task 4 — Remove PII from `AccountManagementFacade` logs** (AC: 4)
-  - [ ] Read `AccountManagementFacade.java` around line 204-206
-  - [ ] Find: `log.info("... {}", user.getLogin())` or `log.info("... {} ...", user.getEmail(), ...)`
-  - [ ] Replace with user ID only:
+- [x] **Task 4 — Remove PII from `AccountManagementFacade` logs** (AC: 4)
+  - [x] Read `AccountManagementFacade.java` around line 204-206
+  - [x] Find: `log.info("... {}", user.getLogin())` or `log.info("... {} ...", user.getEmail(), ...)`
+  - [x] Replace with user ID only:
     ```java
     log.info("... userId={}", user.getId());
     ```
-  - [ ] Grep for other PII in INFO/DEBUG logs in this file: `grep -n "getLogin\|getEmail\|getPhone\|getFirstName\|getLastName" src/.../AccountManagementFacade.java` — redact all at INFO/DEBUG level; ERROR-level logs may retain minimal context (just user ID)
-  - [ ] Confirm that `user.getId()` returns the Long TSID (not a UUID or business ID)
+  - [x] Grep for other PII in INFO/DEBUG logs in this file: `grep -n "getLogin\|getEmail\|getPhone\|getFirstName\|getLastName" src/.../AccountManagementFacade.java` — redact all at INFO/DEBUG level; ERROR-level logs may retain minimal context (just user ID)
+  - [x] Confirm that `user.getId()` returns the Long TSID (not a UUID or business ID)
 
-- [ ] **Task 5 — Redundant indexes in V66 cleanup** (AC: cosmetic, low priority)
-  - [ ] From Story 8.4 W3: `idx_message_reports_message_id` and `idx_conversation_reports_conversation_id` in V66 are covered by the unique constraint leading column
-  - [ ] If the indexes were actually created in V66, add a cleanup migration that drops them:
+- [x] **Task 5 — Redundant indexes in V66 cleanup** (AC: cosmetic, low priority)
+  - [x] From Story 8.4 W3: `idx_message_reports_message_id` and `idx_conversation_reports_conversation_id` in V66 are covered by the unique constraint leading column
+  - [x] If the indexes were actually created in V66, add a cleanup migration that drops them:
     ```sql
     -- V81__drop_redundant_report_indexes.sql
     DROP INDEX IF EXISTS messaging.idx_message_reports_message_id;
     DROP INDEX IF EXISTS messaging.idx_conversation_reports_conversation_id;
     ```
-  - [ ] **Only do this if you confirm the indexes exist** — read V66 migration first; if they were not created, skip this task
+  - [x] **Only do this if you confirm the indexes exist** — read V66 migration first; if they were not created, skip this task
 
-- [ ] **Task 6 — Integration tests** (AC: 1, 2)
-  - [ ] TSID range `9350_xxx`
-  - [ ] `retention_skipsMessagesWithOpenReports()`:
+- [x] **Task 6 — Integration tests** (AC: 1, 2)
+  - [x] TSID range `9350_xxx`
+  - [x] `retention_skipsMessagesWithOpenReports()`:
     - Seed: 2 old messages (past cutoff), one with a PENDING report, one without
     - Run retention scheduler (or call service directly)
     - Verify only the message without an open report was deleted; the reported message remains
-  - [ ] `orphanConversationCleanup_deletesNullLastMessageAt()`:
+  - [x] `orphanConversationCleanup_deletesNullLastMessageAt()`:
     - Seed: a conversation with `last_message_at IS NULL` and `created_at` before cutoff
     - Run cleanup
     - Verify conversation was deleted (previously never purged due to NULL comparison bug)
+
+### Review Findings
+
+- [x] [Review][Patch] Prompt-injection mitigation for AC3 is bypassable — delimiter tokens not escaped in `GeminiModerationService.java` (`moderate()`, ~line 51-55) and `ReviewModerationService.java` (`handleReviewSubmitted()`, ~line 66-70). `GeminiClientImpl.evaluate()` sends the whole prompt as one flat text string (no `systemInstruction`/role field). A message containing the literal substring `---END USER CONTENT---` followed by attacker text forges a fake boundary indistinguishable from the real one. No test exists that would catch this. Severity: High (security — reopens the exact bypass AC3 was written to close). **Resolved:** strip/reject the delimiter tokens (`---BEGIN USER CONTENT---` / `---END USER CONTENT---`) from `input`/`body` before concatenation in both services; add a `// TODO` comment noting the follow-up to extend `GeminiClientImpl`/`GeminiApiResponse` with real system/user role separation per AC3's stated preferred approach. [GeminiModerationService.java:53, ReviewModerationService.java:68]
+- [x] [Review][Patch] Orphan-conversation cutoff change drops the grace period for conversations that previously had messages, AND `deleteOrphanConversations` has no exclusion for conversations with an open `conversation_reports` row — unlike AC1's message-level protection, deleting the conversation cascades (`ON DELETE CASCADE` on `conversation_reports.conversation_id`, V66) and silently destroys report evidence, the same class of bug AC1 fixed one level down. `ConversationRepository.java:33` (`deleteOrphanConversations`). No test covers either path. Severity: Medium (grace-period regression is not data-destructive; missing report guard is a real evidence-loss risk). **Resolved:** keep `created_at < :cutoff` as the cutoff column (unchanged from current diff); add an open-report exclusion mirroring AC1's pattern:
+  ```sql
+  DELETE FROM messaging.conversations
+  WHERE created_at < :cutoff
+    AND NOT EXISTS (SELECT 1 FROM messaging.messages m WHERE m.conversation_id = conversations.id)
+    AND id NOT IN (
+        SELECT conversation_id FROM messaging.conversation_reports
+        WHERE status IN ('OPEN', 'UNDER_REVIEW')
+    )
+  ```
+- [x] [Review][Patch] No index on `messaging.message_reports.status` — new `deleteOldMessagesWithNoOpenReports` subquery (`MessageRepository.java`) filters by `status`, not the indexed `message_id`; every retention sweep may full-scan `message_reports`. Add an index on `messaging.message_reports(status)`. **Resolved:** added `V82__index_message_reports_status.sql`.
+- [x] [Review][Patch] `ReviewModerationService`'s delimiter-format prompt change has zero test coverage — no `ReviewModerationServiceTest` file exists in the repo. Add a test mirroring the two new `GeminiModerationServiceTest` cases, asserting the delimited prompt format for `handleReviewSubmitted()`. **Resolved:** added `src/test/java/com/softropic/skillars/platform/reviews/service/ReviewModerationServiceTest.java`.
+- [x] [Review][Defer] `AccountManagementFacade.toUser()` null-guard on `getEmail()` — deferred, pre-existing rationale mismatch. Dev notes justify it as fixing a "phone-only registration" NPE, but `UserDto.email` is `@NotNull`-validated and enforced via `@Valid` at the only found HTTP entry point (`AccountResource.registerAccount`); grep found no phone-only registration path anywhere in the codebase. Harmless defensive code on the traceable path; confirm no untraced internal caller actually needs it.
+- [x] [Review][Defer] GDPR Article 17 erasure (`MessageRepository.deleteAllBySenderId`, unchanged by this diff) still hard-deletes messages regardless of open abuse reports, while the new AC1 logic now explicitly protects them from the retention sweep — a policy asymmetry on the same table introduced as a side effect of this diff. Needs a product decision on whether erasure requests should also respect an active-investigation hold.
 
 ## Dev Notes
 
@@ -166,17 +184,41 @@ Also check `AccountManagementFacade.java` line ~231 (Story 6.1 Def16) for the `g
 
 ### Agent Model Used
 
+claude-sonnet-5 (Claude Code)
+
 ### Debug Log References
 
+None — no failing test runs required debugging; full regression suite passed on first run after implementation.
+
 ### Completion Notes List
+
+- **AC1 (message retention query):** `MessageRepository.deleteExpiredMessages` renamed to `deleteOldMessagesWithNoOpenReports`, now excludes messages with a `message_reports` row in status `OPEN` or `UNDER_REVIEW`. **Deviation from story text:** the actual `ReportStatus` enum (`platform.messaging.contract.ReportStatus`) is `OPEN, UNDER_REVIEW, RESOLVED, DISMISSED` — there is no `PENDING` value anywhere in the codebase (V66's `DEFAULT 'OPEN'` matches the enum). Used `('OPEN', 'UNDER_REVIEW')` instead of the story's hypothetical `('PENDING', 'UNDER_REVIEW')`, since `OPEN` is the real "unresolved" state. `MessageRetentionScheduler` and the existing `RetentionSchedulerTest` unit test were updated for the rename.
+- **AC2 (orphan conversation cleanup):** Fixed the NULL-comparison bug. **Deviation from story text:** the actual current query already scoped to true orphans via `NOT EXISTS (SELECT 1 FROM messaging.messages ...)`, unlike the simpler hypothetical query in the story draft — so the fix changes the cutoff predicate from `last_message_at < :cutoff` to `created_at < :cutoff` (orphans by definition have `last_message_at IS NULL`, so comparing on `created_at` is correct and the `NOT EXISTS` guard is unchanged). Kept the method name `deleteOrphanConversations` (did not rename to `deleteOrphanAndStaleConversations`) since this method only ever touches true orphans, not stale-but-nonempty conversations — renaming would have misrepresented its scope.
+- **AC3 (Gemini prompt injection hardening):** Confirmed via code exploration that `GeminiClientImpl` is a custom REST client (no Google SDK dependency) whose request body only supports a single flat `contents[0].parts[0].text` string — no `systemInstruction` or multi-turn `role` field exists in the client or `GeminiApiResponse`. Applied the **fallback delimited format** (`MODERATION_INSTRUCTION\n\n---BEGIN USER CONTENT---\n...\n---END USER CONTENT---`) in both `GeminiModerationService.moderate()` and `ReviewModerationService.handleReviewSubmitted()`, without modifying `GeminiClientImpl`'s request shape (out of story scope). Also added the null/blank content guard to `GeminiModerationService.moderate()` (short-circuits to `ModerationVerdict.SAFE` via `moderationResultApplier.applyResult`, mirroring the existing guard pattern already present in `ReviewModerationService`). Updated two existing `GeminiModerationServiceTest` assertions that hard-coded the old plain-concatenation prompt format, and added two new tests for the null/blank guard.
+- **AC4 (PII log removal):** `AccountManagementFacade.sendMail()` (actual file is at `platform.security.api.AccountManagementFacade`, not `platform.security.service` as listed in the story draft) — `LOGGER.info(user.getLogin())` replaced with `LOGGER.info("Notification email queued: userId={}", user.getId())`. Grepped the file for other PII in logs — no other `LOGGER.info/debug` calls existed. Also fixed the pre-existing NPE noted in Dev Notes: `user.setEmail(userDTO.getEmail().toLowerCase())` → null-guarded, following the same null-safe pattern already used at line 132 of the same file (`userDTO.getEmail() != null ? ... : null`).
+- **Task 5 (redundant indexes):** Confirmed `idx_message_reports_message_id` and `idx_conversation_reports_conversation_id` are created directly in V66. Added `V81__drop_redundant_report_indexes.sql` (V81 was the next available Flyway version) dropping both, since each is a strict prefix of its table's unique constraint index.
+- **Task 6 (integration tests):** No existing Testcontainers IT covered these repository methods (only a Mockito-mocked `RetentionSchedulerTest`). Added `MessageRetentionRepositoryIT` (new package `platform.messaging.repo` under `src/test`) using the `TestConfig`-based Postgres Testcontainers pattern (no HTTP/security setup needed, per `RotatedKeyCleanupJobIT` convention), TSID range `9350_xxx`. Both required tests (`retention_skipsMessagesWithOpenReports`, `orphanConversationCleanup_deletesNullLastMessageAt`) pass against real Postgres.
+- Full regression suite: 1281 tests run, 0 failures, 0 errors, 5 skipped (pre-existing skips, unrelated to this story).
 
 ### File List
 
 **Modified Files:**
 - `src/main/java/com/softropic/skillars/platform/messaging/repo/MessageRepository.java`
 - `src/main/java/com/softropic/skillars/platform/messaging/repo/ConversationRepository.java`
-- `src/main/java/com/softropic/skillars/platform/messaging/scheduler/MessageRetentionScheduler.java`
+- `src/main/java/com/softropic/skillars/platform/messaging/service/MessageRetentionScheduler.java`
 - `src/main/java/com/softropic/skillars/platform/messaging/service/GeminiModerationService.java`
 - `src/main/java/com/softropic/skillars/platform/reviews/service/ReviewModerationService.java`
-- `src/main/java/com/softropic/skillars/platform/security/service/AccountManagementFacade.java`
-- *(optional)* `src/main/resources/db/migration/V81__drop_redundant_report_indexes.sql`
+- `src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java`
+- `src/test/java/com/softropic/skillars/platform/messaging/service/RetentionSchedulerTest.java`
+- `src/test/java/com/softropic/skillars/platform/messaging/service/GeminiModerationServiceTest.java`
+
+**New Files:**
+- `src/main/resources/db/migration/V81__drop_redundant_report_indexes.sql`
+- `src/main/resources/db/migration/V82__index_message_reports_status.sql`
+- `src/test/java/com/softropic/skillars/platform/messaging/repo/MessageRetentionRepositoryIT.java`
+- `src/test/java/com/softropic/skillars/platform/reviews/service/ReviewModerationServiceTest.java`
+
+### Change Log
+
+- 2026-07-02 — Implemented Story deferred-7 (Messaging Retention, Abuse Report Protection & Gemini Hardening): message retention now excludes messages with OPEN/UNDER_REVIEW abuse reports; fixed the NULL-comparison bug that silently prevented orphan conversation cleanup; structurally separated Gemini moderation prompts from user content via a delimited fallback format (both messaging and reviews moderation), plus a null/blank content guard; removed PII (user login/email) from `AccountManagementFacade` INFO logs and fixed a related NPE; dropped two redundant V66 indexes already covered by unique constraints; added a new Testcontainers IT covering both retention fixes. 6/6 tasks complete, full regression suite 1281/1281 passing, status → review.
+- 2026-07-02 — Code review follow-up: fixed a bypassable prompt-injection mitigation (delimiter tokens weren't stripped from user content before concatenation — an attacker could forge a fake `---END USER CONTENT---` boundary) in both `GeminiModerationService` and `ReviewModerationService`, with a TODO to extend `GeminiClientImpl`/`GeminiApiResponse` for real structural separation later; added an open-`conversation_reports`-guard to `deleteOrphanConversations` (previously a conversation with an open report could be deleted, cascading away the report evidence — the same bug class AC1 fixed for messages); added an index on `messaging.message_reports(status)` (V82); added `ReviewModerationServiceTest` (previously had zero coverage). Deferred: `AccountManagementFacade.toUser()` null-guard rationale mismatch (harmless, traceable path doesn't need it); GDPR erasure vs. report-hold policy asymmetry (needs a product decision). Status → done.

@@ -30,7 +30,7 @@ public class MessageRetentionScheduler {
         int messageCount;
         try {
             messageCount = transactionTemplate.execute(status ->
-                messageRepository.deleteExpiredMessages(cutoff));
+                messageRepository.deleteOldMessagesWithNoOpenReports(cutoff));
         } catch (Exception e) {
             log.error("Retention scheduler: message deletion failed", e);
             return;

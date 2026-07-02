@@ -40,8 +40,15 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
     List<Message> findAllForAdmin(@Param("convId") Long convId, Pageable pageable);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Query(value = "DELETE FROM messaging.messages WHERE created_at < :cutoff", nativeQuery = true)
-    int deleteExpiredMessages(@Param("cutoff") Instant cutoff);
+    @Query(value = """
+        DELETE FROM messaging.messages
+        WHERE created_at < :cutoff
+          AND id NOT IN (
+              SELECT message_id FROM messaging.message_reports
+              WHERE status IN ('OPEN', 'UNDER_REVIEW')
+          )
+        """, nativeQuery = true)
+    int deleteOldMessagesWithNoOpenReports(@Param("cutoff") Instant cutoff);
 
     // Deletes ALL messages by sender — including soft-deleted rows — for GDPR Article 17 erasure
     @Modifying

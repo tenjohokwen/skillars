@@ -202,7 +202,7 @@ public class AccountManagementFacade {
         publisher.publishEvent(envelope);
 
         if(LOGGER.isInfoEnabled()) {
-            LOGGER.info(user.getLogin());
+            LOGGER.info("Notification email queued: userId={}", user.getId());
         }
         return shortCode;
     }
@@ -228,7 +228,7 @@ public class AccountManagementFacade {
         user.setLoginIdType(userDTO.getLoginIdType());
         user.setFirstName(userDTO.getFirstName());
         user.setLastName(userDTO.getLastName());
-        user.setEmail(userDTO.getEmail().toLowerCase());
+        user.setEmail(userDTO.getEmail() != null ? userDTO.getEmail().toLowerCase() : null);
         user.setPhone(toPhoneNumber(userDTO.getPhone()));
         user.setLangKey(userDTO.getLangKey());
         user.setGender(userDTO.getGender());

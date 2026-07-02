@@ -22,6 +22,9 @@ import java.util.UUID;
 @Slf4j
 public class ReviewModerationService {
 
+    private static final String USER_CONTENT_BEGIN_DELIMITER = "---BEGIN USER CONTENT---";
+    private static final String USER_CONTENT_END_DELIMITER = "---END USER CONTENT---";
+
     private final CoachReviewRepository reviewRepository;
     private final GeminiClient geminiClient;
     private final CoachRatingService coachRatingService;
@@ -63,7 +66,16 @@ public class ReviewModerationService {
             String input = body.length() > maxInputChars ? body.substring(0, maxInputChars) : body;
             ModerationVerdict verdict;
             try {
-                verdict = geminiClient.evaluate(promptTemplate + input);
+                // TODO: replace this delimiter convention with real structural separation once
+                // GeminiClientImpl/GeminiApiResponse support a systemInstruction + multi-turn role field.
+                String sanitizedInput = input
+                    .replace(USER_CONTENT_BEGIN_DELIMITER, "")
+                    .replace(USER_CONTENT_END_DELIMITER, "");
+                String prompt = promptTemplate
+                    + "\n\n" + USER_CONTENT_BEGIN_DELIMITER + "\n"
+                    + sanitizedInput
+                    + "\n" + USER_CONTENT_END_DELIMITER;
+                verdict = geminiClient.evaluate(prompt);
             } catch (Exception e) {
                 log.warn("Gemini moderation failed for reviewId={}: {}", reviewId, e.getMessage());
                 verdict = ModerationVerdict.UNCERTAIN;

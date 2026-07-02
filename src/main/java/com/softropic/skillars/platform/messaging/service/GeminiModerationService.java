@@ -20,6 +20,9 @@ import org.springframework.stereotype.Service;
 @Slf4j
 public class GeminiModerationService implements ModerationService {
 
+    private static final String USER_CONTENT_BEGIN_DELIMITER = "---BEGIN USER CONTENT---";
+    private static final String USER_CONTENT_END_DELIMITER = "---END USER CONTENT---";
+
     private final GeminiClient geminiClient;
     private final ModerationResultApplier moderationResultApplier;
     private final MessageRepository messageRepository;
@@ -33,6 +36,10 @@ public class GeminiModerationService implements ModerationService {
 
     @Override
     public ModerationResult moderate(Long messageId, String content) {
+        if (content == null || content.isBlank()) {
+            return moderationResultApplier.applyResult(messageId, ModerationVerdict.SAFE);
+        }
+
         String input = content.length() > maxInputChars
             ? content.substring(0, maxInputChars)
             : content;
@@ -44,7 +51,16 @@ public class GeminiModerationService implements ModerationService {
         ModerationVerdict verdict;
         String failureReason = null;
         try {
-            verdict = geminiClient.evaluate(promptTemplate + input);
+            // TODO: replace this delimiter convention with real structural separation once
+            // GeminiClientImpl/GeminiApiResponse support a systemInstruction + multi-turn role field.
+            String sanitizedInput = input
+                .replace(USER_CONTENT_BEGIN_DELIMITER, "")
+                .replace(USER_CONTENT_END_DELIMITER, "");
+            String prompt = promptTemplate
+                + "\n\n" + USER_CONTENT_BEGIN_DELIMITER + "\n"
+                + sanitizedInput
+                + "\n" + USER_CONTENT_END_DELIMITER;
+            verdict = geminiClient.evaluate(prompt);
         } catch (Exception e) {
             verdict = ModerationVerdict.UNCERTAIN;
             failureReason = e.getMessage();

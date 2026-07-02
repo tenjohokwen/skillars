@@ -45,20 +45,20 @@ class RetentionSchedulerTest {
 
     @Test
     void runRetention_deletesExpiredMessagesAndOrphanConversations() {
-        when(messageRepository.deleteExpiredMessages(any())).thenReturn(5);
+        when(messageRepository.deleteOldMessagesWithNoOpenReports(any())).thenReturn(5);
         when(conversationRepository.deleteOrphanConversations(any())).thenReturn(2);
 
         scheduler.runRetention();
 
         ArgumentCaptor<Instant> cutoffCaptor = ArgumentCaptor.forClass(Instant.class);
-        verify(messageRepository).deleteExpiredMessages(cutoffCaptor.capture());
+        verify(messageRepository).deleteOldMessagesWithNoOpenReports(cutoffCaptor.capture());
         assertThat(cutoffCaptor.getValue()).isBefore(Instant.now().minus(700, ChronoUnit.DAYS));
         verify(conversationRepository).deleteOrphanConversations(any());
     }
 
     @Test
     void runRetention_dbErrorCaught_noRethrow() {
-        when(messageRepository.deleteExpiredMessages(any())).thenThrow(new RuntimeException("DB error"));
+        when(messageRepository.deleteOldMessagesWithNoOpenReports(any())).thenThrow(new RuntimeException("DB error"));
 
         scheduler.runRetention();
 
@@ -68,13 +68,13 @@ class RetentionSchedulerTest {
     @Test
     void runRetention_usesConfiguredRetentionPeriod() {
         when(configService.getInt("platform.message_retention_months", 24)).thenReturn(12);
-        when(messageRepository.deleteExpiredMessages(any())).thenReturn(0);
+        when(messageRepository.deleteOldMessagesWithNoOpenReports(any())).thenReturn(0);
         when(conversationRepository.deleteOrphanConversations(any())).thenReturn(0);
 
         scheduler.runRetention();
 
         ArgumentCaptor<Instant> cutoffCaptor = ArgumentCaptor.forClass(Instant.class);
-        verify(messageRepository).deleteExpiredMessages(cutoffCaptor.capture());
+        verify(messageRepository).deleteOldMessagesWithNoOpenReports(cutoffCaptor.capture());
         Instant cutoff = cutoffCaptor.getValue();
 
         // 12 calendar months ago — use month-based bounds to tolerate leap year variation (365 vs 366 days)

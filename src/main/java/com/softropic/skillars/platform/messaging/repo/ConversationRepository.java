@@ -30,8 +30,12 @@ public interface ConversationRepository extends JpaRepository<Conversation, Long
     @Modifying
     @Query(value = """
         DELETE FROM messaging.conversations
-        WHERE last_message_at < :cutoff
+        WHERE created_at < :cutoff
           AND NOT EXISTS (SELECT 1 FROM messaging.messages m WHERE m.conversation_id = conversations.id)
+          AND id NOT IN (
+              SELECT conversation_id FROM messaging.conversation_reports
+              WHERE status IN ('OPEN', 'UNDER_REVIEW')
+          )
         """, nativeQuery = true)
     int deleteOrphanConversations(@Param("cutoff") Instant cutoff);
 }
