@@ -181,7 +181,10 @@ export default {
       parentLabel: 'Parent: {name}',
       accept: 'Accept',
       decline: 'Decline',
+      acceptError: 'Failed to accept booking. Please try again.',
+      declineError: 'Failed to decline booking. Please try again.',
       creditsRemaining: '{count} credits remaining with this coach',
+      bookingsLoadError: 'Unable to load your bookings. Please refresh the page.',
     },
     availability: {
       title: 'Manage Availability',
@@ -323,6 +326,7 @@ export default {
       step3Placeholder: 'Type a note...',
       step4Title: 'Homework Drills',
       step4NoSuggestions: 'Drill suggestions coming soon',
+      step4DnaError: 'Unable to load session DNA',
       step4Done: 'Done',
     },
   },

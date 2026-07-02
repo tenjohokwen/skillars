@@ -1,6 +1,6 @@
 # Story Deferred-9: Frontend UX Polish
 
-Status: backlog
+Status: done
 
 ## Story
 
@@ -47,123 +47,66 @@ so that I always have accurate feedback and never see stale or missing content a
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Clear development store on player navigation** (AC: 1)
-  - [ ] Read `PlayerDevelopmentDashboardPage.vue` — find the `watch` on `route.params.playerId` and the `onMounted` hook
-  - [ ] At the top of the watcher (before `loadPortal()` or equivalent):
-    ```javascript
-    watch(() => route.params.playerId, async (newPlayerId) => {
-        // Clear stale state before loading new player
-        developmentStore.exposure = null;
-        developmentStore.targets = [];
-        developmentStore.narrative = null;
-        developmentStore.neglectedSkills = [];
-        // then load
-        await loadPortal(newPlayerId);
-    }, { immediate: false });
-    ```
-  - [ ] Verify the exact store property names from `useDevelopmentStore()` / `development.store.js`
-  - [ ] Also apply the same clear in `onMounted` before the initial load (from 5.2 AD1 — stale error state between player switches)
+- [x] **Task 1 — Clear development store on player navigation** (AC: 1)
+  - [x] Read `PlayerDevelopmentDashboardPage.vue` — find the `watch` on `route.params.playerId` and the `onMounted` hook
+  - [x] At the top of the watcher (before `loadPortal()` or equivalent): added `clearDevelopmentState()` + `loadPlayerData()` refactor
+  - [x] Verify the exact store property names from `useDevelopmentStore()` / `development.store.js`
+  - [x] Also apply the same clear in `onMounted` before the initial load (from 5.2 AD1 — stale error state between player switches)
 
-- [ ] **Task 2 — Booking accept/decline error notification** (AC: 2)
-  - [ ] Read `CoachBookingRequestsPage.vue:75-92` — find `handleAccept()` and `handleDecline()`
-  - [ ] Add error handling in each:
-    ```javascript
-    async handleAccept(bookingId) {
-        this.accepting[bookingId] = true;
-        try {
-            await bookingStore.acceptBooking(bookingId);
-            this.$q.notify({ type: 'positive', message: 'Booking accepted' });
-        } catch (err) {
-            this.$q.notify({
-                type: 'negative',
-                message: err?.response?.data?.message || 'Failed to accept booking. Please try again.'
-            });
-        } finally {
-            this.accepting[bookingId] = false;
-        }
-    }
-    ```
-  - [ ] Same pattern for `handleDecline()`
-  - [ ] If `this.$q` is not accessible (component uses Composition API), use `useQuasar()`:
-    ```javascript
-    const $q = useQuasar();
-    $q.notify({ type: 'negative', message: '...' });
-    ```
+- [x] **Task 2 — Booking accept/decline error notification** (AC: 2)
+  - [x] Read `CoachBookingRequestsPage.vue:75-92` — find `handleAccept()` and `handleDecline()`
+  - [x] Add error handling in each
+  - [x] Same pattern for `handleDecline()`
+  - [x] Component already uses Composition API with `useQuasar()` — reused existing `$q` instance
 
-- [ ] **Task 3 — Render `bookingsError` in `ParentBookingsPage`** (AC: 3)
-  - [ ] Read `ParentBookingsPage.vue` — find where `bookingsError` is set and the current template
-  - [ ] Add to the template, adjacent to the bookings list:
-    ```html
-    <q-banner v-if="bookingsError" class="bg-negative text-white" rounded>
-        Unable to load your bookings. Please refresh the page.
-    </q-banner>
-    ```
-  - [ ] Or use the project's existing error alert component if one exists
+- [x] **Task 3 — Render `bookingsError` in `ParentBookingsPage`** (AC: 3)
+  - [x] Read `ParentBookingsPage.vue` — find where `bookingsError` is set and the current template
+  - [x] Add to the template, adjacent to the bookings list
+  - [x] Used the project's existing `q-banner` error pattern (matches `PlayerDevelopmentDashboardPage.vue` and `store.error` conventions)
 
-- [ ] **Task 4 — Booking request submission error feedback** (AC: 4)
-  - [ ] Read `BookingRequestPage.vue:112-128` — find `submitBookingRequest()` error path
-  - [ ] In the catch block:
-    ```javascript
-    } catch (err) {
-        const msg = err?.response?.data?.message
-            || err?.response?.data?.helpCode
-            || 'Booking request failed. Please check your details and try again.';
-        this.$q.notify({ type: 'negative', message: msg });
-    }
-    ```
-  - [ ] Ensure the button's loading state is reset in a `finally` block so the button is re-enabled after failure
+- [x] **Task 4 — Booking request submission error feedback** (AC: 4)
+  - [x] Read `BookingRequestPage.vue` — `submitBookingRequest()` error path — **already implemented**: `submit()` already has a `catch` with `$q.notify` and resets `submitting` in `finally`. No code change required; verified against AC.
 
-- [ ] **Task 5 — WrapUpSequence DNA loading and error state** (AC: 5)
-  - [ ] Read `WrapUpSequence.vue:309` — find `fetchSessionDna()` and where the DNA chart is rendered
-  - [ ] Add refs:
-    ```javascript
-    const dnaLoading = ref(false);
-    const dnaError = ref(null);
-    ```
-  - [ ] Wrap the fetch:
-    ```javascript
-    async function fetchSessionDna() {
-        dnaLoading.value = true;
-        dnaError.value = null;
-        try {
-            sessionDna.value = await sessionStore.fetchDna(bookingId.value);
-        } catch (err) {
-            dnaError.value = 'Unable to load session DNA';
-        } finally {
-            dnaLoading.value = false;
-        }
-    }
-    ```
-  - [ ] In the template, wrap the DNA chart component:
-    ```html
-    <q-inner-loading :showing="dnaLoading" />
-    <div v-if="dnaError" class="text-grey-6 text-center q-pa-md">{{ dnaError }}</div>
-    <SkillsDnaChart v-else-if="sessionDna" :data="sessionDna" />
-    ```
+- [x] **Task 5 — WrapUpSequence DNA loading and error state** (AC: 5)
+  - [x] Read `WrapUpSequence.vue` — find `fetchSessionDna()` and where the DNA chart is rendered
+  - [x] Add refs: `dnaLoading`, `dnaError`
+  - [x] Wrap the fetch with loading/error handling
+  - [x] In the template, wrap the DNA chart component with `q-inner-loading` + error placeholder; also corrected `variant="compact"` → `variant="full"` per Dev Notes (4.4 W3)
 
-- [ ] **Task 6 — Clear `selectedSlot` on batch mode toggle** (AC: 6)
-  - [ ] Read `BookingRequestPage.vue` — find `toggleBatchMode()`
-  - [ ] Add:
-    ```javascript
-    function toggleBatchMode() {
-        batchMode.value = !batchMode.value;
-        if (batchMode.value) {
-            selectedSlot.value = null;  // clear stale single-slot selection
-        }
-    }
-    ```
+- [x] **Task 6 — Clear `selectedSlot` on batch mode toggle** (AC: 6)
+  - [x] Read `BookingRequestPage.vue` — find `toggleBatchMode()`
+  - [x] Added `selectedSlot.value = null` when entering batch mode
 
-- [ ] **Task 7 — German translations for development module** (AC: 7)
-  - [ ] Read `src/frontend/src/i18n/en/index.js` (or `en-US/index.js`) — find the `development` block with all keys for skills, radar, exposure, targets, narrative
-  - [ ] Read `src/frontend/src/i18n/de/index.js` — find the `development` block that currently contains English strings
-  - [ ] Translate each key to German. Keys expected (verify from `en` source):
-    - Skills taxonomy: skill names, categories
-    - Radar: "Skills Radar", "Assessment", axis labels
-    - Exposure: "Skill Exposure", "Neglected Skills", "Weekly Target"
-    - Targets: "Set Target", "Current Target"
-    - Narrative: "Development Narrative", "This Week", "Trend"
-  - [ ] If the development block in `de` is entirely missing (not just English strings), add the full block
-  - [ ] Machine-translate as a first pass; mark each string with `// TODO: native review` comment for a human translation pass later
+- [x] **Task 7 — German translations for development module** (AC: 7)
+  - [x] Read `src/frontend/src/i18n/en-US/index.js` (canonical reference; `en` mirrors it) — `development` block with all keys for skills, radar, exposure, targets, narrative
+  - [x] Read `src/frontend/src/i18n/de/index.js` — found `development` block with English strings (radar/exposure/targets/narrative keys; `assessmentTypeLabel`, `report`, `timeline` sub-blocks were already German)
+  - [x] Translated all previously-English keys to German (dashboardTitle, skillExposureTitle, currentWeekLabel, trendChartTitle, setTargetsLabel, neglectedSkillTag, neglectedSkillAlert, noExposureYet, saveTargets, targetLabel, narrative.*, radar.* including accessibleTable and correlation sub-blocks)
+  - [x] Key set was already complete (not missing) — only values needed translation
+  - [x] Machine-translated as a first pass; every changed string marked with `// TODO: native review`
+
+### Review Findings
+
+- [x] [Review][Defer] `booking.*` i18n keys are likely unreachable in the production locale [en/index.js, boot/i18n.js, MainLayout.vue] — deferred, pre-existing platform i18n architecture gap, scope exceeds this story. Target state per product owner: three selectable locales — `en-US`, `fr-FR`, `de-DE` — all at full parity. The bare `en` locale (889 lines, larger than `en-US`'s 474) was an experimental placeholder created to resolve American-vs-British English uncertainty; that's now resolved in favor of `en-US`, so `en`'s extra content (including `booking`, `video`, and other blocks `en-US` lacks) needs merging into `en-US` before `en` can be retired. `de` needs renaming to `de-DE` and adding to the language switcher (it isn't selectable today at all). Full parity requires translating `de`'s currently-empty `booking: {}` block and `fr-FR`'s missing `booking` block, not just the 4 keys this story added. This is a platform-wide i18n consolidation — recommend a dedicated follow-up story.
+
+- [x] [Review][Patch] SluTargetEditor.vue targets-loaded watcher has no re-sync path after the new guard — `if (open.value) return` (line 53) silently drops `currentTargets` updates received while the dialog is open, with no re-sync when it later closes; also a possible stale-value flash if `onSave` closes the dialog before the parent's async save+refetch resolves [SluTargetEditor.vue:53] — fixed: added `watch(open, ...)` that re-syncs `localTargets` from `props.currentTargets` whenever the dialog closes
+
+- [x] [Review][Patch] PlayerDevelopmentDashboardPage.vue player-switch watcher has no request-sequencing guard — rapid navigation between players can let a slow response for an earlier player overwrite a later player's freshly loaded state [PlayerDevelopmentDashboardPage.vue:213-219] — fixed: added a `loadRequestId` generation counter; a load whose response lands after a newer navigation self-corrects by reloading the current player
+
+- [x] [Review][Patch] clearDevelopmentState() omits radar/correlation fields — only clears `exposure`, `targets`, `narrative`, `error`; `radarEntries`, `radarDisplay`, `radarPreferences`, `correlationInsights` are left stale during a coach's player switch, undermining the story's stale-data goal [PlayerDevelopmentDashboardPage.vue:180-185] — fixed: `clearDevelopmentState()` now also nulls `radarEntries`, `radarDisplay`, `radarPreferences`, `correlationInsights`
+
+- [x] [Review][Patch] `Number(newPlayerId)` has no NaN guard in the new route watcher — a malformed route param silently produces NaN and gets passed into fetch calls [PlayerDevelopmentDashboardPage.vue:218] — fixed: watcher now bails via `Number.isFinite()` guard before loading
+
+- [x] [Review][Patch] WrapUpSequence.vue `q-inner-loading` is not scoped to the DNA chart area — it overlays the entire full-screen wrap-up modal because its nearest positioned ancestor is `.wrap-up` (`position: fixed`), not a chart-local container, contradicting AC5's "over the DNA chart area" wording [WrapUpSequence.vue:161] — fixed: wrapped the chart/loading/error markup in a new `.wrap-up__dna-chart-area` (`position: relative`) container so the overlay is scoped locally
+
+- [x] [Review][Patch] CoachBookingRequestsPage.vue error catch doesn't refresh the request list — if accept/decline fails because the booking was already resolved concurrently, the stale actionable item remains in the UI, letting the coach retry an action that will fail identically forever [CoachBookingRequestsPage.vue:151-171] — fixed: catch blocks now call `bookingStore.loadCoachBookingRequests()` to resync the list after a failure
+
+- [x] [Review][Patch] ParentBookingsPage.vue error banner and empty-state block can render simultaneously — the pre-existing "no bookings yet" empty-state CTA isn't gated on the absence of `bookingsError` [ParentBookingsPage.vue:7-20] — fixed: empty-state condition now also requires `!bookingStore.bookingsError`
+
+- [x] [Review][Patch] Missing German translations for 4 new booking i18n keys — `booking.requests.acceptError`, `declineError`, `bookingsLoadError`, `booking.wrapUp.step4DnaError` were added only to `en/index.js`, with no `de/index.js` counterparts [de/index.js] — fixed: added German translations for these 4 keys (`de.booking` was previously an empty object; rest of the `booking` block remains pending per deferred i18n consolidation, D2)
+
+- [ ] [Review][Patch] ~~BookingRequestPage.vue `toggleBatchMode()` doesn't clear `notes` when entering batch mode~~ [BookingRequestPage.vue:233-247] — investigated, no fix applied: verified `notes` is only used by the single-slot `submit()` flow and is never included in `submitBatchRequest()`'s payload, so there is no actual leakage into batch submissions. Original finding was a false positive; clearing `notes` here would have discarded the user's typed note for no benefit.
+
+- [x] [Review][Defer] AC7 `portal` sub-block left untranslated in de/index.js [de/index.js] — deferred, pre-existing (already English in both `en` and `de` before this story; explicitly out of this story's scope per the Dev Agent Record)
 
 ## Dev Notes
 
@@ -207,16 +150,40 @@ Story 4.4 noted `WrapUpSequence` uses `variant="compact"` instead of `variant="f
 
 ### Agent Model Used
 
+Claude Sonnet 5 (claude-sonnet-5)
+
 ### Debug Log References
 
+- No automated frontend test harness exists in this repo (no vitest/jest config; `npm test` in `src/frontend/package.json` is a no-op placeholder). None of the 7 tasks in this story call for adding one, so per workflow rules (no new dependencies without approval) automated tests were not added. Verification was done via `eslint` (project-wide, zero errors), `node --check` on both edited i18n files, and manual trace of each acceptance criterion against the implemented code paths.
+- Actual file paths differed from the story's assumed paths (`src/frontend/src/pages/player/...`, `src/frontend/src/pages/coach/...`, `src/frontend/src/pages/parent/...`, `src/frontend/src/components/booking/...`, `src/frontend/src/components/development/...`) — resolved via `find`.
+- `PlayerDevelopmentDashboardPage.vue` had **no existing `watch` on `route.params.playerId`** — only `onMounted`. This is a real bug beyond what the story assumed (player switches wouldn't reload data at all if Vue Router reuses the component instance). Fixed by extracting the load logic into `loadPlayerData()` and adding a new watcher, per the AC.
+- `BookingRequestPage.vue` `submitBookingRequest()` (Task 4 / AC 4) was already correctly implemented (catch + notify + `finally` reset) — the story's referenced line numbers (112-128) pointed at the template, not the script. No change made; verified only.
+- `booking.*` i18n keys exist only in `src/frontend/src/i18n/en/index.js` (not `en-US`), matching the pre-existing pattern used elsewhere in this codebase for the booking module — new keys were added there for consistency. This existing en-US/en split is a pre-existing condition unrelated to this story and was left as-is.
+- Per AC7, only the `development` block was translated in `de/index.js`; the `portal` sub-block (already English in both `en` and `de`) was left untouched as it's outside the story's AC scope.
+
 ### Completion Notes List
+
+- Task 1: Added `clearDevelopmentState()` and refactored data loading into `loadPlayerData(id)`, called from both `onMounted` and a new `watch(() => route.params.playerId, ...)`. Also fixed the `SluTargetEditor.vue` targets-loaded watcher race noted in Dev Notes (5.2 D5) by guarding with `if (open.value) return`.
+- Task 2: Added `catch` blocks with `$q.notify({ type: 'negative', ... })` to `handleAccept`/`handleDecline` in `CoachBookingRequestsPage.vue`; added `booking.requests.acceptError` / `declineError` i18n keys.
+- Task 3: Added a `q-banner` bound to `bookingStore.bookingsError` in `ParentBookingsPage.vue`; added `booking.requests.bookingsLoadError` i18n key.
+- Task 4: Verified only — no code change needed, existing implementation already satisfies AC4.
+- Task 5: Added `dnaLoading`/`dnaError` refs and loading/error handling around `fetchSessionDna()` in `WrapUpSequence.vue`; added `q-inner-loading` and error placeholder in the template; corrected `variant="compact"` to `variant="full"` per Dev Notes (4.4 W3); added `booking.wrapUp.step4DnaError` i18n key.
+- Task 6: `toggleBatchMode()` in `BookingRequestPage.vue` now clears `selectedSlot` when entering batch mode (previously only cleared on exit).
+- Task 7: Translated all previously-English `development` block values in `de/index.js` to German (machine-translation first pass, each marked `// TODO: native review`), matching the key structure already present.
+- Validation: `eslint` run project-wide (zero errors/warnings introduced), `node --check` passed on both edited i18n files. Pre-existing Prettier formatting warnings on 7 of the touched files were confirmed (via `git stash`) to predate this story's changes and were left untouched to avoid unrelated reformatting noise.
 
 ### File List
 
 **Modified Files:**
-- `src/frontend/src/pages/PlayerDevelopmentDashboardPage.vue`
-- `src/frontend/src/pages/CoachBookingRequestsPage.vue`
-- `src/frontend/src/pages/ParentBookingsPage.vue`
-- `src/frontend/src/pages/BookingRequestPage.vue`
-- `src/frontend/src/components/WrapUpSequence.vue`
+- `src/frontend/src/pages/player/PlayerDevelopmentDashboardPage.vue`
+- `src/frontend/src/components/development/SluTargetEditor.vue`
+- `src/frontend/src/pages/coach/CoachBookingRequestsPage.vue`
+- `src/frontend/src/pages/parent/ParentBookingsPage.vue`
+- `src/frontend/src/pages/parent/BookingRequestPage.vue`
+- `src/frontend/src/components/booking/WrapUpSequence.vue`
 - `src/frontend/src/i18n/de/index.js`
+- `src/frontend/src/i18n/en/index.js`
+
+## Change Log
+
+- 2026-07-02: Implemented all 7 tasks (AC 1–7). Status moved backlog → review.

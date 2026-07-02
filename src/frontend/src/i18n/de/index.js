@@ -130,7 +130,17 @@ export default {
       ADULT: '18+',
     },
   },
-  booking: {},
+  booking: {
+    // Remaining booking.* keys pending full translation — see deferred i18n consolidation (D2)
+    requests: {
+      acceptError: 'Buchung konnte nicht angenommen werden. Bitte erneut versuchen.', // TODO: native review
+      declineError: 'Buchung konnte nicht abgelehnt werden. Bitte erneut versuchen.', // TODO: native review
+      bookingsLoadError: 'Deine Buchungen konnten nicht geladen werden. Bitte die Seite neu laden.', // TODO: native review
+    },
+    wrapUp: {
+      step4DnaError: 'Session-DNA konnte nicht geladen werden.', // TODO: native review
+    },
+  },
   video: {},
   marketplace: {
     title: 'Trainer finden',
@@ -395,69 +405,69 @@ export default {
     },
   },
   development: {
-    dashboardTitle: 'Player Development',
-    skillExposureTitle: 'Skill Exposure',
-    currentWeekLabel: 'This Week',
-    trendChartTitle: 'Weekly Trend (last {weeks} weeks)',
-    setTargetsLabel: 'Set weekly targets',
-    neglectedSkillTag: 'Addresses neglected skill',
-    neglectedSkillAlert: '{skill} below target this week',
-    noExposureYet: 'No exposure yet',
-    saveTargets: 'Save Targets',
-    targetLabel: 'Weekly SLU target ({skill})',
+    dashboardTitle: 'Spielerentwicklung', // TODO: native review
+    skillExposureTitle: 'Fähigkeiten-Exposition', // TODO: native review
+    currentWeekLabel: 'Diese Woche', // TODO: native review
+    trendChartTitle: 'Wochentrend (letzte {weeks} Wochen)', // TODO: native review
+    setTargetsLabel: 'Wochenziele festlegen', // TODO: native review
+    neglectedSkillTag: 'Adressiert vernachlässigte Fähigkeit', // TODO: native review
+    neglectedSkillAlert: '{skill} liegt diese Woche unter dem Ziel', // TODO: native review
+    noExposureYet: 'Noch keine Exposition', // TODO: native review
+    saveTargets: 'Ziele speichern', // TODO: native review
+    targetLabel: 'Wöchentliches SLU-Ziel ({skill})', // TODO: native review
     narrative: {
-      increased: '{skill} exposure increased {percent}% this month',
-      decreased: '{skill} exposure decreased {percent}% this month',
+      increased: '{skill}-Exposition ist diesen Monat um {percent}% gestiegen', // TODO: native review
+      decreased: '{skill}-Exposition ist diesen Monat um {percent}% gesunken', // TODO: native review
     },
     radar: {
-      addAssessmentLabel: 'Add Radar Assessment',
-      assessmentPanelTitle: 'Skills Radar Assessment',
-      assessmentTypeLabelObjective: 'Objective Test',
-      assessmentTypeLabelMatchObs: 'Match Observation',
-      assessmentTypeLabelCoachEval: 'Coach Evaluation',
-      assessmentDateLabel: 'Assessment Date',
-      scoreLabel: 'Score (1–100)',
-      notesLabel: 'Notes (optional)',
+      addAssessmentLabel: 'Radar-Bewertung hinzufügen', // TODO: native review
+      assessmentPanelTitle: 'Skills-Radar-Bewertung', // TODO: native review
+      assessmentTypeLabelObjective: 'Objektiver Test', // TODO: native review
+      assessmentTypeLabelMatchObs: 'Spielbeobachtung', // TODO: native review
+      assessmentTypeLabelCoachEval: 'Trainerbewertung', // TODO: native review
+      assessmentDateLabel: 'Bewertungsdatum', // TODO: native review
+      scoreLabel: 'Punktzahl (1–100)', // TODO: native review
+      notesLabel: 'Notizen (optional)', // TODO: native review
       assessmentTypeLabel: 'Bewertungstyp',
-      scoreTierReference: 'Score reference: Elite 90–100 | Excellent 80–89 | Good 70–79 | Above Average 60–69 | Average 50–59 | Below Average 40–49 | Very Weak <40',
-      submitLabel: 'Submit Assessment',
-      historyTitle: 'My Assessment History',
-      noEntriesYet: 'No assessments recorded yet',
-      otherCoachCount: '{count} other coach(es) assessed {skill}',
-      submitSuccess: 'Assessment submitted successfully',
-      submitErrorFeatureGated: 'Skills Radar assessment requires Instructor tier or above',
-      submitError: 'Failed to submit assessment. Please try again.',
-      displayTitle: 'Skills Radar',
-      compareBaselineLabel: 'Compare to baseline',
-      noAssessmentsYet: 'No assessments recorded yet',
-      minSkillsRequired: 'Select at least 3 skills to display the radar',
-      correlationTitle: 'Development Correlation Engine',
-      confidenceFilled: 'High confidence (3+ assessments)',
-      confidenceHalf: 'Low confidence (1–2 assessments)',
-      confidenceEmpty: 'No assessments yet',
-      lastUpdatedTooltip: 'Last assessed: {date}',
-      correlationError: 'Could not load correlation data. Try refreshing.',
+      scoreTierReference: 'Punktereferenz: Elite 90–100 | Ausgezeichnet 80–89 | Gut 70–79 | Überdurchschnittlich 60–69 | Durchschnittlich 50–59 | Unterdurchschnittlich 40–49 | Sehr schwach <40', // TODO: native review
+      submitLabel: 'Bewertung einreichen', // TODO: native review
+      historyTitle: 'Meine Bewertungshistorie', // TODO: native review
+      noEntriesYet: 'Noch keine Bewertungen erfasst', // TODO: native review
+      otherCoachCount: '{count} andere Trainer haben {skill} bewertet', // TODO: native review
+      submitSuccess: 'Bewertung erfolgreich eingereicht', // TODO: native review
+      submitErrorFeatureGated: 'Skills-Radar-Bewertung erfordert die Stufe Instructor oder höher', // TODO: native review
+      submitError: 'Bewertung konnte nicht eingereicht werden. Bitte erneut versuchen.', // TODO: native review
+      displayTitle: 'Skills-Radar', // TODO: native review
+      compareBaselineLabel: 'Mit Baseline vergleichen', // TODO: native review
+      noAssessmentsYet: 'Noch keine Bewertungen erfasst', // TODO: native review
+      minSkillsRequired: 'Wählen Sie mindestens 3 Fähigkeiten aus, um das Radar anzuzeigen', // TODO: native review
+      correlationTitle: 'Entwicklungs-Korrelations-Engine', // TODO: native review
+      confidenceFilled: 'Hohe Konfidenz (3+ Bewertungen)', // TODO: native review
+      confidenceHalf: 'Niedrige Konfidenz (1–2 Bewertungen)', // TODO: native review
+      confidenceEmpty: 'Noch keine Bewertungen', // TODO: native review
+      lastUpdatedTooltip: 'Zuletzt bewertet: {date}', // TODO: native review
+      correlationError: 'Korrelationsdaten konnten nicht geladen werden. Bitte aktualisieren.', // TODO: native review
       accessibleTable: {
-        skill: 'Skill',
-        currentScore: 'Current Score',
-        baselineScore: 'Baseline Score',
-        delta: 'Delta',
+        skill: 'Fähigkeit', // TODO: native review
+        currentScore: 'Aktuelle Punktzahl', // TODO: native review
+        baselineScore: 'Baseline-Punktzahl', // TODO: native review
+        delta: 'Differenz', // TODO: native review
       },
       correlation: {
         insufficientData:
-          'Not enough data yet — keep logging sessions. Minimum {count} sessions required.',
-        academyFeatureTeaser: 'Academy feature — upgrade to unlock',
-        upgradeButton: 'Upgrade to Academy',
+          'Noch nicht genügend Daten — weiter Einheiten protokollieren. Mindestens {count} Einheiten erforderlich.', // TODO: native review
+        academyFeatureTeaser: 'Academy-Funktion — Upgrade zum Freischalten', // TODO: native review
+        upgradeButton: 'Auf Academy upgraden', // TODO: native review
         noInsightsYet:
-          'No correlation insights yet — log more sessions with different skills.',
+          'Noch keine Korrelationserkenntnisse — protokollieren Sie mehr Einheiten mit verschiedenen Fähigkeiten.', // TODO: native review
         excludedSkills:
-          '{count} skill | {count} skills not shown — no training data recorded yet.',
+          '{count} Fähigkeit | {count} Fähigkeiten nicht angezeigt — noch keine Trainingsdaten erfasst.', // TODO: native review
         insight: {
-          highSluImprovement: 'High training volume → Score improving',
+          highSluImprovement: 'Hohes Trainingsvolumen → Punktzahl verbessert sich', // TODO: native review
           highSluNoImprovement:
-            'High training volume → No improvement yet (technique focus needed?)',
-          lowSluImprovement: 'Low training volume → Score improving (natural talent!)',
-          lowSluStable: 'Low training volume → Score stable (natural ability?)',
+            'Hohes Trainingsvolumen → Noch keine Verbesserung (Technikfokus erforderlich?)', // TODO: native review
+          lowSluImprovement: 'Niedriges Trainingsvolumen → Punktzahl verbessert sich (natürliches Talent!)', // TODO: native review
+          lowSluStable: 'Niedriges Trainingsvolumen → Punktzahl stabil (natürliche Begabung?)', // TODO: native review
         },
       },
     },

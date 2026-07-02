@@ -48,16 +48,25 @@ watch(open, (v) => emit('update:modelValue', v))
 
 const localTargets = ref({})
 
+function syncLocalTargets(targets) {
+  localTargets.value = {}
+  for (const t of targets) {
+    localTargets.value[t.skillCode] = t.weeklyTargetSlu
+  }
+}
+
 watch(
   () => props.currentTargets,
   (targets) => {
-    localTargets.value = {}
-    for (const t of targets) {
-      localTargets.value[t.skillCode] = t.weeklyTargetSlu
-    }
+    if (open.value) return
+    syncLocalTargets(targets)
   },
   { immediate: true },
 )
+
+watch(open, (isOpen) => {
+  if (!isOpen) syncLocalTargets(props.currentTargets)
+})
 
 function onSave() {
   const payload = props.skillDefinitions.map((s) => ({

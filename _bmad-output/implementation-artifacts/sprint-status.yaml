@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-07-02 # skillars-deferred-8 test coverage gaps — code review passed (1 confirmed defect fixed, 2 patches applied), status done
+last_updated: 2026-07-02 # skillars-deferred-9 frontend UX polish — code review complete, 7 patches applied, status done
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -279,7 +279,7 @@ development_status:
   skillars-deferred-8-test-coverage-gaps: done  # 5 tasks done 2026-07-02; Task 4 surfaced & fixed a getParentBookings() NPE production bug; code review 2026-07-02 fixed 1 confirmed defect (main.sec cleanup) + 2 patches
 
   # Deferred 9: Frontend UX Polish
-  skillars-deferred-9-frontend-ux-polish: backlog
+  skillars-deferred-9-frontend-ux-polish: done
 
   # Deferred 10: CI/CD & Deployment Hardening
   skillars-deferred-10-cicd-deployment-hardening: backlog

@@ -7,12 +7,16 @@
 
     <div class="text-h5 q-mb-md">{{ t('booking.requests.listTitle') }}</div>
 
+    <q-banner v-if="bookingStore.bookingsError" class="bg-negative text-white q-mb-md" rounded>
+      {{ t('booking.requests.bookingsLoadError') }}
+    </q-banner>
+
     <div v-if="bookingStore.bookingsLoading" class="flex flex-center q-py-xl">
       <q-spinner size="48px" />
     </div>
 
     <div
-      v-else-if="bookingStore.parentBookings.length === 0"
+      v-else-if="!bookingStore.bookingsError && bookingStore.parentBookings.length === 0"
       class="flex flex-center column q-gutter-md q-py-xl"
       style="min-height: 40vh"
     >

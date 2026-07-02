@@ -152,6 +152,9 @@ async function handleAccept(id) {
   accepting.value[id] = true
   try {
     await bookingStore.approveBooking(id)
+  } catch {
+    $q.notify({ type: 'negative', message: t('booking.requests.acceptError') })
+    await bookingStore.loadCoachBookingRequests()
   } finally {
     accepting.value[id] = false
   }
@@ -161,6 +164,9 @@ async function handleDecline(id) {
   declining.value[id] = true
   try {
     await bookingStore.rejectBooking(id)
+  } catch {
+    $q.notify({ type: 'negative', message: t('booking.requests.declineError') })
+    await bookingStore.loadCoachBookingRequests()
   } finally {
     declining.value[id] = false
   }

@@ -134,7 +134,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import SkillsRadarChart from 'src/components/development/SkillsRadarChart.vue'
 import DevelopmentCorrelationPanel from 'src/components/development/DevelopmentCorrelationPanel.vue'
 import { useRoute } from 'vue-router'
@@ -177,28 +177,60 @@ const hasBaseline = computed(() => {
 
 const skillDefinitions = computed(() => store.skillDefinitions)
 
-onMounted(async () => {
+function clearDevelopmentState() {
+  store.exposure = null
+  store.targets = []
+  store.narrative = []
+  store.error = null
+  store.radarEntries = null
+  store.radarDisplay = null
+  store.radarPreferences = null
+  store.correlationInsights = null
+}
+
+let loadRequestId = 0
+
+async function loadPlayerData(id) {
+  const requestId = ++loadRequestId
   await Promise.all([
     store.fetchSkillDefinitions(),
-    store.fetchExposure(playerId.value),
+    store.fetchExposure(id),
   ])
   if (isCoach.value) {
     await Promise.all([
-      store.fetchTargets(playerId.value),
-      store.fetchRadarEntries(playerId.value),
-      store.fetchRadarDisplay(playerId.value),
-      store.fetchRadarPreferences(playerId.value),
-      store.fetchCorrelationInsights(playerId.value),
+      store.fetchTargets(id),
+      store.fetchRadarEntries(id),
+      store.fetchRadarDisplay(id),
+      store.fetchRadarPreferences(id),
+      store.fetchCorrelationInsights(id),
       authStore.fetchCoachTier().finally(() => { tierLoaded.value = true }),
     ])
   }
   if (isParent.value) {
     await Promise.all([
-      store.fetchNarrative(playerId.value),
-      store.fetchRadarDisplay(playerId.value),
+      store.fetchNarrative(id),
+      store.fetchRadarDisplay(id),
     ])
   }
+  if (requestId !== loadRequestId) {
+    // A newer player load started while this one was in flight — its response may
+    // have landed out of order and clobbered fresher data. Reload the current player.
+    await loadPlayerData(playerId.value)
+  }
+}
+
+onMounted(async () => {
+  clearDevelopmentState()
+  await loadPlayerData(playerId.value)
 })
+
+watch(() => route.params.playerId, async (newPlayerId) => {
+  const id = Number(newPlayerId)
+  if (!Number.isFinite(id)) return
+  // Clear stale state before loading new player
+  clearDevelopmentState()
+  await loadPlayerData(id)
+}, { immediate: false })
 
 async function onSaveTargets(targets) {
   await store.saveTargets(playerId.value, targets)

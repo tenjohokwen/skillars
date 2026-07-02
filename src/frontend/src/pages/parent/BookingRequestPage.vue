@@ -237,7 +237,9 @@ function toggleSlotInBasket(slot) {
 
 function toggleBatchMode() {
   batchMode.value = !batchMode.value
-  if (!batchMode.value) {
+  if (batchMode.value) {
+    selectedSlot.value = null // clear stale single-slot selection
+  } else {
     bookingStore.clearBatchBasket()
     selectedSlot.value = null
     batchReviewOpen.value = false

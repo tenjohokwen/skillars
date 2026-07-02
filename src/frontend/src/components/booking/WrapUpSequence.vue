@@ -158,12 +158,16 @@
     <div v-else-if="step === 4" class="wrap-up__step">
       <div class="text-h6 q-mb-md">{{ t('booking.wrapUp.step4Title') }}</div>
 
-      <SessionDNAChart
-        :session-dna="sessionDnaData ?? { technical: 0, physical: 0, cognitive: 0, matchRealism: 0, weakFootFocus: 0 }"
-        variant="compact"
-        :show-confirmation="true"
-        class="q-mb-md"
-      />
+      <div class="wrap-up__dna-chart-area q-mb-md">
+        <q-inner-loading :showing="dnaLoading" />
+        <div v-if="dnaError" class="text-grey-6 text-center q-pa-md">{{ dnaError }}</div>
+        <SessionDNAChart
+          v-else
+          :session-dna="sessionDnaData ?? { technical: 0, physical: 0, cognitive: 0, matchRealism: 0, weakFootFocus: 0 }"
+          variant="full"
+          :show-confirmation="true"
+        />
+      </div>
 
       <div v-if="drillSuggestions.length === 0" class="text-body2 q-mb-lg" style="color: var(--text-secondary)">
         {{ t('booking.wrapUp.step4NoSuggestions') }}
@@ -226,6 +230,8 @@ const homeworkDrillIds = ref([])
 const drillSuggestions = ref([])
 const submitting = ref(false)
 const sessionDnaData = ref(null)
+const dnaLoading = ref(false)
+const dnaError = ref(null)
 
 function toggleDrill(drillId) {
   const idx = homeworkDrillIds.value.indexOf(drillId)
@@ -309,11 +315,16 @@ async function handleSubmitWrapUp() {
 }
 
 async function fetchSessionDna() {
+  dnaLoading.value = true
+  dnaError.value = null
   try {
     const res = await sessionApi.getSessionPlanByBooking(props.bookingId)
     sessionDnaData.value = res.data?.sessionDna ?? null
   } catch {
     sessionDnaData.value = null
+    dnaError.value = t('booking.wrapUp.step4DnaError')
+  } finally {
+    dnaLoading.value = false
   }
 }
 
@@ -369,6 +380,12 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
+}
+
+.wrap-up__dna-chart-area {
+  position: relative;
+  width: 100%;
+  min-height: 80px;
 }
 
 .wrap-up__rating-row {
