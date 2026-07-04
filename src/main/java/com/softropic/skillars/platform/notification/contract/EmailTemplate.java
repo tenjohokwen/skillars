@@ -10,6 +10,8 @@ public enum EmailTemplate {
     COACH_OTP("email.coach.otp.title"),
     PARENT_EMAIL_VERIFY("email.parent.verify.title"),
     PARENT_OTP("email.parent.otp.title"),
+    PLAYER_EMAIL_VERIFY("email.player.verify.title"),
+    PLAYER_OTP("email.player.otp.title"),
     EMAIL_CHANGE("email.change.title"),
     PROFILE_CHANGE("email.profile_change.title"),
     TENANT_API_KEY_GENERATED("email.tenant.api_key_generated.title"),

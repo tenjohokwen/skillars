@@ -13,4 +13,9 @@ public interface PlayerProfileRepository extends JpaRepository<PlayerProfile, Lo
     Optional<PlayerProfile> findByIdAndParentId(Long id, Long parentId);
 
     boolean existsByIdAndParentId(Long id, Long parentId);
+
+    /** For self-registered adult players — userId is their own account, no parent involved. */
+    Optional<PlayerProfile> findByUserId(Long userId);
+
+    boolean existsByUserId(Long userId);
 }

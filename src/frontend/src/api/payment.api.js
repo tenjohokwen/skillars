@@ -9,10 +9,8 @@ export const fetchCreditBalance = () => api.get('/api/payment/credits/balance')
 export const cashOut = (amount) => api.post('/api/payment/credits/cashout', { amount })
 
 // Session pack — parent
-export const purchaseSessionPack = async (packTierId, paymentMethodId) => {
-  const { data } = await api.post('/api/payment/session-packs/purchase', { packTierId, paymentMethodId })
-  return data
-}
+export const purchaseSessionPack = (packTierId, paymentMethodId) =>
+  api.post('/api/payment/session-packs/purchase', { packTierId, paymentMethodId })
 export const extendSessionPack = (purchaseId) =>
   api.post(`/api/payment/session-packs/${purchaseId}/extend`)
 

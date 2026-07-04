@@ -9,5 +9,6 @@ public record PlayerProfileResponse(
     PlayerPosition position,
     AgeTier ageTier,
     String ageTierLabel,
-    boolean independentAccountAllowed
+    boolean independentAccountAllowed,
+    Long userId
 ) {}

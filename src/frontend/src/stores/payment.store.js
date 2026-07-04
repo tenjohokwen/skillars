@@ -43,7 +43,7 @@ export const usePaymentStore = defineStore('payment', {
       this.loading = true
       this.error = null
       try {
-        this.stripeStatus = (await getStripeStatus()).data
+        this.stripeStatus = await getStripeStatus()
       } catch (err) {
         this.error = err
       } finally {
@@ -54,7 +54,7 @@ export const usePaymentStore = defineStore('payment', {
       this.loading = true
       this.error = null
       try {
-        this.creditBalance = (await fetchCreditBalance()).data
+        this.creditBalance = await fetchCreditBalance()
       } catch (err) {
         this.error = err
       } finally {
@@ -65,7 +65,7 @@ export const usePaymentStore = defineStore('payment', {
       this.loading = true
       this.error = null
       try {
-        this.sessionPackTiers = (await fetchMySessionPackTiers()).data
+        this.sessionPackTiers = await fetchMySessionPackTiers()
       } catch (err) {
         this.error = err
       } finally {
@@ -76,7 +76,7 @@ export const usePaymentStore = defineStore('payment', {
       this.loading = true
       this.error = null
       try {
-        this.coachStrikes = (await fetchMyStrikes()).data
+        this.coachStrikes = await fetchMyStrikes()
       } catch (err) {
         this.error = err
       } finally {
@@ -94,7 +94,7 @@ export const usePaymentStore = defineStore('payment', {
       this.loading = true
       this.error = null
       try {
-        this.coachSubscription = (await fetchMyCoachSubscription()).data
+        this.coachSubscription = await fetchMyCoachSubscription()
       } catch (err) {
         this.error = err
       } finally {
@@ -105,7 +105,7 @@ export const usePaymentStore = defineStore('payment', {
       this.loading = true
       this.error = null
       try {
-        this.coachTiers = (await fetchCoachTiers()).data
+        this.coachTiers = await fetchCoachTiers()
       } catch (err) {
         this.error = err
       } finally {
@@ -113,7 +113,7 @@ export const usePaymentStore = defineStore('payment', {
       }
     },
     async subscribeCoach(payload) {
-      const { data } = await subscribeCoach(payload)
+      const data = await subscribeCoach(payload)
       this.coachSubscription = data
       return data
     },
@@ -131,7 +131,7 @@ export const usePaymentStore = defineStore('payment', {
       this.loading = true
       this.error = null
       try {
-        this.playerSubscription = (await fetchMyPlayerSubscription(playerId)).data
+        this.playerSubscription = await fetchMyPlayerSubscription(playerId)
       } catch (err) {
         this.error = err
       } finally {
@@ -142,7 +142,7 @@ export const usePaymentStore = defineStore('payment', {
       this.loading = true
       this.error = null
       try {
-        this.playerTiers = (await fetchPlayerTiers()).data
+        this.playerTiers = await fetchPlayerTiers()
       } catch (err) {
         this.error = err
       } finally {
@@ -150,7 +150,7 @@ export const usePaymentStore = defineStore('payment', {
       }
     },
     async subscribePlayer(payload) {
-      const { data } = await subscribePlayer(payload)
+      const data = await subscribePlayer(payload)
       this.playerSubscription = data
       return data
     },
@@ -167,7 +167,7 @@ export const usePaymentStore = defineStore('payment', {
       this.loading = true
       this.error = null
       try {
-        this.revenueSummary = (await fetchCoachRevenueSummary(from, to)).data
+        this.revenueSummary = await fetchCoachRevenueSummary(from, to)
       } catch (err) {
         this.error = err
       } finally {
@@ -179,8 +179,8 @@ export const usePaymentStore = defineStore('payment', {
       this.error = null
       try {
         const res = await fetchCoachTransactions(from, to, page)
-        this.transactionPage = res.data
-        this.transactions = res.data.content
+        this.transactionPage = res
+        this.transactions = res.content
       } catch (err) {
         this.error = err
       } finally {
@@ -192,8 +192,8 @@ export const usePaymentStore = defineStore('payment', {
       this.error = null
       try {
         const res = await fetchCreditStatement(from, to, page)
-        this.creditStatementPage = res.data
-        this.creditStatement = res.data.content
+        this.creditStatementPage = res
+        this.creditStatement = res.content
       } catch (err) {
         this.error = err
       } finally {

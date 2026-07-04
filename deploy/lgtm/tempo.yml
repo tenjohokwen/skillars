@@ -17,8 +17,9 @@ storage:
       path: /var/tempo/blocks
 
 compactor:
-  compaction_window: 1h
-  max_block_bytes: 100000000
-  block_retention: 336h
-  compacted_block_retention: 1h
-  retention_concurrency: 10
+  compaction:
+    compaction_window: 1h
+    max_block_bytes: 100000000
+    block_retention: 336h
+    compacted_block_retention: 1h
+    retention_concurrency: 10

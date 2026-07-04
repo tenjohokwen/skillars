@@ -7,7 +7,7 @@
 
         <!-- Hamburger (authenticated only) -->
         <q-btn
-          v-if="isAuthenticated"
+          v-if="authStore.isAuthenticated"
           flat round dense
           icon="menu"
           class="header-btn"
@@ -57,8 +57,8 @@
         </q-btn>
 
         <!-- Authenticated: user menu -->
-        <template v-if="isAuthenticated">
-          <q-btn-dropdown flat no-caps :label="username" icon="person" class="header-btn">
+        <template v-if="authStore.isAuthenticated">
+          <q-btn-dropdown flat no-caps :label="authStore.displayName" icon="person" class="header-btn">
             <q-list class="dropdown-list">
               <q-item clickable v-close-popup to="/profile" class="dropdown-item">
                 <q-item-section avatar>
@@ -91,7 +91,7 @@
 
     <!-- ── Left Drawer ─────────────────────────────────────── -->
     <q-drawer
-      v-if="isAuthenticated"
+      v-if="authStore.isAuthenticated"
       v-model="leftDrawerOpen"
       show-if-above
       :width="280"
@@ -220,7 +220,6 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
-import { authApi } from 'src/api/auth.api';
 import { useSession } from 'src/composables/useSession';
 import { toggleTheme as bootToggleTheme, isDarkMode } from 'src/boot/theme';
 import ParentChildSwitcher from 'src/components/ParentChildSwitcher.vue';
@@ -243,21 +242,6 @@ const currentLanguageLabel = computed(() => {
   const lang = languages.find(l => l.value === locale.value);
   return lang ? lang.label : 'English';
 });
-
-function getUsernameFromCookie() {
-  const match = document.cookie.match(/user=([^;]+)/);
-  if (match) {
-    try { return decodeURIComponent(match[1]); } catch { return match[1]; }
-  }
-  return '';
-}
-
-const username = ref(getUsernameFromCookie());
-const isAuthenticated = computed(() => !!username.value);
-
-function updateUsername() {
-  username.value = getUsernameFromCookie();
-}
 
 function changeLanguage(lang) {
   locale.value = lang;
@@ -287,15 +271,14 @@ function deleteUserCookie() {
 }
 
 async function handleLogout() {
-  try { await authApi.logout(); } catch { /* already logged out */ }
+  await authStore.logout();
   destroySession();
-  username.value = '';
   deleteUserCookie();
   router.push('/login');
 }
 
-function onSessionExpired() {
-  username.value = '';
+async function onSessionExpired() {
+  await authStore.logout();
   deleteUserCookie();
 }
 
@@ -304,7 +287,6 @@ function toggleLeftDrawer() {
 }
 
 onMounted(() => {
-  updateUsername();
   loadLanguagePreference();
   window.addEventListener('session:expired', onSessionExpired);
   window.addEventListener('storage', onStorageThemeChange);

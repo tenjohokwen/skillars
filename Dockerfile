@@ -8,6 +8,7 @@ RUN mvn dependency:go-offline -B -q || true
 
 # Layer: Full source (Java + frontend — node binary downloaded here by frontend-maven-plugin)
 COPY src/ src/
+COPY .git/ .git/
 RUN mvn package -Dmaven.test.skip=true -B
 
 # Stage 2: Runtime (minimal JRE image)

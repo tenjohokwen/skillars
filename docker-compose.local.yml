@@ -1,0 +1,33 @@
+services:
+  app:
+    environment:
+      - SPRING_PROFILES_ACTIVE=dev
+      - APP_VIDEO_BUNNY_LIBRARY_ID=123456
+      - MANAGEMENT_HEALTH_MAIL_ENABLED=false
+    ports:
+      - "9990:9990"   # main app
+      - "8367:8367"   # actuator/health (management port)
+  postgres:
+    volumes:
+      - skillars-local-postgres:/var/lib/postgresql/data
+  loki:
+    volumes:
+      - skillars-local-loki:/loki
+  tempo:
+    volumes:
+      - skillars-local-tempo:/var/tempo
+  prometheus:
+    volumes:
+      - skillars-local-prometheus:/prometheus
+  grafana:
+    ports:
+      - "3000:3000"   # Grafana UI
+    volumes:
+      - skillars-local-grafana:/var/lib/grafana
+
+volumes:
+  skillars-local-postgres:
+  skillars-local-loki:
+  skillars-local-tempo:
+  skillars-local-prometheus:
+  skillars-local-grafana:

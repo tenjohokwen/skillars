@@ -39,13 +39,11 @@ export const authApi = {
   },
 
   async skillarsLogin(email, password) {
-    const res = await api.post('/api/auth/login', { email, password })
-    return res.data
+    return api.post('/api/auth/login', { email, password })
   },
 
   async skillarsRefresh() {
-    const res = await api.post('/api/auth/refresh')
-    return res.data
+    return api.post('/api/auth/refresh')
   },
 
   async skillarsLogout() {

@@ -34,7 +34,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function fetchCoachTier() {
     try {
       const response = await api.get('/api/marketplace/coaches/me/tier')
-      coachTier.value = response.data.tier
+      coachTier.value = response.tier
     } catch {
       coachTier.value = null
     }

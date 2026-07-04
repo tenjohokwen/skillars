@@ -103,9 +103,17 @@
         <div class="auth-divider"><span>or</span></div>
 
         <div class="text-center">
-          <span class="text-meta">{{ t('auth.noAccount') }}</span>
-          <router-link to="/register" class="auth-link q-ml-xs">
-            {{ t('auth.createAccount') }}
+          <div class="text-meta q-mb-xs">{{ t('auth.noAccount') }}</div>
+          <router-link to="/coach-register" class="auth-link">
+            {{ t('auth.registerAsCoach') }}
+          </router-link>
+          <span class="text-meta q-mx-xs">&middot;</span>
+          <router-link to="/parent-register" class="auth-link">
+            {{ t('auth.registerAsParent') }}
+          </router-link>
+          <span class="text-meta q-mx-xs">&middot;</span>
+          <router-link to="/player-register" class="auth-link">
+            {{ t('auth.registerAsPlayer') }}
           </router-link>
         </div>
 
@@ -135,7 +143,7 @@ const {
 const ROLE_ROUTES = {
   COACH: '/coach/command-center',
   PARENT: '/parent/dashboard',
-  PLAYER: '/player/locker-room', // TODO(player-login): update to /player/locker-room/:playerId when PLAYER role is implemented
+  PLAYER: '/player/home', // resolves the caller's own playerId, then redirects to /player/locker-room/:playerId
   ADMIN: '/admin/health-dashboard',
 };
 

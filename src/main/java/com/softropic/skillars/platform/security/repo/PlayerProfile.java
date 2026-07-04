@@ -36,8 +36,12 @@ public class PlayerProfile extends BaseEntity {
     @Column(name = "age_tier", nullable = false, length = 15)
     private AgeTier ageTier;
 
-    @Column(name = "parent_id", nullable = false)
+    @Column(name = "parent_id")
     private Long parentId;
+
+    /** Set instead of {@link #parentId} for adult (18+) players who self-registered — exactly one of the two is ever set. */
+    @Column(name = "user_id")
+    private Long userId;
 
     @Column(name = "independent_account_allowed", nullable = false)
     private boolean independentAccountAllowed = true;

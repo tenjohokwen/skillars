@@ -18,6 +18,7 @@ public final class SecurityConstants {
     public static final String ROLE_LTD_ADMIN = "ROLE_LTD_ADMIN";
     public static final String ROLE_COACH = "ROLE_COACH";
     public static final String ROLE_PARENT = "ROLE_PARENT";
+    public static final String ROLE_PLAYER = "ROLE_PLAYER";
 
     /**
      * Authority names (without ROLE_ prefix)
@@ -33,6 +34,7 @@ public final class SecurityConstants {
     public static final String HAS_ADMIN_ROLE = "hasRole('ROLE_ADMIN') or hasRole('ROLE_LTD_ADMIN')";
     public static final String HAS_COACH_ROLE = "hasRole('ROLE_COACH')";
     public static final String HAS_PARENT_ROLE = "hasRole('ROLE_PARENT')";
+    public static final String HAS_PLAYER_ROLE = "hasRole('ROLE_PLAYER')";
 
     /** Use on endpoints that require any authenticated user regardless of role. */
     public static final String IS_AUTHENTICATED = "isAuthenticated()";

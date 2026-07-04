@@ -191,6 +191,39 @@ const routes = [
         component: () => import('pages/parent/PlayerSubscriptionPage.vue'),
         meta: { requiresAuth: true, requiresParent: true },
       },
+      // Player registration flow (guest only) — adult (18+) self-registration
+      {
+        path: 'player-register',
+        component: () => import('pages/auth/PlayerRegisterPage.vue'),
+        meta: { requiresGuest: true },
+      },
+      {
+        path: 'player/email-pending',
+        component: () => import('pages/auth/PlayerEmailPendingPage.vue'),
+        meta: { requiresGuest: true },
+      },
+      {
+        path: 'player/verify-email',
+        component: () => import('pages/auth/PlayerEmailVerifyPage.vue'),
+        meta: { requiresGuest: true },
+      },
+      {
+        path: 'player/verify-phone',
+        component: () => import('pages/auth/PlayerPhoneVerifyPage.vue'),
+        meta: { requiresGuest: true },
+      },
+      {
+        path: 'player/profile-builder',
+        component: () => import('pages/auth/PlayerProfileBuilderPage.vue'),
+        meta: { requiresAuth: true },
+      },
+      {
+        // ROLE_ROUTES.PLAYER landing target — resolves the caller's own playerId then redirects,
+        // since /player/locker-room/:playerId can't be a login redirect target on its own.
+        path: 'player/home',
+        component: () => import('pages/auth/PlayerHomeRedirectPage.vue'),
+        meta: { requiresAuth: true },
+      },
       {
         path: 'player/locker-room/:playerId',
         name: 'player-locker-room',

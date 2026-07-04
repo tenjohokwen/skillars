@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.security.api;
 
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.contract.CreatePlayerProfileRequest;
+import com.softropic.skillars.platform.security.contract.CreateSelfPlayerProfileRequest;
 import com.softropic.skillars.platform.security.contract.PlayerProfileResponse;
 import com.softropic.skillars.platform.security.contract.exception.ShadowAccountException;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
@@ -38,6 +39,23 @@ public class ShadowAccountResource {
         Long parentId = securityUtil.requireCurrentUserId();
         PlayerProfileResponse response = shadowAccountService.createPlayerProfile(parentId, request);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    @PreAuthorize(SecurityConstants.HAS_PLAYER_ROLE)
+    @PostMapping("/me")
+    public ResponseEntity<PlayerProfileResponse> createSelfOwnedPlayerProfile(
+        @RequestBody @Valid CreateSelfPlayerProfileRequest request
+    ) {
+        Long userId = securityUtil.requireCurrentUserId();
+        PlayerProfileResponse response = shadowAccountService.createSelfOwnedPlayerProfile(userId, request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    @PreAuthorize(SecurityConstants.HAS_PLAYER_ROLE)
+    @GetMapping("/me")
+    public ResponseEntity<PlayerProfileResponse> getSelfOwnedPlayerProfile() {
+        Long userId = securityUtil.requireCurrentUserId();
+        return ResponseEntity.ok(shadowAccountService.getSelfOwnedPlayerProfile(userId));
     }
 
     @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)

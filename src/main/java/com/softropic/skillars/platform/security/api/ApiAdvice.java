@@ -25,6 +25,7 @@ import com.softropic.skillars.platform.security.contract.exception.UserNotFoundE
 import com.softropic.skillars.platform.security.contract.exception.LoginRateLimitedException;
 import com.softropic.skillars.platform.security.contract.exception.SkillarsAccountNotVerifiedException;
 import com.softropic.skillars.platform.security.contract.exception.ParentRegistrationException;
+import com.softropic.skillars.platform.security.contract.exception.PlayerRegistrationException;
 import com.softropic.skillars.platform.security.contract.exception.ShadowAccountException;
 import com.softropic.skillars.platform.security.contract.exception.EmailTokenException;
 import com.softropic.skillars.platform.security.contract.exception.OtpVerificationException;
@@ -473,6 +474,12 @@ public class ApiAdvice {
     @ExceptionHandler(ParentRegistrationException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
     public ErrorDto parentRegistrationExceptionHandler(final ParentRegistrationException ex) {
+        return logErrorAndReturnDTO(ex, ex.getMessage(), ex.getErrorCode());
+    }
+
+    @ExceptionHandler(PlayerRegistrationException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ErrorDto playerRegistrationExceptionHandler(final PlayerRegistrationException ex) {
         return logErrorAndReturnDTO(ex, ex.getMessage(), ex.getErrorCode());
     }
 

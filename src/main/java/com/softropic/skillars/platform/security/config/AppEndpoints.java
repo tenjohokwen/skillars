@@ -30,6 +30,8 @@ public final class AppEndpoints {
         "/api/security/parent/register**", "/api/security/parent/verify-email**",
         "/api/security/parent/verify-phone**", "/api/security/parent/resend-verification**",
         "/api/security/parent/resend-otp**",
+        "/api/security/player/register**", "/api/security/player/verify-email**",
+        "/api/security/player/verify-phone**", "/api/security/player/resend-verification**",
         "/api/auth/login**",
         "/api/auth/refresh**",
         "/api/auth/logout**",
