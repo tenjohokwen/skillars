@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notification — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <nav>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../tenant/index.html">Tenant</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Notification</div>
+    <h1>Notification</h1>
+    <p class="subtitle">The platform's outbound-email engine: it turns domain events from every other module into templated, retried, and auditable emails, plus a DB-configurable operational alerting system.</p>
+
+    <h2>Business Overview</h2>
+    <p>
+      Skillars is a multi-sided marketplace (Players/Parents, Coaches, Admins), and almost every meaningful
+      state change — a booking request, a declined reschedule, a session pack about to expire, a flagged
+      video, a tenant's API key being rotated — needs to reach a human by email. Rather than each module
+      formatting and sending its own mail, every other module publishes a plain domain event and the
+      <code>notification</code> module owns the "last mile": mapping that event to a template, resolving the
+      recipient's language, rendering HTML, sending it, and durably retrying if it fails. This keeps email
+      formatting, SMTP plumbing, and delivery-retry logic in one place instead of scattered across booking,
+      tenant, video, and security code.
+    </p>
+    <p>
+      <span class="tag">Coach</span> and <span class="tag">Parent</span> are the main end recipients — booking
+      lifecycle emails, session pack warnings, reschedule/no-show notices.
+      <span class="tag">Admin</span> is a recipient for tenant-lifecycle emails (API key generated/rotated/revoked,
+      tenant created, webhook secret regenerated) and for CSAM/video-moderation alerts, plus the operator of the
+      <code>/v1/admin/alerts</code> endpoints used to configure operational alerting.
+      <span class="tag">System/Ops</span> is the implicit recipient of alert emails when a configured metric
+      threshold is breached (e.g. a fraud-spike or callback-anomaly rule).
+    </p>
+    <p>Key business rules found in the code:</p>
+    <ul>
+      <li>Every outbound email is modeled as an <code>Envelope</code> (recipients + template + arbitrary
+        template data + a deadline + an idempotent <code>sendId</code>) — a domain-agnostic mail request that
+        any module can publish as a Spring application event.</li>
+      <li>Alert rules (<code>metricName</code>, <code>threshold</code>, <code>windowSeconds</code>,
+        <code>notificationChannel</code>) are admin-configurable at runtime via REST, hot-reloaded from the DB
+        every 60s (no restart needed), and support two channels: <code>LOG</code> (just a WARN log line) or
+        <code>EMAIL</code> (also sends to <code>ops@skillars.internal</code>).</li>
+      <li>Failed sends are never silently dropped: they're persisted with a retry flag and picked up by a
+        scheduled retry job, up to <code>MAX_RETRY_ATTEMPTS = 6</code> total attempts, after which the envelope
+        is marked <code>ATTEMPTS_EXHAUSTED</code>. An envelope past its <code>deadline</code> is marked
+        <code>DEADLINE_EXPIRED</code> and abandoned even if retries remain.</li>
+      <li>Tenant lifecycle emails always CC/route to a configured platform notification address
+        (<code>skillars.platform.notification-email</code>) in addition to (or instead of, for email-change
+        events) the tenant's own address — a deliberate security control so tenant admins can't quietly redirect
+        security-relevant notices to themselves alone.</li>
+      <li>Video moderation admin alerts are a startup-time safety gate: if the Arachnid (CSAM detection) feature
+        flag is enabled but <code>platform.admin_alert_email</code> is blank, the application refuses to start
+        rather than silently dropping abuse alerts.</li>
+    </ul>
+
+    <h2>Technical Overview</h2>
+    <h3>Package layout</h3>
+    <table>
+      <thead><tr><th>Package</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>api</code></td><td>Admin REST controller for CRUD on alert rules.</td></tr>
+        <tr><td><code>config</code></td><td>Thymeleaf email-template engine setup, async thread pools for sending mail, ShedLock/scheduling config, circuit-breaker &amp; retry-template beans.</td></tr>
+        <tr><td><code>contract</code></td><td>The module's public API surface: <code>Envelope</code>/<code>Recipient</code> DTOs published as events, the <code>EmailTemplate</code> enum (one entry per email type, ~45 templates), <code>EmailProperties</code>/<code>ProviderConfig</code> (SMTP provider config), <code>EmailDeliveryStatus</code>, and <code>AlertFiredEvent</code>.</td></tr>
+        <tr><td><code>infrastructure</code></td><td>The scheduled retry job (<code>EmailRetryScheduler</code>), the round-robin SMTP sender factory (<code>MailSenderProvider</code>), and <code>infrastructure.listener</code> — the event listeners that translate other modules' domain events into <code>Envelope</code>s.</td></tr>
+        <tr><td><code>repo</code></td><td>JPA entities/repositories: <code>AlertRule</code>, <code>EnvelopeEntity</code> (the durable, retryable record of a send attempt), <code>RecipientEntity</code> (embeddable).</td></tr>
+        <tr><td><code>service</code></td><td>The core send pipeline (<code>MailManager</code> → <code>MailService</code>), the alert evaluation loop (<code>AlertEvaluationService</code>, <code>AlertRuleCache</code>, <code>AlertNotificationListener</code>), <code>EnvelopeMapper</code>, and <code>ResendEmailService</code> (manual re-send by <code>sendId</code>).</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Key entities &amp; DB tables</h3>
+    <table>
+      <thead><tr><th>Entity</th><th>Table</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>AlertRule</code></td><td><code>main.alert_rule</code></td><td>Admin-defined threshold rule: metric name, threshold ratio, window, channel (LOG/EMAIL), enabled flag, description. Audited (<code>main.alert_rule_aud</code>).</td></tr>
+        <tr><td><code>EnvelopeEntity</code></td><td><code>envelope_entity</code> (default schema — see gotcha below)</td><td>Durable record of one send attempt: recipients (element collection), template enum, JSON <code>data</code> map, deadline, attempts count, <code>EmailDeliveryStatus</code>, error text, retry flag, unique <code>sendId</code>. This is the row the retry scheduler polls.</td></tr>
+        <tr><td><code>RecipientEntity</code></td><td>embedded in <code>envelope_entity</code></td><td>Embeddable copy of <code>Recipient</code> (title, name, email, langKey, gender) for persistence.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Key services</h3>
+    <table>
+      <thead><tr><th>Service</th><th>Orchestrates</th></tr></thead>
+      <tbody>
+        <tr><td><code>MailManager</code></td><td>The send pipeline entry point. Listens for <code>Envelope</code> events after transaction commit (async, on the <code>sendMailPool</code> executor), runs the send through a Resilience4j circuit breaker + Spring <code>RetryTemplate</code> (3 attempts, 1s backoff), classifies exceptions as retryable/non-retryable, and persists the outcome as an <code>EnvelopeEntity</code>. Also exposes <code>sendEmailSync</code>, reused directly by the retry scheduler and the alert notifier.</td></tr>
+        <tr><td><code>MailService</code></td><td>Renders the Thymeleaf HTML template (name = <code>EmailTemplate</code> enum constant converted to lowerCamelCase, e.g. <code>BOOKING_CONFIRMED</code> → <code>bookingConfirmed.html</code> under <code>src/main/resources/mails/</code>), resolves the i18n subject via <code>MessageSource</code>, and hands off to a round-robin <code>JavaMailSenderImpl</code> from <code>SenderProvider</code>. <code>EmailTemplate.NONE</code> is a raw-subject/body escape hatch used by alert emails.</td></tr>
+        <tr><td><code>MailSenderProvider</code></td><td>Builds one <code>JavaMailSenderImpl</code> per configured SMTP provider (see <code>email.providerConfigs</code>, e.g. gmx/gmail) and round-robins across them for load distribution.</td></tr>
+        <tr><td><code>EmailRetryScheduler</code></td><td>Every 60s (configurable), <code>SELECT ... FOR UPDATE SKIP LOCKED</code>s up to 10 failed+retryable envelopes, expires/exhausts stale ones in-transaction, then dispatches the rest via <code>MailManager.sendEmailSync</code> only <em>after</em> the DB transaction commits (SMTP I/O is deliberately kept off the DB connection).</td></tr>
+        <tr><td><code>AlertEvaluationService</code></td><td>Scheduled (30s) evaluator that reads enabled rules from <code>AlertRuleCache</code> and computes a metric value per rule, publishing <code>AlertFiredEvent</code> on breach. Metric computation is currently a stub (<code>computeMetricValue</code> always returns -1.0 — domain-specific metrics were removed during a template conversion and are a TODO).</td></tr>
+        <tr><td><code>AlertRuleCache</code></td><td>In-memory <code>AtomicReference</code> cache of enabled <code>AlertRule</code>s, refreshed from the DB every 60s and on startup — lets admins change rules via REST with no redeploy.</td></tr>
+        <tr><td><code>AlertNotificationListener</code></td><td>Reacts to <code>AlertFiredEvent</code>: always logs a WARN, and if the rule's channel is <code>EMAIL</code>, sends a plain-text ops alert (via <code>EmailTemplate.NONE</code>) to <code>ops@skillars.internal</code>, swallowing any mail failure so the alerting loop itself never breaks.</td></tr>
+        <tr><td><code>ResendEmailService</code></td><td>Looks up a previously-persisted <code>EnvelopeEntity</code> by <code>sendId</code> and republishes it as a fresh <code>Envelope</code> event — a manual "resend" escape hatch (e.g. for support tooling).</td></tr>
+        <tr><td><code>infrastructure.listener.*</code></td><td>Five listener classes (<code>AccountChangeEmailListener</code>, <code>BookingEmailListener</code>, <code>SessionPackEmailListener</code>, <code>TenantLifecycleEmailListener</code>, <code>VideoModerationEmailListener</code>) that each consume one family of cross-module domain events and translate them into <code>Envelope</code> publications — this is where the module's actual "which event maps to which template" logic lives.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>REST endpoints</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth/Role</th></tr></thead>
+      <tbody>
+        <tr><td>POST</td><td><code>/v1/admin/alerts</code></td><td>Create a new alert rule.</td><td>JWT, <code>ROLE_ADMIN</code> or <code>ROLE_LTD_ADMIN</code></td></tr>
+        <tr><td>GET</td><td><code>/v1/admin/alerts</code></td><td>List all currently enabled alert rules (served from the live in-memory cache, no DB round-trip).</td><td>JWT, <code>ROLE_ADMIN</code> or <code>ROLE_LTD_ADMIN</code></td></tr>
+        <tr><td>PUT</td><td><code>/v1/admin/alerts/{id}</code></td><td>Update an existing alert rule (implemented as delete-then-save since <code>AlertRule</code> has no setters) and refresh the cache.</td><td>JWT, <code>ROLE_ADMIN</code> or <code>ROLE_LTD_ADMIN</code></td></tr>
+      </tbody>
+    </table>
+    <p>These endpoints sit under <code>/v1/admin/**</code>, which is excluded from the tenant API-key filter chain
+      (via a <code>NegatedRequestMatcher</code> in <code>TenantSecurityConfig</code>) — they're JWT-only, never
+      reachable via a tenant API key.</p>
+
+    <h3>Domain events consumed</h3>
+    <p>The notification module is almost entirely event-driven on the <em>consuming</em> side — it listens for
+      events published by many other platform modules and turns each into an <code>Envelope</code>:</p>
+    <span class="tag">AccountChangeEvent</span> (security)
+    <span class="tag">TenantCreatedEvent</span> (tenant)
+    <span class="tag">TenantApiKeyEvent</span> (tenant)
+    <span class="tag">TenantStatusChangedEvent</span> (tenant)
+    <span class="tag">TenantWebhookSecretRegeneratedEvent</span> (tenant)
+    <span class="tag">BookingRequestedEvent</span> (booking)
+    <span class="tag">BookingConfirmedEvent</span> (booking)
+    <span class="tag">BookingDeclinedEvent</span> (booking)
+    <span class="tag">BookingExpiredEvent</span> (booking)
+    <span class="tag">BookingReminderEvent</span> (booking)
+    <span class="tag">QuickCompleteConfirmationRequiredEvent</span> (booking)
+    <span class="tag">RescheduleRequestedEvent</span> (booking)
+    <span class="tag">RescheduleAcceptedEvent</span> (booking)
+    <span class="tag">RescheduleDeclinedEvent</span> (booking)
+    <span class="tag">BatchBookingRequestedEvent</span> (booking)
+    <span class="tag">BatchBookingAcceptedEvent</span> (booking)
+    <span class="tag">DuplicateBookingProposedEvent</span> (booking)
+    <span class="tag">BookingCancelledDueToPauseEvent</span> (booking)
+    <span class="tag">BookingCancelledByParentEvent</span> (booking)
+    <span class="tag">BookingCancelledByCoachEvent</span> (booking)
+    <span class="tag">CoachNoShowEvent</span> (booking)
+    <span class="tag">PlayerNoShowEvent</span> (booking)
+    <span class="tag">SessionPackExpiryWarningEvent</span> (booking)
+    <span class="tag">SessionPackExpiredEvent</span> (booking)
+    <span class="tag">PackPausedEvent</span> (booking)
+    <span class="tag">VideoModerationAdminAlertEvent</span> (video)
+    <span class="tag">VideoModerationOwnerNotificationEvent</span> (video)
+    <p>Internally, the module also publishes and consumes its own events: an <code>Envelope</code> (published by
+      any listener, consumed by <code>MailManager</code>) and <code>AlertFiredEvent</code> (published by
+      <code>AlertEvaluationService</code>, consumed by <code>AlertNotificationListener</code>).</p>
+
+    <h3>Dependencies on other layers</h3>
+    <p>This module does <strong>not</strong> use <code>infrastructure.ses</code> — its own send path is pure
+      SMTP via Spring's <code>JavaMailSenderImpl</code>, configured through <code>EmailProperties</code>/
+      <code>ProviderConfig</code> (round-robin across providers like gmx/gmail). SES is a separate, narrower
+      integration used directly by <code>platform.security.infrastructure.listener</code>
+      (<code>PlayerRegistrationEmailListener</code>, <code>ParentRegistrationEmailListener</code>,
+      <code>CoachRegistrationEmailListener</code>) for registration-flow emails — it does not route through this
+      module at all. Beyond that, this module depends on <code>infrastructure.threadpool</code> (MDC-propagating
+      task decorator for its executors), <code>infrastructure.feature</code> (feature-flag gate for Arachnid/CSAM
+      alerting), and <code>platform.config.service.ConfigService</code> (runtime-configurable admin alert email
+      address).</p>
+
+    <h2>Key Flows</h2>
+
+    <h3>Booking confirmed → templated email sent</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Booking as booking module
+  participant Listener as BookingEmailListener
+  participant Bus as ApplicationEventPublisher
+  participant Manager as MailManager
+  participant Mail as MailService
+  participant SMTP as JavaMailSenderImpl
+  participant DB as envelope_entity
+
+  Booking->>Bus: publish BookingConfirmedEvent (after commit)
+  Bus->>Listener: onBookingConfirmed(event)
+  Listener->>Listener: build Recipient + data map
+  Listener->>Bus: publish Envelope(BOOKING_CONFIRMED, ...)
+  Bus->>Manager: sendEmailFromTemplate(envelope) [async, sendMailPool]
+  Manager->>Mail: sendEmailFromTemplate(recipient, template, data) [circuit breaker + retry]
+  Mail->>Mail: render bookingConfirmed.html via Thymeleaf
+  Mail->>SMTP: send MimeMessage
+  Manager->>DB: save EnvelopeEntity(status=SENT or FAILED)
+    </pre>
+    <p>
+      A coach accepting a booking request triggers <code>BookingConfirmedEvent</code> from the booking module.
+      <code>BookingEmailListener</code> is a <code>@TransactionalEventListener(phase = AFTER_COMMIT)</code>, so it
+      only fires once the booking state change is durably committed — no email goes out for a change that later
+      rolls back. It builds an <code>Envelope</code> targeting the parent's email and publishes it as a plain
+      Spring event; <code>MailManager</code> picks it up asynchronously on the <code>sendMailPool</code> executor,
+      renders the Thymeleaf template, sends via SMTP, and persists the outcome either way so a failure is never
+      silently lost.
+    </p>
+
+    <h3>Admin configures an EMAIL alert rule, which later fires</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Admin
+  participant API as AlertRuleAdminResource
+  participant Repo as AlertRuleRepository
+  participant Cache as AlertRuleCache
+  participant Eval as AlertEvaluationService
+  participant Notif as AlertNotificationListener
+  participant Manager as MailManager
+
+  Admin->>API: POST /v1/admin/alerts {metric, threshold, channel=EMAIL}
+  API->>Repo: save(AlertRule)
+  API->>Cache: refresh()
+  Cache->>Repo: findAllByEnabledTrue()
+  loop every 30s
+    Eval->>Cache: getCachedRules()
+    Eval->>Eval: computeMetricValue(metric)
+    alt breach
+      Eval->>Notif: publish AlertFiredEvent
+      Notif->>Notif: log WARN
+      Notif->>Manager: sendEmailSync(envelope) to ops@skillars.internal
+    end
+  end
+    </pre>
+    <p>
+      An admin (JWT + <code>ROLE_ADMIN</code>) creates or updates a rule through
+      <code>AlertRuleAdminResource</code>; the rule is saved to <code>main.alert_rule</code> and the in-memory
+      cache is refreshed immediately so the new rule takes effect without waiting for the next scheduled reload.
+      <code>AlertEvaluationService</code> runs every 30s, evaluating each cached rule; today
+      <code>computeMetricValue</code> is a stub that always returns -1.0 (domain metrics were stripped out and are
+      a TODO), so in practice EMAIL/LOG alerts won't currently fire until that gap is closed — but the
+      configuration, caching, and notification plumbing around it is fully wired.
+    </p>
+
+    <h3>Failed send → durable retry</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Manager as MailManager
+  participant SMTP as JavaMailSenderImpl
+  participant DB as envelope_entity
+  participant Scheduler as EmailRetryScheduler
+
+  Manager->>SMTP: send MimeMessage
+  SMTP-->>Manager: MessagingException
+  Manager->>DB: save EnvelopeEntity(status=FAILED, retry=true, attempts++)
+  loop every 60s
+    Scheduler->>DB: SELECT ... WHERE retry=true AND status=FAILED FOR UPDATE SKIP LOCKED
+    alt deadline passed
+      Scheduler->>DB: status=DEADLINE_EXPIRED, retry=false
+    else attempts >= 6
+      Scheduler->>DB: status=ATTEMPTS_EXHAUSTED, retry=false
+    else
+      Scheduler->>Manager: sendEmailSync(envelope) [after commit]
+    end
+  end
+    </pre>
+    <p>
+      When an SMTP send throws a retryable exception, <code>MailManager</code> persists the envelope as
+      <code>FAILED</code> with <code>retry=true</code> instead of propagating the error. <code>EmailRetryScheduler</code>
+      polls for such rows with <code>SELECT ... FOR UPDATE SKIP LOCKED</code> so multiple app instances never
+      double-send the same envelope. Rows past their deadline or at the 6-attempt cap are marked terminal and
+      never refetched; everything else is re-dispatched only after the polling transaction commits, keeping SMTP
+      network I/O off the database connection pool.
+    </p>
+
+    <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout warn">
+      <p><strong>SES is suppressed by default and is unrelated to this module's own mail path.</strong>
+      <code>infrastructure.ses.NoOpSesEmailService</code> activates whenever <code>app.ses.enabled=false</code>
+      (the default), logging <code>"NoOp SES: email suppressed"</code> instead of actually sending. This
+      frequently confuses new devs testing locally — but note it only affects the security module's
+      registration-flow emails (Player/Parent/Coach), not this module. The <code>notification</code> module's
+      own booking/tenant/alert emails go out over real SMTP (gmx/gmail providers configured in
+      <code>application.yaml</code>) regardless of <code>app.ses.enabled</code>, so don't assume flipping that
+      flag controls all outbound mail.</p>
+    </div>
+    <div class="callout">
+      <p><code>ComponentConfig</code> only defines the <code>MailManager</code> bean when
+      <code>enable.test.mail=false</code> (the default). If a profile sets <code>enable.test.mail=true</code>,
+      no <code>MailManager</code> bean is registered by this class — expect a different (test-only) bean to
+      supply it, or startup will fail with an unsatisfied dependency.</p>
+    </div>
+    <div class="callout">
+      <p>Adding a new email type means touching three places in lockstep: add a constant to the
+      <code>EmailTemplate</code> enum (with a <code>subjectKey</code> pointing at an i18n message), add an HTML
+      file under <code>src/main/resources/mails/</code> named after the lowerCamelCase form of the enum constant
+      (e.g. <code>BOOKING_REMINDER</code> → <code>bookingReminder.html</code>), and add the i18n key to
+      <code>messages_*.properties</code>. Miss any one of the three and the send will fail at render or
+      subject-lookup time.</p>
+    </div>
+    <div class="callout warn">
+      <p><code>AlertRule</code> has no public setters and is built exclusively via its Lombok
+      <code>@SuperBuilder</code>. <code>AlertRuleAdminResource.update()</code> therefore implements "update" as
+      delete-then-recreate (same pattern as <code>FeeRuleAdminResource</code> elsewhere) rather than mutating the
+      existing row — don't expect the row's primary key or audit history to be preserved across an update.</p>
+    </div>
+    <div class="callout">
+      <p><code>EnvelopeEntity</code> has no explicit <code>@Table(schema = ...)</code>, unlike <code>AlertRule</code>
+      which is pinned to <code>schema = "main"</code>. No Flyway migration in <code>db/migration</code> currently
+      creates an <code>envelope_entity</code> table either — worth confirming your local schema actually has it
+      (e.g. via a Hibernate-generated DDL or a migration outside this search) before relying on retry/audit
+      history in a fresh environment.</p>
+    </div>
+    <div class="callout">
+      <p>Alert threshold evaluation is currently a no-op: <code>AlertEvaluationService.computeMetricValue()</code>
+      always returns <code>-1.0</code> (a marked TODO — domain-specific metrics like <code>FAILURE_RATE</code>
+      were removed during a refactor). Configuring alert rules via the admin API works end-to-end, but no rule
+      will actually breach and fire until real metric computation is added back.</p>
+    </div>
+
+    <h2>Related Modules</h2>
+    <ul>
+      <li><a href="../booking/index.html">Booking</a> — the largest source of consumed events (booking
+        lifecycle, reschedules, no-shows, session-pack expiry/pause) that drive templated emails.</li>
+      <li><a href="../tenant/index.html">Tenant</a> — tenant creation, API key lifecycle, status changes, and
+        webhook secret rotation all trigger admin/tenant-facing emails.</li>
+      <li><a href="../video/index.html">Video</a> — video moderation admin alerts and owner-flagged
+        notifications (including the CSAM/Arachnid startup safety gate).</li>
+      <li><a href="../security/index.html">Security</a> — publishes <code>AccountChangeEvent</code> consumed
+        here; separately, its own registration listeners call <code>infrastructure.ses</code> directly
+        (bypassing this module).</li>
+      <li><a href="../config/index.html">Config</a> — <code>ConfigService</code> supplies the runtime-configurable
+        <code>platform.admin_alert_email</code> used by video moderation alerts.</li>
+      <li><a href="../infrastructure/index.html">Infrastructure</a> — provides the SES email sender (used
+        elsewhere, not by this module), the MDC-propagating thread-pool decorator, and feature-flag service.</li>
+      <li><a href="../index.html">Home</a></li>
+    </ul>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

@@ -96,7 +96,8 @@ public class AuthService {
             throw new DisabledException("Account is not activated");
         }
 
-        if (user.getSkillarsRole() != null &&
+        boolean phoneOtpRequired = configService.getBoolean("security.registration.phone-otp-required", true);
+        if (user.getSkillarsRole() != null && phoneOtpRequired &&
             user.getVerificationStatus() != SkillarsVerificationStatus.BASIC_VERIFIED) {
             throw new SkillarsAccountNotVerifiedException();
         }

@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tenant — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <nav>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../tenant/index.html">Tenant</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Tenant</div>
+    <h1>Tenant</h1>
+    <p class="subtitle">Admin-managed API tenants — external systems that authenticate with an API key and receive signed webhooks; not a per-club data-partitioning scheme.</p>
+
+    <h2>Business Overview</h2>
+    <p>
+      It is tempting to assume "tenant" means a club, school, or franchise that owns its own coaches and players —
+      that is <strong>not</strong> what this module does. There is no <code>tenant_id</code> column anywhere on
+      <code>Coach</code>, <code>Player</code>, <code>Booking</code>, or any other domain entity, and nothing in
+      <code>marketplace</code>, <code>booking</code>, <code>session</code>, or <code>payment</code> scopes queries by
+      tenant. Instead, a <code>Tenant</code> here represents an <strong>external system/business partner</strong> that
+      is granted machine-to-machine access to a future/limited <code>/v1/**</code> API surface — think a third-party
+      integrator calling into Skillars with an API key, and Skillars calling back out to that partner's webhook URL
+      when relevant events happen. It is a B2B integration-credentials module, not a multi-club SaaS partitioning
+      layer.
+    </p>
+    <p class="subtitle">
+      <span class="tag">API key issuance</span>
+      <span class="tag">Key rotation</span>
+      <span class="tag">Webhook config</span>
+      <span class="tag">Tenant lifecycle</span>
+    </p>
+    <p>
+      Only <strong>Admins</strong> manage tenants — every endpoint in <code>TenantAdminResource</code> is gated by
+      <code>SecurityConstants.HAS_ADMIN_ROLE</code> and lives under <code>/v1/admin/tenants</code>. There is no
+      self-service tenant onboarding UI; an admin creates the tenant record, hands the one-time-shown raw API key to
+      the partner out of band, and manages its lifecycle (renaming, email/webhook updates, suspension, key rotation)
+      from the admin console.
+    </p>
+    <p>
+      Key business rules embedded in the code:
+    </p>
+    <ul>
+      <li>Tenant names must be unique (case-insensitive) — <code>TenantService.createTenant</code> rejects a
+        duplicate name before anything is persisted.</li>
+      <li>A tenant can hold at most one <strong>ACTIVE</strong> API key per <code>(tenant, environment)</code> pair
+        (<code>PROD</code>/<code>DEV</code>/<code>SANDBOX</code>) at a time — generating or reactivating a key while
+        one is already active is rejected.</li>
+      <li>Suspending a tenant (<code>TENT-04</code>) atomically revokes <em>every</em> active and rotated key for that
+        tenant — a suspended tenant cannot authenticate via any leftover grace-period key.</li>
+      <li>Reactivating a suspended tenant (<code>TENT-07</code>) always issues a brand-new <code>PROD</code> key,
+        since the old one was revoked on suspension.</li>
+      <li>The raw API key and a regenerated webhook secret are shown exactly once, at creation/rotation/regeneration
+        time — they are never stored in plaintext and can never be retrieved again after that response.</li>
+    </ul>
+
+    <h2>Technical Overview</h2>
+    <h3>Package layout</h3>
+    <table>
+      <thead><tr><th>Package</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>tenant.api</code></td><td><code>TenantAdminResource</code> — the single admin-only REST controller for tenant and API-key lifecycle management.</td></tr>
+        <tr><td><code>tenant.service</code></td><td><code>TenantService</code> (tenant CRUD/lifecycle), <code>TenantQueryService</code> (read-only listing/detail), <code>ApiKeyService</code> (key generation, hashing, authentication, rotation, revocation), <code>RotatedKeyCleanupJob</code> (Quartz job that expires stale rotated keys).</td></tr>
+        <tr><td><code>tenant.repo</code></td><td>JPA entities <code>Tenant</code> and <code>TenantApiKey</code>, plus their Spring Data repositories.</td></tr>
+        <tr><td><code>tenant.contract</code></td><td>DTOs (<code>TenantDto</code>, <code>TenantDetailDto</code>, <code>TenantSummaryDto</code>, <code>ApiKeyDto</code>, <code>ApiKeySummaryDto</code>, <code>WebhookSecretDto</code>), enums (<code>TenantStatus</code>, <code>ApiKeyStatus</code>, <code>ApiKeyEnvironment</code>), and <code>TenantPrincipal</code> — the Spring Security <code>UserDetails</code> representing an authenticated tenant.</td></tr>
+        <tr><td><code>tenant.contract.event</code></td><td>Plain-record domain events published on tenant/key lifecycle changes: <code>TenantCreatedEvent</code>, <code>TenantStatusChangedEvent</code>, <code>TenantApiKeyEvent</code>, <code>TenantWebhookSecretRegeneratedEvent</code>.</td></tr>
+        <tr><td><code>tenant.config</code></td><td><code>RotatedKeyCleanupSchedulerConfig</code> — registers the Quartz job/trigger that runs the rotated-key cleanup every 5 minutes.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Key entities &amp; tables</h3>
+    <table>
+      <thead><tr><th>Entity</th><th>Table</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>Tenant</code></td><td><code>main.tenant</code></td><td>One row per external partner: immutable <code>tenant_ref</code> (UUID, used as the security-principal username), name, <code>tenant_status</code> (ACTIVE/SUSPENDED), immutable 3-char <code>key_prefix</code> derived from the name, optional notification email, and outbound <code>webhook_url</code> + <code>webhook_secret</code> (HMAC signing key). <code>@Audited</code> via Hibernate Envers.</td></tr>
+        <tr><td><code>TenantApiKey</code></td><td><code>main.tenant_api_key</code></td><td>One row per issued key: SHA-256 <code>key_hash</code> (raw key never stored), <code>key_prefix</code>, <code>key_status</code> (ACTIVE/ROTATED/REVOKED), <code>environment</code> (PROD/DEV/SANDBOX), <code>rotated_at</code> timestamp, optimistic-locked (<code>@Version</code>). Many-to-one to <code>Tenant</code>, indexed on both <code>key_hash</code> and <code>tenant_id</code>. Also <code>@Audited</code>.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Key services</h3>
+    <table>
+      <thead><tr><th>Service</th><th>Orchestrates</th></tr></thead>
+      <tbody>
+        <tr><td><code>TenantService</code></td><td>Tenant lifecycle: create (name-uniqueness check, UUID <code>tenantRef</code>, derived key prefix, initial webhook secret, first API key via <code>ApiKeyService</code>), update name/email/webhook URL, suspend (cascades to revoking all keys), reactivate (issues a new PROD key), regenerate webhook secret. Publishes a lifecycle event after every mutation.</td></tr>
+        <tr><td><code>TenantQueryService</code></td><td>Read-only projections for the admin console: paginated/status-filtered tenant list, full tenant detail (with key summaries, but never the webhook secret), and a dedicated webhook-secret lookup.</td></tr>
+        <tr><td><code>ApiKeyService</code></td><td>The credential engine: generates and SHA-256-hashes new keys (rejecting a duplicate ACTIVE key per tenant+environment), authenticates a raw key against the hash with a 24-hour rotation grace window, rotates a key (revoking any prior ROTATED key for the same tenant+environment to prevent overlapping grace periods), revokes/reactivates keys, and bulk-expires stale ROTATED keys past the grace window.</td></tr>
+        <tr><td><code>RotatedKeyCleanupJob</code></td><td>Quartz job (fires every 5 minutes via <code>RotatedKeyCleanupSchedulerConfig</code>) that calls <code>ApiKeyService.revokeExpiredRotatedKeys()</code> to convert grace-period-expired ROTATED keys to REVOKED.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>REST endpoints</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr></thead>
+      <tbody>
+        <tr><td>GET</td><td><code>/v1/admin/tenants</code></td><td>Paginated tenant list, optional status filter</td><td>ADMIN</td></tr>
+        <tr><td>GET</td><td><code>/v1/admin/tenants/{tenantRef}</code></td><td>Full tenant detail incl. key summaries (never the webhook secret)</td><td>ADMIN</td></tr>
+        <tr><td>GET</td><td><code>/v1/admin/tenants/{tenantRef}/webhook-secret</code></td><td>Retrieve the current webhook signing secret</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/v1/admin/tenants</code></td><td>Create a tenant + first API key for an environment</td><td>ADMIN</td></tr>
+        <tr><td>PATCH</td><td><code>/v1/admin/tenants/{tenantRef}/name</code></td><td>Update tenant display name</td><td>ADMIN</td></tr>
+        <tr><td>PATCH</td><td><code>/v1/admin/tenants/{tenantRef}/email</code></td><td>Update tenant notification email</td><td>ADMIN</td></tr>
+        <tr><td>PATCH</td><td><code>/v1/admin/tenants/{tenantRef}/webhook-url</code></td><td>Update outbound webhook delivery URL</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/v1/admin/tenants/{tenantRef}/suspend</code></td><td>Suspend tenant; atomically revokes all active/rotated keys</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/v1/admin/tenants/{tenantRef}/reactivate</code></td><td>Reactivate a suspended tenant; issues a new PROD key</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/v1/admin/tenants/{tenantRef}/webhook-secret</code></td><td>Regenerate the webhook signing secret (204; fetch via GET)</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/v1/admin/tenants/{tenantRef}/keys/generate</code></td><td>Generate a new key for an environment (requires no existing ACTIVE key)</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/v1/admin/tenants/{tenantId}/keys/{keyId}/rotate</code></td><td>Rotate a key (old key enters 24h grace window as ROTATED)</td><td>ADMIN</td></tr>
+        <tr><td>DELETE</td><td><code>/v1/admin/tenants/{tenantId}/keys/{keyId}</code></td><td>Revoke a key immediately</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/v1/admin/tenants/{tenantId}/keys/{keyId}/reactivate</code></td><td>Reactivate a REVOKED key (rejected if an ACTIVE key already exists for that environment)</td><td>ADMIN</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Tenant isolation: request-scoped, not row-level</h3>
+    <p>
+      This module does not enforce row-level tenant isolation across domain tables, because it does not model
+      per-club data ownership. What it does enforce is <strong>request-scoped tenant identity</strong> for API-key
+      authenticated requests:
+    </p>
+    <ul>
+      <li><code>infrastructure.web.ApiKeyAuthenticationFilter</code> is a non-<code>@Component</code> servlet filter,
+        wired only via <code>addFilterBefore</code> in <code>infrastructure.web.TenantSecurityConfig</code>'s
+        <code>@Order(1)</code> security chain, scoped to <code>/v1/**</code> excluding <code>/v1/account/**</code> and
+        <code>/v1/admin/**</code> (those stay on the existing JWT chain). It reads the <code>X-Api-Key</code> header,
+        calls <code>ApiKeyService.authenticate</code>, rejects suspended tenants with 403 before any
+        <code>SecurityContext</code> is populated, then sets a <code>TenantPrincipal</code> (role
+        <code>ROLE_TENANT</code>, username = <code>tenantRef</code>).</li>
+      <li><code>infrastructure.security.TenantContext</code> is a <code>ThreadLocal&lt;String&gt;</code> holding the
+        current <code>tenantRef</code> for the life of the request, set by the filter and always cleared in a
+        <code>finally</code> block (using <code>remove()</code>, not <code>set(null)</code>, to avoid leaking state
+        across pooled servlet threads).</li>
+      <li><code>infrastructure.threadpool.TenantContextTaskDecorator</code> propagates that same
+        <code>TenantContext</code> value onto async worker threads (mirroring the existing MDC decorator pattern), so
+        tenant identity survives an <code>@Async</code> hop.</li>
+      <li><code>TenantContext.get()</code> is also read by <code>infrastructure.web.LoggingFilter</code> to attach
+        <code>tenantId</code> to structured request-end logs (null/absent for ordinary JWT-authenticated requests).</li>
+      <li>Depends on <code>infrastructure.persistence</code> (<code>AbstractAuditingEntity</code> base class),
+        <code>infrastructure.security</code> (<code>SecurityConstants</code>, <code>TenantContext</code>),
+        <code>infrastructure.web</code> (the filter/security-config classes above), and
+        <code>infrastructure.util.ClockProvider</code> (testable time source for event timestamps).</li>
+      <li>As of this writing no other <code>/v1/**</code> resource endpoints exist yet besides
+        <code>/v1/account/**</code> and <code>/v1/admin/**</code> — the API-key chain currently authenticates
+        requests but there is no partner-facing business endpoint mounted under it. Treat this as a
+        forward-looking integration surface.</li>
+    </ul>
+
+    <h2>Key Flows</h2>
+
+    <h3>Provisioning a new tenant</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Admin as Admin (console)
+  participant Api as TenantAdminResource
+  participant Svc as TenantService
+  participant KeySvc as ApiKeyService
+  participant Repo as TenantRepository
+  participant Listener as TenantLifecycleEmailListener
+  Admin->>Api: POST /v1/admin/tenants {name, environment, email, webhookUrl}
+  Api->>Svc: createTenant(name, environment, email, webhookUrl)
+  Svc->>Repo: existsByNameIgnoreCase(name)
+  Repo-->>Svc: false (unique)
+  Svc->>Svc: build Tenant(tenantRef=UUID, keyPrefix=derived, webhookSecret=UUID)
+  Svc->>Repo: save(tenant)
+  Svc->>KeySvc: generateAndStore(tenant, environment)
+  KeySvc-->>Svc: ApiKeyAndRawKey(entity, rawKey)
+  Svc-->>Listener: publish TenantCreatedEvent
+  Listener-->>Listener: email notification-email only (tenant has no confirmed email yet)
+  Svc-->>Api: TenantCreationResult(tenant, key, rawKey)
+  Api-->>Admin: 201 {tenant, apiKey.rawKey} — shown once
+    </pre>
+    <p>
+      An admin submits a name, initial environment, and optional email/webhook URL. <code>TenantService</code>
+      rejects duplicate names, then builds the <code>Tenant</code> row with a random UUID <code>tenantRef</code>
+      (used later as the security-principal identity), a name-derived key prefix, and a freshly generated webhook
+      secret. It saves the tenant, delegates to <code>ApiKeyService</code> to mint the first API key (SHA-256 hash
+      stored, raw value returned only in this response), and publishes <code>TenantCreatedEvent</code> — routed only
+      to the internal notification address, since the tenant itself has no verified email yet. The raw API key is
+      returned once in the <code>201</code> response body and can never be retrieved again; if it is lost, the only
+      recovery is generating a new key or rotating.
+    </p>
+
+    <h3>Tenant-scoped request authentication</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Partner as External partner system
+  participant Filter as ApiKeyAuthenticationFilter
+  participant KeySvc as ApiKeyService
+  participant Ctx as TenantContext (ThreadLocal)
+  participant Sec as SecurityContextHolder
+  Partner->>Filter: request to /v1/** with X-Api-Key header
+  Filter->>KeySvc: authenticate(rawKey)
+  KeySvc->>KeySvc: sha256Hex(rawKey)
+  KeySvc-->>Filter: TenantApiKey (ACTIVE, or ROTATED within 24h grace)
+  alt tenant is SUSPENDED
+    Filter-->>Partner: 403 Forbidden
+  else tenant is ACTIVE
+    Filter->>Ctx: TenantContext.set(tenantRef)
+    Filter->>Sec: setAuthentication(TenantPrincipal, ROLE_TENANT)
+    Filter->>Filter: chain.doFilter(...)
+    Filter->>Ctx: TenantContext.clear() (finally block)
+    Filter->>Sec: clearContext() (finally block)
+  end
+    </pre>
+    <p>
+      Every request under <code>/v1/**</code> (other than <code>/v1/account/**</code> and <code>/v1/admin/**</code>,
+      which stay on the JWT chain) is intercepted by <code>ApiKeyAuthenticationFilter</code> before Spring Security's
+      normal authentication filter runs. The raw key is hashed and looked up with a 24-hour grace window so a
+      just-rotated key still works briefly. A suspended tenant is rejected with 403 before any security context is
+      populated. On success the filter sets both a request-scoped <code>TenantContext</code> (for logging/async
+      propagation) and a <code>TenantPrincipal</code> with <code>ROLE_TENANT</code> in the
+      <code>SecurityContextHolder</code>. Both are unconditionally cleared in a <code>finally</code> block so servlet
+      thread pooling never leaks one tenant's identity into the next request.
+    </p>
+
+    <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout warn">
+      <p><strong>Do not confuse this "tenant" with per-club/organization multi-tenancy.</strong> A new engineer's
+      first instinct is to look for a <code>tenant_id</code> filter on marketplace/booking/session queries — there
+      isn't one. Coaches and Players are not partitioned by tenant anywhere in the schema. If a future feature needs
+      to scope data to a club/organization, that is a different concept and should not be bolted onto this module
+      without redesigning it.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong><code>TenantContext</code> must always be cleared, including on the async hop.</strong> It is a
+      raw <code>ThreadLocal</code> on pooled servlet and executor threads. <code>ApiKeyAuthenticationFilter</code>
+      clears it with <code>remove()</code> in a <code>finally</code> block, and
+      <code>TenantContextTaskDecorator</code> mirrors that for <code>@Async</code> work. Any new code path that reads
+      or sets <code>TenantContext</code> directly must follow the same set/finally-clear pattern or risk leaking one
+      tenant's identity into a later, unrelated request handled by the same thread.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Raw keys and webhook secrets are shown exactly once.</strong> Only the SHA-256 hash of an API key
+      is persisted (<code>TenantApiKey.keyHash</code>); the raw value is returned in the create/generate/rotate
+      response and then gone forever. The webhook secret is stored in plaintext (needed to compute HMAC signatures)
+      but is only ever surfaced through the dedicated <code>GET .../webhook-secret</code> endpoint — it is
+      deliberately omitted from <code>TenantDetailDto</code> and from every published domain event.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Key rotation is grace-windowed, and overlapping grace periods are prevented on purpose.</strong>
+      Rotating a key flips it to <code>ROTATED</code> with a <code>rotatedAt</code> timestamp; it keeps
+      authenticating for 24 hours (<code>ApiKeyService.GRACE_PERIOD</code>) before the scheduled
+      <code>RotatedKeyCleanupJob</code> flips it to <code>REVOKED</code>. Rotating again before the previous grace
+      period ends immediately revokes that still-in-grace key rather than letting two old keys work simultaneously —
+      don't "fix" this by removing the <code>findRotatedKeyByTenantIdAndEnvironment</code> revoke step.</p>
+    </div>
+
+    <h2>Related Modules</h2>
+    <div class="card-grid">
+      <div class="card"><h4><a href="../security/index.html">Security</a></h4><p>Shares the JWT security-filter-chain machinery; <code>TenantSecurityConfig</code>'s API-key chain is deliberately ordered ahead of and scoped around the JWT chain used by everything else.</p></div>
+      <div class="card"><h4><a href="../notification/index.html">Notification</a></h4><p><code>TenantLifecycleEmailListener</code> consumes every tenant/API-key domain event to send admin and (where applicable) tenant email notifications.</p></div>
+      <div class="card"><h4><a href="../admin/index.html">Admin</a></h4><p>Tenant management is itself an admin-only back-office capability, gated by the same <code>HAS_ADMIN_ROLE</code> check used throughout the <code>admin</code> module.</p></div>
+      <div class="card"><h4><a href="../infrastructure/index.html">Infrastructure</a></h4><p>Supplies <code>AbstractAuditingEntity</code>, <code>SecurityConstants</code>, <code>TenantContext</code>, the API-key servlet filter/security config, <code>TenantContextTaskDecorator</code>, and <code>ClockProvider</code>.</p></div>
+    </div>
+    <p><a href="../index.html">&larr; Back to Home</a></p>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

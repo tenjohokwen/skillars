@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Config — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <nav>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../tenant/index.html">Tenant</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html" class="active">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Config</div>
+    <h1>Config</h1>
+    <p class="subtitle">The database-backed key/value store admins use to tune business thresholds, quotas, and per-tier gates without a deploy.</p>
+
+    <h2>Business Overview</h2>
+    <p>
+      The <code>config</code> module is Skillars' single "knobs and dials" table: a flat list of typed key/value rows
+      (<code>platform_config</code>) that other modules read at runtime instead of hardcoding a number or a per-tier
+      switch in Java. It exists so that Product/Ops can change a business rule &mdash; a commission rate, a storage
+      quota, a moderation SLA window, an age-tier cutoff &mdash; by editing one row through an admin-only REST
+      endpoint, rather than filing a code change and waiting for a release.
+    </p>
+    <p>
+      Looking at the seed data (Flyway migrations <code>V20</code>, <code>V25</code>, <code>V42</code>, <code>V57</code>)
+      shows four broad categories of value living here:
+    </p>
+    <ul>
+      <li><strong>Per-tier feature gates</strong> &mdash; e.g. <code>coach.tier.scout.video_upload</code>,
+        <code>player.tier.athlete.skills_radar</code> &mdash; booleans (stored as the strings <code>"true"</code>/<code>"false"</code>)
+        that decide whether a given Coach or Player subscription tier can use a capability.</li>
+      <li><strong>Quotas</strong> &mdash; per-tier storage and bandwidth limits in GB (<code>coach.tier.academy.storage_quota_gb</code>,
+        <code>player.tier.pro.bandwidth_quota_gb</code>), and drill-video size/duration caps.</li>
+      <li><strong>Business thresholds and timers</strong> &mdash; <code>platform.commission_rate</code>,
+        <code>platform.reliability_strike_expiry_days</code>, <code>platform.strike_threshold.auto_suspension</code>,
+        <code>platform.moderation_sla_minutes</code>, <code>platform.message_retention_months</code>, reminder intervals,
+        signed-URL TTLs.</li>
+      <li><strong>Policy cutoffs</strong> &mdash; the U10/young-teen/teen max-age boundaries the <code>security</code>
+        module's age-tier logic is built on (<code>security.age-policy.*</code>).</li>
+    </ul>
+    <p>
+      Only ROLE_ADMIN/ROLE_LTD_ADMIN accounts can read or change a value, via <code>ConfigResource</code>. There is no
+      self-service UI referenced in this backend module &mdash; whoever exposes an admin console for this simply calls
+      <code>GET</code>/<code>PUT&nbsp;/api/config/values/{key}</code>. New engineers should treat this as a
+      <em>values</em> store, not a schema store: keys are pre-seeded by Flyway migrations, and the API can only update
+      an existing key's value &mdash; it cannot create or delete keys.
+    </p>
+
+    <h2>Technical Overview</h2>
+    <h3>Package layout</h3>
+    <table>
+      <tr><th>Package</th><th>Purpose</th></tr>
+      <tr><td><code>api</code></td><td><code>ConfigResource</code> &mdash; the only entry point into this module, two admin-only endpoints.</td></tr>
+      <tr><td><code>contract</code></td><td>Public surface: <code>ConfigValueType</code> enum, <code>ConfigValueResponse</code> DTO, <code>UpdateConfigRequest</code> DTO.</td></tr>
+      <tr><td><code>config</code></td><td><code>ConfigProperties</code> (<code>@ConfigurationProperties(prefix = "app.config")</code>, currently just <code>cacheTtlSeconds</code>, default 300) and <code>ConfigModuleConfig</code> which registers it.</td></tr>
+      <tr><td><code>service</code></td><td><code>ConfigService</code> &mdash; the module's real public API (injected directly by ~40 services across the codebase) and <code>ConfigMapper</code> (MapStruct entity&rarr;DTO mapping).</td></tr>
+      <tr><td><code>repo</code></td><td><code>PlatformConfig</code> JPA entity and <code>PlatformConfigRepository</code> (Spring Data, one derived finder: <code>findByKey</code>).</td></tr>
+    </table>
+
+    <h3>Key entities &amp; tables</h3>
+    <table>
+      <tr><th>Entity</th><th>Table</th><th>Notes</th></tr>
+      <tr><td><code>PlatformConfig</code> (extends <code>BaseEntity</code>)</td><td><code>main.platform_config</code></td>
+        <td><code>key</code> (unique, VARCHAR 255), <code>value</code> (TEXT), <code>value_type</code> (enum, CHECK-constrained
+        to <code>STRING</code>/<code>LONG</code>), optional <code>description</code>, <code>updated_at</code>. Seeded almost
+        entirely via Flyway (<code>V20</code>, <code>V25</code>, <code>V42</code>, <code>V57</code> and others) &mdash;
+        there is no code path that inserts a brand-new key at runtime.</td></tr>
+    </table>
+
+    <h3>Key services</h3>
+    <table>
+      <tr><th>Service</th><th>Responsibility</th></tr>
+      <tr><td><code>ConfigService</code></td><td>Loads the entire <code>platform_config</code> table into an in-memory
+        <code>ConcurrentHashMap</code> cache and serves typed reads off it: <code>getString</code>, <code>getLong</code>,
+        <code>getLong(key, default)</code>, <code>getInt(key, default)</code>,
+        <code>getBoundedLong(key, default, min, max)</code> (rejects out-of-range values, logs a warning, falls back to
+        default), <code>getBoolean</code>/<code>getBoolean(key, default)</code>, and <code>find(key)</code> returning an
+        <code>Optional&lt;String&gt;</code>. Also owns <code>updateConfig(key, value)</code> (used by the admin endpoint)
+        and <code>invalidate()</code>.</td></tr>
+      <tr><td><code>ConfigMapper</code></td><td>MapStruct mapper, <code>PlatformConfig</code> &rarr; <code>ConfigValueResponse</code>.</td></tr>
+    </table>
+
+    <h3>REST endpoints</h3>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr>
+      <tr><td>GET</td><td><code>/api/config/values/{key}</code></td><td>Fetch one config entry (current value, type, last-updated timestamp)</td><td>ROLE_ADMIN / ROLE_LTD_ADMIN</td></tr>
+      <tr><td>PUT</td><td><code>/api/config/values/{key}</code></td><td>Update an existing config entry's value (must already exist &mdash; 404 otherwise)</td><td>ROLE_ADMIN / ROLE_LTD_ADMIN</td></tr>
+    </table>
+    <p>There is no list/search endpoint and no create/delete endpoint &mdash; keys are enumerated only by reading the Flyway migrations or the database directly.</p>
+
+    <h3>Value types</h3>
+    <p><code>ConfigValueType</code> has exactly two members:</p>
+    <ul>
+      <li><code>STRING</code> &mdash; free text, including booleans stored as the literal strings <code>"true"</code>/<code>"false"</code> and decimals like the commission rate <code>"0.08"</code>.</li>
+      <li><code>LONG</code> &mdash; whole numbers (quotas, day/hour/minute counts, strike thresholds), parsed via <code>Long.parseLong</code>.</li>
+    </ul>
+    <p><code>value_type</code> is descriptive metadata on the row (and a DB CHECK constraint) &mdash; <code>ConfigService</code>'s typed getters don't branch on it; callers simply call <code>getLong</code>/<code>getString</code>/<code>getBoolean</code> for the key they expect and get a parse failure or warning-plus-default if the stored value doesn't match.</p>
+
+    <h3>Boundary vs. <code>infrastructure.feature</code></h3>
+    <p>
+      Skillars has a second, unrelated toggle mechanism: <code>infrastructure.feature.FeatureToggleService</code>
+      (implemented by <code>PropertiesFeatureToggleService</code>), gating a small fixed enum of coarse, whole-platform
+      switches (<code>AppFeature.PAYMENTS</code>, <code>INVOICING</code>, <code>ARACHNID_ENABLED</code>,
+      <code>VIDEOINTEL_ENABLED</code>). Those are backed by Spring <code>@ConfigurationProperties</code>
+      (<code>FeatureProperties</code>), i.e. plain application properties/environment variables validated at startup
+      &mdash; changing one requires a config-map/env change and a restart (or at minimum a re-deploy), and there is no
+      admin API for them. <code>platform.config</code>, by contrast, is a DB-backed, per-key store meant for
+      <em>business-tunable</em> values (tier gates, quotas, thresholds) that Ops can change live through
+      <code>ConfigResource</code> without touching the deployment at all. If you're adding a true environment-level
+      on/off switch (e.g. "is the payment provider integration enabled in this environment"), it belongs in
+      <code>AppFeature</code>; if you're adding a business rule an admin might reasonably want to tune per environment
+      without redeploying, it belongs in <code>platform_config</code>.
+    </p>
+
+    <h2>Key Flows</h2>
+
+    <h3>Admin updates a config value and it takes effect</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant A as Admin
+  participant CR as ConfigResource
+  participant CS as ConfigService
+  participant DB as platform_config
+  participant Other as Any other module (e.g. BookingReminderScheduler)
+
+  A->>CR: PUT /api/config/values/platform.reminder_interval_primary_hours {"value":"12"}
+  CR->>CS: updateConfig(key, "12")
+  CS->>DB: findByKey(key)
+  alt key not found
+    CS-->>CR: throw ResourceNotFoundException (404)
+  end
+  CS->>DB: entity.setValue("12"), setUpdatedAt(now), save
+  CS->>CS: invalidate() -- lastRefreshed = Instant.MIN (this JVM only)
+  CS-->>CR: ConfigValueResponse
+  CR-->>A: 200 OK
+
+  Note over CS: next read on this instance forces refreshCache()
+  Other->>CS: getInt("platform.reminder_interval_primary_hours", 24)
+  CS->>CS: ensureFresh() sees stale flag, reloads all rows from DB
+  CS-->>Other: 12
+    </pre>
+    <p>
+      <code>updateConfig</code> writes straight through to Postgres and then calls <code>invalidate()</code>, which
+      just resets <code>lastRefreshed</code> to <code>Instant.MIN</code> on the JVM handling the request &mdash; it
+      does not proactively push the new value anywhere. The next call into <code>ConfigService</code> on that same
+      instance triggers a full <code>refreshCache()</code> (reloads every row, not just the changed key), so the
+      change is effectively immediate for that instance. Any other application instance in the cluster keeps serving
+      its old cached value until its own <code>@Scheduled</code> refresh fires (interval = <code>app.config.cache-ttl-seconds</code>,
+      default 300s), so a multi-instance deployment can see up to five minutes of skew between nodes.
+    </p>
+
+    <h3>Startup and periodic cache refresh</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Boot as Spring context startup
+  participant CS as ConfigService
+  participant DB as platform_config
+  participant Sched as @Scheduled refresh
+
+  Boot->>CS: @PostConstruct init()
+  CS->>DB: findAll()
+  CS->>CS: populate ConcurrentHashMap cache, lastRefreshed = now
+
+  loop every cacheTtlSeconds (default 300s)
+    Sched->>CS: scheduledRefresh()
+    CS->>DB: findAll()
+    CS->>CS: cache.putAll(new); cache.keySet().retainAll(new.keySet())
+  end
+    </pre>
+    <p>
+      The cache is populated once at startup and refreshed on a fixed delay driven by the same
+      <code>app.config.cache-ttl-seconds</code> property that governs staleness checks in <code>ensureFresh()</code>.
+      The refresh uses put-all-then-retain-all so a reader never sees an empty cache mid-refresh, and a
+      <code>synchronized</code> double-check inside <code>refreshCache()</code> prevents two threads from both
+      re-querying the database when several callers race a cold cache at once.
+    </p>
+
+    <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout warn">
+      <p><strong>Cache staleness is per-instance, not cluster-wide.</strong> An admin's <code>PUT</code> only
+      invalidates the cache on the instance that served the request. In a multi-instance deployment, other instances
+      keep the old value for up to <code>app.config.cache-ttl-seconds</code> (default 300s / 5 minutes). Don't assume
+      a config change is instantly visible everywhere &mdash; for anything latency-sensitive, lower the TTL or plan
+      around the skew window.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>The API can only update, never create.</strong> <code>ConfigService.updateConfig</code> calls
+      <code>findByKey(...).orElseThrow(ResourceNotFoundException)</code> &mdash; there is no path to insert a brand-new
+      key through <code>ConfigResource</code>. Every key must first be seeded by a Flyway migration
+      (<code>V20__platform_config.sql</code> and several later migrations add more keys). If a feature needs a new
+      config key, that's a migration, not just an API call.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Typed getters trust the caller, not <code>value_type</code>.</strong> <code>getLong</code>/<code>getBoolean</code>/etc.
+      parse the stored string directly based on which method you call; the <code>value_type</code> column is metadata
+      (and a DB CHECK constraint) rather than something <code>ConfigService</code> branches on at read time. Calling
+      <code>getLong</code> on a key whose value isn't numeric throws <code>IllegalStateException</code> (or, for the
+      defaulted variants, logs a warning and silently returns the default) &mdash; use <code>getLong(key, default)</code>
+      or <code>getBoundedLong(key, default, min, max)</code> for anything that drives scheduler timing or business
+      thresholds so a bad value degrades gracefully instead of throwing.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Don't confuse this with <code>infrastructure.feature</code>.</strong> Coarse platform on/off switches
+      (<code>AppFeature</code>: PAYMENTS, INVOICING, ARACHNID_ENABLED, VIDEOINTEL_ENABLED) are property-driven and need
+      a restart/redeploy. Per-tier gates, quotas, and business thresholds belong here in <code>platform_config</code>
+      and are admin-tunable at runtime. See the Boundary section above before adding a new toggle to either.</p>
+    </div>
+
+    <h2>Related Modules</h2>
+    <ul>
+      <li><a href="../security/index.html">Security</a> &mdash; <code>AgePolicyService</code> reads the U10/young-teen/teen age cutoffs from here.</li>
+      <li><a href="../booking/index.html">Booking</a> &mdash; reminder intervals, reliability-strike thresholds/expiry, and session-pack timing are all config-driven.</li>
+      <li><a href="../video/index.html">Video</a> &mdash; storage/bandwidth quotas per tier, moderation SLA/lock-timeout/retry limits, signed-URL TTL, drill video size/duration caps.</li>
+      <li><a href="../payment/index.html">Payment</a> &mdash; <code>platform.commission_rate</code> and reliability-strike/cash-out related thresholds.</li>
+      <li><a href="../marketplace/index.html">Marketplace</a> &mdash; coach-tier capability gates (drill library, session builder, video upload access per tier).</li>
+      <li><a href="../development/index.html">Development</a>, <a href="../reviews/index.html">Reviews</a>, <a href="../messaging/index.html">Messaging</a>, <a href="../admin/index.html">Admin</a>, <a href="../notification/index.html">Notification</a> &mdash; each injects <code>ConfigService</code> directly for scheduler intervals, retention windows, and alert thresholds specific to that module.</li>
+      <li><a href="../infrastructure/index.html">Infrastructure</a> &mdash; provides <code>BaseEntity</code>/persistence auditing and the adjacent (but distinct) <code>infrastructure.feature</code> toggle mechanism; see the Boundary section above.</li>
+      <li><a href="../index.html">Home</a></li>
+    </ul>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

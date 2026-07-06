@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin / Staff — Skillars Business Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Business Docs<small>Understand the product, persona by persona</small></a>
+    <nav>
+      <h4>Personas</h4>
+      <ul>
+        <li><a href="../player/index.html">Player</a></li>
+        <li><a href="../parent/index.html">Parent</a></li>
+        <li><a href="../coach/index.html">Coach</a></li>
+        <li><a href="../admin/index.html">Admin / Staff</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Admin / Staff</div>
+    <h1>Admin / Staff</h1>
+    <p class="subtitle">Internal Skillars staff — operations, trust &amp; safety, and platform partnerships. This page is scoped honestly: it covers what's actually clickable in the UI today, separately from what's real backend capability with no UI yet.</p>
+
+    <h2>Who this persona is</h2>
+    <p>Admin/staff accounts run the business behind the scenes: keeping the infrastructure healthy, managing external B2B integration partners, and — per the backend capability documented in the technical docs — moderating content, resolving disputes, enforcing coach reliability, and handling GDPR data requests. As of this build, only the first two have a real frontend; the rest are operated directly against the API (e.g. via internal tooling or direct API calls), not through a Skillars admin screen.</p>
+
+    <h2>What's actually in the UI today</h2>
+    <pre class="mermaid">
+flowchart LR
+    A["/admin/health-dashboard"] -->|"UP/DOWN + per-component detail"| B[Ops visibility]
+    C["/admin/tenants"] --> D["/admin/tenants/:tenantRef"]
+    D -->|"manage API keys, webhook config"| E[B2B partner integrations]
+    </pre>
+
+    <h3>1. System health</h3>
+    <ol>
+      <li><code>/admin/health-dashboard</code>: an overall UP/DOWN status pill, plus a card per backend component (database, cache, external providers, etc.) with status and detail rows. Non-admin users see only the overall pill with an "Admin access required" notice instead of component details.</li>
+    </ol>
+
+    <h3>2. Managing B2B tenants</h3>
+    <p><strong>Why it matters:</strong> a "tenant" here is <em>not</em> a club or organization using Skillars — it's an external business partner integrating with Skillars over API, authenticated by API key. This is a common naming trap; see the callout below.</p>
+    <ol>
+      <li><code>/admin/tenants</code>: a filterable, paginated table of tenants (filter by status: active/suspended/etc.) with a "Create Tenant" button.</li>
+      <li>Clicking a row opens <code>/admin/tenants/:tenantRef</code> — the detail/management screen for that specific partner (API key issuance/rotation, webhook configuration).</li>
+    </ol>
+
+    <h2>What's real but API-only (no admin UI yet)</h2>
+    <p>The backend fully supports the following — they're documented in depth in the technical docs — but there is currently no admin-facing screen for any of them:</p>
+    <div class="card-grid">
+      <div class="card"><h4>Trust &amp; safety moderation</h4><p>A unified moderation queue fed by reports from messaging, reviews, and video — real backend endpoints, no UI.</p></div>
+      <div class="card"><h4>Coach enforcement</h4><p>Reliability strikes, visibility reduction, and suspension for repeated late cancellations/no-shows.</p></div>
+      <div class="card"><h4>Dispute resolution</h4><p>Handling disputes raised over a booking.</p></div>
+      <div class="card"><h4>GDPR requests</h4><p>Data export and erasure requests — legally time-boxed, currently operated without a dedicated screen.</p></div>
+      <div class="card"><h4>Review moderation</h4><p>AI + flag-based moderation of coach reviews before they go public.</p></div>
+    </div>
+
+    <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout warn">
+      <p><strong>Don't promise a stakeholder a moderation/dispute/GDPR dashboard</strong> — none exists in the frontend today. If someone asks "where do I go to approve a GDPR erasure request," the honest answer is: nowhere in the UI yet — it's handled directly against the backend.</p>
+    </div>
+    <div class="callout">
+      <p><strong>"Tenant" means external API partner, not club/organization.</strong> There's no per-club multi-tenancy in Skillars — every coach/player/parent shares the same platform regardless of which club or program they belong to.</p>
+    </div>
+
+    <h2>Related Personas</h2>
+    <div class="card-grid">
+      <div class="card"><h4><a href="../coach/index.html">Coach</a></h4><p>Reliability enforcement and dispute resolution act on coach accounts, even though there's no admin screen for it yet.</p></div>
+      <div class="card"><h4><a href="../parent/index.html">Parent</a></h4><p>GDPR requests and content moderation most often originate from a parent's concerns about their child's data or safety.</p></div>
+    </div>
+    <p><a href="../index.html">&larr; Back to Home</a></p>
+
+    <footer class="page-footer">Skillars business documentation — generated for onboarding.</footer>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

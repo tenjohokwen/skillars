@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Infrastructure — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <nav>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../tenant/index.html">Tenant</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html" class="active">Infrastructure</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Infrastructure</div>
+    <h1>Infrastructure</h1>
+    <p class="subtitle">The shared, tenant-agnostic technical foundation every <code>platform.*</code> module is built on top of — not a business module itself, but the plumbing all of them share.</p>
+
+    <h2>Why This Layer Exists</h2>
+    <p>
+      <code>com.softropic.skillars.infrastructure</code> holds technical concerns that have nothing to do with any single
+      persona or business capability — object storage, outbound email, JWT/cookie handling, rate limiting, thread-pool
+      context propagation, the exception hierarchy, feature flags, validation annotations, and thin clients for external
+      providers (S3, AWS SES, Google Gemini, BunnyCDN, Google Video Intelligence, an arachnid CSAM-scanning provider).
+      None of this is "booking" or "marketplace" or "payment" logic; it is the kind of code that would otherwise get
+      copy-pasted into every module that needed it. Factoring it out here means there is exactly one place that knows
+      how to talk to S3, exactly one place that decides whether an email actually gets sent, and exactly one exception
+      base class every module's domain exceptions extend.
+    </p>
+    <p>
+      The architectural rule this layer enforces is: <strong>platform modules consume infrastructure through its public
+      API, they never reach past a sibling platform module into its private wiring</strong>. The canonical example is
+      <code>filestorage</code> and <code>blobstore</code>: every other platform module that needs to store a file
+      (profile photos, drill videos, chat attachments) calls <code>platform.filestorage</code>'s contract — it never
+      imports <code>infrastructure.blobstore.service.StorageService</code> directly. <code>filestorage</code> itself is
+      the only platform module allowed to depend on <code>blobstore</code>, because it adds the business rules
+      (quota, ownership, soft-delete/retention, DB-backed metadata) that raw blob storage doesn't know about. The same
+      shape repeats elsewhere in this layer: modules call <code>infrastructure.ses.SesEmailService</code>,
+      <code>infrastructure.feature.FeatureToggleService</code>, or <code>infrastructure.exception.ApplicationException</code>
+      directly (these genuinely are thin, stable, cross-cutting primitives with no business logic of their own to
+      wrap), but anything that has business rules layered on top of a raw technical capability — like blob storage —
+      gets its own platform-level wrapper module instead of being called directly.
+    </p>
+
+    <h2>Subpackage Reference</h2>
+    <div class="card-grid">
+      <div class="card"><h4>blobstore</h4><p>S3 / local-filesystem object storage abstraction. Wrapped exclusively by <code>platform.filestorage</code>.</p></div>
+      <div class="card"><h4>security</h4><p>Cross-cutting auth primitives: cookie helpers, rate limiting, tenant/request context, JWT/role constants, security error events.</p></div>
+      <div class="card"><h4>feature</h4><p>Simple properties-backed feature-toggle service (<code>features.*</code> config keys) gating payments, invoicing, arachnid, videointel.</p></div>
+      <div class="card"><h4>persistence</h4><p>JPA base classes (<code>BaseEntity</code>, <code>AbstractAuditingEntity</code>), TSID generation, Flyway schema check, audit listeners.</p></div>
+      <div class="card"><h4>ses</h4><p>AWS SES email sending, with a <code>NoOpSesEmailService</code> that silently swallows sends when disabled.</p></div>
+      <div class="card"><h4>sanitizer</h4><p>Regex-based redaction of emails/phone numbers from free text, used to strip contact info from user-generated content.</p></div>
+      <div class="card"><h4>threadpool</h4><p>Task decorators (MDC, tenant context) and executor wiring so <code>@Async</code>/detached threads keep logging and tenant identity.</p></div>
+      <div class="card"><h4>exception</h4><p><code>ApplicationException</code> — the base runtime exception (support-id, error code, log context) every module's own exceptions extend.</p></div>
+      <div class="card"><h4>video</h4><p><code>VideoProviderAdapter</code> contract plus the BunnyCDN implementation used for upload/playback/webhook handling.</p></div>
+      <div class="card"><h4>context</h4><p>Currently an empty placeholder package — no classes committed yet.</p></div>
+      <div class="card"><h4>gemini</h4><p>Thin client wrapping Google Gemini for text-content moderation, consumed by <code>messaging</code>'s moderation service.</p></div>
+      <div class="card"><h4>util</h4><p>Grab-bag of stateless helpers: <code>Constants</code>, <code>JsonUtil</code>, <code>TimeUtil</code>/<code>TimeGuru</code>, <code>ClockProvider</code>, <code>RandomUtil</code>, <code>PhoneNumberUtil</code>, <code>EnvUtil</code>.</p></div>
+      <div class="card"><h4>config</h4><p>App-wide Spring <code>@Configuration</code> classes: Jackson/ObjectMapper setup, async executor, datasource, JPA auditing, ShedLock, observability.</p></div>
+      <div class="card"><h4>web</h4><p>Servlet filters shared across the app: structured request-lifecycle logging and the tenant API-key authentication filter.</p></div>
+      <div class="card"><h4>videointel</h4><p>Client for Google Cloud Video Intelligence, used to flag explicit content in uploaded videos before publish.</p></div>
+      <div class="card"><h4>message</h4><p>Shared REST response/error DTO shapes (<code>Response</code>, <code>ErrorDto</code>, <code>ErrorMsg</code>, <code>Success</code>/<code>Failure</code>) returned by controllers app-wide.</p></div>
+      <div class="card"><h4>arachnid</h4><p>Client for a third-party CSAM (child sexual abuse material) hash-matching scanner, gating video publish before public availability.</p></div>
+      <div class="card"><h4>client</h4><p><code>AbstractClient</code> — shared RestTemplate wiring (timeouts, interceptors, JSON converters) that provider-specific clients extend.</p></div>
+      <div class="card"><h4>logging</h4><p>Small constant holders (<code>LogKeys</code>, <code>InventoryCode</code>) standardising structured-log field names across modules.</p></div>
+      <div class="card"><h4>validation</h4><p>Bean Validation annotations/validators: <code>@Phone</code>, <code>@Name</code>, <code>@LangIso2</code>, <code>@LocalDateWindow</code>, plus ISO language/phone helpers.</p></div>
+    </div>
+
+    <h3>blobstore</h3>
+    <p>
+      <code>infrastructure.blobstore</code> is the raw object-storage abstraction. The public contract is
+      <code>StorageService</code> (<code>put</code>/<code>get</code>/<code>delete</code>/<code>exists</code>/<code>stat</code>/<code>copy</code>),
+      backed by two implementations selected via <code>app.storage.provider</code>: <code>S3StorageService</code>
+      (default; retries transient <code>SdkException</code>s with exponential backoff via Spring Retry, sanitizes keys,
+      uses <code>S3TransferManager</code> for async uploads) and <code>LocalFileSystemStorageService</code> (dev-mode;
+      writes atomically via temp-file-then-move, and defends against path traversal by asserting the resolved path
+      still starts with the configured base directory). <code>StorageObject</code>/<code>StorageObjectMetadata</code>
+      are the return-type contracts, and <code>StorageObjectNotFoundException</code>/<code>StorageProviderException</code>
+      are the two checked failure modes, both mapped centrally in <code>ApiAdvice</code>. <code>BlobstoreProperties</code>
+      (<code>app.storage.*</code>) configures the bucket, presign/upload TTLs, retry policy, and a whole
+      <code>replication</code> sub-tree for cross-region backup. <strong>The only consumer is
+      <code>platform.filestorage</code></strong> — its <code>ReplicatedStorageService</code>, <code>FileStorageService</code>,
+      <code>DeletionSchedulerService</code>, and <code>StorageMigrationService</code> all depend on
+      <code>infrastructure.blobstore.service.StorageService</code>, and its <code>FileStorageConfig</code> wires up
+      the primary/backup <code>StorageService</code> beans by qualifier. Nothing outside <code>filestorage</code>
+      imports this package.
+    </p>
+
+    <h3>security</h3>
+    <p>
+      This package is cross-cutting security plumbing consumed by <em>every</em> module that touches an authenticated
+      request — it is distinct from (and depended on by) the business-facing <code>platform.security</code> module.
+      <code>SecurityConstants.java</code> is the single source of truth for role/authority strings
+      (<code>ROLE_ADMIN</code>, <code>ROLE_COACH</code>, <code>ROLE_PARENT</code>, <code>ROLE_PLAYER</code>, ...),
+      <code>@PreAuthorize</code> SpEL expression constants (<code>HAS_ADMIN_ROLE</code>, <code>HAS_COACH_ROLE</code>, ...),
+      cookie names (<code>JWT_COOKIE_NAME = "potc"</code>, <code>REFRESH_TOKEN_COOKIE = "rtkn"</code>,
+      <code>SKILLARS_PROFILE_COOKIE = "skp"</code>), and token TTLs (<code>JWT_TTL</code> = 15 min,
+      <code>REFRESH_TOKEN_TTL</code> = 7 days). <code>CookieUtil</code> centralizes cookie creation/removal so every
+      cookie gets consistent <code>Secure</code>/<code>SameSite</code>/<code>HttpOnly</code> handling based on the
+      current request's HTTPS status. <code>RateLimitingService</code> is a generic Bucket4j-backed token-bucket keyed
+      by <code>limitKey:identifier</code>, used by the <code>@RateLimited</code> annotation/aspect and directly by
+      modules needing ad-hoc throttling (login attempts, OTP resend). <code>TenantContext</code> is a
+      <code>ThreadLocal</code> holding the current tenant id for <code>/v1/**</code> API-key requests — set by
+      <code>web.ApiKeyAuthenticationFilter</code> and always cleared with <code>remove()</code> (never <code>set(null)</code>)
+      to avoid leaking identity across pooled threads. Also here: <code>RequestMetadataProvider</code>/<code>ClientContextProvider</code>
+      (current request's IP/HTTPS/locale), <code>RequestIdProvider</code>, and the <code>security.event</code>
+      sub-package (<code>BadCredentialsEvent</code>, <code>FraudEvent</code>, <code>PreAuthEvent</code>) that
+      <code>platform.security</code>'s audit listeners subscribe to.
+    </p>
+
+    <h3>feature</h3>
+    <p>
+      A deliberately minimal feature-toggle system: <code>AppFeature</code> is a closed enum
+      (<code>PAYMENTS</code>, <code>INVOICING</code>, <code>ARACHNID_ENABLED</code>, <code>VIDEOINTEL_ENABLED</code>) —
+      there is no dynamic/admin-editable toggle registry, every flag must be added to this enum first.
+      <code>FeatureProperties</code> binds a <code>features.*</code> map from application config, and
+      <code>PropertiesFeatureToggleService</code> (the only <code>FeatureToggleService</code> implementation) fails
+      fast at startup (<code>@PostConstruct</code>) if config defines a toggle key that isn't a known
+      <code>AppFeature</code>, and defaults an unset toggle to a caller-supplied default (or <code>false</code>).
+      Consumers call <code>featureToggleService.isEnabled(AppFeature.PAYMENTS)</code> rather than reading raw config —
+      <code>platform.security</code>'s <code>FeatureGatedException</code> path and the video moderation pipeline
+      (<code>ARACHNID_ENABLED</code>/<code>VIDEOINTEL_ENABLED</code>, gating whether CSAM/explicit-content scanning
+      actually runs) are the main consumers.
+    </p>
+
+    <h3>persistence</h3>
+    <p>
+      <code>BaseEntity</code> is the root <code>@MappedSuperclass</code> nearly every JPA entity in the codebase
+      extends: it supplies a <code>@Tsid</code>-generated <code>Long id</code> (time-sortable, unlike UUID, and cheaper
+      to index) plus generic <code>equals()</code>/<code>hashCode()</code> based on that id, so subclasses never need
+      to write their own. <code>AbstractAuditingEntity</code> extends it and adds Spring Data JPA auditing
+      (<code>createdBy</code>/<code>createdDate</code>/<code>lastModifiedBy</code>/<code>lastModifiedDate</code> via
+      <code>@CreatedBy</code>/<code>@CreatedDate</code>), Hibernate Envers (<code>@Audited</code>), a <code>status</code>
+      column (<code>EntityStatus</code>), plus <code>requestId</code>/<code>sessionId</code> columns populated by
+      <code>RequestIdAuditEntityListener</code> and <code>SessionIdAuditEntityListener</code> (in
+      <code>infrastructure.security</code>) so every row can be traced back to the request/session that wrote it.
+      <code>DbUtil.generateDbRandom()</code> is the TSID factory entry point used wherever a sortable random id is
+      needed outside JPA's own generator. <code>DbSchemaChecker</code> fails app startup if Flyway detects pending
+      migrations (only active when <code>custom.flyway.check-schema=true</code>). Every entity in every platform
+      module ultimately extends <code>BaseEntity</code> or <code>AbstractAuditingEntity</code>.
+    </p>
+
+    <h3>ses</h3>
+    <p>
+      <code>SesEmailService</code> is a one-method contract (<code>send(to, subject, htmlBody)</code>) with two
+      mutually-exclusive Spring-conditional implementations. <code>SesEmailServiceImpl</code> activates only when
+      <code>app.ses.enabled=true</code>, calling AWS SESv2 and wrapping SDK failures in <code>SesException</code>.
+      <code>NoOpSesEmailService</code> activates whenever <code>app.ses.enabled=false</code> <em>or the property is
+      simply absent</em> (<code>matchIfMissing = true</code>) — it just logs <code>"NoOp SES: email suppressed"</code>
+      and returns. This is the default in local/dev environments: no AWS credentials are needed and no real email
+      goes out, but callers get no error either, which is a common source of "why didn't my email arrive" confusion
+      during local testing. <code>SesConfig</code> only creates the <code>SesV2Client</code> bean when SES is enabled.
+      <code>platform.notification</code> is the primary consumer, sending through this interface rather than touching
+      the AWS SDK directly.
+    </p>
+
+    <h3>sanitizer</h3>
+    <p>
+      <code>ContactDetailSanitizer</code> is a single-purpose regex scrubber: it matches email addresses and
+      phone-number-shaped substrings in arbitrary text and replaces them with a fixed
+      <code>[contact details removed]</code> marker, returning a <code>SanitizerResult(sanitized, wasModified)</code>
+      record. This exists to stop users (particularly minors messaging coaches) from exchanging off-platform contact
+      details inside in-app messages, and to strip contact info from free-text fields at registration. It is used by
+      <code>platform.messaging</code> (message content) and <code>platform.security</code> (registration name/bio
+      fields, and exposed for manual testing via <code>/api/util/sanitize-preview</code>). <code>SanitizerConfig</code>
+      is an empty <code>@Configuration</code> marker with no beans of its own beyond component-scanning the sanitizer.
+    </p>
+
+    <h3>threadpool</h3>
+    <p>
+      Solves one recurring problem: Spring's <code>@Async</code> and manually-submitted executor tasks run on a
+      different thread than the one that submitted them, so thread-local context (logging MDC, tenant identity) does
+      not automatically follow. <code>MdcDecorator</code> (a <code>TaskDecorator</code>) captures the caller thread's
+      MDC via <code>ClientThreadContext</code>, restores it on the worker thread, and — critically — merges the
+      worker's stack trace with the caller's captured stack (via <code>ExecutorExceptionHandler.mergeStacks</code>) on
+      exception, so a stack trace from a detached thread still shows where the task was originally submitted.
+      <code>TenantContextTaskDecorator</code> does the analogous thing for <code>infrastructure.security.TenantContext</code>,
+      capturing the tenant id at submission time and setting/clearing it around the task body. Both are composed
+      together in <code>infrastructure.config.AsyncConfig</code>'s <code>taskExecutor</code> bean (distinct from
+      <code>platform.notification</code>'s own <code>sendMailPool</code> executor). Any module using
+      <code>@Async</code> or submitting work to a shared pool should be aware its task runs through this decorator
+      chain, not with a fresh, empty context.
+    </p>
+
+    <h3>exception</h3>
+    <p>
+      <code>ApplicationException</code> is the base <code>RuntimeException</code> that essentially all custom
+      exceptions across every platform module extend (directly or via an intermediate per-module base like
+      <code>MarketplaceException</code> or <code>SecException</code>). On construction it generates a short,
+      user-shareable <code>supportId</code> (a Sqids-encoded hash of a random UUID — not a raw UUID, so it's compact
+      and support-desk friendly), and its overridden <code>getMessage()</code> appends
+      <code>SUPPORT_ID: ..., ERROR_CODE: ..., MESSAGE: ...</code> to whatever message the subclass passed in, so the
+      support id is always present in logs even if a caller only logs <code>ex.getMessage()</code>. It optionally
+      carries an <code>ErrorCode</code> (a marker interface most modules implement as an enum, e.g.
+      <code>ApplicationError.ENTITY_NOT_FOUND</code>) and a free-form <code>logContext</code> map for structured
+      logging. <code>ResourceNotFoundException</code> is the one concrete subclass defined here, used for generic
+      "not found" cases outside a specific module's own not-found exception. <code>AppSetupException</code> and
+      <code>ConsumerNotFoundException</code> round out the package. Every module's own exception hierarchy
+      (<code>MarketplaceException</code>, <code>BookingStateTransitionException</code>, <code>SecException</code> and
+      its subclasses, <code>QuotaExceededException</code>, etc.) extends <code>ApplicationException</code> so that
+      <code>ApiAdvice</code> can uniformly pull <code>supportId</code> and <code>logContext</code> off any caught
+      exception without knowing its concrete type.
+    </p>
+
+    <h2>Key Flows</h2>
+
+    <h3>Storing a file: platform module → filestorage → blobstore</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant M as Platform module (e.g. video, security)
+  participant FS as platform.filestorage.FileStorageService
+  participant SS as infrastructure.blobstore.StorageService
+  participant P as S3 / LocalFileSystem
+
+  M->>FS: signUpload(request) / confirmUpload(key, meta)
+  FS->>FS: check quota, validate content type/size
+  FS->>SS: put(key, data, contentLength, contentType)
+  SS->>P: upload (retries on SdkException, exponential backoff)
+  P-->>SS: success / NoSuchKeyException
+  SS-->>FS: void or StorageObjectNotFoundException / StorageProviderException
+  FS->>FS: persist FileStorageObject row (key, owner, status)
+  FS-->>M: StorageObjectDto
+    </pre>
+    <p>
+      No platform module other than <code>filestorage</code> ever imports
+      <code>infrastructure.blobstore.service.StorageService</code> directly — <code>filestorage</code> is where
+      quota checks, content-type/size validation, ownership, and the DB-backed <code>FileStorageObject</code> record
+      live, all of which raw blob storage knows nothing about. If a new module needs to store an image or video, it
+      should depend on <code>platform.filestorage</code>'s contract, not add a new dependency on
+      <code>infrastructure.blobstore</code>. Both <code>StorageObjectNotFoundException</code> and
+      <code>StorageProviderException</code> bubble up through <code>filestorage</code> unchanged and are mapped to
+      404/502 centrally in <code>platform.security.api.ApiAdvice</code>.
+    </p>
+
+    <h3>Exception → global error response</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant C as Controller (any module)
+  participant S as Service (any module)
+  participant AE as ApplicationException subclass
+  participant Advice as platform.security.api.ApiAdvice
+  participant Client as HTTP client
+
+  C->>S: business call
+  S->>S: validation / state check fails
+  S->>AE: throw new XyzException(msg, errorCode)
+  AE->>AE: generate supportId (Sqids), attach logContext
+  AE-->>Advice: propagates up as uncaught RuntimeException
+  Advice->>Advice: @ExceptionHandler matches concrete exception type
+  Advice->>Advice: log.error(msg, logContext, throwable) with supportId
+  Advice-->>Client: ErrorDto{helpCode, errorMsg} + mapped HTTP status
+    </pre>
+    <p>
+      <code>ApiAdvice</code> has one <code>@ExceptionHandler</code> per concrete exception type it knows about
+      (<code>ResourceNotFoundException</code> &rarr; 404, <code>StorageProviderException</code> &rarr; 502,
+      <code>QuotaExceededException</code> &rarr; 429, <code>BookingStateTransitionException</code> &rarr; 409, and so
+      on), but the logging path is generic: its private <code>logError</code> helper checks
+      <code>instanceof ApplicationException</code> and, when true, pulls the pre-generated <code>supportId</code> and
+      <code>logContext</code> straight off the exception rather than minting a new one. This is why every module's
+      exceptions extend <code>ApplicationException</code> instead of raw <code>RuntimeException</code> — it's what
+      lets one advice class produce a consistent <code>ErrorDto</code>/support-id pair for exceptions it has never
+      seen a specific handler for, falling through to the generic <code>Throwable</code> handler as a last resort.
+    </p>
+
+    <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout warn">
+      <p><strong>Never call <code>infrastructure.blobstore</code> directly from another platform module.</strong>
+      Always go through <code>platform.filestorage</code>. <code>blobstore</code> has no concept of ownership, quota,
+      or soft-delete — those business rules live in <code>filestorage</code>, and bypassing it means those rules
+      silently don't apply to whatever you stored.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Emails are silently suppressed in most local/dev setups.</strong> <code>NoOpSesEmailService</code>
+      activates whenever <code>app.ses.enabled</code> is <code>false</code> <em>or unset</em> — there is no error, no
+      exception, just a log line ("NoOp SES: email suppressed"). If a verification email or notification "isn't
+      arriving" during local development, check for that log line before assuming a bug in the sending code.</p>
+    </div>
+    <div class="callout">
+      <p><strong>All custom exceptions should extend <code>ApplicationException</code>, not raw <code>RuntimeException</code>.</strong>
+      Doing so gets you a support id, structured log context, and automatic pickup by <code>ApiAdvice</code>'s generic
+      logging path for free. Bypassing it means support tickets reference a support id that was never generated.</p>
+    </div>
+    <div class="callout">
+      <p><strong>New feature flags must be added to the <code>AppFeature</code> enum before they can be configured.</strong>
+      <code>PropertiesFeatureToggleService</code> fails application startup if <code>features.*</code> config defines
+      a key that isn't a known enum constant — there is no free-text/dynamic toggle namespace.</p>
+    </div>
+    <div class="callout">
+      <p><strong><code>TenantContext</code> and MDC are <code>ThreadLocal</code>s cleared with <code>remove()</code>, never <code>set(null)</code>.</strong>
+      Servlet containers and thread pools reuse threads across requests; anything that manually spawns a thread or
+      submits to an executor outside the decorated <code>taskExecutor</code> bean must clear these explicitly or risk
+      leaking one request's tenant/user context into another's logs.</p>
+    </div>
+    <div class="callout">
+      <p><strong><code>BaseEntity</code>/<code>AbstractAuditingEntity</code> already implement <code>equals()</code>/<code>hashCode()</code> by id.</strong>
+      Don't override them in subclasses unless you have a specific reason — doing so inconsistently across entities is
+      a common source of subtle JPA collection/dedup bugs.</p>
+    </div>
+
+    <h2>Consumed By</h2>
+    <ul>
+      <li><a href="../security/index.html">Security</a> — the heaviest consumer by far; depends on cookie/rate-limiting/tenant-context helpers, <code>SecurityConstants</code>, and its own exception hierarchy extends <code>ApplicationException</code>.</li>
+      <li><a href="../video/index.html">Video</a> — consumes the <code>video</code>, <code>arachnid</code>, <code>videointel</code>, and <code>gemini</code> provider adapters for upload/playback and content-moderation scanning.</li>
+      <li><a href="../filestorage/index.html">Filestorage</a> — the sole consumer of <code>blobstore</code>; also uses <code>persistence</code> base entities and the exception hierarchy.</li>
+      <li><a href="../booking/index.html">Booking</a> and <a href="../session/index.html">Session</a> — heavy users of <code>persistence</code> base entities, <code>threadpool</code>-decorated async work, and <code>ApplicationException</code> subclassing.</li>
+      <li><a href="../payment/index.html">Payment</a> — uses <code>client.AbstractClient</code> for outbound provider HTTP calls and the <code>feature</code> toggle service (<code>PAYMENTS</code>/<code>INVOICING</code>).</li>
+      <li><a href="../messaging/index.html">Messaging</a> — uses <code>sanitizer</code> for contact-detail redaction and <code>gemini</code> for moderation.</li>
+      <li><a href="../notification/index.html">Notification</a> — the primary consumer of <code>ses</code> for outbound email.</li>
+      <li><a href="../admin/index.html">Admin</a> — consumes security/persistence primitives for cross-cutting admin operations.</li>
+      <li><a href="../index.html">Home</a></li>
+    </ul>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

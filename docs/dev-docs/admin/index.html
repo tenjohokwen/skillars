@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <nav>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../tenant/index.html">Tenant</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Admin</div>
+    <h1>Admin</h1>
+    <p class="subtitle">Admin-only tooling for trust &amp; safety moderation, coach enforcement, dispute resolution, and GDPR data-subject requests.</p>
+
+    <h2>Business Overview</h2>
+    <p>
+      Skillars is a two-sided marketplace connecting minors (Players), their Parents, and Coaches, so the platform
+      needs a back office that lets <strong>Admins</strong> keep the marketplace safe and legally compliant without
+      touching the consumer-facing apps. The <code>admin</code> module is that back office. It is the only module in
+      the codebase whose endpoints are almost entirely gated behind <code>SecurityConstants.HAS_ADMIN_ROLE</code> —
+      everything here is a tool for internal staff, surfaced through a separate admin console.
+    </p>
+    <p>
+      The module solves four related problems:
+    </p>
+    <p class="subtitle">
+      <span class="tag">Moderation queue</span>
+      <span class="tag">Coach enforcement</span>
+      <span class="tag">Dispute resolution</span>
+      <span class="tag">GDPR requests</span>
+    </p>
+    <p>
+      <strong>1. Unified moderation queue.</strong> Reported messages, reported conversations, flagged reviews, coach
+      strike thresholds, and raised disputes all originate in other modules (messaging, reviews, payment, admin
+      itself). Rather than making admins hunt across five different screens, <code>AdminAlertEventListener</code>
+      listens for the domain events those modules publish and inserts a single <code>AdminAlert</code> row per
+      incident. <code>AdminQueueService</code> then serves one paginated, filterable "queue" backed by that table.
+      Only <code>status=OPEN</code> alerts are currently exposed — the API rejects any other status filter.
+    </p>
+    <p>
+      <strong>2. Coach enforcement.</strong> Coaches accumulate reliability strikes (no-shows, unexcused
+      cancellations) from the <code>payment</code> module's <code>ReliabilityStrikeService</code>. When a coach
+      crosses the visibility threshold (default 3 strikes / 30 days) their profile is downgraded; crossing the
+      suspension threshold (default 5 strikes / 30 days, enforced upstream in <code>payment</code>) triggers a
+      <code>StrikeThresholdReachedEvent</code> that lands in the admin queue. From there an admin can inspect the
+      coach's strike and cancellation history, suspend the coach (auto-cancelling their pending bookings and
+      publishing refund-triggering events), reinstate them, or manually issue/void a strike.
+    </p>
+    <p>
+      <strong>3. Dispute resolution.</strong> A Parent or Player can raise a dispute against a completed/cancelled
+      booking (e.g. coach no-show, safety concern) within a configurable submission window (default 14 days,
+      <code>disputes.submissionWindowDays</code>). An admin reviews the dispute alongside the booking's payment
+      breakdown and the coach's cancellation history, then resolves it with one of four outcomes — full credit,
+      partial credit, no action, or a formal coach warning — or dismisses it outright.
+    </p>
+    <div class="callout warn">
+      <p><strong>GDPR is a legal deadline, not a nice-to-have.</strong> <code>GdprRequestService</code> lets any
+      authenticated user request an export or erasure of their personal data (GDPR Articles 15 &amp; 17). Erasure
+      hard-deletes messages, deletes/anonymises reviews, cascades through every development-tracking table
+      (SLU snapshots, radar assessments, performance reports, timelines, homework), revokes all refresh tokens, and
+      anonymises the core user record. Exports are built as a signed, time-limited ZIP download. Both are
+      processed asynchronously <em>after</em> the request is accepted — get the async wiring wrong and you silently
+      miss the regulatory deadline.</p>
+    </div>
+
+    <h2>Technical Overview</h2>
+    <h3>Package layout</h3>
+    <table>
+      <thead><tr><th>Package</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>admin.api</code></td><td>REST controllers: admin-only moderation/enforcement/dispute/GDPR-listing endpoints, plus two end-user-facing controllers (<code>DisputeResource</code>, <code>GdprResource</code>) for raising disputes and requesting export/erasure.</td></tr>
+        <tr><td><code>admin.service</code></td><td>Business logic: alert ingestion, coach enforcement, message/conversation/review moderation, dispute lifecycle, GDPR request intake, export building, and erasure.</td></tr>
+        <tr><td><code>admin.repo</code></td><td>JPA entities and Spring Data repositories: audit log, moderation queue alerts, disputes, GDPR requests, review moderation log.</td></tr>
+        <tr><td><code>admin.contract</code></td><td>Request/response DTOs, enums (alert/action types and statuses), and the domain events this module publishes and consumes.</td></tr>
+        <tr><td><code>admin.config</code></td><td>Platform-wide <code>@ConfigurationProperties</code> (<code>skillars.platform.*</code>) and a <code>Cryptopher</code> bean for provider-PIN encryption; not admin-domain logic, just where the shared platform config bean happens to live.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Key entities &amp; tables</h3>
+    <table>
+      <thead><tr><th>Entity</th><th>Table</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>AdminActionLog</code></td><td><code>admin.admin_action_log</code></td><td>Immutable audit trail of every admin action (who, what type, against which reference, why).</td></tr>
+        <tr><td><code>AdminAlert</code></td><td><code>admin.admin_alerts</code></td><td>Backs the unified moderation queue: one row per reported/flagged/thresholded incident, deduplicated per (referenceId, type, OPEN).</td></tr>
+        <tr><td><code>Dispute</code></td><td><code>admin.disputes</code></td><td>A booking dispute raised by a parent/player through to admin resolution; optimistic-locked (<code>@Version</code>).</td></tr>
+        <tr><td><code>GdprRequest</code></td><td><code>admin.gdpr_requests</code></td><td>Tracks a single EXPORT or ERASURE request through PENDING → PROCESSING → COMPLETED/FAILED, with a signed download URL and expiry for exports.</td></tr>
+        <tr><td><code>ReviewModerationLog</code></td><td><code>reviews.review_moderation_log</code></td><td>Audit trail for review approve/block decisions. Lives in the <code>admin.repo</code> package but is mapped into the <code>reviews</code> schema.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Key services</h3>
+    <table>
+      <thead><tr><th>Service</th><th>Orchestrates</th></tr></thead>
+      <tbody>
+        <tr><td><code>AdminAlertEventListener</code></td><td>Consumes <code>MessageReportedEvent</code>, <code>ConversationReportedEvent</code>, <code>ReviewFlaggedEvent</code>, <code>StrikeThresholdReachedEvent</code>, <code>DisputeRaisedEvent</code> and writes deduplicated <code>AdminAlert</code> rows, tolerating a race on the unique index.</td></tr>
+        <tr><td><code>AdminQueueService</code></td><td>Serves the paginated moderation queue and the open-alert-count summary, resolving a human-readable summary line per alert type by looking up the source record.</td></tr>
+        <tr><td><code>AdminMessageService</code> / <code>AdminConversationService</code></td><td>Message- and conversation-level moderation: view detail with surrounding context, approve/block a message, unblock a conversation, resolve the related reports/alerts, and push live SSE notifications via <code>MessagingEmitterRegistry</code>.</td></tr>
+        <tr><td><code>AdminReviewService</code></td><td>Serves the review moderation queue and approves/blocks flagged reviews, resolving open flags and triggering <code>CoachRatingService.recompute</code> when a rating-relevant transition occurs.</td></tr>
+        <tr><td><code>AdminCoachEnforcementService</code></td><td>Coach enforcement profile, suspend (cancels pending bookings + publishes cancellation/notification events), reinstate, manual strike issue/delete with automatic status reversion when strikes drop back under the visibility threshold.</td></tr>
+        <tr><td><code>DisputeService</code></td><td>Raise (eligibility + time-window checks), fetch (owner-scoped and admin-scoped views), resolve (credit-wallet ledger entries per resolution type), and dismiss disputes.</td></tr>
+        <tr><td><code>GdprRequestService</code></td><td>Intake for export/erasure requests: prevents duplicate in-flight requests, blocks erasure while an export is in flight, blocks coach erasure while active bookings exist; lists requests for admins.</td></tr>
+        <tr><td><code>GdprExportService</code></td><td>Builds a ZIP (profile, bookings, payments, messages, reviews, disputes) via Jackson, stores it through <code>FileStorageService</code>, and issues a signed, time-limited download URL.</td></tr>
+        <tr><td><code>GdprErasureService</code></td><td>Anonymises/hard-deletes personal data across security, messaging, reviews, and development modules; revokes refresh tokens; publishes <code>UserErasedEvent</code> and <code>AccountDeletionRequestedEvent</code> for downstream cascades.</td></tr>
+        <tr><td><code>GdprEventListener</code></td><td><code>AFTER_COMMIT</code> bridge that triggers <code>GdprExportService</code>/<code>GdprErasureService</code> once the originating request row has actually committed, since both are heavy, independently-transacted operations.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>REST endpoints</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr></thead>
+      <tbody>
+        <tr><td>GET</td><td><code>/api/admin/coaches/{coachId}/enforcement</code></td><td>Coach enforcement profile (strikes, cancellations, open alerts)</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/coaches/{coachId}/suspend</code></td><td>Suspend a coach</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/coaches/{coachId}/reinstate</code></td><td>Reinstate a suspended/pending-review coach</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/coaches/{coachId}/strikes</code></td><td>Issue a manual reliability strike</td><td>ADMIN</td></tr>
+        <tr><td>DELETE</td><td><code>/api/admin/coaches/{coachId}/strikes/{strikeId}</code></td><td>Delete/void a strike (may auto-reinstate the coach)</td><td>ADMIN</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/coaches</code></td><td>List coaches currently under enforcement (paged, status filter)</td><td>ADMIN</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/disputes/{disputeId}</code></td><td>Full admin dispute detail (booking, payment split, coach history)</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/disputes/{disputeId}/resolve</code></td><td>Resolve a dispute (credit/warning outcome)</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/disputes/{disputeId}/dismiss</code></td><td>Dismiss a dispute with a reason</td><td>ADMIN</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/gdpr/requests</code></td><td>List GDPR export/erasure requests (filter by type/status)</td><td>ADMIN</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/queue</code></td><td>Unified moderation queue (status=OPEN only)</td><td>ADMIN</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/queue/summary</code></td><td>Open-alert counts by type</td><td>ADMIN</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/messages/{messageId}</code></td><td>Message detail with surrounding conversation context</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/messages/{messageId}/approve</code></td><td>Approve a held message</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/messages/{messageId}/block</code></td><td>Block a message</td><td>ADMIN</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/conversations/{conversationId}</code></td><td>Conversation detail with all messages and reports</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/conversations/{conversationId}/unblock</code></td><td>Unblock a conversation and resolve its reports</td><td>ADMIN</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/reviews/queue</code></td><td>Reviews currently UNDER_REVIEW, with flags</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/reviews/{reviewId}/approve</code></td><td>Approve a flagged review</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/reviews/{reviewId}/block</code></td><td>Block a flagged review</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/disputes</code></td><td>Raise a dispute against a booking</td><td>Authenticated (Parent/Player)</td></tr>
+        <tr><td>GET</td><td><code>/api/disputes/{disputeId}</code></td><td>View a dispute you raised</td><td>Authenticated, owner-only</td></tr>
+        <tr><td>POST</td><td><code>/api/gdpr/export</code></td><td>Request a personal-data export</td><td>Authenticated</td></tr>
+        <tr><td>GET</td><td><code>/api/gdpr/export/{requestId}</code></td><td>Check export status; 302-redirects to the signed download once ready</td><td>Authenticated, owner-only</td></tr>
+        <tr><td>POST</td><td><code>/api/gdpr/erasure</code></td><td>Request account erasure</td><td>Authenticated</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Domain events</h3>
+    <table>
+      <thead><tr><th>Event</th><th>Direction</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>MessageReportedEvent</code>, <code>ConversationReportedEvent</code></td><td>Consumed (from <code>messaging</code>)</td><td>Create MESSAGE_REPORT / CONVERSATION_REPORT alerts.</td></tr>
+        <tr><td><code>ReviewFlaggedEvent</code></td><td>Consumed (from <code>reviews</code>)</td><td>Creates a REVIEW_FLAG alert.</td></tr>
+        <tr><td><code>StrikeThresholdReachedEvent</code></td><td>Consumed (from <code>payment</code>)</td><td>Creates a STRIKE_THRESHOLD alert.</td></tr>
+        <tr><td><code>DisputeRaisedEvent</code></td><td>Published &amp; consumed (internal)</td><td><code>DisputeService</code> publishes it; <code>AdminAlertEventListener</code> consumes it to raise a DISPUTE_RAISED alert.</td></tr>
+        <tr><td><code>DisputeResolvedEvent</code>, <code>CoachWarningIssuedEvent</code></td><td>Published</td><td>Emitted on dispute resolution; a COACH_WARNING resolution additionally issues a coach warning event.</td></tr>
+        <tr><td><code>CoachSuspendedEvent</code>, <code>CoachSuspensionNotificationEvent</code>, <code>CoachReinstatedEvent</code></td><td>Published</td><td>Emitted by <code>AdminCoachEnforcementService</code> around suspend/reinstate actions.</td></tr>
+        <tr><td><code>BookingCancelledByAdminEvent</code></td><td>Published (to <code>booking</code>/<code>payment</code>)</td><td>One per booking auto-cancelled when a coach is suspended, carrying the price so payment can refund it.</td></tr>
+        <tr><td><code>GdprExportRequestedEvent</code>, <code>GdprErasureRequestedEvent</code></td><td>Published &amp; consumed (internal, <code>AFTER_COMMIT</code>)</td><td><code>GdprRequestService</code> publishes; <code>GdprEventListener</code> consumes post-commit to kick off the actual export/erasure work.</td></tr>
+        <tr><td><code>GdprExportReadyEvent</code></td><td>Published</td><td>Fired once the export ZIP is stored and the signed URL is ready.</td></tr>
+        <tr><td><code>UserErasedEvent</code>, <code>AccountDeletionRequestedEvent</code></td><td>Published (to <code>security</code>)</td><td>Fired at the end of erasure so security-side cascades (sessions, linked accounts) can react.</td></tr>
+        <tr><td><code>ReviewModerationResolvedEvent</code></td><td>Published (to <code>reviews</code>)</td><td>Fired on review approve/block, in addition to the direct <code>CoachRatingService.recompute</code> call.</td></tr>
+      </tbody>
+    </table>
+    <p>
+      This module leans heavily on other platform modules: <strong>security</strong> for the current principal,
+      role checks, and the user/player/refresh-token data erasure touches; <strong>booking</strong> for the bookings
+      being disputed or auto-cancelled; <strong>marketplace</strong> for coach profiles, pricing, and reliability
+      strikes; <strong>payment</strong> for the reliability-strike engine, credit-wallet refunds, and cancellation
+      history; <strong>messaging</strong> and <strong>reviews</strong> for the content actually being moderated;
+      <strong>development</strong> and <strong>session</strong> purely as GDPR-erasure cascade targets;
+      <strong>filestorage</strong> for storing/deleting the GDPR export ZIP; and <strong>config</strong> for every
+      tunable threshold and window used here. From <code>infrastructure</code> it only uses the shared
+      <code>security</code> constants/errors, the generic <code>exception</code> types, and <code>feature</code>
+      flag properties — it does not talk to blob storage directly, going through <code>filestorage</code> instead.
+    </p>
+
+    <h2>Key Flows</h2>
+
+    <h3>Coach enforcement: strike threshold to suspension</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Payment as payment.ReliabilityStrikeService
+  participant Listener as AdminAlertEventListener
+  participant Alerts as AdminAlert (DB)
+  participant Admin as Admin (console)
+  participant Enforce as AdminCoachEnforcementService
+  participant Booking as booking.BookingRepository
+  Payment->>Listener: StrikeThresholdReachedEvent(coachId)
+  Listener->>Alerts: insert STRIKE_THRESHOLD alert (dedup on OPEN)
+  Admin->>Enforce: GET /api/admin/coaches/{coachId}/enforcement
+  Enforce-->>Admin: profile + strike history + cancellation history
+  Admin->>Enforce: POST /api/admin/coaches/{coachId}/suspend
+  Enforce->>Booking: findByCoachIdAndStatus(REQUESTED)
+  Enforce->>Booking: cancel each pending booking
+  Enforce-->>Payment: publish BookingCancelledByAdminEvent (per booking)
+  Enforce-->>Admin: publish CoachSuspendedEvent, CoachSuspensionNotificationEvent
+  Enforce->>Alerts: write AdminActionLog(COACH_SUSPEND)
+    </pre>
+    <p>
+      A coach who racks up unexcused cancellations or no-shows accumulates reliability strikes in the
+      <code>payment</code> module. Once the configured threshold is crossed, <code>StrikeThresholdReachedEvent</code>
+      lands the coach in the moderation queue as a deduplicated <code>AdminAlert</code>. An admin opens the coach's
+      enforcement profile to review strike and cancellation history, then suspends the coach. Suspension is not
+      just a status flip: every pending (<code>REQUESTED</code>) booking for that coach is cancelled server-side and
+      a <code>BookingCancelledByAdminEvent</code> is published per booking so the payment module can refund the
+      parent. Every action — suspend, reinstate, manual strike, strike deletion — is written to
+      <code>AdminActionLog</code> for audit purposes.
+    </p>
+
+    <h3>Dispute resolution</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Parent as Parent/Player
+  participant DisputeApi as DisputeResource
+  participant DisputeSvc as DisputeService
+  participant Listener as AdminAlertEventListener
+  participant Admin as Admin (console)
+  participant Wallet as payment.CreditWalletService
+  Parent->>DisputeApi: POST /api/disputes {bookingId, reason, details}
+  DisputeApi->>DisputeSvc: raiseDispute(...)
+  DisputeSvc->>DisputeSvc: check eligible status + owner + submission window
+  DisputeSvc-->>Listener: publish DisputeRaisedEvent
+  Listener->>Listener: insert DISPUTE_RAISED alert
+  Admin->>DisputeSvc: GET /api/admin/disputes/{disputeId}
+  DisputeSvc-->>Admin: booking + payment split + coach cancellation history
+  Admin->>DisputeSvc: POST /api/admin/disputes/{disputeId}/resolve {resolution, creditAmount}
+  DisputeSvc->>Wallet: writeLedgerEntry(BOOKING_REFUND) (if credit resolution)
+  DisputeSvc-->>Admin: publish DisputeResolvedEvent (+ CoachWarningIssuedEvent if COACH_WARNING)
+    </pre>
+    <p>
+      A Parent or Player can dispute a booking only if it is in an eligible terminal status (completed, cancelled,
+      or no-show) and only within the configurable submission window (default 14 days). Raising a dispute both
+      creates a <code>Dispute</code> row and publishes <code>DisputeRaisedEvent</code>, which the same alert listener
+      used for coach enforcement turns into a queue entry. An admin resolves the dispute with one of four outcomes:
+      <code>FULL_CREDIT</code> and <code>PARTIAL_CREDIT</code> write a refund ledger entry via
+      <code>CreditWalletService</code>, <code>NO_ACTION</code> does nothing financially, and
+      <code>COACH_WARNING</code> optionally issues a partial credit alongside a formal warning event to the coach.
+      Disputes are optimistically locked and can only be resolved or dismissed once.
+    </p>
+
+    <h3>GDPR erasure request</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant User as Authenticated user
+  participant GdprApi as GdprResource
+  participant ReqSvc as GdprRequestService
+  participant EventListener as GdprEventListener
+  participant EraseSvc as GdprErasureService
+  User->>GdprApi: POST /api/gdpr/erasure
+  GdprApi->>ReqSvc: requestErasure(userId)
+  ReqSvc->>ReqSvc: reject if pending export/erasure or active coach bookings
+  ReqSvc-->>GdprApi: GdprRequest(PENDING) + GdprErasureRequestedEvent
+  Note over ReqSvc,EventListener: event delivered AFTER_COMMIT
+  EventListener->>EraseSvc: erase(requestId, userId)
+  EraseSvc->>EraseSvc: anonymise user, hard-delete messages
+  EraseSvc->>EraseSvc: delete/anonymise reviews, cascade development data
+  EraseSvc->>EraseSvc: revoke refresh tokens, mark request COMPLETED
+  EraseSvc-->>User: publish UserErasedEvent, AccountDeletionRequestedEvent
+    </pre>
+    <p>
+      Erasure requests are validated before acceptance — you cannot request erasure while an export is mid-flight,
+      and a coach with active (<code>REQUESTED</code>/<code>ACCEPTED</code>) bookings cannot be erased outright.
+      Once accepted, the actual erasure runs in its own <code>REQUIRES_NEW</code> transaction, triggered only
+      <em>after</em> the request record commits, so a crash mid-erasure cannot silently leave the request stuck at
+      <code>PENDING</code> — the listener catches the failure and marks the request <code>FAILED</code> in a fresh
+      transaction. Erasure is deliberately asymmetric: messages are hard-deleted (satisfying Article 17), but
+      already-<code>APPROVED</code> reviews are anonymised rather than deleted so aggregate coach ratings stay
+      intact.
+    </p>
+
+    <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout warn">
+      <p><strong>GDPR export links expire.</strong> <code>GdprExportService</code> signs the download URL for a
+      configurable window (default 48h, <code>gdpr.export.urlExpiryHours</code>). <code>GdprRequestService</code>
+      returns HTTP 410 Gone once <code>expiresAt</code> has passed, and <code>GdprErasureService</code> deletes any
+      previously completed export ZIPs from storage as part of erasure. Do not assume a download URL from an old
+      <code>AdminGdprRequestDto</code> is still valid.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>GDPR event listeners must never be <code>@Transactional</code>.</strong>
+      <code>GdprEventListener</code> uses <code>@TransactionalEventListener(phase = AFTER_COMMIT)</code> precisely
+      because no surrounding transaction exists at that point — the erasure/export services open their own
+      transactions. If <code>erase()</code> throws, the listener calls <code>markFailed()</code> in a brand-new
+      <code>REQUIRES_NEW</code> transaction so the FAILED status is durable even though the erasure transaction
+      rolled back.</p>
+    </div>
+    <div class="callout">
+      <p><strong>The moderation queue only shows OPEN alerts.</strong> <code>AdminModerationResource.getQueue</code>
+      returns HTTP 400 for any <code>status</code> other than <code>OPEN</code> — there is no "resolved" queue view
+      yet. Alerts are deduplicated per <code>(referenceId, type, OPEN)</code>; re-reporting an already-open message
+      does not create a second alert, and a <code>DataIntegrityViolationException</code> from a concurrent insert
+      race is swallowed intentionally.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Strike deletion can silently reinstate a coach.</strong> <code>deleteStrike</code> recomputes the
+      coach's active-strike count after deletion; if it drops back under the visibility threshold and the coach is
+      currently <code>PENDING_REVIEW</code> or <code>REDUCED</code>, the coach is automatically flipped back to
+      <code>ACTIVE</code> and the open STRIKE_THRESHOLD alert is resolved as a side effect — this is not a separate
+      "reinstate" call.</p>
+    </div>
+    <div class="callout">
+      <p><strong><code>ReviewModerationLog</code> lives in the wrong schema on purpose.</strong> It is defined in
+      <code>admin.repo</code> alongside the other audit entities, but is mapped to <code>@Table(schema = "reviews")</code>
+      because it is conceptually part of the reviews domain. Don't be surprised when it doesn't show up under the
+      <code>admin</code> schema in the database.</p>
+    </div>
+
+    <h2>Related Modules</h2>
+    <div class="card-grid">
+      <div class="card"><h4><a href="../security/index.html">Security</a></h4><p>Current principal/role resolution, user/player/refresh-token records touched by GDPR erasure.</p></div>
+      <div class="card"><h4><a href="../booking/index.html">Booking</a></h4><p>Bookings that are disputed, or auto-cancelled when a coach is suspended.</p></div>
+      <div class="card"><h4><a href="../marketplace/index.html">Marketplace</a></h4><p>Coach profiles, pricing, and reliability-strike records enforcement acts on.</p></div>
+      <div class="card"><h4><a href="../payment/index.html">Payment</a></h4><p>Reliability-strike engine, dispute credit refunds via the credit wallet, cancellation history.</p></div>
+      <div class="card"><h4><a href="../messaging/index.html">Messaging</a></h4><p>Reported messages/conversations moderated through this module's queue.</p></div>
+      <div class="card"><h4><a href="../reviews/index.html">Reviews</a></h4><p>Flagged reviews moderated here; rating recompute triggered on approve/block.</p></div>
+      <div class="card"><h4><a href="../development/index.html">Development</a></h4><p>SLU/radar/performance data cascade-deleted during GDPR player erasure.</p></div>
+      <div class="card"><h4><a href="../session/index.html">Session</a></h4><p>Homework completion records cascade-deleted during GDPR player erasure.</p></div>
+      <div class="card"><h4><a href="../filestorage/index.html">Filestorage</a></h4><p>Stores and deletes the GDPR export ZIP and its signed download URL.</p></div>
+      <div class="card"><h4><a href="../config/index.html">Config</a></h4><p>Supplies every tunable threshold/window (dispute window, strike thresholds, export URL TTL).</p></div>
+      <div class="card"><h4><a href="../infrastructure/index.html">Infrastructure</a></h4><p>Shared security constants/errors, generic exception types, and feature-flag properties.</p></div>
+    </div>
+    <p><a href="../index.html">&larr; Back to Home</a></p>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

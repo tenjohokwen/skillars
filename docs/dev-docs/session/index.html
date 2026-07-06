@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <nav>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../tenant/index.html">Tenant</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Session</div>
+    <h1>Session</h1>
+    <p class="subtitle">Owns coaching content and curriculum authoring — drill libraries, session-plan blocks, reusable templates, and player homework — as distinct from booking's scheduling and calendar concerns.</p>
+
+    <h2>Business Overview</h2>
+    <p>
+      The <code>session</code> module is where a coach designs <em>what actually happens</em> during a training
+      session, independent of <em>when</em> it happens. It answers questions like: which drills will we run, in what
+      order, for how long, targeting which development goals — and afterwards, what homework should the player
+      practice before the next session. It does not know about calendars, availability, or credit wallets; those
+      concerns belong to <a href="../booking/index.html">booking</a>.
+    </p>
+    <p>Primary personas and how they touch this module:</p>
+    <ul>
+      <li><strong>Coach</strong> — browses a curated <code>PLATFORM</code> drill library and/or a private
+        <code>COACH</code>-owned library, clones platform drills to customize them, tags drills for their own
+        organization, uploads demo videos for private drills, builds a session plan (ordered blocks of drills) for a
+        specific booking, saves a session as a reusable template, and deploys a template into a new booking later.</li>
+      <li><strong>Parent</strong> — views the homework ("Locker Room Drills") assigned to their child after a
+        completed session and marks individual assignments as complete.</li>
+      <li><strong>Player</strong> — is the subject of session plans and homework (referenced by <code>playerId</code>)
+        but does not call this module's endpoints directly; the parent account acts on the player's behalf.</li>
+    </ul>
+    <p>Key business rules encoded in the code:</p>
+    <ul>
+      <li>Drills are either <code>PLATFORM</code> (curated, globally owned, no <code>owner_coach_id</code>) or
+        <code>COACH</code> (privately owned, must have an <code>owner_coach_id</code>) — enforced by a database
+        <code>CHECK</code> constraint, not just application logic.</li>
+      <li>Only <code>PLATFORM</code> drills can be cloned into a coach's private library; cloning a
+        <code>COACH</code> drill is rejected (<code>CLONE_NOT_ALLOWED</code>).</li>
+      <li>Tags on drills are private per-coach labels (composite key of drill, tag, coach) — never global metadata.</li>
+      <li>A session plan is one-to-one with a booking: creating a second plan for the same
+        <code>bookingId</code> is rejected (<code>SESSION_ALREADY_EXISTS</code>), and a plan can only be created or a
+        template deployed against a booking that is <code>CONFIRMED</code> or <code>UPCOMING</code>.</li>
+      <li>Every session/template computes a "Session DNA" radar score (technical / physical / cognitive / match
+        realism / weak-foot focus, 0–100) and an equipment checklist, derived purely from the metadata of the drills
+        placed in its blocks.</li>
+      <li>Access to the "Session Builder" (session plans/templates) and to drill video upload are independently
+        feature-gated per coach subscription tier.</li>
+      <li>Homework is generated automatically when a booking completes — coaches do not call a "create homework"
+        endpoint directly.</li>
+    </ul>
+    <div class="callout">
+      <p><strong>Session vs. Booking — the boundary new devs get wrong.</strong> <code>booking</code> owns
+        scheduling: creating bookings, coach availability, booking status transitions, session-pack/credit
+        consumption. <code>session</code> owns curriculum content: what drills, in what structure, and homework
+        follow-through. The two modules only touch through: (1) <code>session</code> reading a booking's snapshot via
+        <code>BookingQueryService.getBookingSnapshot()</code> to validate ownership/status before creating or
+        deploying a plan, and (2) <code>session</code> reacting to <code>BookingCompletedEvent</code>, published by
+        <code>booking</code>, to generate homework assignments. <code>session</code> never writes to booking data and
+        never touches payment/credit logic directly (it only reads pack status via
+        <code>SessionPackService.hasActivePack</code>/<code>getActivePackId</code> to decide whether homework is still
+        visible to a family).</p>
+    </div>
+
+    <h2>Technical Overview</h2>
+    <h3>Package layout</h3>
+    <table>
+      <thead><tr><th>Package</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>session.api</code></td><td>REST controllers (drill library, drill upload, homework, session builder, session templates) plus <code>SessionApiAdvice</code>, the module's exception-to-HTTP mapping.</td></tr>
+        <tr><td><code>session.config</code></td><td>Spring configuration hook (<code>SessionConfig</code>) — currently an empty placeholder.</td></tr>
+        <tr><td><code>session.contract</code></td><td>Request/response DTOs (records), module error codes (<code>SessionErrorCode</code>), module exceptions, and the domain event contract used for video cleanup.</td></tr>
+        <tr><td><code>session.repo</code></td><td>JPA entities and Spring Data repositories, all mapped to the dedicated Postgres <code>session</code> schema.</td></tr>
+        <tr><td><code>session.service</code></td><td>Business logic: drill library management, drill suggestions, video upload orchestration, session-DNA/equipment calculation, session-plan and template lifecycle, homework assignment.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Key entities &amp; tables</h3>
+    <table>
+      <thead><tr><th>Entity</th><th>Table (schema <code>session</code>)</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>Drill</code></td><td><code>drills</code></td><td>Library content. <code>library_type</code> PLATFORM/COACH, JSONB <code>metadata</code> (skills, intensity, equipment, etc.), optimistic-locked via <code>@Version</code>.</td></tr>
+        <tr><td><code>DrillTag</code> / <code>DrillTagId</code></td><td><code>drill_tags</code></td><td>Composite key (drillId, tag, coachId) — per-coach private tagging.</td></tr>
+        <tr><td><code>DrillVideoRef</code></td><td><code>drill_video_refs</code></td><td>Ref-counted pointer from a drill to a video-module <code>Video</code> row; supports drills (originals + clones) sharing one physical asset.</td></tr>
+        <tr><td><code>Session</code></td><td><code>sessions</code></td><td>A concrete session plan for one <code>bookingId</code>. Holds ordered <code>blocks</code> (JSONB), computed <code>session_dna</code>, <code>equipment_list</code>, <code>development_focus</code>, and <code>status</code> (DRAFT/SAVED/COMPLETED).</td></tr>
+        <tr><td><code>SessionTemplate</code></td><td><code>session_templates</code></td><td>A coach's reusable blueprint, cloned from a <code>Session</code>'s blocks. Tracks <code>deploy_count</code>/<code>last_deployed_at</code>.</td></tr>
+        <tr><td><code>HomeworkAssignment</code></td><td><code>homework_assignments</code></td><td>One drill assigned to a player from a completed booking. Unique on (bookingId, drillId) for idempotent creation.</td></tr>
+        <tr><td><code>HomeworkCompletion</code></td><td><code>homework_completions</code></td><td>Marks an assignment done; unique on <code>assignment_id</code>.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Key services</h3>
+    <table>
+      <thead><tr><th>Service</th><th>Orchestrates</th></tr></thead>
+      <tbody>
+        <tr><td><code>DrillLibraryService</code></td><td>Listing/filtering drills, cloning PLATFORM drills, tag management, batch video-URL resolution (via video module), and the Session Builder feature gate check used by every other session service.</td></tr>
+        <tr><td><code>DrillSuggestionService</code></td><td>Recommends drills for a session's remaining slots, scored against the coach's <code>developmentFocus</code>, the player's neglected-skill flags (from <code>development</code>), recent-drill recency, and drills already used in the current session.</td></tr>
+        <tr><td><code>DrillUploadService</code></td><td>Initiates/deletes a demo video for a COACH-owned drill; delegates size/duration validation and upload-session creation to the <code>video</code> module, then updates the drill's <code>DrillVideoRef</code>.</td></tr>
+        <tr><td><code>SessionDnaCalculator</code></td><td>Pure computation of the technical/physical/cognitive/match-realism/weak-foot radar score from a list of drill metadata.</td></tr>
+        <tr><td><code>EquipmentListService</code></td><td>Derives a deduped, sorted equipment checklist from drill metadata.</td></tr>
+        <tr><td><code>SessionPlanService</code></td><td>Create/update/fetch a session plan; validates booking ownership and status via <code>booking</code>, recomputes DNA/equipment on every save.</td></tr>
+        <tr><td><code>SessionTemplateService</code></td><td>Create/list/rename/archive templates from a session; deploys a template into a brand-new <code>Session</code> for a target booking (same ownership/status validation as direct plan creation).</td></tr>
+        <tr><td><code>HomeworkAssignmentService</code></td><td>Listens for <code>BookingCompletedEvent</code> to create homework assignments; serves the parent-facing "Locker Room Drills" list (filtered to coaches with an active session pack); records completions.</td></tr>
+        <tr><td><code>VideoPhysicalDeletionListener</code></td><td>Consumes <code>VideoPhysicalDeletionEvent</code> (published within this module) to trigger physical asset deletion in the <code>video</code> module; also logs (no-ops on) <code>VideoPurgedEvent</code> from that module.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>REST endpoints</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr></thead>
+      <tbody>
+        <tr><td>GET</td><td>/api/session/drills/suggestions</td><td>Suggest drills for a session's open slots</td><td>Coach</td></tr>
+        <tr><td>GET</td><td>/api/session/drills</td><td>Browse/search the PLATFORM or PRIVATE (own) drill library</td><td>Coach</td></tr>
+        <tr><td>POST</td><td>/api/session/drills/{drillId}/clone</td><td>Clone a PLATFORM drill into the coach's private library</td><td>Coach</td></tr>
+        <tr><td>POST</td><td>/api/session/drills/{drillId}/tags</td><td>Add a private tag to an owned drill</td><td>Coach</td></tr>
+        <tr><td>DELETE</td><td>/api/session/drills/{drillId}/tags/{tag}</td><td>Remove a private tag</td><td>Coach</td></tr>
+        <tr><td>GET</td><td>/api/session/drills/tags/suggestions</td><td>List distinct tags the coach has previously used</td><td>Coach</td></tr>
+        <tr><td>GET</td><td>/api/session/drills/video-upload/eligible</td><td>Check whether the coach's tier allows drill video upload</td><td>Coach</td></tr>
+        <tr><td>POST</td><td>/api/session/drills/{drillId}/video/initiate</td><td>Initiate a demo video upload for an owned drill</td><td>Coach</td></tr>
+        <tr><td>DELETE</td><td>/api/session/drills/{drillId}/video</td><td>Remove the video from an owned drill</td><td>Coach</td></tr>
+        <tr><td>GET</td><td>/api/session/players/{playerId}/homework</td><td>List "Locker Room" homework drills for a child</td><td>Parent (ownership-checked)</td></tr>
+        <tr><td>POST</td><td>/api/session/homework/{assignmentId}/complete</td><td>Mark a homework assignment complete</td><td>Parent</td></tr>
+        <tr><td>POST</td><td>/api/session/sessions</td><td>Create a session plan for a booking</td><td>Coach</td></tr>
+        <tr><td>PUT</td><td>/api/session/sessions/{sessionId}</td><td>Update a session plan's blocks/focus/status</td><td>Coach</td></tr>
+        <tr><td>GET</td><td>/api/session/sessions/{sessionId}</td><td>Fetch a session plan</td><td>Coach</td></tr>
+        <tr><td>GET</td><td>/api/session/sessions/by-booking/{bookingId}</td><td>Look up the session plan for a booking</td><td>Coach</td></tr>
+        <tr><td>GET</td><td>/api/session/templates</td><td>List the coach's active templates</td><td>Coach</td></tr>
+        <tr><td>POST</td><td>/api/session/templates</td><td>Save an existing session as a reusable template</td><td>Coach</td></tr>
+        <tr><td>PUT</td><td>/api/session/templates/{templateId}</td><td>Rename a template</td><td>Coach</td></tr>
+        <tr><td>DELETE</td><td>/api/session/templates/{templateId}</td><td>Archive (soft-delete) a template</td><td>Coach</td></tr>
+        <tr><td>POST</td><td>/api/session/templates/{templateId}/deploy</td><td>Deploy a template into a new session plan for a booking</td><td>Coach</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Domain events</h3>
+    <table>
+      <thead><tr><th>Event</th><th>Direction</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>BookingCompletedEvent</code></td><td>Consumed (from <code>booking</code>)</td><td><code>HomeworkAssignmentService</code> handles it <code>@Async</code> / <code>AFTER_COMMIT</code>, creating one <code>HomeworkAssignment</code> per drill ID on the event; idempotent on (bookingId, drillId).</td></tr>
+        <tr><td><code>VideoPhysicalDeletionEvent</code></td><td>Published (internal to this module)</td><td>Fired by <code>DrillUploadService.deleteVideo</code> when no other <code>DrillVideoRef</code> still points at the video; consumed by <code>VideoPhysicalDeletionListener</code>, which calls the <code>video</code> module's <code>AdminVideoService</code>.</td></tr>
+        <tr><td><code>VideoPurgedEvent</code></td><td>Consumed (from <code>video</code>)</td><td>Logged only — physical cleanup for this path is owned by the video module's deletion outbox processor, not by <code>session</code>.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Dependencies</h3>
+    <ul>
+      <li><strong>infrastructure.exception</strong> — <code>ResourceNotFoundException</code> used throughout for 404s.</li>
+      <li><strong>infrastructure.security</strong> — <code>SecurityConstants</code> role expressions (<code>HAS_COACH_ROLE</code>, <code>HAS_PARENT_ROLE</code>) on every endpoint.</li>
+      <li><strong>infrastructure.video</strong> — <code>VideoProviderAdapter</code>, <code>SignedPlaybackUrl</code>, <code>PlaybackTokenClaims</code> used to generate short-lived signed playback URLs for drill demo videos.</li>
+      <li><strong>infrastructure.message</strong> — <code>ErrorDto</code>/<code>ErrorMsg</code> used by <code>SessionApiAdvice</code>.</li>
+      <li><strong>booking</strong> — <code>BookingQueryService.getBookingSnapshot()</code> for ownership/status checks; <code>SessionPackService</code> (read-only) for homework visibility and provenance; consumes <code>BookingCompletedEvent</code>.</li>
+      <li><strong>video</strong> — <code>VideoService</code>, <code>VideoRepository</code>, <code>VideoTypeConstraints</code>, <code>AdminVideoService</code>; actual video storage/transcoding lives in this module, <code>session</code> only keeps a ref-counted pointer.</li>
+      <li><strong>marketplace</strong> — <code>CoachProfileService</code> for coach-id/user-id resolution, subscription tier lookups (feature gating), and coach display names.</li>
+      <li><strong>security</strong> — <code>SecurityUtil</code> for the current coach's user id; <code>PlayerProfileRepository</code>/<code>PlayerOwnershipGuard</code> for parent-child ownership checks.</li>
+      <li><strong>config</strong> — <code>ConfigService</code> for the Session Builder and drill-video-upload feature-gate flags.</li>
+      <li><strong>development</strong> — <code>NeglectedSkillFlagRepository</code> feeds drill-suggestion scoring.</li>
+    </ul>
+
+    <h2>Key Flows</h2>
+
+    <h3>1. Coach builds a session plan for a booking</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Coach
+  participant Resource as SessionBuilderResource
+  participant Plan as SessionPlanService
+  participant Gate as DrillLibraryService
+  participant Booking as Booking Module
+  participant DB as session.sessions
+
+  Coach->>Resource: POST /api/session/sessions {bookingId, blocks, developmentFocus}
+  Resource->>Plan: createSession(req, coachUserId)
+  Plan->>Gate: checkSessionBuilderGate(coachUserId)
+  Gate-->>Plan: OK (tier allows Session Builder)
+  Plan->>Booking: getBookingSnapshot(bookingId)
+  Booking-->>Plan: coachId, playerId, status
+  Plan->>Plan: verify booking owned by coach and CONFIRMED/UPCOMING
+  Plan->>Plan: resolve drill metadata, compute Session DNA + equipment list
+  Plan->>DB: save Session (status=DRAFT)
+  Plan-->>Resource: SessionPlanResponse
+  Resource-->>Coach: 201 Created
+    </pre>
+    <p>
+      The coach submits blocks of drills for a specific booking. Before anything is written, the module checks that
+      the coach's subscription tier has Session Builder enabled, then asks <code>booking</code> for a read-only
+      snapshot to confirm the coach actually owns that booking and that it is in a plannable state. Drill metadata for
+      every referenced drill is batch-loaded once to compute both the Session DNA radar score and the equipment
+      checklist, which are stored alongside the blocks rather than recomputed on every read. Creating a second plan
+      for the same booking is rejected outright, with a database unique-constraint fallback catching any race.
+      Coaches typically call the suggestions endpoint (<code>DrillSuggestionService</code>) while building blocks to
+      fill remaining slots with drills matched to the player's development focus.
+    </p>
+
+    <h3>2. Coach uploads a demo video for a private drill</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Coach
+  participant Resource as DrillUploadResource
+  participant Upload as DrillUploadService
+  participant Constraints as Video Module (constraints)
+  participant VideoSvc as Video Module (upload)
+  participant DB as session.drill_video_refs
+
+  Coach->>Resource: POST /api/session/drills/{drillId}/video/initiate
+  Resource->>Upload: initiateUpload(drillId, coachUserId, req)
+  Upload->>Upload: verify drill is COACH-owned by this coach
+  Upload->>Constraints: validate(DRILL_DEMO, fileSizeBytes, durationSeconds)
+  Constraints-->>Upload: OK or VideoValidationException
+  Upload->>VideoSvc: initializeUpload(coachId, fileName, size, mimeType, DRILL_DEMO)
+  VideoSvc-->>Upload: videoId, signedUploadUrl, expiresAt
+  Upload->>DB: upsert DrillVideoRef(drillId, videoId)
+  Upload-->>Resource: DrillUploadInitiateResponse
+  Resource-->>Coach: 201 Created (signedUploadUrl)
+    </pre>
+    <p>
+      Video upload is only allowed on drills the coach privately owns, and only if the coach's tier has the
+      drill-video-upload feature enabled. Size/duration limits for a <code>DRILL_DEMO</code> video are not owned by
+      this module — they are delegated to the <code>video</code> module's <code>VideoTypeConstraints</code>, and any
+      violation is re-thrown as a <code>DrillConstraintViolationException</code> so the frontend gets a
+      drill-scoped 422 error instead of a generic video error. If a READY video is already linked, the coach must
+      delete it first. The actual file bytes never pass through <code>session</code>; the client uploads directly to
+      the signed URL returned by the video module.
+    </p>
+
+    <h3>3. Booking completes, homework is assigned, parent completes it</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Booking as Booking Module
+  participant HW as HomeworkAssignmentService
+  participant DB as session.homework_assignments
+  participant Parent
+  participant Resource as HomeworkResource
+
+  Booking->>HW: publish BookingCompletedEvent(bookingId, playerId, coachId, homeworkDrillIds)
+  Note over HW: @TransactionalEventListener AFTER_COMMIT, @Async
+  HW->>DB: create HomeworkAssignment per drill (idempotent on bookingId+drillId)
+  Parent->>Resource: GET /api/session/players/{playerId}/homework
+  Resource->>HW: getLockerRoomDrills(playerId)
+  HW-->>Resource: assignments (only coaches with an active session pack)
+  Resource-->>Parent: 200 OK
+  Parent->>Resource: POST /api/session/homework/{assignmentId}/complete
+  Resource->>HW: markComplete(assignmentId, parentId)
+  HW->>DB: verify parent owns player, insert HomeworkCompletion (idempotent)
+  HW-->>Resource: OK
+    </pre>
+    <p>
+      This is the flow that most clearly shows the module boundary: <code>session</code> never decides when homework
+      is assigned — it reacts to a <code>booking</code>-owned lifecycle event, after that booking's transaction has
+      committed. Assignments key off <code>bookingId</code> rather than the (sometimes null) <code>sessionId</code>,
+      because "quick" bookings can skip session planning entirely. When the parent views the Locker Room, assignments
+      from a coach whose session pack with that family has lapsed are hidden even though the row still exists, and
+      marking complete is re-validated against parent-child ownership independently of the earlier gate on the
+      controller.
+    </p>
+
+    <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout">
+      <p><strong>Two independent feature gates.</strong> Session Builder access
+        (<code>feature.sessionBuilder.enabled.&lt;TIER&gt;</code>) and drill video upload
+        (<code>feature.drillVideoUpload.enabled.&lt;TIER&gt;</code>) are separate config keys per coach subscription
+        tier. Every session/template/drill-suggestion service method calls
+        <code>DrillLibraryService.checkSessionBuilderGate()</code> first — a coach can be blocked from the whole
+        module without being blocked from video upload specifically, or vice versa. Both throw
+        <code>FeatureGatedException</code>, not a plain 403, so the frontend can show an upsell rather than a generic
+        error.</p>
+    </div>
+    <div class="callout">
+      <p><strong>PLATFORM vs COACH drills is a DB-enforced invariant, not just a convention.</strong> The
+        <code>chk_drill_owner</code> check constraint requires <code>PLATFORM</code> drills to have a null
+        <code>owner_coach_id</code> and <code>COACH</code> drills to have a non-null one. Cloning only works
+        PLATFORM → COACH; attempting to clone a COACH drill throws <code>CLONE_NOT_ALLOWED</code>.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Drill videos are ref-counted, not owned 1:1.</strong> <code>DrillVideoRef.refCount</code> lets an
+        original drill and its clones share one underlying <code>video</code>-module asset. Deleting a video from one
+        drill only fires <code>VideoPhysicalDeletionEvent</code> (real deletion) when no other
+        <code>DrillVideoRef</code> row still points at that <code>videoId</code>. Never delete/replace a
+        <code>DrillVideoRef</code> row directly without going through <code>DrillUploadService</code> — doing so can
+        either strand a video with no cleanup path or physically delete a video another drill still relies on.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Idempotency keys off <code>bookingId</code>, never <code>sessionId</code>.</strong>
+        <code>HomeworkAssignmentService.handleBookingCompleted</code> deliberately uses the
+        <code>(booking_id, drill_id)</code> unique constraint for idempotent replay protection instead of
+        <code>session_id</code>, because <code>sessionId</code> is nullable (quick-mode bookings have no session
+        plan) and Postgres treats <code>NULL &lt;&gt; NULL</code> — a unique constraint on a nullable column gives
+        zero protection once that column is null. Follow this pattern for any future event handler keyed on
+        optional foreign keys.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Session DNA and the equipment list are computed, not authored.</strong> Both are derived purely from
+        the metadata of drills placed in a session/template's blocks (<code>SessionDnaCalculator</code>,
+        <code>EquipmentListService</code>) and recomputed on every create/update — there is no direct API to set them,
+        so if a drill's metadata changes, existing sessions/templates keep their previously computed snapshot until
+        next saved.</p>
+    </div>
+
+    <h2>Related Modules</h2>
+    <ul>
+      <li><a href="../booking/index.html">Booking</a> — owns scheduling/calendar and session-pack credits; session plans hang off a booking and homework is triggered by booking completion.</li>
+      <li><a href="../video/index.html">Video</a> — owns actual video storage/transcoding/playback; session only keeps ref-counted pointers to drill demo videos.</li>
+      <li><a href="../marketplace/index.html">Marketplace</a> — supplies coach identity/profile resolution and subscription tier used for feature gating.</li>
+      <li><a href="../security/index.html">Security</a> — supplies current-user resolution and parent/child ownership guards.</li>
+      <li><a href="../config/index.html">Config</a> — supplies the feature-flag values that gate Session Builder and drill video upload.</li>
+      <li><a href="../development/index.html">Development</a> — supplies neglected-skill flags consumed by drill suggestion scoring.</li>
+      <li><a href="../index.html">Home</a></li>
+    </ul>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

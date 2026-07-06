@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skillars — Developer Documentation</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <nav>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="marketplace/index.html">Marketplace</a></li>
+        <li><a href="booking/index.html">Booking</a></li>
+        <li><a href="session/index.html">Session</a></li>
+        <li><a href="video/index.html">Video</a></li>
+        <li><a href="development/index.html">Development</a></li>
+        <li><a href="payment/index.html">Payment</a></li>
+        <li><a href="messaging/index.html">Messaging</a></li>
+        <li><a href="reviews/index.html">Reviews</a></li>
+        <li><a href="notification/index.html">Notification</a></li>
+        <li><a href="admin/index.html">Admin</a></li>
+        <li><a href="tenant/index.html">Tenant</a></li>
+        <li><a href="security/index.html">Security</a></li>
+        <li><a href="filestorage/index.html">Filestorage</a></li>
+        <li><a href="config/index.html">Config</a></li>
+        <li><a href="monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="infrastructure/index.html">Infrastructure</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb">Home</div>
+    <h1>Skillars — Developer Documentation</h1>
+    <p class="subtitle">Everything a new engineer needs to understand what Skillars is, how the backend is organized, and where to go deeper.</p>
+
+    <h2>Business Overview</h2>
+    <p>Skillars is a youth sports skill-development and coaching marketplace. It connects <strong>Coaches</strong> with <strong>Players</strong> — many of whom are minors — for one-on-one and small-group training. Because a large share of players are minors, the product is built around a <strong>Parent</strong> account that supervises, consents on behalf of, and pays for a child's participation, with special handling for messaging, GDPR data rights, and content moderation. <strong>Admins</strong> run trust-and-safety, finance, and support operations behind the scenes.</p>
+    <p>The core loop a family goes through looks like this:</p>
+    <div class="card-grid">
+      <div class="card"><h4>1. Discover</h4><p>Parents/players search the <a href="marketplace/index.html">marketplace</a> for a coach by city, specialty, and age group.</p></div>
+      <div class="card"><h4>2. Book</h4><p>They <a href="booking/index.html">book</a> a session or session pack against the coach's published availability.</p></div>
+      <div class="card"><h4>3. Pay</h4><p><a href="payment/index.html">Payment</a> is captured via credit wallet, session pack, or subscription, with Stripe handling coach payouts.</p></div>
+      <div class="card"><h4>4. Train</h4><p>Coaches plan <a href="session/index.html">session content</a> (drills, homework) and may run a live session with <a href="video/index.html">video</a> review.</p></div>
+      <div class="card"><h4>5. Track</h4><p><a href="development/index.html">Player development</a> is tracked over time via Skills Radar assessments and training-volume metrics.</p></div>
+      <div class="card"><h4>6. Review</h4><p>After the session, families leave a <a href="reviews/index.html">review</a> that feeds back into the coach's marketplace ranking.</p></div>
+    </div>
+    <p>Two modules exist purely to keep the lights on: <a href="admin/index.html">admin</a> (moderation, disputes, GDPR, coach enforcement) and <a href="tenant/index.html">tenant</a> — which, despite its name, is <strong>not</strong> per-club multi-tenancy but a B2B integration layer for external partners authenticating via API key.</p>
+
+    <h2>Technical Overview</h2>
+    <p>The backend is a single Spring Boot application (Java), package root <code>com.softropic.skillars</code>, organized as domain modules under <code>com.softropic.skillars.platform.&lt;module&gt;</code>. A cross-cutting <code>com.softropic.skillars.infrastructure.*</code> layer provides shared technical primitives (object storage, security helpers, persistence utilities, feature flags, thread pools, email, sanitization, external provider clients) that platform modules build on rather than reimplement. The frontend is Vue&nbsp;3 (Quasar). Data lives in Postgres, with Redis for caching/session state.</p>
+
+    <h3>Layered architecture</h3>
+    <pre class="mermaid">
+flowchart TB
+    FE["Vue 3 / Quasar Frontend"]
+    subgraph PLATFORM["Platform Modules (com.softropic.skillars.platform.*)"]
+      direction LR
+      MKT[marketplace]
+      BOOK[booking]
+      SESS[session]
+      VID[video]
+      DEV[development]
+      PAY[payment]
+      MSG[messaging]
+      REV[reviews]
+      NOTIF[notification]
+      ADM[admin]
+      TEN[tenant]
+      SEC[security]
+      FS[filestorage]
+      CFG[config]
+      MON[monitoring]
+    end
+    INFRA["Infrastructure Layer (com.softropic.skillars.infrastructure.*)<br/>blobstore · security · persistence · feature · ses · sanitizer · threadpool · client · exception"]
+    EXT["External Services<br/>Postgres · Redis · Stripe · S3 · SES/SMTP · Gemini · BunnyCDN"]
+
+    FE --> PLATFORM
+    PLATFORM --> INFRA
+    INFRA --> EXT
+    </pre>
+    <p>New engineers most often get confused by two boundaries: <strong>booking vs. session</strong> (booking owns scheduling/calendar/credits; session owns training content — drills, plans, homework) and <strong>filestorage vs. infrastructure.blobstore</strong> (filestorage is the only module allowed to call blobstore directly — everyone else goes through filestorage's API). Both are explained in depth on their respective pages.</p>
+
+    <h3>Core business flow &amp; module dependencies</h3>
+    <pre class="mermaid">
+flowchart LR
+    MKT[marketplace] --> BOOK[booking]
+    BOOK --> PAY[payment]
+    BOOK --> SESS[session]
+    BOOK --> VID[video]
+    SESS --> VID
+    BOOK --> DEV[development]
+    BOOK --> REV[reviews]
+    BOOK --> NOTIF[notification]
+    PAY --> NOTIF
+    VID --> NOTIF
+    REV --> MKT
+    MSG[messaging] --> BOOK
+    ADM[admin] --> PAY
+    ADM --> REV
+    ADM --> MSG
+    ADM --> BOOK
+    TEN[tenant] --> NOTIF
+    SEC[security] -.underpins.-> MKT
+    SEC -.underpins.-> BOOK
+    SEC -.underpins.-> PAY
+    SEC -.underpins.-> MSG
+    FS[filestorage] -.files.-> MKT
+    FS -.files.-> ADM
+    FS -.files.-> DEV
+    CFG[config] -.tunables.-> BOOK
+    CFG -.tunables.-> PAY
+    CFG -.tunables.-> VID
+    </pre>
+    <p>This is a curated view of the busiest edges (see each module's own page for its full, code-verified dependency list) — <code>security</code>, <code>config</code>, and <code>infrastructure</code> are consumed by nearly every module and are drawn selectively above to keep the diagram readable.</p>
+
+    <h3>Module index</h3>
+    <table>
+      <thead><tr><th>Module</th><th>What it owns</th></tr></thead>
+      <tbody>
+        <tr><td><a href="marketplace/index.html">marketplace</a></td><td>City-scoped coach discovery/search plus the coach profile-builder wizard.</td></tr>
+        <tr><td><a href="booking/index.html">booking</a></td><td>Coach availability, session/pack booking, cancellation/reschedule, live delivery, and completion.</td></tr>
+        <tr><td><a href="session/index.html">session</a></td><td>Coach-authored training content — drill library, session-plan blocks, templates, homework.</td></tr>
+        <tr><td><a href="video/index.html">video</a></td><td>Video upload, three-layer moderation with minor-safety gate, transcoding, and signed playback.</td></tr>
+        <tr><td><a href="development/index.html">development</a></td><td>Longitudinal player skill tracking — Skills Radar assessments, training-volume (SLU), neglected-skill detection, reports.</td></tr>
+        <tr><td><a href="payment/index.html">payment</a></td><td>Stripe onboarding/payouts, credit wallet, subscriptions, session-pack payments, reliability strikes.</td></tr>
+        <tr><td><a href="messaging/index.html">messaging</a></td><td>Booking-gated, age-tiered in-app conversations with AI content moderation.</td></tr>
+        <tr><td><a href="reviews/index.html">reviews</a></td><td>Post-session ratings/reviews with AI + community moderation, feeding marketplace ranking.</td></tr>
+        <tr><td><a href="notification/index.html">notification</a></td><td>Event-driven templated email delivery plus an admin-configurable operational alert-rule system.</td></tr>
+        <tr><td><a href="admin/index.html">admin</a></td><td>Trust-and-safety moderation queue, coach enforcement, dispute resolution, GDPR requests.</td></tr>
+        <tr><td><a href="tenant/index.html">tenant</a></td><td>B2B external-integration partners authenticated via API key (not per-club multi-tenancy).</td></tr>
+        <tr><td><a href="security/index.html">security</a></td><td>Identity/auth, four registration &amp; verification pipelines, profile self-service, age-tiered policy.</td></tr>
+        <tr><td><a href="filestorage/index.html">filestorage</a></td><td>The platform's single gateway for file upload/download/delete via presigned S3 URLs.</td></tr>
+        <tr><td><a href="config/index.html">config</a></td><td>DB-backed, admin-managed runtime config values (feature gates, quotas, thresholds).</td></tr>
+        <tr><td><a href="monitoring/index.html">monitoring</a></td><td>Fail-fast TLS startup assertion; anchors the app's logging/observability story.</td></tr>
+        <tr><td><a href="infrastructure/index.html">infrastructure</a></td><td><em>Cross-cutting.</em> Shared technical primitives every platform module builds on.</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Getting Started</h2>
+    <div class="card-grid">
+      <div class="card"><h4>Run it locally</h4><p><a href="../deployment/local-deployment.md">docs/deployment/local-deployment.md</a> — Docker Compose stack, env vars, and the local Grafana/Prometheus observability setup.</p></div>
+      <div class="card"><h4>Observability</h4><p><a href="../lgtm-observability.md">docs/lgtm-observability.md</a> — Loki/Grafana/Tempo/Prometheus stack. Note: log shipping to Loki is a known gap, see <a href="monitoring/index.html">Monitoring</a>.</p></div>
+      <div class="card"><h4>Security API reference</h4><p><a href="../security-api-endpoints.md">docs/security-api-endpoints.md</a> — endpoint-level reference for the auth/registration surface documented in <a href="security/index.html">Security</a>.</p></div>
+      <div class="card"><h4>Session refresh mechanism</h4><p><a href="../session-refresh-mechanism.md">docs/session-refresh-mechanism.md</a> — deep dive on the JWT refresh-token rotation flow.</p></div>
+      <div class="card"><h4>Time handling conventions</h4><p><a href="../handling-time.md">docs/handling-time.md</a> — how the codebase handles timezones/dates.</p></div>
+      <div class="card"><h4>Frontend integration</h4><p><a href="../frontend-integration-guide.md">docs/frontend-integration-guide.md</a> and <a href="../frontend-implementation-spec.md">docs/frontend-implementation-spec.md</a>.</p></div>
+    </div>
+
+    <h2>Conventions &amp; Gotchas (platform-wide)</h2>
+    <div class="callout warn">
+      <p><strong>Never call <code>infrastructure.blobstore</code> directly.</strong> Only <code>filestorage</code> is allowed to. Every other module that needs to store or retrieve a file must go through <code>filestorage</code>'s own API. See <a href="filestorage/index.html">Filestorage</a> and <a href="infrastructure/index.html">Infrastructure</a>.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Email is silently suppressed in dev.</strong> When <code>app.ses.enabled=false</code> (the local default), <code>NoOpSesEmailService</code> logs the subject line only and sends nothing — a common source of "I registered but got no email" confusion locally.</p>
+    </div>
+    <div class="callout">
+      <p><strong>booking vs. session</strong> — <code>booking</code> owns scheduling/calendar/credits; <code>session</code> owns training content (drill library, plans, templates, homework). They meet only at a read-only booking snapshot and a completion event.</p>
+    </div>
+    <div class="callout">
+      <p><strong>tenant is not multi-tenancy</strong> — no domain entity has a <code>tenant_id</code> column. A "tenant" is an external B2B API-key-authenticated partner. See <a href="tenant/index.html">Tenant</a>.</p>
+    </div>
+
+    <footer class="page-footer">Skillars developer documentation — generated for onboarding.</footer>
+  </main>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/docs.js"></script>
+</body>
+</html>

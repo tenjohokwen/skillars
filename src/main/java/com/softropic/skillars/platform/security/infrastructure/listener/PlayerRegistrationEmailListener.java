@@ -42,6 +42,11 @@ public class PlayerRegistrationEmailListener {
         String html = templateEngine.process("playerEmailVerify", context);
         String subject = messageSource.getMessage(EmailTemplate.PLAYER_EMAIL_VERIFY.subjectKey(), null, locale);
         try {
+            log.atInfo()
+               .addKeyValue("First name", event.firstName())
+               .addKeyValue("Language used", event.langKey())
+               .setMessage("Handling PlayerVerificationEmailEvent. About to handover to email send service").log();
+
             sesEmailService.send(event.toAddress(), subject, html);
         } catch (SesException ex) {
             log.error("Failed to send verification email — registration may be orphaned. userId lookup required.", ex);

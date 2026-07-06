@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Booking — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <nav>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html" class="active">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../tenant/index.html">Tenant</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Booking</div>
+    <h1>Booking</h1>
+    <p class="subtitle">Turns a marketplace browse into a scheduled, paid, delivered coaching session — and manages everything that can happen to it in between.</p>
+
+    <h2>Business Overview</h2>
+    <p>
+      The <code>booking</code> module is the transactional heart of Skillars: it owns the full lifecycle of a
+      coaching session from the moment a parent requests a time slot to the moment the session is marked
+      complete (or cancelled, disputed, refunded). Every other module that cares about "did this session
+      happen" — payments, reviews, video access, player development timelines, coach reliability scoring —
+      reacts to events this module publishes rather than owning booking state itself.
+    </p>
+    <p>
+      <span class="tag">Parent</span> is the primary actor: parents request sessions for their player(s),
+      pay for them (directly via Stripe or by drawing down a pre-purchased session pack / platform credit
+      wallet), cancel, request reschedules, and confirm session completion.
+      <span class="tag">Coach</span> declares weekly availability and one-off blackout blocks, accepts or
+      declines requests, runs the live session (start/pause/resume/end), and submits a wrap-up. Because
+      players are frequently minors, the player never books directly — the parent account is always the
+      actor of record, and coaches interact with the parent, not the child.
+      <span class="tag">System</span> (schedulers) auto-expires stale requests, sends reminders, force-completes
+      abandoned "quick complete" sessions, and expires session packs.
+    </p>
+    <p>Key business rules enforced in this module (see <code>BookingService</code>, <code>SessionPackService</code>, <code>BookingStateMachine</code>):</p>
+    <ul>
+      <li><strong>Availability-gated booking:</strong> a request is only accepted if the requested time falls inside one of the coach's declared <code>CoachAvailabilityWindow</code>s and doesn't fall inside a <code>CoachAvailabilityBlock</code> (blackout).</li>
+      <li><strong>Coach must be booking-ready:</strong> the coach profile must not be <code>SUSPENDED</code>, and the coach must have a fully configured Stripe destination account (<code>paymentGateway.isCoachPaymentReady</code>) before a request can even be created.</li>
+      <li><strong>Cancellation refund windows (parent-initiated):</strong> more than 24h before the session → <code>FULL</code> refund eligibility; 6–24h → <code>PARTIAL</code>; under 6h → <code>NONE</code>. A coach-initiated cancellation is always <code>FULL</code>. A coach no-show reported by the parent is always <code>FULL</code>. A player no-show reported by the coach is always <code>NONE</code>.</li>
+      <li><strong>Reschedule limits:</strong> only bookings in <code>CONFIRMED</code> or <code>UPCOMING</code> status can be rescheduled, only one pending reschedule request is allowed per booking at a time, and the proposed time must be in the future.</li>
+      <li><strong>Batch bookings:</strong> a parent can request up to a configured maximum number of slots (<code>booking.batch.maxSize</code>) against one coach in a single submission; the coach can accept the whole batch in one action, and the batch's aggregate status (<code>PENDING</code> / <code>PARTIALLY_ACCEPTED</code> / <code>FULLY_ACCEPTED</code> / <code>DECLINED</code>) rolls up automatically as individual bookings change status.</li>
+      <li><strong>Session packs are single-use credits, not cash:</strong> a pack purchase gives the player a number of session credits against a specific coach, with a tiered expiry window (longer packs get longer expiry). A pack can be paused exactly once per its lifetime, which pushes out its expiry by the pause length and requires resolving any bookings that fall inside the pause window (cancel-and-confirm flow).</li>
+      <li><strong>Session completion has two paths:</strong> "Quick Complete" (mode <code>LIVE</code>) finalizes the session immediately when the coach submits the wrap-up and deducts a credit right away; the standard path puts the booking in <code>COMPLETED_PENDING_CONFIRMATION</code> and waits for the parent to confirm — if the parent never responds, a scheduler auto-confirms after a configurable timeout.</li>
+      <li><strong>Stale requests self-clean:</strong> a <code>REQUESTED</code> booking the coach never actions is automatically declined after a configurable number of hours (default 48h).</li>
+    </ul>
+
+    <h2>Technical Overview</h2>
+    <h3>Package layout</h3>
+    <table>
+      <tr><th>Package</th><th>Purpose</th></tr>
+      <tr><td><code>booking.api</code></td><td>REST controllers (one per concern: availability, batch, events/SSE, requests, cancellation, reschedule, schedule views, session completion, session packs) plus a scoped <code>@RestControllerAdvice</code>.</td></tr>
+      <tr><td><code>booking.config</code></td><td><code>BookingConfig</code> — currently an empty Spring <code>@Configuration</code> placeholder.</td></tr>
+      <tr><td><code>booking.contract</code></td><td>Request/response DTOs, the domain event classes published on the Spring <code>ApplicationEventPublisher</code>, the <code>BookingStatus</code>/<code>BookingEvent</code>/<code>ActorRole</code> enums, and booking-specific exceptions.</td></tr>
+      <tr><td><code>booking.repo</code></td><td>JPA entities and Spring Data repositories, all mapped to the <code>booking</code> Postgres schema.</td></tr>
+      <tr><td><code>booking.service</code></td><td>All business logic: the booking state machine, lifecycle services, schedulers, and SSE push.</td></tr>
+    </table>
+
+    <h3>Key entities &amp; tables</h3>
+    <table>
+      <tr><th>Entity</th><th>Table (schema <code>booking</code>)</th><th>Purpose</th></tr>
+      <tr><td><code>Booking</code></td><td><code>bookings</code></td><td>The core aggregate — one requested/accepted/confirmed/completed session between a parent's player and a coach. Optimistic-locked (<code>@Version</code>).</td></tr>
+      <tr><td><code>BookingBatch</code></td><td><code>booking_batches</code></td><td>Groups several <code>Booking</code> rows requested together in one parent submission.</td></tr>
+      <tr><td><code>BookingRescheduleRequest</code></td><td><code>booking_reschedule_requests</code></td><td>A pending/accepted/declined proposal to move a booking's time.</td></tr>
+      <tr><td><code>CoachAvailabilityBlock</code></td><td><code>coach_availability_blocks</code></td><td>One-off blackout period on a coach's calendar (vacation, etc.) — recurring weekly windows live in <code>marketplace.CoachAvailabilityWindow</code>, not here.</td></tr>
+      <tr><td><code>SessionCompletionData</code></td><td><code>session_completion_data</code></td><td>Coach's post-session wrap-up: attendance, effort/focus/technique ratings, voice note, homework drill IDs.</td></tr>
+      <tr><td><code>SessionPackPurchased</code></td><td><code>session_packs_purchased</code></td><td>Legacy/"credits" session-pack purchase record (credits remaining, expiry, pause state) used by <code>SessionPackService</code>. Note: <code>payment.repo.SessionPackPurchase</code> is a separate, newer table used when a booking is created with a <code>sessionPackPurchaseId</code> — see the gotcha below.</td></tr>
+    </table>
+
+    <h3>Key services</h3>
+    <table>
+      <tr><th>Service</th><th>Orchestrates</th></tr>
+      <tr><td><code>BookingService</code></td><td>Core lifecycle: create/accept/decline requests, cancel (parent/coach), no-show recording, schedule &amp; inbox queries, refund-eligibility computation. Drives all transitions through <code>BookingStateMachine</code> and publishes booking events.</td></tr>
+      <tr><td><code>BookingStateMachine</code></td><td>Pure, stateless map of legal <code>(BookingStatus, BookingEvent) → BookingStatus</code> transitions plus per-event allowed actor roles. The single source of truth for what state changes are legal.</td></tr>
+      <tr><td><code>AvailabilityService</code></td><td>CRUD for coach availability windows/blocks and computing free slots by subtracting blocks from windows.</td></tr>
+      <tr><td><code>BookingBatchService</code></td><td>Creates multi-slot batch requests, bulk-accepts a batch, and rolls up batch status from its member bookings.</td></tr>
+      <tr><td><code>BookingBatchStatusListener</code></td><td>Listens for <code>BookingStatusChangedEvent</code> (after commit) and re-derives the owning batch's aggregate status.</td></tr>
+      <tr><td><code>BookingCompletionService</code></td><td>In-session lifecycle: start/pause/resume/end, Quick Complete vs. standard wrap-up submission, parent confirmation, credit deduction on completion.</td></tr>
+      <tr><td><code>QuickCompleteTimeoutService</code></td><td>Scheduled job that auto-confirms a Quick Complete session the parent never responded to, after a configurable timeout.</td></tr>
+      <tr><td><code>RescheduleService</code></td><td>Parent-initiated reschedule request, coach accept/decline.</td></tr>
+      <tr><td><code>BookingDuplicationService</code></td><td>Lets a coach "duplicate next week" a completed booking into a new request, pending session-pack credit availability.</td></tr>
+      <tr><td><code>BookingExpiryScheduler</code></td><td>ShedLock-guarded job that auto-declines <code>REQUESTED</code> bookings older than a configurable window.</td></tr>
+      <tr><td><code>BookingReminderScheduler</code></td><td>ShedLock-guarded job that transitions <code>CONFIRMED → UPCOMING</code> and sends primary/secondary reminder emails ahead of session start.</td></tr>
+      <tr><td><code>BookingSseService</code></td><td>Pushes live booking status changes to subscribed clients over Server-Sent Events.</td></tr>
+      <tr><td><code>BookingQueryService</code></td><td>Lightweight read-only booking snapshot lookup for other modules that only need id/coach/player/status.</td></tr>
+      <tr><td><code>ProjectedRevenueService</code></td><td>Computes a coach's projected gross/commission/net revenue for a given week from confirmed/upcoming bookings.</td></tr>
+      <tr><td><code>SessionPackService</code></td><td>Legacy session-pack purchase, credit balance/deduction, and the one-time-per-pack pause flow (with booking-conflict resolution).</td></tr>
+      <tr><td><code>SessionPackExpiryScheduler</code></td><td>ShedLock-guarded job that expires exhausted-date packs and sends 30-day/7-day expiry warning emails.</td></tr>
+    </table>
+
+    <h3>REST endpoints</h3>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth/Role</th></tr>
+      <tr><td>GET</td><td>/api/bookings/coaches/{coachId}/availability</td><td>Get a coach's weekly availability calendar + computed free slots</td><td>Any authenticated role</td></tr>
+      <tr><td>POST</td><td>/api/bookings/coaches/me/availability/windows</td><td>Add a recurring weekly availability window</td><td>Coach</td></tr>
+      <tr><td>PUT</td><td>/api/bookings/coaches/me/availability/windows/{id}</td><td>Update a window</td><td>Coach</td></tr>
+      <tr><td>DELETE</td><td>/api/bookings/coaches/me/availability/windows/{id}</td><td>Delete a window</td><td>Coach</td></tr>
+      <tr><td>POST</td><td>/api/bookings/coaches/me/availability/blocks</td><td>Add a one-off blackout block</td><td>Coach</td></tr>
+      <tr><td>DELETE</td><td>/api/bookings/coaches/me/availability/blocks/{id}</td><td>Delete a blackout block</td><td>Coach</td></tr>
+      <tr><td>GET</td><td>/api/bookings/batches/config</td><td>Get max batch size config</td><td>Parent</td></tr>
+      <tr><td>POST</td><td>/api/bookings/batches</td><td>Create a multi-slot batch booking request</td><td>Parent</td></tr>
+      <tr><td>POST</td><td>/api/bookings/batches/{batchId}/accept-all</td><td>Coach accepts every booking in a batch</td><td>Coach</td></tr>
+      <tr><td>GET</td><td>/api/bookings/{id}/events</td><td>Subscribe to live booking status updates (SSE)</td><td>Authenticated party to the booking</td></tr>
+      <tr><td>GET</td><td>/api/bookings/{id}</td><td>Get a single booking</td><td>Authenticated party to the booking</td></tr>
+      <tr><td>POST</td><td>/api/bookings/requests</td><td>Create a booking request</td><td>Parent</td></tr>
+      <tr><td>GET</td><td>/api/bookings/requests</td><td>List the parent's own bookings</td><td>Parent</td></tr>
+      <tr><td>GET</td><td>/api/bookings/requests/coach</td><td>Coach inbox: requested bookings (single + batch-grouped)</td><td>Coach</td></tr>
+      <tr><td>PUT</td><td>/api/bookings/requests/{id}/accept</td><td>Accept a booking request (kicks off payment)</td><td>Coach</td></tr>
+      <tr><td>PUT</td><td>/api/bookings/requests/{id}/decline</td><td>Decline a booking request</td><td>Coach</td></tr>
+      <tr><td>POST</td><td>/api/bookings/{id}/cancel</td><td>Parent cancels a booking</td><td>Parent</td></tr>
+      <tr><td>POST</td><td>/api/bookings/{id}/coach-cancel</td><td>Coach cancels a booking, with reason code</td><td>Coach</td></tr>
+      <tr><td>POST</td><td>/api/bookings/{id}/no-show-player</td><td>Coach records player no-show</td><td>Coach</td></tr>
+      <tr><td>POST</td><td>/api/bookings/{id}/no-show-coach</td><td>Parent records coach no-show</td><td>Parent</td></tr>
+      <tr><td>POST</td><td>/api/bookings/{id}/reschedule</td><td>Parent proposes a new time</td><td>Parent</td></tr>
+      <tr><td>PUT</td><td>/api/bookings/{id}/reschedule/{rescheduleId}/accept</td><td>Coach accepts the proposed reschedule</td><td>Coach</td></tr>
+      <tr><td>PUT</td><td>/api/bookings/{id}/reschedule/{rescheduleId}/decline</td><td>Coach declines the proposed reschedule</td><td>Coach</td></tr>
+      <tr><td>POST</td><td>/api/bookings/{id}/duplicate-next-week</td><td>Coach re-proposes a completed booking one week later</td><td>Coach</td></tr>
+      <tr><td>GET</td><td>/api/bookings/coaches/me/schedule</td><td>Coach's weekly schedule + availability + projected revenue</td><td>Coach</td></tr>
+      <tr><td>GET</td><td>/api/bookings/parents/me/schedule</td><td>Parent's schedule for a given player</td><td>Parent</td></tr>
+      <tr><td>POST</td><td>/api/bookings/{id}/start</td><td>Coach starts the live session</td><td>Coach</td></tr>
+      <tr><td>POST</td><td>/api/bookings/{id}/end</td><td>Coach ends the live session</td><td>Coach</td></tr>
+      <tr><td>POST</td><td>/api/bookings/{id}/pause</td><td>Coach pauses the live session</td><td>Coach</td></tr>
+      <tr><td>POST</td><td>/api/bookings/{id}/resume</td><td>Coach resumes a paused session</td><td>Coach</td></tr>
+      <tr><td>POST</td><td>/api/bookings/{id}/complete</td><td>Coach submits wrap-up (LIVE = Quick Complete, or standard)</td><td>Coach</td></tr>
+      <tr><td>POST</td><td>/api/bookings/{id}/quick-complete</td><td>Coach initiates Quick Complete from UPCOMING</td><td>Coach</td></tr>
+      <tr><td>PUT</td><td>/api/bookings/{id}/confirm-completion</td><td>Parent confirms a pending session completion</td><td>Parent</td></tr>
+      <tr><td>GET</td><td>/api/bookings/session/{bookingId}/drills/suggestions</td><td>Get drill suggestions for the session's homework</td><td>Coach</td></tr>
+      <tr><td>GET</td><td>/api/bookings/players/{playerId}/packs</td><td>List a player's session packs</td><td>Parent</td></tr>
+      <tr><td>POST</td><td>/api/bookings/players/{playerId}/packs/purchase</td><td>Purchase a session pack or single session</td><td>Parent</td></tr>
+      <tr><td>POST</td><td>/api/bookings/players/{playerId}/packs/{packId}/pause</td><td>Pause a session pack (with booking-conflict resolution)</td><td>Parent</td></tr>
+    </table>
+
+    <h3>Domain events</h3>
+    <p>Booking publishes on Spring's <code>ApplicationEventPublisher</code>; most listeners (payment, notification) subscribe via <code>@TransactionalEventListener(phase = AFTER_COMMIT)</code> so they only fire once the booking row is durably committed.</p>
+    <p>
+      <span class="tag">BookingRequestedEvent</span>
+      <span class="tag">BookingAcceptedEvent</span>
+      <span class="tag">BookingDeclinedEvent</span>
+      <span class="tag">BookingStatusChangedEvent</span>
+      <span class="tag">BookingCancelledByParentEvent</span>
+      <span class="tag">BookingCancelledByCoachEvent</span>
+      <span class="tag">BookingCancelledDueToPauseEvent</span>
+      <span class="tag">PlayerNoShowEvent</span>
+      <span class="tag">CoachNoShowEvent</span>
+      <span class="tag">CoachReliabilityStrikeQueuedEvent</span>
+      <span class="tag">BookingExpiredEvent</span>
+      <span class="tag">BookingReminderEvent</span>
+      <span class="tag">BookingCompletedEvent</span>
+      <span class="tag">QuickCompleteConfirmationRequiredEvent</span>
+      <span class="tag">RescheduleRequestedEvent</span>
+      <span class="tag">RescheduleAcceptedEvent</span>
+      <span class="tag">RescheduleDeclinedEvent</span>
+      <span class="tag">DuplicateBookingProposedEvent</span>
+      <span class="tag">BatchBookingRequestedEvent</span>
+      <span class="tag">BatchBookingAcceptedEvent</span>
+      <span class="tag">PackPausedEvent</span>
+      <span class="tag">SessionPackExhaustedEvent</span>
+      <span class="tag">SessionPackExpiredEvent</span>
+      <span class="tag">SessionPackExpiryWarningEvent</span>
+    </p>
+    <p>
+      The module consumes only its own internal <code>BookingStatusChangedEvent</code> (in
+      <code>BookingBatchStatusListener</code> and <code>BookingSseService</code>) — it doesn't listen to events
+      from other modules. Downstream, <code>payment</code> (<code>PaymentLifecycleService</code>,
+      <code>CancellationRefundService</code>, <code>BookingPaymentPersistenceService</code>,
+      <code>RevenueReportingService</code>), <code>notification</code>
+      (<code>BookingEmailListener</code>, <code>SessionPackEmailListener</code>), <code>development</code>
+      (<code>TimelineEventListener</code>, <code>SluCalculationService</code>), <code>admin</code>
+      (<code>DisputeService</code>, <code>AdminCoachEnforcementService</code>), and <code>session</code>
+      (<code>HomeworkAssignmentService</code>) all subscribe to booking events.
+    </p>
+
+    <h3>Dependencies on other modules</h3>
+    <p>Confirmed from actual imports in the module's api/service classes:</p>
+    <ul>
+      <li><strong>marketplace</strong> — <code>CoachProfile</code>, <code>CoachProfileRepository</code>, <code>CoachAvailabilityWindow</code>/<code>CoachAvailabilityWindowRepository</code> (recurring weekly windows live here, not in booking), <code>CoachPricing</code>/<code>CoachPricingRepository</code>, <code>SessionPack</code>/<code>SessionPackRepository</code> (the sellable pack catalog).</li>
+      <li><strong>payment</strong> — <code>PaymentGateway</code> (Stripe charge/capture/refund), <code>SessionPackPurchase</code>/<code>SessionPackPurchaseRepository</code> (the newer pack-purchase-linked-to-booking path).</li>
+      <li><strong>security</strong> — <code>PlayerProfile</code>/<code>PlayerProfileRepository</code>, <code>UserRepository</code>, <code>SecurityUtil</code>, <code>Principal</code>, plus <code>infrastructure.security.SecurityConstants</code> for role checks on every endpoint.</li>
+      <li><strong>config</strong> — <code>ConfigService</code> for all tunable business thresholds (batch size, request expiry hours, reminder windows, commission rate, pack expiry tiers, pause max days, quick-complete timeout).</li>
+      <li><strong>session</strong> — <code>DrillSuggestionService</code> (lazily injected to break a circular dependency) and <code>SessionRepository</code>, used by <code>SessionCompletionResource</code> to surface homework drill suggestions after a session.</li>
+      <li><strong>infrastructure</strong> — <code>infrastructure.exception.ResourceNotFoundException</code>, <code>infrastructure.security.SecurityError</code>, <code>infrastructure.message.ErrorDto</code>/<code>ErrorMsg</code> (used by <code>BookingApiAdvice</code>).</li>
+    </ul>
+
+    <h2>Key Flows</h2>
+
+    <h3>Booking a session (request → accept → payment → confirmed)</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Parent
+  participant BookingResource
+  participant BookingService
+  participant PaymentLifecycleService
+  participant Coach
+
+  Parent->>BookingResource: POST /api/bookings/requests
+  BookingResource->>BookingService: createBookingRequest()
+  BookingService->>BookingService: validate coach status, availability window, pack credits
+  BookingService-->>Parent: BookingResponse (REQUESTED)
+  BookingService--)Coach: BookingRequestedEvent (email)
+  Coach->>BookingResource: PUT /requests/{id}/accept
+  BookingResource->>BookingService: acceptBooking()
+  BookingService->>BookingService: transition ACCEPT then INITIATE_PAYMENT (status = PAYMENT_PENDING)
+  BookingService--)PaymentLifecycleService: BookingAcceptedEvent (AFTER_COMMIT)
+  PaymentLifecycleService->>PaymentLifecycleService: deduct pack credit or charge Stripe/credit wallet
+  PaymentLifecycleService->>BookingService: transition PAYMENT_CAPTURED (status = CONFIRMED)
+  BookingResource->>BookingService: re-fetch booking
+  BookingResource-->>Coach: BookingResponse (CONFIRMED)
+    </pre>
+    <p>
+      A parent's request starts life as <code>REQUESTED</code> and is only accepted into the system if the
+      slot sits inside the coach's declared availability, the coach is booking-ready, and (if a session pack
+      was specified) the pack belongs to the parent, matches the coach, and still has credits. When the coach
+      accepts, <code>BookingService</code> fires two transitions in the same transaction —
+      <code>ACCEPT</code> then <code>INITIATE_PAYMENT</code> — landing the booking in <code>PAYMENT_PENDING</code>
+      before publishing <code>BookingAcceptedEvent</code>. Because that event is consumed by
+      <code>PaymentLifecycleService</code> as an <code>AFTER_COMMIT</code> listener, payment capture (or pack
+      deduction) happens synchronously right after commit and moves the booking to <code>CONFIRMED</code> or
+      back to <code>DECLINED</code> before the coach's HTTP request even returns — which is why
+      <code>BookingResource.acceptBooking()</code> re-fetches the booking before responding.
+    </p>
+
+    <h3>Cancellation and reschedule</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Parent
+  participant CancellationResource
+  participant RescheduleResource
+  participant BookingService
+  participant RescheduleService
+  participant Coach
+
+  Parent->>CancellationResource: POST /{id}/cancel
+  CancellationResource->>BookingService: cancelBookingAsParent()
+  BookingService->>BookingService: compute hoursBeforeSession -> refundEligibility (FULL/PARTIAL/NONE)
+  BookingService->>BookingService: transition CANCEL_PARENT
+  BookingService--)Coach: BookingCancelledByParentEvent
+  Note over Parent,Coach: ...or, instead of cancelling outright:
+  Parent->>RescheduleResource: POST /{id}/reschedule
+  RescheduleResource->>RescheduleService: requestReschedule()
+  RescheduleService--)Coach: RescheduleRequestedEvent
+  Coach->>RescheduleResource: PUT /{id}/reschedule/{rid}/accept
+  RescheduleResource->>RescheduleService: acceptReschedule()
+  RescheduleService->>RescheduleService: overwrite booking start/end time, mark request ACCEPTED
+  RescheduleService--)Parent: RescheduleAcceptedEvent
+    </pre>
+    <p>
+      Cancellation and reschedule are separate, competing paths on a live booking. Cancellation always computes
+      a refund-eligibility tier based on hours-until-session before transitioning the booking to
+      <code>CANCELLED_PARENT</code> or <code>CANCELLED_COACH</code>; the actual refund is executed downstream
+      by <code>payment.CancellationRefundService</code> off the cancellation event, not by this module.
+      Reschedule only works while the booking is <code>CONFIRMED</code> or <code>UPCOMING</code>, allows only
+      one pending proposal at a time, and — unlike cancellation — never changes the booking's status; it only
+      overwrites the requested start/end time once the coach accepts.
+    </p>
+
+    <h3>Session completion (live delivery to confirmed completion)</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Coach
+  participant SessionCompletionResource
+  participant BookingCompletionService
+  participant SessionPackService
+  participant Parent
+
+  Coach->>SessionCompletionResource: POST /{id}/start
+  SessionCompletionResource->>BookingCompletionService: startSession() [UPCOMING -> IN_PROGRESS]
+  Coach->>SessionCompletionResource: POST /{id}/end
+  SessionCompletionResource->>BookingCompletionService: endSession() [-> COMPLETED_PENDING_CONFIRMATION]
+  Coach->>SessionCompletionResource: POST /{id}/complete (WrapUpRequest)
+  SessionCompletionResource->>BookingCompletionService: submitWrapUp()
+  alt mode == LIVE (Quick Complete)
+    BookingCompletionService->>BookingCompletionService: transition QUICK_COMPLETE [-> COMPLETED]
+    BookingCompletionService->>SessionPackService: deductCredit()
+    BookingCompletionService--)Parent: BookingCompletedEvent
+  else mode == SCHEDULED
+    BookingCompletionService--)Parent: QuickCompleteConfirmationRequiredEvent
+    Parent->>SessionCompletionResource: PUT /{id}/confirm-completion
+    SessionCompletionResource->>BookingCompletionService: confirmCompletion() [-> COMPLETED]
+    BookingCompletionService->>SessionPackService: deductCredit()
+    BookingCompletionService--)Parent: BookingCompletedEvent
+  end
+    </pre>
+    <p>
+      A live session moves <code>UPCOMING → IN_PROGRESS</code> (optionally through <code>PAUSED</code> and back)
+      and ends in <code>COMPLETED_PENDING_CONFIRMATION</code> once the coach submits a wrap-up
+      (<code>SessionCompletionData</code>: attendance, ratings, voice note, homework drills). If the wrap-up
+      mode is <code>LIVE</code> ("Quick Complete"), the booking is completed and the pack credit deducted
+      immediately. Otherwise the parent must explicitly confirm via <code>confirm-completion</code> before the
+      credit is deducted and <code>BookingCompletedEvent</code> fires — and if the parent never confirms,
+      <code>QuickCompleteTimeoutService</code> force-completes it after a configurable timeout so credits and
+      downstream flows (reviews, development timeline) aren't stuck forever.
+    </p>
+
+    <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout warn">
+      <p><strong>Two parallel session-credit systems exist.</strong> Legacy bookings draw against
+      <code>booking.repo.SessionPackPurchased</code> via <code>SessionPackService</code>
+      (<code>getCreditsRemaining</code>, <code>deductCredit</code>, pause). Bookings created with a
+      <code>sessionPackPurchaseId</code> instead draw against <code>payment.repo.SessionPackPurchase</code> via
+      <code>payment.service.PackSessionService</code>, deducted inside <code>PaymentLifecycleService</code>.
+      Before touching credit logic, check which system the booking you're working on actually uses —
+      <code>BookingService.createBookingRequest()</code> acquires a pessimistic lock on the legacy table
+      "to prevent concurrent double-booking on the old system" even when the new system is the one deducting.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Circular dependencies are broken with <code>@Lazy</code> field injection, not constructor
+      injection.</strong> <code>BookingService</code> ↔ <code>SessionPackService</code> and
+      <code>platform.session.service.DrillSuggestionService</code> ↔ <code>platform.booking.api</code> are both
+      cyclic at the bean level. Follow the existing pattern (<code>@Autowired @Lazy private ...</code> field)
+      when adding new cross-references — introducing a constructor-injected dependency here will break
+      application startup.</p>
+    </div>
+    <div class="callout">
+      <p><strong><code>BookingStateMachine</code> is the only place status transitions are legal.</strong>
+      Never call <code>booking.setStatus(...)</code> directly outside <code>BookingService.transition()</code> —
+      the state machine also enforces which <code>ActorRole</code> may fire which event
+      (<code>EVENT_ROLES</code> map in <code>BookingService</code>), so bypassing it also bypasses that
+      authorization check.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Events are published inside the same <code>@Transactional</code> method that changes state,
+      but listeners run <code>AFTER_COMMIT</code>.</strong> This is intentional (it guarantees the DB row is
+      durable before anyone reacts to it) but means side effects like Stripe charges or emails happen
+      synchronously after the triggering method returns and before the HTTP response is sent — see
+      <code>BookingResource.acceptBooking()</code>, which re-fetches the booking for exactly this reason.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Controller method ordering matters.</strong> In <code>BookingResource</code>,
+      <code>GET /requests/coach</code> is declared before the <code>/{id}/accept</code> and
+      <code>/{id}/decline</code> mappings specifically to avoid Spring path-matching ambiguity with the
+      <code>{id}</code> path variable. Keep new literal-path endpoints above wildcard ones in the same
+      resource.</p>
+    </div>
+
+    <h2>Related Modules</h2>
+    <ul>
+      <li><a href="../marketplace/index.html">Marketplace</a> — supplies coach profiles, pricing, recurring availability windows, and the sellable session pack catalog that booking reads from.</li>
+      <li><a href="../payment/index.html">Payment</a> — owns Stripe charge/refund/capture, the credit wallet, and the newer session-pack-purchase-linked credit system; reacts to every booking lifecycle event to move money.</li>
+      <li><a href="../session/index.html">Session</a> — supplies drill suggestions surfaced after wrap-up and consumes completion data for homework assignment and templates.</li>
+      <li><a href="../security/index.html">Security</a> — provides player/parent identity, ownership checks, and the role-based auth (<code>SecurityConstants</code>) enforced on every booking endpoint.</li>
+      <li><a href="../config/index.html">Config</a> — supplies every tunable threshold used by booking (expiry hours, reminder windows, commission rate, pack expiry tiers, batch size, pause limits).</li>
+      <li><a href="../notification/index.html">Notification</a> — sends the actual booking/pack lifecycle emails off booking's domain events.</li>
+      <li><a href="../development/index.html">Development</a> — builds the player skill timeline and coach reliability scoring from completed/cancelled/no-show booking events.</li>
+      <li><a href="../admin/index.html">Admin</a> — disputes and GDPR erasure/export flows reference booking records directly.</li>
+      <li><a href="../reviews/index.html">Reviews</a> — review eligibility is gated on a completed booking existing between the parties.</li>
+      <li><a href="../index.html">Home</a></li>
+    </ul>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

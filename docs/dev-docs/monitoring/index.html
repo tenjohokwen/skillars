@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monitoring — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <nav>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../tenant/index.html">Tenant</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html" class="active">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Monitoring</div>
+    <h1>Monitoring</h1>
+    <p class="subtitle">A single fail-fast startup guard plus the operational logging/observability surface every other module relies on to be debuggable in production.</p>
+
+    <h2>Business Overview</h2>
+    <p>
+      Skillars coaches, parents, and players book live, time-boxed activity: a session slot, a video review window, a
+      payment that has to clear before a booking is confirmed. None of that tolerates silent failure — a coach whose
+      TLS configuration is quietly broken, or a payment provider call that fails without anyone noticing, turns into a
+      missed session or an unresolved charge with no paper trail. The <code>monitoring</code> module itself is
+      intentionally tiny (one class), but it exists precisely because "fail loudly at startup, and leave a trail once
+      running" is cheaper to guarantee once, centrally, than to re-check per module. This page also anchors the
+      broader operability story &mdash; structured logs and the LGTM stack &mdash; that every module depends on when
+      something goes wrong in production.
+    </p>
+
+    <h2>Technical Overview</h2>
+    <h3><code>TlsStartupAssertion</code></h3>
+    <p>
+      <code>TlsStartupAssertion</code> (<code>platform.monitoring</code>) is a Spring
+      <code>ApplicationListener&lt;ApplicationReadyEvent&gt;</code>. It deliberately hooks <code>ApplicationReadyEvent</code>
+      rather than <code>@PostConstruct</code>: <code>ApplicationReadyEvent</code> fires only after every bean is fully
+      wired and the application is ready to accept traffic, which is the correct point for an operational
+      "is production configured correctly" assertion &mdash; a <code>@PostConstruct</code> check could run before
+      other configuration has finished loading.
+    </p>
+    <p>On firing, the assertion does two things in order:</p>
+    <ul>
+      <li><strong>Dev-profile guard.</strong> If the active Spring profiles include <code>dev</code>, the assertion
+        logs a debug line and returns immediately. Local/sandbox <code>application.yaml</code> intentionally sets
+        <code>checkCertificate: false</code> via the shared <code>*DEFAULT_TCP</code> YAML anchor, and the assertion
+        must not block that.</li>
+      <li><strong>Certificate-check assertion.</strong> Outside the <code>dev</code> profile, it reads
+        <code>client.momo.tcp-config.check-certificate</code> (defaulting to <code>true</code> if the property is
+        absent &mdash; safe-by-default). Both the Orange Money and MTN MoMo mobile-money provider clients share this
+        same flag via the YAML anchor. If it resolves to <code>false</code>, the assertion throws
+        <code>AppSetupException</code> with a message pointing at the exact property to fix.</li>
+    </ul>
+    <p>
+      Because <code>AppSetupException</code> is thrown from an <code>ApplicationReadyEvent</code> listener, Spring
+      Boot treats it as a startup failure: the context fails to complete refresh and the JVM exits non-zero rather
+      than serving traffic with certificate verification silently disabled. This is the fail-fast contract &mdash; a
+      misconfigured production/staging deployment never comes up "green" with TLS verification off for the payment
+      providers.
+    </p>
+
+    <h3>Structured logging</h3>
+    <p>
+      <code>src/main/resources/config/logback-spring.xml</code> configures a single <code>ConsoleAppender</code> named
+      <code>JSON</code>, using <code>logstash-logback-encoder</code>'s <code>LoggingEventCompositeJsonEncoder</code>.
+      Every log line is emitted as JSON with UTC timestamp, level, thread, logger name, message, MDC context, and
+      exception arguments/stack trace, plus a fixed <code>service</code>/<code>environment</code>/<code>version</code>
+      block sourced from <code>spring.application.name</code>, <code>app.environment</code>, and <code>app.version</code>.
+      This is what makes log lines machine-parseable for LogQL queries once/if they reach Loki (see the callout below).
+    </p>
+
+    <h3>The LGTM stack</h3>
+    <p>
+      Beyond this module, Skillars documents a full LGTM (Loki, Grafana, Tempo, Prometheus/Mimir) observability stack
+      for the payment-orchestration surface: structured logs for exact error context, Prometheus/Mimir metrics for
+      rate/volume health signals, Tempo traces for causal request chains, and Grafana for unified dashboards and
+      alerting. See <a href="../../lgtm-observability.md">docs/lgtm-observability.md</a> for the full LogQL/PromQL/TraceQL
+      query reference, incident runbooks, dashboard panel definitions, and alert rules. For how to bring the stack up
+      locally alongside the app, see <a href="../../deployment/local-deployment.md">docs/deployment/local-deployment.md</a>.
+    </p>
+
+    <h2>Key Flows</h2>
+    <pre class="mermaid">
+flowchart TD
+  A[ApplicationReadyEvent fires] --> B{dev profile active?}
+  B -- yes --> C[log.debug: assertion skipped]
+  C --> Z[App continues serving traffic]
+  B -- no --> D[Read client.momo.tcp-config.check-certificate<br/>default = true]
+  D --> E{checkCertificate == true?}
+  E -- yes --> F[log.info: TLS assertion passed]
+  F --> Z
+  E -- no --> G[throw AppSetupException]
+  G --> H[Spring context fails to complete refresh]
+  H --> I[JVM exits non-zero — app never serves traffic]
+    </pre>
+    <p>
+      The assertion runs exactly once per boot, after the full application context is up. In the common case (dev
+      profile, or a correctly configured non-dev environment) it is a no-op observability line and the app proceeds
+      normally. The failure path only triggers when a non-dev deployment has <code>checkCertificate: false</code> set
+      for the shared Orange/MTN TCP config &mdash; a configuration mistake that would otherwise let payment-provider
+      HTTP clients skip certificate verification silently. Throwing from an <code>ApplicationReadyEvent</code>
+      listener is what converts that mistake into a hard, visible deployment failure instead of a runtime security gap
+      discovered later.
+    </p>
+
+    <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout warn">
+      <p><strong>Loki log shipping is not actually wired up.</strong> <code>logback-spring.xml</code> defines
+      <code>lokiUrl</code>/<code>lokiEnabled</code> Spring properties (sourced from <code>loki.url</code>/<code>loki.enabled</code>)
+      and the project depends on <code>loki-logback-appender</code>, but no Loki appender is configured in the
+      logback file &mdash; only the console <code>JSON</code> appender is attached to <code>root</code>. In practice
+      this means <code>docker logs</code>/<code>dcl logs</code> against the running container is the only way to see
+      application logs today, and the Loki datasource in Grafana Explore will return nothing no matter how the LogQL
+      query in <a href="../../lgtm-observability.md">docs/lgtm-observability.md</a> is written. Treat every LogQL
+      example there as aspirational/reference until a Loki appender is actually added to <code>logback-spring.xml</code>.</p>
+    </div>
+    <div class="callout">
+      <p><strong>The dev-profile skip is a deliberate escape hatch, not a bug.</strong> Local/sandbox
+      <code>application.yaml</code> intentionally sets <code>checkCertificate: false</code> on the shared
+      <code>*DEFAULT_TCP</code> anchor so developers can hit mock/sandboxed provider endpoints without valid certs.
+      Don't "fix" this by removing the dev-profile guard in <code>TlsStartupAssertion</code> &mdash; that would break
+      local development instead.</p>
+    </div>
+    <div class="callout">
+      <p><strong>One flag governs both providers.</strong> Orange Money and MTN MoMo TCP client config share the same
+      <code>*DEFAULT_TCP</code> YAML anchor, so <code>client.momo.tcp-config.check-certificate</code> is a single
+      switch for certificate verification across both provider integrations &mdash; there's no way to disable it for
+      one provider only via this property.</p>
+    </div>
+
+    <h2>Related Modules</h2>
+    <ul>
+      <li><a href="../infrastructure/index.html">Infrastructure</a> &mdash; supplies <code>AppSetupException</code> (thrown by <code>TlsStartupAssertion</code>) and other shared exception/config primitives; also where the console JSON logging pattern is consumed uniformly across modules.</li>
+      <li><a href="../index.html">Home</a></li>
+    </ul>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

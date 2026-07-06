@@ -220,7 +220,7 @@ public class ParentRegistrationService {
         token.setUsed(false);
         emailTokenRepository.save(token);
 
-        String verifyUrl = frontendUrl + "/parent/verify-email?token=" + token.getToken() +
+        String verifyUrl = frontendUrl + "/#/parent/verify-email?token=" + token.getToken() +
             "&email=" + URLEncoder.encode(user.getEmail(), StandardCharsets.UTF_8);
         publisher.publishEvent(new ParentVerificationEmailEvent(
             user.getEmail(), verifyUrl, user.getLangKey(), user.getFirstName()));

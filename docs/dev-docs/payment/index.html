@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Payment — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <nav>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../tenant/index.html">Tenant</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Payment</div>
+    <h1>Payment</h1>
+    <p class="subtitle">Moves money between parents, coaches, and the platform — Stripe Connect payouts, credit wallets, subscriptions, session packs, and the reliability-strike system that keeps coach supply honest.</p>
+
+    <h2>Business Overview</h2>
+    <p>
+      Skillars is a two-sided marketplace: parents pay for their kids' coaching sessions, and coaches need
+      to get paid out reliably without the platform touching card numbers or bank details directly. The
+      <code>payment</code> module is the single place where money actually moves. It owns four related but
+      distinct concerns:
+    </p>
+    <div class="card-grid">
+      <div class="card">
+        <strong>Coach payouts (Stripe Connect)</strong>
+        <p>Coaches onboard via a Stripe Connect OAuth flow. Once Stripe confirms <code>charges_enabled</code>
+        and <code>payouts_enabled</code>, the platform can create Destination Charges that split a booking's
+        price into a coach payout and a platform commission in a single Stripe call.</p>
+      </div>
+      <div class="card">
+        <strong>Parent credit wallet</strong>
+        <p>Refunds, admin adjustments, and pack-related reversals are never sent back to a card immediately —
+        they land in an append-only <code>parent_credit_ledger</code> as store credit. Parents can later
+        "cash out" that credit back to their card (minus a Stripe processing fee) or spend it on future bookings.</p>
+      </div>
+      <div class="card">
+        <strong>Subscriptions &amp; session packs</strong>
+        <p>Coaches subscribe to tiers (SCOUT/INSTRUCTOR/ACADEMY) that unlock marketplace visibility features;
+        players/parents subscribe to tiers (ATHLETE/SEMI_PRO/PRO) that unlock video/skill-radar features.
+        Parents can alternatively prepay a coach-defined session pack (bulk sessions at a fixed per-session
+        price) instead of paying per booking.</p>
+      </div>
+      <div class="card">
+        <strong>Reliability strikes</strong>
+        <p>Coaches who cancel late or no-show accumulate strikes. A rolling 30-day strike count drives two
+        marketplace consequences: reduced search visibility, then suspension pending admin review — this is
+        the module's main trust &amp; safety lever over coach behavior.</p>
+      </div>
+    </div>
+
+    <h3>Key business rules found in the code</h3>
+    <div class="callout">
+      <p><strong>Commission &amp; fees.</strong> Every Stripe destination charge deducts a platform commission
+      (<code>platform.commission.rate</code>, config-driven) as <code>application_fee_amount</code>, on top of
+      Stripe's own processing fee (<code>payment.stripe.feeRate</code> + <code>payment.stripe.feeFixed</code>),
+      which is also charged separately to parents cashing out credit.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Cancellation refund matrix.</strong> Parent cancellations only refund if made &gt;24h before
+      the session (<code>event.isRefundEligible()</code>); otherwise the session/credit is forfeited. Coach
+      cancellations and coach no-shows always refund the parent (credit or restored pack session) and, unless
+      the reason is one of <code>MUTUAL_AGREEMENT</code>, <code>HEALTH_MEDICAL</code>, <code>FAMILY_EMERGENCY</code>,
+      <code>WEATHER</code>, also trigger a reliability strike. Player no-shows forfeit the fee with no refund
+      and no strike.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Reliability thresholds.</strong> Counting strikes in the trailing 30 days: reaching
+      <code>reliability.strike.visibilityThreshold</code> (default 3) reduces marketplace visibility; reaching
+      <code>reliability.strike.suspensionThreshold</code> (default 5) moves the coach to
+      <code>PENDING_REVIEW</code> for manual admin action. These two outcomes are mutually exclusive per
+      invocation — suspension is checked first.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Session packs expire and can be extended once.</strong> A purchased pack expires 60 days
+      after purchase. The coach can extend it by 30 more days, but only once (<code>extendedAt</code> must be
+      null) and only within a 14-day window before expiry. Packs nearing expiry with sessions remaining trigger
+      a daily warning notification 14 days out.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Subscription tier changes are asymmetric.</strong> Upgrades apply immediately with Stripe
+      proration; downgrades are scheduled to take effect at the current billing period's end via a
+      <code>*_subscription_changes</code> table, applied by a nightly cron job. Player SEMI_PRO/PRO tiers are
+      yearly-billing only.</p>
+    </div>
+
+    <h2>Technical Overview</h2>
+    <h3>Package layout</h3>
+    <table>
+      <thead><tr><th>Package</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>payment.api</code></td><td>REST controllers (8 resources) plus <code>PaymentApiAdvice</code>, a module-scoped exception handler for <code>PaymentGatewayException</code>.</td></tr>
+        <tr><td><code>payment.service</code></td><td>All business logic — Stripe integration, subscriptions, credit wallet, session packs, reliability strikes, revenue reporting, and scheduled jobs.</td></tr>
+        <tr><td><code>payment.repo</code></td><td>JPA entities (schema <code>payment</code>) and Spring Data repositories.</td></tr>
+        <tr><td><code>payment.contract</code></td><td>Request/response DTOs, the <code>PaymentGateway</code> port interface, and enums (<code>BillingInterval</code>, <code>SubscriptionStatus</code>, <code>PaymentGateway</code>).</td></tr>
+        <tr><td><code>payment.contract.event</code></td><td>Domain events published by this module (Stripe onboarding complete, strike threshold reached, coach visibility reduced, subscription expired).</td></tr>
+        <tr><td><code>payment.contract.exception</code></td><td><code>PaymentGatewayException</code> (mapped to HTTP 422) and <code>WebhookSignatureException</code> (mapped to HTTP 400).</td></tr>
+        <tr><td><code>payment.adapter</code></td><td><code>PlayerSubscriptionQueryAdapter</code> — implements the <code>video</code> module's <code>PlayerSubscriptionQueryPort</code> so video can query subscription status without depending on payment internals.</td></tr>
+        <tr><td><code>payment.config</code></td><td><code>PaymentConfig</code> (Stripe SDK bootstrap) and <code>PaymentProperties</code> (<code>app.payment.stripe.*</code> configuration properties).</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Key entities &amp; DB tables</h3>
+    <table>
+      <thead><tr><th>Entity</th><th>Table (schema <code>payment</code>)</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td>BookingPayment</td><td>booking_payments</td><td>One row per booking: credit vs. Stripe split, Stripe PaymentIntent id, capture/freeze status.</td></tr>
+        <tr><td>StripeCustomer</td><td>stripe_customers</td><td>Parent → Stripe Customer id + saved default payment method + last PaymentIntent (used for cash-out refunds).</td></tr>
+        <tr><td>CoachStripeAccount</td><td>coach_stripe_accounts</td><td>Coach → connected Stripe account id, onboarding status (PENDING/COMPLETE/RESTRICTED), charges/payouts-enabled flags.</td></tr>
+        <tr><td>StripeWebhookEvent</td><td>stripe_webhook_events</td><td>Idempotency ledger — one row per processed Stripe event id, inserted via <code>ON CONFLICT DO NOTHING</code>.</td></tr>
+        <tr><td>ParentCreditLedger</td><td>parent_credit_ledger</td><td>Append-only ledger of credit movements (deductions, refunds, cash-outs, reversals); balance = SUM(amount).</td></tr>
+        <tr><td>PaymentCoachSubscription</td><td>coach_subscriptions</td><td>Coach's current subscription tier/status/Stripe subscription id/period end.</td></tr>
+        <tr><td>PaymentPlayerSubscription</td><td>player_subscriptions</td><td>Player's current subscription tier/billing interval/status (player id is a BIGINT TSID, not UUID).</td></tr>
+        <tr><td>CoachSubscriptionChange / PlayerSubscriptionChange</td><td>coach_subscription_changes / player_subscription_changes</td><td>Pending scheduled tier downgrades, applied at period end by a cron job.</td></tr>
+        <tr><td>SessionPackTier</td><td>session_pack_tiers</td><td>Coach-defined pack offer (label, session count, total price); only one active tier per coach at a time.</td></tr>
+        <tr><td>SessionPackPurchase</td><td>session_pack_purchases</td><td>Parent's purchased pack instance — remaining sessions, expiry, one-time extension, optimistic version for concurrent deduction safety.</td></tr>
+        <tr><td>CoachCancellationHistory</td><td>coach_cancellation_history</td><td>Audit trail of every coach-initiated cancellation and its reason, independent of whether a strike was issued.</td></tr>
+      </tbody>
+    </table>
+    <p>Reliability strikes themselves (<code>CoachReliabilityStrike</code>) are owned by the <code>marketplace</code> module's repo package, not payment — payment only issues/reads them through <code>CoachReliabilityStrikeRepository</code>.</p>
+
+    <h3>Key services</h3>
+    <table>
+      <thead><tr><th>Service</th><th>Orchestrates</th></tr></thead>
+      <tbody>
+        <tr><td>StripeOnboardingService</td><td>Generates the Stripe Connect OAuth authorize URL and exchanges the OAuth code for a connected account id (state param doubles as coach id for CSRF binding).</td></tr>
+        <tr><td>StripeWebhookService</td><td>Verifies webhook signatures, enforces idempotency, and routes <code>account.updated</code> / <code>customer.subscription.*</code> / <code>invoice.payment_failed</code> events.</td></tr>
+        <tr><td>StripeClient</td><td>Thin, mockable wrapper around static Stripe SDK calls (PaymentIntent, Subscription, Refund, SetupIntent, Customer) — the only class that talks to the Stripe Java SDK directly.</td></tr>
+        <tr><td>StripePaymentGateway</td><td>Implements the <code>PaymentGateway</code> port: Destination Charges with commission as <code>application_fee_amount</code>, refunds, SetupIntents, Stripe customer creation.</td></tr>
+        <tr><td>SubscriptionService</td><td>Coach/player tier catalogue, subscribe/upgrade/downgrade/cancel, webhook-driven status sync, scheduled downgrade application and PAST_DUE grace-period expiry.</td></tr>
+        <tr><td>CreditWalletService</td><td>Reads ledger balance (SUM) and writes ledger entries; cash-out debit runs at SERIALIZABLE isolation to prevent double-spend races.</td></tr>
+        <tr><td>CashOutService</td><td>Converts parent credit balance into a Stripe refund to their saved card, minus processing fee, with compensating ledger reversal if the Stripe refund fails.</td></tr>
+        <tr><td>PackSessionService</td><td>Deducts/restores a session from a purchased pack under a pessimistic row lock; publishes <code>SessionPackExhaustedEvent</code> when a pack hits zero.</td></tr>
+        <tr><td>PaymentLifecycleService</td><td>Listens for <code>BookingAcceptedEvent</code>/<code>BatchBookingAcceptedEvent</code> and decides credit-vs-Stripe split per booking (or per batch).</td></tr>
+        <tr><td>BookingPaymentPersistenceService</td><td>Atomically persists the <code>BookingPayment</code> row, ledger deduction, and booking state transition, then publishes <code>BookingConfirmedEvent</code>/<code>BookingDeclinedEvent</code>.</td></tr>
+        <tr><td>CancellationRefundService</td><td>Listens for cancellation/no-show events, applies the refund matrix, records cancellation history, and issues reliability strikes for unexcused coach cancellations/no-shows.</td></tr>
+        <tr><td>ReliabilityStrikeService</td><td>Issues strikes, evaluates rolling 30-day thresholds, and flips coach status to REDUCED or PENDING_REVIEW.</td></tr>
+        <tr><td>RevenueReportingService</td><td>Read-only reporting: coach revenue summaries/transactions/receipts, parent credit statements, and admin platform-wide finance overview.</td></tr>
+        <tr><td>SessionPackPaymentService</td><td>Purchase/extend a pack and coach tier CRUD (create/deactivate), with compensating Stripe refund if local persistence fails after a successful charge.</td></tr>
+        <tr><td>SessionPackExpiryNotifier / SubscriptionChangeApplicator / SubscriptionGracePeriodChecker</td><td>Scheduled jobs (daily 08:00, nightly 02:00, nightly 03:00) for pack expiry warnings, applying scheduled downgrades, and downgrading PAST_DUE subscriptions after grace period.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>REST endpoints</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr></thead>
+      <tbody>
+        <tr><td>GET</td><td>/api/admin/payment/overview</td><td>Platform-wide finance overview (gross volume, commission, fees, active subscriptions)</td><td>ADMIN</td></tr>
+        <tr><td>GET</td><td>/api/admin/payment/coaches/{coachId}/revenue</td><td>Per-coach revenue + strike/dispute counters for admin view</td><td>ADMIN</td></tr>
+        <tr><td>GET</td><td>/api/payment/credits/balance</td><td>Parent's current credit wallet balance</td><td>PARENT</td></tr>
+        <tr><td>POST</td><td>/api/payment/credits/cashout</td><td>Convert credit balance to a Stripe refund (minus fee)</td><td>PARENT</td></tr>
+        <tr><td>GET</td><td>/api/payment/coaches/me/strikes</td><td>Coach's own reliability strike history</td><td>COACH</td></tr>
+        <tr><td>PUT</td><td>/api/payment/coaches/strikes/{strikeId}/acknowledge</td><td>Coach acknowledges a strike</td><td>COACH</td></tr>
+        <tr><td>GET</td><td>/api/payment/coaches/me/revenue</td><td>Coach revenue summary for a period</td><td>COACH</td></tr>
+        <tr><td>GET</td><td>/api/payment/coaches/me/transactions</td><td>Paged coach transaction list</td><td>COACH</td></tr>
+        <tr><td>GET</td><td>/api/payment/coaches/bookings/{bookingId}/receipt</td><td>Coach-facing receipt for a booking</td><td>COACH</td></tr>
+        <tr><td>GET</td><td>/api/payment/parents/bookings/{bookingId}/receipt</td><td>Parent-facing receipt for a booking</td><td>PARENT</td></tr>
+        <tr><td>GET</td><td>/api/payment/credits/statement</td><td>Paged parent credit ledger statement with running balance</td><td>PARENT</td></tr>
+        <tr><td>POST</td><td>/api/payment/session-packs/purchase</td><td>Purchase a coach's active session pack tier</td><td>PARENT</td></tr>
+        <tr><td>POST</td><td>/api/payment/session-packs/{purchaseId}/extend</td><td>One-time 30-day extension near expiry</td><td>COACH</td></tr>
+        <tr><td>GET</td><td>/api/payment/coaches/me/session-pack-tiers</td><td>List own pack tiers (active + inactive)</td><td>COACH</td></tr>
+        <tr><td>POST</td><td>/api/payment/coaches/me/session-pack-tiers</td><td>Create a new pack tier (deactivates prior active tier)</td><td>COACH</td></tr>
+        <tr><td>PATCH</td><td>/api/payment/coaches/me/session-pack-tiers/{tierId}/deactivate</td><td>Deactivate a pack tier</td><td>COACH</td></tr>
+        <tr><td>GET</td><td>/api/payment/coaches/{coachId}/session-pack-tiers</td><td>Discover a coach's currently active pack tier</td><td>PARENT</td></tr>
+        <tr><td>POST</td><td>/api/payment/setup-intent</td><td>Create a Stripe SetupIntent to save a card</td><td>PARENT</td></tr>
+        <tr><td>POST</td><td>/api/payment/save-payment-method</td><td>Attach a saved payment method to the parent's Stripe customer</td><td>PARENT</td></tr>
+        <tr><td>GET</td><td>/api/payment/coaches/me/stripe/onboard</td><td>Get the Stripe Connect OAuth authorize URL</td><td>COACH</td></tr>
+        <tr><td>GET</td><td>/api/payment/coaches/me/stripe/callback</td><td>Stripe OAuth redirect target — exchanges code, validates state</td><td>COACH</td></tr>
+        <tr><td>GET</td><td>/api/payment/coaches/me/stripe/status</td><td>Coach's current Stripe onboarding/charges/payouts status</td><td>COACH</td></tr>
+        <tr><td>POST</td><td>/api/payment/webhooks/stripe</td><td>Stripe webhook receiver (signature-verified, not session-authenticated)</td><td>permitAll</td></tr>
+        <tr><td>GET</td><td>/api/payment/subscriptions/coach/tiers</td><td>List coach subscription tier catalogue</td><td>permitAll</td></tr>
+        <tr><td>GET</td><td>/api/payment/subscriptions/coach/me</td><td>Coach's current subscription</td><td>COACH</td></tr>
+        <tr><td>POST</td><td>/api/payment/subscriptions/coach/subscribe</td><td>Subscribe to a paid coach tier</td><td>COACH</td></tr>
+        <tr><td>POST</td><td>/api/payment/subscriptions/coach/change-tier</td><td>Upgrade (immediate) or downgrade (scheduled) coach tier</td><td>COACH</td></tr>
+        <tr><td>DELETE</td><td>/api/payment/subscriptions/coach</td><td>Cancel coach subscription at period end</td><td>COACH</td></tr>
+        <tr><td>GET</td><td>/api/payment/subscriptions/player/tiers</td><td>List player subscription tier catalogue</td><td>permitAll</td></tr>
+        <tr><td>GET</td><td>/api/payment/subscriptions/player/me</td><td>Player's current subscription</td><td>Parent, ownership-checked via <code>playerOwnershipGuard</code></td></tr>
+        <tr><td>POST</td><td>/api/payment/subscriptions/player/subscribe</td><td>Subscribe a player to a tier + billing interval</td><td>PARENT</td></tr>
+        <tr><td>POST</td><td>/api/payment/subscriptions/player/change-tier</td><td>Upgrade/downgrade a player's tier</td><td>PARENT</td></tr>
+        <tr><td>DELETE</td><td>/api/payment/subscriptions/player</td><td>Cancel a player's subscription at period end</td><td>PARENT</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Domain events</h3>
+    <table>
+      <thead><tr><th>Event</th><th>Direction</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>BookingAcceptedEvent / BatchBookingAcceptedEvent</td><td>Consumed (from <code>booking</code>)</td><td>Drives <code>PaymentLifecycleService</code>'s credit/Stripe split, listened at AFTER_COMMIT.</td></tr>
+        <tr><td>BookingCancelledByParentEvent / ByCoachEvent / ByAdminEvent, CoachNoShowEvent, PlayerNoShowEvent</td><td>Consumed (from <code>booking</code>)</td><td>Drives <code>CancellationRefundService</code>'s refund/forfeit/strike logic, all at AFTER_COMMIT in a new transaction.</td></tr>
+        <tr><td>BookingConfirmedEvent / BookingDeclinedEvent</td><td>Published (booking's own contract)</td><td>Fired after payment capture succeeds/fails so booking/notification flows can react.</td></tr>
+        <tr><td>SessionPackExhaustedEvent / SessionPackExpiryWarningEvent</td><td>Published (booking's own contract, reused)</td><td>Fired when a pack hits zero remaining sessions, or is within 14 days of expiry.</td></tr>
+        <tr><td>CoachStripeOnboardingCompleteEvent</td><td>Published</td><td>Fired after webhook commit once Stripe reports both charges and payouts enabled.</td></tr>
+        <tr><td>StrikeThresholdReachedEvent</td><td>Published</td><td>Consumed by <code>admin.service.AdminAlertEventListener</code> — surfaces coaches suspended pending review.</td></tr>
+        <tr><td>CoachVisibilityReducedEvent</td><td>Published</td><td>Fired when a coach crosses the visibility-reduction strike threshold.</td></tr>
+        <tr><td>SubscriptionExpiredEvent</td><td>Published</td><td>Consumed by <code>video.service.VideoSubscriptionLifecycleListener</code> to gate video/skill-radar features on subscription tier.</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Key Flows</h2>
+
+    <h3>Coach Stripe Connect onboarding</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Coach as Coach (browser)
+  participant API as StripeOnboardingResource
+  participant Svc as StripeOnboardingService
+  participant Stripe as Stripe OAuth
+  participant DB as coach_stripe_accounts
+
+  Coach->>API: GET /coaches/me/stripe/onboard
+  API->>Svc: generateOnboardingUrl(coachId)
+  Svc->>Stripe: OAuth.authorizeUrl(state=coachId)
+  Stripe-->>Svc: authorize URL
+  Svc-->>Coach: StripeOnboardingUrlResponse
+  Coach->>Stripe: redirected, approves Connect access
+  Stripe-->>API: GET /coaches/me/stripe/callback?code&state
+  API->>API: validate state == coachId (CSRF guard)
+  API->>Svc: handleOAuthCallback(coachId, code)
+  Svc->>Stripe: OAuth.token(code)
+  Stripe-->>Svc: stripe_user_id (connected account id)
+  Svc->>DB: upsert CoachStripeAccount(status=PENDING)
+  API-->>Coach: redirect to /coach/payment-settings
+    </pre>
+    <p>
+      Onboarding uses Stripe's OAuth Connect flow rather than embedded Account Links — the coach is
+      redirected to Stripe, authorizes access, and Stripe redirects back to a backend callback endpoint
+      (not the frontend) with a one-time code and the original <code>state</code> value. The controller
+      checks that <code>state</code> equals the authenticated coach's id before exchanging the code, which
+      prevents an attacker from linking their own Stripe account to a victim coach's session (CSRF
+      account-linking). The account starts in <code>PENDING</code> status; it only flips to
+      <code>COMPLETE</code> later, asynchronously, via the <code>account.updated</code> webhook — the
+      OAuth callback itself never sets <code>chargesEnabled</code>/<code>payoutsEnabled</code>.
+    </p>
+
+    <h3>Stripe webhook: idempotent, signature-verified event processing</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Stripe
+  participant WH as StripeWebhookResource
+  participant Svc as StripeWebhookService
+  participant Idem as stripe_webhook_events
+  participant Acct as CoachStripeAccount
+  participant Sub as SubscriptionService
+
+  Stripe->>WH: POST /webhooks/stripe (Stripe-Signature header)
+  WH->>Svc: processWebhook(payload, sigHeader)
+  Svc->>Svc: Webhook.constructEvent (verify signature, outside TX)
+  Svc->>Idem: INSERT eventId ON CONFLICT DO NOTHING (in TX)
+  alt duplicate event (0 rows inserted)
+    Idem-->>Svc: no-op, return
+  else new event
+    alt account.updated
+      Svc->>Acct: set chargesEnabled / payoutsEnabled
+      Svc->>Acct: status = COMPLETE or RESTRICTED
+      Svc-->>Svc: publish CoachStripeOnboardingCompleteEvent after commit
+    else customer.subscription.updated / deleted
+      Svc->>Sub: handleSubscriptionWebhook(type, subId, data)
+      Sub->>Sub: sync status / currentPeriodEnd, or reset to free tier
+    else invoice.payment_failed
+      Svc->>Sub: mark PAST_DUE, stamp pastDueSince (first failure only)
+    end
+  end
+  WH-->>Stripe: 200 OK
+    </pre>
+    <p>
+      Signature verification happens outside any transaction; the idempotency insert and the actual event
+      handling then run atomically inside one <code>@Transactional</code> method
+      (<code>handleEventAtomically</code>) via a self-injected proxy, so a duplicate Stripe retry can never
+      partially apply an event. If the SDK fails to deserialize the payload for
+      <code>account.updated</code> or <code>invoice.payment_failed</code>, the handler re-throws so the
+      whole transaction — including the idempotency row — rolls back, letting Stripe retry until the
+      deserialization bug is fixed rather than silently losing the event forever.
+    </p>
+
+    <h3>Booking payment capture: credit wallet + Stripe destination charge</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Booking as BookingService
+  participant Life as PaymentLifecycleService
+  participant Wallet as CreditWalletService
+  participant Gateway as StripePaymentGateway
+  participant Persist as BookingPaymentPersistenceService
+
+  Booking-->>Life: BookingAcceptedEvent (AFTER_COMMIT)
+  Life->>Wallet: getBalance(parentId)
+  Wallet-->>Life: creditBalance
+  Life->>Life: creditToUse = min(balance, price)<br/>stripeAmount = price - creditToUse
+  alt stripeAmount > 0
+    Life->>Gateway: chargeAndCapture(bookingId, parentId, coachId, stripeAmount)
+    Gateway->>Gateway: Destination Charge, transfer_data.destination = coach account,<br/>application_fee_amount = commission
+    Gateway-->>Life: stripePaymentIntentId
+  end
+  Life->>Persist: persistPaymentSuccess(creditDebited, stripeCharged, ...)
+  Persist->>Persist: write BOOKING_DEDUCTION ledger entry (if credit used)
+  Persist->>Persist: save BookingPayment(status=CAPTURED)
+  Persist->>Booking: transition(PAYMENT_CAPTURED)
+  Persist-->>Booking: publish BookingConfirmedEvent
+    </pre>
+    <p>
+      Credit is applied first, and Stripe is only charged for the remainder — so a parent with full credit
+      coverage never touches Stripe for that booking. The Stripe call happens outside any local transaction
+      (network I/O should never hold a DB transaction open); only after it succeeds (or is skipped entirely)
+      does <code>BookingPaymentPersistenceService</code> commit the ledger entry, the
+      <code>BookingPayment</code> row, and the booking's state transition to <code>CONFIRMED</code> as one
+      atomic unit. If the Stripe charge throws, the booking is instead transitioned to
+      <code>PAYMENT_FAILED</code> and no credit is ever debited. The batch variant
+      (<code>onBatchBookingAccepted</code>) applies the same logic across many bookings sharing one Stripe
+      charge, splitting the credit/Stripe amounts proportionally per booking afterward.
+    </p>
+
+    <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout warn">
+      <p><strong>Never skip webhook signature verification or idempotency.</strong> <code>/api/payment/webhooks/stripe</code>
+      is <code>permitAll</code> by necessity (Stripe doesn't send session cookies), so
+      <code>Webhook.constructEvent(...)</code> is the only thing standing between this endpoint and anyone on
+      the internet forging account/subscription state changes. Any new webhook handler must also go through
+      <code>StripeWebhookService.handleEventAtomically</code> so the <code>stripe_webhook_events</code>
+      insert-if-absent still protects against Stripe's at-least-once retry delivery.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Stripe SDK calls must stay outside <code>@Transactional</code> methods.</strong> The
+      services deliberately split "make the Stripe network call" from "persist the result" into separate
+      methods, invoked through a <code>@Autowired @Lazy</code> self-reference so Spring's transactional proxy
+      is honoured on the persistence half only (a direct <code>this.foo()</code> call bypasses the proxy).
+      Wrapping a Stripe call inside a DB transaction risks holding a row lock or connection for the duration
+      of a slow external HTTP call.</p>
+    </div>
+    <div class="callout">
+      <p><strong>The credit ledger is append-only.</strong> <code>parent_credit_ledger</code> rows are never
+      updated or deleted — balance is always <code>SUM(amount)</code> via
+      <code>ledgerRepository.sumByParentId</code>. Compensating a failed operation means writing a new
+      reversal row (e.g. <code>CASH_OUT_REVERSAL</code>), never mutating the original entry. Cash-out debits
+      run at <code>SERIALIZABLE</code> isolation specifically to prevent two concurrent cash-out requests
+      from both reading a stale balance and double-spending the same credit.</p>
+    </div>
+    <div class="callout">
+      <p><strong>A coach can't be charged through until Stripe onboarding is COMPLETE.</strong>
+      <code>StripePaymentGateway.resolveCoachStripeAccountId</code> throws
+      <code>payment.coachStripeNotConfigured</code> (mapped to HTTP 422, logged at WARN not ERROR since it's
+      an expected state) if the coach's <code>onboarding_status</code> isn't <code>COMPLETE</code> with
+      <code>charges_enabled</code> true. This is booking's most common "why did payment fail" support case.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Session pack deduction/restoration uses a pessimistic lock.</strong>
+      <code>PackSessionService</code> reads via <code>findByIdForUpdate</code>, not the plain repository
+      finder, because concurrent bookings against the same pack (e.g. two devices) would otherwise both read
+      the same <code>remainingSessions</code> and both decrement from it, under-counting the deduction.</p>
+    </div>
+
+    <h2>Related Modules</h2>
+    <ul>
+      <li><a href="../booking/index.html">Booking</a> — payment listens for <code>BookingAcceptedEvent</code>/cancellation/no-show events and calls back into <code>BookingService.transition(...)</code>; booking owns the events, payment owns the money.</li>
+      <li><a href="../marketplace/index.html">Marketplace</a> — coach subscription tier and reliability strikes are surfaced through marketplace's <code>CoachProfile</code>, <code>CoachSubscription</code>, and <code>CoachReliabilityStrike</code> entities, which payment reads/writes directly.</li>
+      <li><a href="../security/index.html">Security</a> — <code>SecurityUtil</code> resolves the current user id/role, and <code>ParentPlayerLinkRepository</code> enforces parent-player ownership before subscribing/cancelling a player's plan.</li>
+      <li><a href="../config/index.html">Config</a> — <code>ConfigService</code> supplies commission rate, Stripe fee rate/fixed, subscription price ids, tier feature lists, and reliability strike thresholds, all without redeploying.</li>
+      <li><a href="../admin/index.html">Admin</a> — <code>AdminAlertEventListener</code> consumes <code>StrikeThresholdReachedEvent</code>; <code>AdminCoachEnforcementService</code>, <code>DisputeService</code>, and <code>GdprExportService</code> read payment data for enforcement, disputes, and data export.</li>
+      <li><a href="../video/index.html">Video</a> — <code>VideoSubscriptionLifecycleListener</code> consumes <code>SubscriptionExpiredEvent</code>, and <code>PlayerSubscriptionQueryAdapter</code> implements video's <code>PlayerSubscriptionQueryPort</code> to gate features by tier.</li>
+      <li><a href="../infrastructure/index.html">Infrastructure</a> — uses shared <code>ResourceNotFoundException</code>, <code>ErrorDto</code>/<code>ErrorMsg</code>, and <code>SecurityConstants</code>/<code>SecurityError</code> primitives.</li>
+      <li><a href="../index.html">Home</a></li>
+    </ul>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

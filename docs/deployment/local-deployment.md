@@ -457,3 +457,11 @@ querying `{service="skillars"}` in Grafana Explore against the `Loki`
 datasource — zero results — while `docker logs skillars-app-1` shows plenty
 of output for the same window. Wiring up the appender (so Explore/LogQL
 actually work) is a separate follow-up, not done as part of this guide.
+
+
+## Manual migration
+* Spring boot will usually do the flyway migration once app is run, however it can be run manually
+
+```shell
+  docker exec -i skillars-postgres-1 psql -U postgres -d skillars < src/main/resources/db/migration/V85__phone_otp_required_toggle.sql
+```

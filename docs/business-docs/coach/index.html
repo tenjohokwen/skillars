@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coach — Skillars Business Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Business Docs<small>Understand the product, persona by persona</small></a>
+    <nav>
+      <h4>Personas</h4>
+      <ul>
+        <li><a href="../player/index.html">Player</a></li>
+        <li><a href="../parent/index.html">Parent</a></li>
+        <li><a href="../coach/index.html">Coach</a></li>
+        <li><a href="../admin/index.html">Admin / Staff</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Coach</div>
+    <h1>Coach</h1>
+    <p class="subtitle">The football/soccer coach who lists on the marketplace, runs sessions, and gets paid — Skillars' supply side.</p>
+
+    <h2>Who this persona is</h2>
+    <p>A Coach is a paid supplier on the marketplace: they publish a bookable profile, set their own availability, run live sessions, plan training content, and get paid through Stripe. Everything a Parent or Player experiences as "booking a coach" is this persona's supply — availability windows, pricing, session content, and reliability all live on the coach's side.</p>
+
+    <h2>Your journey at a glance</h2>
+    <pre class="mermaid">
+flowchart LR
+    A["/coach-register"] --> B["/coach/email-pending"]
+    B --> C["/coach/verify-email"]
+    C --> D["/coach/verify-phone"]
+    D --> E["/coach/profile-builder<br/>5-step wizard"]
+    E --> F["/coach/command-center<br/>main hub"]
+    F --> G["/coach/availability"]
+    F --> H["/coach/booking-requests"]
+    H --> I["Live session in Command Center"]
+    F --> J["/coach/drills & /coach/session-templates"]
+    F --> K["/coach/session-builder/:bookingId"]
+    F --> L["/coach/payment-settings<br/>Stripe onboarding"]
+    F --> M["/coach/revenue"]
+    F --> N["/coach/reliability"]
+    F --> O["/coach/subscription"]
+    F --> P["/messaging"]
+    </pre>
+
+    <h3>1. Registering as a coach</h3>
+    <ol>
+      <li>Go to <code>/coach-register</code>. Fields: First name, Last name, Email, Phone, Password, plus Terms/Privacy acceptance.</li>
+      <li>Submitting takes you to <code>/coach/email-pending</code> (same resend-with-cooldown pattern used across all three registration flows).</li>
+      <li>Email link → <code>/coach/verify-email</code> → <code>/coach/verify-phone</code> (6-digit SMS OTP).</li>
+    </ol>
+
+    <h3>2. Building your public profile</h3>
+    <p><strong>Why it matters:</strong> this is literally your storefront — an incomplete or unpublished profile means zero marketplace visibility.</p>
+    <p>Despite its filename, <code>/coach/profile-builder</code> is a fully built 5-step wizard (not a stub) that must be completed before you show up in the marketplace:</p>
+    <ol>
+      <li><strong>Step 1 — Identity.</strong></li>
+      <li><strong>Step 2 — Specialties/sport details.</strong></li>
+      <li><strong>Step 3 — Pricing.</strong></li>
+      <li><strong>Step 4 — Availability</strong> (initial setup — fine-tuned later at <code>/coach/availability</code>).</li>
+      <li><strong>Step 5 — Profile photo</strong>, uploaded directly from this step (or skipped) via a presigned upload — same underlying mechanism as any other file upload on the platform.</li>
+    </ol>
+    <p>Completing step 5 publishes your profile and takes you straight to <code>/coach/command-center</code>. Coming back to this URL later, once your profile is already complete, redirects you straight to the command center instead of re-showing the wizard.</p>
+
+    <h3>3. Your command center</h3>
+    <p><strong>Why it matters:</strong> this is the coach's single main hub — a week-by-week schedule plus the live-session tools that turn a booking into a delivered (and paid) session.</p>
+    <ol>
+      <li><code>/coach/command-center</code> shows a week grid of your bookings (prev/next week navigation) plus a sidebar of currently active clients.</li>
+      <li>When a booked session's time arrives, an "Active Session" overlay takes over the screen for running it live.</li>
+      <li>Ending a session opens a "Wrap-Up" sequence, then a post-wrap-up summary showing a "Session DNA" chart — a snapshot of what was actually covered.</li>
+    </ol>
+
+    <h3>4. Setting your availability</h3>
+    <ol>
+      <li><code>/coach/availability</code> shows a weekly calendar (prev/next week navigation) of your recurring availability windows and any one-off blocked time.</li>
+      <li>An always-visible add/edit panel below the calendar lets you pick a day of week, start time, and end time, then save — no modal, so you never lose your place on the calendar.</li>
+      <li>Existing windows/blocks can be edited or deleted directly from the calendar.</li>
+    </ol>
+
+    <h3>5. Handling booking requests</h3>
+    <ol>
+      <li><code>/coach/booking-requests</code> is your inbox: individual requests, plus batch groups (several slots one parent requested together at once), each showing the player, requested time, and Accept/decline actions.</li>
+      <li>An empty inbox shows a simple "nothing here yet" state.</li>
+    </ol>
+
+    <h3>6. Planning session content</h3>
+    <p><strong>Why it matters:</strong> this is what separates Skillars from a bare scheduling tool — structured, reusable training content tied to each session.</p>
+    <ol>
+      <li><code>/coach/drills</code>: your drill library, split into a "Platform" tab (Skillars' own curated drills) and a "My Library" tab (drills you've authored yourself), with a filter button to narrow results.</li>
+      <li><code>/coach/session-builder/:bookingId</code>: a 3-column planner — drill library on the left, the session plan itself in the middle, template/save actions along the top ("Save Draft", "Save Session", "Save as Template", and a shortcut to browse existing templates).</li>
+      <li><code>/coach/session-templates</code>: your vault of saved, reusable templates — rename or delete from a per-template menu.</li>
+    </ol>
+    <div class="callout">
+      <p><strong>The session builder can be feature-gated by subscription tier.</strong> Coaches on the lowest ("Scout") tier see a locked overlay instead of the builder — this is the per-tier feature gating mentioned in the subscription section below, enforced live rather than just described in marketing copy.</p>
+    </div>
+
+    <h3>7. Getting paid</h3>
+    <ol>
+      <li><code>/coach/payment-settings</code>: connect your Stripe account (the "Connect with Stripe" button starts Stripe's own onboarding flow) — required before you can actually receive payouts.</li>
+      <li><code>/coach/revenue</code>: a date-range filtered summary of gross earnings, commission deducted, and Stripe fees, so you can see your real take-home at a glance.</li>
+      <li><code>/coach/subscription</code>: your own subscription tier (separate from a parent/player's subscription) — upgrade or cancel from a set of tier cards.</li>
+      <li><code>/coach/reliability</code>: your reliability-strike history (late cancellations/no-shows) with an "acknowledge" action — repeated strikes reduce your marketplace visibility or suspend you, per the platform's enforcement rules.</li>
+    </ol>
+
+    <h3>8. Messaging clients</h3>
+    <p>Same shared <code>/messaging</code> screen every persona uses. Conversations only exist against a real booking relationship — you can't message a parent or player you've never been booked with.</p>
+
+    <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout warn">
+      <p><strong>Your profile isn't visible in the marketplace until all 5 profile-builder steps are complete</strong> — a coach who registers but abandons the wizard partway through will not appear in search results.</p>
+    </div>
+    <div class="callout">
+      <p><strong>"Placeholder" in a filename doesn't mean unfinished</strong> — <code>CoachProfileBuilderPlaceholderPage.vue</code> is the real, fully-built 5-step wizard despite the name (unlike some genuinely-stub pages on the Parent side).</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Session builder access is subscription-tier-gated.</strong> Don't promise full session-planning capability to a coach on the entry-level tier without checking current tier gates.</p>
+    </div>
+
+    <h2>Related Personas</h2>
+    <div class="card-grid">
+      <div class="card"><h4><a href="../parent/index.html">Parent</a></h4><p>Books and pays for the sessions you deliver, and is the primary source of your booking requests and revenue.</p></div>
+      <div class="card"><h4><a href="../player/index.html">Player</a></h4><p>The athlete you assign homework to and assess via Skills Radar — whether self-registered or added by a parent.</p></div>
+      <div class="card"><h4><a href="../admin/index.html">Admin / Staff</a></h4><p>Enforces reliability strikes and resolves disputes involving your bookings, from the backend today (no dedicated coach-facing dispute UI yet).</p></div>
+    </div>
+    <p><a href="../index.html">&larr; Back to Home</a></p>
+
+    <footer class="page-footer">Skillars business documentation — generated for onboarding.</footer>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

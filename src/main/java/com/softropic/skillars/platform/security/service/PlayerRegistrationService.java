@@ -200,8 +200,19 @@ public class PlayerRegistrationService {
             if (user.getVerificationStatus() == null ||
                 user.getVerificationStatus() == SkillarsVerificationStatus.UNVERIFIED) {
                 emailTokenRepository.deleteByUserIdAndUsedFalse(user.getId());
+                log.atInfo()
+                   .addKeyValue("First name", user.getFirstName())
+                   .addKeyValue("Last Name", user.getLastName())
+                   .addKeyValue("Current verification status", user.getVerificationStatus())
+                   .setMessage("About to resend verification email").log();
                 sendVerificationEmail(user);
+                return;
             }
+            log.atInfo()
+               .addKeyValue("First name", user.getFirstName())
+               .addKeyValue("Last Name", user.getLastName())
+               .addKeyValue("Current verification status", user.getVerificationStatus())
+               .setMessage("User's verification status needs to be null/blank or unverified for a resend verification email to be sent").log();
         });
     }
 
@@ -213,7 +224,7 @@ public class PlayerRegistrationService {
         token.setUsed(false);
         emailTokenRepository.save(token);
 
-        String verifyUrl = frontendUrl + "/player/verify-email?token=" + token.getToken() +
+        String verifyUrl = frontendUrl + "/#/player/verify-email?token=" + token.getToken() +
             "&email=" + URLEncoder.encode(user.getEmail(), StandardCharsets.UTF_8);
         publisher.publishEvent(new PlayerVerificationEmailEvent(
             user.getEmail(), verifyUrl, user.getLangKey(), user.getFirstName()));

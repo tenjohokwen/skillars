@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Player — Skillars Business Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Business Docs<small>Understand the product, persona by persona</small></a>
+    <nav>
+      <h4>Personas</h4>
+      <ul>
+        <li><a href="../player/index.html">Player</a></li>
+        <li><a href="../parent/index.html">Parent</a></li>
+        <li><a href="../coach/index.html">Coach</a></li>
+        <li><a href="../admin/index.html">Admin / Staff</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Player</div>
+    <h1>Player</h1>
+    <p class="subtitle">An adult (18+) athlete who trains directly with a coach through Skillars — browsing coaches, doing assigned homework, and tracking their own skill development.</p>
+
+    <h2>Who this persona is</h2>
+    <p>A Player is the person actually being coached. Skillars supports two very different kinds of player account: an <strong>adult self-registered Player</strong> (this page) who manages their own account end-to-end, and a <strong>minor player profile</strong> created and supervised by a Parent (no login of their own — see the <a href="../parent/index.html">Parent</a> page). Sports coverage centers on football/soccer today — the player profile asks for a playing position (Goalkeeper, Defender, Midfielder, Forward).</p>
+
+    <h2>Your journey at a glance</h2>
+    <pre class="mermaid">
+flowchart LR
+    A["/player-register<br/>Create account"] --> B["/player/email-pending<br/>Check your email"]
+    B --> C["/player/verify-email<br/>Click emailed link"]
+    C --> D["/player/verify-phone<br/>Enter 6-digit SMS code"]
+    D --> E["/player/profile-builder<br/>Pick your position"]
+    E --> F["/player/locker-room/:id<br/>Your homework hub"]
+    F --> G["/marketplace<br/>Browse coaches"]
+    G --> H["/coaches/:coachId<br/>View a coach's profile"]
+    F --> I["/player/development/:id<br/>Skills Radar & progress"]
+    F --> J["/player/videos<br/>Upload drill videos"]
+    F --> K["/messaging<br/>Chat with your coach"]
+    </pre>
+    <p>The one thing to know up front: <strong>booking a session is not something a Player does themselves today.</strong> See the callout in "Browsing the marketplace" below.</p>
+
+    <h3>1. Registering as a player</h3>
+    <p><strong>Why it matters:</strong> this is Skillars' self-serve acquisition path for adult athletes — no coach or parent has to invite them first.</p>
+    <ol>
+      <li>Go to <code>/player-register</code> (not the generic <code>/register</code> page — that's a separate legacy form used for admin-style accounts, and using it will not create a usable Player account).</li>
+      <li>Fill in: First name, Last name, Email, Phone, Date of birth, Password. Ticking the Terms of Service and Privacy Policy checkboxes is required before the "Create Account" button becomes clickable.</li>
+      <li>The Date of birth field is validated live: if you enter a birth date under 18 years ago, a banner appears ("You must be 18 or older to register as a player") with a link to <code>/parent-register</code> instead — self-registration is adults-only by design; minors are onboarded by a parent.</li>
+      <li>First/Last name are also scanned for accidental contact info (e.g. a phone number typed into the name field) and warn you before submitting.</li>
+      <li>On submit, you land on <code>/player/email-pending</code>, which tells you to check your email and offers a "Resend email" button (60-second cooldown between resends).</li>
+    </ol>
+    <div class="callout warn">
+      <p><strong>In local/dev environments, no real email is sent.</strong> The dev-mode email service only logs the subject line and suppresses the body — this is a known, common point of confusion, not a bug specific to registration.</p>
+    </div>
+
+    <h3>2. Verifying your email and phone</h3>
+    <ol>
+      <li>Clicking the verification link in the email opens <code>/player/verify-email?token=...</code>, which auto-submits the token — you'll briefly see a spinner, then get redirected automatically.</li>
+      <li>You land on <code>/player/verify-phone</code>: a 6-digit one-time-passcode entry (auto-advances between digit boxes, and auto-submits once all 6 digits are filled — pasting a 6-digit code also works).</li>
+      <li>On success, you're taken to <code>/player/profile-builder</code>.</li>
+    </ol>
+
+    <h3>3. Finishing your profile</h3>
+    <ol>
+      <li>At <code>/player/profile-builder</code>, the only required field today is <strong>Position</strong> (Goalkeeper, Defender, Midfielder, or Forward).</li>
+      <li>Clicking "Finish Setup" creates your player profile and takes you straight to your Locker Room.</li>
+    </ol>
+
+    <h3>4. Your home base: the Locker Room</h3>
+    <p><strong>Why it matters:</strong> this is where a coach's homework assignments actually reach the player between live sessions — it's the retention mechanic that keeps a player training on their own time.</p>
+    <ol>
+      <li>Logging in always sends you through <code>/player/home</code>, which silently resolves your own player ID and redirects you to <code>/player/locker-room/:playerId</code>.</li>
+      <li>If you have assigned homework, drills are grouped by the coach who assigned them, each shown as a drill card with a "Mark done" checkbox you tick off yourself (once checked, it can't be unchecked).</li>
+      <li>If nothing's been assigned yet, you'll see an empty state instead.</li>
+    </ol>
+
+    <h3>5. Browsing the marketplace</h3>
+    <p><strong>Why it matters:</strong> this is how a player evaluates and chooses a coach to work with.</p>
+    <ol>
+      <li>Go to <code>/marketplace</code> (also reachable while logged out — it's public).</li>
+      <li>You must type a city and search before any results show — there's no default/nearby listing.</li>
+      <li>Once a city is entered, filters appear: District, Age group, Language, and a Sort option; results are shown as a grid of coach cards with a "Load more" button for pagination.</li>
+      <li>Clicking a coach card opens <code>/coaches/:coachId</code> — their public profile: photo, verification badge, availability status, star rating (or "No reviews yet"), bio, specialties, languages, and price.</li>
+    </ol>
+    <div class="callout warn">
+      <p><strong>As of the current build, a Player cannot actually complete a booking from this screen.</strong> The profile page's call-to-action button only has real behavior for Parent accounts (it routes them to a booking-request or buy-sessions page); for a logged-in Player, clicking it just sends you to <code>/login</code> — a dead end, since you're already logged in. Booking today is a Parent-initiated action even when the person training is an adult self-registered player. If you want to actually get booked with a coach right now, that has to happen outside this screen (e.g. the coach books you directly, or a parent account requests it on your behalf).</p>
+    </div>
+
+    <h3>6. Tracking your development</h3>
+    <p><strong>Why it matters:</strong> this is Skillars' core value proposition beyond just scheduling — a visible, ongoing record of skill growth.</p>
+    <ol>
+      <li>Go to <code>/player/development/:playerId</code> (linked from your Locker Room).</li>
+      <li>You'll see a Skills Radar chart (multi-axis ability ratings your coach has scored you on) — read-only for players — with an optional toggle to compare against your original baseline.</li>
+      <li>Below that, a weekly Skill Exposure chart shows which skills you've actually been training, highlighting any the system flags as neglected.</li>
+    </ol>
+
+    <h3>7. Uploading drill videos</h3>
+    <ol>
+      <li>Go to <code>/player/videos</code>.</li>
+      <li>A quota bar shows your storage/bandwidth usage before you upload.</li>
+      <li>Click "Upload", pick a video file — a progress bar tracks the upload, and once processed it appears in your video list with a status card (this is where content moderation and, for minors, a parental-approval gate would apply — as an adult player that gate doesn't block you).</li>
+      <li>Each video can be deleted from the same list.</li>
+    </ol>
+
+    <h3>8. Messaging your coach</h3>
+    <ol>
+      <li>Go to <code>/messaging</code>: a two-panel screen — conversation list on the left, message thread on the right.</li>
+      <li>Selecting a conversation loads its message history; type in the box at the bottom and press Enter or click send.</li>
+      <li>Conversations only exist against a real, booking-linked coach relationship — you can't cold-message an arbitrary coach.</li>
+    </ol>
+
+    <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout warn">
+      <p><strong>Booking is not player-initiated in the current UI</strong> — see the marketplace section above. Don't promise a prospective player "browse and book" as a complete self-serve loop until this is wired up.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Use <code>/player-register</code>, never the generic <code>/register</code> page</strong> — they lead to different account types.</p>
+    </div>
+    <div class="callout">
+      <p><strong>There's no player-facing "leave a review" screen.</strong> Ratings shown on a coach's profile are real, but nothing in the current UI lets a player submit one.</p>
+    </div>
+
+    <h2>Related Personas</h2>
+    <div class="card-grid">
+      <div class="card"><h4><a href="../parent/index.html">Parent</a></h4><p>Books sessions and pays on behalf of players under 18 — and is currently the only account type that can actually complete a booking through the UI.</p></div>
+      <div class="card"><h4><a href="../coach/index.html">Coach</a></h4><p>The other side of every booking, messaging thread, homework assignment, and development assessment a player sees.</p></div>
+    </div>
+    <p><a href="../index.html">&larr; Back to Home</a></p>
+
+    <footer class="page-footer">Skillars business documentation — generated for onboarding.</footer>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

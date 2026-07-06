@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <nav>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html" class="active">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../tenant/index.html">Tenant</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Video</div>
+    <h1>Video</h1>
+    <p class="subtitle">Owns the full lifecycle of an uploaded video — upload, quota enforcement, three-layer content moderation, minor-safety parental approval, transcoding, playback authorization, and eventual archival/deletion — behind a Bunny.net provider adapter.</p>
+
+    <h2>Business Overview</h2>
+    <p>Skillars videos are the raw material behind drill review and skill assessment: a <strong>Coach</strong> uploads a <code>DRILL_DEMO</code> or <code>COACH_REVIEW</code> clip, and a <strong>Player</strong> (frequently a minor) uploads <code>HOMEWORK</code> footage responding to an assigned drill. Because a large share of players are minors, this module is one of the most compliance-sensitive parts of the platform: every uploaded video passes through a three-layer moderation pipeline — CSAM matching (Arachnid), explicit-content detection (VideoIntel), and a minor-safety gate that routes any minor's video to their linked <strong>Parent</strong> for explicit approval before it is ever transcoded or made playable. <strong>Admins</strong> get a separate surface to lock, archive, delete, or reconcile videos when the pipeline or the Bunny.net provider gets out of sync.</p>
+    <p>Key business rules baked into the code:</p>
+    <ul>
+      <li>Coaches may only upload <code>DRILL_DEMO</code> or <code>COACH_REVIEW</code> videos; players may only upload <code>HOMEWORK</code> — enforced in <code>VideoResource</code>, not just client-side.</li>
+      <li>Minor players are always allowed to initiate an upload (no 403 at upload time); the minor-safety gate in <code>ModerationOrchestrationService</code> is what defers visibility until a parent approves, per Story 6.6.</li>
+      <li>Each video type has its own size/duration ceiling (e.g. <code>COACH_REVIEW</code> ≤ 1&nbsp;GB) enforced by <code>VideoTypeConstraints</code>, and storage is metered per owner via a byte-quota tied to subscription tier.</li>
+      <li>Storage quota is <em>tier-gated</em> — a "Scout" tier with a zero storage quota is rejected outright (<code>QuotaService.check()</code>).</li>
+      <li><code>COACH_REVIEW</code> videos never expose a download URL (only a signed streaming URL) — download is only offered for owner-downloadable types like <code>HOMEWORK</code>/<code>DRILL_DEMO</code>.</li>
+      <li>A CSAM match (Arachnid) immediately locks the video, alerts admins, and triggers account suspension — the most severe path in the module.</li>
+      <li>Subscription expiry cascades into video access: a player's <code>READY</code> videos get <code>BLOCKED</code> when their subscription lapses (unless another active subscription covers them), then <code>ARCHIVED</code> after 30 days, then physically purged after 90 — with a special "yearly exemption" that pauses the archival clock for YEARLY-tier subscribers.</li>
+    </ul>
+
+    <h2>Technical Overview</h2>
+    <h3>Package layout</h3>
+    <table>
+      <thead><tr><th>Package</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>api</code></td><td>REST controllers: upload, approval, playback, admin ops, SSE status events, provider webhook receiver.</td></tr>
+        <tr><td><code>config</code></td><td>Spring configuration and typed <code>VideoProperties</code> (upload/session TTL, playback token TTL, reconciliation batch sizes, provider selection).</td></tr>
+        <tr><td><code>contract</code></td><td><strong>Public integration boundary of the module.</strong> Enums, request/response DTOs, exceptions, domain events, and the <code>QuotaProvider</code>/<code>PlayerSubscriptionQueryPort</code> SPIs that other modules implement or consume. The package-info.java here is authoritative — see Conventions &amp; Gotchas below.</td></tr>
+        <tr><td><code>contract.event</code></td><td>Domain events published to other platform modules (notification, security, payment-adjacent listeners).</td></tr>
+        <tr><td><code>contract.exception</code></td><td>Module-specific exceptions, all extending <code>infrastructure.exception.ApplicationException</code>.</td></tr>
+        <tr><td><code>repo</code></td><td>JPA entities and Spring Data repositories — <code>Video</code>, upload sessions, quotas/reservations, moderation scans, outboxes, playback tokens.</td></tr>
+        <tr><td><code>service</code></td><td>Business logic: upload orchestration, quota check/reserve/commit, moderation pipeline, approval workflow, playback authorization, lifecycle state machine, deletion/outbox processing, schedulers.</td></tr>
+        <tr><td><code>service.validation</code></td><td>Chain-of-responsibility upload validation steps (file size, format, MIME type).</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Key entities &amp; tables</h3>
+    <table>
+      <thead><tr><th>Entity / table</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>Video</code> / <code>videos</code></td><td>Core aggregate: <code>ownerId</code> (coach UUID string or player Long-as-string), <code>operationalState</code>, <code>accessState</code>, <code>visibility</code>, <code>videoType</code>, provider asset id, moderation/lifecycle timestamps. <strong>No <code>teamId</code> column</strong> — deliberate, see Conventions below.</td></tr>
+        <tr><td><code>UploadSession</code> / <code>upload_sessions</code></td><td>One TUS upload attempt per video; tracks the quota reservation handle and provider upload id.</td></tr>
+        <tr><td><code>VideoQuota</code> / <code>video_quotas</code></td><td>Per-owner running totals: storage used, bandwidth used, bandwidth period start.</td></tr>
+        <tr><td><code>VideoQuotaReservation</code> / <code>video_quota_reservations</code></td><td>In-flight reservations (ACTIVE/COMMITTED/RELEASED) with a TTL, backing the <code>QuotaProvider</code> check→reserve→commit/release protocol.</td></tr>
+        <tr><td><code>VideoApprovalRequest</code> / <code>video_approval_requests</code></td><td>One row per minor-safety-gate hold: links video, player, and parent; status PENDING/APPROVED/REJECTED/CANCELLED.</td></tr>
+        <tr><td><code>VideoModerationScan</code> / <code>video_moderation_scans</code></td><td>Immutable, insert-only audit record per moderation layer (ARACHNID/VIDEOINTEL/MINOR_GATE) and outcome.</td></tr>
+        <tr><td><code>VideoLifecycleLog</code> / <code>video_lifecycle_log</code></td><td>Audit trail of BLOCKED→ARCHIVED→DELETED lifecycle transitions.</td></tr>
+        <tr><td><code>VideoDeletionLog</code> / <code>video_deletion_log</code></td><td>Audit trail of every purge, with triggering actor and Bunny asset id.</td></tr>
+        <tr><td><code>VideoDeletionOutbox</code> / <code>video_deletion_outbox</code></td><td>Async outbox that drives the actual Bunny.net physical delete after logical PURGED, with retry/backoff.</td></tr>
+        <tr><td><code>VideoWebhookEvent</code> / <code>video_webhook_events</code></td><td>Idempotent inbox for Bunny provider webhooks, keyed by a stable derived <code>event_id</code>.</td></tr>
+        <tr><td><code>PlaybackToken</code> / <code>playback_tokens</code></td><td>Issued per playback authorization; supports revocation-window checks.</td></tr>
+        <tr><td><code>ReconciliationIncident</code> / <code>reconciliation_incidents</code></td><td>Records admin-triggered or automated corrections between local state and Bunny provider state.</td></tr>
+        <tr><td><code>SubscriptionLifecycleOutbox</code> / <code>subscription_lifecycle_outbox</code></td><td>Async outbox processing <code>SubscriptionExpiredEvent</code> from the payment module into BLOCKED transitions.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Key services</h3>
+    <table>
+      <thead><tr><th>Service</th><th>Orchestrates</th></tr></thead>
+      <tbody>
+        <tr><td><code>VideoService</code></td><td>Upload initiation/retry, upload confirmation, transcoding completion/failure — the transactional core that talks to the provider adapter and the quota provider together.</td></tr>
+        <tr><td><code>QuotaService</code></td><td>The default <code>QuotaProvider</code> implementation: <code>SELECT FOR UPDATE</code>-serialized reserve, atomic CTE-based commit, idempotent release, storage decrement on deletion.</td></tr>
+        <tr><td><code>ModerationOrchestrationService</code></td><td>Runs the 3-layer moderation pipeline (Arachnid → VideoIntel → minor safety gate) as a <code>@TransactionalEventListener(AFTER_COMMIT)</code>, driven by <code>VideoUploadedEvent</code> and SLA retries.</td></tr>
+        <tr><td><code>VideoApprovalService</code></td><td>Parent approve/reject workflow for HIDDEN videos; triggers the deferred Bunny transcoding call after approval.</td></tr>
+        <tr><td><code>PlaybackService</code></td><td>Playback authorization: eligibility checks, signed URL + JWT playback token issuance, revocation-window enforcement, optional owner download URL.</td></tr>
+        <tr><td><code>VideoAccessGuard</code></td><td>SpEL-accessible <code>@PreAuthorize</code> bean (<code>videoAccessGuard</code>) enforcing play/delete RBAC: PURGED gate → admin → owner → parent → coach-with-recent-booking → deny.</td></tr>
+        <tr><td><code>VideoLifecycleService</code></td><td>The operational-state machine (<code>VALID_TRANSITIONS</code> map) plus access-state transitions (BLOCKED/ARCHIVED) and the purge escape hatch.</td></tr>
+        <tr><td><code>VideoDeletionService</code></td><td>User/admin/account-cascade deletion: marks PURGED, decrements quota, writes deletion log + outbox row.</td></tr>
+        <tr><td><code>AdminVideoService</code></td><td>Admin operations: force access-state changes, hard delete, list upload sessions, trigger reconciliation against the provider.</td></tr>
+        <tr><td><code>VideoLifecycleScheduler</code></td><td>Nightly job: BLOCKED→ARCHIVED (with yearly-subscription exemption) and ARCHIVED→DELETED phases.</td></tr>
+        <tr><td><code>VideoSubscriptionLifecycleListener</code></td><td>Consumes <code>SubscriptionExpiredEvent</code> from <code>payment</code> via an outbox; blocks a player's videos or resets the lifecycle clock for YEARLY tier.</td></tr>
+        <tr><td><code>WebhookEventProcessorScheduler</code></td><td>Drains the webhook inbox with <code>FOR UPDATE SKIP LOCKED</code>, dispatches Bunny events (upload/encoding success/failure) to state transitions, handling out-of-order delivery.</td></tr>
+        <tr><td><code>VideoDeletionOutboxProcessor</code></td><td>Drains the deletion outbox, calling Bunny <code>deleteAsset</code>; consults <code>session.repo.DrillVideoRef</code> ref-counting so a shared drill-demo asset isn't physically deleted while other sessions still reference it.</td></tr>
+        <tr><td><code>QuotaReservationTimeoutService</code> / <code>QuotaReservationBatchExpirer</code></td><td>Reaper for the <code>QuotaProvider</code> contract — expires stale ACTIVE reservations under a ShedLock-guarded scheduled job.</td></tr>
+        <tr><td><code>ModerationSlaMonitorService</code></td><td>Detects videos stuck in SCANNING past an SLA and republishes a moderation retry event.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>REST endpoints</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr></thead>
+      <tbody>
+        <tr><td>POST</td><td>/api/video/uploads/initiate</td><td>Coach initiates a DRILL_DEMO/COACH_REVIEW upload</td><td>ROLE_COACH</td></tr>
+        <tr><td>POST</td><td>/api/video/player/uploads/initiate</td><td>Player (incl. minors) initiates a HOMEWORK upload</td><td>ROLE_USER</td></tr>
+        <tr><td>GET</td><td>/api/video/quotas/me</td><td>Current user's storage/bandwidth quota usage vs. tier limit</td><td>ROLE_USER or ROLE_COACH</td></tr>
+        <tr><td>GET</td><td>/api/video/my</td><td>List current user's videos (excludes DELETED/PURGED/FAILED)</td><td>ROLE_USER or ROLE_COACH</td></tr>
+        <tr><td>DELETE</td><td>/api/video/{id}</td><td>Delete own (or, for a linked player, guardian-authorized) video</td><td><code>@videoAccessGuard.canDelete</code></td></tr>
+        <tr><td>GET</td><td>/api/video/{id}/play</td><td>Authorize playback; returns signed playback URL + JWT + optional download URL</td><td><code>@videoAccessGuard.canPlay</code></td></tr>
+        <tr><td>GET</td><td>/api/video/{id}/events</td><td>SSE stream of operational-state changes for a video, owner-only</td><td>authenticated + ownership check</td></tr>
+        <tr><td>GET</td><td>/api/video/{id}/status</td><td>Poll current operational/display state, owner-only</td><td>authenticated + ownership check</td></tr>
+        <tr><td>GET</td><td>/api/video/approvals</td><td>Parent lists pending approval requests for their linked players</td><td>ROLE_PARENT</td></tr>
+        <tr><td>PUT</td><td>/api/video/approvals/{id}/approve</td><td>Parent approves a HIDDEN video, triggering deferred transcoding</td><td>ROLE_PARENT</td></tr>
+        <tr><td>PUT</td><td>/api/video/approvals/{id}/reject</td><td>Parent rejects a HIDDEN video (terminal REJECTED state)</td><td>ROLE_PARENT</td></tr>
+        <tr><td>PATCH</td><td>/api/video/admin/videos/{videoId}/access-state</td><td>Force a video's access state (ACTIVE/BLOCKED/ARCHIVED)</td><td>ROLE_ADMIN</td></tr>
+        <tr><td>DELETE</td><td>/api/video/admin/videos/{videoId}</td><td>Admin hard delete (calls provider directly, releases pending quota)</td><td>ROLE_ADMIN</td></tr>
+        <tr><td>GET</td><td>/api/video/admin/videos/{videoId}/sessions</td><td>List all upload sessions for a video (debugging)</td><td>ROLE_ADMIN</td></tr>
+        <tr><td>POST</td><td>/api/video/admin/videos/{videoId}/reconcile</td><td>Reconcile local state against live Bunny provider status</td><td>ROLE_ADMIN</td></tr>
+        <tr><td>POST</td><td>/api/video/webhooks/bunny</td><td>Bunny.net provider webhook receiver (HMAC-verified, not JWT-authenticated)</td><td>permitAll — HMAC signature is the auth mechanism</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Domain events</h3>
+    <table>
+      <thead><tr><th>Event</th><th>Published when</th><th>Consumed by</th></tr></thead>
+      <tbody>
+        <tr><td><code>VideoUploadedEvent</code></td><td>Bunny confirms TUS upload success (video.upload.success webhook)</td><td><code>ModerationOrchestrationService</code> (starts the moderation pipeline), AFTER_COMMIT</td></tr>
+        <tr><td><code>VideoModerationRetryEvent</code></td><td><code>ModerationSlaMonitorService</code> detects a SCANNING video past SLA</td><td><code>ModerationOrchestrationService</code> — re-runs the pipeline</td></tr>
+        <tr><td><code>VideoPublishedEvent</code></td><td>Transcoding completes, video reaches READY</td><td>internal/extension hook (no in-module consumer found; available for downstream modules)</td></tr>
+        <tr><td><code>VideoStatusChangedEvent</code></td><td>Any operational-state transition, including purge</td><td><code>VideoSseService</code> pushes it to subscribed SSE clients</td></tr>
+        <tr><td><code>VideoPurgedEvent</code></td><td>Video logically deleted (PURGED), AFTER_COMMIT</td><td>extension hook — does NOT mean physical Bunny deletion is complete (see gotcha below)</td></tr>
+        <tr><td><code>VideoModerationAdminAlertEvent</code></td><td>CSAM match, layer unavailability, unresolvable pipeline error</td><td><code>notification</code> module (admin alert listener)</td></tr>
+        <tr><td><code>VideoModerationOwnerNotificationEvent</code></td><td>VideoIntel flags explicit content</td><td><code>notification</code> module</td></tr>
+        <tr><td><code>VideoApprovalParentNotificationEvent</code></td><td>Minor-safety gate creates an approval request</td><td><code>platform.notification.infrastructure.listener.VideoApprovalEmailListener</code></td></tr>
+        <tr><td><code>VideoApprovalOwnerNotificationEvent</code></td><td>Parent approves or rejects a video</td><td><code>platform.notification.infrastructure.listener.VideoApprovalEmailListener</code></td></tr>
+        <tr><td><code>AccountSuspensionRequestedEvent</code> (published, owned by <code>security</code>)</td><td>CSAM match confirmed</td><td><code>security</code> module suspends the account</td></tr>
+      </tbody>
+    </table>
+    <p>Consumed events: <code>VideoUploadedEvent</code>/<code>VideoModerationRetryEvent</code> (self, above); <code>AccountDeletionRequestedEvent</code> from <code>security</code> (cascades video purge — <code>AccountDeletionCascadeListener</code>); <code>SubscriptionExpiredEvent</code> from <code>payment</code> (drives BLOCKED transitions — <code>VideoSubscriptionLifecycleListener</code>).</p>
+
+    <h3>Dependencies on infrastructure and other modules</h3>
+    <p><code>infrastructure.video</code> supplies the <code>VideoProviderAdapter</code> SPI (implemented by <code>BunnyVideoProviderAdapter</code>) covering upload credential issuance, playback/download URL signing, asset status, transcoding triggers, and webhook signature verification — this module never talks to Bunny.net directly. <code>infrastructure.videointel</code> supplies <code>VideoIntelClient</code>, used only by <code>ModerationOrchestrationService</code> for Layer&nbsp;2 explicit-content scanning. The module also depends on <code>infrastructure.arachnid</code> (CSAM matching, Layer&nbsp;1) and <code>infrastructure.feature</code> (feature-flags gating whether each moderation layer runs). Cross-module platform dependencies: <code>marketplace</code> (coach/player profile lookups to resolve <code>ownerId</code>), <code>security</code> (age policy, parent-player links, account-deletion cascade, principal/session utilities), <code>booking</code> (recent-completed-booking check that grants a coach playback access to a player's video), <code>session</code> (drill-video ref-counting so shared drill assets aren't prematurely purged), <code>payment</code> (subscription-expiry event that drives lifecycle blocking), and <code>config</code> (dynamic runtime configuration values).</p>
+
+    <h2>Key Flows</h2>
+
+    <h3>Upload → moderation → transcoding → playback</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Coach as Coach/Player
+  participant VR as VideoResource
+  participant VS as VideoService
+  participant QP as QuotaProvider
+  participant Bunny as VideoProviderAdapter (Bunny)
+  participant WH as WebhookEventProcessorScheduler
+  participant MOD as ModerationOrchestrationService
+  participant VAS as VideoApprovalService
+  participant PS as PlaybackService
+
+  Coach->>VR: POST /uploads/initiate
+  VR->>VS: initializeUpload(request)
+  VS->>QP: check(ownerId, bytes)
+  VS->>QP: reserve(ownerId, bytes, videoType)
+  VS->>Bunny: initializeUpload()
+  VS-->>Coach: signed TUS upload URL + videoId (UPLOADING)
+  Coach->>Bunny: TUS upload (direct)
+  Bunny-->>WH: webhook video.upload.success
+  WH->>WH: transition UPLOADING to PROCESSING
+  WH->>MOD: publish VideoUploadedEvent (AFTER_COMMIT)
+  MOD->>MOD: transition PROCESSING to SCANNING
+  MOD->>MOD: Arachnid then VideoIntel then Minor Gate
+  alt owner is a minor
+    MOD->>VAS: createApprovalRequest (HIDDEN)
+    Note over VAS: parent later calls approve/reject
+    VAS->>Bunny: triggerTranscoding() after approval
+  else adult or coach video
+    MOD->>Bunny: triggerTranscoding()
+  end
+  Bunny-->>WH: webhook video.encoding.success
+  WH->>VS: completeTranscoding()
+  VS->>QP: commit(reservationHandle)
+  VS->>VS: transition to READY
+  Coach->>PS: GET /{id}/play
+  PS->>PS: authorizePlayback (state + revocation checks)
+  PS-->>Coach: signed playback URL + JWT
+    </pre>
+    <p>A single upload passes through four operational states before it is playable: <code>UPLOADING</code> → <code>PROCESSING</code> → <code>SCANNING</code> → <code>TRANSCODING</code> → <code>READY</code>. The quota reservation made at initiate-time is only committed (storage counted against the owner) once transcoding completes, and is released on any failure path. If the owner is a minor, the pipeline diverts to <code>HIDDEN</code> and creates a <code>VideoApprovalRequest</code> instead of calling Bunny immediately — the actual <code>triggerTranscoding()</code> call is deferred until a parent approves, and happens strictly after the DB transaction commits so the external HTTP call never holds a connection open. Webhook delivery is asynchronous and can arrive out of order (encoding.success before upload.success), which <code>WebhookEventProcessorScheduler</code> explicitly compensates for.</p>
+
+    <h3>Quota check → reserve → commit/release</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant VS as VideoService
+  participant QS as QuotaService (QuotaProvider)
+  participant DB as video_quota_reservations
+
+  VS->>QS: check(ownerId, requestedBytes)
+  QS-->>VS: true/false (advisory only, no lock)
+  VS->>QS: reserve(ownerId, bytes, videoType)
+  QS->>DB: SELECT ... FOR UPDATE (serializes per owner)
+  QS->>DB: INSERT reservation status=ACTIVE, expiresAt=now+TTL
+  QS-->>VS: reservationHandle (UUID)
+  alt upload + transcoding succeed
+    VS->>QS: commit(reservationHandle)
+    QS->>DB: UPDATE ACTIVE to COMMITTED + increment storage_used_bytes (atomic CTE)
+  else upload/transcoding fails or session expires
+    VS->>QS: release(reservationHandle)
+    QS->>DB: UPDATE ACTIVE to RELEASED (storage NOT decremented)
+  end
+  Note over DB: QuotaReservationTimeoutService reaps ACTIVE rows past expiresAt
+    </pre>
+    <p><code>check()</code> is advisory only — it holds no lock, so a concurrent reservation can drain quota between the check and a subsequent <code>reserve()</code> call; <code>reserve()</code> is the authoritative gate because it takes a <code>SELECT ... FOR UPDATE</code> row lock on the owner's quota row. <code>commit()</code> and <code>release()</code> are both single atomic SQL statements guarded by a <code>WHERE status = 'ACTIVE'</code> clause, which is what makes them idempotent under retries or races. Reservations that are neither committed nor released within their TTL (e.g. an abandoned upload) are cleaned up by <code>QuotaReservationTimeoutService</code>'s ShedLock-guarded reaper — without this, quota would leak indefinitely.</p>
+
+    <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout warn">
+      <p><strong>Visibility is stored here but not enforced here.</strong> The <code>Visibility</code> enum (PRIVATE/GROUP/UNLISTED) lives on the <code>Video</code> entity purely as data. Per <code>contract/package-info.java</code>, gating access based on Visibility is explicitly the <em>consuming application's</em> responsibility. Do not assume calling <code>PlaybackService</code> or <code>VideoAccessGuard</code> enforces Visibility — it doesn't. If a new caller needs Visibility-based access control, it must implement that check itself before reaching this module's playback/list APIs.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong><code>QuotaProvider</code> implementations must be idempotent and TTL-bounded.</strong> Per the contract's package-info.java, all methods (especially <code>commit</code> and <code>release</code>) must be safe to call more than once for the same handle, reservations must carry a TTL, and a reaper must prune orphaned reservations. <code>QuotaService</code> satisfies this via status-transition guards (<code>ACTIVE→COMMITTED</code>/<code>ACTIVE→RELEASED</code>) and <code>QuotaReservationTimeoutService</code>. Any alternative <code>QuotaProvider</code> implementation (e.g. for a different billing model) that skips idempotency or the reaper will leak or double-count quota under retries.</p>
+    </div>
+    <div class="callout">
+      <p><strong>No <code>teamId</code> on <code>Video</code>.</strong> This is deliberate per the contract package-info — the module has no concept of team ownership. Consuming applications own the linkage between teams and videos (e.g. via <code>session</code>'s drill references). Don't add a <code>teamId</code> column here to "simplify" a query; join through the owning module instead.</p>
+    </div>
+    <div class="callout">
+      <p><strong><code>VideoPurgedEvent</code> ≠ physical deletion.</strong> It fires AFTER_COMMIT when a video is marked <code>PURGED</code> (logical delete), but the actual Bunny.net asset removal happens later, asynchronously, via <code>VideoDeletionOutboxProcessor</code>. Any consumer must not treat this event as confirmation that storage/CDN cost has actually been reclaimed, and must use <code>@TransactionalEventListener(phase = AFTER_COMMIT)</code>, never a plain <code>@EventListener</code>, since the publishing transaction can still roll back.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Owner identity is polymorphic and format-sniffed.</strong> <code>ownerId</code> is a UUID string for coach-owned videos and a decimal Long string for player-owned videos — there is no discriminator column. Guards like <code>VideoAccessGuard</code> and <code>ModerationOrchestrationService</code> distinguish the two by attempting <code>UUID.fromString()</code> first, falling back to <code>Long.parseLong()</code>. When adding new owner-aware logic, follow this same probe order rather than assuming one format.</p>
+    </div>
+
+    <h2>Related Modules</h2>
+    <ul>
+      <li><a href="../marketplace/index.html">Marketplace</a> — coach and player profile lookups used to resolve <code>ownerId</code> and validate coach identity at upload time.</li>
+      <li><a href="../security/index.html">Security</a> — age policy (minor detection), parent-player links (approval routing, guardian playback bypass), account-deletion cascade, and CSAM-triggered account suspension.</li>
+      <li><a href="../booking/index.html">Booking</a> — recent-completed-booking check that grants a coach temporary playback access to a player's video.</li>
+      <li><a href="../session/index.html">Session</a> — drill-video reference counting (<code>DrillVideoRef</code>) so a shared drill-demo asset isn't physically deleted while other sessions still use it.</li>
+      <li><a href="../payment/index.html">Payment</a> — <code>SubscriptionExpiredEvent</code> drives the BLOCKED lifecycle transition and the yearly-tier archival exemption.</li>
+      <li><a href="../notification/index.html">Notification</a> — consumes approval, moderation, and admin-alert events to send emails/pushes.</li>
+      <li><a href="../config/index.html">Config</a> — runtime-tunable thresholds (moderation lock timeout, lifecycle day counts, reservation timeout, playback TTLs).</li>
+      <li><a href="../infrastructure/index.html">Infrastructure</a> — <code>infrastructure.video</code> (Bunny.net provider adapter) and <code>infrastructure.videointel</code> (explicit-content scanning) that this module builds directly on top of.</li>
+      <li><a href="../index.html">Home</a></li>
+    </ul>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

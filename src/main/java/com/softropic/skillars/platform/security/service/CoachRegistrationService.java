@@ -198,7 +198,7 @@ public class CoachRegistrationService {
         token.setUsed(false);
         emailTokenRepository.save(token);
 
-        String verifyUrl = frontendUrl + "/coach/verify-email?token=" + token.getToken() +
+        String verifyUrl = frontendUrl + "/#/coach/verify-email?token=" + token.getToken() +
             "&email=" + URLEncoder.encode(user.getEmail(), StandardCharsets.UTF_8);
         publisher.publishEvent(new CoachVerificationEmailEvent(
             user.getEmail(), verifyUrl, user.getLangKey(), user.getFirstName()));

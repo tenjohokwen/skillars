@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Development — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <nav>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../tenant/index.html">Tenant</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Development</div>
+    <h1>Development</h1>
+    <p class="subtitle">Turns raw session activity and coach assessments into a longitudinal picture of a player's skill growth — training volume (SLU), coach-judged ability (Skills Radar), neglect detection, and shareable reports.</p>
+
+    <h2>Business Overview</h2>
+    <p>Skillars sells two different signals about a young player's progress, and the <code>development</code> module is where they are produced, reconciled, and surfaced. The module answers two distinct questions for Coaches and Parents: <em>"how much has this player trained on each skill?"</em> (an automatic, objective volume metric) and <em>"how good has this player gotten at each skill, according to the people who watched them?"</em> (a subjective, coach-entered rating). The two are deliberately kept as separate systems that are only correlated for the top subscription tier — mixing them by default would misleadingly imply that more training time equals more skill.</p>
+    <ul>
+      <li><strong>Coaches</strong> submit Skills Radar assessments after working with a player, view weekly SLU exposure/target dashboards, generate branded PDF performance reports, and (Academy tier only) see a SLU-vs-Radar correlation engine.</li>
+      <li><strong>Parents</strong> (and, indirectly, Players via the family/player-ownership guard) view the same radar display, timeline, exposure dashboard, and performance reports for their own child — read-only, gated by <code>playerOwnershipGuard</code> rather than a coach role.</li>
+      <li><strong>The system itself</strong> (not a human) calculates SLU automatically whenever a booked session completes, and runs a weekly scheduled job that flags skills a player is being under-trained on relative to coach-set targets.</li>
+    </ul>
+    <p><strong>SLU — "Skill Load Units."</strong> SLU is a training-volume metric computed per skill, per drill, at session-completion time: <code>slu = repDensity × skillWeight × (intensity × intensityScale) × (pressureLevel × pressureScale) × (matchRealism × matchRealismScale) × durationMinutes</code> (see <code>SluFormula</code>). It only fires for attended (no-show excluded) bookings whose session plan is <code>SAVED</code> or <code>COMPLETED</code> and has at least one drill assigned. Once written, <code>player_skill_stats</code> rows are treated as an immutable, append-only ledger — nothing recalculates historical SLU even if a drill's metadata changes later. A denormalized weekly snapshot (<code>player_slu_weekly_snapshot</code>) is upserted alongside every write so dashboards never need to aggregate the full history.</p>
+    <p><strong>Skills Radar</strong> is a 0–100 composite ability score per skill, built from up to three assessment types a coach can submit: <code>OBJECTIVE</code> (50% weight), <code>MATCH_OBSERVATION</code> (30%), and <code>COACH_EVALUATION</code> (20%). Whenever a coach submits a radar entry, an async, after-commit event handler (<code>RadarCompositeCalculationService</code>) recomputes the weighted composite for every affected skill and upserts it into <code>player_radar_composites</code>. The very first composite computed for a player+skill is also frozen into <code>player_radar_baselines</code> (insert-if-absent, never overwritten) — this baseline is the fixed reference point later used to measure "improvement."</p>
+    <p><strong>Neglected-skill detection</strong> is a weekly scheduled job (Monday 06:00 UTC, ShedLock-protected) that compares each player's <em>actual</em> SLU for the just-completed ISO week against the <em>highest</em> weekly SLU target any of their coaches has set for that skill. If actual SLU falls more than <code>slu.neglected.threshold</code> (a configurable fraction, validated to be in the open interval (0,1)) below that target, the skill is flagged as neglected (an open row in <code>neglected_skill_flags</code>); if it later recovers, the flag is auto-resolved. This is purely a training-volume signal — it says nothing about ability, and is one of the inputs the <code>session</code> module's drill-suggestion logic reads to recommend catch-up drills.</p>
+    <p>Skills Radar submission and PDF report generation are gated by coach subscription tier (<code>SCOUT</code> cannot use either; <code>INSTRUCTOR</code>/<code>ACADEMY</code> can; branding and the SLU/Radar correlation engine are <code>ACADEMY</code>-only), enforced with <code>FeatureGatedException</code> before any player-existence check runs, specifically to avoid leaking player existence via 404-vs-403 timing/response differences to a lower-tier coach.</p>
+
+    <h2>Technical Overview</h2>
+    <h3>Package layout</h3>
+    <table>
+      <thead><tr><th>Package</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>api</code></td><td>REST controllers — one per bounded concern (branding, neglected skills, reports, timeline, radar assessment/display, skill definitions, exposure, SLU targets).</td></tr>
+        <tr><td><code>service</code></td><td>Business logic: SLU calculation/formula, radar composite calculation, neglected-skill detection/processing, report PDF generation, timeline write/query, correlation engine, coach-player authorization.</td></tr>
+        <tr><td><code>repo</code></td><td>JPA entities and Spring Data repositories, all mapped to the <code>development</code> Postgres schema.</td></tr>
+        <tr><td><code>contract</code></td><td>DTOs, request/response records, enums (<code>AssessmentType</code>, <code>PlayerTimelineEventType</code>, <code>CorrelationInsightType</code>), and domain events.</td></tr>
+        <tr><td><code>config</code></td><td>Module Spring <code>@Configuration</code> (currently a placeholder bean holder).</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Key entities &amp; tables</h3>
+    <table>
+      <thead><tr><th>Entity</th><th>Table</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>SkillDefinition</code></td><td>skill_definitions</td><td>Canonical taxonomy of skill codes (e.g. PAC, WEF), display name/order, active flag, rubric text.</td></tr>
+        <tr><td><code>RadarAssessmentEntry</code></td><td>radar_assessment_entries</td><td>One row per skill per submitted assessment; grouped by <code>assessmentGroupId</code>; carries <code>assessmentType</code> and 0–100 <code>score</code>.</td></tr>
+        <tr><td><code>PlayerRadarComposite</code></td><td>player_radar_composites</td><td>Current weighted composite score + entry count per player/skill; upserted after every submission.</td></tr>
+        <tr><td><code>PlayerRadarBaseline</code></td><td>player_radar_baselines</td><td>First-ever composite score per player/skill; write-once (INSERT ... ON CONFLICT DO NOTHING).</td></tr>
+        <tr><td><code>CoachRadarPreference</code></td><td>coach_radar_preferences</td><td>Per coach-player pair, the subset of skill codes the coach chose to display.</td></tr>
+        <tr><td><code>PlayerSkillStat</code></td><td>player_skill_stats</td><td>Immutable append-only SLU ledger per session/drill/skill; never updated or deleted (except GDPR erasure).</td></tr>
+        <tr><td><code>PlayerSluWeeklySnapshot</code></td><td>player_slu_weekly_snapshot</td><td>Denormalized per-ISO-week SLU totals per player/skill, additively upserted for fast dashboard reads.</td></tr>
+        <tr><td><code>PlayerSluTarget</code></td><td>player_slu_targets</td><td>Per coach/player/skill weekly SLU target set by a coach; drives neglect detection.</td></tr>
+        <tr><td><code>NeglectedSkillFlag</code></td><td>neglected_skill_flags</td><td>Open/resolved flag per player/skill when actual SLU trails target beyond threshold.</td></tr>
+        <tr><td><code>PerformanceReport</code></td><td>performance_reports</td><td>Record of a generated PDF report (storage key, next-steps text, coach, generation time).</td></tr>
+        <tr><td><code>CoachBranding</code></td><td>coach_branding</td><td>Academy-tier coach's logo key + brand colour used to white-label PDF reports.</td></tr>
+        <tr><td><code>PlayerTimelineEvent</code></td><td>player_timeline_events</td><td>Append-only feed of development-relevant events (session completed, radar assessment, report generated, …) with JSONB metadata.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Key services</h3>
+    <table>
+      <thead><tr><th>Service</th><th>Orchestrates</th></tr></thead>
+      <tbody>
+        <tr><td><code>SluCalculationService</code></td><td>Listens for <code>BookingCompletedEvent</code> (after commit, async); computes SLU per drill/skill via <code>SluFormula</code>, writes <code>player_skill_stats</code>, and updates the weekly snapshot. Guards against no-shows, missing session plans, non-committed statuses, and duplicate delivery.</td></tr>
+        <tr><td><code>RadarAssessmentService</code></td><td>Validates coach-player relationship and subscription tier, persists submitted radar entries, and publishes <code>RadarEntrySubmittedEvent</code>.</td></tr>
+        <tr><td><code>RadarCompositeCalculationService</code></td><td>Listens for <code>RadarEntrySubmittedEvent</code> (after commit, async); recomputes the weighted composite score and freezes the first-ever baseline.</td></tr>
+        <tr><td><code>RadarDisplayService</code></td><td>Assembles the radar chart data (composite + baseline per skill) and manages per-coach skill display preferences.</td></tr>
+        <tr><td><code>NeglectedSkillDetectionService</code></td><td>Weekly ShedLock-guarded cron entry point; validates the neglect threshold config and iterates all players with targets.</td></tr>
+        <tr><td><code>NeglectedSkillProcessor</code></td><td>Per-player logic comparing actual weekly SLU snapshot vs. max target per skill; opens/resolves <code>NeglectedSkillFlag</code> rows.</td></tr>
+        <tr><td><code>SluTargetService</code></td><td>CRUD for coach-set weekly SLU targets; exposes open neglected-skill flags to callers.</td></tr>
+        <tr><td><code>SluDashboardService</code> / <code>SluNarrativeService</code> / <code>SluContributionService</code></td><td>Build the weekly exposure trend, plain-language "what changed" narrative keys, and per-coach contribution percentages for the player exposure dashboard.</td></tr>
+        <tr><td><code>DevelopmentCorrelationService</code></td><td>Academy-tier-gated engine that classifies each skill into one of four SLU-vs-composite-improvement insight buckets.</td></tr>
+        <tr><td><code>ReportGenerationService</code></td><td>Builds a branded PDF (via OpenPDF) embedding a radar chart image, skill score table and next-steps text; stores it through <code>filestorage</code>, records it, and notifies the parent by email event.</td></tr>
+        <tr><td><code>SkillsRadarChartRenderer</code></td><td>Pure AWT/Graphics2D renderer producing the PNG radar polygon embedded in PDF reports.</td></tr>
+        <tr><td><code>TimelineEventListener</code> / <code>TimelineQueryService</code></td><td>Write development-relevant events onto the player timeline (in its own <code>REQUIRES_NEW</code> transaction) and serve the timeline, gating stale coach access behind a configurable expiry window.</td></tr>
+        <tr><td><code>CoachPlayerAuthorizationService</code></td><td>Shared guard verifying an active booking relationship exists between a coach and player before any coach-only development data is read or written.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>REST endpoints</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr></thead>
+      <tbody>
+        <tr><td>GET</td><td>/api/development/coaches/me/branding</td><td>Get the current coach's PDF report branding (logo, colour)</td><td>ROLE_COACH</td></tr>
+        <tr><td>PUT</td><td>/api/development/coaches/me/branding</td><td>Save branding (Academy tier enforced in service)</td><td>ROLE_COACH</td></tr>
+        <tr><td>GET</td><td>/api/development/players/{playerId}/neglected-skills</td><td>List currently open neglected-skill flags</td><td>ROLE_COACH or player-owning parent</td></tr>
+        <tr><td>POST</td><td>/api/development/players/{playerId}/reports</td><td>Generate a branded PDF performance report</td><td>ROLE_COACH (INSTRUCTOR/ACADEMY tier)</td></tr>
+        <tr><td>GET</td><td>/api/development/players/{playerId}/reports</td><td>List generated reports with signed download URLs</td><td>ROLE_COACH or player-owning parent</td></tr>
+        <tr><td>GET</td><td>/api/development/players/{playerId}/timeline</td><td>Get the player's development activity timeline</td><td>ROLE_COACH or player-owning parent</td></tr>
+        <tr><td>POST</td><td>/api/development/players/{playerId}/radar/entries</td><td>Submit a Skills Radar assessment (one or more skill scores)</td><td>ROLE_COACH (INSTRUCTOR/ACADEMY tier)</td></tr>
+        <tr><td>GET</td><td>/api/development/players/{playerId}/radar/entries</td><td>List the calling coach's own submitted radar entries + other-coach counts per skill</td><td>ROLE_COACH</td></tr>
+        <tr><td>GET</td><td>/api/development/players/{playerId}/radar/display</td><td>Get composite + baseline radar chart data for all active skills</td><td>ROLE_COACH or player-owning parent</td></tr>
+        <tr><td>GET</td><td>/api/development/players/{playerId}/radar/preferences</td><td>Get the coach's saved skill-subset display preference for this player</td><td>ROLE_COACH</td></tr>
+        <tr><td>PUT</td><td>/api/development/players/{playerId}/radar/preferences</td><td>Save the coach's skill-subset display preference</td><td>ROLE_COACH</td></tr>
+        <tr><td>GET</td><td>/api/development/players/{playerId}/radar/correlation</td><td>Get SLU-vs-Radar correlation insights (Academy gate enforced in service)</td><td>ROLE_COACH</td></tr>
+        <tr><td>GET</td><td>/api/development/skill-definitions</td><td>List the active skill taxonomy</td><td>Any authenticated user</td></tr>
+        <tr><td>GET</td><td>/api/development/players/{playerId}/exposure</td><td>Weekly SLU exposure + trend + neglected-skill codes</td><td>ROLE_COACH or player-owning parent</td></tr>
+        <tr><td>GET</td><td>/api/development/players/{playerId}/narrative</td><td>Plain-language "what changed recently" narrative keys</td><td>ROLE_COACH or player-owning parent</td></tr>
+        <tr><td>GET</td><td>/api/development/players/{playerId}/slu/coach-contributions</td><td>Per-coach percentage contribution to SLU, per skill, over a window</td><td>ROLE_COACH or player-owning parent</td></tr>
+        <tr><td>GET</td><td>/api/development/players/{playerId}/targets</td><td>Get the calling coach's weekly SLU targets for this player</td><td>ROLE_COACH</td></tr>
+        <tr><td>PUT</td><td>/api/development/players/{playerId}/targets</td><td>Set/clear weekly SLU targets per skill</td><td>ROLE_COACH</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Domain events</h3>
+    <table>
+      <thead><tr><th>Event</th><th>Published by</th><th>Consumed by</th></tr></thead>
+      <tbody>
+        <tr><td><code>booking.BookingCompletedEvent</code></td><td>booking module</td><td><code>SluCalculationService</code> (writes SLU) and <code>TimelineEventListener</code> (writes SESSION_COMPLETED timeline event) — both after-commit, async</td></tr>
+        <tr><td><code>development.RadarEntrySubmittedEvent</code></td><td><code>RadarAssessmentService</code></td><td><code>RadarCompositeCalculationService</code> (recomputes composite/baseline) and <code>TimelineEventListener</code> (writes RADAR_ASSESSMENT timeline event) — both after-commit, async</td></tr>
+        <tr><td><code>notification.Envelope</code></td><td><code>ReportGenerationService</code></td><td>notification module — emails the parent that a new performance report is available</td></tr>
+      </tbody>
+    </table>
+    <p>Dependencies on other layers: <code>infrastructure.security</code> (<code>SecurityConstants</code>) for role constants; <code>platform.security.service.SecurityUtil</code> and <code>platform.security.repo.PlayerProfileRepository</code> for current-user/ownership checks; <code>platform.marketplace.service.CoachProfileService</code> / <code>PlayerProfileService</code> for coach/player identity and subscription tier; <code>platform.session.repo.Session</code>/<code>Drill</code> and <code>platform.booking.repo.BookingRepository</code> for the SLU trigger and coach-player relationship check; <code>platform.filestorage.service.FileStorageService</code> for storing/signing PDF report bytes (per the module convention, <code>infrastructure.blobstore</code> is never touched directly); <code>platform.config.service.ConfigService</code> for tunable SLU/neglect thresholds; <code>platform.notification.contract.Envelope</code>/<code>EmailTemplate</code> for parent notifications.</p>
+
+    <h2>Key Flows</h2>
+
+    <h3>Coach submits a Skills Radar assessment</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Coach
+  participant API as RadarAssessmentResource
+  participant Svc as RadarAssessmentService
+  participant Auth as CoachPlayerAuthorizationService
+  participant Repo as RadarAssessmentRepository
+  participant Bus as ApplicationEventPublisher
+  participant Comp as RadarCompositeCalculationService
+  participant Timeline as TimelineEventListener
+
+  Coach->>API: POST /players/{playerId}/radar/entries
+  API->>Svc: submitAssessment(coachUserId, playerId, request)
+  Svc->>Auth: requireCoachPlayerRelationship
+  Auth-->>Svc: ok (active booking exists)
+  Svc->>Svc: check subscription tier (INSTRUCTOR/ACADEMY)
+  Svc->>Repo: saveAll(RadarAssessmentEntry rows)
+  Svc->>Bus: publish RadarEntrySubmittedEvent
+  API-->>Coach: 204 No Content
+  Bus--)Comp: after commit (async)
+  Comp->>Comp: recompute weighted composite (50/30/20)
+  Comp->>Comp: upsert composite + insert-if-absent baseline
+  Bus--)Timeline: after commit (async)
+  Timeline->>Timeline: write RADAR_ASSESSMENT timeline event
+    </pre>
+    <p>The tier gate runs before the coach-player relationship result is exposed to the response, specifically so a Scout-tier coach cannot distinguish "player doesn't exist" from "player exists but I can't assess them." Once entries are saved, the API returns immediately — the composite recalculation and timeline write both happen asynchronously after the transaction commits, so a slow chart recompute never blocks the coach's request. If this is the very first composite ever computed for that player/skill, it becomes the permanent baseline used later to measure improvement.</p>
+
+    <h3>Session completes → SLU is recorded → neglect is (eventually) detected</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Booking as booking module
+  participant Slu as SluCalculationService
+  participant Session as session.SessionRepository
+  participant Formula as SluFormula
+  participant Stats as SluRepository
+  participant Snap as SluWeeklySnapshotRepository
+  participant Cron as NeglectedSkillDetectionService
+  participant Proc as NeglectedSkillProcessor
+  participant Flag as NeglectedSkillFlagRepository
+
+  Booking--)Slu: BookingCompletedEvent (after commit, async)
+  Slu->>Session: findByBookingId
+  Slu->>Slu: verify attended, status SAVED/COMPLETED, has blocks
+  Slu->>Formula: calculate(drillMetadata, duration, scales) per drill
+  Slu->>Stats: saveAll(PlayerSkillStat rows) — immutable ledger
+  Slu->>Snap: upsertAdd (weekly totals, additive)
+
+  Note over Cron: Every Monday 06:00 UTC, ShedLock-guarded
+  Cron->>Proc: processPlayer(playerId, threshold, evalYear, evalWeek)
+  Proc->>Proc: actual SLU vs max target per skill
+  alt actual < target * (1 - threshold)
+    Proc->>Flag: open NeglectedSkillFlag (if not already open)
+  else recovered
+    Proc->>Flag: resolve open flag
+  end
+    </pre>
+    <p>SLU calculation is triggered only by attended bookings whose session plan actually has committed drill blocks — no-shows and empty "Quick Complete" sessions contribute nothing. The weekly snapshot table exists purely so the neglected-skill job and the exposure dashboard never need to sum the full <code>player_skill_stats</code> history. Detection always evaluates the <em>previous</em> completed ISO week (since the cron fires just after that week ends) and compares against the highest target set by any of the player's coaches, so one coach's target can flag a skill even if a different coach is the one training it.</p>
+
+    <h3>Coach generates a performance report for a parent</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Coach
+  participant API as PerformanceReportResource
+  participant Svc as ReportGenerationService
+  participant Tier as CoachProfileService
+  participant Chart as SkillsRadarChartRenderer
+  participant FS as filestorage.FileStorageService
+  participant Repo as PerformanceReportRepository
+  participant Timeline as TimelineEventListener
+  participant Notif as notification (Envelope event)
+
+  Coach->>API: POST /players/{playerId}/reports {nextSteps}
+  API->>Svc: generateReport(coachUserId, playerId, nextSteps)
+  Svc->>Svc: requireCoachPlayerRelationship + tier gate
+  Svc->>Svc: verify SLU session history exists
+  Svc->>Chart: renderToPng(radar skills)
+  Svc->>Svc: build PDF (branding if ACADEMY, chart, score table, next steps)
+  Svc->>FS: storeBytes(pdf, storageKey)
+  Svc->>Repo: saveAndFlush(PerformanceReport)
+  Svc->>Timeline: writeTimelineEvent(PERFORMANCE_REPORT)
+  Svc->>Notif: publish Envelope (PERFORMANCE_REPORT_SHARED email, +48h delay)
+  API-->>Coach: 204 No Content
+    </pre>
+    <p>Report generation is one of the few synchronous, transactional flows in the module — the PDF must exist in storage and the DB row must be committed before the endpoint returns, because a persistence failure triggers best-effort cleanup of the just-uploaded PDF to avoid orphaned files. Academy-tier coaches get their saved branding (logo + colour) embedded; everyone else gets the default Skillars header. The parent notification email is scheduled 48 hours out and failures to send it are logged but never fail the report-generation request itself.</p>
+
+    <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout warn">
+      <p><strong>player_skill_stats and radar baselines are append-only / write-once.</strong> <code>PlayerSkillStat</code> rows are never updated after a session completes — even if a drill's metadata changes later, historical SLU must not be retroactively recalculated. Baselines in <code>player_radar_baselines</code> use <code>INSERT ... ON CONFLICT DO NOTHING</code> specifically so the very first composite score is frozen forever as the improvement reference point. The only legitimate deletes are the <code>deleteAllByPlayerId</code> GDPR Article 17 erasure paths used by <code>GdprErasureService</code>.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Tier-gate checks must run before existence checks.</strong> In both <code>RadarAssessmentService</code> and <code>ReportGenerationService</code>, the subscription-tier <code>FeatureGatedException</code> is thrown before any player-specific data is touched, so a Scout-tier coach's request fails identically whether or not the player exists. Don't reorder these checks when adding new coach-tier-gated endpoints.</p>
+    </div>
+    <div class="callout">
+      <p><strong>player_id is a BIGINT (TSID), not a UUID — despite what some historical specs say.</strong> Several entities carry an explicit comment noting this (e.g. <code>PlayerSkillStat.playerId</code>: "TSID Long — NOT UUID despite epics spec"). Coach and report IDs, by contrast, are UUIDs. Mixing these up is a common source of type errors when adding new queries.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Radar and SLU are intentionally separate systems.</strong> Skills Radar is a subjective, coach-entered ability score; SLU is an objective, system-computed training-volume metric. They are only ever correlated for Academy-tier coaches via <code>DevelopmentCorrelationService</code>, gated behind a minimum session-count config threshold. Don't conflate the two when building new player-facing UI — the UX spec explicitly calls out that this distinction must stay visually clear.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Native SQL enum casts need care.</strong> <code>RadarAssessmentRepository</code>'s native queries return the Postgres <code>development.assessment_type</code> enum as plain text (<code>rae.assessment_type::text</code>); callers must do <code>AssessmentType.valueOf((String) row[1])</code> rather than casting the row value directly, per the inline comment on the repository.</p>
+    </div>
+
+    <h2>Related Modules</h2>
+    <div class="card-grid">
+      <div class="card"><h4><a href="../booking/index.html">Booking</a></h4><p>Publishes <code>BookingCompletedEvent</code>, the trigger for SLU calculation and the SESSION_COMPLETED timeline entry; also backs the coach-player relationship check.</p></div>
+      <div class="card"><h4><a href="../session/index.html">Session</a></h4><p>Session/Drill data (blocks, drill metadata, skill weighting) feeds the SLU formula; session's <code>DrillSuggestionService</code> reads neglected-skill flags to recommend catch-up drills.</p></div>
+      <div class="card"><h4><a href="../marketplace/index.html">Marketplace</a></h4><p>Supplies coach and player profile identity plus coach subscription tier used for every feature gate in this module.</p></div>
+      <div class="card"><h4><a href="../filestorage/index.html">Filestorage</a></h4><p>Stores and signs download URLs for generated PDF reports and coach branding logos — never touches <code>infrastructure.blobstore</code> directly.</p></div>
+      <div class="card"><h4><a href="../notification/index.html">Notification</a></h4><p>Delivers the parent email when a new performance report is generated, via a published <code>Envelope</code> event.</p></div>
+      <div class="card"><h4><a href="../config/index.html">Config</a></h4><p>Supplies tunable thresholds (SLU scale factors, neglect threshold, correlation minimum session count, timeline coach-access expiry) via <code>ConfigService</code>.</p></div>
+      <div class="card"><h4><a href="../security/index.html">Security</a></h4><p>Provides <code>SecurityUtil</code>, role constants, and <code>PlayerProfileRepository</code> ownership checks used to gate coach vs. parent access on nearly every endpoint.</p></div>
+      <div class="card"><h4><a href="../admin/index.html">Admin</a></h4><p><code>GdprErasureService</code> calls this module's repositories directly to erase all development data (radar, SLU, timeline, reports) for a player on request.</p></div>
+      <div class="card"><h4><a href="../index.html">Home</a></h4><p>Back to the documentation index.</p></div>
+    </div>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skillars — Business Documentation</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="index.html">Skillars Business Docs<small>Understand the product, persona by persona</small></a>
+    <nav>
+      <h4>Personas</h4>
+      <ul>
+        <li><a href="player/index.html">Player</a></li>
+        <li><a href="parent/index.html">Parent</a></li>
+        <li><a href="coach/index.html">Coach</a></li>
+        <li><a href="admin/index.html">Admin / Staff</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb">Home</div>
+    <h1>Skillars — Business Documentation</h1>
+    <p class="subtitle">What Skillars is, who it's for, how it makes money, and exactly how to execute each persona's real flows in the live product.</p>
+
+    <h2>What Skillars is</h2>
+    <p>Skillars is a marketplace that connects private football/soccer coaches with players for one-on-one and small-group training, built around a Parent account that supervises and pays for a minor child's participation. Coaches list themselves publicly, publish availability, and get booked and paid through the platform; players (adult self-registered, or added as a child profile by a parent) receive assigned homework drills, get assessed on a multi-skill "Skills Radar," and can upload video for review.</p>
+
+    <h2>The four personas</h2>
+    <div class="card-grid">
+      <div class="card"><h4><a href="player/index.html">Player</a></h4><p>The athlete being coached — self-registers if 18+, otherwise added by a parent with no login of their own.</p></div>
+      <div class="card"><h4><a href="parent/index.html">Parent</a></h4><p>The account that books, pays, and consents on behalf of a minor child — Skillars' primary paying customer.</p></div>
+      <div class="card"><h4><a href="coach/index.html">Coach</a></h4><p>The paid supplier — publishes a profile, sets availability, delivers sessions, plans training content, gets paid.</p></div>
+      <div class="card"><h4><a href="admin/index.html">Admin / Staff</a></h4><p>Internal operations — infrastructure health and B2B partner management today; moderation/disputes/GDPR are real but not yet in the UI.</p></div>
+    </div>
+
+    <h2>How the business makes money</h2>
+    <ul>
+      <li><strong>Per-session and session-pack payments</strong> from parents (or players), paid up front as pay-per-session or a discounted multi-session bundle.</li>
+      <li><strong>Commission on coach earnings</strong> — a coach's revenue dashboard shows gross earnings with commission and Stripe processing fees deducted, meaning Skillars takes a cut of every paid session.</li>
+      <li><strong>Coach subscriptions</strong> — coaches sit on tiers (a "Scout" entry tier is visibly feature-gated out of parts of the product, e.g. the session builder), implying paid tier upgrades unlock more capability.</li>
+      <li><strong>Player/parent subscriptions</strong> — a separate recurring subscription a parent can buy for a child, distinct from one-off session packs.</li>
+      <li><strong>Credit wallet</strong> — parents hold a cash balance usable across bookings, with the ability to cash out unused funds.</li>
+    </ul>
+
+    <h2>Cross-persona journey map</h2>
+    <pre class="mermaid">
+flowchart TB
+    subgraph Coach["Coach"]
+      C1["Register & verify"] --> C2["5-step profile builder"]
+      C2 --> C3["Set availability"]
+    end
+    subgraph Marketplace["Marketplace"]
+      M1["Search by city"] --> M2["View coach profile"]
+    end
+    subgraph Parent["Parent"]
+      P1["Register & verify"] --> P2["Add a child player"]
+      P2 --> M1
+      M2 --> P3["Buy sessions / request booking"]
+    end
+    subgraph Player["Player (18+ self-registered)"]
+      PL1["Register & verify"] --> PL2["Profile builder"]
+      PL2 --> PL3["Locker Room: homework"]
+    end
+    C3 --> M2
+    P3 --> C4["Coach accepts in booking-requests inbox"]
+    C4 --> C5["Live session in Command Center"]
+    C5 --> C6["Wrap-up & Session DNA"]
+    C6 --> D1["Development dashboard: Skills Radar"]
+    D1 --> PL3
+    </pre>
+    <p>The one deliberate gap in this map: an adult self-registered Player has no working "book a session" button of their own today — see the <a href="player/index.html">Player</a> page. Booking is a Parent-initiated action in the current build, even when the trainee is an adult.</p>
+
+    <h2>What's not built yet (read this before promising a flow)</h2>
+    <div class="callout warn">
+      <p><strong>Player self-booking</strong> — the marketplace "book" call-to-action only functions for Parent accounts.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Parent's central dashboard</strong> (<code>/parent/dashboard</code>) is a placeholder stub — the real parent experience lives on separate bookings/wallet/development pages reached by direct navigation.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Review submission</strong> — coach ratings display on profiles, but no screen in the current UI lets anyone actually submit one.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Admin moderation, disputes, GDPR requests, and coach enforcement</strong> are real backend capabilities with no admin UI yet — see <a href="admin/index.html">Admin / Staff</a>.</p>
+    </div>
+
+    <h2>Explore by persona</h2>
+    <p>Each persona page below walks through that persona's real UI flows step by step — exact routes, field labels, and button text — starting from account creation through to their core day-to-day actions.</p>
+    <table>
+      <thead><tr><th>Persona</th><th>Start here</th></tr></thead>
+      <tbody>
+        <tr><td><a href="player/index.html">Player</a></td><td>Registering as a player, browsing the marketplace, tracking development</td></tr>
+        <tr><td><a href="parent/index.html">Parent</a></td><td>Registering, adding a child, booking &amp; paying, monitoring development</td></tr>
+        <tr><td><a href="coach/index.html">Coach</a></td><td>Registering, building a profile, running sessions, getting paid</td></tr>
+        <tr><td><a href="admin/index.html">Admin / Staff</a></td><td>System health, B2B tenant management, and what's API-only today</td></tr>
+      </tbody>
+    </table>
+
+    <footer class="page-footer">Skillars business documentation — generated for onboarding.</footer>
+  </main>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/docs.js"></script>
+</body>
+</html>

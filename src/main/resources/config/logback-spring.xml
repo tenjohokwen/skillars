@@ -18,6 +18,7 @@
                 <message/>
                 <mdc/>
                 <arguments/>
+                <keyValuePairs/>
                 <stackTrace/>
                 <pattern>
                     <pattern>
@@ -32,8 +33,53 @@
         </encoder>
     </appender>
 
+    <if condition='property("lokiEnabled").equals("true")'>
+        <then>
+            <appender name="LOKI" class="com.github.loki4j.logback.Loki4jAppender">
+                <http class="com.github.loki4j.logback.JavaHttpSender">
+                    <url>${lokiUrl}/loki/api/v1/push</url>
+                </http>
+                <format class="com.github.loki4j.logback.JsonEncoder">
+                    <label>
+                        <pattern>app=${appName},environment=${environment},level=%level</pattern>
+                    </label>
+                    <message class="net.logstash.logback.layout.LoggingEventCompositeJsonLayout">
+                        <providers>
+                            <timestamp>
+                                <timeZone>UTC</timeZone>
+                            </timestamp>
+                            <logLevel/>
+                            <threadName/>
+                            <loggerName/>
+                            <message/>
+                            <mdc/>
+                            <arguments/>
+                            <keyValuePairs/>
+                            <stackTrace/>
+                            <pattern>
+                                <pattern>
+                                    {
+                                      "service":     "${appName}",
+                                      "environment": "${environment}",
+                                      "version":     "${appVersion}"
+                                    }
+                                </pattern>
+                            </pattern>
+                        </providers>
+                    </message>
+                    <sortByTime>true</sortByTime>
+                </format>
+            </appender>
+        </then>
+    </if>
+
     <root level="INFO">
         <appender-ref ref="JSON"/>
+        <if condition='property("lokiEnabled").equals("true")'>
+            <then>
+                <appender-ref ref="LOKI"/>
+            </then>
+        </if>
     </root>
 
 </configuration>

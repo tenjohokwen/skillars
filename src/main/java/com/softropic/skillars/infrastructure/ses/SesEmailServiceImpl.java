@@ -3,12 +3,14 @@ package com.softropic.skillars.infrastructure.ses;
 import com.softropic.skillars.infrastructure.ses.exception.SesException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.services.sesv2.SesV2Client;
 import software.amazon.awssdk.services.sesv2.model.SesV2Exception;
 
 @RequiredArgsConstructor
 @Service
+@Profile("!dev")
 @ConditionalOnProperty(name = "app.ses.enabled", havingValue = "true", matchIfMissing = false)
 public class SesEmailServiceImpl implements SesEmailService {
 

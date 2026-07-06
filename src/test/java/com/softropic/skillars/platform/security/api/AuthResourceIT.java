@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.security.api;
 import com.softropic.skillars.config.TestConfig;
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.security.SecurityIT;
 
 import org.junit.jupiter.api.AfterEach;
@@ -78,6 +79,11 @@ class AuthResourceIT {
     @Autowired
     private PasswordEncoder passwordEncoder;
 
+    @Autowired
+    private ConfigService configService;
+
+    private static final String PHONE_OTP_REQUIRED_KEY = "security.registration.phone-otp-required";
+
     @LocalServerPort
     private int randomServerPort;
 
@@ -134,6 +140,7 @@ class AuthResourceIT {
             jdbcTemplate.execute("DELETE FROM main.sec");
             return null;
         });
+        configService.updateConfig(PHONE_OTP_REQUIRED_KEY, "false");
     }
 
     @Test
@@ -202,6 +209,10 @@ class AuthResourceIT {
 
     @Test
     void login_unverifiedUser_returns403WithAccountNotVerifiedCode() {
+        // Phone-OTP enforcement is disabled by default (security.registration.phone-otp-required=false);
+        // force it on here to verify the enforcement path itself still works when enabled.
+        configService.updateConfig(PHONE_OTP_REQUIRED_KEY, "true");
+
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
             baseUrl() + LOGIN_ENDPOINT,
             HttpMethod.POST,

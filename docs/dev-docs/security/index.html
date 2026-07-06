@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Security — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <nav>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../tenant/index.html">Tenant</a></li>
+        <li><a href="../security/index.html" class="active">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Security</div>
+    <h1>Security</h1>
+    <p class="subtitle">Identity, authentication, and account lifecycle for every persona on Skillars — Players, Parents, Coaches, and Admins.</p>
+
+    <h2>Business Overview</h2>
+    <p>
+      The <code>security</code> module is the front door for all four Skillars personas. It owns the <code>User</code>
+      row that every other module ultimately joins against, and it is the only module allowed to mint the JWT/refresh-token
+      pair that proves "who is making this request." Everything from booking a coach to viewing a radar assessment
+      depends on this module having already authenticated the caller and attached the correct role and verification
+      status to the security context.
+    </p>
+    <p>
+      Because Skillars serves minors, registration is not one flow but four, each with different rules:
+    </p>
+    <ul>
+      <li><strong>Coach</strong> and <strong>Parent</strong> registration — adult-only, no date-of-birth collected (a
+        placeholder DOB of 1900-01-01 is stored since it is irrelevant to those roles). Both follow the same
+        register &rarr; email-verify &rarr; phone-OTP-verify &rarr; <code>BASIC_VERIFIED</code> pipeline.</li>
+      <li><strong>Player (self-registration)</strong> — only permitted for adults (18+). <code>PlayerRegistrationService</code>
+        rejects registration outright for anyone under 18 (via <code>AgePolicyService.isMinor</code>) rather than silently
+        downgrading them; minors are expected to be registered by a parent instead.</li>
+      <li><strong>Player (shadow account)</strong> — a Parent creates a <code>PlayerProfile</code> for their child via
+        <code>ShadowAccountResource</code>/<code>ShadowAccountService</code>. A <code>PlayerProfile</code> is <em>not</em>
+        a <code>User</code>: it has no login of its own for minors, and is linked to the parent's account through
+        <code>ParentPlayerLink</code>. If the child is a minor, explicit <code>parentConsent</code> and a
+        <code>consentPolicyVersion</code> must be supplied (GDPR/COPPA-style consent capture) before the profile is created.</li>
+    </ul>
+    <p>
+      Age itself drives business rules beyond registration: <code>AgePolicyService</code> buckets players into
+      <code>U10</code>, <code>AGE_10_12</code>, <code>AGE_13_17</code>, and <code>ADULT</code> tiers, and derives a
+      <code>MessagingPolicy</code> per tier (U10 players cannot message at all; 10-12 is parent-managed; 13-17 is
+      supervised; adults are unrestricted). This is consumed by the <code>messaging</code> module, not enforced there,
+      so a new engineer wiring up messaging must call back into security for the policy rather than re-deriving age
+      rules locally.
+    </p>
+    <p>
+      Admins get a narrow, purpose-built surface here too: <code>AdminLoginResource</code> lets an ADMIN/LTD_ADMIN clear
+      a locked-out user's login-attempt cache without waiting out the 4-hour window, and <code>UserAdminService</code>
+      runs a scheduled job that purges accounts that never activated.
+    </p>
+
+    <h2>Technical Overview</h2>
+    <h3>Package layout</h3>
+    <table>
+      <tr><th>Package</th><th>Purpose</th></tr>
+      <tr><td><code>api</code></td><td>REST controllers (Resources) for auth, account, profile, registration (coach/parent/player), shadow accounts, admin login-unlock, and sanitizer preview; plus the global <code>ApiAdvice</code> exception mapper and the registration notification strategy classes.</td></tr>
+      <tr><td><code>api.dto</code></td><td>Request/response records for profile and registration endpoints (address, password change, phone change, 2FA toggle, OTP resend, email/phone verify).</td></tr>
+      <tr><td><code>api.registration</code></td><td>Strategy pattern (<code>EmailRegistrationStrategy</code>/<code>SmsRegistrationStrategy</code>) used by <code>AccountManagementFacade</code> to notify users via the channel matching their chosen login type.</td></tr>
+      <tr><td><code>audit</code></td><td>Security/account audit trail — <code>AuditLog</code> entity, <code>TrailService</code>, and listeners that record account changes and security events for compliance/support.</td></tr>
+      <tr><td><code>config</code></td><td><code>SecurityConfiguration</code> (Spring Security filter chain wiring), <code>AppEndpoints</code> (public vs secured URL matcher lists), CORS and MVC config.</td></tr>
+      <tr><td><code>contract</code></td><td>The module's public API surface: DTOs (<code>UserDto</code>, <code>LoginRequest</code>/<code>LoginResponse</code>), enums (<code>SkillarsRole</code>, <code>SkillarsVerificationStatus</code>, <code>AgeTier</code>, <code>Gender</code>, <code>LoginIdType</code>), policy records (<code>AgePolicy</code>, <code>MessagingPolicy</code>), the Spring Security <code>Principal</code>, and all checked exceptions.</td></tr>
+      <tr><td><code>contract.event</code></td><td>Domain events published by this module (registration emails/OTPs, account changes, security alerts) — consumed by <code>notification</code> and by this module's own listeners.</td></tr>
+      <tr><td><code>contract.exception</code></td><td>All security/registration/auth exception types, most carrying a message key and machine error code consumed by <code>ApiAdvice</code>.</td></tr>
+      <tr><td><code>contract.util</code></td><td><code>AuthoritiesConstants</code>, <code>Cryptopher</code> (crypto helper), <code>ShortCode</code> (short human-support codes).</td></tr>
+      <tr><td><code>infrastructure</code></td><td>Security-module-internal plumbing: JWT filters/token creation (<code>infrastructure.jwt</code>), the authorization manager chain, fraud-aware authentication manager, and event listeners that turn security/auth events into audit rows and emails.</td></tr>
+      <tr><td><code>repo</code></td><td>JPA entities and Spring Data repositories: <code>User</code>, <code>PlayerProfile</code>, <code>ParentPlayerLink</code>, <code>Authority</code>, tokens (<code>RefreshToken</code>, <code>EmailVerificationToken</code>, <code>PhoneOtpToken</code>, <code>PersistentToken</code>, <code>LoginInfo</code>), <code>LoginAttempt</code>, <code>SecKey</code>/<code>Secret</code> (encryption key material), <code>Address</code>/<code>Challenge</code> (embeddables).</td></tr>
+      <tr><td><code>service</code></td><td>All business logic: auth (<code>AuthService</code>, <code>TwoFactorLoginService</code>, <code>LoginAttemptsService</code>), registration (<code>UserRegistrationService</code>, <code>CoachRegistrationService</code>, <code>ParentRegistrationService</code>, <code>PlayerRegistrationService</code>), profile (<code>UserProfileService</code>, <code>UserService</code>), shadow accounts (<code>ShadowAccountService</code>, <code>PlayerOwnershipGuard</code>), age policy, password reset, admin ops, and low-level crypto (<code>SecKeyService</code>/<code>SecretService</code>).</td></tr>
+    </table>
+
+    <h3>Key entities &amp; tables</h3>
+    <table>
+      <tr><th>Entity</th><th>Table</th><th>Notes</th></tr>
+      <tr><td><code>User</code> (extends <code>Customer</code>)</td><td><code>user</code></td><td>Core account: login, password hash, activation/lock state, reset key, <code>skillarsRole</code> (COACH/PARENT/PLAYER/null=admin-style), <code>verificationStatus</code> (UNVERIFIED &rarr; EMAIL_VERIFIED &rarr; BASIC_VERIFIED &rarr; SUSPENDED), embedded addresses, phone, DOB. Business methods (<code>activate()</code>, <code>lock()</code>, <code>preparePasswordReset()</code>, <code>completePasswordReset()</code>) enforce invariants directly on the entity.</td></tr>
+      <tr><td><code>Authority</code></td><td><code>authority</code></td><td>Spring Security role/authority (<code>ROLE_USER</code>, <code>ROLE_ADMIN</code>, <code>ROLE_COACH</code>, <code>ROLE_PARENT</code>, <code>ROLE_PLAYER</code>, <code>ROLE_LTD_ADMIN</code>); many-to-many with <code>User</code>.</td></tr>
+      <tr><td><code>PlayerProfile</code></td><td><code>main.player_profiles</code></td><td>The "shadow" child profile. Exactly one of <code>parentId</code> (minor, created by parent) or <code>userId</code> (self-registered adult) is set, never both. Carries <code>ageTier</code>, <code>position</code>, and GDPR consent fields (<code>consentAcceptedAt</code>, <code>consentPolicyVersion</code>) when a minor.</td></tr>
+      <tr><td><code>ParentPlayerLink</code></td><td><code>main.parent_player_links</code></td><td>Join row linking a parent <code>User</code> to a <code>PlayerProfile</code>, with its own consent timestamp/version. A unique constraint (surfaced as <code>ShadowAccountException</code>) prevents a player being linked to two parents.</td></tr>
+      <tr><td><code>RefreshToken</code></td><td><code>main.refresh_tokens</code></td><td>Hashed (SHA-256) rotating refresh token backing <code>/api/auth/refresh</code>; tracks <code>used</code>/<code>rotatedAt</code> for reuse (theft) detection.</td></tr>
+      <tr><td><code>EmailVerificationToken</code></td><td><code>email_verification_tokens</code></td><td>Single-use UUID token shared by all three role-agnostic registration flows (coach/parent/player).</td></tr>
+      <tr><td><code>PhoneOtpToken</code></td><td><code>phone_otp_tokens</code></td><td>Hashed 6-digit OTP for the phone-verification step, also shared across the three registration flows.</td></tr>
+      <tr><td><code>LoginAttempt</code></td><td><code>main.login_attempts</code></td><td>Records a failed-login timestamp keyed by <code>SHA-256(email|ip)</code>; used by <code>AuthService</code> to rate-limit/lockout brute-force login.</td></tr>
+      <tr><td><code>LoginInfo</code></td><td>(default)</td><td>Backs the legacy two-factor login flow — stores the OTP, seed, and client/session metadata between the first-factor check and the 2FA confirmation.</td></tr>
+      <tr><td><code>PersistentToken</code></td><td><code>persistent_token</code></td><td>Tracks concurrent session/device info per user (IP, user agent, blacklist flag).</td></tr>
+      <tr><td><code>SecKey</code> / <code>Secret</code></td><td><code>sec_key</code> / <code>sec</code></td><td>Encrypted key material used by the crypto services; not application secrets in the .env sense — these back internal permutation/encryption schemes.</td></tr>
+    </table>
+
+    <h3>Key services</h3>
+    <table>
+      <tr><th>Service</th><th>Orchestrates</th></tr>
+      <tr><td><code>AuthService</code></td><td>Login (with SHA-256(email|ip)-keyed rate limiting), refresh-token rotation with reuse/theft detection and a 30s multi-tab grace window, logout, and issuing the <code>rtkn</code>/<code>skp</code> cookies.</td></tr>
+      <tr><td><code>AccountManagementFacade</code></td><td>Legacy-style account registration/password-reset orchestration used by <code>AccountResource</code>/<code>ProfileResource</code>; delegates to email/SMS notification strategies and rate-limits registration, resend, and email-change operations.</td></tr>
+      <tr><td><code>CoachRegistrationService</code>, <code>ParentRegistrationService</code>, <code>PlayerRegistrationService</code></td><td>Nearly-identical register &rarr; email-verify &rarr; phone-OTP-verify &rarr; <code>BASIC_VERIFIED</code> pipelines per role, differing mainly in DOB handling and the events they publish.</td></tr>
+      <tr><td><code>ShadowAccountService</code></td><td>Creates/lists/fetches <code>PlayerProfile</code>s for both parent-managed minors (with consent enforcement) and self-registered adult players; links additional parents.</td></tr>
+      <tr><td><code>UserService</code> / <code>UserProfileService</code></td><td>Read-only user/profile lookups and self-service profile mutations (email, password, phone, address, 2FA toggle), each publishing an <code>AccountChangeEvent</code> for audit/notification.</td></tr>
+      <tr><td><code>AgePolicyService</code></td><td>Config-driven age-tier calculation and derived <code>MessagingPolicy</code>, shared by shadow-account creation and player self-registration.</td></tr>
+      <tr><td><code>LoginAttemptsService</code> / <code>LoginDecisionManager</code></td><td>In-memory (Guava cache) brute-force protection layered by client id, IP+user, and user — used by the legacy form-login path; distinct from <code>AuthService</code>'s DB-backed rate limiting on <code>/api/auth/login</code>.</td></tr>
+      <tr><td><code>TwoFactorLoginService</code></td><td>Generates and validates the second-factor OTP for the legacy cookie/session login flow (distinct from the phone-OTP used during registration).</td></tr>
+      <tr><td><code>PasswordResetService</code></td><td>Reset-key issuance/validation and password completion, delegating invariant checks to <code>User</code> domain methods.</td></tr>
+      <tr><td><code>UserAdminService</code></td><td>Admin lock/unlock, delete, and a scheduled daily job purging never-activated accounts in small batches.</td></tr>
+      <tr><td><code>SecurityUtil</code></td><td>Central helper for "who is the current user" — <code>getCurrentUser()</code>, <code>requireCurrentUserId()</code>, role checks — used throughout this module and by other platform modules.</td></tr>
+      <tr><td><code>PlayerOwnershipGuard</code></td><td>Spring Security SpEL bean (<code>@playerOwnershipGuard.check(...)</code>) verifying a parent owns the <code>playerId</code> path variable before allowing access.</td></tr>
+    </table>
+
+    <h3>REST endpoints</h3>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr>
+      <tr><td>POST</td><td><code>/api/auth/login</code></td><td>Password login; issues JWT + refresh-token cookies</td><td>Public</td></tr>
+      <tr><td>POST</td><td><code>/api/auth/refresh</code></td><td>Rotate refresh token, reissue JWT</td><td>Public (refresh-token cookie)</td></tr>
+      <tr><td>POST</td><td><code>/api/auth/logout</code></td><td>Invalidate refresh token, clear cookies</td><td>Public</td></tr>
+      <tr><td>POST</td><td><code>/v1/account/register</code></td><td>Legacy full account registration</td><td>Public</td></tr>
+      <tr><td>POST</td><td><code>/v1/account/regislink</code></td><td>Resend registration/activation link</td><td>Public</td></tr>
+      <tr><td>POST</td><td><code>/v1/account/activate</code></td><td>Activate account via key</td><td>Public</td></tr>
+      <tr><td>GET</td><td><code>/v1/account/authenticate</code></td><td>Echo back the authenticated remote user</td><td>Authenticated</td></tr>
+      <tr><td>GET</td><td><code>/v1/account/</code></td><td>Get current user (basic)</td><td>Authenticated</td></tr>
+      <tr><td>POST</td><td><code>/v1/account/reset_password/init</code></td><td>Start password reset (emails reset key)</td><td>Public</td></tr>
+      <tr><td>POST</td><td><code>/v1/account/reset_password/finish</code></td><td>Complete password reset</td><td>Public</td></tr>
+      <tr><td>GET</td><td><code>/v1/account/ping</code></td><td>Liveness probe</td><td>Public</td></tr>
+      <tr><td>GET</td><td><code>/api/account/profile</code></td><td>Get current user's full profile incl. addresses</td><td>ROLE_ADMIN/LTD_ADMIN/USER/COACH/PARENT</td></tr>
+      <tr><td>PUT</td><td><code>/api/account/email</code></td><td>Change email (sends verification)</td><td>Same as above</td></tr>
+      <tr><td>PUT</td><td><code>/api/account/password</code></td><td>Change password</td><td>Same as above</td></tr>
+      <tr><td>PUT</td><td><code>/api/account/phone</code></td><td>Change phone</td><td>Same as above</td></tr>
+      <tr><td>PUT</td><td><code>/api/account/address</code></td><td>Add/replace an address</td><td>Same as above</td></tr>
+      <tr><td>PUT</td><td><code>/api/account/info</code></td><td>Update name/lang/gender/title/nationalId</td><td>Same as above</td></tr>
+      <tr><td>PUT</td><td><code>/api/account/2fa</code></td><td>Toggle two-factor auth</td><td>Same as above</td></tr>
+      <tr><td>POST</td><td><code>/api/security/coach/register</code></td><td>Coach self-registration</td><td>Public</td></tr>
+      <tr><td>GET</td><td><code>/api/security/coach/verify-email</code></td><td>Verify coach email token</td><td>Public</td></tr>
+      <tr><td>POST</td><td><code>/api/security/coach/verify-phone</code></td><td>Verify coach phone OTP</td><td>Public</td></tr>
+      <tr><td>POST</td><td><code>/api/security/coach/resend-verification</code></td><td>Resend coach verification email</td><td>Public</td></tr>
+      <tr><td>POST</td><td><code>/api/security/parent/register</code></td><td>Parent self-registration</td><td>Public</td></tr>
+      <tr><td>GET</td><td><code>/api/security/parent/verify-email</code></td><td>Verify parent email token</td><td>Public</td></tr>
+      <tr><td>POST</td><td><code>/api/security/parent/verify-phone</code></td><td>Verify parent phone OTP</td><td>Public</td></tr>
+      <tr><td>POST</td><td><code>/api/security/parent/resend-verification</code></td><td>Resend parent verification email</td><td>Public</td></tr>
+      <tr><td>POST</td><td><code>/api/security/parent/resend-otp</code></td><td>Resend parent phone OTP</td><td>Public</td></tr>
+      <tr><td>POST</td><td><code>/api/security/player/register</code></td><td>Adult player self-registration</td><td>Public</td></tr>
+      <tr><td>GET</td><td><code>/api/security/player/verify-email</code></td><td>Verify player email token</td><td>Public</td></tr>
+      <tr><td>POST</td><td><code>/api/security/player/verify-phone</code></td><td>Verify player phone OTP</td><td>Public</td></tr>
+      <tr><td>POST</td><td><code>/api/security/player/resend-verification</code></td><td>Resend player verification email</td><td>Public</td></tr>
+      <tr><td>POST</td><td><code>/api/security/players</code></td><td>Parent creates a shadow <code>PlayerProfile</code> for their child</td><td>ROLE_PARENT</td></tr>
+      <tr><td>POST</td><td><code>/api/security/players/me</code></td><td>Self-registered adult player creates their own profile</td><td>ROLE_PLAYER</td></tr>
+      <tr><td>GET</td><td><code>/api/security/players/me</code></td><td>Fetch own player profile</td><td>ROLE_PLAYER</td></tr>
+      <tr><td>GET</td><td><code>/api/security/players</code></td><td>List parent's linked player profiles</td><td>ROLE_PARENT</td></tr>
+      <tr><td>GET</td><td><code>/api/security/players/{playerId}</code></td><td>Fetch one player profile</td><td><code>@playerOwnershipGuard.check</code></td></tr>
+      <tr><td>POST</td><td><code>/api/security/players/{playerId}/link-parent</code></td><td>Link an additional parent (currently always rejects — not yet implemented)</td><td><code>@playerOwnershipGuard.check</code></td></tr>
+      <tr><td>DELETE</td><td><code>/v1/admin/users/{username}/login-lock</code></td><td>Admin clears login-attempt locks for a user</td><td>ROLE_ADMIN/LTD_ADMIN</td></tr>
+      <tr><td>POST</td><td><code>/api/util/sanitize-preview</code></td><td>Preview PII/contact-detail sanitization on arbitrary text</td><td>Any authenticated role</td></tr>
+    </table>
+
+    <h3>Domain events</h3>
+    <p>Published (via <code>ApplicationEventPublisher</code>, consumed mainly by <code>notification</code> and this module's own audit listeners):</p>
+    <ul>
+      <li><code>UserRegisteredEvent</code>, <code>CoachVerificationEmailEvent</code>/<code>CoachOtpEmailEvent</code>, <code>ParentVerificationEmailEvent</code>/<code>ParentOtpEmailEvent</code>, <code>PlayerVerificationEmailEvent</code>/<code>PlayerOtpEmailEvent</code> — registration/verification emails and OTP codes per role.</li>
+      <li><code>AccountChangeEvent</code> / <code>AccountChangeUserInfo</code> — published on every self-service profile mutation (email, password, phone, address, 2FA) for audit trail and notification.</li>
+      <li><code>SecurityAlertEvent</code>, <code>SendMailEvent</code>, <code>AccountDeletionRequestedEvent</code>, <code>AccountSuspensionRequestedEvent</code>, <code>UserErasedEvent</code> — security/compliance side effects (help-desk alerts, GDPR erasure confirmation).</li>
+    </ul>
+    <p>Consumed from <code>infrastructure.security.event</code> (cross-cutting): <code>BadCredentialsEvent</code>, <code>FraudEvent</code>, and authentication success/failure events, all picked up by listeners in <code>platform.security.infrastructure.listener</code> to drive audit logging and lockouts.</p>
+    <p>Depends on <code>infrastructure.security</code> for cookie handling (<code>CookieUtil</code>), rate limiting (<code>@RateLimited</code>/<code>RateLimitingService</code>), the shared <code>SecurityConstants</code>/<code>SecurityError</code>, and request-context helpers (<code>ClientContextProvider</code>, <code>RequestMetadataProvider</code>). Also imports from <code>infrastructure.sanitizer</code> (contact-detail scrubbing at registration), <code>infrastructure.validation</code> (<code>PhoneNumber</code>), <code>infrastructure.persistence</code> (base entity/auditing classes), and reaches into <code>platform.config</code>, <code>platform.notification</code>, and <code>platform.filestorage</code>'s contract exceptions (handled centrally in <code>ApiAdvice</code> alongside marketplace/booking/session exceptions).</p>
+
+    <h2>Key Flows</h2>
+
+    <h3>Coach / Parent / Player self-registration &amp; verification</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant U as User (Coach/Parent/Player)
+  participant R as *RegistrationResource
+  participant S as *RegistrationService
+  participant DB as user / email_verification_tokens / phone_otp_tokens
+  participant N as notification (email)
+
+  U->>R: POST /api/security/{role}/register
+  R->>S: register{Role}(request)
+  S->>S: validate email unique, sanitize name
+  alt Player only
+    S->>S: AgePolicyService.isMinor(dob)? reject if true
+  end
+  S->>DB: save User (UNVERIFIED, INACTIVE)
+  S->>N: publish {Role}VerificationEmailEvent
+  N-->>U: verification email with token link
+
+  U->>R: GET /api/security/{role}/verify-email?token=...
+  R->>S: verifyEmail(token)
+  S->>DB: validate token, mark used
+  S->>DB: User.verificationStatus = EMAIL_VERIFIED, activated=true
+  S->>DB: save PhoneOtpToken
+  S->>N: publish {Role}OtpEmailEvent
+  N-->>U: OTP code
+
+  U->>R: POST /api/security/{role}/verify-phone {userId, otp}
+  R->>S: verifyPhone(userId, otp)
+  S->>DB: check rate limit, hash-compare OTP
+  S->>DB: User.verificationStatus = BASIC_VERIFIED
+  S-->>U: 200 OK (can now log in)
+    </pre>
+    <p>
+      All three roles share the same underlying tables (<code>email_verification_tokens</code>, <code>phone_otp_tokens</code>)
+      and the same three-step state machine: <code>UNVERIFIED &rarr; EMAIL_VERIFIED &rarr; BASIC_VERIFIED</code>. Login
+      is blocked by <code>AuthService</code> until <code>BASIC_VERIFIED</code> is reached for any user with a non-null
+      <code>skillarsRole</code>. OTP codes are never stored in plaintext — only their SHA-256(otp+userId) hash is
+      persisted, and phone-OTP verification is itself rate-limited per user via <code>RateLimitingService</code>.
+    </p>
+
+    <h3>Parent creates a shadow player profile (minor)</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant P as Parent (logged in)
+  participant SR as ShadowAccountResource
+  participant SS as ShadowAccountService
+  participant AP as AgePolicyService
+  participant DB as player_profiles / parent_player_links
+
+  P->>SR: POST /api/security/players {name, dob, position, parentConsent, consentPolicyVersion}
+  SR->>SS: createPlayerProfile(parentId, request)
+  SS->>AP: getAgeTier(dob) / isMinor(tier)
+  alt isMinor and no parentConsent
+    SS-->>SR: throw ShadowAccountException(parentConsentRequired)
+  end
+  SS->>DB: save PlayerProfile (parentId set, consent timestamp/version)
+  SS->>DB: save ParentPlayerLink (unique per player)
+  SS-->>SR: PlayerProfileResponse
+  SR-->>P: 201 Created
+    </pre>
+    <p>
+      A <code>PlayerProfile</code> created this way has no login credentials of its own — the parent's <code>User</code>
+      account is the authentication boundary. Every subsequent read (<code>GET /api/security/players/{playerId}</code>)
+      is gated by <code>PlayerOwnershipGuard</code>, which checks the <code>ParentPlayerLink</code> table rather than
+      trusting a role check alone. A unique DB constraint on <code>parent_player_links</code> prevents a second parent
+      from linking the same player, surfaced as a 409 via <code>ShadowAccountException</code>.
+    </p>
+
+    <h3>Login and refresh-token rotation</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant C as Client
+  participant AR as AuthResource
+  participant AS as AuthService
+  participant DB as login_attempts / refresh_tokens / user
+
+  C->>AR: POST /api/auth/login {email, password}
+  AR->>AS: login(email, password, ip)
+  AS->>DB: countByIdentifier(sha256(email|ip)) within lock window
+  alt too many recent failures
+    AS-->>AR: throw LoginRateLimitedException (429)
+  end
+  AS->>DB: findOneByLogin, check password, activated, verificationStatus
+  AS->>DB: save RefreshToken (hashed)
+  AS-->>C: Set-Cookie potc (JWT), rtkn (refresh), skp (profile)
+
+  C->>AR: POST /api/auth/refresh (rtkn cookie)
+  AR->>AS: refresh(req, res)
+  AS->>DB: findByTokenHash
+  alt token already used, within 30s grace window
+    AS->>DB: find successor token (multi-tab race, not theft)
+  else token already used, outside grace window
+    AS->>DB: markAllUsedByUserId (revoke all sessions)
+    AS-->>C: 401 "Token reuse detected"
+  end
+  AS->>DB: mark old token used+rotatedAt, save new RefreshToken
+  AS-->>C: new potc/rtkn cookies
+    </pre>
+    <p>
+      Login failures are rate-limited by a SHA-256 hash of <code>email|ip</code> (canonicalising IPv6-loopback and
+      <code>::ffff:</code>-prefixed addresses first) so an attacker cannot lock out a legitimate user by hammering a
+      different IP under the same email, nor vice versa. Refresh-token reuse detection distinguishes a genuine theft
+      from an ordinary multi-tab race: if the presented (already-used) token was rotated less than 30 seconds ago, the
+      caller is redirected to the current successor token instead of having all sessions revoked.
+    </p>
+
+    <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout warn">
+      <p><strong>Two parallel authentication systems coexist.</strong> <code>AuthResource</code>/<code>AuthService</code>
+      (JWT + hashed <code>RefreshToken</code> in <code>refresh_tokens</code>, cookies <code>potc</code>/<code>rtkn</code>/<code>skp</code>)
+      is the current mechanism for the four persona roles. The older <code>LoginAttemptsService</code>/<code>TwoFactorLoginService</code>/<code>LoginInfo</code>
+      path backs the legacy form-login + email-OTP 2FA flow used by admin-style accounts with no <code>skillarsRole</code>.
+      Don't assume rate-limiting or lockout behavior from one path applies to the other — they use entirely separate
+      storage and counters.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Minors never get a standalone login.</strong> A minor's <code>PlayerProfile</code> has <code>parentId</code>
+      set and <code>userId</code> null — there is no <code>User</code> row for them. Only adult self-registered players
+      get <code>userId</code> set (and no <code>parentId</code>). Code that assumes every <code>PlayerProfile</code> maps
+      1:1 to a <code>User</code> will break for the (majority) minor case.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Verification status gates login, not just registration.</strong> Any <code>User</code> with a non-null
+      <code>skillarsRole</code> (coach/parent/player) must reach <code>SkillarsVerificationStatus.BASIC_VERIFIED</code>
+      before <code>AuthService.login()</code> will let them in, even if <code>activated</code> is true. Admin-style
+      users (<code>skillarsRole == null</code>) skip this check entirely.</p>
+    </div>
+    <div class="callout">
+      <p><strong><code>AgePolicyService</code> is the single source of truth for age tiers.</strong> Thresholds
+      (U10/young-teen/teen max ages) are config-driven via <code>ConfigService</code> with hardcoded fallbacks in
+      <code>AgePolicy.defaults()</code>. Don't hardcode age comparisons elsewhere (e.g. in <code>messaging</code> or
+      <code>marketplace</code>) — call <code>getAgeTier</code>/<code>isMinor</code>/<code>getMessagingPolicy</code> instead
+      so a config change takes effect everywhere at once.</p>
+    </div>
+    <div class="callout">
+      <p><strong>OTPs and passwords are always hashed at rest.</strong> Phone OTPs are stored as
+      <code>SHA-256(otp + userId)</code>, refresh tokens as <code>SHA-256(rawToken)</code>, and passwords via
+      <code>BCryptPasswordEncoder</code>. There is no code path that reads a plaintext credential back out of the
+      database — plan test/debug tooling accordingly.</p>
+    </div>
+
+    <h2>Related Modules</h2>
+    <ul>
+      <li><a href="../infrastructure/index.html">Infrastructure</a> — supplies JWT cookie utilities, rate limiting (<code>@RateLimited</code>), sanitizer, phone/validation helpers, and shared security constants/errors that this module builds on directly.</li>
+      <li><a href="../notification/index.html">Notification</a> — consumes this module's registration/verification/OTP/account-change events to actually send emails.</li>
+      <li><a href="../config/index.html">Config</a> — <code>ConfigService</code> supplies the runtime-tunable age-policy thresholds and login rate-limit settings used by <code>AgePolicyService</code> and <code>AuthService</code>.</li>
+      <li><a href="../messaging/index.html">Messaging</a> — enforces the <code>MessagingPolicy</code> derived here per player age tier.</li>
+      <li><a href="../marketplace/index.html">Marketplace</a>, <a href="../booking/index.html">Booking</a>, <a href="../session/index.html">Session</a> — their exceptions are mapped centrally in this module's <code>ApiAdvice</code>, and they rely on <code>SecurityUtil</code>/<code>Principal</code> for the current user's identity and role.</li>
+      <li><a href="../filestorage/index.html">Filestorage</a> — its quota/validation/storage exceptions are also handled by this module's <code>ApiAdvice</code>.</li>
+      <li><a href="../admin/index.html">Admin</a> — uses <code>AdminLoginResource</code>/<code>LoginAttemptsService</code> to clear login locks and shares the ADMIN/LTD_ADMIN authority model defined here.</li>
+      <li><a href="../index.html">Home</a></li>
+    </ul>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

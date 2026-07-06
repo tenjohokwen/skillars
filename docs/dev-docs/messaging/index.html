@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Messaging — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <nav>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../tenant/index.html">Tenant</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Messaging</div>
+    <h1>Messaging</h1>
+    <p class="subtitle">In-app conversations between coaches, parents, and players — gated by an active booking, moderated by an LLM before delivery, and age-policy-aware so minors are never left unsupervised.</p>
+
+    <h2>Business Overview</h2>
+    <p>
+      Skillars lets coaches and families coordinate around a session — scheduling changes, drill feedback,
+      encouragement — without exchanging personal contact details. The <code>messaging</code> module is the
+      in-app chat that makes this possible while keeping a parent in the loop whenever the player is a minor.
+      A conversation is always a triangle: a <strong>coach</strong>, a <strong>player</strong>, and that
+      player's <strong>parent</strong> (even when the parent never sends a message, they are a silent
+      oversight party on the thread).
+    </p>
+    <p>
+      A conversation cannot be started out of thin air. <code>MessagingService.initiateConversation()</code>
+      requires an existing confirmed (or completed) booking between the coach and the player
+      (<code>BookingRepository.existsByCoachIdAndPlayerIdAndStatusIn(...)</code>) — otherwise the request fails
+      with <code>NO_BOOKING_RELATIONSHIP</code>. This is the module's core anti-abuse rule: coaches cannot cold-message
+      players or parents they have never coached.
+    </p>
+    <p>
+      Who is allowed to talk to whom is governed by <strong><code>AgeMessagingPolicy</code></strong>, derived from
+      <code>AgePolicyService.getMessagingPolicy(playerId)</code> in the <a href="../security/index.html">security</a>
+      module's age-tier rules:
+    </p>
+    <table>
+      <thead><tr><th>Policy</th><th>Age tier</th><th>Player can send?</th><th>Parent role</th></tr></thead>
+      <tbody>
+        <tr><td>PROHIBITED</td><td>Under 10</td><td>No</td><td>Primary participant (parent messages on player's behalf)</td></tr>
+        <tr><td>PARENT_MANAGED</td><td>10–12</td><td>No</td><td>Primary participant</td></tr>
+        <tr><td>SUPERVISED</td><td>13–17</td><td>Yes</td><td>Oversight — can read, cannot send</td></tr>
+        <tr><td>UNRESTRICTED</td><td>Adult player</td><td>Yes</td><td>Excluded entirely — parent has no access</td></tr>
+      </tbody>
+    </table>
+    <p>
+      Every message is written as <code>PENDING</code>, sent to a moderation service, and only becomes visible
+      once approved. Any party can report a message or an entire conversation; reporting a conversation
+      immediately flips it to <code>BLOCKED</code> for everyone, and reporting a message puts that single
+      message <code>UNDER_REVIEW</code> so it is hidden pending admin review. Messages older than a configurable
+      retention window (default 24 months) are purged nightly unless they are attached to an open safety
+      report — the platform intentionally keeps evidence of anything under active dispute.
+    </p>
+
+    <h2>Technical Overview</h2>
+    <h3>Package layout</h3>
+    <table>
+      <thead><tr><th>Package</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>messaging.api</code></td><td>REST controller (<code>MessagingResource</code>) and its dedicated exception advice (<code>MessagingApiAdvice</code>).</td></tr>
+        <tr><td><code>messaging.config</code></td><td>Spring <code>@Configuration</code> placeholder — no manual beans currently registered.</td></tr>
+        <tr><td><code>messaging.contract</code></td><td>DTOs, enums, error codes, and the <code>ModerationService</code> interface + result/event records shared across the module.</td></tr>
+        <tr><td><code>messaging.repo</code></td><td>JPA entities (<code>Conversation</code>, <code>Message</code>, <code>MessageReport</code>, <code>ConversationReport</code>) and their Spring Data repositories.</td></tr>
+        <tr><td><code>messaging.service</code></td><td>Business logic: conversation/message orchestration, age-policy gating, LLM moderation, SSE push, and scheduled retention cleanup.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Key entities &amp; tables</h3>
+    <table>
+      <thead><tr><th>Entity</th><th>Table (schema)</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>Conversation</code></td><td><code>messaging.conversations</code></td><td>One row per (coach, player) pair — unique constraint enforced by catching <code>DataIntegrityViolationException</code> on concurrent create. Tracks <code>status</code> (ACTIVE/ARCHIVED/BLOCKED) and a per-role <code>*_last_read_at</code> timestamp used for unread counts.</td></tr>
+        <tr><td><code>Message</code></td><td><code>messaging.messages</code></td><td>Belongs to a conversation; carries <code>moderationStatus</code> (PENDING/APPROVED/BLOCKED/UNDER_REVIEW), a nullable <code>deliveredAt</code>, and a soft-delete <code>deletedAt</code>. Content is TEXT, capped at 2000 chars by service-level validation (no <code>@Size</code> on the entity).</td></tr>
+        <tr><td><code>MessageReport</code></td><td><code>messaging.message_reports</code></td><td>One report per (message, reporter) — duplicate reports rejected. Tracks resolution (<code>resolvedAt</code>/<code>resolvedBy</code>) for admin moderation workflows.</td></tr>
+        <tr><td><code>ConversationReport</code></td><td><code>messaging.conversation_reports</code></td><td>Same shape as <code>MessageReport</code> but at the conversation level; creating one immediately blocks the conversation.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Key services</h3>
+    <table>
+      <thead><tr><th>Service</th><th>Orchestrates</th></tr></thead>
+      <tbody>
+        <tr><td><code>MessagingService</code></td><td>Conversation lifecycle, sending/listing messages, unread counts, parental oversight views, SSE registration. The main entry point behind <code>MessagingResource</code>.</td></tr>
+        <tr><td><code>ConversationCreationHelper</code></td><td>Package-private helper that creates a conversation in its own <code>REQUIRES_NEW</code> transaction so a unique-constraint race can be caught and retried cleanly by the caller.</td></tr>
+        <tr><td><code>MessagingReportService</code></td><td>Handles message/conversation reporting: flips moderation/conversation status and publishes <code>MessageReportedEvent</code> / <code>ConversationReportedEvent</code>.</td></tr>
+        <tr><td><code>GeminiModerationService</code></td><td><code>@Primary</code> implementation of <code>ModerationService</code> — sends message content to the Gemini LLM (<code>infrastructure.gemini.GeminiClient</code>) wrapped in a prompt template with delimiter markers, and maps the verdict to a moderation status.</td></tr>
+        <tr><td><code>PassThroughModerationService</code></td><td>Non-primary, named-bean (<code>"passThrough"</code>) fallback that marks everything SAFE — useful for local/dev profiles where no Gemini key is configured.</td></tr>
+        <tr><td><code>ModerationResultApplier</code></td><td>Shared verdict-to-status mapping used by both moderation implementations; also resolves the SSE recipient and fires the <code>NEW_MESSAGE</code> / <code>MESSAGE_BLOCKED</code> push only after the DB transaction commits.</td></tr>
+        <tr><td><code>MessagingEmitterRegistry</code></td><td>In-memory map of userId → <code>SseEmitter</code> for live push (new message, blocked message, heartbeat every 30s). Single-instance only — see gotchas.</td></tr>
+        <tr><td><code>MessageRetentionScheduler</code></td><td>Nightly (02:00) job that hard-deletes messages/conversations past the retention window, skipping anything tied to an open report.</td></tr>
+        <tr><td><code>AgeMessagingPolicy</code></td><td>Enum + mapping logic translating the security module's raw <code>MessagingPolicy</code> flags into the four age tiers used throughout this module.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>REST endpoints</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr></thead>
+      <tbody>
+        <tr><td>POST</td><td>/api/messaging/conversations</td><td>Start (or fetch existing) conversation between the caller's coach/parent identity and a player; requires a confirmed booking.</td><td>Authenticated; caller must be the coach or the player's parent</td></tr>
+        <tr><td>GET</td><td>/api/messaging/conversations</td><td>List the caller's conversations (role-scoped: coach's, parent's, or player's own), sorted by most recent message.</td><td>Authenticated</td></tr>
+        <tr><td>POST</td><td>/api/messaging/conversations/{conversationId}/messages</td><td>Send a message; content saved PENDING then run through moderation synchronously before responding.</td><td>Authenticated; caller must be a party to the conversation</td></tr>
+        <tr><td>GET</td><td>/api/messaging/conversations/{conversationId}/messages</td><td>Paginated message history for the conversation; updates the caller's per-role last-read timestamp.</td><td>Authenticated; caller must be a party</td></tr>
+        <tr><td>GET</td><td>/api/messaging/players/{playerId}/conversations</td><td>Parental oversight: all conversations for a player, including BLOCKED ones.</td><td>ROLE_PARENT + must own the player</td></tr>
+        <tr><td>GET</td><td>/api/messaging/players/{playerId}/conversations/{conversationId}/messages</td><td>Parental oversight: read-only message history — does NOT mark messages as read.</td><td>ROLE_PARENT + must own the player</td></tr>
+        <tr><td>DELETE</td><td>/api/messaging/conversations/{conversationId}/messages/{messageId}</td><td>Soft-delete a message. Only the original sender; blocked while a message is UNDER_REVIEW/BLOCKED.</td><td>Authenticated; must be the sender</td></tr>
+        <tr><td>POST</td><td>/api/messaging/conversations/{conversationId}/messages/{messageId}/report</td><td>Report a single message; sets it UNDER_REVIEW and creates a <code>MessageReport</code>.</td><td>Authenticated; caller must be a party</td></tr>
+        <tr><td>POST</td><td>/api/messaging/conversations/{conversationId}/report</td><td>Report the whole conversation; immediately sets status to BLOCKED.</td><td>Authenticated; caller must be a party</td></tr>
+        <tr><td>GET</td><td>/api/messaging/conversations/{conversationId}/events</td><td>Subscribe to an SSE stream (<code>NEW_MESSAGE</code>, <code>MESSAGE_BLOCKED</code>, heartbeat) for live delivery.</td><td>Authenticated; caller must be a party</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Domain events</h3>
+    <table>
+      <thead><tr><th>Event</th><th>Published by</th><th>Consumed by</th></tr></thead>
+      <tbody>
+        <tr><td><code>MessageReportedEvent</code></td><td><code>MessagingReportService.reportMessage()</code></td><td><code>admin.service.AdminAlertEventListener</code> — surfaces moderation reports to admins</td></tr>
+        <tr><td><code>ConversationReportedEvent</code></td><td><code>MessagingReportService.reportConversation()</code></td><td><code>admin.service.AdminAlertEventListener</code></td></tr>
+        <tr><td><code>ModerationFailureEvent</code></td><td><code>GeminiModerationService.moderate()</code> when the Gemini call throws</td><td>Logged; also observed by <code>AdminAlertEventListener</code> for operational alerting</td></tr>
+      </tbody>
+    </table>
+    <p>
+      Dependency-wise, messaging leans on <a href="../booking/index.html">booking</a> (to gate conversation creation
+      on a real relationship), <a href="../marketplace/index.html">marketplace</a> (<code>CoachProfileRepository</code>
+      for identity/display name resolution), <a href="../security/index.html">security</a>
+      (<code>PlayerProfileRepository</code>, <code>AgePolicyService</code>, <code>SecurityUtil</code>, <code>Principal</code>),
+      <a href="../config/index.html">config</a> (<code>ConfigService</code> for the retention window), and
+      <code>infrastructure.gemini</code> for LLM moderation. Notably it does <strong>not</strong> use
+      <code>infrastructure.sanitizer</code> anywhere — content safety is delegated entirely to the Gemini verdict, not
+      to any HTML/XSS-style input sanitization.
+    </p>
+
+    <h2>Key Flows</h2>
+
+    <h3>Sending a message through moderation</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Sender
+  participant MessagingResource
+  participant MessagingService
+  participant DB as messages table
+  participant Moderation as GeminiModerationService
+  participant Gemini as GeminiClient (LLM)
+  participant Applier as ModerationResultApplier
+  participant SSE as MessagingEmitterRegistry
+  participant Recipient
+
+  Sender->>MessagingResource: POST /conversations/{id}/messages
+  MessagingResource->>MessagingService: sendMessage(conversationId, content, senderId, role)
+  MessagingService->>MessagingService: validate length, verify party, check BLOCKED, check age policy
+  MessagingService->>DB: save Message(status=PENDING) + commit
+  MessagingService->>Moderation: moderate(messageId, content)
+  Moderation->>Gemini: evaluate(prompt with delimited content)
+  Gemini-->>Moderation: verdict (SAFE / UNSAFE / UNCERTAIN)
+  Moderation->>Applier: applyResult(messageId, verdict)
+  Applier->>DB: update moderationStatus (+ deliveredAt if SAFE)
+  Applier->>SSE: after commit, emit NEW_MESSAGE or MESSAGE_BLOCKED
+  SSE-->>Recipient: push event (if subscribed)
+  MessagingService-->>MessagingResource: MessageDto (content hidden if BLOCKED/UNDER_REVIEW)
+  MessagingResource-->>Sender: 202 Accepted
+    </pre>
+    <p>
+      The message row is committed as <code>PENDING</code> before moderation even runs, so a crash mid-moderation
+      never loses the message — it just stays pending. Moderation itself runs synchronously in the request thread
+      (not queued), calling out to Gemini with the raw content wrapped between fixed delimiter markers to reduce
+      prompt-injection risk. The response DTO always hides <code>content</code> when the status is
+      <code>BLOCKED</code> or <code>UNDER_REVIEW</code>, so a blocked message is never leaked back to either party.
+      Live delivery uses an in-process SSE emitter map, and the push is deliberately deferred to
+      <code>afterCommit()</code> so a client never receives a notification for a message that a rollback later erases.
+    </p>
+
+    <h3>Reporting a message and the parental oversight view</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Reporter
+  participant MessagingResource
+  participant MessagingReportService
+  participant DB as message_reports / messages
+  participant EventBus as ApplicationEventPublisher
+  participant AdminListener as AdminAlertEventListener
+  participant Parent
+
+  Reporter->>MessagingResource: POST /conversations/{id}/messages/{msgId}/report
+  MessagingResource->>MessagingReportService: reportMessage(conv, msg, reporter, role, reason, details)
+  MessagingReportService->>MessagingReportService: verify reporter is a party
+  MessagingReportService->>DB: check not already reported by this user
+  MessagingReportService->>DB: set Message.moderationStatus = UNDER_REVIEW
+  MessagingReportService->>DB: save MessageReport(status=OPEN)
+  MessagingReportService->>EventBus: publish MessageReportedEvent
+  EventBus->>AdminListener: onMessageReported(event)
+  MessagingReportService-->>MessagingResource: ReportResponse(reportId)
+
+  Parent->>MessagingResource: GET /players/{playerId}/conversations
+  MessagingResource->>MessagingReportService: (via MessagingService) verify parent owns player + age policy allows oversight
+  MessagingResource-->>Parent: ALL conversations for player, including BLOCKED
+    </pre>
+    <p>
+      Reporting a single message hides it (<code>UNDER_REVIEW</code>) without touching the rest of the conversation,
+      while reporting the whole conversation is more drastic — it immediately sets the conversation to
+      <code>BLOCKED</code>, which stops all future sends for both sides until an admin resolves the report. Both
+      report types are deduplicated per (item, reporter) pair. The parental oversight endpoints are a distinct
+      read path: they deliberately bypass the "hide BLOCKED conversations" filter used elsewhere and never touch
+      the read-timestamp columns, since they exist purely for safety visibility, not for participating in the chat.
+    </p>
+
+    <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout warn">
+      <p><strong>No sanitizer dependency.</strong> Unlike other user-generated-content paths in the platform,
+      messaging content is never passed through <code>infrastructure.sanitizer</code>. Safety filtering is 100%
+      delegated to the Gemini moderation verdict (SAFE/UNSAFE/UNCERTAIN). If Gemini is unreachable or misconfigured
+      and the deployment falls back to <code>PassThroughModerationService</code>, every message is marked SAFE with
+      no content inspection at all — treat that fallback as dev/local-only, never enable it in an environment where
+      real minors are messaging.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>SSE emitters are in-memory and per-instance.</strong> <code>MessagingEmitterRegistry</code> keeps
+      its <code>userId → SseEmitter</code> map in a local <code>ConcurrentHashMap</code>. Behind a load balancer with
+      multiple app instances, a user's live push only works if their SSE connection and the message-sending request
+      land on the same instance — there is no cross-instance fan-out (e.g. via Redis pub/sub). Don't assume delivery
+      is guaranteed; clients must still poll/reconcile via the paginated GET endpoint.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Age policy drives almost every branch.</strong> <code>AgeMessagingPolicy</code> (derived from
+      <code>AgePolicyService.getMessagingPolicy</code>) governs who can initiate, who can send, whose name is shown to
+      whom, and whether a conversation shows up in a player's own list at all. When adding a new messaging feature,
+      always ask "what does this do under PROHIBITED / PARENT_MANAGED / SUPERVISED / UNRESTRICTED?" rather than
+      assuming a simple two-party model.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Retention deletes are hard deletes, gated by open reports.</strong>
+      <code>MessageRetentionScheduler</code> runs nightly and permanently removes messages/conversations older than
+      <code>platform.message_retention_months</code> (default 24) — but skips anything referenced by an
+      <code>OPEN</code>/<code>UNDER_REVIEW</code> report row, so evidence under active moderation is preserved.
+      There is a separate, unconditional <code>MessageRepository.deleteAllBySenderId()</code> used for GDPR Article 17
+      erasure requests — that one ignores report status entirely, so a right-to-erasure request will remove a
+      user's messages even if they're the subject of an open report.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Conversations are keyed by (coach, player), not by a chat "thread ID" you create client-side.</strong>
+      <code>initiateConversation</code> is idempotent — calling it again for the same coach/player pair returns the
+      existing conversation. Creation races are handled by creating in a <code>REQUIRES_NEW</code> sub-transaction
+      and catching <code>DataIntegrityViolationException</code> to re-query, so don't be surprised to see that pattern
+      when tracing conversation-creation code.</p>
+    </div>
+
+    <h2>Related Modules</h2>
+    <table>
+      <thead><tr><th>Module</th><th>Why it's related</th></tr></thead>
+      <tbody>
+        <tr><td><a href="../booking/index.html">Booking</a></td><td>A confirmed/completed booking between coach and player is the prerequisite for creating any conversation.</td></tr>
+        <tr><td><a href="../marketplace/index.html">Marketplace</a></td><td>Coach identity (<code>CoachProfileRepository</code>) is used to authorize senders and resolve display names.</td></tr>
+        <tr><td><a href="../security/index.html">Security</a></td><td>Supplies player/parent profiles, the age-tier <code>AgePolicyService</code>, and the authenticated <code>Principal</code>/role resolution used on every endpoint.</td></tr>
+        <tr><td><a href="../config/index.html">Config</a></td><td><code>ConfigService</code> supplies the configurable message retention window used by the nightly cleanup job.</td></tr>
+        <tr><td><a href="../admin/index.html">Admin</a></td><td>Consumes <code>MessageReportedEvent</code>, <code>ConversationReportedEvent</code>, and <code>ModerationFailureEvent</code> to alert and drive moderation review queues.</td></tr>
+        <tr><td><a href="../infrastructure/index.html">Infrastructure</a></td><td>Uses <code>infrastructure.gemini.GeminiClient</code> for LLM-based content moderation.</td></tr>
+      </tbody>
+    </table>
+    <p><a href="../index.html">&larr; Back to Home</a></p>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

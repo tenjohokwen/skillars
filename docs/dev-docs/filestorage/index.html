@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Filestorage — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <nav>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../tenant/index.html">Tenant</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Filestorage</div>
+    <h1>Filestorage</h1>
+    <p class="subtitle">The single, audited front door every platform module must use to upload, download, and delete files — nobody talks to S3 directly except this module.</p>
+
+    <h2>Business Overview</h2>
+    <p>
+      Skillars accumulates files from almost every persona: a Coach's profile photo, a voice note recorded during a
+      Booking wrap-up, a GDPR data-export ZIP an Admin generates for a Parent, a branded session-report PDF a Coach
+      downloads. None of those modules know or care whether the bytes end up in S3, on local disk, or get mirrored to
+      a backup region — that's <code>filestorage</code>'s job. It exists to answer, once, for the whole platform: "how
+      do we accept an upload safely, enforce a size/type/quota policy on it, know who owns it, let it be downloaded
+      again without proxying the bytes through our own servers, and eventually delete it — including from a backup
+      copy — without losing track of any of that in the process?"
+    </p>
+    <p>Personas touch <code>filestorage</code> almost entirely indirectly, through whichever module owns the business flow:</p>
+    <ul>
+      <li><strong>Coaches</strong> upload a profile photo during the Marketplace profile builder; the photo bytes go
+        straight from the browser to S3 via a presigned URL that <code>filestorage</code> issues.</li>
+      <li><strong>Parents/Coaches</strong> record a voice note during a session wrap-up (Booking module); the
+        frontend calls <code>filestorage</code>'s generic <code>/api/storage</code> endpoints directly, tagging the
+        upload with <code>entity=booking</code>.</li>
+      <li><strong>Admins</strong> trigger GDPR export/erasure jobs that store a generated ZIP bundle and later delete
+        it, via <code>filestorage</code>'s programmatic Java API.</li>
+      <li><strong>Coaches</strong> download generated session-report PDFs and branding logos (Development module),
+        again via <code>filestorage</code>'s programmatic API and presigned download URLs.</li>
+    </ul>
+    <p>Key business rules found in the code:</p>
+    <ul>
+      <li><strong>Uploads are two-phase and never touch the app server's bytes.</strong> A caller first asks for a
+        presigned S3 <code>PUT</code> URL (<code>sign/upload</code>), uploads bytes directly to S3 from the browser,
+        then calls back to <code>confirm/**</code> so the backend can verify the object actually landed (via
+        <code>HeadObject</code>) before it trusts it exists.</li>
+      <li><strong>Every owner has a storage quota</strong> (10&nbsp;GiB by default, <code>platform.filestorage.quota.default-bytes</code>),
+        enforced by summing existing <code>file_storage_objects.size_bytes</code> for the caller before a new upload
+        is signed.</li>
+      <li><strong>Deletes are soft first, physical later.</strong> A <code>DELETE</code> just marks a row
+        <code>deleted_at</code>; a scheduled job physically removes the S3 object only after a retention window
+        (<code>app.storage.deletion.retention-days</code>, default 30 days) has passed.</li>
+      <li><strong>Every write can be asynchronously mirrored to a backup region/bucket</strong> via a transactional
+        outbox table, so a slow or failing backup copy never blocks the primary upload/delete request.</li>
+    </ul>
+
+    <h2>Technical Overview</h2>
+
+    <h3>Package layout</h3>
+    <table>
+      <tr><th>Package</th><th>Purpose</th></tr>
+      <tr><td><code>filestorage.api</code></td><td>One REST controller (<code>StorageResource</code>) exposing the generic sign-upload / confirm / sign-download / delete endpoints used directly by frontends.</td></tr>
+      <tr><td><code>filestorage.config</code></td><td><code>FileStorageProperties</code> (validation rules, quota) and <code>FileStorageConfig</code>, which conditionally wires the replication decorator/scheduler beans.</td></tr>
+      <tr><td><code>filestorage.contract</code></td><td>Request/response records (sign/confirm/download), <code>ValidationRequest</code>, <code>StorageObjectDto</code> (metadata export/import), and <code>FileStorageErrorCode</code>.</td></tr>
+      <tr><td><code>filestorage.contract.exception</code></td><td><code>QuotaExceededException</code>, <code>StorageValidationException</code> — typed <code>ApplicationException</code>s mapped to HTTP errors by <code>security.api.ApiAdvice</code>.</td></tr>
+      <tr><td><code>filestorage.event</code></td><td><code>StorageObjectConfirmedEvent</code> — the one domain event this module publishes.</td></tr>
+      <tr><td><code>filestorage.repo</code></td><td>JPA entities/repositories: <code>FileStorageObject</code>, <code>OutboxReplicationJob</code>, <code>StorageAccessEvent</code>.</td></tr>
+      <tr><td><code>filestorage.service</code></td><td>The core orchestration: <code>FileStorageService</code>, <code>ReplicatedStorageService</code>, <code>OutboxPollerScheduler</code>, <code>DeletionSchedulerService</code>, <code>StorageMigrationService</code>, <code>StorageKeyGenerator</code>, and the validation chain.</td></tr>
+      <tr><td><code>filestorage.service.validation</code></td><td>Five ordered <code>ValidationStep</code> components run by <code>ValidationChain</code> on every sign-upload request.</td></tr>
+    </table>
+
+    <h3>Key entities &amp; DB tables</h3>
+    <table>
+      <tr><th>Entity</th><th>Table</th><th>Notes</th></tr>
+      <tr><td><code>FileStorageObject</code></td><td><code>file_storage_objects</code></td><td>The record of a confirmed upload: <code>key</code>, <code>owner_id</code>, filename, content type, size, checksum, JSON <code>tags</code>, provider/bucket, <code>upload_confirmed_at</code>, plus <code>deleted_at</code>/<code>physical_deleted_at</code> for the two-stage delete lifecycle. Extends <code>AbstractAuditingEntity</code>, so <code>createdBy</code> is used as the upload's owner-of-record for delete authorization.</td></tr>
+      <tr><td><code>OutboxReplicationJob</code></td><td><code>outbox_replication_jobs</code></td><td>Transactional outbox row per <code>REPLICATE</code>/<code>DELETE</code> action, with <code>status</code> (PENDING/PROCESSING/COMPLETED/FAILED), <code>attemptCount</code>, and <code>errorMessage</code>. One row is created in the same DB transaction as the primary write it shadows.</td></tr>
+      <tr><td><code>StorageAccessEvent</code></td><td><code>storage_access_events</code></td><td>Append-only audit log of every signed-download request (key, owner, size, timestamp) — used for access auditing, not currently exposed via any read API.</td></tr>
+    </table>
+
+    <h3>Key services</h3>
+    <table>
+      <tr><th>Service</th><th>Orchestrates</th></tr>
+      <tr><td><code>FileStorageService</code></td><td>The main entry point. <code>signUpload()</code> runs the validation chain, checks the owner's quota, generates a storage key, and presigns an S3 <code>PUT</code>. <code>confirmUpload()</code> verifies the object via <code>HeadObject</code>, persists <code>FileStorageObject</code>, enqueues a <code>REPLICATE</code> outbox job, and publishes <code>StorageObjectConfirmedEvent</code> — all inside one transaction. <code>signDownload()</code> records a <code>StorageAccessEvent</code> and presigns a <code>GET</code>. <code>softDelete()</code> checks the caller is the original uploader (<code>createdBy</code>) before flagging <code>deleted_at</code>. It also exposes programmatic helpers (<code>storeBytes</code>, <code>downloadBytes</code>, <code>signedDownloadUrl</code>, <code>deleteRawBytes</code>, <code>assertOwnership</code>) used by server-side callers that generate their own files (PDFs, ZIPs) rather than accepting a browser upload.</td></tr>
+      <tr><td><code>ReplicatedStorageService</code></td><td>A <code>StorageService</code> decorator (conditional <code>@Primary</code> bean when <code>app.storage.replication.enabled=true</code>): after delegating <code>put()</code> to the real primary <code>StorageService</code>, it enqueues a <code>REPLICATE</code> outbox job for that key. All other methods pass straight through.</td></tr>
+      <tr><td><code>OutboxPollerScheduler</code></td><td>Scheduled job (<code>app.storage.poller.fixed-delay-ms</code>, default 5s) that claims <code>PENDING</code> outbox rows with <code>FOR UPDATE SKIP LOCKED</code>, streams the object from the primary <code>StorageService</code> to the backup one for <code>REPLICATE</code> jobs (or calls <code>delete()</code> on the backup for <code>DELETE</code> jobs), and retries with an attempt counter up to <code>app.storage.replication.max-attempts</code> before marking a job <code>FAILED</code>.</td></tr>
+      <tr><td><code>DeletionSchedulerService</code></td><td>Scheduled job on the same interval that finds soft-deleted <code>FileStorageObject</code>s past the retention cutoff, physically deletes them from the primary store, enqueues a <code>DELETE</code> outbox job (so the backup copy is cleaned up too), and marks <code>physical_deleted_at</code>.</td></tr>
+      <tr><td><code>StorageMigrationService</code></td><td>Ops utility (plain class, not a managed bean) for moving objects between two <code>StorageService</code> backends — e.g. local-disk-to-S3 migration — plus exporting/importing <code>FileStorageObject</code> metadata as <code>StorageObjectDto</code> for backup/restore.</td></tr>
+      <tr><td><code>StorageKeyGenerator</code></td><td>Generates keys as <code>{entity}/{entityId}/{yyyy}/{mm}/{uuid}.{extension}</code> and parses them back apart. This convention is how other modules (e.g. Marketplace) recover "which business entity does this confirmed upload belong to" without any extra columns.</td></tr>
+      <tr><td><code>ValidationChain</code> + <code>ValidationStep</code>s</td><td>Ordered pipeline run on every sign-upload: <code>FilenameSanitizationStep</code> (order 1, strips control chars/path traversal), <code>MimeTypeValidationStep</code> (10), <code>ExtensionValidationStep</code> (20), <code>FileSizeValidationStep</code> (30), <code>ChecksumValidationStep</code> (40, requires a 64-char lowercase SHA-256 hex if provided).</td></tr>
+    </table>
+
+    <h3>REST endpoints</h3>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth/Role</th></tr>
+      <tr><td>POST</td><td><code>/api/storage/sign/upload</code></td><td>Validate + quota-check a proposed upload and return a presigned S3 <code>PUT</code> URL plus the generated key.</td><td><code>SecurityConstants.HAS_ANY_ROLE</code> (any authenticated role); additionally, for <code>entity=coach_profile</code>, <code>entityId</code> must equal the caller's own business id.</td></tr>
+      <tr><td>POST</td><td><code>/api/storage/confirm/**</code></td><td>Confirm a completed upload: verifies the object in S3, persists <code>FileStorageObject</code>, enqueues replication, publishes <code>StorageObjectConfirmedEvent</code>.</td><td><code>HAS_ANY_ROLE</code></td></tr>
+      <tr><td>GET</td><td><code>/api/storage/sign/download/**</code></td><td>Presign a temporary S3 <code>GET</code> URL for an existing, non-deleted key and log a <code>StorageAccessEvent</code>.</td><td><code>HAS_ANY_ROLE</code></td></tr>
+      <tr><td>DELETE</td><td><code>/api/storage/**</code></td><td>Soft-delete a file; rejects the request unless the caller is the original uploader.</td><td><code>HAS_ANY_ROLE</code></td></tr>
+    </table>
+
+    <h3>Domain events</h3>
+    <p>
+      <code>filestorage</code> publishes <code>filestorage.event.StorageObjectConfirmedEvent</code> from
+      <code>FileStorageService.confirmUpload()</code>, inside the same transaction as the persisted
+      <code>FileStorageObject</code>. It is currently consumed by exactly one listener platform-wide:
+      <code>marketplace.service.CoachProfilePhotoEventListener</code>, which parses the key via
+      <code>StorageKeyGenerator</code> and, only for <code>entity=coach_profile</code> keys, updates the matching
+      coach's <code>photoUrl</code>. <code>filestorage</code> does not consume any events published by other modules.
+    </p>
+
+    <div class="callout">
+      <p><strong>Dependency on <code>infrastructure.blobstore</code>:</strong> <code>filestorage</code> is built
+      directly on top of <code>infrastructure.blobstore</code>'s <code>StorageService</code> interface (used by the
+      replication/migration/deletion code paths) and its S3 SDK beans — <code>S3Client</code> and
+      <code>S3Presigner</code>, built by <code>BlobstoreConfig</code> from <code>BlobstoreProperties</code> — which
+      <code>FileStorageService</code> autowires directly for the sign/confirm/download HTTP flow (presigning needs
+      the S3-specific presigner API, not just the generic <code>StorageService</code> abstraction). Everything
+      backend-specific — S3 vs. local disk, bucket names, credentials, backup-region wiring — lives in
+      <code>infrastructure.blobstore</code> and is covered in depth on the
+      <a href="../infrastructure/index.html">Infrastructure</a> page; this page only documents the boundary.</p>
+    </div>
+
+    <h2>Key Flows</h2>
+
+    <h3>Uploading a file (presigned two-phase upload)</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Browser as Browser (Coach/Parent)
+  participant Resource as StorageResource
+  participant Service as FileStorageService
+  participant Chain as ValidationChain
+  participant S3 as S3 (via S3Presigner/S3Client)
+  participant DB as file_storage_objects / outbox_replication_jobs
+  participant Listener as e.g. CoachProfilePhotoEventListener
+
+  Browser->>Resource: POST /api/storage/sign/upload {entity, entityId, contentType, extension, fileSizeBytes, checksum}
+  Resource->>Service: signUpload(request)
+  Service->>Chain: validate(request)
+  Chain-->>Service: OK (or StorageValidationException)
+  Service->>Service: check owner quota (sumSizeBytesByOwnerId)
+  Service->>Service: generate key via StorageKeyGenerator
+  Service->>S3: presign PUT (uploadTtlSeconds)
+  Service-->>Resource: SignUploadResponse {key, uploadUrl, expiresAt}
+  Resource-->>Browser: 200 OK
+  Browser->>S3: PUT bytes directly to uploadUrl
+  Browser->>Resource: POST /api/storage/confirm/{key} {contentType, fileSizeBytes, checksum}
+  Resource->>Service: confirmUpload(key, request)
+  Service->>S3: HeadObject(key)
+  S3-->>Service: contentType, contentLength, eTag
+  Service->>DB: save FileStorageObject + OutboxReplicationJob(REPLICATE, PENDING)
+  Service->>Listener: publish StorageObjectConfirmedEvent
+  Service-->>Resource: ConfirmUploadResponse
+  Resource-->>Browser: 200 OK
+    </pre>
+    <p>
+      The app server never sees the file's bytes — the browser uploads straight to S3 using the presigned URL, which
+      keeps upload traffic off the Spring Boot instances entirely. <code>confirmUpload()</code> is the trust
+      boundary: it re-verifies size, content type, and that an <code>ETag</code> exists via a live <code>HeadObject</code>
+      call, so a client can't simply lie about what it uploaded. If a <code>FileStorageObject</code> for the key
+      already exists, <code>confirmUpload()</code> short-circuits and returns the existing record — confirmation is
+      idempotent. The event publish and outbox insert happen in the same transaction as the object save, so a
+      listener never sees a confirmed upload that isn't durably persisted.
+    </p>
+
+    <h3>Downloading / streaming a file</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Caller as Caller (browser or another module)
+  participant Resource as StorageResource
+  participant Service as FileStorageService
+  participant DB as file_storage_objects / storage_access_events
+  participant S3 as S3 (via S3Presigner)
+
+  Caller->>Resource: GET /api/storage/sign/download/{key}
+  Resource->>Service: signDownload(key)
+  Service->>DB: findByKeyAndDeletedAtIsNull(key)
+  alt not found or soft-deleted
+    Service-->>Resource: StorageObjectNotFoundException (404)
+  else found
+    Service->>DB: save StorageAccessEvent(key, ownerId, sizeBytes)
+    Service->>S3: presign GET (presignTtlSeconds)
+    Service-->>Resource: SignDownloadResponse {key, downloadUrl, expiresAt}
+    Resource-->>Caller: 200 OK
+    Caller->>S3: GET downloadUrl (direct fetch/stream)
+  end
+    </pre>
+    <p>
+      Like uploads, downloads never proxy bytes through the application — the caller gets a short-lived presigned
+      URL and streams directly from S3. A soft-deleted object (<code>deleted_at</code> set) is treated as not found,
+      so deletion takes effect immediately for downloads even though the physical bytes and DB row still exist during
+      the retention window. Every successful sign-download is recorded as a <code>StorageAccessEvent</code> before
+      the URL is even returned, giving an audit trail of who accessed what and when.
+    </p>
+
+    <h3>Soft delete, retention, and cross-region replication (outbox pattern)</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Caller as Caller
+  participant Resource as StorageResource
+  participant Service as FileStorageService
+  participant DelSched as DeletionSchedulerService
+  participant Outbox as OutboxPollerScheduler
+  participant Primary as Primary StorageService
+  participant Backup as Backup StorageService
+
+  Caller->>Resource: DELETE /api/storage/{key}
+  Resource->>Service: softDelete(key, currentUser)
+  Service->>Service: verify createdBy == currentUser
+  Service-->>Resource: 204 No Content (deleted_at set)
+
+  loop every poller.fixed-delay-ms
+    DelSched->>DelSched: find FSOs with deleted_at < now-retentionDays
+    DelSched->>Primary: delete(key)
+    DelSched->>DelSched: enqueue OutboxReplicationJob(DELETE, PENDING), mark physical_deleted_at
+  end
+
+  loop every poller.fixed-delay-ms
+    Outbox->>Outbox: pollPending() FOR UPDATE SKIP LOCKED, mark PROCESSING
+    alt job type REPLICATE
+      Outbox->>Primary: get(key)
+      Outbox->>Backup: put(key, data, length, contentType)
+    else job type DELETE
+      Outbox->>Backup: delete(key)
+    end
+    Outbox->>Outbox: mark COMPLETED, or increment attempt / mark FAILED
+  end
+    </pre>
+    <p>
+      Deletion is deliberately two-staged: the user-facing <code>DELETE</code> only flips a flag, so it's instant and
+      reversible-in-principle during the retention window. A separate scheduler does the actual, irreversible S3
+      deletion later and — importantly — routes that physical deletion through the same outbox table used for
+      replication, so the backup copy is guaranteed to eventually be deleted too, not just the primary. The outbox
+      poller uses <code>FOR UPDATE SKIP LOCKED</code> so multiple app instances can run the scheduler concurrently
+      without double-processing a job, and gives up on a job (marking it <code>FAILED</code>) only after
+      <code>replication.max-attempts</code> retries.
+    </p>
+
+    <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout warn">
+      <p><strong>Never call <code>infrastructure.blobstore</code> directly from another platform module — always go
+      through <code>filestorage</code>.</strong> Every other module that needs to store or retrieve a file (profile
+      photos, drill videos, generated documents, GDPR bundles) must go through <code>filestorage</code>'s public
+      surface: the <code>/api/storage/**</code> REST endpoints for end-user-driven uploads/downloads, or
+      <code>FileStorageService</code>'s programmatic methods (<code>storeBytes</code>, <code>downloadBytes</code>,
+      <code>signedDownloadUrl</code>, <code>deleteRawBytes</code>, <code>assertOwnership</code>) for server-generated
+      files, as Admin and Development already do. <code>filestorage</code> is the only module that is allowed to
+      depend on <code>infrastructure.blobstore</code>'s <code>StorageService</code>/<code>S3Client</code>/<code>S3Presigner</code>
+      beans directly. This is the single point of control for: swapping the storage backend (S3 vs. local disk) or
+      adding a new one without touching business modules; enforcing per-owner quota and the file-validation chain
+      consistently; recording ownership (<code>FileStorageObject.ownerId</code>/<code>createdBy</code>) and access
+      history (<code>StorageAccessEvent</code>) for every file regardless of which module requested it; and
+      guaranteeing the soft-delete/retention/outbox-replication lifecycle runs for every object. A module that wrote
+      straight to <code>infrastructure.blobstore</code> would silently skip all of that — no quota accounting, no
+      audit trail, no replication, and no coordinated deletion.</p>
+    </div>
+    <div class="callout">
+      <p><strong>The sign/confirm/download HTTP flow bypasses the <code>StorageService</code> abstraction on
+      purpose.</strong> <code>FileStorageService</code> autowires <code>S3Client</code> and <code>S3Presigner</code>
+      directly rather than going through <code>infrastructure.blobstore.service.StorageService</code>, because
+      presigned URLs are an S3-presigner-specific capability that the generic interface doesn't expose. Only the
+      replication/migration/deletion code paths (<code>ReplicatedStorageService</code>, <code>OutboxPollerScheduler</code>,
+      <code>DeletionSchedulerService</code>, <code>StorageMigrationService</code>) go through the portable
+      <code>StorageService</code> interface. Keep this split in mind if you ever try to make the whole module
+      provider-agnostic — the presigning path is currently S3-only.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Quota is checked at sign-upload time, not at confirm time.</strong> <code>signUpload()</code> sums
+      existing bytes for the owner and compares against the quota before issuing a presigned URL — there's a
+      time-of-check/time-of-use gap if a caller signs several large uploads concurrently before confirming any of
+      them, since nothing re-checks the quota in <code>confirmUpload()</code>. Don't rely on the quota being a hard,
+      race-proof limit today.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Entity-ownership validation at upload time is opt-in, not universal.</strong> <code>StorageResource</code>
+      only enforces "entityId must match the caller" for entities listed in its <code>OWNER_BOUND_ENTITIES</code> set
+      (currently just <code>coach_profile</code>). Any other <code>entity</code> value (e.g. <code>booking</code>) is
+      accepted with whatever <code>entityId</code> the client sends at sign-upload time — ownership for those is only
+      enforced later, and only for delete, via <code>softDelete()</code> checking <code>createdBy</code>. If you add a
+      new owner-sensitive entity type, add it to <code>OWNER_BOUND_ENTITIES</code>.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Not every module that handles files goes through <code>filestorage</code> today.</strong> The
+      <code>video</code> module has no imports of <code>filestorage</code> or <code>infrastructure.blobstore</code>
+      anywhere in its source as of this writing — it manages its own video bytes through a separate pipeline. Don't
+      assume drill-video storage is covered by anything documented on this page; check the
+      <a href="../video/index.html">Video</a> module directly.</p>
+    </div>
+
+    <h2>Related Modules</h2>
+    <ul>
+      <li><a href="../marketplace/index.html">Marketplace</a> — <code>CoachProfilePhotoEventListener</code> consumes
+        <code>StorageObjectConfirmedEvent</code> to sync a confirmed coach profile photo upload onto <code>CoachProfile.photoUrl</code>.</li>
+      <li><a href="../booking/index.html">Booking</a> — the frontend wrap-up flow calls
+        <code>/api/storage/sign/upload</code> and <code>/confirm/**</code> directly (tagged <code>entity=booking</code>)
+        to store session voice-note recordings; no Java code in the booking module itself touches <code>filestorage</code>.</li>
+      <li><a href="../admin/index.html">Admin</a> — <code>GdprExportService</code>/<code>GdprErasureService</code> use
+        <code>FileStorageService.storeBytes</code>/<code>signedDownloadUrl</code>/<code>deleteRawBytes</code> to
+        store, share, and clean up generated GDPR export ZIPs.</li>
+      <li><a href="../development/index.html">Development</a> — <code>ReportGenerationService</code> uses the same
+        programmatic API to store/download/delete session-report PDFs and coach branding logo assets.</li>
+      <li><a href="../security/index.html">Security</a> — supplies <code>SecurityUtil</code> (current user/business
+        id resolution) that <code>filestorage</code> depends on for ownership; conversely,
+        <code>security.api.ApiAdvice</code> maps <code>filestorage</code>'s <code>QuotaExceededException</code>/<code>StorageValidationException</code>
+        to HTTP error responses in the platform's global exception handler.</li>
+      <li><a href="../infrastructure/index.html">Infrastructure</a> — <code>infrastructure.blobstore</code> is the
+        only thing <code>filestorage</code> is allowed to sit on top of; see the boundary callout above and the
+        Infrastructure page for the S3/local-disk backend details.</li>
+      <li><a href="../index.html">Home</a></li>
+    </ul>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>
