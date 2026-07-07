@@ -41,16 +41,17 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function logout() {
+    // Clear client-side state synchronously, before the network call, so any router
+    // guard evaluating isAuthenticated() while the logout request is in flight sees
+    // the user as already logged out (avoids a race that bounces the redirect back
+    // into the app because userId/skp were still set).
+    document.cookie = 'skp=; Max-Age=0; path=/'
+    clearUser()
     try {
       await authApi.skillarsLogout()
     } catch {
       /* best-effort */
     }
-    // Clear the skp cookie client-side regardless of API outcome.
-    // Without this, hydrateFromCookie() re-authenticates from the stale cookie on next reload
-    // even though the Pinia store was cleared.
-    document.cookie = 'skp=; Max-Age=0; path=/'
-    clearUser()
   }
 
   /**

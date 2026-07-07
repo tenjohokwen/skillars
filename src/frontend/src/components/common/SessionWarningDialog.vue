@@ -58,6 +58,7 @@ const {
   secondsRemaining,
   minutesRemaining,
   isRefreshing,
+  warningThresholdSeconds,
   handleRefresh,
   handleLogout,
 } = useSession();
@@ -78,9 +79,9 @@ const formattedCountdown = computed(() => {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 });
 
-// Progress value (0-1) based on 2 minutes warning threshold
+// Progress value (0-1) based on the server-driven warning threshold
 const progressValue = computed(() => {
-  const maxSeconds = 2 * 60; // 2 minutes
+  const maxSeconds = warningThresholdSeconds.value || 1;
   return Math.max(0, Math.min(1, secondsRemaining.value / maxSeconds));
 });
 

@@ -1,7 +1,7 @@
 import { defineBoot } from '#q-app/wrappers';
 import axios from 'axios';
 import { getCurrentBrowserFingerPrint } from '@rajesh896/broprint.js';
-import { recordActivity, stopSessionMonitoring, cleanup } from 'src/plugins/sessionManager';
+import { recordActivity, stopSessionMonitoring, cleanup, syncWarningThresholdFromCookie } from 'src/plugins/sessionManager';
 import { getCurrentLocale } from 'src/boot/i18n';
 
 // Loading state management
@@ -39,10 +39,15 @@ function notifyLoadingChange() {
 }
 
 /**
- * Delete the user cookie (used on logout/session expiry)
+ * Delete session cookies (used on logout/session expiry).
+ * Clears both 'user' (display name) and 'skp' (id/role, read by
+ * authStore.hydrateFromCookie()) — leaving skp behind would let the router's
+ * requiresGuest guard re-authenticate from the stale cookie after the redirect
+ * to /login and bounce the user straight back into the app.
  */
 function deleteUserCookie() {
   document.cookie = 'user=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+  document.cookie = 'skp=; Max-Age=0; path=/';
 }
 
 /**
@@ -110,6 +115,11 @@ api.interceptors.response.use(
     pendingRequests--;
     notifyLoadingChange();
 
+    // Every authenticated request refreshes the 'rint' cookie server-side
+    // (see JWTAuthorizationFilter -> extendTtlOfToken); keep our warning
+    // threshold in sync with it.
+    syncWarningThresholdFromCookie();
+
     // Unwrap axios response - return just the data
     return response.data;
   },
@@ -117,6 +127,9 @@ api.interceptors.response.use(
     // Decrement pending requests counter
     pendingRequests--;
     notifyLoadingChange();
+
+    // The auth filter runs (and refreshes 'rint') before business-logic errors occur too.
+    syncWarningThresholdFromCookie();
 
     // Handle different error scenarios
     if (error.response) {

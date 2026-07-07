@@ -1,20 +1,26 @@
 import { ref, computed } from 'vue';
 
 // Constants
-const SESSION_WARNING_THRESHOLD = 2 * 60 * 1000; // 2 minutes in ms
+const DEFAULT_WARNING_THRESHOLD = 2 * 60 * 1000; // fallback used until the 'rint' cookie has been seen
 const SESSION_CHECK_INTERVAL = 30 * 1000; // 30 seconds
 const COUNTDOWN_INTERVAL = 1000; // 1 second for countdown display
-const SESSION_TTL = 15 * 60 * 1000; // 15 minutes in ms
+const SESSION_TTL = 15 * 60 * 1000; // 15 minutes in ms — must match SecurityConstants.JWT_TTL
+const RINT_COOKIE_NAME = 'rint'; // SecurityConstants.SESSION_REFRESH_COUNTDOWN
 
 // Reactive state
 const lastActivityTime = ref(Date.now());
 const showWarning = ref(false);
 const timeUntilExpiry = ref(SESSION_TTL);
 const isRefreshing = ref(false);
+// How long before expiry the warning should start. Kept in sync with the server-issued
+// 'rint' cookie (see syncWarningThresholdFromCookie) so the client doesn't rely on a
+// hardcoded guess that can drift from the backend's actual JWT_TTL/warning-window config.
+const warningThreshold = ref(DEFAULT_WARNING_THRESHOLD);
 
 // Computed values for display
 const secondsRemaining = computed(() => Math.max(0, Math.ceil(timeUntilExpiry.value / 1000)));
 const minutesRemaining = computed(() => Math.ceil(timeUntilExpiry.value / 60000));
+const warningThresholdSeconds = computed(() => Math.round(warningThreshold.value / 1000));
 
 // Internal timer IDs (not reactive)
 let checkIntervalId = null;
@@ -25,6 +31,33 @@ let countdownIntervalId = null;
  */
 export function recordActivity() {
   lastActivityTime.value = Date.now();
+}
+
+/**
+ * Read the 'rint' cookie value (ms). The backend refreshes this cookie on every
+ * authenticated request (JWTAuthorizationFilter -> extendTtlOfToken/renewLoginToken),
+ * setting it to JWT_TTL minus the server's intended warning window. Deriving the
+ * warning threshold from it keeps the client's warning window authoritative even if
+ * the backend's TTL or warning-window constants change.
+ */
+function readRintCookie() {
+  const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${RINT_COOKIE_NAME}=([^;]*)`));
+  if (!match) return null;
+  const ms = Number(decodeURIComponent(match[1]));
+  return Number.isFinite(ms) && ms > 0 ? ms : null;
+}
+
+/**
+ * Sync the warning threshold from the 'rint' cookie. Call this after every
+ * authenticated API response (the cookie is refreshed alongside the JWT).
+ */
+export function syncWarningThresholdFromCookie() {
+  const rint = readRintCookie();
+  if (rint === null) return;
+  const threshold = SESSION_TTL - rint;
+  if (threshold > 0 && threshold < SESSION_TTL) {
+    warningThreshold.value = threshold;
+  }
 }
 
 /**
@@ -67,6 +100,9 @@ export function startSessionMonitoring() {
 
   // Initialize with current activity
   recordActivity();
+  // Pick up any 'rint' cookie already present (e.g. surviving from a prior page load)
+  // instead of waiting for the next API response.
+  syncWarningThresholdFromCookie();
 
   // Start interval timer for main checks
   checkIntervalId = setInterval(() => {
@@ -76,8 +112,8 @@ export function startSessionMonitoring() {
 
     const wasWarning = showWarning.value;
 
-    // Set warning flag when under 2 minutes and still positive
-    showWarning.value = timeUntilExpiry.value < SESSION_WARNING_THRESHOLD && timeUntilExpiry.value > 0;
+    // Set warning flag when under the server-driven threshold and still positive
+    showWarning.value = timeUntilExpiry.value < warningThreshold.value && timeUntilExpiry.value > 0;
 
     // Start countdown timer when warning begins (for visual second-by-second updates)
     if (showWarning.value && !wasWarning) {
@@ -143,4 +179,11 @@ export function cleanup() {
 }
 
 // Export reactive refs for composable use
-export { showWarning, timeUntilExpiry, secondsRemaining, minutesRemaining, isRefreshing };
+export {
+  showWarning,
+  timeUntilExpiry,
+  secondsRemaining,
+  minutesRemaining,
+  isRefreshing,
+  warningThresholdSeconds,
+};

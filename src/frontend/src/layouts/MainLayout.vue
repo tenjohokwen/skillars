@@ -277,23 +277,18 @@ async function handleLogout() {
   router.push('/login');
 }
 
-async function onSessionExpired() {
-  await authStore.logout();
-  deleteUserCookie();
-}
-
 function toggleLeftDrawer() {
   leftDrawerOpen.value = !leftDrawerOpen.value;
 }
 
 onMounted(() => {
   loadLanguagePreference();
-  window.addEventListener('session:expired', onSessionExpired);
+  // Automatic session-expiry handling (cookie/state clearing + redirect) is owned
+  // by App.vue, which is always mounted — avoids a race between two listeners.
   window.addEventListener('storage', onStorageThemeChange);
 });
 
 onUnmounted(() => {
-  window.removeEventListener('session:expired', onSessionExpired);
   window.removeEventListener('storage', onStorageThemeChange);
 });
 </script>

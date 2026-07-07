@@ -129,11 +129,13 @@ import { useI18n } from 'vue-i18n';
 import { authApi } from 'src/api/auth.api';
 import { useErrorHandler } from 'src/composables/useErrorHandler';
 import { useAuthStore } from 'src/stores/auth.store';
+import { useSession } from 'src/composables/useSession';
 
 const router = useRouter();
 const route = useRoute();
 const { t } = useI18n();
 const authStore = useAuthStore();
+const { initSession } = useSession();
 
 const {
   setError, clearError, hasError, errorMessage,
@@ -164,6 +166,7 @@ async function handleLogin() {
   try {
     const response = await authApi.skillarsLogin(form.value.email, form.value.password);
     authStore.setUser(response);
+    initSession();
     const redirect = route.query.redirect
     const safePath = typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')
       ? redirect

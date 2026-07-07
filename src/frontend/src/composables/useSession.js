@@ -6,6 +6,7 @@ import {
   secondsRemaining,
   minutesRemaining,
   isRefreshing,
+  warningThresholdSeconds,
   startSessionMonitoring,
   stopSessionMonitoring,
   refreshSession,
@@ -23,6 +24,7 @@ import { authApi } from 'src/api/auth.api';
  *   secondsRemaining: import('vue').ComputedRef<number>,
  *   minutesRemaining: import('vue').ComputedRef<number>,
  *   isRefreshing: import('vue').ComputedRef<boolean>,
+ *   warningThresholdSeconds: import('vue').ComputedRef<number>,
  *   handleRefresh: () => Promise<void>,
  *   handleLogout: () => Promise<void>,
  *   initSession: () => void,
@@ -38,6 +40,7 @@ export function useSession() {
   const secondsRemainingComputed = computed(() => secondsRemaining.value);
   const minutesRemainingComputed = computed(() => minutesRemaining.value);
   const isRefreshingComputed = computed(() => isRefreshing.value);
+  const warningThresholdSecondsComputed = computed(() => warningThresholdSeconds.value);
 
   /**
    * Handle session refresh.
@@ -91,6 +94,7 @@ export function useSession() {
     secondsRemaining: secondsRemainingComputed,
     minutesRemaining: minutesRemainingComputed,
     isRefreshing: isRefreshingComputed,
+    warningThresholdSeconds: warningThresholdSecondsComputed,
     handleRefresh,
     handleLogout,
     initSession,
