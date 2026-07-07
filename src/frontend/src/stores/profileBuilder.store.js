@@ -16,8 +16,8 @@ export const useProfileBuilderStore = defineStore('profileBuilder', () => {
     error.value = null
     try {
       const res = await getProfileBuilderStatus()
-      status.value = res.data
-      currentStep.value = Math.min((res.data.lastCompletedStep ?? 0) + 1, 5)
+      status.value = res
+      currentStep.value = Math.min((res.lastCompletedStep ?? 0) + 1, 5)
     } catch (e) {
       error.value = e
     } finally {
@@ -47,7 +47,7 @@ export const useProfileBuilderStore = defineStore('profileBuilder', () => {
     error.value = null
     try {
       const res = await publishProfile()
-      status.value = res.data
+      status.value = res
     } catch (e) {
       error.value = e
       throw e

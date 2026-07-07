@@ -1,8 +1,9 @@
 <template>
   <div>
-    <div class="text-caption q-mb-xs">{{ t('auth.coach.step2Specialties') }}</div>
+    <div class="text-label q-mb-sm">{{ t('auth.coach.step2Specialties') }}</div>
     <q-select
       v-model="form.specialties"
+      :label="t('auth.coach.step2Specialties')"
       :options="specialtyOptions"
       outlined
       multiple
@@ -10,8 +11,8 @@
       :rules="[v => (v && v.length > 0) || t('validation.required')]"
       class="q-mb-md"
     />
-    <div class="text-caption q-mb-xs">{{ t('auth.coach.step2AgeGroups') }}</div>
-    <div class="q-gutter-sm q-mb-md">
+    <div class="text-label q-mb-sm">{{ t('auth.coach.step2AgeGroups') }}</div>
+    <div class="profile-builder__age-groups q-mb-lg">
       <q-checkbox v-model="form.ageGroups" val="U10" label="U10" />
       <q-checkbox v-model="form.ageGroups" val="AGE_10_12" label="10–12" />
       <q-checkbox v-model="form.ageGroups" val="AGE_13_17" label="13–17" />
@@ -19,7 +20,7 @@
     </div>
     <q-btn
       :label="t('common.next')"
-      color="primary"
+      class="btn-accent"
       @click="submit"
       :loading="loading"
       unelevated
@@ -54,3 +55,15 @@ function submit() {
   })
 }
 </script>
+
+<style lang="scss" scoped>
+.profile-builder__age-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  padding: 12px 16px;
+  background: var(--surface-glass);
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+}
+</style>

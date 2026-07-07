@@ -1,42 +1,60 @@
 <template>
   <div>
-    <div class="text-caption q-mb-xs">{{ t('auth.coach.step4AvailabilityWindows') }}</div>
-    <div v-for="(win, i) in form.windows" :key="i" class="row q-col-gutter-sm q-mb-sm items-center">
-      <div class="col-3">
-        <q-select
-          v-model="win.dayOfWeek"
-          :options="dayOptions"
-          option-value="value"
-          option-label="label"
-          emit-value
-          map-options
-          label="Day"
-          outlined
-          dense
-        />
-      </div>
-      <div class="col-3">
-        <q-input v-model="win.startTime" label="Start" outlined dense type="time" />
-      </div>
-      <div class="col-3">
-        <q-input v-model="win.endTime" label="End" outlined dense type="time" />
-      </div>
-      <div class="col-2">
-        <q-btn icon="close" flat dense @click="removeWindow(i)" />
+    <div class="text-label q-mb-xs">{{ t('auth.coach.step4AvailabilityWindows') }}</div>
+    <div class="text-meta q-mb-sm">{{ t('auth.coach.step4WindowHelper') }}</div>
+
+    <div v-if="!form.windows.length" class="profile-builder__empty-state q-mb-sm">
+      {{ t('auth.coach.step4WindowEmpty') }}
+    </div>
+
+    <div v-for="(win, i) in form.windows" :key="i" class="profile-builder__entry-card q-mb-sm">
+      <div class="row q-col-gutter-sm items-center">
+        <div class="col-12 col-sm-4">
+          <q-select
+            v-model="win.dayOfWeek"
+            :options="dayOptions"
+            option-value="value"
+            option-label="label"
+            emit-value
+            map-options
+            :label="t('auth.coach.step4Day')"
+            outlined
+            dense
+          />
+        </div>
+        <div class="col-5 col-sm-3">
+          <q-input v-model="win.startTime" :label="t('auth.coach.step4Start')" outlined dense type="time" />
+        </div>
+        <div class="col-5 col-sm-3">
+          <q-input v-model="win.endTime" :label="t('auth.coach.step4End')" outlined dense type="time" />
+        </div>
+        <div class="col-2 flex items-center justify-end">
+          <q-btn
+            icon="close"
+            flat
+            dense
+            round
+            :aria-label="t('auth.coach.step4RemoveWindow')"
+            @click="removeWindow(i)"
+          />
+        </div>
       </div>
     </div>
+
     <q-btn
       :label="t('auth.coach.step4AddWindow')"
-      flat
+      class="btn-ghost"
       size="sm"
       icon="add"
       @click="addWindow"
-      class="q-mb-md"
+      unelevated
+      no-caps
     />
-    <div>
+
+    <div class="q-mt-lg">
       <q-btn
         :label="t('common.next')"
-        color="primary"
+        class="btn-accent"
         @click="submit"
         :loading="loading"
         unelevated
@@ -89,3 +107,20 @@ function submit() {
   })
 }
 </script>
+
+<style lang="scss" scoped>
+.profile-builder__empty-state {
+  padding: 14px 16px;
+  border: 1px dashed var(--border-medium);
+  border-radius: 14px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.profile-builder__entry-card {
+  padding: 12px;
+  background: var(--surface-glass);
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+}
+</style>

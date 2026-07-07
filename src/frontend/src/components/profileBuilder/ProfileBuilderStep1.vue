@@ -1,5 +1,6 @@
 <template>
   <div>
+    <div class="text-label q-mb-sm">{{ t('auth.coach.step1SectionBasics') }}</div>
     <q-input
       v-model="form.displayName"
       :label="t('auth.coach.step1DisplayName')"
@@ -19,8 +20,7 @@
     />
     <q-banner
       v-if="showContactWarning"
-      class="q-mb-sm"
-      style="background: var(--color-warning-surface, #fff3cd); color: var(--color-warning-text, #856404); border-radius: 8px;"
+      class="contact-warning q-mb-md"
       rounded
       dense
     >
@@ -29,18 +29,26 @@
       </template>
       {{ t('auth.coach.contactDetailWarning') }}
     </q-banner>
-    <q-input
-      v-model="form.city"
-      :label="t('auth.coach.step1City')"
-      outlined
-      class="q-mb-sm"
-    />
-    <q-input
-      v-model="form.district"
-      :label="t('auth.coach.step1District')"
-      outlined
-      class="q-mb-sm"
-    />
+
+    <div class="text-label q-mb-sm q-mt-md">{{ t('auth.coach.step1SectionLocation') }}</div>
+    <div class="row q-col-gutter-md q-mb-sm">
+      <div class="col-12 col-sm-6">
+        <q-input
+          v-model="form.city"
+          :label="t('auth.coach.step1City')"
+          outlined
+        />
+      </div>
+      <div class="col-12 col-sm-6">
+        <q-input
+          v-model="form.district"
+          :label="t('auth.coach.step1District')"
+          outlined
+        />
+      </div>
+    </div>
+
+    <div class="text-label q-mb-sm q-mt-md">{{ t('auth.coach.step1SectionLanguages') }}</div>
     <q-select
       v-model="form.languages"
       :label="t('auth.coach.step1Languages')"
@@ -49,12 +57,13 @@
       multiple
       use-chips
       :rules="[v => (v && v.length > 0) || t('validation.required')]"
-      class="q-mb-sm"
+      class="q-mb-md"
     />
+
     <div class="q-mt-md">
       <q-btn
         :label="t('common.next')"
-        color="primary"
+        class="btn-accent"
         @click="submit"
         :loading="props.loading"
         unelevated
@@ -135,3 +144,12 @@ function submit() {
   })
 }
 </script>
+
+<style lang="scss" scoped>
+.contact-warning {
+  background: var(--surface-warning) !important;
+  color: var(--accent-warning) !important;
+  border-radius: 8px !important;
+  font-size: 13px;
+}
+</style>

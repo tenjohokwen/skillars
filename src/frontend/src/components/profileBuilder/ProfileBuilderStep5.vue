@@ -1,27 +1,31 @@
 <template>
   <div>
-    <q-file
-      v-model="selectedFile"
-      :label="t('auth.coach.step5PhotoLabel')"
-      outlined
-      accept=".jpg,.jpeg,.png"
-      :max-file-size="5242880"
-      @update:model-value="onFileSelected"
-      class="q-mb-md"
-    >
-      <template #prepend>
-        <q-icon name="photo_camera" />
-      </template>
-    </q-file>
+    <div class="text-meta q-mb-md">{{ t('auth.coach.step5Helper') }}</div>
 
-    <div v-if="previewUrl" class="q-mb-md">
-      <q-img :src="previewUrl" style="max-width: 200px; max-height: 200px" />
+    <div class="row q-col-gutter-md items-start q-mb-md">
+      <div v-if="previewUrl" class="col-auto">
+        <q-img :src="previewUrl" class="profile-builder__avatar-preview" />
+      </div>
+      <div class="col">
+        <q-file
+          v-model="selectedFile"
+          :label="t('auth.coach.step5PhotoLabel')"
+          outlined
+          accept=".jpg,.jpeg,.png"
+          :max-file-size="5242880"
+          @update:model-value="onFileSelected"
+        >
+          <template #prepend>
+            <q-icon name="photo_camera" />
+          </template>
+        </q-file>
+      </div>
     </div>
 
     <div class="q-gutter-sm">
       <q-btn
         :label="t('auth.coach.step5Upload')"
-        color="primary"
+        class="btn-accent"
         @click="submit"
         :loading="loading"
         :disable="!selectedFile"
@@ -29,9 +33,10 @@
       />
       <q-btn
         :label="t('auth.coach.step5SkipLabel')"
-        flat
+        class="btn-ghost"
         @click="skip"
         :disable="loading"
+        unelevated
       />
     </div>
   </div>
@@ -66,3 +71,12 @@ function skip() {
   emit('skip')
 }
 </script>
+
+<style lang="scss" scoped>
+.profile-builder__avatar-preview {
+  width: 88px;
+  height: 88px;
+  border-radius: 24px;
+  border: 1px solid var(--border-soft);
+}
+</style>

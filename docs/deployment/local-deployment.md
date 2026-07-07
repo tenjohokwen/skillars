@@ -465,3 +465,7 @@ actually work) is a separate follow-up, not done as part of this guide.
 ```shell
   docker exec -i skillars-postgres-1 psql -U postgres -d skillars < src/main/resources/db/migration/V85__phone_otp_required_toggle.sql
 ```
+
+## UAT
+*  When you're ready to point UAT at real AWS, that's just setting APP_STORAGE_ENDPOINT_URL, APP_STORAGE_S3_ACCESS_KEY, APP_STORAGE_S3_SECRET_KEY, and APP_STORAGE_BUCKET as real env vars for that environment — application-uat.yaml doesn't override storage today, so it already inherits from the base config and  
+   just needs those env vars supplied wherever UAT is deployed

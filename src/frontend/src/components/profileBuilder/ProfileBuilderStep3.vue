@@ -1,5 +1,6 @@
 <template>
   <div>
+    <div class="text-label q-mb-sm">{{ t('auth.coach.step3PerSessionPrice') }}</div>
     <q-input
       v-model.number="form.perSessionPrice"
       :label="t('auth.coach.step3PerSessionPrice')"
@@ -7,52 +8,72 @@
       type="number"
       prefix="€"
       :rules="[v => !!v && v > 0 || t('validation.required')]"
-      class="q-mb-md"
+      class="q-mb-lg"
     />
 
-    <div class="text-caption q-mb-xs">{{ t('auth.coach.step3SessionPacks') }}</div>
-    <div v-for="(pack, i) in form.sessionPacks" :key="i" class="row q-col-gutter-sm q-mb-sm">
-      <div class="col-4">
-        <q-input
-          v-model.number="pack.sessionCount"
-          label="Sessions"
-          outlined
-          type="number"
-          dense
-        />
-      </div>
-      <div class="col-4">
-        <q-input
-          v-model.number="pack.totalPrice"
-          label="Price (€)"
-          outlined
-          type="number"
-          dense
-        />
-      </div>
-      <div class="col-3">
-        <q-input v-model="pack.label" label="Label" outlined dense />
-      </div>
-      <div class="col-1 flex items-center">
-        <q-btn icon="close" flat dense @click="removePack(i)" />
+    <div class="text-label q-mb-xs">{{ t('auth.coach.step3SessionPacks') }}</div>
+    <div class="text-meta q-mb-sm">{{ t('auth.coach.step3PackHelper') }}</div>
+
+    <div v-if="!form.sessionPacks.length" class="profile-builder__empty-state q-mb-sm">
+      {{ t('auth.coach.step3PackEmpty') }}
+    </div>
+
+    <div v-for="(pack, i) in form.sessionPacks" :key="i" class="profile-builder__entry-card q-mb-sm">
+      <div class="row q-col-gutter-sm">
+        <div class="col-12 col-sm-4">
+          <q-input
+            v-model.number="pack.sessionCount"
+            :label="t('auth.coach.step3PackSessions')"
+            outlined
+            type="number"
+            dense
+          />
+        </div>
+        <div class="col-12 col-sm-4">
+          <q-input
+            v-model.number="pack.totalPrice"
+            :label="t('auth.coach.step3PackPrice')"
+            outlined
+            type="number"
+            dense
+            prefix="€"
+          />
+        </div>
+        <div class="col-10 col-sm-3">
+          <q-input v-model="pack.label" :label="t('auth.coach.step3PackLabel')" outlined dense />
+        </div>
+        <div class="col-2 col-sm-1 flex items-center justify-end">
+          <q-btn
+            icon="close"
+            flat
+            dense
+            round
+            :aria-label="t('auth.coach.step3RemovePack')"
+            @click="removePack(i)"
+          />
+        </div>
       </div>
     </div>
+
     <q-btn
       :label="t('auth.coach.step3AddPack')"
-      flat
+      class="btn-ghost"
       size="sm"
       icon="add"
       @click="addPack"
-      class="q-mb-md"
+      unelevated
+      no-caps
     />
 
-    <q-btn
-      :label="t('common.next')"
-      color="primary"
-      @click="submit"
-      :loading="loading"
-      unelevated
-    />
+    <div class="q-mt-lg">
+      <q-btn
+        :label="t('common.next')"
+        class="btn-accent"
+        @click="submit"
+        :loading="loading"
+        unelevated
+      />
+    </div>
   </div>
 </template>
 
@@ -90,3 +111,20 @@ function submit() {
   })
 }
 </script>
+
+<style lang="scss" scoped>
+.profile-builder__empty-state {
+  padding: 14px 16px;
+  border: 1px dashed var(--border-medium);
+  border-radius: 14px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.profile-builder__entry-card {
+  padding: 12px 12px 4px;
+  background: var(--surface-glass);
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+}
+</style>
