@@ -67,8 +67,7 @@ const receipt = ref(null)
 
 onMounted(async () => {
   try {
-    const { data } = await fetchParentReceipt(route.params.bookingId)
-    receipt.value = data
+    receipt.value = await fetchParentReceipt(route.params.bookingId)
   } finally {
     loading.value = false
   }

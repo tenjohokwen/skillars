@@ -319,7 +319,7 @@ async function onSaveBlock() {
 onMounted(async () => {
   try {
     const res = await getProfileBuilderStatus()
-    coachId.value = res.data?.coachId ?? null
+    coachId.value = res?.coachId ?? null
     if (!coachId.value) {
       store.error = new Error('No coach profile found for this account')
       return

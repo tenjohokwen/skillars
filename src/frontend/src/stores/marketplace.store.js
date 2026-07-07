@@ -68,7 +68,7 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
     try {
       const params = buildApiParams(0)
       const res = await searchCoaches(params)
-      applyPage(res.data)
+      applyPage(res)
     } catch (e) {
       error.value = e
     } finally {
@@ -82,11 +82,11 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
     try {
       const params = buildApiParams(currentPage.value + 1)
       const res = await searchCoaches(params)
-      coaches.value = [...coaches.value, ...res.data.coaches]  // append for infinite-scroll UX
-      currentPage.value   = res.data.page
-      totalPages.value    = res.data.totalPages
-      totalElements.value = res.data.totalElements
-      hasNext.value       = res.data.hasNext
+      coaches.value = [...coaches.value, ...res.coaches]  // append for infinite-scroll UX
+      currentPage.value   = res.page
+      totalPages.value    = res.totalPages
+      totalElements.value = res.totalElements
+      hasNext.value       = res.hasNext
     } catch (e) {
       error.value = e
     } finally {

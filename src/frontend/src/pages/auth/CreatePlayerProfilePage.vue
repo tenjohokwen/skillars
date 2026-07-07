@@ -70,7 +70,7 @@
 
           <div v-if="isMinorDob" class="q-mt-lg">
             <div class="text-section-title q-mb-sm">{{ t('player.consentTitle') }}</div>
-            <div class="policy-scroll-box q-mb-sm" @scroll="onConsentScroll">
+            <div ref="policyBoxRef" class="policy-scroll-box q-mb-sm" @scroll="onConsentScroll">
               <p>{{ t('player.consentBody') }}</p>
             </div>
             <q-checkbox
@@ -97,7 +97,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { playerProfileApi } from 'src/api/playerProfile.api'
@@ -120,6 +120,7 @@ const form = ref({
 const isSubmitting = ref(false)
 const consentPolicyVersion = '1.0'
 const consentScrolled = ref(false)
+const policyBoxRef = ref(null)
 
 function onConsentScroll(event) {
   const el = event.target
@@ -146,7 +147,20 @@ const ageFromDob = computed(() => {
 })
 
 const isMinorDob = computed(() => ageFromDob.value !== null && ageFromDob.value < 18)
-watch(isMinorDob, () => { consentScrolled.value = false; form.value.parentConsent = false })
+watch(isMinorDob, async (isMinor) => {
+  consentScrolled.value = false
+  form.value.parentConsent = false
+  if (isMinor) {
+    // Short consent text may fit without overflowing — no scroll event would ever
+    // fire in that case, permanently disabling the checkbox. Treat "nothing to
+    // scroll" as already read.
+    await nextTick()
+    const el = policyBoxRef.value
+    if (el && el.scrollHeight <= el.clientHeight + 1) {
+      consentScrolled.value = true
+    }
+  }
+})
 
 const ageTierPreview = computed(() => {
   const age = ageFromDob.value

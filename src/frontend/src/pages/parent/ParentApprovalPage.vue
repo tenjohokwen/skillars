@@ -61,8 +61,7 @@ const actioning = ref(null)
 async function fetchApprovals() {
   loading.value = true
   try {
-    const { data } = await videoApi.getMyApprovals()
-    approvals.value = data
+    approvals.value = await videoApi.getMyApprovals()
   } catch (err) {
     if (err?.response?.status === 403) {
       router.replace('/parent/dashboard')

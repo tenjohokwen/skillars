@@ -285,7 +285,7 @@ function handleBuySessions() {
 onMounted(async () => {
   try {
     const response = await getCoachProfile(coachId)
-    profile.value = response.data
+    profile.value = response
 
     if (authStore.isParent) {
       if (!playerStore.activePlayerId) {

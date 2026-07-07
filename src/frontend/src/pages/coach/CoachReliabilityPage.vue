@@ -95,7 +95,7 @@ onMounted(async () => {
       paymentStore.fetchCoachStrikes(),
       getProfileBuilderStatus(),
     ])
-    coachProfile.value = profileRes.data
+    coachProfile.value = profileRes
   } finally {
     loading.value = false
   }

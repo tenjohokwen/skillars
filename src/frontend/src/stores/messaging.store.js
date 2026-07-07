@@ -25,7 +25,7 @@ export const useMessagingStore = defineStore('messaging', () => {
     error.value = null
     try {
       const res = await fetchConversations()
-      conversations.value = res.data
+      conversations.value = res
     } catch (e) {
       error.value = e
     } finally {
@@ -41,7 +41,7 @@ export const useMessagingStore = defineStore('messaging', () => {
       if (!messages.value[conversationId]) {
         messages.value[conversationId] = []
       }
-      messages.value[conversationId] = res.data.content
+      messages.value[conversationId] = res.content
     } catch (e) {
       error.value = e
     } finally {
@@ -54,17 +54,17 @@ export const useMessagingStore = defineStore('messaging', () => {
     if (!messages.value[conversationId]) {
       messages.value[conversationId] = []
     }
-    messages.value[conversationId].unshift(res.data)
+    messages.value[conversationId].unshift(res)
     await loadConversations()
-    return res.data
+    return res
   }
 
   async function openConversation(coachId, playerId) {
     const res = await initiateConversation(coachId, playerId)
-    activeConversationId.value = res.data.conversationId
+    activeConversationId.value = res.conversationId
     await loadConversations()
-    await loadMessages(res.data.conversationId)
-    return res.data
+    await loadMessages(res.conversationId)
+    return res
   }
 
   function connectSse(conversationId) {

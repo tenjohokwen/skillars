@@ -297,7 +297,7 @@ onMounted(async () => {
   bookingStore.loadParentBookings()
   try {
     const res = await getBatchConfig()
-    maxBatchSize.value = res.data.maxSize
+    maxBatchSize.value = res.maxSize
   } catch {
     console.warn('Could not load batch config, using default max size')
   }

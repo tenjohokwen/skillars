@@ -85,7 +85,7 @@ export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
     loading.value = true
     try {
       const resp = await sessionApi.getSessionPlanByBooking(bId)
-      const plan = resp.data
+      const plan = resp
       sessionId.value = plan.id
       bookingId.value = plan.bookingId
       status.value = plan.status
@@ -134,9 +134,9 @@ export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
         resp = await sessionApi.updateSessionPlan(sessionId.value, payload)
       } else {
         resp = await sessionApi.createSessionPlan({ bookingId: bookingId.value, ...payload })
-        sessionId.value = resp.data.id
+        sessionId.value = resp.id
       }
-      status.value = resp.data.status
+      status.value = resp.status
     } catch (e) {
       error.value = e
       throw e
@@ -150,7 +150,7 @@ export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
     suggestionsLoading.value = true
     try {
       const res = await sessionApi.getSuggestions(sessionId.value, 10)
-      suggestedDrills.value = res.data
+      suggestedDrills.value = res
     } catch {
       suggestedDrills.value = []
     } finally {

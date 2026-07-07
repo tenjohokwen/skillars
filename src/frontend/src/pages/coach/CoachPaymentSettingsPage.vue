@@ -130,7 +130,7 @@ async function connectStripe() {
   connectingStripe.value = true
   connectError.value = false
   try {
-    const { data } = await getStripeOnboardingUrl()
+    const data = await getStripeOnboardingUrl()
     // P22: guard against null/undefined URL before navigating
     if (data?.onboardingUrl) {
       window.location.href = data.onboardingUrl

@@ -49,7 +49,7 @@ export const useDevelopmentStore = defineStore('development', () => {
     error.value = null
     try {
       const response = await getSkillDefinitions()
-      skillDefinitions.value = response.data
+      skillDefinitions.value = response
     } catch (err) {
       error.value = err?.response?.data?.message ?? 'Failed to load skill definitions'
     }
@@ -60,7 +60,7 @@ export const useDevelopmentStore = defineStore('development', () => {
     error.value = null
     try {
       const response = await getSkillExposure(playerId, weeks)
-      exposure.value = response.data
+      exposure.value = response
     } catch (err) {
       error.value = err?.response?.data?.message ?? 'Failed to load skill exposure'
     } finally {
@@ -72,7 +72,7 @@ export const useDevelopmentStore = defineStore('development', () => {
     error.value = null
     try {
       const response = await getNarrativeSummary(playerId)
-      narrative.value = response.data
+      narrative.value = response
     } catch (err) {
       error.value = err?.response?.data?.message ?? 'Failed to load narrative summary'
     }
@@ -82,7 +82,7 @@ export const useDevelopmentStore = defineStore('development', () => {
     error.value = null
     try {
       const response = await getMyTargets(playerId)
-      targets.value = response.data
+      targets.value = response
     } catch (err) {
       error.value = err?.response?.data?.message ?? 'Failed to load targets'
     }
@@ -103,7 +103,7 @@ export const useDevelopmentStore = defineStore('development', () => {
     error.value = null
     try {
       const response = await getMyRadarEntries(playerId)
-      radarEntries.value = response.data
+      radarEntries.value = response
     } catch (err) {
       error.value = err?.response?.data?.message ?? 'Failed to load radar entries'
     } finally {
@@ -127,7 +127,7 @@ export const useDevelopmentStore = defineStore('development', () => {
     error.value = null
     try {
       const response = await getRadarDisplay(playerId)
-      radarDisplay.value = response.data
+      radarDisplay.value = response
     } catch (err) {
       error.value = err?.response?.data?.message ?? 'Failed to load radar display'
     } finally {
@@ -138,7 +138,7 @@ export const useDevelopmentStore = defineStore('development', () => {
   async function fetchRadarPreferences(playerId) {
     try {
       const response = await getRadarPreferences(playerId)
-      radarPreferences.value = response.data
+      radarPreferences.value = response
     } catch {
       radarPreferences.value = { selectedSkillCodes: [] }
     }
@@ -157,7 +157,7 @@ export const useDevelopmentStore = defineStore('development', () => {
     correlationLoading.value = true
     try {
       const response = await getCorrelationInsights(playerId)
-      correlationInsights.value = response.data
+      correlationInsights.value = response
     } catch (err) {
       // Non-Academy coaches get 403 here — store null silently; UI shows teaser
       if (err?.response?.status !== 403) {
@@ -174,7 +174,7 @@ export const useDevelopmentStore = defineStore('development', () => {
     reportsError.value = null
     try {
       const response = await listReports(playerId)
-      reports.value = response.data
+      reports.value = response
     } catch (err) {
       reportsError.value = err?.response?.data?.message ?? 'Failed to load reports'
     } finally {
@@ -201,7 +201,7 @@ export const useDevelopmentStore = defineStore('development', () => {
     timelineError.value = null
     try {
       const response = await getTimeline(playerId)
-      timeline.value = response.data
+      timeline.value = response
     } catch (err) {
       timelineError.value = err?.response?.data?.message ?? 'Failed to load timeline'
     } finally {
@@ -219,7 +219,7 @@ export const useDevelopmentStore = defineStore('development', () => {
     try {
       const response = await getCoachContributions(playerId)
       if (seq === _coachContributionsSeq) {
-        coachContributions.value = response.data
+        coachContributions.value = response
       }
     } catch (err) {
       if (seq === _coachContributionsSeq) {

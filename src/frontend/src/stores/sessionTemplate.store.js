@@ -11,7 +11,7 @@ export const useSessionTemplateStore = defineStore('sessionTemplate', () => {
     loading.value = true
     try {
       const res = await sessionApi.listTemplates()
-      templates.value = res.data
+      templates.value = res
     } catch (e) {
       error.value = e
     } finally {
@@ -21,8 +21,8 @@ export const useSessionTemplateStore = defineStore('sessionTemplate', () => {
 
   async function createTemplate(sessionId, name) {
     const res = await sessionApi.createTemplate({ sessionId, name })
-    templates.value.unshift(res.data)
-    return res.data
+    templates.value.unshift(res)
+    return res
   }
 
   async function renameTemplate(templateId, name) {
@@ -54,7 +54,7 @@ export const useSessionTemplateStore = defineStore('sessionTemplate', () => {
         t.deployCount = (t.deployCount ?? 0) + 1
         t.lastDeployedAt = new Date().toISOString()
       }
-      return res.data
+      return res
     } catch (e) {
       error.value = e
       throw e

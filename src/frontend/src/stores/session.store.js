@@ -24,7 +24,7 @@ export const useSessionStore = defineStore('session', () => {
     error.value = null
     try {
       const response = await sessionApi.getDrills(library)
-      drills.value = response.data
+      drills.value = response
     } catch (err) {
       error.value = err
     } finally {
@@ -49,7 +49,7 @@ export const useSessionStore = defineStore('session', () => {
         params.weakFootBias = activeFilters.value.weakFootBias
       }
       const response = await sessionApi.getDrills(library, params)
-      drills.value = response.data
+      drills.value = response
     } catch (err) {
       error.value = err
     } finally {
@@ -64,7 +64,7 @@ export const useSessionStore = defineStore('session', () => {
       const drill = drills.value.find((d) => d.id === drillId)
       if (drill) {
         drill.isClonedByMe = true
-        drill.cloneId = response.data.id
+        drill.cloneId = response.id
       }
       return response
     } catch (err) {
@@ -103,7 +103,7 @@ export const useSessionStore = defineStore('session', () => {
   async function fetchTagSuggestions() {
     try {
       const response = await sessionApi.getTagSuggestions()
-      tagSuggestions.value = response.data
+      tagSuggestions.value = response
     } catch (err) {
       error.value = err
     }
@@ -113,7 +113,7 @@ export const useSessionStore = defineStore('session', () => {
     if (canUploadVideo.value !== null) return
     try {
       const res = await sessionApi.checkVideoUploadEligibility()
-      canUploadVideo.value = res.data.eligible === true
+      canUploadVideo.value = res.eligible === true
     } catch {
       // do not cache failure — leave null so the next mount retries
     }
@@ -130,7 +130,7 @@ export const useSessionStore = defineStore('session', () => {
         durationSeconds: durationSeconds ?? 0,
       }
       const res = await sessionApi.initiateVideoUpload(drillId, payload)
-      const { videoId, uploadSessionId, signedUploadUrl, expiresAt } = res.data
+      const { videoId, uploadSessionId, signedUploadUrl, expiresAt } = res
       return { videoId, uploadSessionId, signedUploadUrl, expiresAt }
     } catch (e) {
       error.value = e

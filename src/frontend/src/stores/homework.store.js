@@ -12,7 +12,7 @@ export const useHomeworkStore = defineStore('homework', () => {
     error.value = null
     try {
       const res = await homeworkApi.getLockerRoomDrills(playerId)
-      assignments.value = res.data
+      assignments.value = res
     } catch (e) {
       error.value = e
       assignments.value = []

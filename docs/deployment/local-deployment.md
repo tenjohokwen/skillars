@@ -466,6 +466,42 @@ actually work) is a separate follow-up, not done as part of this guide.
   docker exec -i skillars-postgres-1 psql -U postgres -d skillars < src/main/resources/db/migration/V85__phone_otp_required_toggle.sql
 ```
 
+## Data persistence
+* MinIO's data lives in a named Docker volume (skillars-local-minio, shown as skillars_skillars-local-minio in docker volume ls), which is independent of the container lifecycle. 
+* Recreating, restarting, or rebuilding the app or minio containers doesn't touch that volume — same as how your Postgres data survives app redeploys via skillars-local-postgres.
+* What would wipe it:
+    - docker compose down -v (or --volumes) — explicitly removes named volumes.
+    - docker volume rm skillars_skillars-local-minio directly.
+    - Deleting/pruning the volume manually.
+
+* Plain docker compose down / up, container recreates, and image rebuilds are all safe — the bucket and its objects stay put, and since Postgres (which stores the FileStorageObject metadata row pointing at that key) persists the same way, the two stay in sync.
+
 ## UAT
 *  When you're ready to point UAT at real AWS, that's just setting APP_STORAGE_ENDPOINT_URL, APP_STORAGE_S3_ACCESS_KEY, APP_STORAGE_S3_SECRET_KEY, and APP_STORAGE_BUCKET as real env vars for that environment — application-uat.yaml doesn't override storage today, so it already inherits from the base config and  
    just needs those env vars supplied wherever UAT is deployed
+
+
+## Save deletes
+```shell
+
+   BEGIN;                                                                                                                                                                                                                                                                                                               
+                                                                                                                                                                                                                                                                                                                       
+  -- 1. Confirm you're targeting the right account                                                                                                                                                                                                                                                                     
+  SELECT id, login, email, first_name, last_name, skillars_role, activated                                                                                                                                                                                                                                             
+  FROM main."user"                                                                                                                                                                                                                                                                                                     
+  WHERE email = 'tenjoh_okwen@yahoo.com';                                                                                                                                                                                                                                                                              
+                                                                                                                                                                                                                                                                                                                       
+  -- 2. Delete the role link (no ON DELETE CASCADE on this FK)                                                                                                                                                                                                                                                         
+  DELETE FROM main.user_authority                                                                                                                                                                                                                                                                                      
+  WHERE user_id = (SELECT id FROM main."user" WHERE email = 'tenjoh_okwen@yahoo.com');                                                                                                                                                                                                                                 
+                                                                                                                                                                                                                                                                                                                       
+  -- 3. Delete the user itself — email_verification_tokens, persistent_token,                                                                                                                                                                                                                                          
+  --    phone_otp_tokens, refresh_tokens, player_profiles and parent_player_links                                                                                                                                                                                                                                      
+  --    all cascade automatically; verified this account has no rows in the                                                                                                                                                                                                                                            
+  --    non-cascading tables (persistent_token, user_addresses, coach_profiles)                                                                                                                                                                                                                                        
+  --    so nothing else needs cleanup.                                                                                                                                                                                                                                                                                 
+  DELETE FROM main."user"                                                                                                                                                                                                                                                                                              
+  WHERE email = 'tenjoh_okwen@yahoo.com';                                                                                                                                                                                                                                                                              
+                                                                                                                                                                                                                                                                                                                       
+  COMMIT;
+```

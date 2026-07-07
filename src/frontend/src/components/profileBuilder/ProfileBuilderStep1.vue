@@ -117,7 +117,7 @@ watch(
       abortController = new AbortController()
       try {
         const res = await sanitizePreview(newVal, abortController.signal)
-        showContactWarning.value = res.data.detectionFound === true
+        showContactWarning.value = res.detectionFound === true
       } catch {
         showContactWarning.value = false
       } finally {

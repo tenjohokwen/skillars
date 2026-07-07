@@ -51,14 +51,14 @@
       <!-- Star rating -->
       <div class="coach-card__rating q-mt-xs">
         <q-rating
-          :model-value="coach.aggregateRating"
+          :model-value="coach.averageRating ?? 0"
           readonly
           size="14px"
           color="amber"
           max="5"
         />
         <span class="text-caption q-ml-xs">
-          {{ coach.aggregateRating.toFixed(1) }}
+          {{ (coach.averageRating ?? 0).toFixed(1) }}
           ({{ t('marketplace.reviewCount', { count: coach.reviewCount }) }})
         </span>
       </div>

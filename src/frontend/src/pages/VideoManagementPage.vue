@@ -96,8 +96,7 @@ const uploadProgress = ref(0)
 async function fetchVideos() {
   videosLoading.value = true
   try {
-    const { data } = await videoApi.getMyVideos()
-    videos.value = data
+    videos.value = await videoApi.getMyVideos()
   } catch (err) {
     if (err?.response?.status === 403) {
       $q.notify({ type: 'negative', message: t('video.management.accessDenied') })
@@ -113,8 +112,7 @@ async function fetchVideos() {
 async function fetchQuota() {
   quotaLoading.value = true
   try {
-    const { data } = await videoApi.getMyQuota()
-    quota.value = data
+    quota.value = await videoApi.getMyQuota()
   } catch {
     // Quota display degrades silently; bar stays in loading state rather than crashing the page
   } finally {
@@ -153,7 +151,7 @@ async function onFileSelected(event) {
   uploadProgress.value = 0
 
   try {
-    const { data } = await videoApi.initiatePlayerUpload({
+    const data = await videoApi.initiatePlayerUpload({
       fileName: file.name,
       fileSizeBytes: file.size,
       mimeType: file.type,

@@ -63,7 +63,7 @@ export function useBookingSse(bookingId) {
         connectionState.value = 'polling'
         pollingInterval = setInterval(async () => {
           const r = await getBookingById(bookingId)
-          status.value = r.data.status
+          status.value = r.status
         }, 2000)
       } else if (!pollingInterval) {
         connectionState.value = 'reconnecting'
@@ -164,9 +164,9 @@ export const useBookingStore = defineStore('booking', () => {
       const ws = date ?? currentMonday()
       weekStart.value = ws
       const res = await getCoachAvailability(coachId, ws)
-      windows.value = res.data.windows ?? []
-      blocks.value = res.data.blocks ?? []
-      computedSlots.value = res.data.computedSlots ?? []
+      windows.value = res.windows ?? []
+      blocks.value = res.blocks ?? []
+      computedSlots.value = res.computedSlots ?? []
     } catch (e) {
       error.value = e
     } finally {
@@ -204,7 +204,7 @@ export const useBookingStore = defineStore('booking', () => {
     packsError.value = null
     try {
       const res = await getPlayerPacks(playerId)
-      sessionPacks.value = res.data ?? []
+      sessionPacks.value = res ?? []
     } catch (e) {
       packsError.value = e?.response?.data?.message ?? e?.message ?? 'Failed to load session packs'
     } finally {
@@ -222,9 +222,9 @@ export const useBookingStore = defineStore('booking', () => {
     packPauseError.value = null
     try {
       const res = await pauseSessionPack(playerId, packId, { pauseStartDate, pauseDurationDays })
-      packPauseResult.value = res.data
-      packPauseConflicts.value = res.data.conflictingBookings ?? []
-      return res.data
+      packPauseResult.value = res
+      packPauseConflicts.value = res.conflictingBookings ?? []
+      return res
     } catch (e) {
       packPauseError.value = e
       throw e
@@ -242,10 +242,10 @@ export const useBookingStore = defineStore('booking', () => {
         pauseDurationDays,
         confirmedCancellationIds,
       })
-      packPauseResult.value = res.data
+      packPauseResult.value = res
       packPauseConflicts.value = []
       await loadPlayerPacks(playerId)
-      return res.data
+      return res
     } catch (e) {
       packPauseError.value = e
       throw e
@@ -259,7 +259,7 @@ export const useBookingStore = defineStore('booking', () => {
     bookingsError.value = null
     try {
       const res = await getParentBookings()
-      parentBookings.value = res.data ?? []
+      parentBookings.value = res ?? []
     } catch (e) {
       bookingsError.value = e
     } finally {
@@ -272,8 +272,8 @@ export const useBookingStore = defineStore('booking', () => {
     coachRequestsError.value = null
     try {
       const res = await getCoachBookingRequests()
-      coachBookingRequests.value = res.data.singleBookings ?? []
-      coachBatchGroups.value = res.data.batchGroups ?? []
+      coachBookingRequests.value = res.singleBookings ?? []
+      coachBatchGroups.value = res.batchGroups ?? []
     } catch (e) {
       coachRequestsError.value = e
     } finally {
@@ -287,7 +287,7 @@ export const useBookingStore = defineStore('booking', () => {
     coachScheduleError.value = null
     try {
       const res = await getCoachSchedule(weekStart)
-      coachSchedule.value = res.data
+      coachSchedule.value = res
     } catch (e) {
       coachScheduleError.value = e
     } finally {
@@ -300,7 +300,7 @@ export const useBookingStore = defineStore('booking', () => {
     parentScheduleError.value = null
     try {
       const res = await getParentSchedule(playerId)
-      parentSchedule.value = res.data
+      parentSchedule.value = res
     } catch (e) {
       parentScheduleError.value = e
     } finally {
@@ -496,7 +496,7 @@ export const useBookingStore = defineStore('booking', () => {
         totalAmount,
       })
       clearBatchBasket()
-      return res.data
+      return res
     } catch (e) {
       batchError.value = e
       throw e

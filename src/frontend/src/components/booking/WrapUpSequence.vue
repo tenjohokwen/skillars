@@ -263,7 +263,7 @@ async function startRecording() {
           checksum: null,
           tags: {},
         })
-        const { key, uploadUrl } = signRes.data
+        const { key, uploadUrl } = signRes
         await fetch(uploadUrl, { method: 'PUT', body: blob, headers: { 'Content-Type': 'audio/webm' } })
         await confirmUpload(key, {})
         voiceNoteText.value = '[Voice note recorded — transcription pending]'
@@ -290,7 +290,7 @@ function stopRecording() {
 async function fetchDrillSuggestions() {
   try {
     const res = await getDrillSuggestions(props.bookingId)
-    drillSuggestions.value = res.data ?? []
+    drillSuggestions.value = res ?? []
   } catch {
     drillSuggestions.value = []
   }
@@ -319,7 +319,7 @@ async function fetchSessionDna() {
   dnaError.value = null
   try {
     const res = await sessionApi.getSessionPlanByBooking(props.bookingId)
-    sessionDnaData.value = res.data?.sessionDna ?? null
+    sessionDnaData.value = res?.sessionDna ?? null
   } catch {
     sessionDnaData.value = null
     dnaError.value = t('booking.wrapUp.step4DnaError')

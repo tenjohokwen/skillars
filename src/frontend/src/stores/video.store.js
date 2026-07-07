@@ -119,7 +119,7 @@ export const useVideoStore = defineStore('video', () => {
       const controller = new AbortController()
       currentAbortController.value = controller
 
-      const { data } = await videoApi.initiateUpload({
+      const data = await videoApi.initiateUpload({
         fileName: file.name,
         fileSizeBytes: file.size,
         mimeType: file.type,

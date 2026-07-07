@@ -142,7 +142,7 @@ onMounted(async () => {
       getCoachProfile(coachId),
       playerId ? bookingStore.loadPlayerPacks(playerId) : Promise.resolve(),
     ])
-    const profile = coachRes.data
+    const profile = coachRes
     coachName.value = profile.displayName ?? ''
     sessionPacks.value = profile.sessionPacks ?? []
     perSessionPrice.value = profile.perSessionPrice ?? null

@@ -119,7 +119,7 @@
           <div class="q-mt-lg q-gutter-y-md">
 
             <div>
-              <div class="policy-scroll-box" @scroll="onScroll('tos', $event)">
+              <div ref="tosBoxRef" class="policy-scroll-box" @scroll="onScroll('tos', $event)">
                 <p>{{ t('auth.parent.tosLabel') }} — Lorem ipsum dolor sit amet, consectetur adipiscing elit. By using Skillars, you agree to our terms and conditions. These terms govern your use of the platform, including booking sessions, payments, and data handling. You must be at least 18 years old to register as a parent. All accounts are subject to our acceptable use policy.</p>
               </div>
               <q-checkbox
@@ -131,7 +131,7 @@
             </div>
 
             <div>
-              <div class="policy-scroll-box" @scroll="onScroll('privacy', $event)">
+              <div ref="privacyBoxRef" class="policy-scroll-box" @scroll="onScroll('privacy', $event)">
                 <p>{{ t('auth.parent.privacyLabel') }} — We collect personal data to provide our services. Your data is processed in accordance with GDPR and applicable data protection laws. We do not sell your personal data to third parties. You may request deletion of your data at any time. Session recordings and coaching data are retained for the period specified in our privacy policy.</p>
               </div>
               <q-checkbox
@@ -143,7 +143,7 @@
             </div>
 
             <div>
-              <div class="policy-scroll-box" @scroll="onScroll('parentConsent', $event)">
+              <div ref="parentConsentBoxRef" class="policy-scroll-box" @scroll="onScroll('parentConsent', $event)">
                 <p>{{ t('auth.parent.parentConsentLabel') }} — As the legal guardian of the player(s) you register, you consent to Skillars collecting and processing data about your child for coaching purposes. You confirm you are the legal parent or guardian. You are responsible for ensuring your child's participation is appropriate. You may withdraw consent at any time by contacting support.</p>
               </div>
               <q-checkbox
@@ -178,7 +178,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { parentRegistrationApi } from 'src/api/parentRegistration.api'
@@ -202,7 +202,16 @@ const tosScrolled = ref(false)
 const privacyScrolled = ref(false)
 const parentConsentScrolled = ref(false)
 
+const tosBoxRef = ref(null)
+const privacyBoxRef = ref(null)
+const parentConsentBoxRef = ref(null)
+
 const scrollFlags = { tos: tosScrolled, privacy: privacyScrolled, parentConsent: parentConsentScrolled }
+const boxRefs = { tos: tosBoxRef, privacy: privacyBoxRef, parentConsent: parentConsentBoxRef }
+
+function isFullyVisible(el) {
+  return el.scrollHeight <= el.clientHeight + 1
+}
 
 function onScroll(key, event) {
   const el = event.target
@@ -210,6 +219,18 @@ function onScroll(key, event) {
     scrollFlags[key].value = true
   }
 }
+
+// Policy text short enough to fit without scrolling would otherwise never fire
+// a scroll event, permanently disabling the checkbox — treat "nothing to scroll"
+// as already read.
+onMounted(() => {
+  for (const key of Object.keys(boxRefs)) {
+    const el = boxRefs[key].value
+    if (el && isFullyVisible(el)) {
+      scrollFlags[key].value = true
+    }
+  }
+})
 
 const firstNameRef = computed(() => form.value.firstName)
 const lastNameRef = computed(() => form.value.lastName)
