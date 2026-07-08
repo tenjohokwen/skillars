@@ -1,0 +1,119 @@
+services:
+  app:
+    environment:
+      - SPRING_PROFILES_ACTIVE=uat
+      # Stripe TEST-mode credentials only. PaymentConfig (see
+      # src/main/java/.../payment/config/PaymentConfig.java) refuses to start under the
+      # "uat" profile if this resolves to a live key (sk_live_...) — see
+      # docs/deployment/uat-deployment.md for how to get a test-mode key and register a
+      # webhook endpoint against this box's public domain.
+      - APP_PAYMENT_STRIPE_API_KEY=${APP_PAYMENT_STRIPE_API_KEY}
+      - APP_PAYMENT_STRIPE_WEBHOOK_SECRET=${APP_PAYMENT_STRIPE_WEBHOOK_SECRET}
+      - APP_PAYMENT_STRIPE_OAUTH_CLIENT_ID=${APP_PAYMENT_STRIPE_OAUTH_CLIENT_ID}
+      # Same VideoProviderConfig gotcha documented in docker-compose.local.yml /
+      # local-deployment.md: app.video.bunny.library-id is eagerly validated as numeric
+      # by a non-lazy bean, so a blank value fails the *entire* app context on boot,
+      # not just video features. BUNNY_LIBRARY_ID isn't a secret (just a numeric account
+      # ID), so it's the one variable here allowed a literal placeholder fallback.
+      - APP_VIDEO_BUNNY_LIBRARY_ID=${BUNNY_LIBRARY_ID:-123456}
+      - APP_VIDEO_BUNNY_API_KEY=${BUNNY_API_KEY:-}
+      - APP_VIDEO_BUNNY_CDN_HOSTNAME=${BUNNY_CDN_HOSTNAME:-}
+      # BunnyVideoProviderAdapter's constructor throws IllegalArgumentException if this is
+      # blank — same non-lazy bean as above, so a missing value crashes the whole app
+      # context on boot, not just video features, even though UAT may never touch real
+      # video. No fallback default: set a real value in .env.uat (any non-blank string
+      # unblocks startup; only real Bunny webhook verification needs the real key).
+      - APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET=${APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET}
+      # Not fail-fast at boot — only fails the first time a playback JWT is issued. Still
+      # no fallback default: generate a real one (see uat-deployment.md) rather than
+      # discovering the gap when someone actually tries to watch a video.
+      - APP_VIDEO_PLAYBACK_SIGNING_SECRET=${APP_VIDEO_PLAYBACK_SIGNING_SECRET}
+      # Cryptopher (platform.security) throws EncryptionException and refuses to start the
+      # whole app context if this is blank — it's already fail-fast in the Java code, this
+      # line just makes sure the value in .env.uat actually reaches the container (base
+      # docker-compose.yml doesn't pass it through for prod either — separate, pre-existing
+      # gap not fixed here).
+      - PLATFORM_PIN_ENCRYPTION_SECRET=${PLATFORM_PIN_ENCRYPTION_SECRET}
+      # MinIO stands in for the real S3 API — see the `minio` service below. Both the app
+      # container and real browsers (for presigned upload/download URLs) need to resolve
+      # the *same* host, since S3Presigner bakes app.storage.endpoint-url straight into
+      # every presigned URL — so this points at the public STORAGE_DOMAIN (routed to the
+      # minio service via Traefik below), not the internal `minio:9500` compose DNS name.
+      - APP_STORAGE_BUCKET=${APP_STORAGE_BUCKET}
+      - APP_STORAGE_ENDPOINT_URL=https://${STORAGE_DOMAIN}
+      - APP_STORAGE_S3_ACCESS_KEY=${MINIO_ROOT_USER}
+      - APP_STORAGE_S3_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      # Same MailHealthIndicator gotcha as local dev (see local-deployment.md Step 3):
+      # application-uat.yaml's spring.mail.password defaults to a placeholder, which
+      # fails real SMTP auth and drags /manage/health to DOWN. Set real mail creds
+      # below and flip this to true once they're in place; false keeps the health
+      # check (and therefore Compose's healthy/unhealthy status) meaningful in the
+      # meantime.
+      - MANAGEMENT_HEALTH_MAIL_ENABLED=${MANAGEMENT_HEALTH_MAIL_ENABLED:-false}
+      - SPRING_MAIL_PASSWORD=${SPRING_MAIL_PASSWORD:-}
+      - GMAIL_PASSWORD=${GMAIL_PASSWORD:-}
+      - GMX_PASSWORD=${GMX_PASSWORD:-}
+    depends_on:
+      minio:
+        condition: service_healthy
+
+  # LGTM (Loki/Grafana/Tempo/Prometheus) is NOT trimmed for UAT, unlike
+  # docker-compose.local.yml — this file adds to the base docker-compose.yml rather than
+  # replacing any of it, so `docker compose -f docker-compose.yml -f docker-compose.uat.yml
+  # --env-file .env.uat up -d` (no explicit service list) brings up the full observability
+  # stack the same way a plain production deploy does. Nothing to configure here.
+
+  # Stands in for the real S3 API so UAT doesn't need AWS credentials. Publicly reachable
+  # (unlike local dev's MinIO, which only needs to work for your own machine) because
+  # S3Presigner bakes app.storage.endpoint-url directly into every presigned URL it
+  # generates — a browser anywhere on the internet needs to be able to resolve and reach
+  # whatever host that is, the same way it would need to reach real S3. Routed through
+  # Traefik on its own domain (STORAGE_DOMAIN) with its own Let's Encrypt certificate, the
+  # same pattern already used for MONITORING_DOMAIN/grafana below.
+  minio:
+    image: minio/minio:RELEASE.2024-01-13T07-53-03Z
+    command: server /data --address ":9500" --console-address ":9501"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+    volumes:
+      - skillars-uat-minio:/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.minio.rule=Host(`${STORAGE_DOMAIN}`)"
+      - "traefik.http.routers.minio.entrypoints=websecure"
+      - "traefik.http.routers.minio.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.minio.service=minio-svc"
+      - "traefik.http.services.minio-svc.loadbalancer.server.port=9500"
+    healthcheck:
+      # mc ready assumes MinIO's default port 9000 — doesn't work with the custom
+      # --address above, so point an inline alias at the real port instead.
+      test: ["CMD-SHELL", "mc alias set healthcheck http://localhost:9500 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD >/dev/null 2>&1 && mc ready healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - skillars-internal
+    restart: unless-stopped
+
+  # One-shot: creates the UAT bucket on every startup (no-op if it already exists).
+  minio-init:
+    image: minio/mc:RELEASE.2024-01-13T08-44-48Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - APP_STORAGE_BUCKET=${APP_STORAGE_BUCKET}
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9500 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD &&
+      mc mb --ignore-existing local/$$APP_STORAGE_BUCKET
+      "
+    networks:
+      - skillars-internal
+
+volumes:
+  skillars-uat-minio:

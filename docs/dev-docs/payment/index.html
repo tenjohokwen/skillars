@@ -373,6 +373,35 @@ sequenceDiagram
       the same <code>remainingSessions</code> and both decrement from it, under-counting the deduction.</p>
     </div>
 
+    <h3 id="running-stripe-listen-locally">Local development: Stripe webhooks without a public URL</h3>
+    <div class="card">
+      <p>Stripe can only deliver webhooks (subscription renewals, dispute events, Connect
+      onboarding completion) to a publicly reachable URL, which <code>localhost</code>
+      isn't. For local iteration, use the
+      <a href="https://docs.stripe.com/stripe-cli">Stripe CLI</a> to forward Stripe's test-mode
+      events to your machine instead of registering a real webhook endpoint:</p>
+      <pre>stripe listen --forward-to localhost:9990/api/payment/webhooks/stripe</pre>
+      <p>First run prints a <code>whsec_...</code> signing secret — set that as
+      <code>APP_PAYMENT_STRIPE_WEBHOOK_SECRET</code> (it's different from any secret shown in the
+      Dashboard; the CLI signs forwarded events with its own key) and
+      <code>APP_PAYMENT_STRIPE_API_KEY</code> to a <code>sk_test_...</code> key from the Dashboard
+      (Developers → API keys, with <strong>Test mode</strong> on). Trigger events on demand with
+      <code>stripe trigger payment_intent.succeeded</code> etc. instead of driving the full UI flow
+      each time.</p>
+      <p><strong>Use the standard secret key (<code>sk_test_...</code>), not a Restricted key
+      (<code>rk_test_...</code>).</strong> <code>StripeOnboardingService</code> exchanges Connect
+      OAuth codes via <code>OAuth.token</code>, which Stripe only accepts with the account's
+      standard secret key — a Restricted key fails that call no matter which permissions it's
+      granted, even though it would work fine for the PaymentIntent/Refund/Subscription calls
+      elsewhere in this module.</p>
+      <p>This is a local-only substitute for a real endpoint. Once the app is deployed somewhere
+      publicly reachable (e.g. the UAT box in
+      <a href="../../deployment/uat-deployment.md">uat-deployment.md</a>), register a real webhook
+      endpoint against that domain in the Stripe Dashboard instead — <code>stripe listen</code> only
+      forwards to whichever machine is running it, so it isn't a substitute for a real endpoint once
+      other people need webhooks to reach the same server.</p>
+    </div>
+
     <h2>Related Modules</h2>
     <ul>
       <li><a href="../booking/index.html">Booking</a> — payment listens for <code>BookingAcceptedEvent</code>/cancellation/no-show events and calls back into <code>BookingService.transition(...)</code>; booking owns the events, payment owns the money.</li>

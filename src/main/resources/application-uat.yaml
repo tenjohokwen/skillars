@@ -24,6 +24,39 @@ app:
     from-address: noreply@skillars.com
     enabled: false
   frontend-url: "${APP_FRONTEND_URL:https://uat.skillars.com}"
+  # Stripe TEST-mode credentials only — PaymentConfig refuses to start under the "uat"
+  # profile if APP_PAYMENT_STRIPE_API_KEY resolves to a live key (sk_live_...), so this
+  # can never silently start moving real money. See docs/deployment/uat-deployment.md.
+  payment:
+    stripe:
+      oauth-callback-url: "${APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL:https://uat.skillars.com/api/payment/coaches/me/stripe/callback}"
+  # MinIO stands in for the real S3 API in UAT — see docker-compose.uat.yml (the `minio`
+  # service, exposed publicly through Traefik at STORAGE_DOMAIN so presigned URLs are
+  # reachable by real browsers, not just containers on the compose network) and
+  # docs/deployment/uat-deployment.md. No defaults here on purpose: every value below
+  # must come from .env.uat, not a baked-in fallback, since this is a publicly reachable
+  # box (compare to application.yaml's localhost:9000 base default, which only makes
+  # sense for a box that can't be reached from the outside).
+  storage:
+    bucket: "${APP_STORAGE_BUCKET:}"
+    endpoint-url: "${APP_STORAGE_ENDPOINT_URL:}"
+    s3:
+      access-key: "${APP_STORAGE_S3_ACCESS_KEY:}"
+      secret-key: "${APP_STORAGE_S3_SECRET_KEY:}"
+      path-style-access: true
+  # Video is not otherwise in scope for UAT, but VideoProviderConfig's videoProviderAdapter
+  # bean is eagerly constructed (non-lazy dependency chain) whenever app.video.provider is
+  # "bunny" (the default), and BunnyVideoProviderAdapter's constructor throws immediately
+  # if webhook-signing-secret is blank — so the *entire app context* fails to start without
+  # this, not just video features. playback signing-secret isn't fail-fast the same way
+  # (only fails the first time a playback token is issued) but still needs a real value to
+  # not fail then. Neither has a default here — see uat-deployment.md for how to generate
+  # both.
+  video:
+    playback:
+      signing-secret: "${APP_VIDEO_PLAYBACK_SIGNING_SECRET:}"
+    bunny:
+      webhook-signing-secret: "${APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET:}"
 
 skillars:
   platform:

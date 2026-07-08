@@ -1,0 +1,220 @@
+    1  pwd
+    2  apt update
+    3  apt upgrade
+    4  apt install openjdk-17-jdk-headless -y
+    5  exit
+    6  java --version
+    7  sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+    8  curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
+    9  sudo apt update
+   10  sudo apt install postgresql-17
+   11  sudo systemctl start postgresql
+   12  sudo systemctl enable postgresql
+   13  psql --version
+   14  sudo vim /etc/postgresql/17/main/postgresql.conf
+   15  sudo systemctl restart postgresql
+   16  psql -U postgres
+   17  pg_isready
+   18  sudo vim /etc/postgresql/17/main/postgresql.conf
+   19  sed -i '/^host/s/ident/md5/' /etc/postgresql/17/main/pg_hba.conf
+   20  sudo sed -i '/^local/s/peer/trust/' /etc/postgresql/17/main/pg_hba.conf
+   21  echo "host all all 0.0.0.0/0 md5" | sudo tee -a /etc/postgresql/17/main/pg_hba.conf
+   22  sudo systemctl restart postgresql
+   23  psql -U postgres
+   24  pwd
+   25  cd /
+   26  l
+   27  cd var/
+   28  l
+   29  cd log/
+   30  l
+   31  less README
+   32  mkdir -p /var/log/gulliver
+   33  l
+   34  ls -l gulliver
+   35  ls -l gulliver/
+   36  ls -ld gulliver/
+   37  pwd
+   38  cd /
+   39  l
+   40  mkdir /server
+   41  ls -ld server
+   42  cd server
+   43  ls
+   44  mkdir gulliver
+   45  ls
+   46  cd /etc/
+   47  l
+   48  cd nginx/
+   49  l
+   50  cd sites-available/
+   51  l
+   52  ls
+   53  ls -l
+   54  vim default
+   55  cd /server
+   56  l
+   57  vim /etc/nginx/sites-available/gulliver
+   58  sudo ln -s /etc/nginx/sites-available/gulliver /etc/nginx/sites-enabled/
+   59  nginx -t
+   60  systemctl reload nginx
+   61  l
+   62  cd gulliver/
+   63  l
+   64  java -jar -Dspring.profiles.active=local gulliver-0.0.1-SNAPSHOT.jar
+   65  psql -U postgres
+   66  ps
+   67  ps auxw
+   68  java -jar -Dspring.profiles.active=local gulliver-0.0.1-SNAPSHOT.jar
+   69  psql -U postgres
+   70  java -jar -Dspring.profiles.active=local gulliver-0.0.1-SNAPSHOT.jar
+   71  vim /etc/nginx/sites-available/gulliver
+   72  nginx -t && sudo systemctl reload nginx
+   73  ufw allow 'Nginx Full'
+   74  java --version
+   75  ufw enable
+   76  sudo ufw
+   77  apt install ufw -y
+   78  sudo ufw enable
+   79  ufw allow ssh
+   80  ufw status
+   81  ufw allow 'Nginx Full'
+   82  ufw status
+   83  systemctl status nginx
+   84  pwd
+   85  cd /etc/nginx
+   86  l
+   87  cd sites-enabled/
+   88  l
+   89  vim gulliver
+   90  psql -U postgres
+   91  whoami
+   92  cd ..
+   93  vim /etc/nginx/sites-available/gulliver
+   94  nginx -t && sudo systemctl reload nginx
+   95  vim /etc/nginx/sites-available/multiple-apps
+   96  pwd
+   97  l
+   98  cd sites-available/
+   99  l
+  100  rm gulliver
+  101  cd ../sites-enabled/
+  102  l
+  103  rm gulliver
+  104  l
+  105  cd ..
+  106  l
+  107  nginx -t && sudo systemctl reload nginx
+  108  ln -s /etc/nginx/sites-available/multiple-apps /etc/nginx/sites-enabled/
+  109  nginx -t && sudo systemctl reload nginx
+  110  vim
+  111  root@hwsrv-1301707:/etc/nginx# vim /etc/nginx/sites-available/multiple-apps
+  112  cd sites-available/
+  113  l
+  114  vim multiple-apps
+  115  rn multiple-apps
+  116  rm multiple-apps
+  117  l
+  118  cd /etc/nginx/sites-enabled/
+  119  l
+  120  rm multiple-apps
+  121  less default
+  122  cd ..
+  123  l
+  124  cd sites-available/
+  125  l
+  126  cd ../sites-enabled/
+  127  l
+  128  cd ../sites-available/
+  129  vim gulliver
+  130  ln -s /etc/nginx/sites-available/gulliver /etc/nginx/sites-enabled/
+  131  nginx -t && sudo systemctl reload nginx
+  132  vim gulliver
+  133  nginx -t && sudo systemctl reload nginx
+  134  vim  /etc/nginx/sites-enabled/gulliver
+  135  nginx -t && sudo systemctl reload nginx
+  136  vim  /etc/nginx/sites-enabled/gulliver
+  137  nginx -t && sudo systemctl reload nginx
+  138  vim  /etc/nginx/sites-enabled/gulliver
+  139  psql -U postgres
+  140  sudo apt update
+  141  sudo apt install nginx
+  142  pg_isready
+  143  psql -U postgres
+  144  cd /usr/local/
+  145  l
+  146  cd var/
+  147  l
+  148  cd gulliver/
+  149  l
+  150  less gulliver_access.2025-09-29.gulliver
+  151  l
+  152  cd /var/log/gulliver
+  153  l
+  154  cd /tmp
+  155  l
+  156  cd tomcat.9990.6502699915484931074
+  157  l
+  158  cd work/
+  159  l
+  160  cd Tomcat/
+  161  l
+  162  cd localhost/
+  163  ls
+  164  cd ROOT/
+  165  l
+  166  pwd
+  167  ps auxw
+  168  cd /var/log
+  169  l
+  170  cd gulliver/
+  171  l
+  172  cd ../nginx/
+  173  l
+  174  less error.log
+  175  cd /server/
+  176  l
+  177  cd gulliver/
+  178  l
+  179  ls -l
+  180  nohup java -jar -Dspring.profiles.active=local  gulliver-0.0.1-SNAPSHOT.jar &
+  181  l
+  182  less nohup.out
+  183  ps auxw
+  184  tail -f /var/log/gulliver/spring.log
+  185  ps auxw
+  186  kill 160031
+  187  ps auxw
+  188  l
+  189  less nohup.out
+  190  rm nohup.out
+  191  nohup java -jar -Dspring.profiles.active=local  gulliver-0.0.1-SNAPSHOT.jar &
+  192  psql -U postgres
+  193  df --h
+  194  df -h
+  195  netstat -tnlp
+  196  cd /var/www/html/
+  197  ll
+  198  service nginx status
+  199  service httpd status
+  200  service apache2 status
+  201  systemctl status apache2
+  202  apachectl status
+  203  exit
+  204  ps
+  205  pwd
+  206  l /
+  207  cd server
+  208  cd /server
+  209  l
+  210  history
+  211  tail -f /var/log/gulliver/spring.log
+  212  service nginx status
+  213  last
+  214  service httpd status
+  215  history
+  216  is_ready
+  217  pg_isready
+  218  psql -U postgres
+  219  tail -f /var/log/gulliver/spring.log
+  220  psql -U postgres
