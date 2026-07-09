@@ -7,6 +7,18 @@ x-logging: &default-logging
 services:
   app:
     image: skillars:uat
+    # docker-compose.yml caps this service at 2.0 CPUs — fine on the multi-core Hetzner
+    # boxes production/uat-deployment.md target, but Docker refuses to even create the
+    # container if a `cpus` limit exceeds the host's actual CPU count ("range of CPUs is
+    # from 0.01 to 1.00, as there are only 1 CPUs available" on a single-vCPU Hostwinds
+    # plan). `memory: 2g` is left as-is via deep merge (Compose merges `deploy.resources.limits`
+    # as a map, not a wholesale replacement) — only `cpus` needed capping. If the box you're
+    # on has more than 1 vCPU, raise this back up (or drop it entirely) accordingly; 1.00 is
+    # the safe single-vCPU default, not a value with any other significance.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
     environment:
       - SPRING_PROFILES_ACTIVE=uat
       # docker-compose.yml hardcodes LOKI_ENABLED=true/LOKI_URL=http://loki:3100

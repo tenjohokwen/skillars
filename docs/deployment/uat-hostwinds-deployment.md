@@ -91,10 +91,43 @@ docker compose version
 
 ## Step 3: Clone the repo and build the image
 
+The repo is private (`git@github.com:tenjohokwen/skillars.git`), so the box
+needs its own credentials to clone it. **Use a GitHub deploy key** — an
+SSH keypair generated on this box specifically, with the public half
+registered as a **read-only Deploy Key on the repo itself** (GitHub →
+repo → Settings → Deploy keys → Add deploy key), not tied to your personal
+GitHub account or any broader PAT scope. Same pattern already used for
+`SSH_DEPLOY_KEY` in `secrets-reference.md`, just in the opposite direction
+(this box authenticating *to* GitHub, not GitHub Actions authenticating
+*to* this box).
+
+```bash
+ssh-keygen -t ed25519 -C "hwsrv-1301707-skillars-uat" -f ~/.ssh/skillars_deploy -N ""
+cat ~/.ssh/skillars_deploy.pub
+```
+
+Paste that public key into **Settings → Deploy keys → Add deploy key** on
+the GitHub repo (leave "Allow write access" unchecked — this box only ever
+needs to `git pull`, never push). Then tell SSH to actually use that key for
+GitHub:
+
+```bash
+cat >> ~/.ssh/config <<'EOF'
+Host github.com
+  HostName github.com
+  User git
+  IdentityFile ~/.ssh/skillars_deploy
+  IdentitiesOnly yes
+EOF
+chmod 600 ~/.ssh/config
+
+ssh -T git@github.com   # expect: "Hi tenjohokwen/skillars! You've successfully authenticated..."
+```
+
 ```bash
 mkdir -p /server
 cd /server
-git clone <REPO_URL> skillars
+git clone git@github.com:tenjohokwen/skillars.git skillars
 cd /server/skillars
 docker build -t skillars:uat .
 ```
