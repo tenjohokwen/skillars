@@ -15,7 +15,12 @@ way to a working upload flow without real AWS credentials).
 
 **This box can only run one of gulliver or Skillars at a time** — both
 default to port `9990`, and this guide reuses that port rather than
-reconfiguring either app. See [Step 1](#step-1-stop-gulliver).
+reconfiguring either app. See [Step 1](#step-1-stop-gulliver--and-its-postgres).
+
+**The actual box is small: 1 vCPU / 1GB RAM / 30GB SSD (Amsterdam, Ubuntu
+24.04).** That's tight enough to need real attention, not just "drop
+Traefik and hope" — see [Resource budget](#resource-budget) for the full
+accounting and what got tuned because of it.
 
 Image tag: **`skillars:uat`**.
 
@@ -39,8 +44,66 @@ app container ──skillars-internal network──> postgres, redis, minio cont
   `uat-deployment.md`'s `STORAGE_DOMAIN` + Traefik), so its S3 API port is
   published directly on the host instead — `http://hwsrv-1301707.hostwindsdns.com:9500`.
 - **Postgres/Redis**: run in Docker, internal-only (not published to the
-  host) — completely separate from the native PostgreSQL 17 already
-  installed on this box for gulliver. No conflict, nothing shared.
+  host) — a separate instance from the native PostgreSQL 17 already
+  installed on this box for gulliver, no port conflict. That said, the
+  native instance is stopped for the duration of this deployment anyway
+  (Step 1) — not because of a conflict, but because the box can't afford to
+  run two Postgres instances at once. See [Resource budget](#resource-budget).
+
+---
+
+## Resource budget
+
+Every other guide in `docs/deployment/` targets multi-core boxes with
+several GB of RAM. This one doesn't have that luxury, so the defaults in
+`docker-compose.yml` needed real tuning, not just the `cpus: "1.00"` fix
+already applied to `app` (its base-file default of `2.0` exceeds this box's
+single vCPU outright — Docker refuses to even create the container in that
+case, rather than just running slower) — here's the accounting, so the
+numbers in `docker-compose.uat-hostwinds.yml` read as reasoned rather than
+arbitrary:
+
+| Component | Memory limit | Why |
+|---|---|---|
+| OS + Docker daemon + nginx | ~150–200MB (not enforced, just budgeted) | Baseline for Ubuntu 24.04 + `dockerd` + a lightweight reverse proxy |
+| `postgres` (Docker) | 220MB | Down from the base file's 1536MB. `shared_buffers` defaults to 128MB in the `postgres:17-alpine` image; 220MB leaves headroom above that without the multi-GB assumption the base file makes |
+| `redis` (Docker) | 48MB | Down from 256MB — see below, actual usage is near-zero |
+| `minio` | 140MB | Not capped at all before this guide (new service, no base-file default to inherit) |
+| `app` | 460MB | Down from 2GB. See the `JAVA_TOOL_OPTIONS` comment in `docker-compose.uat-hostwinds.yml` for the heap/metaspace/code-cache breakdown that fits inside it |
+
+That's 868MB committed across the four containers, leaving roughly
+150MB for the OS/Docker/nginx baseline out of 1024MB total — workable, but
+not comfortable. Two things make this less fragile than the raw numbers
+suggest:
+
+- **Redis is present but not actually load-bearing.** Grepping the codebase
+  for `RedisTemplate`/`RedisConnectionFactory`/direct Lettuce usage turns up
+  nothing — `bucket4j-redis` is on the classpath but `RateLimitingService`
+  uses a plain in-memory `ConcurrentHashMap`, not Redis, and
+  `AuthenticationFailureListener` has its own TODO noting Redis-backed login
+  throttling is a *future* multi-node change, not current behavior. Spring
+  Boot still auto-configures a Lettuce connection factory (nothing disables
+  `spring-boot-starter-data-redis`'s auto-configuration), but Lettuce
+  connects lazily, so the app boots fine regardless of whether Redis is
+  reachable. The only observable effect of Redis being slow/absent is
+  Actuator's Redis health indicator, silenced via
+  `MANAGEMENT_HEALTH_REDIS_ENABLED=false`. **`redis` still runs as a
+  container** (see the note in `docker-compose.uat-hostwinds.yml` about why
+  it can't cleanly be dropped from `depends_on`), but its 48MB limit is
+  sized for what it actually needs, not what the base file assumed.
+- **Swap is added as a safety net** (Step 2) specifically because 868MB
+  of limits against ~870MB of actually-available RAM leaves very little
+  margin for the moment of peak memory pressure — typically class-loading
+  during app startup, not steady-state. Swap turns a miscalculation into
+  "slow" instead of "OOM-killed."
+
+**None of this has been run against the live box yet.** Treat the numbers
+above as a reasoned starting point, not a guarantee — if `app` gets
+OOM-killed on first boot (`docker compose ... logs app` will show it was
+killed abruptly rather than logging its own shutdown), the first thing to
+try is raising `-Xmx`/the container `memory` limit for `app` at the expense
+of `postgres`'s 220MB, since Postgres is the one component here with the
+most headroom above its actual working set.
 
 ---
 
@@ -56,7 +119,7 @@ app container ──skillars-internal network──> postgres, redis, minio cont
 
 ---
 
-## Step 1: Stop gulliver
+## Step 1: Stop gulliver — and its Postgres
 
 ```bash
 ps auxw | grep gulliver-0.0.1-SNAPSHOT.jar
@@ -69,7 +132,41 @@ Confirm port `9990` is free before continuing:
 netstat -tnlp | grep 9990   # should print nothing
 ```
 
-## Step 2: Install Docker + git
+Also stop the box's **native** PostgreSQL (installed for gulliver, per
+`gulliver-doc.md` §2) — not because of a port conflict (the Docker
+`postgres` container never touches the host's 5432), but because this box
+can't afford to run two full Postgres instances on 1GB of RAM at once. See
+[Resource budget](#resource-budget) for why this matters more than it might
+look like it should.
+
+```bash
+sudo systemctl stop postgresql
+systemctl status postgresql   # should show "inactive (dead)"
+```
+
+(`sudo systemctl start postgresql` reverses this if you ever need gulliver
+working again without tearing down Skillars first — see
+[Tearing down / restarting](#tearing-down--restarting).)
+
+## Step 2: Add swap
+
+1GB of RAM with no swap means the OOM killer is the *only* thing standing
+between a momentary memory spike (most likely: JVM class-loading during
+`app`'s startup) and a container getting hard-killed. A swapfile turns that
+into "briefly slow" instead — cheap insurance given 30GB of SSD to spare,
+and this is a one-time smoke-test box, not something where swap's latency
+cost matters:
+
+```bash
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+free -h   # confirm Swap: 2.0Gi
+```
+
+## Step 3: Install Docker + git
 
 Not yet on this box — gulliver runs bare-metal (`java -jar`), no Docker
 anywhere in its history.
@@ -89,7 +186,7 @@ sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 docker compose version
 ```
 
-## Step 3: Clone the repo and build the image
+## Step 4: Clone the repo and build the image
 
 The repo is private (`git@github.com:tenjohokwen/skillars.git`), so the box
 needs its own credentials to clone it. **Use a GitHub deploy key** — an
@@ -139,18 +236,18 @@ struggle with a Maven + Node.js build. If it's too tight, build the image on
 your own machine instead and transfer it with `docker save skillars:uat |
 gzip | ssh root@<NODE_IP> "gunzip | docker load"`.
 
-## Step 4: Get `.env.uat` onto the box
+## Step 5: Get `.env.uat` onto the box
 
 ```bash
 scp .env.uat root@hwsrv-1301707.hostwindsdns.com:/server/skillars/.env.uat
 ssh root@hwsrv-1301707.hostwindsdns.com "chmod 600 /server/skillars/.env.uat"
 ```
 
-(If you're already `cd /server/skillars` on the box from Step 3, and
+(If you're already `cd /server/skillars` on the box from Step 4, and
 `.env.uat` already has real values for this box, this is the only new file
 to bring over — everything else came from `git clone`.)
 
-## Step 5: Open the firewall for MinIO
+## Step 6: Open the firewall for MinIO
 
 ```bash
 ufw allow 9500/tcp
@@ -163,7 +260,7 @@ instead, matching how gulliver worked. Opening it would just add an
 unnecessary second way to reach the app directly, bypassing nginx for no
 benefit.
 
-## Step 6: Deploy
+## Step 7: Deploy
 
 ```bash
 cd /server/skillars
@@ -189,7 +286,13 @@ immediately on boot rather than looping unhealthy — see
 [`uat-deployment.md` Step 4](uat-deployment.md#step-4-prepare-envuat) for
 what each one needs.
 
-## Step 7: Seed bootstrap data
+If `app` instead disappears/restarts with no clean shutdown log line, that's
+more likely the OOM killer than a config problem — see
+[Resource budget](#resource-budget) for the memory accounting and what to
+adjust first (`docker compose ... logs app`, and `dmesg | grep -i "killed process"`
+on the host, will confirm which it was).
+
+## Step 8: Seed bootstrap data
 
 Same fixture as every other environment — without this row, login fails
 with `AppSetupException: JWT secret key has not been set in DB` (see
@@ -205,7 +308,7 @@ Use `initTestData.sql` instead if you also want ready-made sample logins —
 see `local-deployment.md` Step 5 for the account list, same file either
 environment.)
 
-## Step 8: Verify
+## Step 9: Verify
 
 ```bash
 curl -s http://hwsrv-1301707.hostwindsdns.com/actuator/health
@@ -281,7 +384,7 @@ docker compose -f docker-compose.yml -f docker-compose.uat-hostwinds.yml --env-f
 `redis`, or `minio` to watch a different container — or `skillars-app-1` for
 `skillars-postgres-1`/`skillars-minio-1` with the plain `docker logs` form.
 Container names follow `<compose-project>-<service>-<index>`; the project
-name defaults to the directory Compose is run from, `skillars` per Step 3,
+name defaults to the directory Compose is run from, `skillars` per Step 4,
 so these names are exactly what you'll see without needing `-p`.)
 
 ### Time-boxed (avoid dumping the whole history)
@@ -380,7 +483,7 @@ way, automatically, once it's listening on `9990` again.
   here** — `docker-compose.uat-hostwinds.yml` doesn't reference
   `STORAGE_DOMAIN` at all (uses `DOMAIN` + port `9500` instead), and
   `grafana`/`loki`/`tempo`/`prometheus` are never in the explicit service
-  list in Step 6. Harmless to leave them in the file.
+  list in Step 7. Harmless to leave them in the file.
 - **The nginx site is still named `gulliver`** even though it's now serving
   Skillars. Fine for a quick test; if this setup sticks around, consider:
   ```bash

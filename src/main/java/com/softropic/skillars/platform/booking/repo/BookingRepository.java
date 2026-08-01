@@ -18,6 +18,21 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
         SELECT b FROM Booking b
         WHERE b.coachId = :coachId
           AND b.status IN :statuses
+          AND b.requestedStartTime < :endTime
+          AND b.requestedEndTime > :startTime
+          AND (:excludeBookingId IS NULL OR b.id <> :excludeBookingId)
+        """)
+    List<Booking> findOverlappingBookings(
+        @Param("coachId") UUID coachId,
+        @Param("startTime") Instant startTime,
+        @Param("endTime") Instant endTime,
+        @Param("statuses") List<String> statuses,
+        @Param("excludeBookingId") UUID excludeBookingId);
+
+    @Query("""
+        SELECT b FROM Booking b
+        WHERE b.coachId = :coachId
+          AND b.status IN :statuses
           AND b.requestedStartTime >= :weekStart
           AND b.requestedStartTime < :weekEnd
         ORDER BY b.requestedStartTime ASC

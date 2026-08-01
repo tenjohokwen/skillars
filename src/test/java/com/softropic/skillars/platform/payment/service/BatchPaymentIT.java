@@ -10,8 +10,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.math.BigDecimal;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -30,6 +34,11 @@ class BatchPaymentIT extends BasePaymentIT {
     private UUID coachId;
     private static final long PARENT_ID = 55001L;
     private static final long PLAYER_ID = 55099L;
+
+    // Each call gets its own non-overlapping slot (Story 3.11's DB-level exclusion constraint
+    // now rejects overlapping bookings for the same coach) — the exact time is irrelevant to what
+    // these tests exercise (payment/credit aggregation), so a simple per-call offset suffices.
+    private final AtomicInteger slotOffset = new AtomicInteger(0);
 
     @BeforeEach
     void setUpCoach() {
@@ -156,26 +165,28 @@ class BatchPaymentIT extends BasePaymentIT {
     }
 
     private void insertBooking(UUID bookingId, UUID forCoachId, UUID packPurchaseId) {
+        Instant start = Instant.now().plus(2, ChronoUnit.DAYS)
+            .plus(slotOffset.getAndIncrement() * 2L, ChronoUnit.HOURS);
+        Instant end = start.plusSeconds(3600);
+
         transactionTemplate.execute(status -> {
             if (packPurchaseId != null) {
                 jdbcTemplate.update(
                     "INSERT INTO booking.bookings " +
                     "(id, parent_id, player_id, coach_id, status, requested_start_time, requested_end_time, " +
                     "canonical_timezone, session_pack_purchase_id, version, created_at, updated_at) " +
-                    "VALUES (?, ?, ?, ?, 'PAYMENT_PENDING', " +
-                    "now() + interval '2 days', now() + interval '2 days' + interval '1 hour', " +
-                    "'UTC', ?, 0, now(), now())",
-                    bookingId, PARENT_ID, PLAYER_ID, forCoachId, packPurchaseId
+                    "VALUES (?, ?, ?, ?, 'PAYMENT_PENDING', ?, ?, 'UTC', ?, 0, now(), now())",
+                    bookingId, PARENT_ID, PLAYER_ID, forCoachId,
+                    Timestamp.from(start), Timestamp.from(end), packPurchaseId
                 );
             } else {
                 jdbcTemplate.update(
                     "INSERT INTO booking.bookings " +
                     "(id, parent_id, player_id, coach_id, status, requested_start_time, requested_end_time, " +
                     "canonical_timezone, version, created_at, updated_at) " +
-                    "VALUES (?, ?, ?, ?, 'PAYMENT_PENDING', " +
-                    "now() + interval '2 days', now() + interval '2 days' + interval '1 hour', " +
-                    "'UTC', 0, now(), now())",
-                    bookingId, PARENT_ID, PLAYER_ID, forCoachId
+                    "VALUES (?, ?, ?, ?, 'PAYMENT_PENDING', ?, ?, 'UTC', 0, now(), now())",
+                    bookingId, PARENT_ID, PLAYER_ID, forCoachId,
+                    Timestamp.from(start), Timestamp.from(end)
                 );
             }
             return null;

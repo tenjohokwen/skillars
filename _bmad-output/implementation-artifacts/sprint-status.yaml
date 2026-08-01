@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-07-02 # skillars-deferred-10 CI/CD & deployment hardening — code review complete, status done
+last_updated: 2026-08-01 # skillars-3-11 coach slot double-booking prevention — code review complete, status done
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -184,6 +184,7 @@ development_status:
   skillars-3-8-rescheduling-duplication-reminders: done
   skillars-3-9-bulk-session-request-from-calendar: done
   skillars-3-10-session-pack-expiry-pause-management: done
+  skillars-3-11-coach-slot-double-booking-prevention: done
   skillars-epic-3-retrospective: optional
 
   # Epic 4: Session Builder & Drill Library

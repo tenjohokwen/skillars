@@ -228,6 +228,9 @@ The coach scheduling view must display total projected revenue for the current w
 **FR-BKG-014 — Bulk Session Request**
 Parents must be able to select multiple available time slots from a coach's calendar and submit them as a single grouped request (maximum batch size configurable via platform config; default 5). The coach receives one grouped notification and may accept all slots at once or respond to each individually. A single payment transaction covers all accepted bookings in a batch.
 
+**FR-BKG-016 — Coach Slot Capacity / Group Bookings** *(Post-MVP)*
+Multi-player group sessions — a coach accepting more than one booking against the same time slot, up to a configured capacity (e.g. up to 5 players per slot) — are deferred to post-MVP. The MVP booking model is strictly 1:1: one session credit, one player, one coach, one slot; a slot is exclusively held by at most one active booking (enforced by Epic 3's slot double-booking prevention). Supporting capacity would require a distinct concrete-slot-instance concept (today's `coach_availability_windows` is a recurring weekly template with no per-occurrence identity or capacity field), per-seat pricing/credit rules, and a materially different overlap/acceptance model than the 1:1 flow — treat as a new epic, not an extension of existing booking stories, if pursued.
+
 ---
 
 ### 5.3 Session Builder & Drill Library
@@ -921,3 +924,4 @@ The backend is implemented as a modular monolith at MVP with clearly defined ser
 | Sponsored coach listings | Future revenue stream |
 | Social sharing of PDF reports | Nice-to-have; not a launch requirement |
 | Native mobile app (iOS / Android) | Platform launches as a mobile-responsive web application |
+| Coach slot capacity / group bookings (multiple players per slot) | MVP booking model is strictly 1:1 coach-to-player; group sessions require a new slot-instance and pricing model — post-MVP |

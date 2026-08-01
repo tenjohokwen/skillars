@@ -63,6 +63,7 @@
     <ul>
       <li><strong>Availability-gated booking:</strong> a request is only accepted if the requested time falls inside one of the coach's declared <code>CoachAvailabilityWindow</code>s and doesn't fall inside a <code>CoachAvailabilityBlock</code> (blackout).</li>
       <li><strong>Coach must be booking-ready:</strong> the coach profile must not be <code>SUSPENDED</code>, and the coach must have a fully configured Stripe destination account (<code>paymentGateway.isCoachPaymentReady</code>) before a request can even be created.</li>
+      <li><strong>No two active bookings can hold overlapping time for the same coach:</strong> a coach can have at most one booking in <code>REQUESTED</code>/<code>ACCEPTED</code>/<code>PAYMENT_PENDING</code>/<code>CONFIRMED</code>/<code>UPCOMING</code>/<code>IN_PROGRESS</code>/<code>PAUSED</code> status per overlapping <code>[requestedStartTime, requestedEndTime)</code> range. Enforced both at request creation and again when the coach accepts (closing the race where two overlapping requests are accepted before either commits) — see <a href="#slot-exclusivity">Slot exclusivity</a> below.</li>
       <li><strong>Cancellation refund windows (parent-initiated):</strong> more than 24h before the session → <code>FULL</code> refund eligibility; 6–24h → <code>PARTIAL</code>; under 6h → <code>NONE</code>. A coach-initiated cancellation is always <code>FULL</code>. A coach no-show reported by the parent is always <code>FULL</code>. A player no-show reported by the coach is always <code>NONE</code>.</li>
       <li><strong>Reschedule limits:</strong> only bookings in <code>CONFIRMED</code> or <code>UPCOMING</code> status can be rescheduled, only one pending reschedule request is allowed per booking at a time, and the proposed time must be in the future.</li>
       <li><strong>Batch bookings:</strong> a parent can request up to a configured maximum number of slots (<code>booking.batch.maxSize</code>) against one coach in a single submission; the coach can accept the whole batch in one action, and the batch's aggregate status (<code>PENDING</code> / <code>PARTIALLY_ACCEPTED</code> / <code>FULLY_ACCEPTED</code> / <code>DECLINED</code>) rolls up automatically as individual bookings change status.</li>
@@ -85,7 +86,7 @@
     <h3>Key entities &amp; tables</h3>
     <table>
       <tr><th>Entity</th><th>Table (schema <code>booking</code>)</th><th>Purpose</th></tr>
-      <tr><td><code>Booking</code></td><td><code>bookings</code></td><td>The core aggregate — one requested/accepted/confirmed/completed session between a parent's player and a coach. Optimistic-locked (<code>@Version</code>).</td></tr>
+      <tr><td><code>Booking</code></td><td><code>bookings</code></td><td>The core aggregate — one requested/accepted/confirmed/completed session between a parent's player and a coach. Optimistic-locked (<code>@Version</code>). Indexed on <code>(coach_id, status, requested_start_time, requested_end_time)</code> (<code>idx_bkg_coach_status_time</code>) for overlap lookups, and backed by a Postgres <code>EXCLUDE USING gist</code> constraint (<code>excl_bkg_coach_slot_overlap</code>) that rejects any committed row overlapping another active booking for the same coach — see <a href="#slot-exclusivity">Slot exclusivity</a>.</td></tr>
       <tr><td><code>BookingBatch</code></td><td><code>booking_batches</code></td><td>Groups several <code>Booking</code> rows requested together in one parent submission.</td></tr>
       <tr><td><code>BookingRescheduleRequest</code></td><td><code>booking_reschedule_requests</code></td><td>A pending/accepted/declined proposal to move a booking's time.</td></tr>
       <tr><td><code>CoachAvailabilityBlock</code></td><td><code>coach_availability_blocks</code></td><td>One-off blackout period on a coach's calendar (vacation, etc.) — recurring weekly windows live in <code>marketplace.CoachAvailabilityWindow</code>, not here.</td></tr>
@@ -98,7 +99,7 @@
       <tr><th>Service</th><th>Orchestrates</th></tr>
       <tr><td><code>BookingService</code></td><td>Core lifecycle: create/accept/decline requests, cancel (parent/coach), no-show recording, schedule &amp; inbox queries, refund-eligibility computation. Drives all transitions through <code>BookingStateMachine</code> and publishes booking events.</td></tr>
       <tr><td><code>BookingStateMachine</code></td><td>Pure, stateless map of legal <code>(BookingStatus, BookingEvent) → BookingStatus</code> transitions plus per-event allowed actor roles. The single source of truth for what state changes are legal.</td></tr>
-      <tr><td><code>AvailabilityService</code></td><td>CRUD for coach availability windows/blocks and computing free slots by subtracting blocks from windows.</td></tr>
+      <tr><td><code>AvailabilityService</code></td><td>CRUD for coach availability windows/blocks and computing free slots by subtracting blocks from windows; flags (non-blocking) whether an edited window now conflicts with a real upcoming booking — see <a href="#slot-exclusivity">Slot exclusivity</a>.</td></tr>
       <tr><td><code>BookingBatchService</code></td><td>Creates multi-slot batch requests, bulk-accepts a batch, and rolls up batch status from its member bookings.</td></tr>
       <tr><td><code>BookingBatchStatusListener</code></td><td>Listens for <code>BookingStatusChangedEvent</code> (after commit) and re-derives the owning batch's aggregate status.</td></tr>
       <tr><td><code>BookingCompletionService</code></td><td>In-session lifecycle: start/pause/resume/end, Quick Complete vs. standard wrap-up submission, parent confirmation, credit deduction on completion.</td></tr>
@@ -221,10 +222,12 @@ sequenceDiagram
   Parent->>BookingResource: POST /api/bookings/requests
   BookingResource->>BookingService: createBookingRequest()
   BookingService->>BookingService: validate coach status, availability window, pack credits
+  BookingService->>BookingService: lock CoachProfile row, check for overlapping active bookings
   BookingService-->>Parent: BookingResponse (REQUESTED)
   BookingService--)Coach: BookingRequestedEvent (email)
   Coach->>BookingResource: PUT /requests/{id}/accept
   BookingResource->>BookingService: acceptBooking()
+  BookingService->>BookingService: lock CoachProfile row, re-check for overlapping active bookings
   BookingService->>BookingService: transition ACCEPT then INITIATE_PAYMENT (status = PAYMENT_PENDING)
   BookingService--)PaymentLifecycleService: BookingAcceptedEvent (AFTER_COMMIT)
   PaymentLifecycleService->>PaymentLifecycleService: deduct pack credit or charge Stripe/credit wallet
@@ -234,15 +237,78 @@ sequenceDiagram
     </pre>
     <p>
       A parent's request starts life as <code>REQUESTED</code> and is only accepted into the system if the
-      slot sits inside the coach's declared availability, the coach is booking-ready, and (if a session pack
-      was specified) the pack belongs to the parent, matches the coach, and still has credits. When the coach
-      accepts, <code>BookingService</code> fires two transitions in the same transaction —
+      slot sits inside the coach's declared availability, the coach is booking-ready, the slot doesn't overlap
+      an existing active booking for that coach (see <a href="#slot-exclusivity">Slot exclusivity</a>), and
+      (if a session pack was specified) the pack belongs to the parent, matches the coach, and still has
+      credits. When the coach accepts, <code>BookingService</code> re-runs the same overlap check — closing
+      the race where the coach accepts two overlapping requests before either commits — then fires two
+      transitions in the same transaction —
       <code>ACCEPT</code> then <code>INITIATE_PAYMENT</code> — landing the booking in <code>PAYMENT_PENDING</code>
       before publishing <code>BookingAcceptedEvent</code>. Because that event is consumed by
       <code>PaymentLifecycleService</code> as an <code>AFTER_COMMIT</code> listener, payment capture (or pack
       deduction) happens synchronously right after commit and moves the booking to <code>CONFIRMED</code> or
       back to <code>DECLINED</code> before the coach's HTTP request even returns — which is why
       <code>BookingResource.acceptBooking()</code> re-fetches the booking before responding.
+    </p>
+
+    <h3 id="slot-exclusivity">Slot exclusivity (double-booking prevention)</h3>
+    <p>
+      Two layers enforce that a coach can't end up with two overlapping active bookings:
+    </p>
+    <ul>
+      <li><strong>App-layer check + lock (primary path, gives a clean pre-emptive error).</strong>
+      <code>createBookingRequest</code> and <code>acceptBooking</code> both call
+      <code>coachProfileRepository.findByIdForUpdate(coachId)</code> — a <code>PESSIMISTIC_WRITE</code>
+      lock on the <code>CoachProfile</code> row, with a 5s <code>jakarta.persistence.lock.timeout</code>
+      query hint — immediately before running
+      <code>bookingRepository.findOverlappingBookings(coachId, startTime, endTime, statuses,
+      excludeBookingId)</code>. There is no dedicated "coach's calendar" row, so the coach's own profile
+      row is the serialization point: locking it forces concurrent create/accept calls for the <em>same
+      coach</em> to run one-at-a-time around the overlap check. If any active booking overlaps, the call
+      throws <code>OperationNotAllowedException</code> with <code>BookingError.SLOT_UNAVAILABLE</code>
+      (<code>booking.slotUnavailable</code>). <code>createBookingRequest</code> checks against
+      <code>REQUESTED</code>/<code>ACCEPTED</code>/<code>PAYMENT_PENDING</code>/<code>CONFIRMED</code>/<code>UPCOMING</code>/<code>IN_PROGRESS</code>/<code>PAUSED</code>;
+      <code>acceptBooking</code>'s re-check excludes <code>REQUESTED</code> (a merely-requested competing
+      booking isn't a real conflict yet) and excludes the booking's own id (so retrying an accept on an
+      already-accepted booking doesn't self-match).</li>
+      <li><strong>DB-level exclusion constraint (backstop for every write path).</strong> Migration
+      <code>V87__booking_overlap_exclusion_constraint.sql</code> adds
+      <code>excl_bkg_coach_slot_overlap</code>, a Postgres <code>EXCLUDE USING gist</code> constraint on
+      <code>(coach_id WITH =, tstzrange(requested_start_time, requested_end_time, '[)') WITH &amp;&amp;)</code>,
+      scoped to the same non-<code>REQUESTED</code> active statuses. This guarantees no two <em>committed</em>
+      rows can overlap regardless of which code path wrote them — including <code>BookingBatchService</code>
+      and <code>RescheduleService</code>, which don't call the app-layer check above. A violation surfaces as
+      a <code>DataIntegrityViolationException</code>, mapped by <code>ApiAdvice</code>'s
+      <code>CONSTRAINT_MAPPINGS</code>/<code>CONFLICT_CONSTRAINTS</code> to the same
+      <code>booking.slotUnavailable</code> / 409 rather than a raw 500.</li>
+    </ul>
+    <div class="callout warn">
+      <p><strong>The lock is per-coach, not per-slot — a known, accepted trade-off.</strong> Because
+      <code>findByIdForUpdate</code> locks the whole <code>CoachProfile</code> row, <em>all</em> concurrent
+      <code>createBookingRequest</code>/<code>acceptBooking</code> calls for the same coach serialize through
+      it, even for non-overlapping times (e.g. Tuesday vs. Friday). Accepted as fine at current booking
+      volume — don't "fix" this without evidence of real contention (slow-query/lock-wait monitoring), and
+      note a lock-timeout now fails fast with 409 <code>generic.conflict</code>
+      (<code>PessimisticLockingFailureException</code> handler in <code>ApiAdvice</code>) rather than hanging.
+      This is a <em>different</em> lock from the legacy <code>SessionPackPurchased</code> pessimistic lock
+      mentioned below — <code>createBookingRequest</code> can acquire both in the same call, on two unrelated
+      tables.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Known gap: batch and reschedule writes only get the DB backstop, not the pre-emptive
+      app-layer check.</strong> <code>BookingBatchService.createBatch</code> and
+      <code>RescheduleService.acceptReschedule</code> can still write an overlapping row — it will fail at
+      the DB with a clean <code>booking.slotUnavailable</code> 409 via the exclusion constraint, but without
+      the coach-lock pre-check's earlier, more explicit UX. Tracked as a residual gap in
+      <code>deferred-work.md</code>; not yet closed as of this writing.</p>
+    </div>
+    <p>
+      Editing/deleting a recurring <code>CoachAvailabilityWindow</code> also surfaces a (non-blocking)
+      conflict warning: <code>AvailabilityService.hasBookingConflict()</code> looks 90 days ahead for
+      <code>CONFIRMED</code>/<code>UPCOMING</code> bookings whose local start time (in the window's
+      <code>canonicalTimezone</code>) falls inside the edited window's day-of-week/time range, and returns
+      that via <code>AvailabilityWindowResponse.hasConflict</code>. This is currently backend-only — no
+      frontend component reads <code>hasConflict</code>, so no warning is actually shown to a coach yet.
     </p>
 
     <h3>Cancellation and reschedule</h3>

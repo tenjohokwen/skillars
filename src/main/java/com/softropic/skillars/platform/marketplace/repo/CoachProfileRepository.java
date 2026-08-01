@@ -1,11 +1,15 @@
 package com.softropic.skillars.platform.marketplace.repo;
 
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
+import jakarta.persistence.LockModeType;
+import jakarta.persistence.QueryHint;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -20,6 +24,14 @@ public interface CoachProfileRepository
     Optional<CoachProfile> findByUserId(Long userId);
 
     boolean existsByUserId(Long userId);
+
+    // Bounded lock wait (review patch): without this, contention on a popular coach's row blocks
+    // the requesting thread indefinitely instead of failing cleanly — see ApiAdvice's
+    // PessimisticLockingFailureException handler for the resulting 409 mapping.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "5000"))
+    @Query("SELECT c FROM CoachProfile c WHERE c.id = :id")
+    Optional<CoachProfile> findByIdForUpdate(@Param("id") UUID id);
 
     // Language filter via native query — PostgreSQL array ANY() is not portable in JPA Criteria API
     // City constraint added to avoid a global scan of all active coaches (P1)

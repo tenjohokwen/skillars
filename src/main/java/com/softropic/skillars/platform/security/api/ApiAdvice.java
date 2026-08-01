@@ -139,7 +139,8 @@ public class ApiAdvice {
     private static final Map<String, String> CONSTRAINT_MAPPINGS = Map.of(
         "tenant_tenant_ref_key", "tenant.ref.duplicate",
         "user_login_key", "user.login.duplicate",
-        "user_email_key", "user.email.duplicate"
+        "user_email_key", "user.email.duplicate",
+        "excl_bkg_coach_slot_overlap", "booking.slotUnavailable"
     );
 
     // Unique constraints that represent idempotent-retry collisions → 409 Conflict (not 400 Bad Request)
@@ -148,7 +149,8 @@ public class ApiAdvice {
         "idx_drills_coach_name_unique",
         "idx_drills_clone_uniqueness",
         "uq_sessions_booking_id",
-        "idx_videos_provider_asset_id_unique"
+        "idx_videos_provider_asset_id_unique",
+        "excl_bkg_coach_slot_overlap"
     );
 
     @ExceptionHandler(DataIntegrityViolationException.class)
@@ -567,6 +569,19 @@ public class ApiAdvice {
     public ErrorDto optimisticLockExceptionHandler(
             final org.springframework.orm.ObjectOptimisticLockingFailureException ex) {
         final String defaultMsg = "Concurrent modification conflict — please retry";
+        return logErrorAndReturnDTO(ex, defaultMsg, "generic.conflict");
+    }
+
+    /**
+     * Handles pessimistic lock wait timeouts (e.g. CoachProfileRepository.findByIdForUpdate's
+     * bounded lock.timeout hint) — under heavy contention this fails fast with a clean 409
+     * instead of the request thread blocking indefinitely or a raw 500.
+     */
+    @ExceptionHandler(org.springframework.dao.PessimisticLockingFailureException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ErrorDto pessimisticLockExceptionHandler(
+            final org.springframework.dao.PessimisticLockingFailureException ex) {
+        final String defaultMsg = "This resource is busy — please retry";
         return logErrorAndReturnDTO(ex, defaultMsg, "generic.conflict");
     }
 

@@ -48,6 +48,7 @@ This document provides the complete epic and story breakdown for Skillars, decom
 - FR-BKG-012: Quick Complete parent confirmation gate — session transitions to COMPLETED only after parent/player confirms; auto-confirms after 24h of no response.
 - FR-BKG-013: Coach Command Center displays total projected revenue for current week from confirmed upcoming sessions alongside schedule gaps.
 - FR-BKG-014: Bulk session request — parent selects up to platform-configured maximum slots (default 5) from coach calendar and submits as a grouped request; coach receives single grouped notification; Accept All or individual response; single payment transaction covers the accepted batch.
+- FR-BKG-015: Slot double-booking prevention — a coach's time slot is held once a booking request exists against it (REQUESTED through UPCOMING); concurrent or later overlapping requests are rejected, and accept-time re-validation closes the race where two overlapping requests are accepted independently.
 
 **Session Builder & Drill Library**
 - FR-SES-001: Four default session blocks — Warm-Up (10 min), Technical Foundation (15 min), Game Intensity (25 min), Cool-Down & Review (10 min). Block duration and content customizable.
@@ -288,6 +289,7 @@ This document provides the complete epic and story breakdown for Skillars, decom
 | FR-BKG-012 | Epic 3 | Quick Complete parent confirmation gate |
 | FR-BKG-013 | Epic 3 | Coach Command Center projected revenue |
 | FR-BKG-014 | Epic 3 | Bulk session request from calendar |
+| FR-BKG-015 | Epic 3 | Slot double-booking prevention |
 | FR-POR-001 | Epic 3 | Session pack dashboard |
 | FR-POR-002 | Epic 3 | Upcoming sessions view |
 | FR-POR-003 | Epic 3 | One-tap rescheduling from parent portal |
@@ -1425,6 +1427,40 @@ So that I have clear, fair commitment terms — and both I and the coach are pro
 **Then** `400` with `ErrorDto` code `booking.packAlreadyPaused` — one pause per pack lifetime is the platform limit
 
 *Dev notes: `platform.booking`. V32 migration: add `expires_at TIMESTAMPTZ NOT NULL DEFAULT now()` (backfilled via UPDATE based on session_count tier), `paused_until TIMESTAMPTZ`, `warning_30d_sent_at TIMESTAMPTZ`, `warning_7d_sent_at TIMESTAMPTZ` to `booking.session_packs_purchased`; add `CANCELLED` to `booking.bookings` CHECK constraint (status IN ('REQUESTED','ACCEPTED','CONFIRMED','UPCOMING','DECLINED','CANCELLED','COMPLETED','DISPUTED')). Expiry tier thresholds stored in `platform_config`: `pack.expiry.days.tier1` (1 session → 90), `pack.expiry.days.tier2` (2–5 → 180), `pack.expiry.days.tier3` (6–10 → 365), `pack.expiry.days.tier4` (11+ → 548). `SessionPackService` gains `BookingRepository` dependency (already added in Story 3.3); update `hasCredits()` to also exclude `paused_until > now()` packs. New `SessionPackExpiryScheduler` (`@Scheduled` every 60 min): run expiry transitions and warning notifications. New endpoint `POST /api/bookings/players/{playerId}/packs/{packId}/pause` (`@PreAuthorize` parent ownership) — body: `{ pauseStartDate, pauseDurationDays }`; first call returns `200` with conflict list if bookings exist (no pause applied yet); second call with `{ ..., confirmedCancellationIds: [...] }` applies the pause and triggers cascade cancellations. Each cascade cancellation calls `BookingService.cancelDueToPause(bookingId)` → sets status `CANCELLED`, publishes `BookingCancelledDueToPauseEvent`, resolved via `@TransactionalEventListener` in `BookingEmailListener`. Frontend: `SessionPackDashboard.vue` gains expiry badge, pause CTA, and cancellation confirmation modal. Test: `SessionPackExpirySchedulerTest` (unit — tier boundary, warning idempotency), `SessionPackPauseResourceIT` (pause with conflicts, pause without conflicts, second-pause rejected, cascade cancellation verifiable via booking status check).*
+
+### Story 3.11: Coach Slot Double-Booking Prevention
+
+As a coach,
+I want the platform to stop two families from being able to hold the same time slot,
+So that I never have to discover a scheduling collision only after accepting a request.
+
+**Acceptance Criteria:**
+
+**Given** a coach already has a booking in `REQUESTED`, `ACCEPTED`, `PAYMENT_PENDING`, `CONFIRMED`, or `UPCOMING` status whose time range overlaps `[requestedStartTime, requestedEndTime)`
+**When** a parent submits a new booking request for that same coach with an overlapping time range
+**Then** the request is rejected before any `bookings` row is created, with `ErrorDto` code `booking.slotUnavailable`
+**And** the existing availability-window check (Story 3.1) still runs first — an out-of-window request still fails with `booking.slotOutsideAvailability`-style validation as today, unchanged
+
+**Given** two parents submit overlapping booking requests for the same coach at nearly the same moment (concurrent transactions)
+**When** both `createBookingRequest` calls execute
+**Then** the overlap check and insert are serialized per coach (pessimistic lock acquired on the coach's row before the overlap check, held for the transaction) so exactly one request succeeds and the other is rejected with `booking.slotUnavailable`
+**And** no two bookings for the same coach can end up simultaneously in an overlapping, non-terminal state regardless of timing
+
+**Given** a booking is `REQUESTED`
+**When** the coach calls `acceptBooking` but another booking for the same coach with an overlapping time range has since reached `ACCEPTED`, `PAYMENT_PENDING`, `CONFIRMED`, or `UPCOMING` status
+**Then** the accept is rejected with `booking.slotUnavailable` and the booking remains `REQUESTED` (so the coach can still decline it)
+**And** this re-check uses the same per-coach lock as booking creation to close the accept-time race window
+
+**Given** `AvailabilityService.updateWindow()` needs to warn a coach that an availability change overlaps a real booking (Story 3.1, AC: "a warning is shown if the change would overlap with an existing confirmed booking")
+**When** `hasBookingConflict(coachId, window)` is evaluated
+**Then** it queries actual bookings in `CONFIRMED` or `UPCOMING` status that overlap the window's recurring day/time instead of the current hardcoded `return false` stub
+**And** the `TODO(3.3): wire to BookingRepository once available` comment is removed
+
+**Given** the overlap query runs on every booking creation and every accept call
+**When** the `bookings` table grows to production scale
+**Then** a composite index on `(coach_id, status, requested_start_time, requested_end_time)` supports the overlap lookup without a sequential scan
+
+*Dev notes: `platform.booking` + `platform.marketplace` (read-only cross-module dependency already established in `BookingService`, which injects `CoachProfileRepository`). Root cause: `BookingService.createBookingRequest()` (`isSlotWithinAvailabilityWindow`, around line 180) only validates the requested time against the coach's recurring `coach_availability_windows` template — it never checks for existing overlapping `Booking` rows, and `acceptBooking()` has no conflict check either. Add `BookingRepository.findOverlappingBookings(coachId, startTime, endTime, statuses)`: `WHERE coach_id = :coachId AND status IN :statuses AND requested_start_time < :endTime AND requested_end_time > :startTime` (half-open interval overlap test, matches the existing `findByCoachIdAndStatusInAndTimeBetween` style already in `BookingRepository`). For serialization, add `CoachProfileRepository.findByIdForUpdate(UUID id)` using `@Lock(LockModeType.PESSIMISTIC_WRITE)` — same pattern already used in `SessionPackPurchasedRepository.findByIdForUpdate` / `SessionPackPurchaseRepository.findByIdForUpdate` (NFR-004's documented "SELECT FOR UPDATE exclusively for optimistic-to-pessimistic boundary cases" convention). `BookingService.createBookingRequest()` acquires the lock via a separate `findByIdForUpdate` call placed immediately before the overlap query (not by replacing the earlier plain `coachProfileRepository.findById` used for the coach-status check — that lookup precedes the `paymentGateway.isCoachPaymentReady()` external call, and a DB row lock must not be held across an external HTTP call). `BookingService.acceptBooking()` acquires the same lock (on `booking.getCoachId()`) immediately before its overlap re-check and before the `ACCEPT` transition. Add `BookingError.SLOT_UNAVAILABLE -> "booking.slotUnavailable"` to the existing `BookingError` enum (currently only has `COACH_UNAVAILABLE`). `AvailabilityService.hasBookingConflict()` gains a `BookingRepository` dependency and calls the new overlap query restricted to `List.of("CONFIRMED", "UPCOMING")` for the window's projected next occurrence. Flyway migration `V86__booking_overlap_index.sql`: `CREATE INDEX idx_bkg_coach_status_time ON booking.bookings (coach_id, status, requested_start_time, requested_end_time);`. Explicitly out of scope for this story: auto-declining other `REQUESTED` bookings that lose the race when one is accepted (the coach will simply get `booking.slotUnavailable` if they try to accept a second overlapping request and must decline it manually — acceptable UX for v1, no cascade logic needed). Test: `BookingServiceTest` (unit — overlapping creation rejected for each conflicting status, non-overlapping adjacent slots allowed, accept-time race rejected), `BookingServiceConcurrencyIT` (integration, `@SpringBootTest` + `Testcontainers` — two threads racing `createBookingRequest` for the same coach/overlapping time, assert exactly one `Booking` row persists), `AvailabilityServiceTest` (unit — `hasBookingConflict` now returns true/false based on real booking data instead of the stub).*
 
 ---
 

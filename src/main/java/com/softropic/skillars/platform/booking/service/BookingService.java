@@ -113,6 +113,12 @@ public class BookingService {
     private final SessionPackPurchaseRepository sessionPackPurchaseRepository;
     private final CoachPricingRepository coachPricingRepository;
 
+    private static final List<String> ACTIVE_SLOT_STATUSES =
+        List.of("REQUESTED", "ACCEPTED", "PAYMENT_PENDING", "CONFIRMED", "UPCOMING", "IN_PROGRESS", "PAUSED");
+
+    private static final List<String> ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED =
+        ACTIVE_SLOT_STATUSES.stream().filter(s -> !s.equals("REQUESTED")).toList();
+
     @Transactional
     public void transition(UUID bookingId, BookingEvent event, TransitionContext context) {
         transitionInternal(bookingId, event, context, true);
@@ -145,18 +151,19 @@ public class BookingService {
         PlayerProfile player = playerProfileRepository.findById(req.playerId())
             .orElseThrow(() -> new ResourceNotFoundException("Player not found", "player_profile"));
         if (!Objects.equals(player.getParentId(), parentId)) {
-            throw new OperationNotAllowedException("Parent does not own this player", SecurityError.MISSING_RIGHTS);
+            throw new OperationNotAllowedException("Parent does not own this player", Map.of("submitted parent id", parentId), SecurityError.MISSING_RIGHTS);
         }
 
         CoachProfile coach = coachProfileRepository.findById(req.coachId())
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+        final Map<String, Object> metaData = Map.of("submitted coach id", req.coachId());
         if (coach.getStatus() == CoachProfileStatus.SUSPENDED) {
-            throw new OperationNotAllowedException("Coach is suspended", BookingError.COACH_UNAVAILABLE);
+            throw new OperationNotAllowedException("Coach is suspended", metaData, BookingError.COACH_UNAVAILABLE);
         }
         if (coach.getStatus() != CoachProfileStatus.ACTIVE
                 && coach.getStatus() != CoachProfileStatus.REDUCED
                 && coach.getStatus() != CoachProfileStatus.PENDING_REVIEW) {
-            throw new OperationNotAllowedException("Coach profile is not active", SecurityError.MISSING_RIGHTS);
+            throw new OperationNotAllowedException("Coach profile is not active", metaData, SecurityError.MISSING_RIGHTS);
         }
 
         if (!paymentGateway.isCoachPaymentReady(coach.getId())) {
@@ -164,21 +171,43 @@ public class BookingService {
         }
 
         if (!req.requestedStartTime().isAfter(Instant.now())) {
-            throw new OperationNotAllowedException("Requested start time must be in the future", SecurityError.MISSING_RIGHTS);
+            throw new OperationNotAllowedException("Requested start time must be in the future",
+                Map.of("requested start time", req.requestedStartTime()), SecurityError.MISSING_RIGHTS);
         }
         if (!req.requestedEndTime().isAfter(req.requestedStartTime())) {
-            throw new OperationNotAllowedException("Requested end time must be after start time", SecurityError.MISSING_RIGHTS);
+            throw new OperationNotAllowedException("Requested end time must be after start time",
+                Map.of("requested start time", req.requestedStartTime(), "requested end time", req.requestedEndTime()),
+                SecurityError.MISSING_RIGHTS);
         }
 
         try {
             ZoneId.of(req.canonicalTimezone());
         } catch (DateTimeException e) {
-            throw new OperationNotAllowedException("Invalid timezone: " + req.canonicalTimezone(), SecurityError.MISSING_RIGHTS);
+            throw new OperationNotAllowedException("Invalid timezone: " + req.canonicalTimezone(),
+                Map.of("submitted timezone", req.canonicalTimezone()), SecurityError.MISSING_RIGHTS);
         }
 
         List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachId(req.coachId());
         if (!isSlotWithinAvailabilityWindow(req.requestedStartTime(), req.requestedEndTime(), windows)) {
-            throw new OperationNotAllowedException("Requested slot is not within coach availability", SecurityError.MISSING_RIGHTS);
+            throw new OperationNotAllowedException("Requested slot is not within coach availability",
+                Map.of("requested start time", req.requestedStartTime(), "requested end time", req.requestedEndTime()),
+                SecurityError.MISSING_RIGHTS);
+        }
+
+        // AC 1/2: acquire a per-coach lock before the authoritative overlap check so two
+        // concurrent requests for the same coach are serialized, not interleaved. The lookup
+        // result itself is unused beyond the lock it acquires — orElseThrow both documents that
+        // and guards against the lock silently no-op'ing if the coach row vanished mid-request.
+        coachProfileRepository.findByIdForUpdate(req.coachId())
+            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+        List<Booking> overlapping = bookingRepository.findOverlappingBookings(
+            req.coachId(), req.requestedStartTime(), req.requestedEndTime(), ACTIVE_SLOT_STATUSES, null);
+        if (!overlapping.isEmpty()) {
+            throw new OperationNotAllowedException(
+                "Requested slot overlaps an existing booking for this coach",
+                Map.of("submitted coach id", req.coachId(), "requested start time", req.requestedStartTime(),
+                    "requested end time", req.requestedEndTime()),
+                BookingError.SLOT_UNAVAILABLE);
         }
 
         // Validate session pack purchase if provided (AC 8)
@@ -189,7 +218,9 @@ public class BookingService {
                 throw new PaymentGatewayException("payment.packExpired");
             }
             if (!pack.getParentId().equals(parentId)) {
-                throw new OperationNotAllowedException("Pack does not belong to this parent", SecurityError.MISSING_RIGHTS);
+                throw new OperationNotAllowedException("Pack does not belong to this parent",
+                    Map.of("submitted parent id", parentId, "submitted pack id", req.sessionPackPurchaseId()),
+                    SecurityError.MISSING_RIGHTS);
             }
             if (!pack.getCoachId().equals(req.coachId())) {
                 throw new PaymentGatewayException("payment.packCoachMismatch");
@@ -233,7 +264,27 @@ public class BookingService {
         CoachProfile coach = coachProfileRepository.findByUserId(coachUserId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
         if (!Objects.equals(booking.getCoachId(), coach.getId())) {
-            throw new OperationNotAllowedException("Coach does not own this booking", SecurityError.MISSING_RIGHTS);
+            throw new OperationNotAllowedException("Coach does not own this booking",
+                Map.of("submitted booking id", bookingId, "submitted coach id", coach.getId()), SecurityError.MISSING_RIGHTS);
+        }
+
+        // AC 3: re-check for a slot conflict that may have appeared since this booking was
+        // REQUESTED (e.g. the coach already accepted a different overlapping request). The lookup
+        // result itself is unused beyond the lock it acquires — orElseThrow both documents that
+        // and guards against the lock silently no-op'ing if the coach row vanished mid-request.
+        coachProfileRepository.findByIdForUpdate(coach.getId())
+            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+        // excludeBookingId=bookingId: without this, retrying acceptBooking on a booking already
+        // moved to one of these statuses would match itself and mask the real state-transition error.
+        List<Booking> overlapping = bookingRepository.findOverlappingBookings(
+            booking.getCoachId(), booking.getRequestedStartTime(), booking.getRequestedEndTime(),
+            ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED, bookingId);
+        if (!overlapping.isEmpty()) {
+            throw new OperationNotAllowedException(
+                "This slot is no longer available — another booking was accepted for the same time",
+                Map.of("submitted coach id", coach.getId(), "requested start time", booking.getRequestedStartTime(),
+                    "requested end time", booking.getRequestedEndTime()),
+                BookingError.SLOT_UNAVAILABLE);
         }
 
         TransitionContext ctx = new TransitionContext(ActorRole.COACH, coachUserId);

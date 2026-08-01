@@ -89,6 +89,7 @@ class ExpiredPackBookingValidationTest {
         coach.setUserId(9001L);
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
         when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
 
         // Availability window covers the full day in UTC
         CoachAvailabilityWindow window = new CoachAvailabilityWindow();
@@ -129,6 +130,7 @@ class ExpiredPackBookingValidationTest {
         coach.setUserId(9001L);
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
         when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
 
         CoachAvailabilityWindow window = new CoachAvailabilityWindow();
         window.setCanonicalTimezone("UTC");
@@ -243,6 +245,7 @@ class ExpiredPackBookingValidationTest {
         coach.setUserId(9001L);
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
         when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
 
         CoachAvailabilityWindow window = new CoachAvailabilityWindow();
         window.setCanonicalTimezone("UTC");

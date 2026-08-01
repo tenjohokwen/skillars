@@ -7,20 +7,44 @@ x-logging: &default-logging
 services:
   app:
     image: skillars:uat
-    # docker-compose.yml caps this service at 2.0 CPUs — fine on the multi-core Hetzner
-    # boxes production/uat-deployment.md target, but Docker refuses to even create the
-    # container if a `cpus` limit exceeds the host's actual CPU count ("range of CPUs is
-    # from 0.01 to 1.00, as there are only 1 CPUs available" on a single-vCPU Hostwinds
-    # plan). `memory: 2g` is left as-is via deep merge (Compose merges `deploy.resources.limits`
-    # as a map, not a wholesale replacement) — only `cpus` needed capping. If the box you're
-    # on has more than 1 vCPU, raise this back up (or drop it entirely) accordingly; 1.00 is
-    # the safe single-vCPU default, not a value with any other significance.
+    # docker-compose.yml's own limits (2.0 CPUs, 2GB memory) target the multi-core Hetzner
+    # boxes production/uat-deployment.md are built for. Neither fits a 1 vCPU / 1GB
+    # Hostwinds plan: Docker refuses to even create the container if `cpus` exceeds the
+    # host's actual CPU count ("range of CPUs is from 0.01 to 1.00, as there are only 1
+    # CPUs available"), and a 2GB memory ceiling is double the box's entire RAM. `memory`
+    # here (460m) is a deliberately tight budget, not a comfortable one — see the
+    # `JAVA_TOOL_OPTIONS` override below for how the JVM itself is kept under it, and
+    # uat-hostwinds-deployment.md's "Resource budget" section for the full box-wide
+    # accounting this number came from and why it may need adjusting on first boot.
     deploy:
       resources:
         limits:
           cpus: "1.00"
+          memory: 460m
     environment:
       - SPRING_PROFILES_ACTIVE=uat
+      # The Dockerfile's own ENV JAVA_TOOL_OPTIONS="-Duser.timezone=UTC" is fully replaced
+      # (not appended to) by this override, so -Duser.timezone=UTC is repeated here.
+      # -Xmx256m: heap ceiling, leaves room for metaspace/threads/native memory below the
+      # 460m container limit above — without an explicit -Xmx the JVM would default to
+      # 25% of the *container's* memory limit (~115m), too small for this many modules
+      # (payment, booking, security, filestorage, video, admin, marketplace, ...) to load
+      # without constant GC thrash.
+      # -XX:MaxMetaspaceSize=150m: class metadata for all those modules adds up; capped so
+      # a leak/miscalculation here can't silently eat the memory budgeted for heap instead.
+      # -XX:ReservedCodeCacheSize=48m: JIT-compiled code cache, smaller than default (240m)
+      # — acceptable since this is a one-time smoke test, not a long-running/hot-path box.
+      # -XX:+UseSerialGC: G1 (the JVM's default since Java 9) reserves memory for
+      # concurrent GC threads/regions sized for much larger heaps than 256m — SerialGC is
+      # the standard recommendation for small, resource-constrained JVM containers.
+      - JAVA_TOOL_OPTIONS=-Duser.timezone=UTC -Xmx256m -XX:MaxMetaspaceSize=150m -XX:ReservedCodeCacheSize=48m -XX:+UseSerialGC
+      # Nothing in the current codebase actually uses Redis (see uat-hostwinds-deployment.md
+      # "Resource budget" for how this was confirmed) — Lettuce connects lazily, so the app
+      # boots fine either way, but Spring Boot Actuator's Redis health indicator still tries
+      # an eager PING as part of /manage/health, which would otherwise drag the whole
+      # aggregate health check to DOWN for no functional reason. Same pattern as
+      # MANAGEMENT_HEALTH_MAIL_ENABLED below.
+      - MANAGEMENT_HEALTH_REDIS_ENABLED=false
       # docker-compose.yml hardcodes LOKI_ENABLED=true/LOKI_URL=http://loki:3100
       # unconditionally on this service — logback-spring.xml really does attach a
       # Loki4jAppender to the root logger when loki.enabled=true (see "Logging" in
@@ -81,6 +105,30 @@ services:
   # started. LOKI_ENABLED is turned off above; MANAGEMENT_OTLP_TRACING_ENDPOINT (tempo) is
   # left as-is — the OTLP exporter fails silently/async on an unreachable collector, unlike
   # the Loki appender, so it doesn't need the same treatment.
+  #
+  # `postgres` and `redis` are NOT dropped from this deployment even though the box also
+  # has its own native PostgreSQL (used by gulliver) and nothing in the app actually uses
+  # Redis — `app`'s `depends_on: {postgres, redis}` is defined in the base
+  # docker-compose.yml, and Compose merges `depends_on` rather than letting an override
+  # replace or clear it (confirmed empirically — an override here would silently do
+  # nothing), so both containers start regardless of what's listed after `up -d`. Fighting
+  # that with the `!reset`/`!override` YAML merge tags was considered and rejected: they're
+  # tied to a Compose Spec version this file can't guarantee the installed CLI supports.
+  # Right-sizing them below, and stopping the *native* Postgres instead (Step 1), gets
+  # nearly the same RAM back without that fragility.
+  postgres:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 220m
+
+  redis:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.10"
+          memory: 48m
 
   # Stands in for the real S3 API. Unlike docker-compose.uat.yml, there's no
   # STORAGE_DOMAIN/Traefik here — this box only has the one real hostname (DOMAIN), so
@@ -92,6 +140,14 @@ services:
   minio:
     image: minio/minio:RELEASE.2024-01-13T07-53-03Z
     command: server /data --address ":9500" --console-address ":9501"
+    # No limit at all otherwise — this is new to this stripped-down file (unlike
+    # postgres/redis, minio isn't in the base docker-compose.yml with its own defaults to
+    # cap down), so it would run under Docker's unbounded default without this.
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 140m
     environment:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}

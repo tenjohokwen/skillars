@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.booking.service;
 
 import com.softropic.skillars.platform.booking.contract.BookingAcceptedEvent;
+import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.BookingDeclinedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingRequestedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingResponse;
@@ -46,6 +47,9 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -100,6 +104,9 @@ class BookingServiceTest {
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
         when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
         when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of());
         when(sessionPackPurchasedRepository.findActivePacksForDeduction(any(Long.class), any(UUID.class), any(Instant.class))).thenReturn(List.of());
         when(sessionPackService.getCreditsRemaining(PLAYER_ID, COACH_ID)).thenReturn(3);
         when(bookingRepository.countInFlightBookings(PLAYER_ID, COACH_ID)).thenReturn(0L);
@@ -125,6 +132,9 @@ class BookingServiceTest {
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
         when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
         when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of());
         when(sessionPackPurchasedRepository.findActivePacksForDeduction(any(Long.class), any(UUID.class), any(Instant.class))).thenReturn(List.of());
         when(sessionPackService.getCreditsRemaining(PLAYER_ID, COACH_ID)).thenReturn(0);
         when(bookingRepository.countInFlightBookings(PLAYER_ID, COACH_ID)).thenReturn(0L);
@@ -136,6 +146,62 @@ class BookingServiceTest {
 
         assertThat(response).isNotNull();
         verify(bookingRepository).save(any(Booking.class));
+    }
+
+    @Test
+    void createBookingRequest_noOverlap_createsRequestedBooking() {
+        PlayerProfile player = makePlayer(PLAYER_ID, PARENT_ID);
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        CoachAvailabilityWindow window = makeCoveringWindow(COACH_ID);
+        Booking savedBooking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of());
+        when(sessionPackPurchasedRepository.findActivePacksForDeduction(any(Long.class), any(UUID.class), any(Instant.class))).thenReturn(List.of());
+        when(sessionPackService.getCreditsRemaining(PLAYER_ID, COACH_ID)).thenReturn(3);
+        when(bookingRepository.countInFlightBookings(PLAYER_ID, COACH_ID)).thenReturn(0L);
+        when(bookingRepository.save(any(Booking.class))).thenReturn(savedBooking);
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+
+        CreateBookingRequest req = makeValidRequest(COACH_ID, PLAYER_ID, window);
+        BookingResponse response = bookingService.createBookingRequest(PARENT_ID, req);
+
+        assertThat(response).isNotNull();
+        verify(bookingRepository).save(any(Booking.class));
+    }
+
+    @Test
+    void createBookingRequest_overlappingActiveBooking_throwsOperationNotAllowedException() {
+        PlayerProfile player = makePlayer(PLAYER_ID, PARENT_ID);
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        CoachAvailabilityWindow window = makeCoveringWindow(COACH_ID);
+        Booking conflicting = makeBooking(PARENT_ID, 999L, COACH_ID, "ACCEPTED");
+
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of(conflicting));
+
+        CreateBookingRequest req = makeValidRequest(COACH_ID, PLAYER_ID, window);
+
+        assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(ex -> assertThat(((OperationNotAllowedException) ex).getErrorCode())
+                .isEqualTo(BookingError.SLOT_UNAVAILABLE));
+        verify(bookingRepository, never()).save(any(Booking.class));
+        // Pins down the exact status list (mirrors BookingService.ACTIVE_SLOT_STATUSES) so a
+        // regression that narrowed/widened it wouldn't pass silently under a looser anyList() stub.
+        verify(bookingRepository).findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class),
+            eq(List.of("REQUESTED", "ACCEPTED", "PAYMENT_PENDING", "CONFIRMED", "UPCOMING", "IN_PROGRESS", "PAUSED")),
+            isNull());
     }
 
     @Test
@@ -209,6 +275,9 @@ class BookingServiceTest {
 
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of());
         when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(makePlayer(PLAYER_ID, PARENT_ID)));
@@ -227,6 +296,49 @@ class BookingServiceTest {
 
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of());
+
+        assertThatThrownBy(() -> bookingService.acceptBooking(booking.getId(), COACH_USER_ID))
+            .isInstanceOf(BookingStateTransitionException.class);
+    }
+
+    @Test
+    void acceptBooking_overlappingConfirmedBooking_throwsOperationNotAllowedException() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        Booking conflicting = makeBooking(PARENT_ID, 999L, COACH_ID, "CONFIRMED");
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of(conflicting));
+
+        assertThatThrownBy(() -> bookingService.acceptBooking(booking.getId(), COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(ex -> assertThat(((OperationNotAllowedException) ex).getErrorCode())
+                .isEqualTo(BookingError.SLOT_UNAVAILABLE));
+        verify(bookingRepository, never()).save(any(Booking.class));
+        // Pins down that REQUESTED is excluded (mirrors BookingService's exclusion list) and that
+        // the booking being accepted excludes itself from the overlap match (self-match guard).
+        verify(bookingRepository).findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class),
+            eq(List.of("ACCEPTED", "PAYMENT_PENDING", "CONFIRMED", "UPCOMING", "IN_PROGRESS", "PAUSED")),
+            eq(booking.getId()));
+    }
+
+    @Test
+    void acceptBooking_retriedOnAlreadyAcceptedBooking_doesNotSelfMatchAsOverlap() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "PAYMENT_PENDING");
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        // Simulate the real query excluding the booking's own id: it would not appear here.
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), eq(booking.getId())))
+            .thenReturn(List.of());
 
         assertThatThrownBy(() -> bookingService.acceptBooking(booking.getId(), COACH_USER_ID))
             .isInstanceOf(BookingStateTransitionException.class);

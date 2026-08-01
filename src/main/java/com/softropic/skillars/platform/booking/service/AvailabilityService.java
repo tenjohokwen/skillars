@@ -7,6 +7,8 @@ import com.softropic.skillars.platform.booking.contract.CoachAvailabilityRespons
 import com.softropic.skillars.platform.booking.contract.CreateBlockRequest;
 import com.softropic.skillars.platform.booking.contract.CreateWindowRequest;
 import com.softropic.skillars.platform.booking.contract.UpdateWindowRequest;
+import com.softropic.skillars.platform.booking.repo.Booking;
+import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.repo.CoachAvailabilityBlock;
 import com.softropic.skillars.platform.booking.repo.CoachAvailabilityBlockRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
@@ -17,6 +19,7 @@ import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,11 +27,15 @@ import java.time.DateTimeException;
 import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class AvailabilityService {
@@ -36,6 +43,7 @@ public class AvailabilityService {
     private final CoachAvailabilityWindowRepository windowRepository;
     private final CoachAvailabilityBlockRepository blockRepository;
     private final CoachProfileRepository coachProfileRepository;
+    private final BookingRepository bookingRepository;
 
     @Transactional(readOnly = true)
     public CoachAvailabilityResponse getAvailabilityCalendar(UUID coachId, LocalDate weekStart) {
@@ -119,7 +127,6 @@ public class AvailabilityService {
         window.setEndTime(req.endTime());
         CoachAvailabilityWindow saved = windowRepository.save(window);
 
-        // TODO(3.3): wire to BookingRepository once available
         boolean hasConflict = hasBookingConflict(profile.getId(), saved);
         return toWindowResponse(saved, hasConflict);
     }
@@ -200,8 +207,26 @@ public class AvailabilityService {
         return new AvailabilityBlockResponse(b.getId(), b.getStartDatetime(), b.getEndDatetime(), b.getReason());
     }
 
-    // TODO(3.3): wire to BookingRepository once available
     private boolean hasBookingConflict(UUID coachId, CoachAvailabilityWindow window) {
-        return false;
+        ZoneId zoneId;
+        try {
+            zoneId = ZoneId.of(window.getCanonicalTimezone());
+        } catch (DateTimeException e) {
+            log.warn("Skipping booking-conflict check for window {} (coach {}): invalid canonicalTimezone '{}'",
+                window.getId(), coachId, window.getCanonicalTimezone());
+            return false;
+        }
+        Instant now = Instant.now();
+        Instant horizon = now.plus(90, ChronoUnit.DAYS);
+        List<Booking> futureBookings = bookingRepository.findByCoachIdAndStatusInAndTimeBetween(
+            coachId, List.of("CONFIRMED", "UPCOMING"), now, horizon);
+
+        return futureBookings.stream().anyMatch(b -> {
+            ZonedDateTime startZdt = b.getRequestedStartTime().atZone(zoneId);
+            LocalTime localTime = startZdt.toLocalTime();
+            return window.getDayOfWeek() == (short) startZdt.getDayOfWeek().getValue()
+                && !localTime.isBefore(window.getStartTime())
+                && localTime.isBefore(window.getEndTime());
+        });
     }
 }
