@@ -283,6 +283,8 @@ export default {
       accept: 'Annehmen',
       decline: 'Ablehnen',
       creditsRemaining: '{count} Guthaben bei diesem Trainer verbleibend',
+      selectPack: 'Sitzungspaket verwenden',
+      packOptionLabel: '{remaining} von {total} Sitzungen übrig',
     },
     wrapUp: {
       step4DnaError: 'Session-DNA konnte nicht geladen werden.', // TODO: native review
@@ -377,6 +379,7 @@ export default {
       pauseSuccess: 'Paket pausiert — Ablaufdatum entsprechend verlängert',
       alreadyPausedLabel: 'Paket hat seine Pause bereits genutzt',
       purchaseError: 'Kauf fehlgeschlagen. Bitte erneut versuchen.',
+      noTierAvailable: 'Dieser Trainer hat kein Sitzungspaket zum Kauf verfügbar.',
     },
     completion: {
       endSession: 'Sitzung beenden',

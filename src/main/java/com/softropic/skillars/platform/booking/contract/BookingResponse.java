@@ -16,7 +16,6 @@ public record BookingResponse(
     String notes,
     Instant createdAt,
     String parentName,
-    int effectiveCreditsRemaining,
     RescheduleRequestResponse pendingReschedule,
     UUID batchId,
     Integer batchSize

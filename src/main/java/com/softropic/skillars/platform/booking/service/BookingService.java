@@ -100,14 +100,12 @@ public class BookingService {
 
     private final BookingRepository bookingRepository;
     private final BookingStateMachine bookingStateMachine;
-    private final SessionPackService sessionPackService;
     private final CoachProfileRepository coachProfileRepository;
     private final PaymentGateway paymentGateway;
     private final CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
     private final PlayerProfileRepository playerProfileRepository;
     private final UserRepository userRepository;
     private final ApplicationEventPublisher eventPublisher;
-    private final com.softropic.skillars.platform.booking.repo.SessionPackPurchasedRepository sessionPackPurchasedRepository;
     private final BookingRescheduleRequestRepository rescheduleRequestRepository;
     private final BookingBatchRepository batchRepository;
     private final SessionPackPurchaseRepository sessionPackPurchaseRepository;
@@ -230,13 +228,6 @@ public class BookingService {
             }
         }
 
-        // Acquire pessimistic lock on legacy pack rows to prevent concurrent double-booking on the old system.
-        // Skipped for the new payment.session_pack_purchases path, which uses PackSessionService.deductSession()
-        // for its own lock instead.
-        if (req.sessionPackPurchaseId() == null) {
-            sessionPackPurchasedRepository.findActivePacksForDeduction(req.playerId(), req.coachId(), Instant.now());
-        }
-
         Booking booking = new Booking();
         booking.setParentId(parentId);
         booking.setPlayerId(req.playerId());
@@ -255,9 +246,7 @@ public class BookingService {
             req.requestedStartTime(), req.canonicalTimezone()
         ));
 
-        int effectiveCredits = (int) (sessionPackService.getCreditsRemaining(req.playerId(), req.coachId())
-            - bookingRepository.countInFlightBookings(req.playerId(), req.coachId()));
-        return toResponse(booking, coach.getDisplayName(), player.getName(), null, effectiveCredits, null, null, null);
+        return toResponse(booking, coach.getDisplayName(), player.getName(), null, null, null, null);
     }
 
     @Transactional
@@ -308,7 +297,7 @@ public class BookingService {
         ));
 
         // Return PAYMENT_PENDING status — PaymentLifecycleService handles CONFIRMED/DECLINED
-        return toResponse(updated, coach.getDisplayName(), resolvePlayerName(updated.getPlayerId()), null, 0, null, null, null);
+        return toResponse(updated, coach.getDisplayName(), resolvePlayerName(updated.getPlayerId()), null, null, null, null);
     }
 
     private BigDecimal resolveSessionPrice(Booking booking) {
@@ -352,7 +341,7 @@ public class BookingService {
         CoachProfile coach = coachProfileRepository.findById(booking.getCoachId()).orElse(null);
         String coachName = coach != null ? coach.getDisplayName() : "Unknown Coach";
         String playerName = resolvePlayerName(booking.getPlayerId());
-        return toResponse(booking, coachName, playerName, null, 0, null, null, null);
+        return toResponse(booking, coachName, playerName, null, null, null, null);
     }
 
     @Transactional(readOnly = true)
@@ -388,12 +377,10 @@ public class BookingService {
         return bookings.stream().map(b -> {
             String coachName = coachNames.getOrDefault(b.getCoachId(), "Unknown Coach");
             String playerName = resolvePlayerName(b.getPlayerId());
-            int effectiveCredits = (int) (sessionPackService.getCreditsRemaining(b.getPlayerId(), b.getCoachId())
-                - bookingRepository.countInFlightBookings(b.getPlayerId(), b.getCoachId()));
             // batchSizeMap may be Map.of() (or simply lack the key) — Map.get(null) throws NPE on
             // the JDK's immutable maps, so only look up batch size when the booking is actually batched.
             Integer batchSize = b.getBatchId() != null ? batchSizeMap.get(b.getBatchId()) : null;
-            return toResponse(b, coachName, playerName, null, effectiveCredits,
+            return toResponse(b, coachName, playerName, null,
                 pendingReschedules.get(b.getId()), b.getBatchId(), batchSize);
         }).toList();
     }
@@ -413,7 +400,7 @@ public class BookingService {
             if (b.getBatchId() == null) {
                 String playerName = resolvePlayerName(b.getPlayerId());
                 String parentName = resolveParentName(b.getParentId());
-                singles.add(toResponse(b, coach.getDisplayName(), playerName, parentName, 0, null, null, null));
+                singles.add(toResponse(b, coach.getDisplayName(), playerName, parentName, null, null, null));
             } else {
                 batchedByBatchId.computeIfAbsent(b.getBatchId(), k -> new java.util.ArrayList<>()).add(b);
             }
@@ -431,7 +418,7 @@ public class BookingService {
             String parentName = batchBookings.isEmpty() ? "" : resolveParentName(batchBookings.get(0).getParentId());
             List<BookingResponse> bookingResponses = batchBookings.stream().map(b -> {
                 String playerName = resolvePlayerName(b.getPlayerId());
-                return toResponse(b, coach.getDisplayName(), playerName, parentName, 0, null, batchId, totalCount);
+                return toResponse(b, coach.getDisplayName(), playerName, parentName, null, batchId, totalCount);
             }).toList();
             return new BatchGroupedBookingResponse(batchId, parentName, totalCount, bookingResponses);
         }).toList();
@@ -488,12 +475,6 @@ public class BookingService {
             String coachName = coachProfileRepository.findById(b.getCoachId())
                 .map(CoachProfile::getDisplayName)
                 .orElse("Unknown Coach");
-            int credits = (int) (sessionPackService.getCreditsRemaining(b.getPlayerId(), b.getCoachId())
-                - bookingRepository.countInFlightBookings(b.getPlayerId(), b.getCoachId()));
-            if (credits < 0) {
-                log.warn("Over-booking detected: playerId={} coachId={} credits={}", b.getPlayerId(), b.getCoachId(), credits);
-            }
-            int effectiveCredits = Math.max(0, credits);
             return new ParentScheduleItem(
                 b.getId(),
                 b.getCoachId(),
@@ -501,8 +482,7 @@ public class BookingService {
                 b.getRequestedStartTime(),
                 b.getRequestedEndTime(),
                 b.getStatus(),
-                b.getCanonicalTimezone(),
-                effectiveCredits);
+                b.getCanonicalTimezone());
         }).toList();
 
         return new ParentScheduleResponse(playerId, items);
@@ -726,7 +706,7 @@ public class BookingService {
     }
 
     private BookingResponse toResponse(Booking b, String coachName, String playerName, String parentName,
-                                        int effectiveCredits, RescheduleRequestResponse pendingReschedule,
+                                        RescheduleRequestResponse pendingReschedule,
                                         UUID batchId, Integer batchSize) {
         return new BookingResponse(
             b.getId(),
@@ -741,7 +721,6 @@ public class BookingService {
             b.getNotes(),
             b.getCreatedAt(),
             parentName,
-            effectiveCredits,
             pendingReschedule,
             batchId,
             batchSize

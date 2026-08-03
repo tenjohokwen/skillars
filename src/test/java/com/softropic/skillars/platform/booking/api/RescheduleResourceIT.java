@@ -68,6 +68,7 @@ class RescheduleResourceIT {
     private UUID coachProfileId;
     private UUID coachProfile2Id;
     private UUID bookingId;
+    private UUID packTierId;
 
     @BeforeEach
     void setUp() {
@@ -144,6 +145,24 @@ class RescheduleResourceIT {
                 Timestamp.from(Instant.now().plus(180, ChronoUnit.DAYS))
             );
 
+            // Story 11.2: BookingDuplicationService's pack-eligibility check now queries
+            // payment.session_pack_purchases exclusively (PackSessionService.hasActivePack),
+            // not the legacy table above — an active pack is needed there too.
+            packTierId = UUID.randomUUID();
+            jdbcTemplate.update(
+                "INSERT INTO payment.session_pack_tiers " +
+                "(pack_tier_id, coach_id, label, session_count, total_price, price_per_session, is_active, version, created_at) " +
+                "VALUES (?, ?, '5-Pack', 5, 150.00, 30.00, true, 0, now())",
+                packTierId, coachProfileId
+            );
+            jdbcTemplate.update(
+                "INSERT INTO payment.session_pack_purchases " +
+                "(purchase_id, parent_id, player_id, coach_id, pack_tier_id, price_per_session, remaining_sessions, expires_at, version, created_at) " +
+                "VALUES (?, ?, ?, ?, ?, 30.00, 5, ?, 0, now())",
+                UUID.randomUUID(), PARENT_ID, PLAYER_ID, coachProfileId, packTierId,
+                Timestamp.from(Instant.now().plus(180, ChronoUnit.DAYS))
+            );
+
             insertConfirmedBooking(bookingId);
             return null;
         });
@@ -155,6 +174,8 @@ class RescheduleResourceIT {
             jdbcTemplate.update("DELETE FROM booking.booking_reschedule_requests WHERE booking_id = ?", bookingId);
             jdbcTemplate.update("DELETE FROM booking.bookings WHERE parent_id = ?", PARENT_ID);
             jdbcTemplate.update("DELETE FROM booking.session_packs_purchased WHERE parent_id = ?", PARENT_ID);
+            jdbcTemplate.update("DELETE FROM payment.session_pack_purchases WHERE parent_id = ?", PARENT_ID);
+            jdbcTemplate.update("DELETE FROM payment.session_pack_tiers WHERE pack_tier_id = ?", packTierId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_pricing WHERE coach_id IN (?, ?)", coachProfileId, coachProfile2Id);
             jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id IN (?, ?)", coachProfileId, coachProfile2Id);
             jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = ?", PLAYER_ID);

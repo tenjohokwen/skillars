@@ -10,6 +10,5 @@ public record ParentScheduleItem(
     Instant requestedStartTime,
     Instant requestedEndTime,
     String status,
-    String canonicalTimezone,
-    int effectiveCreditsRemaining
+    String canonicalTimezone
 ) {}

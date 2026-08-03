@@ -38,7 +38,6 @@ import java.util.UUID;
 public class BookingCompletionService {
 
     private final BookingService bookingService;
-    private final SessionPackService sessionPackService;
     private final SessionCompletionDataRepository completionDataRepository;
     private final CoachProfileRepository coachProfileRepository;
     private final UserRepository userRepository;
@@ -147,7 +146,6 @@ public class BookingCompletionService {
 
         if ("LIVE".equals(req.mode())) {
             bookingService.transition(bookingId, BookingEvent.QUICK_COMPLETE, new TransitionContext(ActorRole.COACH, coachUserId));
-            sessionPackService.deductCredit(booking.getPlayerId(), booking.getCoachId());
             eventPublisher.publishEvent(new BookingCompletedEvent(
                 this, bookingId, booking.getCoachId(), booking.getPlayerId(), booking.getParentId(),
                 scd.isPlayerAttended(), req.effortRating(), req.focusRating(), req.techniqueRating(),
@@ -181,7 +179,6 @@ public class BookingCompletionService {
 
         SessionCompletionData scd = completionDataRepository.findByBookingId(bookingId)
             .orElseThrow(() -> new ResourceNotFoundException("Session completion data not found", "session_completion_data"));
-        sessionPackService.deductCredit(booking.getPlayerId(), booking.getCoachId());
 
         List<UUID> homeworkDrillIds = deserializeHomeworkDrillIds(scd.getHomeworkDrillIds());
         eventPublisher.publishEvent(new BookingCompletedEvent(

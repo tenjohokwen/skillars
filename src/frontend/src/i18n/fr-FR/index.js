@@ -1028,6 +1028,8 @@ export default {
       declineError: 'Échec du refus de la réservation. Veuillez réessayer.',
       creditsRemaining: '{count} crédits restants avec ce coach',
       bookingsLoadError: 'Impossible de charger vos réservations. Veuillez actualiser la page.',
+      selectPack: 'Utiliser un pack de séances',
+      packOptionLabel: '{remaining} séances restantes sur {total}',
     },
     availability: {
       title: 'Gérer la disponibilité',
@@ -1103,6 +1105,7 @@ export default {
       pauseSuccess: "Pack mis en pause — l'expiration a été prolongée en conséquence",
       alreadyPausedLabel: 'Le pack a déjà utilisé sa pause',
       purchaseError: "Échec de l'achat. Veuillez réessayer.",
+      noTierAvailable: "Ce coach n'a pas de pack de séances disponible à l'achat.",
     },
     completion: {
       endSession: 'Terminer la séance',

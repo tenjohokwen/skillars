@@ -55,6 +55,8 @@ class HomeworkResourceIT extends BaseSessionIT {
     private UUID drillId;
     private UUID assignmentId;
     private UUID packId;
+    private UUID packTierId;
+    private UUID paymentPurchaseId;
 
     @BeforeEach
     void setUp() {
@@ -109,6 +111,25 @@ class HomeworkResourceIT extends BaseSessionIT {
                 Timestamp.from(Instant.now().plus(180, ChronoUnit.DAYS))
             );
 
+            // Story 11.2: HomeworkAssignmentService's active-pack gating now queries
+            // payment.session_pack_purchases exclusively (PackSessionService.hasActivePack),
+            // not the legacy table above — an active pack is needed there too.
+            packTierId = UUID.randomUUID();
+            jdbcTemplate.update(
+                "INSERT INTO payment.session_pack_tiers " +
+                "(pack_tier_id, coach_id, label, session_count, total_price, price_per_session, is_active, version, created_at) " +
+                "VALUES (?, ?, '5-Pack', 5, 150.00, 30.00, true, 0, now())",
+                packTierId, coachProfileId
+            );
+            paymentPurchaseId = UUID.randomUUID();
+            jdbcTemplate.update(
+                "INSERT INTO payment.session_pack_purchases " +
+                "(purchase_id, parent_id, player_id, coach_id, pack_tier_id, price_per_session, remaining_sessions, expires_at, version, created_at) " +
+                "VALUES (?, ?, ?, ?, ?, 30.00, 5, ?, 0, now())",
+                paymentPurchaseId, PARENT_ID, PLAYER_ID, coachProfileId, packTierId,
+                Timestamp.from(Instant.now().plus(180, ChronoUnit.DAYS))
+            );
+
             // Drill
             drillId = UUID.randomUUID();
             insertDrill(drillId, "Homework Drill", "COACH", coachProfileId, "ACTIVE");
@@ -133,6 +154,8 @@ class HomeworkResourceIT extends BaseSessionIT {
             jdbcTemplate.update("DELETE FROM session.homework_completions WHERE player_id = ?", PLAYER_ID);
             jdbcTemplate.update("DELETE FROM session.homework_assignments WHERE player_id = ?", PLAYER_ID);
             jdbcTemplate.update("DELETE FROM booking.session_packs_purchased WHERE parent_id = ?", PARENT_ID);
+            jdbcTemplate.update("DELETE FROM payment.session_pack_purchases WHERE parent_id = ?", PARENT_ID);
+            jdbcTemplate.update("DELETE FROM payment.session_pack_tiers WHERE pack_tier_id = ?", packTierId);
             jdbcTemplate.update("DELETE FROM session.drills WHERE id = ?", drillId);
             jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = ?", PLAYER_ID);
             jdbcTemplate.update("DELETE FROM marketplace.coach_subscriptions WHERE coach_id = ?", coachProfileId);
@@ -186,8 +209,11 @@ class HomeworkResourceIT extends BaseSessionIT {
 
     @Test
     void getLockerRoomDrills_packExhausted_returns200EmptyList() {
-        transactionTemplate.execute(status ->
-            jdbcTemplate.update("UPDATE booking.session_packs_purchased SET status = 'EXHAUSTED', credits_remaining = 0 WHERE id = ?", packId));
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update("UPDATE booking.session_packs_purchased SET status = 'EXHAUSTED', credits_remaining = 0 WHERE id = ?", packId);
+            return jdbcTemplate.update(
+                "UPDATE payment.session_pack_purchases SET remaining_sessions = 0 WHERE purchase_id = ?", paymentPurchaseId);
+        });
         String cookies = loginAndGetCookies(PARENT_EMAIL);
         ResponseEntity<List> response = httpTestClient.makeHttpRequest(
             baseUrl() + "/api/session/players/" + PLAYER_ID + "/homework",

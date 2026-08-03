@@ -760,6 +760,8 @@ export default {
       declineError: 'Failed to decline booking. Please try again.',
       creditsRemaining: '{count} credits remaining with this coach',
       bookingsLoadError: 'Unable to load your bookings. Please refresh the page.',
+      selectPack: 'Use a session pack',
+      packOptionLabel: '{remaining} of {total} sessions left',
     },
     availability: {
       title: 'Manage Availability',
@@ -835,6 +837,7 @@ export default {
       pauseSuccess: 'Pack paused — expiry extended accordingly',
       alreadyPausedLabel: 'Pack already used its pause',
       purchaseError: 'Purchase failed. Please try again.',
+      noTierAvailable: 'This coach has no session pack available for purchase.',
     },
     completion: {
       endSession: 'End Session',

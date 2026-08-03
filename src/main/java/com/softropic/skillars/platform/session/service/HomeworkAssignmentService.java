@@ -2,8 +2,8 @@ package com.softropic.skillars.platform.session.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
-import com.softropic.skillars.platform.booking.service.SessionPackService;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
+import com.softropic.skillars.platform.payment.service.PackSessionService;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.session.contract.DrillResponse;
 import com.softropic.skillars.platform.session.contract.HomeworkAssignmentResponse;
@@ -43,7 +43,7 @@ public class HomeworkAssignmentService {
     private final SessionRepository sessionRepository;
     private final DrillRepository drillRepository;
     private final DrillLibraryService drillLibraryService;
-    private final SessionPackService sessionPackService;
+    private final PackSessionService packSessionService;
     private final CoachProfileService coachProfileService;
     private final PlayerProfileRepository playerProfileRepository;
     private final MeterRegistry meterRegistry;
@@ -99,7 +99,7 @@ public class HomeworkAssignmentService {
                 .map(HomeworkAssignment::getCoachId)
                 .collect(Collectors.toSet())
                 .stream()
-                .filter(coachId -> sessionPackService.hasActivePack(playerId, coachId))
+                .filter(coachId -> packSessionService.hasActivePack(playerId, coachId))
                 .collect(Collectors.toSet());
 
             List<HomeworkAssignment> active = all.stream()
@@ -163,6 +163,6 @@ public class HomeworkAssignmentService {
     }
 
     private UUID resolvePackId(Long playerId, UUID coachId) {
-        return sessionPackService.getActivePackId(playerId, coachId);
+        return packSessionService.getActivePackId(playerId, coachId);
     }
 }

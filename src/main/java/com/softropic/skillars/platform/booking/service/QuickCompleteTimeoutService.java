@@ -29,7 +29,6 @@ public class QuickCompleteTimeoutService {
 
     private final SessionCompletionDataRepository completionDataRepository;
     private final BookingService bookingService;
-    private final SessionPackService sessionPackService;
     private final ApplicationEventPublisher eventPublisher;
     private final ConfigService configService;
     private final TransactionTemplate transactionTemplate;
@@ -46,7 +45,6 @@ public class QuickCompleteTimeoutService {
                     bookingService.transition(scd.getBookingId(), BookingEvent.COMPLETE,
                         new TransitionContext(ActorRole.SYSTEM, null));
                     Booking booking = bookingService.getBookingOrThrow(scd.getBookingId());
-                    sessionPackService.deductCredit(scd.getPlayerId(), scd.getCoachId());
                     eventPublisher.publishEvent(new BookingCompletedEvent(
                         this, scd.getBookingId(), scd.getCoachId(), scd.getPlayerId(),
                         booking.getParentId(), scd.isPlayerAttended(), scd.getEffortRating(),

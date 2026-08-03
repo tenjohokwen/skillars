@@ -198,7 +198,7 @@ class BookingRequestResourceIT {
     }
 
     @Test
-    void createBookingRequest_validRequest_returns201AndBookingResponseContainsEffectiveCredits() {
+    void createBookingRequest_validRequest_returns201AndBookingResponse() {
         String cookies = loginAndGetCookies(PARENT_EMAIL);
 
         ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
@@ -218,8 +218,10 @@ class BookingRequestResourceIT {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         assertThat(response.getBody()).containsKey("id");
         assertThat(response.getBody().get("status")).isEqualTo("REQUESTED");
-        // 3 raw credits - 1 newly in-flight REQUESTED booking = 2 effective
-        assertThat((Integer) response.getBody().get("effectiveCreditsRemaining")).isEqualTo(2);
+        // Story 11.2: effectiveCreditsRemaining was removed from BookingResponse — the
+        // coach+player-wide legacy credit rollup has no equivalent on the new payment-path
+        // schema; the frontend now reads pack data from GET /api/payment/session-packs instead.
+        assertThat(response.getBody()).doesNotContainKey("effectiveCreditsRemaining");
     }
 
     @Test

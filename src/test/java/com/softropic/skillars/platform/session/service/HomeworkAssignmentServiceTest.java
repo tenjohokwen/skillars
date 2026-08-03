@@ -2,8 +2,8 @@ package com.softropic.skillars.platform.session.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
-import com.softropic.skillars.platform.booking.service.SessionPackService;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
+import com.softropic.skillars.platform.payment.service.PackSessionService;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.session.contract.HomeworkAssignmentResponse;
@@ -11,16 +11,12 @@ import com.softropic.skillars.platform.session.repo.Drill;
 import com.softropic.skillars.platform.session.repo.DrillRepository;
 import com.softropic.skillars.platform.session.repo.HomeworkAssignment;
 import com.softropic.skillars.platform.session.repo.HomeworkAssignmentRepository;
-import com.softropic.skillars.platform.session.repo.HomeworkCompletion;
 import com.softropic.skillars.platform.session.repo.HomeworkCompletionRepository;
-import com.softropic.skillars.platform.session.repo.Session;
 import com.softropic.skillars.platform.session.repo.SessionRepository;
-import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+
 import org.instancio.Instancio;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
@@ -31,6 +27,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -50,7 +49,7 @@ class HomeworkAssignmentServiceTest {
     @Mock private SessionRepository sessionRepository;
     @Mock private DrillRepository drillRepository;
     @Mock private DrillLibraryService drillLibraryService;
-    @Mock private SessionPackService sessionPackService;
+    @Mock private PackSessionService packSessionService;
     @Mock private CoachProfileService coachProfileService;
     @Mock private PlayerProfileRepository playerProfileRepository;
     @Spy private MeterRegistry meterRegistry = new SimpleMeterRegistry();
@@ -69,7 +68,7 @@ class HomeworkAssignmentServiceTest {
             2001L, true, 4, 4, 4, List.of(drillId1, drillId2));
 
         when(sessionRepository.findByBookingId(bookingId)).thenReturn(Optional.empty());
-        when(sessionPackService.getActivePackId(playerId, coachId)).thenReturn(null);
+        when(packSessionService.getActivePackId(playerId, coachId)).thenReturn(null);
         when(homeworkAssignmentRepository.existsByBookingIdAndDrillId(any(), any())).thenReturn(false);
 
         service.handleBookingCompleted(event);
@@ -105,7 +104,7 @@ class HomeworkAssignmentServiceTest {
             1001L, 2001L, true, null, null, null, List.of(drillId));
 
         when(sessionRepository.findByBookingId(bookingId)).thenReturn(Optional.empty());
-        when(sessionPackService.getActivePackId(anyLong(), any())).thenReturn(null);
+        when(packSessionService.getActivePackId(anyLong(), any())).thenReturn(null);
         when(homeworkAssignmentRepository.existsByBookingIdAndDrillId(bookingId, drillId)).thenReturn(true);
 
         service.handleBookingCompleted(event);
@@ -125,8 +124,8 @@ class HomeworkAssignmentServiceTest {
 
         when(homeworkAssignmentRepository.findByPlayerIdOrderByAssignedAtDesc(playerId))
             .thenReturn(List.of(activeAssignment, exhaustedAssignment));
-        when(sessionPackService.hasActivePack(playerId, activeCoachId)).thenReturn(true);
-        when(sessionPackService.hasActivePack(playerId, exhaustedCoachId)).thenReturn(false);
+        when(packSessionService.hasActivePack(playerId, activeCoachId)).thenReturn(true);
+        when(packSessionService.hasActivePack(playerId, exhaustedCoachId)).thenReturn(false);
 
         Drill drill = buildDrill(drillId);
         when(drillRepository.findAllById(any())).thenReturn(List.of(drill));
@@ -165,7 +164,7 @@ class HomeworkAssignmentServiceTest {
 
         when(homeworkAssignmentRepository.findByPlayerIdOrderByAssignedAtDesc(playerId))
             .thenReturn(List.of(assignment));
-        when(sessionPackService.hasActivePack(playerId, coachId)).thenReturn(true);
+        when(packSessionService.hasActivePack(playerId, coachId)).thenReturn(true);
 
         Drill drill = buildDrill(drillId);
         when(drillRepository.findAllById(any())).thenReturn(List.of(drill));

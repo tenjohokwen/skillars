@@ -39,7 +39,7 @@
           </q-item-label>
           <div class="q-mt-sm">
             <SessionPackTracker
-              :credits-remaining="session.effectiveCreditsRemaining"
+              :credits-remaining="creditsRemainingFor(session)"
               :session-count="sessionCountFor(session)"
             />
           </div>
@@ -96,10 +96,26 @@ function formatInTz(isoString, timezone) {
   }).format(new Date(isoString))
 }
 
-function sessionCountFor(session) {
-  const pack = bookingStore.sessionPacks.find(
+// A player+coach pair can now have multiple simultaneously-active packs (unlike legacy's
+// single-active-pack model) — pick the soonest-expiring one as "the" pack to display here,
+// since that's the one whose credits run out first and most needs the parent's attention.
+function mostRelevantPackFor(session) {
+  const activePacks = bookingStore.sessionPacks.filter(
     (p) => p.coachId === session.coachId && p.status === 'ACTIVE',
   )
+  if (activePacks.length === 0) return null
+  return activePacks.reduce((soonest, p) =>
+    new Date(p.expiresAt) < new Date(soonest.expiresAt) ? p : soonest,
+  )
+}
+
+function sessionCountFor(session) {
+  const pack = mostRelevantPackFor(session)
   return pack ? pack.sessionCount : 0
+}
+
+function creditsRemainingFor(session) {
+  const pack = mostRelevantPackFor(session)
+  return pack ? pack.creditsRemaining : 0
 }
 </script>

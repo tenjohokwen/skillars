@@ -11,7 +11,6 @@ import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingBatchRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequestRepository;
-import com.softropic.skillars.platform.booking.repo.SessionPackPurchasedRepository;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
@@ -58,14 +57,12 @@ import static org.mockito.Mockito.when;
 class BookingServiceTest {
 
     @Mock private BookingRepository bookingRepository;
-    @Mock private SessionPackService sessionPackService;
     @Mock private CoachProfileRepository coachProfileRepository;
     @Mock private PaymentGateway paymentGateway;
     @Mock private CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
     @Mock private PlayerProfileRepository playerProfileRepository;
     @Mock private UserRepository userRepository;
     @Mock private ApplicationEventPublisher eventPublisher;
-    @Mock private SessionPackPurchasedRepository sessionPackPurchasedRepository;
     @Mock private BookingRescheduleRequestRepository rescheduleRequestRepository;
     @Mock private BookingBatchRepository bookingBatchRepository;
     @Mock private SessionPackPurchaseRepository sessionPackPurchaseRepository;
@@ -83,9 +80,9 @@ class BookingServiceTest {
     void setUp() {
         bookingStateMachine = new BookingStateMachine();
         bookingService = new BookingService(
-            bookingRepository, bookingStateMachine, sessionPackService, coachProfileRepository,
+            bookingRepository, bookingStateMachine, coachProfileRepository,
             paymentGateway, coachAvailabilityWindowRepository, playerProfileRepository,
-            userRepository, eventPublisher, sessionPackPurchasedRepository,
+            userRepository, eventPublisher,
             rescheduleRequestRepository, bookingBatchRepository,
             sessionPackPurchaseRepository, coachPricingRepository
         );
@@ -107,9 +104,6 @@ class BookingServiceTest {
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
             .thenReturn(List.of());
-        when(sessionPackPurchasedRepository.findActivePacksForDeduction(any(Long.class), any(UUID.class), any(Instant.class))).thenReturn(List.of());
-        when(sessionPackService.getCreditsRemaining(PLAYER_ID, COACH_ID)).thenReturn(3);
-        when(bookingRepository.countInFlightBookings(PLAYER_ID, COACH_ID)).thenReturn(0L);
         when(bookingRepository.save(any(Booking.class))).thenReturn(savedBooking);
         when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
 
@@ -122,7 +116,7 @@ class BookingServiceTest {
     }
 
     @Test
-    void createBookingRequest_succeeds_paymentDeferredWhenNoLegacyCredits() {
+    void createBookingRequest_payPerSession_createsRequestedBooking() {
         PlayerProfile player = makePlayer(PLAYER_ID, PARENT_ID);
         CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
         CoachAvailabilityWindow window = makeCoveringWindow(COACH_ID);
@@ -135,9 +129,6 @@ class BookingServiceTest {
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
             .thenReturn(List.of());
-        when(sessionPackPurchasedRepository.findActivePacksForDeduction(any(Long.class), any(UUID.class), any(Instant.class))).thenReturn(List.of());
-        when(sessionPackService.getCreditsRemaining(PLAYER_ID, COACH_ID)).thenReturn(0);
-        when(bookingRepository.countInFlightBookings(PLAYER_ID, COACH_ID)).thenReturn(0L);
         when(bookingRepository.save(any(Booking.class))).thenReturn(savedBooking);
         when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
 
@@ -162,9 +153,6 @@ class BookingServiceTest {
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
             .thenReturn(List.of());
-        when(sessionPackPurchasedRepository.findActivePacksForDeduction(any(Long.class), any(UUID.class), any(Instant.class))).thenReturn(List.of());
-        when(sessionPackService.getCreditsRemaining(PLAYER_ID, COACH_ID)).thenReturn(3);
-        when(bookingRepository.countInFlightBookings(PLAYER_ID, COACH_ID)).thenReturn(0L);
         when(bookingRepository.save(any(Booking.class))).thenReturn(savedBooking);
         when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
 

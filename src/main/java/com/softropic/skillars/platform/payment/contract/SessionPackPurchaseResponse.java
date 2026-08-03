@@ -14,6 +14,7 @@ public record SessionPackPurchaseResponse(
     Instant expiresAt,
     String stripePaymentIntentId,
     Long playerId,
+    UUID coachId,
     Instant pausedUntil,
     String status
 ) {}

@@ -15,7 +15,6 @@ import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingBatch;
 import com.softropic.skillars.platform.booking.repo.BookingBatchRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
-import com.softropic.skillars.platform.booking.repo.SessionPackPurchasedRepository;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
@@ -46,8 +45,6 @@ public class BookingBatchService {
 
     private final BookingBatchRepository batchRepository;
     private final BookingRepository bookingRepository;
-    private final SessionPackService sessionPackService;
-    private final SessionPackPurchasedRepository sessionPackPurchasedRepository;
     private final CoachProfileRepository coachProfileRepository;
     private final PlayerProfileRepository playerProfileRepository;
     private final UserRepository userRepository;
@@ -98,11 +95,6 @@ public class BookingBatchService {
             .count();
         if (distinctStartTimes != req.slots().size()) {
             throw new BatchRuleViolationException("booking.duplicateSlotStartTime");
-        }
-
-        sessionPackPurchasedRepository.findActivePacksForDeduction(req.playerId(), req.coachId(), Instant.now());
-        if (!sessionPackService.hasCredits(req.playerId(), req.coachId())) {
-            throw new OperationNotAllowedException("No effective session credits available for this coach", SecurityError.MISSING_RIGHTS);
         }
 
         BookingBatch batch = new BookingBatch();

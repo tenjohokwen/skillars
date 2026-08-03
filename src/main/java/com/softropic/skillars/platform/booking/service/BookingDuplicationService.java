@@ -7,6 +7,7 @@ import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.payment.service.PackSessionService;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -28,7 +29,7 @@ public class BookingDuplicationService {
     private final BookingRepository bookingRepository;
     private final CoachProfileRepository coachProfileRepository;
     private final UserRepository userRepository;
-    private final SessionPackService sessionPackService;
+    private final PackSessionService packSessionService;
     private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
@@ -53,10 +54,11 @@ public class BookingDuplicationService {
             throw new OperationNotAllowedException(
                 "Proposed session time is in the past", SecurityError.MISSING_RIGHTS);
         }
-        if (!sessionPackService.hasCredits(original.getPlayerId(), original.getCoachId())) {
+        if (!packSessionService.hasActivePack(original.getPlayerId(), original.getCoachId())) {
             throw new OperationNotAllowedException(
                 "No effective session credits available for this coach", SecurityError.MISSING_RIGHTS);
         }
+        UUID packId = packSessionService.getActivePackId(original.getPlayerId(), original.getCoachId());
 
         Booking newBooking = new Booking();
         newBooking.setCoachId(original.getCoachId());
@@ -65,6 +67,7 @@ public class BookingDuplicationService {
         newBooking.setCanonicalTimezone(original.getCanonicalTimezone());
         newBooking.setRequestedStartTime(newStart);
         newBooking.setRequestedEndTime(newEnd);
+        newBooking.setSessionPackPurchaseId(packId);
         bookingRepository.save(newBooking);
 
         String parentEmail = userRepository.findById(original.getParentId())

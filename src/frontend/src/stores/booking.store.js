@@ -7,8 +7,6 @@ import {
   deleteAvailabilityWindow,
   addAvailabilityBlock,
   deleteAvailabilityBlock,
-  getPlayerPacks,
-  purchaseSessionPack,
   createBookingRequest,
   acceptBooking,
   declineBooking,
@@ -30,8 +28,12 @@ import {
   duplicateNextWeek,
   createBatch,
   acceptAllBatch,
-  pauseSessionPack,
 } from 'src/api/booking.api'
+import {
+  purchaseSessionPack,
+  getMySessionPacks,
+  pauseSessionPack,
+} from 'src/api/payment.api'
 
 export function useBookingSse(bookingId) {
   const status = ref(null)
@@ -199,12 +201,29 @@ export const useBookingStore = defineStore('booking', () => {
     await loadAvailability(coachId, weekStart.value ?? currentMonday())
   }
 
+  // The new payment-path list endpoint (GET /api/payment/session-packs) is parent-scoped, not
+  // player-scoped like the legacy endpoint was — it returns every pack for every child of the
+  // authenticated parent. loadPlayerPacks(playerId) keeps its player-scoped name/signature for
+  // callers, filtering the parent-wide result down to one player here so existing consumers don't
+  // need to change. Field names also differ from legacy (purchaseId/remainingSessions vs.
+  // id/creditsRemaining) — normalized here so templates built against the legacy shape keep working.
+  function normalizePack(p) {
+    return {
+      ...p,
+      id: p.purchaseId,
+      creditsRemaining: p.remainingSessions,
+    }
+  }
+
   async function loadPlayerPacks(playerId) {
     packsLoading.value = true
     packsError.value = null
     try {
-      const res = await getPlayerPacks(playerId)
-      sessionPacks.value = res ?? []
+      const res = await getMySessionPacks()
+      const packs = (res ?? []).map(normalizePack)
+      sessionPacks.value = playerId
+        ? packs.filter((p) => String(p.playerId) === String(playerId))
+        : packs
     } catch (e) {
       packsError.value = e?.response?.data?.message ?? e?.message ?? 'Failed to load session packs'
     } finally {
@@ -212,16 +231,16 @@ export const useBookingStore = defineStore('booking', () => {
     }
   }
 
-  async function purchasePack(playerId, request) {
-    await purchaseSessionPack(playerId, request)
+  async function purchasePack(playerId, packTierId, paymentMethodId) {
+    await purchaseSessionPack(packTierId, playerId, paymentMethodId)
     await loadPlayerPacks(playerId)
   }
 
-  async function initiatePausePack(playerId, packId, pauseStartDate, pauseDurationDays) {
+  async function initiatePausePack(purchaseId, pauseStartDate, pauseDurationDays) {
     packPauseLoading.value = true
     packPauseError.value = null
     try {
-      const res = await pauseSessionPack(playerId, packId, { pauseStartDate, pauseDurationDays })
+      const res = await pauseSessionPack(purchaseId, { pauseStartDate, pauseDurationDays })
       packPauseResult.value = res
       packPauseConflicts.value = res.conflictingBookings ?? []
       return res
@@ -233,11 +252,11 @@ export const useBookingStore = defineStore('booking', () => {
     }
   }
 
-  async function confirmPausePack(playerId, packId, pauseStartDate, pauseDurationDays, confirmedCancellationIds) {
+  async function confirmPausePack(playerId, purchaseId, pauseStartDate, pauseDurationDays, confirmedCancellationIds) {
     packPauseLoading.value = true
     packPauseError.value = null
     try {
-      const res = await pauseSessionPack(playerId, packId, {
+      const res = await pauseSessionPack(purchaseId, {
         pauseStartDate,
         pauseDurationDays,
         confirmedCancellationIds,

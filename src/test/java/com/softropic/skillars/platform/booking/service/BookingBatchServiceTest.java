@@ -10,7 +10,6 @@ import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingBatch;
 import com.softropic.skillars.platform.booking.repo.BookingBatchRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
-import com.softropic.skillars.platform.booking.repo.SessionPackPurchasedRepository;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
@@ -19,9 +18,9 @@ import com.softropic.skillars.platform.security.contract.exception.OperationNotA
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -37,7 +36,6 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -48,8 +46,6 @@ class BookingBatchServiceTest {
 
     @Mock BookingBatchRepository batchRepository;
     @Mock BookingRepository bookingRepository;
-    @Mock SessionPackService sessionPackService;
-    @Mock SessionPackPurchasedRepository sessionPackPurchasedRepository;
     @Mock CoachProfileRepository coachProfileRepository;
     @Mock PlayerProfileRepository playerProfileRepository;
     @Mock UserRepository userRepository;
@@ -75,8 +71,6 @@ class BookingBatchServiceTest {
 
         CoachProfile coach = buildActiveCoach();
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
-        when(sessionPackPurchasedRepository.findActivePacksForDeduction(any(Long.class), any(UUID.class), any(Instant.class))).thenReturn(List.of());
-        when(sessionPackService.hasCredits(PLAYER_ID, COACH_ID)).thenReturn(true);
 
         BookingBatch savedBatch = new BookingBatch();
         savedBatch.setId(BATCH_ID);
@@ -117,20 +111,29 @@ class BookingBatchServiceTest {
     }
 
     @Test
-    void createBatch_noCredits_throws() {
+    void createBatch_noLegacyPackPreflightCheck_batchIsCreatedRegardless() {
+        // Story 11.2 Task 4 (decision a): batch bookings stay credit-wallet/Stripe-only —
+        // the legacy pack-eligibility pre-flight check is dropped entirely, not migrated,
+        // since it was already disconnected from the actual payment outcome (batch bookings
+        // never carried a sessionPackPurchaseId and always settled via
+        // PaymentLifecycleService.onBatchBookingAccepted's credit-wallet/Stripe branch).
         when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
 
         PlayerProfile player = new PlayerProfile();
         player.setParentId(PARENT_ID);
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(buildActiveCoach()));
-        when(sessionPackPurchasedRepository.findActivePacksForDeduction(any(Long.class), any(UUID.class), any(Instant.class))).thenReturn(List.of());
-        when(sessionPackService.hasCredits(PLAYER_ID, COACH_ID)).thenReturn(false);
 
-        assertThatThrownBy(() -> service.createBatch(PARENT_ID, buildRequest(1)))
-            .isInstanceOf(OperationNotAllowedException.class);
+        BookingBatch savedBatch = new BookingBatch();
+        savedBatch.setId(BATCH_ID);
+        when(batchRepository.save(any())).thenReturn(savedBatch);
+        when(bookingRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(userRepository.findById(any())).thenReturn(Optional.empty());
 
-        verify(batchRepository, never()).save(any());
+        BatchBookingCreatedResponse result = service.createBatch(PARENT_ID, buildRequest(1));
+
+        assertThat(result.bookingCount()).isEqualTo(1);
+        verify(batchRepository).save(any(BookingBatch.class));
     }
 
     @Test

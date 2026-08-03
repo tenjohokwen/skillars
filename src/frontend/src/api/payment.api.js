@@ -9,8 +9,12 @@ export const fetchCreditBalance = () => api.get('/api/payment/credits/balance')
 export const cashOut = (amount) => api.post('/api/payment/credits/cashout', { amount })
 
 // Session pack — parent
-export const purchaseSessionPack = (packTierId, paymentMethodId) =>
-  api.post('/api/payment/session-packs/purchase', { packTierId, paymentMethodId })
+export const purchaseSessionPack = (packTierId, playerId, paymentMethodId) =>
+  api.post('/api/payment/session-packs/purchase', { packTierId, playerId, paymentMethodId })
+export const getMySessionPacks = (coachId) =>
+  api.get('/api/payment/session-packs', { params: coachId ? { coachId } : {} })
+export const pauseSessionPack = (purchaseId, data) =>
+  api.post(`/api/payment/session-packs/${purchaseId}/pause`, data)
 export const extendSessionPack = (purchaseId) =>
   api.post(`/api/payment/session-packs/${purchaseId}/extend`)
 

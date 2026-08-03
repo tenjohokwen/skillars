@@ -30,10 +30,9 @@
         <q-card-section>
           <div class="row items-start">
             <div class="col">
-              <div class="text-weight-medium">{{ pack.coachDisplayName }}</div>
+              <div class="text-weight-medium">{{ coachNames[pack.coachId] ?? pack.coachId }}</div>
               <div class="text-caption text-grey q-mt-xs">
                 {{ t('booking.packs.sessionsBundle', { count: pack.sessionCount }) }}
-                · {{ formatDate(pack.purchasedAt) }}
               </div>
               <div class="text-caption q-mt-xs">
                 {{ t('booking.packs.creditsRemainingLabel', { remaining: pack.creditsRemaining, total: pack.sessionCount }) }}
@@ -127,11 +126,12 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { useBookingStore } from 'src/stores/booking.store'
+import { getCoachProfile } from 'src/api/marketplace.api'
 
 const route = useRoute()
 const { t } = useI18n()
@@ -142,6 +142,25 @@ const playerId = route.params.playerId
 const pauseDialogOpen = ref(false)
 const activePack = ref(null)
 const pauseForm = ref({ startDate: '', durationDays: 30 })
+// New payment-path packs only carry coachId, not a display name (unlike the legacy list
+// endpoint) — this page can show packs from multiple coaches, so resolve names client-side.
+const coachNames = ref({})
+
+async function resolveCoachNames(packs) {
+  const unresolvedIds = [...new Set(packs.map((p) => p.coachId))].filter((id) => !coachNames.value[id])
+  const profiles = await Promise.all(
+    unresolvedIds.map((id) => getCoachProfile(id).catch(() => null)),
+  )
+  const resolved = { ...coachNames.value }
+  unresolvedIds.forEach((id, i) => {
+    if (profiles[i]) resolved[id] = profiles[i].displayName
+  })
+  coachNames.value = resolved
+}
+
+watch(() => bookingStore.sessionPacks, (packs) => {
+  if (packs.length > 0) resolveCoachNames(packs)
+})
 
 function formatDate(isoString) {
   if (!isoString) return ''
@@ -212,7 +231,7 @@ async function submitPause() {
   } else {
     try {
       const result = await bookingStore.initiatePausePack(
-        playerId, packId, pauseStartDate, pauseDurationDays,
+        packId, pauseStartDate, pauseDurationDays,
       )
       if (result.pauseApplied) {
         pauseDialogOpen.value = false

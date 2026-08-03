@@ -43,7 +43,6 @@ import static org.mockito.Mockito.lenient;
 class BookingCompletionServiceTest {
 
     @Mock private BookingService bookingService;
-    @Mock private SessionPackService sessionPackService;
     @Mock private SessionCompletionDataRepository completionDataRepository;
     @Mock private CoachProfileRepository coachProfileRepository;
     @Mock private UserRepository userRepository;
@@ -64,7 +63,7 @@ class BookingCompletionServiceTest {
     @BeforeEach
     void setUp() {
         service = new BookingCompletionService(
-            bookingService, sessionPackService, completionDataRepository,
+            bookingService, completionDataRepository,
             coachProfileRepository, userRepository, playerProfileRepository,
             eventPublisher, new ObjectMapper()
         );
@@ -94,13 +93,29 @@ class BookingCompletionServiceTest {
         service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req);
 
         verify(bookingService).transition(eq(BOOKING_ID), eq(BookingEvent.QUICK_COMPLETE), any(TransitionContext.class));
-        verify(sessionPackService).deductCredit(PLAYER_ID, COACH_ID);
 
         ArgumentCaptor<BookingCompletedEvent> captor = ArgumentCaptor.forClass(BookingCompletedEvent.class);
         verify(eventPublisher).publishEvent(captor.capture());
         BookingCompletedEvent event = captor.getValue();
         assertThat(event.getBookingId()).isEqualTo(BOOKING_ID);
         assertThat(event.isPlayerAttended()).isTrue();
+    }
+
+    @Test
+    void submitWrapUp_liveMode_doesNotTouchAnySessionPackDependency() {
+        // Regression guard for the accept/completion double-deduction bug (Story 11.2 Task 2):
+        // BookingCompletionService must have no dependency on PackSessionService,
+        // SessionPackPurchaseRepository, or legacy SessionPackService at all — accept-time
+        // deduction is owned entirely by PaymentLifecycleService. Asserting this via reflection
+        // on declared fields is a stronger guard than a runtime mock-verify: it fails at the
+        // class level the moment such a dependency is reintroduced, regardless of whether any
+        // test happens to exercise the code path that would call it.
+        List<String> dependencyTypeNames = java.util.Arrays.stream(BookingCompletionService.class.getDeclaredFields())
+            .map(f -> f.getType().getSimpleName())
+            .toList();
+
+        assertThat(dependencyTypeNames)
+            .doesNotContain("PackSessionService", "SessionPackPurchaseRepository", "SessionPackService");
     }
 
     @Test
@@ -118,7 +133,6 @@ class BookingCompletionServiceTest {
         service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req);
 
         verify(bookingService, never()).transition(any(), eq(BookingEvent.QUICK_COMPLETE), any());
-        verify(sessionPackService, never()).deductCredit(any(), any());
 
         ArgumentCaptor<QuickCompleteConfirmationRequiredEvent> captor =
             ArgumentCaptor.forClass(QuickCompleteConfirmationRequiredEvent.class);
@@ -140,7 +154,6 @@ class BookingCompletionServiceTest {
         service.confirmCompletion(BOOKING_ID, PARENT_ID);
 
         verify(bookingService).transition(eq(BOOKING_ID), eq(BookingEvent.COMPLETE), any(TransitionContext.class));
-        verify(sessionPackService).deductCredit(PLAYER_ID, COACH_ID);
 
         ArgumentCaptor<BookingCompletedEvent> captor = ArgumentCaptor.forClass(BookingCompletedEvent.class);
         verify(eventPublisher).publishEvent(captor.capture());

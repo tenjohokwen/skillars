@@ -77,6 +77,20 @@ public class PackSessionService {
         log.info("Session restored to pack: purchaseId={}", purchaseId);
     }
 
+    @Transactional(readOnly = true)
+    public boolean hasActivePack(Long playerId, UUID coachId) {
+        return !sessionPackPurchaseRepository.findActivePacks(playerId, coachId, Instant.now()).isEmpty();
+    }
+
+    @Transactional(readOnly = true)
+    public UUID getActivePackId(Long playerId, UUID coachId) {
+        List<SessionPackPurchase> packs = sessionPackPurchaseRepository.findActivePacks(playerId, coachId, Instant.now());
+        if (!packs.isEmpty()) return packs.get(0).getPurchaseId();
+        return sessionPackPurchaseRepository.findTopByPlayerIdAndCoachIdOrderByCreatedAtDesc(playerId, coachId)
+            .map(SessionPackPurchase::getPurchaseId)
+            .orElse(null);
+    }
+
     @Transactional
     public PauseConflictResponse pausePack(Long parentId, UUID purchaseId, PausePackRequest req) {
         SessionPackPurchase purchase = sessionPackPurchaseRepository.findByIdForUpdate(purchaseId)

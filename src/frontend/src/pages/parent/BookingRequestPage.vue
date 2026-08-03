@@ -94,6 +94,17 @@
 
     <!-- Single-booking mode inputs -->
     <template v-if="!batchMode">
+      <q-card v-if="activePacksForCoach.length > 0" flat bordered class="q-mb-md">
+        <q-card-section>
+          <div class="text-subtitle1 q-mb-sm">{{ t('booking.requests.selectPack') }}</div>
+          <q-option-group
+            v-model="selectedPackId"
+            :options="packOptions"
+            color="primary"
+          />
+        </q-card-section>
+      </q-card>
+
       <q-input
         v-model="notes"
         type="textarea"
@@ -202,6 +213,23 @@ const creditsForCoach = computed(() => bookingStore.creditsForCoach(coachId))
 const hasCredits = computed(() => creditsForCoach.value > 0)
 const batchAtMax = computed(() => bookingStore.batchBasketSize >= maxBatchSize.value)
 
+// AC2: let the parent pick a specific pack (or "pay per session") when submitting a single
+// booking request. Batch bookings don't carry a pack (Task 4 decision — credit-wallet/Stripe
+// only), so this selector only applies in single-booking mode.
+const selectedPackId = ref(null)
+const activePacksForCoach = computed(() =>
+  bookingStore.sessionPacks.filter(
+    (p) => String(p.coachId) === String(coachId) && p.status === 'ACTIVE',
+  ),
+)
+const packOptions = computed(() => [
+  { label: t('booking.packs.perSession'), value: null },
+  ...activePacksForCoach.value.map((p) => ({
+    label: t('booking.requests.packOptionLabel', { remaining: p.creditsRemaining, total: p.sessionCount }),
+    value: p.id,
+  })),
+])
+
 const ACTIVE_BOOKING_STATUSES = new Set(['REQUESTED', 'ACCEPTED', 'CONFIRMED', 'UPCOMING', 'IN_PROGRESS'])
 const bookedStartTimes = computed(
   () =>
@@ -265,6 +293,7 @@ async function submit() {
       requestedEndTime: selectedSlot.value.endTime,
       canonicalTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       notes: notes.value || null,
+      sessionPackPurchaseId: selectedPackId.value,
     })
     router.push('/parent/bookings')
   } catch {

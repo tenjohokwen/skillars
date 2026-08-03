@@ -29,4 +29,17 @@ public interface SessionPackPurchaseRepository extends JpaRepository<SessionPack
 
     @Query("SELECT p FROM SessionPackPurchase p WHERE p.expiresAt < :now AND p.expiredNotifiedAt IS NULL AND p.remainingSessions > 0")
     List<SessionPackPurchase> findExpiredNotYetNotified(@Param("now") Instant now);
+
+    @Query("""
+        SELECT p FROM SessionPackPurchase p
+        WHERE p.playerId = :playerId AND p.coachId = :coachId
+          AND p.remainingSessions > 0 AND p.expiresAt > :now
+          AND (p.pausedUntil IS NULL OR p.pausedUntil <= :now)
+        ORDER BY p.createdAt ASC
+        """)
+    List<SessionPackPurchase> findActivePacks(@Param("playerId") Long playerId,
+                                              @Param("coachId") UUID coachId,
+                                              @Param("now") Instant now);
+
+    Optional<SessionPackPurchase> findTopByPlayerIdAndCoachIdOrderByCreatedAtDesc(Long playerId, UUID coachId);
 }

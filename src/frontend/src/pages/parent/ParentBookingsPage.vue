@@ -50,12 +50,6 @@
             :label="showInMyTime[booking.id] ? t('booking.timezone.showInSessionTime') : t('booking.timezone.showInMyTime')"
             @click="toggleTimezone(booking.id)"
           />
-          <q-item-label caption class="q-mt-xs">
-            {{
-              t('booking.requests.creditsRemaining', { count: booking.effectiveCreditsRemaining })
-            }}
-          </q-item-label>
-
           <!-- Pending reschedule indicator -->
           <div v-if="booking.pendingReschedule" class="text-caption q-mt-xs"
                style="color: var(--accent-warning)">

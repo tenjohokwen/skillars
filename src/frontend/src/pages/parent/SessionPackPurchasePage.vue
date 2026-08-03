@@ -19,43 +19,27 @@
 
     <template v-else>
       <q-card
-        v-if="perSessionPrice != null"
+        v-if="tier"
         flat
         bordered
         class="pack-option q-mb-sm cursor-pointer"
-        :class="{ 'pack-option--selected': selected === 'single' }"
-        @click="selected = 'single'"
+        :class="{ 'pack-option--selected': selected === tier.packTierId }"
+        @click="selected = tier.packTierId"
       >
         <q-card-section>
           <div class="row items-center">
             <div class="col">
-              <div class="text-weight-medium">{{ t('booking.packs.perSession') }}</div>
-              <div class="text-caption text-grey">{{ t('booking.packs.pricePerSession', { price: formatPrice(perSessionPrice) }) }}</div>
+              <div class="text-weight-medium">{{ t('booking.packs.sessionsBundle', { count: tier.sessionCount }) }}</div>
+              <div class="text-caption text-grey">{{ formatPrice(tier.totalPrice) }} · {{ t('booking.packs.pricePerSession', { price: formatPrice(tier.pricePerSession) }) }}</div>
             </div>
-            <q-radio :model-value="selected" val="single" @update:model-value="selected = 'single'" />
+            <q-radio :model-value="selected" :val="tier.packTierId" @update:model-value="selected = tier.packTierId" />
           </div>
         </q-card-section>
       </q-card>
 
-      <q-card
-        v-for="pack in sessionPacks"
-        :key="pack.id"
-        flat
-        bordered
-        class="pack-option q-mb-sm cursor-pointer"
-        :class="{ 'pack-option--selected': selected === pack.id }"
-        @click="selected = pack.id"
-      >
-        <q-card-section>
-          <div class="row items-center">
-            <div class="col">
-              <div class="text-weight-medium">{{ t('booking.packs.sessionsBundle', { count: pack.sessionCount }) }}</div>
-              <div class="text-caption text-grey">{{ formatPrice(pack.totalPrice) }} · {{ t('booking.packs.pricePerSession', { price: formatPrice(pack.totalPrice / pack.sessionCount) }) }}</div>
-            </div>
-            <q-radio :model-value="selected" :val="pack.id" @update:model-value="selected = pack.id" />
-          </div>
-        </q-card-section>
-      </q-card>
+      <div v-else class="text-body2 text-secondary q-py-md text-center">
+        {{ t('booking.packs.noTierAvailable') }}
+      </div>
 
       <q-banner v-if="purchaseError" class="bg-negative text-white q-mb-md">
         {{ purchaseError }}
@@ -81,6 +65,7 @@ import { useI18n } from 'vue-i18n'
 import { useBookingStore } from 'src/stores/booking.store'
 import SessionPackTracker from 'src/components/booking/SessionPackTracker.vue'
 import { getCoachProfile } from 'src/api/marketplace.api'
+import { fetchCoachSessionPackTiers } from 'src/api/payment.api'
 
 const route = useRoute()
 const router = useRouter()
@@ -91,24 +76,33 @@ const coachId = route.params.coachId
 const playerId = route.query.playerId
 
 const coachName = ref('')
-const sessionPacks = ref([])
-const perSessionPrice = ref(null)
+// Story 11.2: the marketplace's coach-profile "sessionPacks" bundle catalog (used here
+// pre-cutover) has no usable id field on its DTO and was never wired to a real purchase flow —
+// this page now sources its single purchasable tier from the payment module's
+// session-pack-tiers endpoint instead (Story 7.1's model: one active tier per coach).
+// The legacy "buy a single session credit" option has no equivalent on the new path (the new
+// purchase endpoint always requires a packTierId) — pay-per-session is a booking-time choice
+// now (no pack selected when booking), not a pre-purchasable product, so that option is removed.
+const tier = ref(null)
 const pricingCurrency = ref('EUR')
 const loadingPacks = ref(false)
 const selected = ref(null)
 const purchasing = ref(false)
 const purchaseError = ref(null)
 
-const currentCredits = computed(() =>
-  bookingStore.creditsForCoach(coachId)
-)
-
-const currentSessionCount = computed(() => {
+// A player+coach pair can now have multiple simultaneously-active packs — show the
+// soonest-expiring one here (see decision in ParentPlayerPortalPage.vue for the same tiebreak).
+const currentPack = computed(() => {
   const activePacks = bookingStore.sessionPacks.filter(
-    (p) => p.coachId === coachId && p.status === 'ACTIVE'
+    (p) => p.coachId === coachId && p.status === 'ACTIVE',
   )
-  return activePacks.length > 0 ? activePacks[0].sessionCount : 0
+  if (activePacks.length === 0) return null
+  return activePacks.reduce((soonest, p) =>
+    new Date(p.expiresAt) < new Date(soonest.expiresAt) ? p : soonest,
+  )
 })
+const currentCredits = computed(() => currentPack.value?.creditsRemaining ?? 0)
+const currentSessionCount = computed(() => currentPack.value?.sessionCount ?? 0)
 
 function formatPrice(value) {
   return new Intl.NumberFormat(undefined, {
@@ -122,11 +116,7 @@ async function confirmPurchase() {
   purchasing.value = true
   purchaseError.value = null
   try {
-    const request = {
-      coachId,
-      sessionPackId: selected.value === 'single' ? null : selected.value,
-    }
-    await bookingStore.purchasePack(playerId, request)
+    await bookingStore.purchasePack(playerId, selected.value)
     router.back()
   } catch (e) {
     purchaseError.value = e?.response?.data?.message ?? t('booking.packs.purchaseError')
@@ -138,15 +128,14 @@ async function confirmPurchase() {
 onMounted(async () => {
   loadingPacks.value = true
   try {
-    const [coachRes] = await Promise.all([
+    const [coachRes, tierRes] = await Promise.all([
       getCoachProfile(coachId),
+      fetchCoachSessionPackTiers(coachId).catch(() => null),
       playerId ? bookingStore.loadPlayerPacks(playerId) : Promise.resolve(),
     ])
-    const profile = coachRes
-    coachName.value = profile.displayName ?? ''
-    sessionPacks.value = profile.sessionPacks ?? []
-    perSessionPrice.value = profile.perSessionPrice ?? null
-    pricingCurrency.value = profile.currency ?? 'EUR'
+    coachName.value = coachRes?.displayName ?? ''
+    pricingCurrency.value = coachRes?.currency ?? 'EUR'
+    tier.value = tierRes ?? null
   } finally {
     loadingPacks.value = false
   }

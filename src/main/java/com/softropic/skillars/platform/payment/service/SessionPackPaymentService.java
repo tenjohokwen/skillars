@@ -214,6 +214,7 @@ public class SessionPackPaymentService {
             purchase.getExpiresAt(),
             purchase.getStripePaymentIntentId(),
             purchase.getPlayerId(),
+            purchase.getCoachId(),
             purchase.getPausedUntil(),
             computeStatus(purchase)
         );
