@@ -629,9 +629,6 @@
 - D8: `extendPack` missing pessimistic lock on `SessionPackPurchase` — Story 7.3 [`SessionPackPaymentService.java`]
 - D9: EUR currency hardcoded in `chargeAndCapture` — single-currency now; make configurable later [`StripePaymentGateway.java`]
 
-### Group 4 deferred (Booking module) — 2026-06-24
-- D10: `sessionPackPurchasedRepository.findActivePacksForDeduction()` acquires pessimistic write locks on ALL legacy pack rows even when `sessionPackPurchaseId != null` (new pack path has its own lock in `PackSessionService`) — unnecessary I/O; remove the call when `sessionPackPurchaseId != null` in Story 7.3 [`BookingService.java:createBookingRequest()`]
-
 ### Group 4 adversarial deferred (Booking module) — 2026-06-24
 - D12: `getBooking(UUID)` has no caller authorization check — any authenticated user can read any booking by UUID; Story 7.3 [`BookingService.java:271`]
 - D13: `getParentBookings` does not clamp negative `effectiveCredits` to 0 — inconsistency with `getParentPlayerSchedule`; pre-existing [`BookingService.java:316`]

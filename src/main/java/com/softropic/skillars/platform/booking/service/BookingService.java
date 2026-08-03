@@ -231,8 +231,11 @@ public class BookingService {
         }
 
         // Acquire pessimistic lock on legacy pack rows to prevent concurrent double-booking on the old system.
-        // Note: new payment.session_pack_purchases path uses PackSessionService.deductSession() for its own lock.
-        sessionPackPurchasedRepository.findActivePacksForDeduction(req.playerId(), req.coachId(), Instant.now());
+        // Skipped for the new payment.session_pack_purchases path, which uses PackSessionService.deductSession()
+        // for its own lock instead.
+        if (req.sessionPackPurchaseId() == null) {
+            sessionPackPurchasedRepository.findActivePacksForDeduction(req.playerId(), req.coachId(), Instant.now());
+        }
 
         Booking booking = new Booking();
         booking.setParentId(parentId);
