@@ -15,6 +15,7 @@ import com.softropic.skillars.platform.payment.repo.StripeCustomer;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -27,6 +28,7 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -39,9 +41,13 @@ public class SessionPackPaymentService {
     private final SessionPackPurchaseRepository sessionPackPurchaseRepository;
     private final StripeCustomerRepository stripeCustomerRepository;
     private final CoachProfileRepository coachProfileRepository;
+    private final PlayerProfileRepository playerProfileRepository;
     private final PaymentGateway paymentGateway;
 
-    public SessionPackPurchaseResponse purchasePack(Long parentId, UUID packTierId, String paymentMethodId) {
+    public SessionPackPurchaseResponse purchasePack(Long parentId, UUID packTierId, Long playerId, String paymentMethodId) {
+        playerProfileRepository.findByIdAndParentId(playerId, parentId)
+            .orElseThrow(() -> new ResourceNotFoundException("Player not found", "player_profile"));
+
         SessionPackTier tier = sessionPackTierRepository.findById(packTierId)
             .orElseThrow(() -> new ResourceNotFoundException("Session pack tier not found", "session_pack_tier"));
         if (!tier.isActive()) {
@@ -55,7 +61,7 @@ public class SessionPackPaymentService {
 
         SessionPackPurchase purchase;
         try {
-            purchase = createPurchase(parentId, tier, paymentIntentId);
+            purchase = createPurchase(parentId, playerId, tier, paymentIntentId);
         } catch (Exception e) {
             log.error("Purchase record creation failed after Stripe charge: packTierId={} parentId={}", packTierId, parentId);
             try {
@@ -67,6 +73,23 @@ public class SessionPackPaymentService {
         }
 
         return toResponse(purchase, tier.getLabel(), tier.getSessionCount());
+    }
+
+    public List<SessionPackPurchaseResponse> getPacksForParent(Long parentId, UUID coachId) {
+        List<SessionPackPurchase> purchases = sessionPackPurchaseRepository.findByParentIdOrderByCreatedAtDesc(parentId).stream()
+            .filter(p -> coachId == null || coachId.equals(p.getCoachId()))
+            .toList();
+        List<UUID> tierIds = purchases.stream().map(SessionPackPurchase::getPackTierId).distinct().toList();
+        Map<UUID, SessionPackTier> tiersById = sessionPackTierRepository.findAllById(tierIds).stream()
+            .collect(Collectors.toMap(SessionPackTier::getPackTierId, t -> t));
+        return purchases.stream()
+            .map(p -> {
+                SessionPackTier tier = tiersById.get(p.getPackTierId());
+                String label = tier != null ? tier.getLabel() : null;
+                int sessionCount = tier != null ? tier.getSessionCount() : 0;
+                return toResponse(p, label, sessionCount);
+            })
+            .toList();
     }
 
     @Transactional
@@ -167,9 +190,10 @@ public class SessionPackPaymentService {
         });
     }
 
-    private SessionPackPurchase createPurchase(Long parentId, SessionPackTier tier, String paymentIntentId) {
+    private SessionPackPurchase createPurchase(Long parentId, Long playerId, SessionPackTier tier, String paymentIntentId) {
         SessionPackPurchase purchase = new SessionPackPurchase();
         purchase.setParentId(parentId);
+        purchase.setPlayerId(playerId);
         purchase.setCoachId(tier.getCoachId());
         purchase.setPackTierId(tier.getPackTierId());
         purchase.setPricePerSession(tier.getPricePerSession());
@@ -188,8 +212,25 @@ public class SessionPackPaymentService {
             purchase.getRemainingSessions(),
             purchase.getPricePerSession(),
             purchase.getExpiresAt(),
-            purchase.getStripePaymentIntentId()
+            purchase.getStripePaymentIntentId(),
+            purchase.getPlayerId(),
+            purchase.getPausedUntil(),
+            computeStatus(purchase)
         );
+    }
+
+    private String computeStatus(SessionPackPurchase purchase) {
+        Instant now = Instant.now();
+        if (purchase.getRemainingSessions() == 0) {
+            return "EXHAUSTED";
+        }
+        if (purchase.getPausedUntil() != null && purchase.getPausedUntil().isAfter(now)) {
+            return "PAUSED";
+        }
+        if (purchase.getExpiresAt().isBefore(now)) {
+            return "EXPIRED";
+        }
+        return "ACTIVE";
     }
 
     private SessionPackTierResponse toTierResponse(SessionPackTier tier) {

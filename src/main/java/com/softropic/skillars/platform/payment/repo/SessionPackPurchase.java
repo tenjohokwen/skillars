@@ -31,6 +31,9 @@ public class SessionPackPurchase {
     @Column(name = "parent_id", nullable = false)
     private Long parentId;
 
+    @Column(name = "player_id", nullable = false)
+    private Long playerId;
+
     @Column(name = "coach_id", nullable = false)
     private UUID coachId;
 
@@ -48,6 +51,12 @@ public class SessionPackPurchase {
 
     @Column(name = "extended_at")
     private Instant extendedAt;
+
+    @Column(name = "paused_until")
+    private Instant pausedUntil;
+
+    @Column(name = "expired_notified_at")
+    private Instant expiredNotifiedAt;
 
     @Column(name = "stripe_payment_intent_id")
     private String stripePaymentIntentId;

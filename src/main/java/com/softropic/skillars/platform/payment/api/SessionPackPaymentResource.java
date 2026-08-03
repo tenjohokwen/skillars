@@ -2,6 +2,8 @@ package com.softropic.skillars.platform.payment.api;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.booking.contract.PauseConflictResponse;
+import com.softropic.skillars.platform.booking.contract.PausePackRequest;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.contract.CreateSessionPackTierRequest;
@@ -13,6 +15,7 @@ import com.softropic.skillars.platform.payment.contract.SetupIntentResponse;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.repo.StripeCustomer;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
+import com.softropic.skillars.platform.payment.service.PackSessionService;
 import com.softropic.skillars.platform.payment.service.SessionPackPaymentService;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import io.micrometer.observation.annotation.Observed;
@@ -27,6 +30,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import org.springframework.dao.DataIntegrityViolationException;
@@ -41,6 +45,7 @@ import java.util.UUID;
 public class SessionPackPaymentResource {
 
     private final SessionPackPaymentService sessionPackPaymentService;
+    private final PackSessionService packSessionService;
     private final StripeCustomerRepository stripeCustomerRepository;
     private final PaymentGateway paymentGateway;
     private final CoachProfileRepository coachProfileRepository;
@@ -54,8 +59,29 @@ public class SessionPackPaymentResource {
             @Valid @RequestBody PurchaseSessionPackRequest request) {
         Long parentId = securityUtil.getCurrentCoachUserId();
         SessionPackPurchaseResponse response = sessionPackPaymentService.purchasePack(
-            parentId, request.packTierId(), request.paymentMethodId());
+            parentId, request.packTierId(), request.playerId(), request.paymentMethodId());
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    // ─── Parent: list own session packs ───────────────────────────────────────
+
+    @GetMapping("/session-packs")
+    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    public ResponseEntity<List<SessionPackPurchaseResponse>> getMySessionPacks(
+            @RequestParam(required = false) UUID coachId) {
+        Long parentId = securityUtil.getCurrentCoachUserId();
+        return ResponseEntity.ok(sessionPackPaymentService.getPacksForParent(parentId, coachId));
+    }
+
+    // ─── Parent: pause a session pack ──────────────────────────────────────────
+
+    @PostMapping("/session-packs/{purchaseId}/pause")
+    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    public ResponseEntity<PauseConflictResponse> pauseSessionPack(
+            @PathVariable UUID purchaseId, @Valid @RequestBody PausePackRequest request) {
+        Long parentId = securityUtil.getCurrentCoachUserId();
+        PauseConflictResponse response = packSessionService.pausePack(parentId, purchaseId, request);
+        return ResponseEntity.ok(response);
     }
 
     // ─── Coach: extend a session pack ─────────────────────────────────────────

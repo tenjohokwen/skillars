@@ -14,6 +14,9 @@ import org.wiremock.spring.ConfigureWireMock;
 import org.wiremock.spring.EnableWireMock;
 import org.wiremock.spring.InjectWireMock;
 
+import java.sql.Date;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.util.UUID;
 
 /**
@@ -60,9 +63,46 @@ public abstract class BasePaymentIT {
             // P8: coach_profiles and users were not cleaned, causing insertTestCoach to silently
             // return a stale UUID via ON CONFLICT DO NOTHING on repeated test-class runs
             jdbcTemplate.execute("DELETE FROM marketplace.coach_profiles");
+            jdbcTemplate.execute("DELETE FROM main.player_profiles WHERE parent_id IN " +
+                "(SELECT id FROM main.\"user\" WHERE login LIKE '%@test.com')");
             jdbcTemplate.execute("DELETE FROM main.\"user\" WHERE login LIKE '%@test.com'");
             return null;
         });
+    }
+
+    /**
+     * Inserts a minimal parent user row (required as the FK target for player_profiles.parent_id).
+     */
+    protected void insertTestParent(long userId, String email) {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.\"user\" (id, login, login_id_type, password_hash, activated, " +
+                "first_name, last_name, gender, dob, email) " +
+                "VALUES (?, ?, 'EMAIL', '{noop}test', true, 'Test', 'Parent', 'MALE', '1985-01-01', ?) " +
+                "ON CONFLICT (id) DO NOTHING",
+                userId, email, email
+            );
+            return null;
+        });
+    }
+
+    /**
+     * Inserts a minimal player profile owned by the given parent.
+     * Returns the player profile id.
+     */
+    protected Long insertTestPlayer(long playerId, long parentId) {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.player_profiles " +
+                "(id, name, date_of_birth, position, age_tier, parent_id, independent_account_allowed, created_at, created_by) " +
+                "VALUES (?, 'Test Player', ?, 'MIDFIELDER', 'ADULT', ?, true, ?, 'system') " +
+                "ON CONFLICT (id) DO NOTHING",
+                playerId, Date.valueOf(LocalDate.now().minusYears(16)), parentId,
+                java.sql.Timestamp.from(Instant.now())
+            );
+            return null;
+        });
+        return playerId;
     }
 
     /**

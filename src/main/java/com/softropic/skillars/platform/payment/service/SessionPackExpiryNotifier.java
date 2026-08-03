@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepositor
 import com.softropic.skillars.platform.security.repo.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -27,6 +28,7 @@ public class SessionPackExpiryNotifier {
     private final ApplicationEventPublisher eventPublisher;
 
     @Scheduled(cron = "0 0 8 * * *")
+    @SchedulerLock(name = "SessionPackExpiryNotifier_warn", lockAtMostFor = "PT15M", lockAtLeastFor = "PT2M")
     public void notifyExpiringPacks() {
         Instant now = Instant.now();
         Instant window = now.plus(14, ChronoUnit.DAYS);

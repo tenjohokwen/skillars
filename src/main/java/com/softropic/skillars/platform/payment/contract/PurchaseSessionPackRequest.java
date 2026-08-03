@@ -6,5 +6,6 @@ import java.util.UUID;
 
 public record PurchaseSessionPackRequest(
     @NotNull UUID packTierId,
+    @NotNull Long playerId,
     String paymentMethodId
 ) {}

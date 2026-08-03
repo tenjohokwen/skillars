@@ -24,4 +24,9 @@ public interface SessionPackPurchaseRepository extends JpaRepository<SessionPack
 
     @Query("SELECT p FROM SessionPackPurchase p WHERE p.expiresAt BETWEEN :from AND :to AND p.extendedAt IS NULL AND p.remainingSessions > 0")
     List<SessionPackPurchase> findExpiringWithinWindowAndSessionsRemaining(@Param("from") Instant from, @Param("to") Instant to);
+
+    List<SessionPackPurchase> findByParentIdOrderByCreatedAtDesc(Long parentId);
+
+    @Query("SELECT p FROM SessionPackPurchase p WHERE p.expiresAt < :now AND p.expiredNotifiedAt IS NULL AND p.remainingSessions > 0")
+    List<SessionPackPurchase> findExpiredNotYetNotified(@Param("now") Instant now);
 }

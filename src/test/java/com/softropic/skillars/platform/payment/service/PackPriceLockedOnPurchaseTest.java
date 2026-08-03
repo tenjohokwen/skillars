@@ -8,6 +8,8 @@ import com.softropic.skillars.platform.payment.repo.SessionPackTier;
 import com.softropic.skillars.platform.payment.repo.SessionPackTierRepository;
 import com.softropic.skillars.platform.payment.repo.StripeCustomer;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
+import com.softropic.skillars.platform.security.repo.PlayerProfile;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -16,6 +18,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -35,11 +39,13 @@ class PackPriceLockedOnPurchaseTest {
     @Mock SessionPackPurchaseRepository sessionPackPurchaseRepository;
     @Mock StripeCustomerRepository stripeCustomerRepository;
     @Mock CoachProfileRepository coachProfileRepository;
+    @Mock PlayerProfileRepository playerProfileRepository;
     @Mock PaymentGateway paymentGateway;
 
     @InjectMocks SessionPackPaymentService sessionPackPaymentService;
 
     private static final Long PARENT_ID = 7001L;
+    private static final Long PLAYER_ID = 7002L;
     private static final UUID COACH_ID = UUID.randomUUID();
     private static final UUID TIER_ID = UUID.randomUUID();
     private static final BigDecimal PRICE_PER_SESSION = new BigDecimal("25.00");
@@ -56,6 +62,8 @@ class PackPriceLockedOnPurchaseTest {
         tier.setPricePerSession(PRICE_PER_SESSION);
         tier.setActive(true);
         when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(tier));
+        when(playerProfileRepository.findByIdAndParentId(PLAYER_ID, PARENT_ID))
+            .thenReturn(Optional.of(new PlayerProfile()));
 
         StripeCustomer customer = new StripeCustomer();
         customer.setParentId(PARENT_ID);
@@ -69,9 +77,10 @@ class PackPriceLockedOnPurchaseTest {
         savedPurchase.setPricePerSession(PRICE_PER_SESSION);
         savedPurchase.setRemainingSessions(10);
         savedPurchase.setStripePaymentIntentId("pi_stub_123");
+        savedPurchase.setExpiresAt(Instant.now().plus(60, ChronoUnit.DAYS));
         when(sessionPackPurchaseRepository.save(any())).thenReturn(savedPurchase);
 
-        sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, null);
+        sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, null);
 
         verify(sessionPackPurchaseRepository).save(purchaseCaptor.capture());
         SessionPackPurchase purchase = purchaseCaptor.getValue();
@@ -93,6 +102,8 @@ class PackPriceLockedOnPurchaseTest {
         originalTier.setPricePerSession(PRICE_PER_SESSION);
         originalTier.setActive(true);
         when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(originalTier));
+        when(playerProfileRepository.findByIdAndParentId(PLAYER_ID, PARENT_ID))
+            .thenReturn(Optional.of(new PlayerProfile()));
         when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(existingCustomer()));
         when(paymentGateway.chargeAndCapture(any(), any(), any(), any())).thenReturn("pi_stub_original");
 
@@ -100,9 +111,10 @@ class PackPriceLockedOnPurchaseTest {
         SessionPackPurchase firstPurchase = new SessionPackPurchase();
         firstPurchase.setPricePerSession(new BigDecimal("25.00"));
         firstPurchase.setRemainingSessions(10);
+        firstPurchase.setExpiresAt(Instant.now().plus(60, ChronoUnit.DAYS));
         when(sessionPackPurchaseRepository.save(any())).thenReturn(firstPurchase);
 
-        sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, null);
+        sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, null);
         verify(sessionPackPurchaseRepository).save(firstCaptor.capture());
 
         // Price at purchase is locked at 25.00 even if tier price changes later

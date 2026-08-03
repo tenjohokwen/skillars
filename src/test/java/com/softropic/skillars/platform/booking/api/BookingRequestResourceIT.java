@@ -357,9 +357,9 @@ class BookingRequestResourceIT {
             );
             jdbcTemplate.update(
                 "INSERT INTO payment.session_pack_purchases " +
-                "(purchase_id, parent_id, coach_id, pack_tier_id, price_per_session, remaining_sessions, expires_at, version, created_at) " +
-                "VALUES (?, ?, ?, ?, 30.00, 5, ?, 0, now())",
-                purchaseId, otherParentId, coachProfileId, packTierId,
+                "(purchase_id, parent_id, player_id, coach_id, pack_tier_id, price_per_session, remaining_sessions, expires_at, version, created_at) " +
+                "VALUES (?, ?, ?, ?, ?, 30.00, 5, ?, 0, now())",
+                purchaseId, otherParentId, PLAYER_ID, coachProfileId, packTierId,
                 Timestamp.from(Instant.now().plus(30, ChronoUnit.DAYS))
             );
             return null;

@@ -3351,3 +3351,103 @@ So that the platform meets my rights under GDPR (Articles 15, 17, and 20).
 **And** no personal data beyond `userId` is returned
 
 *Dev notes: `platform.admin`. New table: `gdpr_requests` — Flyway migration. Export ZIP assembled via `filestorage` module `StorageService` — same pre-signed URL pattern as filestorage Epic 2. Anonymous UUID for retained approved reviews: fixed well-known UUID stored in application properties as `gdpr.anonymousAuthorId`. Session invalidation via `UserErasedEvent(userId)` consumed by `platform.identity`. Video cascade via `AccountDeletionRequestedEvent` consumed by `platform.video`'s `AccountDeletionCascadeListener` (Story 6.5) — both events published in the same erasure transaction after. Player development data deletion: `GdprErasureService` deletes directly from Epic 5 tables via cross-module delete methods on `SkillAssessmentRepository`, `DrillCompletionRepository` etc. — same monolith, direct Spring injection. Financial retention period (`gdpr.financialRetentionYears`, default 10) from ConfigService. Test: `GdprExportIT` (request → 202, async build → COMPLETED + download URL, expired URL → 410), `GdprErasureIT` (PII fields nulled, messages deleted, development data deleted, APPROVED reviews anonymised, financial records retained, videos cascade triggered, session invalidated), `ActiveBookingsErasureBlockIT` (coach with active bookings → 409).*
+
+---
+
+## Epic 11: Session Pack Payment Consolidation
+
+The platform currently runs two parallel, independently-purchasable "session pack" systems: a legacy one (`booking.session_packs_purchased`, built in Story 3.2/3.10 before Stripe existed, no real payment gateway) that the live frontend actually uses today, and a newer Stripe-integrated one (`payment.session_pack_purchases`, built in Story 7.2) that is fully wired for real payment but not yet reachable from any UI. Story 7.3 explicitly deferred reconciling them. **The application has no live/production system yet (still in development/UAT) — there is no user data to protect and no rollback safety net required.** This epic's mandatory end-state is the complete removal of the legacy system: every use case the legacy system currently supports (purchase, per-player credit tracking, pause/resume, expiry warnings and forfeiture) must keep working, but running on `payment.session_pack_purchases` alone. The three-story split exists purely for implementation sequencing safety (build parity before cutover, cut over before deleting) — not to hedge against production risk, since none exists at this stage.
+
+### Story 11.1: Session Pack Payment-Path Parity Gaps
+
+As a platform engineer,
+I want `payment.session_pack_purchases` to support per-player scoping, pause/resume, a parent-facing list query, and idempotent expiry notification/forfeiture,
+So that it has full feature parity with the legacy `booking.session_packs_purchased` system before any caller is migrated to depend on it exclusively.
+
+**Acceptance Criteria:**
+
+**Given** Flyway runs on startup
+**When** the next migration applies
+**Then** `payment.session_pack_purchases` gains `player_id BIGINT NOT NULL` (table is empty pre-launch — no backfill needed), `paused_until TIMESTAMPTZ NULL`, and `expired_notified_at TIMESTAMPTZ NULL`, plus indexes supporting parent-scoped and coach+player-scoped lookups
+
+**Given** a parent purchases a pack
+**When** `POST /api/payment/session-packs/purchase` is called
+**Then** the request now includes `playerId`; `SessionPackPaymentService.purchasePack()` verifies the player belongs to the authenticated parent and persists `playerId` on the created row
+
+**Given** an authenticated parent
+**When** `GET /api/payment/session-packs?coachId={optional}` is called
+**Then** all of that parent's packs are returned (optionally filtered to one coach) including `playerId`, `pausedUntil`, and a computed (not persisted) `status`: `EXHAUSTED` / `PAUSED` / `EXPIRED` / `ACTIVE`
+
+**Given** a parent wants to pause an active, unpaused pack
+**When** `POST /api/payment/session-packs/{purchaseId}/pause` is called
+**Then** the pack is paused exactly once per lifetime, conflicting in-flight bookings are surfaced for confirmation and cascade-cancelled on confirmation, and `expiresAt` is pushed out by the pause duration — mirroring legacy `SessionPackService.pausePack()` behavior on the new schema
+
+**Given** the platform runs on multiple instances
+**When** a new ShedLock-protected scheduled job fires
+**Then** it idempotently marks expired-but-unnotified packs and publishes the existing `SessionPackExpiredEvent` exactly once per pack; the pre-existing `SessionPackExpiryNotifier` (14-day warning) also gains the `@SchedulerLock` it is currently missing
+
+**Given** all pre-existing purchase/extend/deduct/restore/tier-CRUD behavior
+**When** this story's changes are applied
+**Then** none of that behavior changes — only additive capability is introduced; no legacy code is touched in this story
+
+*Dev notes: `platform.payment`. Reuse existing `booking.contract` DTOs/events verbatim — `PausePackRequest`, `PauseConflictResponse`, `ConflictingBookingItem`, `PackPausedEvent`, `SessionPackExpiredEvent`, `SessionPackExhaustedEvent` — do not duplicate. Ownership checks use `PlayerProfileRepository.findByIdAndParentId(...)`, the repository's documented convention, not `BookingService`'s older manual pattern. Full technical detail in `_bmad-output/implementation-artifacts/skillars-11-1-payment-path-parity-gaps.md`.*
+
+---
+
+### Story 11.2: Cut Over Booking Flow and Frontend to the Single Payment Path
+
+As a parent and coach,
+I want session-pack purchase, credit display, and booking-time deduction to run entirely on `payment.session_pack_purchases`,
+So that there is only one way to buy, track, and spend session-pack credits.
+
+**Acceptance Criteria:**
+
+**Given** the parent-facing purchase and credits UI
+**When** this story ships
+**Then** `SessionPackPurchasePage.vue` purchases through `SessionPackPaymentResource` (Stripe-backed) instead of the legacy `SessionPackResource` endpoint, and `SessionPackTracker.vue` reads credits from the Story 11.1 list endpoint instead of legacy `getPlayerPacks`
+
+**Given** a parent books a session using pack credit
+**When** the booking request is submitted
+**Then** `CreateBookingRequest.sessionPackPurchaseId` is always populated for pack-based bookings, so `BookingService.createBookingRequest()` always takes the new-path branch
+
+**Given** `BookingCompletionService`, `BookingBatchService`, `BookingDuplicationService`, `QuickCompleteTimeoutService`, and `HomeworkAssignmentService` — all current callers of legacy `SessionPackService`
+**When** this story ships
+**Then** each is migrated to the `payment` module's `PackSessionService`/`SessionPackPurchaseRepository` equivalents, using the `playerId` scoping added in Story 11.1
+
+**Given** `BookingService.createBookingRequest()`'s legacy pessimistic-lock branch (guarded by `req.sessionPackPurchaseId() == null`)
+**When** this story ships
+**Then** that branch is removed entirely — a null `sessionPackPurchaseId` unambiguously means "pay-per-session," not "fall back to legacy pack"
+
+**Given** the full purchase → book → pause → expire lifecycle
+**When** exercised end-to-end in UAT
+**Then** observable behavior matches what the legacy system did, with no regression in `BookingServiceTest`/`BookingServiceConcurrencyIT`
+
+*Dev notes: `platform.booking`, `platform.payment`, frontend. This is the cutover story — the legacy system keeps running underneath until this story is verified, so it can be reverted by re-pointing callers back if an implementation issue surfaces (development-stage safety net, not a production concern). Full technical detail to be produced when this story is created via create-story.*
+
+---
+
+### Story 11.3: Remove Legacy Session-Pack System and Scheduled Tasks
+
+As a platform engineer,
+I want the legacy `booking.session_packs_purchased` system fully deleted,
+So that there is exactly one session-pack code path left in the codebase.
+
+**Acceptance Criteria:**
+
+**Given** Story 11.2 has cut every caller over to the new path
+**When** this story ships
+**Then** `SessionPackService`, `SessionPackResource`, `SessionPackMapper`, `SessionPackPurchasedRepository`, `SessionPackPurchased`, and `SessionPackExpiryScheduler` (booking module) — and their tests — are deleted entirely, with no compensating shims or deprecated-but-retained stubs
+
+**Given** the legacy table has no real user data (development-stage, confirmed empty)
+**When** the removal migration runs
+**Then** `booking.session_packs_purchased` is dropped outright — no data-migration script needed
+
+**Given** the application starts up after this story
+**When** the Spring context loads
+**Then** no `@Scheduled` registration exists for the deleted `SessionPackExpiryScheduler`, and a full-repo grep confirms no remaining source file imports any deleted legacy class
+
+**Given** the full regression suite
+**When** run with the legacy system entirely absent
+**Then** `BookingServiceTest`, `BookingServiceConcurrencyIT`, and frontend booking/purchase tests all pass
+
+*Dev notes: `platform.booking`. This story is the actual completion of the consolidation — Epic 11 is not "done" until this story ships, since Stories 11.1/11.2 leave the legacy system physically present (unused but undeleted). Full technical detail to be produced when this story is created via create-story.*

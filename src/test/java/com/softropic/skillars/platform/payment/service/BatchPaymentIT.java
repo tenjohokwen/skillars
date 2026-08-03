@@ -85,10 +85,10 @@ class BatchPaymentIT extends BasePaymentIT {
             );
             jdbcTemplate.update(
                 "INSERT INTO payment.session_pack_purchases " +
-                "(purchase_id, parent_id, coach_id, pack_tier_id, price_per_session, remaining_sessions, " +
+                "(purchase_id, parent_id, player_id, coach_id, pack_tier_id, price_per_session, remaining_sessions, " +
                 "expires_at, version, created_at) " +
-                "VALUES (?, ?, ?, ?, 40.00, 5, now() + interval '60 days', 0, now())",
-                packId, PARENT_ID, coachId, tierId
+                "VALUES (?, ?, ?, ?, ?, 40.00, 5, now() + interval '60 days', 0, now())",
+                packId, PARENT_ID, PLAYER_ID, coachId, tierId
             );
             return null;
         });

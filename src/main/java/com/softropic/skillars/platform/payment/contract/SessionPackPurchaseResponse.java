@@ -12,5 +12,8 @@ public record SessionPackPurchaseResponse(
     int remainingSessions,
     BigDecimal pricePerSession,
     Instant expiresAt,
-    String stripePaymentIntentId
+    String stripePaymentIntentId,
+    Long playerId,
+    Instant pausedUntil,
+    String status
 ) {}

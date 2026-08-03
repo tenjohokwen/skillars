@@ -27,10 +27,13 @@ class SessionPackPurchaseIT extends BasePaymentIT {
 
     private UUID coachId;
     private static final long PARENT_ID = 77001L;
+    private static final long PLAYER_ID = 77003L;
 
     @BeforeEach
     void setUpCoach() {
         coachId = insertTestCoach(77002L, "purchase_coach@test.com", "Purchase Coach");
+        insertTestParent(PARENT_ID, "purchase_parent@test.com");
+        insertTestPlayer(PLAYER_ID, PARENT_ID);
     }
 
     @Test
@@ -41,7 +44,7 @@ class SessionPackPurchaseIT extends BasePaymentIT {
             .packTierId();
 
         SessionPackPurchaseResponse purchase =
-            sessionPackPaymentService.purchasePack(PARENT_ID, tierId, "pm_test_pi");
+            sessionPackPaymentService.purchasePack(PARENT_ID, tierId, PLAYER_ID, "pm_test_pi");
 
         assertThat(purchase.pricePerSession())
             .as("pricePerSession must be locked at tier's rate")
@@ -58,7 +61,7 @@ class SessionPackPurchaseIT extends BasePaymentIT {
             .packTierId();
 
         SessionPackPurchaseResponse firstPurchase =
-            sessionPackPaymentService.purchasePack(PARENT_ID, originalTierId, null);
+            sessionPackPaymentService.purchasePack(PARENT_ID, originalTierId, PLAYER_ID, null);
         assertThat(firstPurchase.pricePerSession()).isEqualByComparingTo("20.00");
 
         // Coach reprices: new tier (old tier is deactivated) — new price is €30/session
@@ -82,7 +85,7 @@ class SessionPackPurchaseIT extends BasePaymentIT {
         sessionPackPaymentService.deactivateTier(coachId, tierId);
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
-            () -> sessionPackPaymentService.purchasePack(PARENT_ID, tierId, null))
+            () -> sessionPackPaymentService.purchasePack(PARENT_ID, tierId, PLAYER_ID, null))
             .isInstanceOf(PaymentGatewayException.class)
             .hasMessageContaining("payment.packTierInactive");
     }

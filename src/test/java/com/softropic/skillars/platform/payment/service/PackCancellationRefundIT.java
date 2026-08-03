@@ -22,6 +22,7 @@ class PackCancellationRefundIT extends BasePaymentIT {
 
     private static final long PARENT_ID    = 80001L;
     private static final long COACH_USER_ID = 80002L;
+    private static final long PLAYER_ID    = 80003L;
     private static final BigDecimal PRICE_PER_SESSION = new BigDecimal("30.00");
 
     // Populated in setUp() — coachId is the coach_profiles PK, which satisfies the FK chain
@@ -52,11 +53,11 @@ class PackCancellationRefundIT extends BasePaymentIT {
 
             packId = jdbcTemplate.queryForObject(
                 "INSERT INTO payment.session_pack_purchases " +
-                "(purchase_id, parent_id, coach_id, pack_tier_id, remaining_sessions, price_per_session, expires_at) " +
-                "VALUES (gen_random_uuid(), ?, ?, ?, 5, ?, ?) " +
+                "(purchase_id, parent_id, player_id, coach_id, pack_tier_id, remaining_sessions, price_per_session, expires_at) " +
+                "VALUES (gen_random_uuid(), ?, ?, ?, ?, 5, ?, ?) " +
                 "RETURNING purchase_id",
                 UUID.class,
-                PARENT_ID, coachId, tierId, PRICE_PER_SESSION,
+                PARENT_ID, PLAYER_ID, coachId, tierId, PRICE_PER_SESSION,
                 Timestamp.from(Instant.now().plus(30, ChronoUnit.DAYS))
             );
             return null;

@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-07-02 # skillars-deferred-8 test coverage gaps → done (code review passed)
+# last_updated: 2026-08-03 # skillars-11-1 dev complete, status review; full mvn verify green
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-08-01 # skillars-3-11 coach slot double-booking prevention — code review complete, status done
+last_updated: 2026-08-03 # skillars-11-1 payment path parity gaps — code review complete, status done
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -284,3 +284,10 @@ development_status:
 
   # Deferred 10: CI/CD & Deployment Hardening
   skillars-deferred-10-cicd-deployment-hardening: done
+
+  # Epic 11: Session Pack Payment Consolidation
+  skillars-epic-11: in-progress
+  skillars-11-1-payment-path-parity-gaps: done  # code review 2026-08-03: 4 patches applied (scheduler save/publish ordering, N+1 tier lookup, duplicate-id dedup in pausePack, missing forfeiture-query index), 9 pre-existing issues deferred, 1 decision (premature PAUSED status) accepted as intended
+  skillars-11-2-cutover-booking-and-frontend: backlog
+  skillars-11-3-remove-legacy-session-pack-system: backlog
+  skillars-epic-11-retrospective: optional
