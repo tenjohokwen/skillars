@@ -937,6 +937,17 @@ export default {
       tierLabel: '{label} — {count} Sitzungen für €{price}',
       noActiveTier: 'Dieser Coach hat kein aktives Sitzungspaket verfügbar.',
     },
+    card: {
+      title: 'Zahlungsmethode',
+      savedLabel: '{brand} •••• {last4} · gültig bis {expMonth}/{expYear}',
+      detailsUnavailable: 'Karte hinterlegt · Details derzeit nicht verfügbar',
+      replaceCard: 'Karte ersetzen',
+      addCardPrompt: 'Fügen Sie eine Zahlungskarte hinzu, um fortzufahren',
+      addCardCta: 'Karte hinzufügen',
+      save: 'Karte speichern',
+      saveError: 'Ihre Karte konnte nicht gespeichert werden. Bitte versuchen Sie es erneut.',
+      unavailable: 'Kartenzahlungen sind derzeit nicht verfügbar',
+    },
   },
   admin: {},
   featureGate: {
@@ -1037,7 +1048,6 @@ export default {
       cancelSuccess: 'Spieler-Plan endet am {date}.',
       cancelError: 'Kündigung fehlgeschlagen.',
       cancelPending: 'Spieler-Abonnement endet am {date}.',
-      paymentMethodRequired: 'Bitte geben Sie eine Zahlungsmethoden-ID ein.',
     },
   },
   parent: {

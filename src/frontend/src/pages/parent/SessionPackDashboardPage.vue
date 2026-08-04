@@ -147,13 +147,18 @@ const pauseForm = ref({ startDate: '', durationDays: 30 })
 const coachNames = ref({})
 
 async function resolveCoachNames(packs) {
-  const unresolvedIds = [...new Set(packs.map((p) => p.coachId))].filter((id) => !coachNames.value[id])
+  // AC 9: a key-presence check (not truthiness) so a negative-cached `null` id is excluded —
+  // `!coachNames.value[id]` would keep refetching a failed lookup forever since `!null === true`.
+  const unresolvedIds = [...new Set(packs.map((p) => p.coachId))].filter(
+    (id) => !(id in coachNames.value),
+  )
   const profiles = await Promise.all(
     unresolvedIds.map((id) => getCoachProfile(id).catch(() => null)),
   )
   const resolved = { ...coachNames.value }
   unresolvedIds.forEach((id, i) => {
-    if (profiles[i]) resolved[id] = profiles[i].displayName
+    // Negative-cache a failed/missing lookup as null so it isn't retried on every watch firing.
+    resolved[id] = profiles[i] ? profiles[i].displayName : null
   })
   coachNames.value = resolved
 }

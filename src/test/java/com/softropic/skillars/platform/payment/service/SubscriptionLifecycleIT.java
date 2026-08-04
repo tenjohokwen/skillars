@@ -26,6 +26,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -322,6 +323,98 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
         assertThat(sub.getTier()).isEqualTo("SCOUT");
         assertThat(sub.getStatus()).isEqualTo("CANCELLED");
         assertThat(sub.getStripeSubscriptionId()).isNull();
+    }
+
+    // ─── Player Subscribe (Deferred-11 AC 5) ──────────────────────────────────────
+    // subscribePlayer() no longer takes a caller-supplied paymentMethodId — it resolves the
+    // saved card from the parent's StripeCustomer row, and must never call attachPaymentMethod
+    // (the saved card is already attached to that customer from the setup-intent flow; calling
+    // attach again throws on Stripe's side).
+
+    private static final long PLAYER_PARENT_ID = 91101L;
+    private static final long PLAYER_ID = 91102L;
+    private static final String PLAYER_PARENT_STRIPE_CUSTOMER_ID = "cus_test_parent_91101";
+    private static final String PLAYER_PARENT_PAYMENT_METHOD = "pm_test_parent_91101";
+
+    private void seedPlayerPriceConfig() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.platform_config (id, key, value, value_type) " +
+                "VALUES (9010, 'subscription.player.semi_pro.yearly.priceId', 'price_semi_pro_yearly', 'STRING') " +
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+            );
+            return null;
+        });
+        configService.invalidate();
+    }
+
+    private void linkParentToPlayer(long parentId, long playerId) {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.parent_player_links " +
+                "(id, parent_id, player_id, consent_accepted_at, consent_policy_version) " +
+                "VALUES (?, ?, ?, ?, '1.0') ON CONFLICT (player_id) DO NOTHING",
+                playerId, parentId, playerId, java.sql.Timestamp.from(Instant.now())
+            );
+            return null;
+        });
+    }
+
+    @Test
+    void playerSubscribe_resolvesPaymentMethodFromStripeCustomer_neverAttachesPaymentMethod() throws StripeException {
+        insertTestParent(PLAYER_PARENT_ID, "player.sub.parent@test.com");
+        insertTestPlayer(PLAYER_ID, PLAYER_PARENT_ID);
+        linkParentToPlayer(PLAYER_PARENT_ID, PLAYER_ID);
+        seedPlayerPriceConfig();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO payment.stripe_customers (parent_id, stripe_customer_id, stripe_payment_method_id) " +
+                "VALUES (?, ?, ?) ON CONFLICT (parent_id) DO UPDATE SET " +
+                "stripe_customer_id = EXCLUDED.stripe_customer_id, " +
+                "stripe_payment_method_id = EXCLUDED.stripe_payment_method_id",
+                PLAYER_PARENT_ID, PLAYER_PARENT_STRIPE_CUSTOMER_ID, PLAYER_PARENT_PAYMENT_METHOD
+            );
+            return null;
+        });
+
+        subscriptionService.subscribePlayer(PLAYER_PARENT_ID, PLAYER_ID, "SEMI_PRO", "YEARLY");
+
+        verify(stripeClient, times(1)).createSubscription(
+            PLAYER_PARENT_STRIPE_CUSTOMER_ID, "price_semi_pro_yearly", PLAYER_PARENT_PAYMENT_METHOD);
+        verify(stripeClient, never()).attachPaymentMethod(anyString(), anyString());
+    }
+
+    @Test
+    void playerSubscribe_noStripeCustomerRow_throwsNoPaymentMethod() {
+        insertTestParent(PLAYER_PARENT_ID, "player.sub.parent2@test.com");
+        insertTestPlayer(PLAYER_ID + 1, PLAYER_PARENT_ID);
+        linkParentToPlayer(PLAYER_PARENT_ID, PLAYER_ID + 1);
+        seedPlayerPriceConfig();
+
+        assertThatThrownBy(() ->
+            subscriptionService.subscribePlayer(PLAYER_PARENT_ID, PLAYER_ID + 1, "SEMI_PRO", "YEARLY")
+        ).isInstanceOf(PaymentGatewayException.class).hasMessage("payment.noPaymentMethod");
+    }
+
+    @Test
+    void playerSubscribe_stripeCustomerRowWithNullPaymentMethod_throwsNoPaymentMethod() {
+        insertTestParent(PLAYER_PARENT_ID, "player.sub.parent3@test.com");
+        insertTestPlayer(PLAYER_ID + 2, PLAYER_PARENT_ID);
+        linkParentToPlayer(PLAYER_PARENT_ID, PLAYER_ID + 2);
+        seedPlayerPriceConfig();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO payment.stripe_customers (parent_id, stripe_customer_id, stripe_payment_method_id) " +
+                "VALUES (?, ?, NULL) ON CONFLICT (parent_id) DO UPDATE SET " +
+                "stripe_customer_id = EXCLUDED.stripe_customer_id, stripe_payment_method_id = NULL",
+                PLAYER_PARENT_ID, PLAYER_PARENT_STRIPE_CUSTOMER_ID
+            );
+            return null;
+        });
+
+        assertThatThrownBy(() ->
+            subscriptionService.subscribePlayer(PLAYER_PARENT_ID, PLAYER_ID + 2, "SEMI_PRO", "YEARLY")
+        ).isInstanceOf(PaymentGatewayException.class).hasMessage("payment.noPaymentMethod");
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────────

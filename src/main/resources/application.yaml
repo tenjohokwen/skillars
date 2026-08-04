@@ -232,6 +232,7 @@ app:
       callback-success-url: ${APP_PAYMENT_STRIPE_CALLBACK_SUCCESS_URL:/coach/payment-settings}
       fee-rate: ${APP_PAYMENT_STRIPE_FEE_RATE:0.025}
       fee-fixed: ${APP_PAYMENT_STRIPE_FEE_FIXED:0.25}
+      publishable-key: ${APP_PAYMENT_STRIPE_PUBLISHABLE_KEY:}
 
 features:
   toggles:

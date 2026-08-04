@@ -186,6 +186,7 @@ below, which is specific to UAT / not in `secrets-reference.md` yet:
 | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | Yes | Generated in Step 3 — these double as `APP_STORAGE_S3_ACCESS_KEY`/`APP_STORAGE_S3_SECRET_KEY`, `docker-compose.uat.yml` maps them automatically |
 | `APP_STORAGE_BUCKET` | Yes | The bucket name chosen in Step 3 |
 | `APP_PAYMENT_STRIPE_API_KEY` | Yes | The `sk_test_...` key from Step 2 |
+| `APP_PAYMENT_STRIPE_PUBLISHABLE_KEY` | Yes (for card-collection UI) | The matching `pk_test_...` key from Step 2; served to the frontend via `GET /api/payment/stripe/config` |
 | `APP_PAYMENT_STRIPE_WEBHOOK_SECRET` | Yes (for webhook-dependent flows) | From Step 5 below |
 | `APP_PAYMENT_STRIPE_OAUTH_CLIENT_ID` | Only if testing Connect onboarding | The test-mode Connect client ID from Step 2 |
 | `PLATFORM_PIN_ENCRYPTION_SECRET` | **Yes — app refuses to start without it** | `Cryptopher` throws `EncryptionException(MISSING_SECRET)` and the whole context fails if this is blank, profile-independent, not new to UAT. Generate: `openssl rand -base64 32` |

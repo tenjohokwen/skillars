@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.service.PackSessionService;
+import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
@@ -76,8 +77,7 @@ class BookingDuplicationServiceTest {
         UUID activePackId = UUID.randomUUID();
         when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
-        when(packSessionService.hasActivePack(PLAYER_ID, COACH_ID)).thenReturn(true);
-        when(packSessionService.getActivePackId(PLAYER_ID, COACH_ID)).thenReturn(activePackId);
+        when(packSessionService.findActivePackId(PLAYER_ID, COACH_ID)).thenReturn(activePackId);
 
         // Override the start time to be far enough in the past that +7 days is in the future
         Instant originalStart = Instant.now().minus(6, ChronoUnit.DAYS);
@@ -146,7 +146,9 @@ class BookingDuplicationServiceTest {
 
         when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
-        when(packSessionService.hasActivePack(PLAYER_ID, COACH_ID)).thenReturn(false);
+        when(packSessionService.findActivePackId(PLAYER_ID, COACH_ID)).thenThrow(
+            new OperationNotAllowedException(
+                "No effective session credits available for this coach", SecurityError.MISSING_RIGHTS));
 
         assertThatThrownBy(() -> service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID))
             .isInstanceOf(OperationNotAllowedException.class)

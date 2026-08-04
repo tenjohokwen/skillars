@@ -951,6 +951,17 @@ export default {
       tierLabel: '{label} — {count} sessions for €{price}',
       noActiveTier: 'This coach has no active session pack available.',
     },
+    card: {
+      title: 'Payment Method',
+      savedLabel: '{brand} •••• {last4} · expires {expMonth}/{expYear}',
+      detailsUnavailable: 'Card on file · details unavailable right now',
+      replaceCard: 'Replace card',
+      addCardPrompt: 'Add a payment card to continue',
+      addCardCta: 'Add card',
+      save: 'Save card',
+      saveError: 'Could not save your card. Please try again.',
+      unavailable: 'Card payments are unavailable right now',
+    },
   },
   parent: {
     nav: 'Parent',
@@ -1062,7 +1073,6 @@ export default {
       cancelSuccess: 'Player plan will end on {date}. Access is retained until then.',
       cancelError: 'Cancellation failed. Please try again.',
       cancelPending: 'Player subscription ends on {date}.',
-      paymentMethodRequired: 'Please enter a payment method ID.',
     },
   },
   messaging: {

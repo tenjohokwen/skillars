@@ -31,6 +31,8 @@ export const deactivateSessionPackTier = (tierId) =>
 export const createSetupIntent = () => api.post('/api/payment/setup-intent')
 export const savePaymentMethod = (paymentMethodId) =>
   api.post('/api/payment/save-payment-method', { paymentMethodId })
+export const getStripeConfig = () => api.get('/api/payment/stripe/config')
+export const getSavedPaymentMethod = () => api.get('/api/payment/payment-method')
 
 /**
  * Collect card for session pack purchase (immediate capture).
@@ -43,11 +45,12 @@ export const confirmPackPayment = async (stripePublishableKey, clientSecret) => 
 
 /**
  * Collect card for future payments (SetupIntent flow — no immediate charge).
+ * `cardElement` is a mounted Stripe Elements card element (from stripe.elements()).
  * Returns the setupIntent after confirmation; caller must then call savePaymentMethod().
  */
-export const confirmCardSetup = async (stripePublishableKey, clientSecret) => {
+export const confirmCardSetup = async (stripePublishableKey, clientSecret, cardElement) => {
   const stripe = await loadStripe(stripePublishableKey)
-  return stripe.confirmCardSetup(clientSecret)
+  return stripe.confirmCardSetup(clientSecret, { payment_method: { card: cardElement } })
 }
 
 // Coach reliability strikes

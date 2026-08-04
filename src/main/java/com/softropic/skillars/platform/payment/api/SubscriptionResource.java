@@ -102,7 +102,7 @@ public class SubscriptionResource {
             @Valid @RequestBody PlayerSubscribeRequest request) {
         Long parentId = currentParentId();
         PlayerSubscriptionResponse response = subscriptionService.subscribePlayer(
-            parentId, request.playerId(), request.tier(), request.billingInterval(), request.paymentMethodId());
+            parentId, request.playerId(), request.tier(), request.billingInterval());
         return ResponseEntity.ok(response);
     }
 

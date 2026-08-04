@@ -264,8 +264,7 @@ public class SubscriptionService {
     // ─── Player Subscribe ────────────────────────────────────────────────────────
 
     public PlayerSubscriptionResponse subscribePlayer(Long parentUserId, Long playerId,
-                                                       String tier, String billingInterval,
-                                                       String paymentMethodId) {
+                                                       String tier, String billingInterval) {
         assertPlayerOwnership(parentUserId, playerId);
         validatePlayerTierInterval(tier, billingInterval);
 
@@ -282,13 +281,23 @@ public class SubscriptionService {
                 "payment.subscription.priceNotConfigured");
         }
 
-        String stripeCustomerId = stripeCustomerRepository.findById(parentUserId)
-            .orElseThrow(() -> new IllegalStateException("No Stripe customer for parentId=" + parentUserId))
-            .getStripeCustomerId();
+        com.softropic.skillars.platform.payment.repo.StripeCustomer stripeCustomer =
+            stripeCustomerRepository.findById(parentUserId)
+                .orElseThrow(() -> new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException(
+                    "payment.noPaymentMethod"));
+        String paymentMethodId = stripeCustomer.getStripePaymentMethodId();
+        if (paymentMethodId == null || paymentMethodId.isBlank()) {
+            throw new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException(
+                "payment.noPaymentMethod");
+        }
+        String stripeCustomerId = stripeCustomer.getStripeCustomerId();
 
         Subscription stripeSub;
         try {
-            stripeClient.attachPaymentMethod(stripeCustomerId, paymentMethodId);
+            // No attachPaymentMethod call here: the payment method was already attached to this
+            // exact customer when it was saved (POST /setup-intent creates a customer-scoped
+            // SetupIntent; confirmCardSetup + POST /save-payment-method complete it). Calling
+            // attach again on an already-attached payment method throws on Stripe's side.
             stripeSub = stripeClient.createSubscription(stripeCustomerId, priceId, paymentMethodId);
         } catch (com.stripe.exception.StripeException e) {
             log.error("[PLAYER_SUBSCRIBE_STRIPE_FAILED playerId={}]", playerId, e);

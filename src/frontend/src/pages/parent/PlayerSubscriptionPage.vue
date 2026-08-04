@@ -111,12 +111,10 @@
             dense
             class="q-mb-md"
           />
-          <q-input
-            v-model="paymentMethodId"
-            :label="t('subscription.paymentMethodId')"
-            outlined
-            dense
-          />
+          <div v-if="hasCard === false" class="text-body2 text-warning q-mb-sm">
+            {{ t('payment.card.addCardPrompt') }}
+            <q-btn flat dense size="sm" color="primary" :label="t('payment.card.addCardCta')" @click="addCardDialog = true" />
+          </div>
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat :label="t('common.cancel')" v-close-popup />
@@ -124,9 +122,21 @@
             color="primary"
             :label="t('subscription.confirm')"
             :loading="actionLoading"
+            :disable="hasCard === false"
             @click="confirmSubscribe"
           />
         </q-card-actions>
+      </q-card>
+    </q-dialog>
+
+    <q-dialog v-model="addCardDialog">
+      <q-card class="glass-card" style="min-width: 340px">
+        <q-card-section>
+          <div class="text-h6">{{ t('payment.card.title') }}</div>
+        </q-card-section>
+        <q-card-section class="q-pt-none">
+          <PaymentMethodCard @saved="addCardDialog = false" />
+        </q-card-section>
       </q-card>
     </q-dialog>
   </q-page>
@@ -138,6 +148,7 @@ import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { useRoute } from 'vue-router'
 import { usePaymentStore } from 'src/stores/payment.store'
+import PaymentMethodCard from 'src/components/payment/PaymentMethodCard.vue'
 
 const { t } = useI18n()
 const $q = useQuasar()
@@ -149,12 +160,15 @@ const playerId = computed(() => Number(route.params.playerId))
 const loading = ref(false)
 const actionLoading = ref(false)
 const subscribeDialog = ref(false)
+const addCardDialog = ref(false)
 const selectedTier = ref('')
 const billingInterval = ref('MONTHLY')
-const paymentMethodId = ref('')
 
 const subscription = computed(() => paymentStore.playerSubscription)
 const tiers = computed(() => paymentStore.playerTiers)
+// AC 5: gate confirm on a saved card instead of a raw, frontend-typed payment-method id — the
+// backend resolves the saved card itself (SubscriptionService.subscribePlayer).
+const hasCard = computed(() => paymentStore.savedPaymentMethod?.hasCard ?? false)
 
 const TIER_ORDER = ['ATHLETE', 'SEMI_PRO', 'PRO']
 
@@ -169,6 +183,7 @@ onMounted(async () => {
     await Promise.all([
       paymentStore.fetchPlayerSubscription(playerId.value),
       paymentStore.fetchPlayerTiers(),
+      paymentStore.fetchSavedPaymentMethod(),
     ])
   } finally {
     loading.value = false
@@ -195,8 +210,8 @@ function openSubscribeDialog(tier) {
 }
 
 async function confirmSubscribe() {
-  if (!paymentMethodId.value) {
-    $q.notify({ type: 'warning', message: t('subscription.player.paymentMethodRequired') })
+  if (hasCard.value === false) {
+    $q.notify({ type: 'warning', message: t('payment.card.addCardPrompt') })
     return
   }
   actionLoading.value = true
@@ -212,7 +227,6 @@ async function confirmSubscribe() {
         playerId: playerId.value,
         tier: selectedTier.value,
         billingInterval: billingInterval.value,
-        paymentMethodId: paymentMethodId.value,
       })
     }
     subscribeDialog.value = false

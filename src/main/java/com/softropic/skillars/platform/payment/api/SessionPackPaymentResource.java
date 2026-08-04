@@ -6,12 +6,15 @@ import com.softropic.skillars.platform.booking.contract.PauseConflictResponse;
 import com.softropic.skillars.platform.booking.contract.PausePackRequest;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.payment.config.PaymentProperties;
 import com.softropic.skillars.platform.payment.contract.CreateSessionPackTierRequest;
 import com.softropic.skillars.platform.payment.contract.PurchaseSessionPackRequest;
 import com.softropic.skillars.platform.payment.contract.SavedPaymentMethodRequest;
+import com.softropic.skillars.platform.payment.contract.SavedPaymentMethodResponse;
 import com.softropic.skillars.platform.payment.contract.SessionPackPurchaseResponse;
 import com.softropic.skillars.platform.payment.contract.SessionPackTierResponse;
 import com.softropic.skillars.platform.payment.contract.SetupIntentResponse;
+import com.softropic.skillars.platform.payment.contract.StripeConfigResponse;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.repo.StripeCustomer;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
@@ -50,6 +53,7 @@ public class SessionPackPaymentResource {
     private final PaymentGateway paymentGateway;
     private final CoachProfileRepository coachProfileRepository;
     private final SecurityUtil securityUtil;
+    private final PaymentProperties paymentProperties;
 
     // ─── Parent: purchase a session pack ──────────────────────────────────────
 
@@ -176,6 +180,23 @@ public class SessionPackPaymentResource {
             stripeCustomerRepository.save(existing);
         }
         return ResponseEntity.noContent().build();
+    }
+
+    // ─── Stripe.js configuration ───────────────────────────────────────────────
+
+    @GetMapping("/stripe/config")
+    @PreAuthorize(SecurityConstants.IS_AUTHENTICATED)
+    public ResponseEntity<StripeConfigResponse> getStripeConfig() {
+        return ResponseEntity.ok(new StripeConfigResponse(paymentProperties.getPublishableKey()));
+    }
+
+    // ─── Parent: saved payment method ──────────────────────────────────────────
+
+    @GetMapping("/payment-method")
+    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    public ResponseEntity<SavedPaymentMethodResponse> getSavedPaymentMethod() {
+        Long parentId = securityUtil.getCurrentCoachUserId();
+        return ResponseEntity.ok(sessionPackPaymentService.getSavedPaymentMethod(parentId));
     }
 
     private UUID resolveCoachId() {

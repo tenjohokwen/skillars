@@ -5,5 +5,4 @@ import jakarta.validation.constraints.NotNull;
 public record PlayerSubscribeRequest(
         @NotNull Long playerId,
         @NotNull String tier,
-        @NotNull String billingInterval,
-        @NotNull String paymentMethodId) {}
+        @NotNull String billingInterval) {}

@@ -45,16 +45,34 @@
         {{ purchaseError }}
       </q-banner>
 
+      <q-banner v-if="!hasCard" rounded class="q-mb-md" style="background: var(--surface-warning)">
+        {{ t('payment.card.addCardPrompt') }}
+        <template #action>
+          <q-btn flat :label="t('payment.card.addCardCta')" @click="addCardDialog = true" />
+        </template>
+      </q-banner>
+
       <q-btn
         unelevated
         color="primary"
         class="full-width q-mt-md"
         :label="t('booking.packs.confirmPurchase')"
-        :disable="!selected"
+        :disable="!selected || !hasCard"
         :loading="purchasing"
         @click="confirmPurchase"
       />
     </template>
+
+    <q-dialog v-model="addCardDialog">
+      <q-card class="glass-card" style="min-width: 340px">
+        <q-card-section>
+          <div class="text-h6">{{ t('payment.card.title') }}</div>
+        </q-card-section>
+        <q-card-section class="q-pt-none">
+          <PaymentMethodCard @saved="onCardSaved" />
+        </q-card-section>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
 
@@ -63,7 +81,9 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useBookingStore } from 'src/stores/booking.store'
+import { usePaymentStore } from 'src/stores/payment.store'
 import SessionPackTracker from 'src/components/booking/SessionPackTracker.vue'
+import PaymentMethodCard from 'src/components/payment/PaymentMethodCard.vue'
 import { getCoachProfile } from 'src/api/marketplace.api'
 import { fetchCoachSessionPackTiers } from 'src/api/payment.api'
 
@@ -71,6 +91,7 @@ const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
 const bookingStore = useBookingStore()
+const paymentStore = usePaymentStore()
 
 const coachId = route.params.coachId
 const playerId = route.query.playerId
@@ -89,6 +110,16 @@ const loadingPacks = ref(false)
 const selected = ref(null)
 const purchasing = ref(false)
 const purchaseError = ref(null)
+const addCardDialog = ref(false)
+
+// AC 5: gate the purchase control on a saved card — the backend falls back to it silently, so
+// without this gate a parent with no card would only find out the purchase is impossible after
+// clicking confirm.
+const hasCard = computed(() => paymentStore.savedPaymentMethod?.hasCard ?? false)
+
+function onCardSaved() {
+  addCardDialog.value = false
+}
 
 // A player+coach pair can now have multiple simultaneously-active packs — show the
 // soonest-expiring one here (see decision in ParentPlayerPortalPage.vue for the same tiebreak).
@@ -132,6 +163,7 @@ onMounted(async () => {
       getCoachProfile(coachId),
       fetchCoachSessionPackTiers(coachId).catch(() => null),
       playerId ? bookingStore.loadPlayerPacks(playerId) : Promise.resolve(),
+      paymentStore.fetchSavedPaymentMethod(),
     ])
     coachName.value = coachRes?.displayName ?? ''
     pricingCurrency.value = coachRes?.currency ?? 'EUR'

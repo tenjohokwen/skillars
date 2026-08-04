@@ -22,7 +22,7 @@
         <q-btn
           color="primary"
           :label="t('revenue.apply')"
-          :loading="paymentStore.loading"
+          :loading="paymentStore.loading.revenueSummary || paymentStore.loading.transactions"
           @click="loadRevenue"
         />
       </div>
@@ -64,7 +64,7 @@
         :columns="columns"
         row-key="bookingId"
         flat
-        :loading="paymentStore.loading"
+        :loading="paymentStore.loading.revenueSummary || paymentStore.loading.transactions"
         :pagination="{ rowsPerPage: 20 }"
       >
         <template #body-cell-sessionDate="props">

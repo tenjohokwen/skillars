@@ -17,7 +17,7 @@
       </q-banner>
 
       <q-banner
-        v-if="paymentStore.error"
+        v-if="paymentStore.error.stripeStatus"
         class="q-mb-md"
         rounded
         style="background: rgba(var(--color-error-rgb, 200, 0, 0), 0.12)"
@@ -40,7 +40,7 @@
         {{ t('payment.error.connectFailed') }}
       </q-banner>
 
-      <div v-if="paymentStore.loading" class="flex flex-center q-py-xl">
+      <div v-if="paymentStore.loading.stripeStatus" class="flex flex-center q-py-xl">
         <q-spinner size="48px" />
       </div>
 

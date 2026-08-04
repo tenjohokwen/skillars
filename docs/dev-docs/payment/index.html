@@ -190,6 +190,8 @@
         <tr><td>GET</td><td>/api/payment/coaches/{coachId}/session-pack-tiers</td><td>Discover a coach's currently active pack tier</td><td>PARENT</td></tr>
         <tr><td>POST</td><td>/api/payment/setup-intent</td><td>Create a Stripe SetupIntent to save a card</td><td>PARENT</td></tr>
         <tr><td>POST</td><td>/api/payment/save-payment-method</td><td>Attach a saved payment method to the parent's Stripe customer</td><td>PARENT</td></tr>
+        <tr><td>GET</td><td>/api/payment/stripe/config</td><td>Returns the Stripe.js publishable key for frontend Elements initialisation</td><td>Any authenticated user</td></tr>
+        <tr><td>GET</td><td>/api/payment/payment-method</td><td>Parent's saved card summary (brand/last4/expiry) for gating purchase/subscribe UI</td><td>PARENT</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/me/stripe/onboard</td><td>Get the Stripe Connect OAuth authorize URL</td><td>COACH</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/me/stripe/callback</td><td>Stripe OAuth redirect target — exchanges code, validates state</td><td>COACH</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/me/stripe/status</td><td>Coach's current Stripe onboarding/charges/payouts status</td><td>COACH</td></tr>
@@ -385,7 +387,11 @@ sequenceDiagram
       <code>APP_PAYMENT_STRIPE_WEBHOOK_SECRET</code> (it's different from any secret shown in the
       Dashboard; the CLI signs forwarded events with its own key) and
       <code>APP_PAYMENT_STRIPE_API_KEY</code> to a <code>sk_test_...</code> key from the Dashboard
-      (Developers → API keys, with <strong>Test mode</strong> on). Trigger events on demand with
+      (Developers → API keys, with <strong>Test mode</strong> on). Also set
+      <code>APP_PAYMENT_STRIPE_PUBLISHABLE_KEY</code> to the matching <code>pk_test_...</code> key —
+      the frontend fetches it from <code>GET /api/payment/stripe/config</code> to initialise Stripe
+      Elements; without it, card-collection UI shows the "unavailable" state instead of throwing.
+      Trigger events on demand with
       <code>stripe trigger payment_intent.succeeded</code> etc. instead of driving the full UI flow
       each time.</p>
       <p><strong>Use the standard secret key (<code>sk_test_...</code>), not a Restricted key

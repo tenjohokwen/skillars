@@ -54,11 +54,7 @@ public class BookingDuplicationService {
             throw new OperationNotAllowedException(
                 "Proposed session time is in the past", SecurityError.MISSING_RIGHTS);
         }
-        if (!packSessionService.hasActivePack(original.getPlayerId(), original.getCoachId())) {
-            throw new OperationNotAllowedException(
-                "No effective session credits available for this coach", SecurityError.MISSING_RIGHTS);
-        }
-        UUID packId = packSessionService.getActivePackId(original.getPlayerId(), original.getCoachId());
+        UUID packId = packSessionService.findActivePackId(original.getPlayerId(), original.getCoachId());
 
         Booking newBooking = new Booking();
         newBooking.setCoachId(original.getCoachId());

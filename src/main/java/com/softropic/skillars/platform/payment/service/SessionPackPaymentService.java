@@ -4,9 +4,12 @@ import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.payment.contract.SavedPaymentMethodResponse;
 import com.softropic.skillars.platform.payment.contract.SessionPackPurchaseResponse;
 import com.softropic.skillars.platform.payment.contract.SessionPackTierResponse;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
+import com.stripe.exception.StripeException;
+import com.stripe.model.PaymentMethod;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchase;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
 import com.softropic.skillars.platform.payment.repo.SessionPackTier;
@@ -43,6 +46,7 @@ public class SessionPackPaymentService {
     private final CoachProfileRepository coachProfileRepository;
     private final PlayerProfileRepository playerProfileRepository;
     private final PaymentGateway paymentGateway;
+    private final StripeClient stripeClient;
 
     public SessionPackPurchaseResponse purchasePack(Long parentId, UUID packTierId, Long playerId, String paymentMethodId) {
         playerProfileRepository.findByIdAndParentId(playerId, parentId)
@@ -171,6 +175,28 @@ public class SessionPackPaymentService {
         return sessionPackTierRepository.findByCoachIdAndIsActiveTrue(coachId)
             .map(this::toTierResponse)
             .orElse(null);
+    }
+
+    @Transactional(readOnly = true)
+    public SavedPaymentMethodResponse getSavedPaymentMethod(Long parentId) {
+        String paymentMethodId = stripeCustomerRepository.findById(parentId)
+            .map(StripeCustomer::getStripePaymentMethodId)
+            .orElse(null);
+        if (paymentMethodId == null || paymentMethodId.isBlank()) {
+            return new SavedPaymentMethodResponse(false, null, null, null, null);
+        }
+        try {
+            PaymentMethod paymentMethod = stripeClient.retrievePaymentMethod(paymentMethodId);
+            PaymentMethod.Card card = paymentMethod.getCard();
+            if (card == null) {
+                return new SavedPaymentMethodResponse(true, null, null, null, null);
+            }
+            return new SavedPaymentMethodResponse(
+                true, card.getBrand(), card.getLast4(), card.getExpMonth(), card.getExpYear());
+        } catch (StripeException e) {
+            log.warn("Failed to retrieve saved payment method from Stripe: parentId={}", parentId, e);
+            return new SavedPaymentMethodResponse(true, null, null, null, null);
+        }
     }
 
     private StripeCustomer getOrCreateStripeCustomer(Long parentId, String paymentMethodId) {

@@ -866,6 +866,17 @@ export default {
       tierLabel: '{label} — {count} séances pour {price} €',
       noActiveTier: "Ce coach n'a aucun pack de séances actif disponible.",
     },
+    card: {
+      title: 'Moyen de paiement',
+      savedLabel: '{brand} •••• {last4} · expire le {expMonth}/{expYear}',
+      detailsUnavailable: 'Carte enregistrée · détails indisponibles pour le moment',
+      replaceCard: 'Remplacer la carte',
+      addCardPrompt: 'Ajoutez une carte de paiement pour continuer',
+      addCardCta: 'Ajouter une carte',
+      save: 'Enregistrer la carte',
+      saveError: "Impossible d'enregistrer votre carte. Veuillez réessayer.",
+      unavailable: 'Les paiements par carte ne sont pas disponibles pour le moment',
+    },
   },
   subscription: {
     currentPlan: 'Plan actuel',
@@ -904,7 +915,6 @@ export default {
       cancelSuccess: "Le plan du joueur se terminera le {date}. L'accès est conservé jusque-là.",
       cancelError: "Échec de l'annulation. Veuillez réessayer.",
       cancelPending: "L'abonnement du joueur se termine le {date}.",
-      paymentMethodRequired: 'Veuillez entrer un ID de moyen de paiement.',
     },
   },
   messaging: {

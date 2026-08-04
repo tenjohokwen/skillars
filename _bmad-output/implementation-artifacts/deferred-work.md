@@ -1,3 +1,54 @@
+# Deferred Work
+
+Issues surfaced during code review that were consciously **not** fixed in the story under review.
+One bullet = one open item. Grouped by the review that raised it; the heading carries that review's date.
+
+## How to read this file
+
+- **This is a list of open work only.** Items are deleted outright once they are implemented — this file is
+  not a history of what was fixed. Absence of an item does not mean it was never raised; check git history
+  of this file (or the `skillars-deferred-*.md` stories) for what has been closed.
+- **Sections are not in chronological order.** Read the date in each `## Deferred from:` heading.
+- **Item ids (`D1`, `W3`, `Def12`, `AD4`…) are only unique within their section.** They are the ids the
+  original review used; they repeat across sections and are not global identifiers.
+- **`**[AUDIT <date>: …]**` annotations are the only re-verified claims in this file.** Everything else
+  — especially any "will be fixed in Story X" / "Epic Y owns this" phrasing — records what was believed at
+  review time and has **not** been re-checked. Several such promises turned out to be unkept (see below).
+  Verify against the code before trusting an unannotated forward-reference.
+- **File paths and line numbers age fast.** They were accurate at the review date in the heading.
+
+## Last audit: 2026-08-04
+
+Scope of that audit, so the gaps in it are explicit:
+
+- Removed every item closed by the shipped `skillars-deferred-1` … `skillars-deferred-10` stories, after
+  verifying each fix in code rather than trusting the story's `done` status.
+- Removed items whose subject code was deleted by Story 11.3 (the legacy `SessionPackService` /
+  `SessionPackResource` / `SessionPackResourceIT` system) and items already marked RESOLVED inline.
+- Moved 6 items into `skillars-deferred-11-stripe-card-collection.md` (Stripe card collection, the
+  `loadStripe` null-key guard, `payment.store.js` shared flags, the pack-resolution TOCTOU, the
+  `sessionPacks` store scoping, and coach-name negative caching).
+- Re-verified 13 items that named a future story as their fixer, where that story has since shipped. **Twelve
+  of the thirteen were never actually fixed** and now carry an `[AUDIT 2026-08-04: STILL OPEN …]` note; one
+  was superseded by a deliberate design decision and is annotated as such.
+- **Not audited:** every other forward-reference and every "pre-existing pattern" claim. Those remain
+  unverified. The deployment/infrastructure sections (`deploy-*`) were not re-checked against the current
+  scripts at all.
+
+### Known tracking defect found by the audit
+
+`skillars-deferred-5` is marked `done` in `sprint-status.yaml`, but its **AC4 was never implemented** —
+`ReviewApiAdvice` still does not cover `platform.admin.api`. The item is retained below under the
+`skillars-9-3` section. Treat other `done` markers with corresponding care.
+
+---
+
+## Deferred from: code review of skillars-deferred-11-stripe-card-collection (2026-08-04)
+- `PackSessionServiceParityTest` mocks `findActivePacks` to already return ordered results and only asserts `packs.get(0)` — doesn't exercise the real repository `ORDER BY`, so a regression to actual query ordering wouldn't be caught. [`src/test/java/com/softropic/skillars/platform/payment/service/PackSessionServiceParityTest.java`]
+- `PaymentMethodCard.vue`'s `watch(showForm)` has no in-flight guard against rapid toggle races between async `mountCardElement()` and sync `unmountCardElement()` — low-probability, self-heals on the next full remount. [`PaymentMethodCard.vue:124-127`]
+- `PaymentMethodCard.vue`'s `stripeUnavailable` state has no retry affordance short of a full page reload — AC2 only requires the unavailable message + disabled submit, which is satisfied; a retry action would be a UX enhancement beyond spec scope. [`PaymentMethodCard.vue:86-106`]
+- No frontend tests (Vitest/Vue Test Utils) were added for `PaymentMethodCard.vue` or the new `payment.store.js` actions (`fetchStripeConfig`, `fetchSavedPaymentMethod`) — real coverage gap on a component with non-trivial lifecycle logic. [`PaymentMethodCard.vue`, `payment.store.js`]
+
 ## Deferred from: code review of skillars-3-11-coach-slot-double-booking-prevention (2026-07-31)
 - D1: Coach-suspension race window between the unlocked initial status check and the later lock acquisition in `createBookingRequest` — `coach.getStatus()` is validated via a plain `findById` (`BookingService.java:154-164`), then the coach row is locked later (after the external `paymentGateway.isCoachPaymentReady` call, per this story's own explicit ordering requirement) without re-checking status. If an admin suspends the coach in that window, a booking can still be created. Pre-existing pattern (the unlocked initial read predates this story); the new lock creates a cheap opportunity to close it in a future change. [src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java:154-164,191]
 - D2: No DB-level exclusion constraint backing the new overlap prevention — all double-booking protection lives in app-layer checks at each write path (`createBookingRequest`, `acceptBooking`). Pre-existing architectural trade-off, explicitly justified in this story's own Dev Notes ("no dedicated calendar-slot row to lock"), but the code review found two other write paths (`BookingBatchService.createBatch`, `RescheduleService.acceptReschedule`) that already bypass the app-layer check entirely — worth revisiting as a DB-level backstop (e.g. Postgres `EXCLUDE USING gist` on a `tstzrange`) rather than relying on every future write path remembering to call it. [src/main/resources/db/migration/, src/main/java/com/softropic/skillars/platform/booking/repo/BookingRepository.java]
@@ -12,7 +63,6 @@
 
 ## Deferred from: code review of skillars-10-2-coach-enforcement-strike-management (2026-06-30)
 - D1: `AFTER_COMMIT` listener failure silently drops refunds — `CancellationRefundService.onBookingCancelledByAdmin()` follows the same `REQUIRES_NEW` pattern as all other listeners; if the refund transaction fails after the suspension commits, the booking stays CANCELLED with no refund issued and no retry. Pre-existing pattern shared by `onBookingCancelledByCoach`, `onCoachNoShow`, etc. Address in a platform-wide payment resilience pass. [CancellationRefundService.java:onBookingCancelledByAdmin]
-- D2: `visibilityThreshold` config key missing/non-numeric crashes `deleteStrike` with 500 — `Long.parseLong(configService.getString(...))` with no null/format guard. Same risk exists in `ReliabilityStrikeService.issue()` (already shipping). Address in a config-access hardening pass. [AdminCoachEnforcementService.java:207]
 - D3: N+1 strike count queries in `getCoachesUnderEnforcement` — one `countByCoachIdAndCreatedAtAfter` per coach per page. Spec acknowledges at MVP scale (admin-only, low traffic); optimize via batch query if list size becomes a concern. [AdminCoachEnforcementService.java:252]
 
 ## Deferred from: code review of skillars-10-1 patches (2026-06-30)
@@ -24,21 +74,12 @@
 - D2: `findBeforePivot` / `findAfterPivot` strict `<`/`>` on `createdAt` excludes messages sharing the exact pivot timestamp from context window — low-probability collision but possible when two messages arrive within the same millisecond. [MessageRepository.java:33-37]
 
 ## Deferred from: code review of skillars-9-3-review-visibility-flagging-admin-resolution (2026-06-30)
-- D1: Double-approve produces spurious audit log + event — No guard in `AdminReviewService.approveReview()` against re-approving an already-APPROVED review. Idempotent on state but creates duplicate `review_moderation_log` entries and fires duplicate `ReviewModerationResolvedEvent`. Defer to Epic 10 when admin UI enforces valid state transitions. [AdminReviewService.java:72-94]
-- D2: `ReviewApiAdvice` scope excludes `AdminReviewResource` — Advice covers `platform.reviews.api` only; admin controller is in `platform.admin.api`. `ResourceNotFoundException` from approve/block falls to the global handler, which may return a different error shape than the reviews API. Acceptable if global handler is consistent; verify before Epic 10 admin UI integration. [ReviewApiAdvice.java:21]
+- D1: Double-approve produces spurious audit log + event — No guard in `AdminReviewService.approveReview()` against re-approving an already-APPROVED review. Idempotent on state but creates duplicate `review_moderation_log` entries and fires duplicate `ReviewModerationResolvedEvent`. Defer to Epic 10 when admin UI enforces valid state transitions. [AdminReviewService.java:72-94] — **[AUDIT 2026-08-04: STILL OPEN. Epic 10 has shipped; `AdminReviewService.approveReview` reads `previousStatus` then sets APPROVED with no already-APPROVED guard. No longer blocked on anything.]**
+- D2: `ReviewApiAdvice` scope excludes `AdminReviewResource` — Advice covers `platform.reviews.api` only; admin controller is in `platform.admin.api`. `ResourceNotFoundException` from approve/block falls to the global handler, which may return a different error shape than the reviews API. Acceptable if global handler is consistent; verify before Epic 10 admin UI integration. [ReviewApiAdvice.java:21] — **[AUDIT 2026-08-04: STILL OPEN, AND MIS-TRACKED. This was AC4 of `skillars-deferred-5`, which is marked `done` in sprint-status.yaml — but `ReviewApiAdvice.java:20` is still `@RestControllerAdvice(basePackages = "com.softropic.skillars.platform.reviews.api")` with no `platform.admin.api`. A shipped story has an unmet AC.]**
 - D3: Coach flag guard silently skips when coach profile is missing — `coachProfileRepository.findById(...).ifPresent(...)` in `ReviewFlagService.flag()` returns empty if profile is deleted/deactivated; the coach-self-flag guard is silently bypassed. AC9 mandates profile retention, making this rare, but a stricter guard (throw if profile not found) would be safer. [ReviewFlagService.java:44-50]
 
-## Deferred from: code review of skillars-9-2-review-moderation-rating-aggregation (2026-06-29)
-- D1: AC3 admin resolution endpoint not implemented — intentional; Epic 10 owns admin endpoints; `ReviewModerationResolvedEvent` and `CoachRatingService.recompute()` ready for Epic 10 to call. [ReviewModerationResolvedEvent.java]
-- D2: Prompt injection in Gemini review moderation — `promptTemplate + input` concatenation with no sanitisation; same established pattern as messaging module (Story 8.3); address project-wide in a Gemini hardening pass if LLM prompt injection becomes a compliance concern. [ReviewModerationService.java]
-
-## Deferred from: code review of skillars-9-1-review-submission-eligibility (2026-06-29)
-- W1: `eventPublisher.publishEvent(new ReviewSubmittedEvent(...))` fires synchronously inside `@Transactional` in `submitReview` and `updateReview` — if Story 9.2 registers a plain `@EventListener` (synchronous), any exception in the listener rolls back the review save; Story 9.2 must use `@TransactionalEventListener(phase = AFTER_COMMIT)` only. [ReviewSubmissionService.java:64-65, 95-96]
-- W2: `SecurityUtil.getCurrentUser()` throws `IllegalStateException` (→ 500) for non-standard auth tokens — consistent with `MessagingResource` and other resources; project-wide risk not introduced by this story; fix in a platform-wide auth hardening pass. [ReviewResource.java:78-86]
 
 ## Deferred from: code review of skillars-8-4 (2026-06-27)
-- W1: CASCADE deletes open abuse reports during retention — `DELETE FROM messaging.messages WHERE created_at < :cutoff` cascades to `message_reports` via FK, destroying OPEN/UNDER_REVIEW report evidence. Spec-specified behavior (AC4). Epic 10 admin module should block retention for messages with open reports or archive reports before cascade. [`MessageRepository.java:33`, `V66__messaging_reports.sql:3`]
-- W2: `deleteOrphanConversations` never purges empty-shell conversations — `NULL < :cutoff` evaluates to NULL in SQL; conversations created but never messaged accumulate indefinitely. Low-severity. [`ConversationRepository.java:31`]
 - W3: Redundant explicit indexes in V66 — `idx_message_reports_message_id` and `idx_conversation_reports_conversation_id` are covered by the unique constraint leading column. Minor storage waste. [`V66__messaging_reports.sql:27-28`]
 - W4: `softDeleteMessage` ALREADY_DELETED race window — two concurrent soft-deletes by the same user both pass `deletedAt == null` at READ_COMMITTED; second silently succeeds instead of 409. Requires `@Version` on `Message`. [`MessagingService.java:263`]
 - W5: `@PreAuthorize(IS_AUTHENTICATED)` on report endpoints instead of party-check annotation — consistent with module pattern; 403 preserved at service layer. Architectural note for future hardening. [`MessagingResource.java:140,151,168`]
@@ -47,7 +88,6 @@
 - W1: TOCTOU — age policy + party checks run without a transaction before committed message save; spec-designed (NOT_SUPPORTED), window is narrow [`MessagingService.java:129-145`]
 - W2: Message orphaned in PENDING on JVM crash or `applyResult()` DB exception after initial tx commit; no cleanup path or retry mechanism [`MessagingService.java:167` / `GeminiModerationService.java:53`]
 - W3: `conv.getParentId()` returned without null guard for SUPERVISED policy in `ModerationResultApplier.resolveRecipient()` — same pattern in `MessagingService.resolveRecipient()` [`ModerationResultApplier.java:104`]
-- W4: Prompt injection — user message content appended directly to Gemini instruction prompt with no structural separation; future hardening story [`GeminiModerationService.java:46`]
 - W5: `content` dereferenced before null check in `GeminiModerationService.moderate()`; guarded only at the single current call-site [`GeminiModerationService.java:35`]
 
 ## Deferred from: code review of skillars-8-2 (2026-06-26)
@@ -63,18 +103,15 @@
 - D1: `parent_credit_balance` VIEW returns 0 rows (not a zero-balance row) for parents with no ledger history — safe via JPQL path; latent trap for native SQL consumers [`V62__session_payment_credit_wallet.sql`]
 - D2: Duplicate expiry query methods — `findByCoachIdAndExpiresAtBetween...` (coach-scoped) and `findExpiringWithinWindowAndSessionsRemaining` (JPQL all-coaches) overlap; coach-scoped method appears unused; verify in Group 2 service review [`SessionPackPurchaseRepository.java:21-25`]
 - D3: `SessionPackPurchase.expiresAt` mutable with no `updatable=false` — service-layer enforced via `extendPack()` business rules; open setter is a footgun [`SessionPackPurchase.java`]
-- D4: No DB-level append-only enforcement on `parent_credit_ledger` (no trigger or RLS blocking UPDATE/DELETE) — AC 1 intent; application-layer invariant only; harden in a later migration [`V62__session_payment_credit_wallet.sql`]
 - D5: `stripe_customers.last_payment_intent_id` not in AC 1 spec schema — intentional addition to support cash-out refund flow (Group 2 Decision D1 resolution); AC 1 should be updated to document this column [`V62__session_payment_credit_wallet.sql`, `StripeCustomer.java`]
 - D6: No `CHECK (stripe_customer_id LIKE 'cus_%')` format guard on `stripe_customers` — would catch placeholder IDs at DB boundary; application-layer only today [`V62__session_payment_credit_wallet.sql`]
 
 ## Deferred from: code review of skillars-7-1-stripe-connect-onboarding-commission-engine (2026-06-24)
-- D1: `capturePayment` called inside `@Transactional` in `purchasePack`/`purchaseSingleSession` — DB connection held open during Stripe I/O; will cause connection pool exhaustion when Story 7.2 enables real charges [`SessionPackService.java`]
 - D2: Session pack purchase always fails with `payment.providerUnavailable` in Story 7.1 — intentional stub behaviour per spec; Story 7.2 implements real charging [`StripePaymentGateway.java`]
 - D3: Unbounded `VARCHAR` on `stripe_webhook_events.event_id` — Stripe event IDs are well-formed in practice; low B-tree risk [`V61__payment_module_init.sql`]
 - D4: `acceptBooking` fires `INITIATE_PAYMENT` → `PAYMENT_CAPTURED` state transitions without performing actual payment — pre-existing state machine flow, not introduced by Story 7.1; Story 7.2 must retrofit a failure path and prevent the state being committed before capture succeeds [`BookingService.java:203-204`]
 
 ## Deferred from: adversarial code review of skillars-5-6-parent-development-portal (2026-06-19)
-- AD1: Stale error state between player switches — each store action resets its own error ref at call-start; fully resolved when route.params.playerId watch patch is applied [`ParentDevelopmentPortalPage.vue`]
 - AD2: MapStruct not used for `Object[]` → `CoachContributionDto` mapping — MapStruct cannot transform raw JDBC Object[] projections; inherent native query limitation [`SluContributionService.java`]
 - AD3: `@Testcontainers` annotation absent from IT class — tests pass (6/6); infrastructure activated via TestConfig; add annotation for explicitness in future test-hardening pass [`ParentDevelopmentPortalResourceIT.java`]
 - AD4: Instancio not used in IT — FK-constrained integration seeding requires fixed IDs; project-wide IT pattern [`ParentDevelopmentPortalResourceIT.java`]
@@ -101,7 +138,6 @@
 ## Deferred from: code review of skillars-5-5-pdf-performance-report-unified-player-timeline (2026-06-19)
 - D1: `slu_value` and `calculated_at` column names in `SluRepository` native queries not explicitly verified against the actual migration file — runtime `BadSqlGrammarException` risk; confirm column names from V-series migration before deploying [`SluRepository.java:36,42`]
 - D2: S3 I/O (Academy logo download + PDF upload to S3) executes inside `@Transactional generateReport` — blocking calls hold DB connection for the duration; may exhaust connection pool under concurrent load [`ReportGenerationService.java:87-142`]
-- ~~D3: Email Thymeleaf template at `mails/performanceReportShared.html` — verify this matches the path `MailManager` scans; if the scanner expects `templates/mail/`, emails will silently fail to render with no exception thrown [`src/main/resources/mails/performanceReportShared.html`]~~ — **RESOLVED 2026-06-19**: path confirmed correct by Acceptance Auditor; `MailManager` scans `mails/` prefix with CamelCase name.
 - D4: No rate limit on `POST /api/development/players/{playerId}/reports` — a coach can call in a loop; each call generates a PDF, uploads to S3, inserts a DB row, writes a timeline event, and queues a parent email; trivial cost-amplification DoS vector [`PerformanceReportResource.java`]
 - D5: `nextSteps` stored permanently on `performance_reports` with no redaction or deletion API — coach cannot correct defamatory or incorrect notes after generation; GDPR erasure story must add `PerformanceReportRepository.deleteByPlayerId` + S3 object deletion for each `storage_key` [`ReportGenerationService.java`, `performance_reports` table]
 - D6: `getParentEmailByPlayerId` fires 2 separate DB queries (getParentIdByPlayerId + userRepository.findById) — no single-query fetch for parent email+name; TOCTOU gap if parent account deleted between calls [`PlayerProfileService.java`]
@@ -112,12 +148,9 @@
 - W3: Native SQL `@Modifying` queries bypass `@Version` optimistic lock — version column not incremented by native queries; pre-existing codebase-wide pattern; auditing all call sites is a separate hardening task [`VideoRepository.java` and other repos]
 - W4: ownerId format ambiguity for mixed-type strings — Task 0 Identity Bridge investigation was a mandatory gate; deferred on assumption Task 0 was completed and format confirmed [`VideoAccessGuard.java`]
 - W5: `PROCESSING→READY` backward-compat bypass not removed — spec Task 9 requires a separate PR with ops sign-off (7+ days of zero `video.moderation.bypass` counter); intentionally excluded from Story 6.5 [`VideoLifecycleService.java`]
-- W6: `VideoPhysicalDeletionEvent` name is misleading — spec dev notes recommend renaming to `VideoPurgedEvent` or `VideoLogicallyDeletedEvent` before Story 10.4 wires a consumer; blast radius is a Find & Replace now vs a production incident later [`VideoPhysicalDeletionEvent.java`]
-- W7: `VideoPhysicalDeletionEvent` published inside `@Transactional deleteVideo()` before commit — synchronous `@EventListener` consumers would process a deletion that may roll back; no consumer exists yet; Story 10.4 must use `@TransactionalEventListener(AFTER_COMMIT)` only [`VideoDeletionService.java:90`]
 - W8: `cascadeDeleteForAccount` quota reset non-atomic — JVM crash after last per-video commit but before `resetBytesForOwner()` leaves deleted account's quota row permanently non-zero; no retry path corrects this; future reconciliation job spec'd in dev notes [`VideoDeletionService.java:169`]
 - W9: `canDelete(null, videoId)` belt-and-suspenders is a no-op for non-HTTP callers — null auth causes broad catch to swallow the re-check; `@PreAuthorize` is the primary enforceable gate; acceptable for current call sites [`VideoDeletionService.java:117`]
 - W10: Parent-play/PURGE race — null `providerAssetId` passed to `generatePlaybackUrl()` if video is concurrently purged between `@PreAuthorize` canPlay evaluation and `PlaybackService.authorizePlayback()` call; provider should throw cleanly; very low probability in practice [`PlaybackService.java`]
-- D7: Any `ROLE_COACH` can call `GET /api/development/players/{playerId}/reports` for any player — `hasRole('ROLE_COACH')` short-circuits the parent ownership guard; explicit MVP trade-off per spec dev notes; revisit if enumeration attacks become a concern [`PerformanceReportResource.java:listReports`]
 
 ## Deferred from: code review of skillars-5-4-skills-radar-display-development-correlation (2026-06-19)
 - W1: No FK from `player_radar_baselines.player_id` / `coach_radar_preferences.player_id` to `main.player_profiles` — accepted limitation per spec dev notes; consistent with Stories 5.1–5.3 no-FK pattern across `development.*` tables [`V51__radar_display_correlation.sql`]
@@ -125,39 +158,30 @@
 - W3: `insertBaselineIfAbsent` `@Transactional` participates in outer transaction — `ON CONFLICT DO NOTHING` cannot protect across a rollback on first-ever baseline write; documented MVP limitation in spec dev notes [`PlayerRadarBaselineRepository.java`]
 - W4: Skill deactivation silently drops baseline from display — `findAllByActiveTrueOrderByDisplayOrderAsc` excludes inactive skills; baseline re-appears on reactivation [`RadarDisplayService.java:39`]
 - W5: IT `assertThat(minimumSessionCount).isEqualTo(5L)` hardcodes config value — low risk with Testcontainers; `ON CONFLICT DO NOTHING` in V51 migration [`RadarDisplayResourceIT.java:333`]
-- W6: Any ACADEMY coach can call `GET /radar/correlation` for any player — no player-coach ownership check; consistent with `GET /radar/display`; platform-wide security hardening needed (see also DEF5) [`RadarDisplayResource.java:64-69`]
 - W7: `IMPROVEMENT_THRESHOLD = 3.0` hardcoded — exactly-3-point improvement classified as "no improvement"; explicitly accepted in spec dev notes; configurable in a future story [`DevelopmentCorrelationService.java:33`]
 - W8: `(int)` cast on `totalCount` in `RadarCompositeCalculationService` — pre-existing silent overflow for very high entry counts; not introduced in this diff (see DEF6) [`RadarCompositeCalculationService.java`]
 - W9: `SkillsRadarChartSpec.js` tests cannot run — vitest / `@vue/test-utils` not installed; explicitly accepted in story completion notes; frontend test-runner setup is a separate initiative
 
 ## Deferred from: code review of skillars-5-3-skills-radar-assessment-entry-multi-coach-cumulation — Pass 2 (2026-06-19)
-- DEF5: No coach-player relationship check on radar endpoints — any INSTRUCTOR+ coach can submit/read assessments for any player; `parentId` JOIN only provides cross-family isolation (FR-TSC-009), not coach-to-player assignment enforcement; same architectural gap as Story 5.2 narrative access (DEF0); address in a platform-wide security hardening story auditing all coach-scoped development endpoints [`RadarAssessmentService.java`, `RadarAssessmentResource.java`]
 - DEF6: `entry_count` long→double→int narrowing in composite calculator — count from native SQL is cast double→int; silently overflows above Integer.MAX_VALUE; irrelevant at current volumes [`RadarCompositeCalculationService.java:61-69`]
 - DEF6: Orphaned `player_radar_composites` rows on player deletion — `player_id` column has no FK to `player_profiles`; deleted player leaves stale composite rows; pre-existing no-FK pattern across the development module [`player_radar_composites`, `V50__radar_assessment_entries.sql`]
 - DEF7: Async composite silently stales on failure — `@Async` listener swallows all exceptions (logged only); no retry/dead-letter queue; composite frozen at prior value until next submission triggers recomputation; accepted per story dev notes [`RadarCompositeCalculationService.java:onRadarEntrySubmitted`]
 
 ## Deferred from: code review of skillars-5-3-skills-radar-assessment-entry-multi-coach-cumulation (2026-06-19)
 - DEF1: `SkillDefinitionRepository` injected directly into `SkillDefinitionResource` (no service layer) — pre-existing architecture; fix at next planned touch of `SkillDefinitionResource` [`SkillDefinitionResource.java:17`]
-- DEF2: `entry_count` in `player_radar_composites` stores total rows across all assessment types, not distinct coaches — semantic mismatch with Story 5.4 confidence indicator design ("3+ entries = filled dot" is misleading when all 3 rows come from one coach); 5.4 author should add a `distinct_coach_count` column or revise the confidence model [`RadarCompositeCalculationService.java`, `player_radar_composites`]
+- DEF2: `entry_count` in `player_radar_composites` stores total rows across all assessment types, not distinct coaches — semantic mismatch with Story 5.4 confidence indicator design ("3+ entries = filled dot" is misleading when all 3 rows come from one coach); 5.4 author should add a `distinct_coach_count` column or revise the confidence model [`RadarCompositeCalculationService.java`, `player_radar_composites`] — **[AUDIT 2026-08-04: STILL OPEN. Story 5.4 has shipped; no `distinct_coach_count` column exists in any migration and the confidence model was not revised.]**
 - DEF3: Concurrent async composite recalculation race — two simultaneous submissions for the same player trigger two `@Async` events that can both query aggregates before either upserts; last writer wins and self-corrects on the next submission; theoretical low-probability issue [`RadarCompositeCalculationService.java:onRadarEntrySubmitted`]
 - DEF4: No retry or dead-letter queue for async composite failure — failure logged but composite silently stale until next assessment triggers recomputation; accepted per story dev notes; address in an infrastructure hardening story if operational visibility requires it [`RadarCompositeCalculationService.java`]
 
 ## Deferred from: code review of skillars-5-2-skill-exposure-dashboard-neglected-skill-detection — Round 2 Group C (2026-06-19)
 - D3: `getNeglectedSkills` in `development.api.js` is dead code — neglected codes are bundled in the exposure response; the standalone API export is never called. Remove in a cleanup pass. [`development.api.js:11-12`]
-- D4: `useDevelopmentStore` is a singleton and not reset on player navigation — coaches managing multiple players see stale data briefly between navigations. Fix: clear `exposure`, `targets`, `narrative` to null/[] at the top of `onMounted`. [`PlayerDevelopmentDashboardPage.vue:81`]
 - D5: `SluTargetEditor` `currentTargets` watcher can discard in-progress user input if `fetchTargets` resolves while the dialog is open (race between fetchExposure completing and fetchTargets completing). Low probability; fix by guarding the targets-loaded state or deferring the watcher when open. [`SluTargetEditor.vue:51`]
-- D6: `de/index.js` development block uses English strings — translate to German in a dedicated i18n story. [`de/index.js:388-404`]
 
-## Deferred from: code review of skillars-5-2-skill-exposure-dashboard-neglected-skill-detection — Round 2 Group B (2026-06-19)
-- D1: Year-boundary week arithmetic in `SluDashboardServiceTest` — `prevWeek = curWeek > 1 ? curWeek-1 : 52` assigns ISO week 52 to the current year when curWeek=1; the correct week 52 belongs to the prior ISO year. Test passes because the mock returns whatever keys are given, but snapshot IDs are semantically invalid and would produce wrong data if copied to an IT test. Only manifests in tests run in early January (ISO week 1). Fix: compute prev/prevPrev using `ZonedDateTime.minusWeeks(n)` + `WEEK_BASED_YEAR`, same as the narrative test. [`SluDashboardServiceTest.java:690-692`]
-- D2: AC 7 (neglected skill detection uses highest coach target) has no IT-level regression test — the `multipleCoachesUsesHighestTarget` unit test pre-bakes the MAX result as a stub, so it does not verify that the JPQL `SELECT ... MAX(t.weeklyTargetSlu) ... GROUP BY ...` query actually aggregates across two coaches. If the query gains a `WHERE coach_id = :coachId` filter by mistake, AC 7 silently breaks. Add an IT that inserts targets from two coaches for the same player/skill, fires the detection, and verifies the flag reflects the highest target. Defer to Story 5.3 IT suite expansion.
 
 ## Deferred from: code review of skillars-5-2-skill-exposure-dashboard-neglected-skill-detection — Round 2 Group A (2026-06-19)
 - D0: Narrative sharing consent system — player or parent should be able to grant a coach access to their narrative summary, with a visible toggle to revoke it; coaches currently have unrestricted read access to all narratives via `ROLE_COACH` guard; restrict access and implement a proper permission model in a dedicated story [`SkillExposureResource.java:34-38`]
 - D1: V49 `CREATE UNIQUE INDEX` blocks startup if phased deploy allowed Monday batch to create duplicate flags between V48 and V49 — mitigated by same-commit deployment of both migrations; negligible in standard CI pipeline [`V49__neglected_skill_unique_open_constraint.sql`]
-- D2: No distributed lock on `@Scheduled` — multi-instance neglected-skill detection race; V49 unique index prevents data corruption but rolls back flag resolutions on the losing node; ShedLock is the correct fix, out of scope for this story [`NeglectedSkillDetectionService.java`]
 - D3: All skills flagged neglected for inactive/new player — `actual=0` falls below every coach target; technically correct per AC 4 literal but causes flag-flood on first evaluation; consider a "minimum sessions in the evaluated period" guard in a future UX refinement story [`NeglectedSkillProcessor.java`]
-- D4: `slu.neglected.threshold > 1` silently disables all neglected-skill detection — negative `oneMinus` makes `lowerBound` always negative; no range validation on the config value [`NeglectedSkillDetectionService.java:22-27`]
 - D5: No upper bound on `findByPlayerIdFromWeek` JPQL query — future-dated snapshot rows from a clock-skew or ingestion error inflate trend data; fix requires an upper-bound year/week filter at ingestion time [`SluWeeklySnapshotRepository.java:21-27`]
 - D6: `SluCalculationService` async ISO week boundary race — `now` captured pre-`saveAll`; a session straddling Monday midnight writes SLU rows and snapshot to different ISO weeks — pre-existing design acknowledged in story dev notes [`SluCalculationService.java:177-187`]
 
@@ -180,14 +204,12 @@
 ## Deferred from: code review of skillars-5-1-slu-engine-skill-taxonomy (2026-06-18)
 - W1: Negative metadata fields (repDensity/intensity/etc.) can produce corrupt SLU via double-negative — pre-existing validation gap at drill creation; fix at DrillMetadata validation layer [`SluFormula.java:45-66`]
 - W2: @Async executor naming ambiguity — explicit `@Async("taskExecutor")` qualifier would eliminate uncertainty; largely covered by the AsyncUncaughtExceptionHandler patch [`SluCalculationService.java:43`]
-- W3: configService.getString whitespace/empty string causes NumberFormatException → silent SLU abort — pre-existing ConfigService limitation; fix belongs at config write validation [`SluCalculationService.java:78-85`]
 - W4: Thread.sleep in negative-path IT tests — acceptable for negative async assertions where no positive signal exists; replace with Awaitility + log spy if flakiness is observed in CI [`SluCalculationServiceIT.java:107,125,135,171`]
 - W5: Platform config IDs 70-72 skip 68-69 — intentional gap; no migration uses 68-69; ON CONFLICT DO NOTHING prevents failures [`V46__development_module_init.sql:51-55`]
 - W6: player_id and coach_id have no FK constraints on player_skill_stats — intentional for immutable audit rows; cascading deletes would corrupt historical SLU [`V46__development_module_init.sql:19,21`]
 
 ## Deferred from: code review of skillars-4-6-homework-assignment-player-locker-room (2026-06-18)
 - W1: `getLockerRoomDrills` calls `hasActivePack` once per unique coach (N+1 queries) — performance concern, not correctness; batch API needed; address in a performance-hardening pass [`HomeworkAssignmentService.java:getLockerRoomDrills`]
-- W2: Missing composite index on `(player_id, coach_id)` on `homework_assignments` — full player-index scan used for the coach-filter path as data grows [`V45__homework_assignments.sql`]
 - W3: `handleBookingCompleted` stores null sessionId with no log.warn — async bean ordering is not guaranteed; add warn log if sessionId resolves null [`HomeworkAssignmentService.java:handleBookingCompleted`]
 - W4: `@Size(max=2)` on `WrapUpRequest.homeworkDrillIds` not enforced on event-driven path — HTTP validation is the only entry point today; add size guard in service if other publishers emerge [`HomeworkAssignmentService.java`]
 
@@ -198,11 +220,7 @@
 - W4: Template name inputs missing `maxlength="200"` client-side — server `@Size(max=200)` catches it; generic error is acceptable UX [`SessionTemplateVault.vue`, `SessionBuilderPage.vue`]
 - W5: `createTemplate()` store action never sets `error.value` on failure — callers handle errors; minimal impact on store error state [`sessionTemplate.store.js`]
 - W6: `SessionTemplate.blocks` null risk if `session.getBlocks()` null — `Session.blocks` is NOT NULL in DB so sessions should never have null blocks; constraint prevents [`SessionTemplateService.java:createTemplate`]
-- W7: V44 migration no index on `source_template_id` — performance concern for future analytics queries on deployed sessions per template; not needed for current functionality [`V44__session_templates.sql`]
-- W8: `deployTemplate()` race condition (duplicate booking, `existsByBookingId` + `save` not atomic) — pre-existing pattern identical to `SessionPlanService.createSession`; deferred from Round 1 [`SessionTemplateService.java:deployTemplate`]
 
-## Deferred from: code review of skillars-4-5-intelligent-drill-suggestions-session-templates (2026-06-18)
-- W1: Race condition: `existsByBookingId` check and `save` not atomic in `SessionTemplateService.deployTemplate` — same pre-existing pattern as `SessionPlanService.createSession`; no DB unique constraint on `session.sessions(booking_id)`; concurrent deploys to the same booking could both succeed [`SessionTemplateService.java:deployTemplate`]
 
 ## Deferred from: code review of skillars-4-4-session-builder-block-structure-dna — round 2 (2026-06-18)
 - W8: `isBookingPlannable` accepts `"UPCOMING"` but no known code path transitions a Booking to this status — proactive future-proofing, harmless if UPCOMING is never set [`SessionPlanService.java:167`]
@@ -213,7 +231,6 @@
 - W2: IT test `updateSession_completedSession` does not assert SESSION_PLAN_LOCKED helpCode in response body — test verifies 403 status but never reads `response.body.helpCode` to confirm the correct error code is returned. Test quality improvement. [`SessionBuilderResourceIT.java:271`]
 - W3: `WrapUpSequence` uses `variant="compact"` instead of spec-specified `"full"` — cosmetic deviation; DNA chart renders at 160px instead of 240px in the wrap-up overlay. [`WrapUpSequence.vue:163`]
 - W4: `SessionBlockRequest.drills` has no `@Size(max=...)` upper-bound constraint — unbounded drill count per block; a malicious payload could include thousands of drills, causing runaway DNA/equipment computation. Hardening concern, not MVP-blocking. [`SessionBlockRequest.java:16`]
-- W5: `WrapUpSequence.fetchSessionDna` has no loading or error state — fires on component mount (step 1 entry), not step 4; chart renders without any spinner while fetching; failed fetch silently leaves chart absent. UX polish. [`WrapUpSequence.vue:309`]
 - W6: `buildResponse` calls `drillRepository.findAllById` twice for the same ID set — once inside `resolveMetaMap`, once inside `buildResponse` itself. Redundant DB round-trip for every read. Performance optimization. [`SessionPlanService.java:220`]
 - W7: IT teardown `DELETE FROM session.sessions` runs before `DELETE FROM booking.bookings` — safe today because there is no FK between the tables; would fail if a FK is ever added. Future-proofing. [`SessionBuilderResourceIT.java:104`]
 
@@ -241,14 +258,13 @@
 ## Deferred from: external code review of skillars-4-1-drill-library-foundation (2026-06-17)
 - D1: `resolveMinEnabledTier` returns `"NONE"` when all gate config keys are false — misleading required-tier in `FeatureGatedException`; low-probability misconfiguration edge case [`DrillLibraryService.java:103-110`]
 - D2: `DrillVideoRef.save()` issues merge (SELECT + INSERT) instead of persist (INSERT-only) — extra SELECT on clone ref insert; no data corruption in normal flow; fix with `Persistable<UUID>` implementation when performance becomes a concern [`DrillLibraryService.java:82`]
-- D3: No unique constraint on `(owner_coach_id, name)` — coach can clone the same platform drill multiple times, silently creating duplicates in their private library; UI drill list may show dups [`V38__session_module_init.sql`]
 
 ## Deferred from: code review of skillars-4-1-drill-library-foundation (2026-06-17)
 - D1: `session` schema name is a PostgreSQL non-reserved keyword — works on all tested PG versions; renaming after migration is written would require a destructive V40 migration [`V38__session_module_init.sql`]
 - D2: V39 seed drills use `gen_random_uuid()` — non-deterministic IDs differ between environments; migration already written; deterministic UUIDs would require a V40 fix migration [`V39__session_foundation_20_drills.sql`]
 - D3: Feature gate config key format relies on `tier.name()` matching DB key suffix exactly — new tier addition requires a matching migration; acceptable by convention; no compile-time enforcement [`DrillLibraryService.java:86`]
 - D4: `POST /api/session/plans` returns 201 empty body — intentional stub per story dev notes; full implementation in Story 4.4 [`SessionPlanResource.java`]
-- D5: `DrillLibraryPage.vue` `onMounted` no error handling — stub page; Story 4.2 builds full UI [`DrillLibraryPage.vue:15`]
+- D5: `DrillLibraryPage.vue` `onMounted` no error handling — stub page; Story 4.2 builds full UI [`DrillLibraryPage.vue:15`] — **[AUDIT 2026-08-04: STILL OPEN. Story 4.2 has shipped and built the full UI, but `onMounted` still has no error branch.]**
 - D6: New coach with no profile gets `ResourceNotFoundException` → 404 from `getCoachIdByUserId` on private drill list — edge case; Story 4.2 to guard on the frontend; backend always requires a complete profile [`CoachProfileService.java`]
 - D7: `listPrivateDrills` no explicit `library_type = 'COACH'` filter — safe today due to DB `chk_drill_owner` constraint preventing PLATFORM drills from having a non-null `owner_coach_id` [`DrillRepository.java`]
 - D8: `DrillResponse.ownerCoachId` is always null for PLATFORM drills — nullable contract undocumented; Story 4.2 frontend rendering should null-check [`DrillResponse.java`]
@@ -262,7 +278,6 @@
 
 ## Deferred from: code review of skillars-3-6-session-completion-live-mode-quick-complete (2026-06-16)
 - W1: JPQL string literal `'COMPLETED'` in `findPendingQuickCompletes` is fragile against `BookingStatus` enum rename — pre-existing pattern project-wide [`SessionCompletionDataRepository.java:22`]
-- W2: `currentUserId()` casts `getCurrentUser()` to `Principal` without null guard — same unchecked cast used in all platform Resources; pre-existing [`SessionCompletionResource.java`]
 - W3: `BookingCompletedEvent` has no retry/DLQ mechanism if listener fails after commit — infrastructure limitation, pre-existing across all event consumers [`BookingEmailListener.java`]
 - W4: `getDrillSuggestions` has no `@Max` constraint on `limit` parameter — stub endpoint fully replaced by Epic 4; guard when real implementation lands [`SessionCompletionResource.java`]
 - W5: Auto-return after wrap-up reloads `selectedWeek` instead of current week — minor UX edge case when coach was browsing a different week [`CoachCommandCenterPage.vue:305`]
@@ -285,51 +300,32 @@
 - `useBookingSse()` not wired into `BookingStateChip` — SSE wire-up deferred to consuming page/component story; chip will be connected when the parent booking detail page is built
 
 ## Deferred from: code review of skillars-3-3-booking-request-approval-workflow Group E (2026-06-15)
-- `getParentBookings_returnsListSortedByStartTime` IT test asserts only HTTP 200 + non-null body — sort order never verified; needs 2+ bookings in reverse chronological order + `extracting("requestedStartTime").isSorted()` assertion; a regression removing the `OrderBy` from the JPA method would not be caught [BookingRequestResourceIT.java:480]
-- `parentName` field not asserted in `getCoachBookingRequests` IT test — AC 8 requires parent name on coach inbox rows; `response.getBody().get(0).get("parentName")` never checked [BookingRequestResourceIT.java:524]
 - Authority id 9502 leaked in `playerNotOwnedByParent_returns403` test — `finally` block cleans user + user_authority but not the authority row; `@AfterEach` only deletes ids 9500, 9501; add `DELETE FROM main.authority WHERE id = 9502` to the finally block [BookingRequestResourceIT.java:289]
 - `declineBooking` unit test uses `any(BookingDeclinedEvent.class)` — `canonicalTimezone` field not captured/asserted via `ArgumentCaptor`; regression where timezone is null would pass [BookingServiceTest.java:244]
-- No wrong-coach IT test for `declineBooking` — `acceptBooking_wrongCoach_returns403` exists but no equivalent for the decline endpoint; role-guard misconfiguration on that path would go undetected [BookingRequestResourceIT.java]
 
 ## Deferred from: code review of skillars-3-3-booking-request-approval-workflow Group D (2026-06-15)
-- `canonicalTimezone` sent as parent's browser timezone — session time in coach notification email shown in parent's TZ, not coach's; canonical timezone for a session should be the coach's timezone; revisit in Story 3.5 (Scheduling Views & Timezone Management) [BookingRequestPage.vue:121]
+- `canonicalTimezone` sent as parent's browser timezone — session time in coach notification email shown in parent's TZ, not coach's; canonical timezone for a session should be the coach's timezone; revisit in Story 3.5 (Scheduling Views & Timezone Management) [BookingRequestPage.vue:121] — **[AUDIT 2026-08-04: STILL OPEN. Story 3.5 has shipped; `BookingRequestPage.vue:294,312` still send `Intl.DateTimeFormat().resolvedOptions().timeZone`.]**
 - `formatSlot()` in BookingRequestPage uses `toLocaleString()` with no timezone — slots display in parent's local time, not coach's timezone; inconsistent with ParentBookingsPage which uses `{ timeZone: timezone }`; address in Story 3.5 [BookingRequestPage.vue:104]
-- No user-visible error feedback on `handleAccept`/`handleDecline` failure — button spinner stops but no toast/snackbar is shown; coach cannot distinguish success from silent failure; add error notification in a UX polish story [CoachBookingRequestsPage.vue:75-92]
-- `ParentBookingsPage` error state (`bookingsError`) is captured but never rendered — user sees empty-state message on API failure; add error branch to template in a UX polish story [ParentBookingsPage.vue]
-- `submitBookingRequest` error path in BookingRequestPage — 400/403/network failures leave user on page with no feedback; add error notification in a UX polish story [BookingRequestPage.vue:112-128]
 
 ## Deferred from: code review of skillars-3-3-booking-request-approval-workflow Group C (2026-06-15)
-- `ShortCode.shortenInt(UUID.randomUUID().hashCode())` as `Envelope` idempotency key — 32-bit int space has ~77k birthday collision threshold; collision causes `DataIntegrityViolationException` in `MailManager`, which retries the conflicting sendId and corrupts the original envelope's delivery record; replace with full UUID or at minimum a 64-bit random value; pre-existing across all notification types [BookingEmailListener.java]
-- `isRetryable(exception)` in `MailManager` checks the wrapping `RuntimeException` instance, not the cause — a `MessagingException` wrapping a `MailParseException` is marked retryable and retried to exhaustion despite being non-recoverable; fix: unwrap cause before checking [MailManager]
-- `((Principal) securityUtil.getCurrentUser())` unchecked cast in `BookingResource` returns HTTP 500 (`ClassCastException`) if the security principal is an unexpected type; add `instanceof` guard and return 401 with a structured error; pre-existing pattern in all platform controllers [BookingResource.java:70,82]
 - No cross-field `@AssertTrue` on `CreateBookingRequest` enforcing `requestedEndTime > requestedStartTime` — currently caught at service layer with a security-semantics error (`OperationNotAllowedException`) instead of a 400 Bad Request; add class-level constraint to return proper validation error [CreateBookingRequest.java]
 
 ## Deferred from: code review of skillars-3-3-booking-request-approval-workflow Group B (2026-06-15)
 - No duplicate-booking guard for same slot — multiple REQUESTED bookings for same player/coach/timeslot are possible; credit soft-reservation handles the economic constraint; add a unique partial index on (player_id, coach_id, requested_start_time) WHERE status IN (...) in a future scheduling-conflicts story [BookingService.java:createBookingRequest, V31 migration]
-- `resolveEmail` silently returns "" for missing/deleted users — event is published with blank recipient; downstream email sender logs the failure; add a warn-log at resolveEmail call sites or return Optional if blank-email delivery failures need observability [BookingService.java, BookingExpiryScheduler.java, BookingReminderScheduler.java]
 - N+1 player name + credit queries in `getParentBookings` — already tracked from Group A
 - All availability windows have invalid timezone → misleading 403; add a distinct error code or admin-visible flag when no valid windows exist vs. slot outside valid windows [BookingService.java:isSlotWithinAvailabilityWindow]
 - Midnight-crossing sessions fail/pass incorrectly in availability window check because endZdt.toLocalTime() wraps past midnight; add explicit day-boundary guard when requestedEnd < requestedStart (in LocalTime) [BookingService.java:228-232]
 - DST transition can shift booking time by 1h relative to window boundary; acceptable for current scope; revisit when timezone management (Story 3.5) is implemented [BookingService.java:isSlotWithinAvailabilityWindow]
-- `configService.getLong()` throws on missing key, silencing that scheduler tick; consider a `getLongOrDefault(key, default)` overload so schedulers degrade gracefully if config is accidentally deleted [BookingExpiryScheduler.java:35, BookingReminderScheduler.java:35-36]
 - `w.getDayOfWeek()` vs JS 0-based day format — verify that the availability-windows frontend sends ISO 1-7 (not JS 0-6); pre-existing from Story 3.1 [BookingService.java:230, CreateWindowRequest.java]
 
 ## Deferred from: code review of skillars-3-3-booking-request-approval-workflow Group A (2026-06-15)
 - `requestedEndTime` minimum duration not validated — 1-second bookings accepted; minimum session length not in scope for Story 3.3; add a `@PositiveDuration(min=15m)` or service-level check in a future session-constraints story [CreateBookingRequest.java:16]
 - `canonicalTimezone` not IANA-validated before storage — invalid string passed by client causes DateTimeException at reminder notification time; add `ZoneId.of(canonicalTimezone)` validation in BookingService.createBookingRequest [CreateBookingRequest.java:17, BookingService.java]
 - N+1 queries in `getParentBookings` — player names and effective credits each fire separate SQL per booking row; batch player name lookup the same way coach names are batched; catch when booking volume per parent grows [BookingService.java:getParentBookings]
-- `@Slf4j` missing on `SessionPackService` — pre-existing omission; violates project-wide "@Slf4j for all services" rule; fix in any story that touches SessionPackService next [SessionPackService.java]
 
 ## Deferred from: code review of skillars-3-2-session-pack-purchase-credit-dashboard (2026-06-13)
-- Payment charged before record persisted — `capturePayment` called before `repository.save`; `@Transactional` does not roll back external gateway call. Stub safe now; fix with idempotency key when Stripe is wired in Epic 7. [SessionPackService.java:purchasePack+purchaseSingleSession]
-- Payment reference (transaction ID) never stored — return value of `capturePayment` discarded; no `payment_reference` column in schema. Add column and persist in Epic 7. [SessionPackService.java + V30 migration]
-- `deductCredit()` has no `parentId` re-authorization — acknowledged by TODO(3.3); Story 3.3's `BookingService` must only supply a verified `playerId` from a committed booking entity. [SessionPackService.java:deductCredit]
-- No concurrency integration test for `deductCredit` / pessimistic lock — `SELECT FOR UPDATE` correctness not exercise by real concurrent transactions. Add in a dedicated testing story or before Story 3.6 wires `deductCredit`. [SessionPackResourceIT.java]
-- `@Sql(SecurityIT.SEC_DATA_SQL_PATH)` ordering dependency undocumented in `SessionPackResourceIT` — pre-existing pattern from 3.1; document what ID ranges SEC_DATA_SQL_PATH uses to prevent collision. [SessionPackResourceIT.java]
-- `tearDown` deletes `main.sec` / `main.refresh_tokens` without `WHERE` — unconditional delete matches other IT classes; revisit if tests ever run in parallel against a shared DB. [SessionPackResourceIT.java:tearDown]
-- `PlayerProfileRepository.findById` used instead of `findByIdAndParentId` in `verifyPlayerOwnership` — diverges from the repo's family-isolation contract; not a correctness bug now. [SessionPackService.java:verifyPlayerOwnership]
 - No DB-level state machine constraints — `ACTIVE+credits=0` or `EXHAUSTED+credits>0` not prevented at DB layer; enforce with additional `CHECK` constraints when the status lifecycle is fully stable. [V30__booking_session_packs.sql]
-- In-memory `coachId` filter in `getPacksForPlayer` — loads all packs for parent+player then Java stream filters by coachId; push filter into SQL when pack volumes grow. [SessionPackService.java:getPacksForPlayer]
+- In-memory `coachId` filter when listing a parent's packs — loads all packs for the parent then Java-stream filters by coachId; push the filter into SQL when pack volumes grow. **[AUDIT 2026-08-04: carried over from the deleted legacy `SessionPackService.getPacksForPlayer` into the new payment path — retargeted]** [`SessionPackPaymentService.java:78-81`]
 
 ## Deferred from: code review of skillars-3-1-coach-availability-management (2026-06-13)
 - Block spans midnight → negative CSS height in WeeklyCalendar overlay — multi-day block rendering is out of scope for Story 3.1 ACs; handle when calendar becomes a product priority [WeeklyCalendar.vue:1652-1668]
@@ -477,7 +473,6 @@
 - No GHCR auth failure handling — no guidance if `docker login` fails (expired PAT, wrong token scope) before `docker compose pull`.
 - Step 5 health check retry loop is manual — "retry after 10 seconds" gives no command to re-run; a simple loop would be deterministic [rollback.md:139–142].
 - Partial pull failure leaves .env inconsistent — if `docker compose pull` times out, .env holds new tag but image not available; no recovery path documented [rollback.md:106].
-- 60s smoke test window vs. `start_period: 60s` — docker-compose.yml sets start_period to 60s; slow JVM startup can exhaust all 12 smoke test retries during startup grace period, triggering false Auto-Revert [deploy.yml + docker-compose.yml].
 - Auto-Revert fails if previous image deleted from GHCR — GHCR retention policies can evict old images; Auto-Revert pull then fails with `outcome=failed` and production may be in unknown state.
 - `SSH_KNOWN_HOST` empty or multi-line edge cases — empty secret bypasses known-host verification; multi-line `ssh-keyscan` output is valid but undocumented [deploy.yml:27].
 - Container name `skillars-app-1` hardcoded in expected output without explaining Docker Compose naming convention (project-service-index) [rollback.md:113].
@@ -487,17 +482,12 @@
 - `Fail workflow` step is unreachable if a notification step throws — job still fails (attributed to the notification step instead), same end outcome, low severity diagnostic issue [`.github/workflows/deploy.yml`:139-143].
 
 ## Deferred from: code review of deploy-2-1-automated-ci-build-pipeline (2026-06-04)
-- No PR trigger — a broken `Dockerfile` or workflow is only discovered after merge to `main`; no pre-merge build validation. Add a `pull_request:` trigger (build-only, no push) in a future CI hardening pass.
-- Actions pinned by floating tag not SHA digest — `checkout@v4`, `login-action@v3`, `build-push-action@v6` are mutable tags; a force-push to any tag is a supply-chain attack vector. Pin to immutable commit SHAs.
-- ~~No `HEALTHCHECK` in `Dockerfile`~~ — **RESOLVED 2026-06-04**: added `HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3` using the actuator health endpoint.
-- ~~No `--platform` flag on builder stage~~ — **RESOLVED 2026-06-04**: added `--platform=linux/amd64` to both `FROM` stages in `Dockerfile`.
 - No `SPRING_PROFILES_ACTIVE` in `ENTRYPOINT` — the container boots on the base profile; prod-specific beans and any config not overridden by environment variables silently use dev defaults. Recommend documenting the required env var in the Compose service definition.
 - No stable/latest symbolic tag alongside the SHA tag — downstream scripts and Helm charts must be updated on every push or they silently run stale images; a `main` or `latest` tag would provide a stable pointer.
 
 ## Deferred from: code review of deploy-1-5-first-time-setup-documentation (2026-06-04)
 - Repo cloned to `/opt/skillars` before Hetzner Volume mounted — volume mount overlays `/opt/skillars/data`; benign today since repo has no `data/` content, but fragile if repo structure changes.
 - `acme.json` lives on root disk — server rebuild loses all TLS certificates; Let's Encrypt rate limits make reissuance slow; no backup or restore guidance exists.
-- `ufw` installed by `provision.sh` but never enabled — Hetzner-level firewall is the sole protection layer with no host-level fallback [deploy/provision.sh].
 - Redis data on named Docker volume (root disk), not Hetzner persistent Volume — session/cache data lost on server rebuild [docker-compose.yml].
 - No outbound firewall rules — observability containers (Prometheus, Loki, Tempo, Redis) have unrestricted internet egress; security hardening enhancement.
 - Docker Hub unauthenticated pull rate limits not documented — shared Hetzner egress IPs can hit the 100/6h limit; rare but unmitigated.
@@ -536,28 +526,21 @@
 - Prometheus has no `depends_on: app` in compose — cold-start scrape failures on first `docker compose up`. Acceptable gap; scrapes recover once app is healthy.
 - LGTM data `mkdir -p` calls gated inside Hetzner Volume device `if [ -b ]` check — consistent with existing postgres pattern. If volume is absent at provision time, Docker auto-creates dirs as root (further compounds the permission issue once it's resolved).
 
-## Deferred from: code review (2026-05-26)
-- ~~Potential Path Traversal [S3StorageService.java]~~ — **RESOLVED 2026-05-28**: `StorageKeyGenerator` strips `/` from `entity` and `entityId` inputs via `[^a-zA-Z0-9_-]` sanitization. The `/` chars in the composed S3 key come exclusively from hardcoded format-string separators, not user input.
-- ~~Unbounded Thread Pool [BlobstoreConfig.java]~~ — **RESOLVED 2026-05-28**: Replaced `Executors.newFixedThreadPool` with `ThreadPoolExecutor` backed by `ArrayBlockingQueue(100)` and `CallerRunsPolicy`. Pool size and queue capacity configurable via `app.storage.executor.*`.
 
 ## Deferred from: code review of skillars-3-9-bulk-session-request-from-calendar (2026-06-16)
 - W1: Race condition in `updateBatchStatusFromBooking` under concurrent coach actions — `REQUIRES_NEW` opens a fresh transaction but two concurrent individual accepts can both call this before either commits; batch status outcome is indeterminate; REQUIRES_NEW is the spec-prescribed pattern [`BookingBatchService.java`]
 - W2: `bookingRepository.findById` in `BookingBatchStatusListener` runs outside explicit transaction — fires in AFTER_COMMIT context without a wrapping transaction; works under Spring Boot defaults but may fail on stricter configurations [`BookingBatchStatusListener.java`]
 - W3: `parentName` null in `getParentBookings()` — pre-existing behavior, no AC requires parent name on parent's own bookings view [`BookingService.java`]
 - W4: `getCoachBookingRequests` derives `parentName` from first booking in batch — data invariant guaranteed at creation; reachable only via direct DB manipulation [`BookingService.java`]
-- W5: Confirm button in batch review dialog has no `hasCredits` guard — backend validates and returns error; Epic 7 will wire credit display to frontend [`BookingRequestPage.vue`]
+- W5: Confirm button in batch review dialog has no `hasCredits` guard — backend validates and returns error; Epic 7 will wire credit display to frontend [`BookingRequestPage.vue`] — **[AUDIT 2026-08-04: SUPERSEDED — not a defect. `BookingRequestPage.vue:249` now carries an explicit decision comment: "Do NOT gate on hasCredits: AC 3 allows booking via platform credit or full card payment." A warning banner (line 20) covers the UX. Retained only so the decision is not re-litigated.]**
 
 ## Deferred from: code review of skillars-3-8-rescheduling-duplication-reminders (2026-06-16)
 - D1: `completionLoading` shared across all reschedule/duplicate store actions — consumers cannot distinguish which operation is in-flight; per-booking scoping refs partially mitigate; pre-existing [`booking.store.js`]
-- D2: `ShortCode.shortenInt(UUID.randomUUID().hashCode())` idempotency key collision risk — 128-bit UUID collapsed to 32-bit int; low-probability but non-zero collision chance; pre-existing across all email handlers [`BookingEmailListener.java`]
-- D3: Empty email silently accepted in notification loops — if coach/parent user lookup fails, empty-string email is used with no exception or warning; pre-existing pattern [`BookingEmailListener.java`]
-- D4: `currentUserId()` ClassCastException risk — `getCurrentUser()` cast to `Principal` without instanceof check; 500 instead of 401 if principal type changes; pre-existing across all resources [`RescheduleResource.java`]
 - D5: `COACH` value in `proposedBy` DB constraint allowed but never set — coach-initiated reschedule path not in scope this story; DB is future-proof [`BookingRescheduleRequest.java`]
 - D6: Service-layer tests use Mockito unit test pattern (`@ExtendWith(MockitoExtension.class)`) — story spec Task 20/21 explicitly defined unit tests; integration coverage provided by `RescheduleResourceIT` [`RescheduleServiceTest.java`, `BookingDuplicationServiceTest.java`]
 - D7: `datetime-local` input in reschedule dialog coerces proposed times to browser local timezone — the ISO-8601 string sent to the API reflects the user's local offset, not the coach's canonical timezone; browser local time intent is ambiguous (parent and coach may be in different timezones); add a visible canonical timezone hint label next to the inputs in a future UX polish story [`ParentBookingsPage.vue`]
 
 ## Deferred from: code review of skillars-3-10-session-pack-expiry-pause-management (2026-06-17)
-- D1: No distributed locking on `SessionPackExpiryScheduler` — multi-instance deployments will concurrently process packs, causing duplicate status transitions and duplicate warning emails. Requires Shedlock or a DB advisory lock. Pre-existing pattern across all project schedulers. [`SessionPackExpiryScheduler.java`]
 - D2: `@TransactionalEventListener(AFTER_COMMIT)` failure silently loses coach cancellation notifications — if email dispatch fails after commit, the coach is never notified even though bookings are `CANCELLED`. Event delivery reliability (retry/DLQ) is an infrastructure-wide concern not introduced by this change. [`BookingEmailListener.java`, `SessionPackEmailListener.java`]
 
 ## Deferred from: code review of skillars-6-1-video-module-foundation-quota-system (2026-06-20)
@@ -566,18 +549,16 @@
 - Def3: Long arithmetic overflow in `storageUsedBytes + requestedBytes` — theoretical at practical quota sizes (max ~9.2 EB); no guard exists. [`QuotaService.java:check`, `QuotaService.java:reserve`]
 - Def4: `commit()` no-op on already-COMMITTED is indistinguishable from not-found — `updated == 0` is logged as debug; callers cannot differentiate idempotent from non-existent handle; intentional idempotency design. [`QuotaService.java:commit`]
 - Def5: `expireBatch()` exception mid-loop not caught — exception terminates the do-while; Spring `@Scheduled` catches it at the framework level; next firing will retry. [`QuotaReservationTimeoutService.java:expireStaleReservations`]
-- Def6: `BandwidthResetService` has no distributed locking — multi-instance deployments can fire the cron simultaneously; data is idempotent but wasteful; single-instance deploy assumed for now. [`BandwidthResetService.java`]
 - Def7: `VideoConfig.quotaProviderValidator` consistency guarantee logging — AC 10 requires logging the guarantee at startup; validator not in this diff; needs verification that it calls `getConsistencyGuarantee()` and logs it. [Out-of-diff verification needed]
 - Def8: `BandwidthResetService` period drift when job runs late — `bandwidth_period_start` set to `NOW()` on actual run date, not 1st of month; next period boundary shifts accordingly; acceptable drift for non-billing context. [`BandwidthResetService.java:resetMonthlyBandwidth`]
 
 ## Deferred from: code review of skillars-6-1-video-module-foundation-quota-system Run 2 (2026-06-20)
 - Def9: `sumActiveReservedBytes` includes expired-but-unreaped ACTIVE rows — brief (<60s) window between expiry and reaper firing causes conservative over-reporting; intentional design. [`VideoQuotaReservationRepository.java:22`]
 - Def10: `BandwidthResetService` full-table lock risk at month boundary — single unpartitioned UPDATE locks all video_quotas rows, blocking concurrent `reserve()` calls; scaling concern. [`BandwidthResetService.java`]
-- Def11: `bandwidth_used_bytes` never incremented — tracking deferred to Story 6.3 (streaming/playback pipeline); schema and reset job created now so schema is ready. [`QuotaService.java`]
+- Def11: `bandwidth_used_bytes` never incremented — tracking deferred to Story 6.3 (streaming/playback pipeline); schema and reset job created now so schema is ready. [`QuotaService.java`] — **[AUDIT 2026-08-04: STILL OPEN. Story 6.3 has shipped; the column is only written by the initial INSERT in `QuotaService.java:158` and by the monthly reset — never incremented on playback.]**
 - Def12: `QuotaConfigService.resolveTierKey()` exhaustive switch will throw `MatchException` if `CoachSubscriptionTier` enum grows — safe now but fragile if a new coach tier is added. [`QuotaConfigService.java:39`]
 - Def13: `DrillUploadService` video replacement orphans old quota reservation — pre-existing; replacing a non-READY video's `DrillVideoRef` does not call `release()` on the old reservation; orphaned bytes held until reaper. [`DrillUploadService.java:~69-85`]
 - Def14: `DrillUploadService.deleteVideo()` TOCTOU on `clearVideoId`/`existsByVideoId` — pre-existing; concurrent deletes on different drills sharing the same `videoId` can publish `VideoPhysicalDeletionEvent` twice. [`DrillUploadService.java:~104-108`]
-- Def15: PII logging in `AccountManagementFacade` (user login at INFO level) — pre-existing; `user.getLogin()` logged at INFO; GDPR concern. [`AccountManagementFacade.java:~204-206`]
 - Def16: `AccountManagementFacade` phone registration NullPointerException — pre-existing; `getEmail().toLowerCase()` throws NPE for phone-only registrations. [`AccountManagementFacade.java:~231`]
 - Def17: `AdminVideoService.deleteVideo()` — `release()` exception inside `TransactionTemplate` kills delete transaction — pre-existing. [`AdminVideoService.java`]
 - Def18: V53 platform_config IDs 117-132 hardcoded — verify against all intermediate migrations (V43–V52) before deploying; any ID conflict causes Flyway failure. [`V53__video_quota_system.sql:32-50`]
@@ -585,10 +566,7 @@
 
 ## Deferred from: code review of skillars-6-2 (2026-06-22)
 
-- Def20: `retryUpload()` does not transition `videos.operational_state` back to UPLOADING — video stays FAILED during retry; ReconciliationWorkerScheduler may re-FAIL it before the new upload registers. Pre-existing design gap. [`VideoService.java:retryUpload`]
-- Def21: `confirmUpload()` writes `PROCESSING` directly via `videoRepository.save()`, bypassing `VideoLifecycleService.VALID_TRANSITIONS` enforcement — silent regression risk on future state refactors. Pre-existing gap. [`VideoService.java:confirmUpload`]
 - Def22: `UploadSessionExpiryScheduler` releases quota outside TX then marks session EXPIRED in separate TX — non-atomic; safe because `release()` is idempotent, but ordering is fragile to future refactors. Pre-existing design decision. [`UploadSessionExpiryScheduler.java`]
-- Def23: No unique index on `videos.provider_asset_id` — `findByProviderAssetId()` could throw `IncorrectResultSizeDataAccessException` if a duplicate is ever stored. Pre-existing schema gap. [`VideoRepository.java`]
 
 ## Deferred from: code review of skillars-6-2 pass 5 (2026-06-22)
 
@@ -607,32 +585,24 @@
 - RW3: Quota release outside transaction on encoding.failed in SCANNING — same pattern as Def24; `quotaProvider.release()` after committed SCANNING→FAILED transition; if release throws, quota is permanently leaked. [`WebhookEventProcessorScheduler.java:185-187`]
 
 ## Deferred from: code review of skillars-6-6-player-video-management-portal (2026-06-24)
-- W1: Account deletion cascade leaves PENDING approval rows for HIDDEN videos — `VideoDeletionService.cascadeDeleteForAccount()` does not call `cancelAllPendingForVideo()`; parent sees stale approval cards post-deletion; approving them triggers idempotent PURGED guard and silently returns. Fix belongs to account-deletion cascade story. [`VideoDeletionService.java:cascadeDeleteForAccount()`]
 - W2: N+1 queries in `VideoApprovalResource.listPendingApprovals()` — one `playerProfileService.getPlayerNameByPlayerId()` + one `videoRepository.findById()` per approval row; acknowledged in spec TODO; acceptable for single-family use. [`VideoApprovalResource.java`]
 - W3: V60 DDL ACCESS EXCLUSIVE lock risk — `ALTER TABLE main.videos DROP CONSTRAINT / ADD CONSTRAINT` takes table-level ACCESS EXCLUSIVE lock with no `SET lock_timeout`; can cause connection pile-up under concurrent video uploads. [`V60__video_approval_portal.sql`]
 - W4: `autoRejectExpired` JPQL uses `current_timestamp` (returns `java.util.Date`) on an `Instant`-typed field — type mismatch; method is explicitly NOT WIRED (comment says so); safe until a scheduler is added. [`VideoApprovalRequestRepository.java:autoRejectExpired()`]
 - W5: `@GeneratedValue(AUTO)` on `VideoApprovalRequest` entity vs `UUID DEFAULT gen_random_uuid()` in SQL — Hibernate 6 AUTO may allocate a sequence-based Long for AUTO strategy on non-Long PK; pre-existing entity pattern; verify Hibernate dialect resolves UUID correctly. [`VideoApprovalRequest.java`]
 - W6: `PURGED` in `VideoManagementPage.onStatusChanged()` is dead code — `VideoSseService.TERMINAL_STATES` does not include PURGED; this state is never pushed via SSE; handler branch is unreachable. [`VideoManagementPage.vue:onStatusChanged()`]
 - W7: `@Observed(name = "video.approvals")` at class level on `VideoApprovalResource` — loses per-operation observability granularity vs. per-method `@Observed` pattern used throughout `VideoResource`; minor deviation from project pattern. [`VideoApprovalResource.java`]
-- W8: `resolveCurrentOwnerId()` casts `securityUtil.getCurrentUser()` to `Principal` without `instanceof` guard — pre-existing established pattern from coach upload endpoint (`BookingResource.currentParentId()` same cast); works within current Spring Security config; risk only if auth principal type changes. [`VideoResource.java:resolveCurrentOwnerId()`]
 
 ## Deferred from: code review of skillars-7-2-session-payment-lifecycle-credit-wallet (2026-06-24)
-- D1: `extendPack` missing pessimistic lock — two concurrent coach requests can both read `extendedAt = null` and commit a double extension (+30+30 days) [`SessionPackPaymentService.java`]
-- D2: Pack ownership not validated in `BookingService.createBooking()` — authenticated parent can supply another parent's `sessionPackPurchaseId` to deduct from their pack [`BookingService.java`]
-- D3: Missing indexes on `session_pack_purchases(parent_id)` and `(coach_id, expires_at)` — full-table scans on expiry scheduler and parent-scoped lookups as table grows [`V62__session_payment_credit_wallet.sql`]
 - D4: Raw `String` fields for `type` (ParentCreditLedger) and `status` (BookingPayment) instead of Java enums — DB constraint guards correctness; higher migration cost to add enum mapping
 
 ### Group 2 deferred (Services) — 2026-06-24
-- D5: `@Transactional` proxy bypass on `persistPaymentSuccess`, `persistPaymentFailure`, `persistPackBatchPayment`, `persistCreditBatchPayment`, `writeCashOutLedgerEntries`, `getOrCreateStripeCustomer`, `createPurchase` — acknowledged in Dev Notes; fix: extract to sibling @Service beans — Story 7.3 [`PaymentLifecycleService.java`, `SessionPackPaymentService.java`, `CashOutService.java`]
-- D6: `BookingDisputedEvent` handler not implemented — Dev Notes defer to Story 10.x [`PaymentLifecycleService.java`]
-- D7: `SessionPackExhaustedEvent.playerId` contains parentId semantically — pre-existing event contract; Story 7.3 [`PackSessionService.java`]
-- D8: `extendPack` missing pessimistic lock on `SessionPackPurchase` — Story 7.3 [`SessionPackPaymentService.java`]
+- D6: `BookingDisputedEvent` handler not implemented — Dev Notes defer to Story 10.x [`PaymentLifecycleService.java`] — **[AUDIT 2026-08-04: STILL OPEN. Epic 10 has shipped; `BookingDisputedEvent` has zero references anywhere in the codebase — the event type itself was never created.]**
+- D7: `SessionPackExhaustedEvent.playerId` contains parentId semantically — pre-existing event contract; Story 7.3 [`PackSessionService.java`] — **[AUDIT 2026-08-04: STILL OPEN. Story 7.3 has shipped; `SessionPackExhaustedEvent.java:10` still declares a bare `Long playerId`.]**
 - D9: EUR currency hardcoded in `chargeAndCapture` — single-currency now; make configurable later [`StripePaymentGateway.java`]
 
 ### Group 4 adversarial deferred (Booking module) — 2026-06-24
-- D12: `getBooking(UUID)` has no caller authorization check — any authenticated user can read any booking by UUID; Story 7.3 [`BookingService.java:271`]
 - D13: `getParentBookings` does not clamp negative `effectiveCredits` to 0 — inconsistency with `getParentPlayerSchedule`; pre-existing [`BookingService.java:316`]
-- D14: `CANCEL_PARENT` not permitted from `PAYMENT_PENDING` — booking stuck if Stripe webhook never fires; design gap; MVP acceptable; Story 7.3 [`BookingStateMachine.java:30`]
+- D14: `CANCEL_PARENT` not permitted from `PAYMENT_PENDING` — booking stuck if Stripe webhook never fires; design gap; MVP acceptable; Story 7.3 [`BookingStateMachine.java:30`] — **[AUDIT 2026-08-04: STILL OPEN. Story 7.3 has shipped; `BookingStateMachine.java:30-32` maps PAYMENT_PENDING to PAYMENT_CAPTURED and PAYMENT_FAILED only.]**
 - D15: Past-elapsed `requestedStartTime` at CANCEL_PARENT gives NONE refund eligibility — correct path is NO_SHOW_COACH event; edge case [`BookingService.java:471`]
 - D16: `Booking` identity columns (`parentId`, `playerId`, `coachId`) lack `updatable = false` — defence-in-depth; no current mutation path; pre-existing [`Booking.java:31-37`]
 
@@ -645,14 +615,9 @@
 - D22: Credit routing boundary: `balance == sessionPrice` (Case A/B boundary, stripeAmount=0) and cashout `amount == balance` (wallet goes to -feeAmount) — low severity, current behaviour correct; no test pins the boundary [`CreditRoutingTest.java`, `CashOutServiceTest.java`]
 - D23: Unit-level idempotency ledger-count guard (`duplicateEvent_idempotencyNoOp` verifies skip but not that ledger mock was never called) — covered by `PaymentWebhookIdempotencyIT`; low value to add unit-level assertion
 
-### Group 5 adversarial deferred (Frontend) — 2026-06-24
-- D17: `loadStripe(undefined)` if publishable key is null — `confirmPackPayment`/`confirmCardSetup` accept the key from callers; if caller passes `undefined`, `loadStripe(null)` throws a TypeError in the payment confirmation path; fix belongs in the component that owns `stripeStatus` state, not in the API module [`payment.api.js: confirmPackPayment`, `confirmCardSetup`]
-- D18: Shared `loading`/`error` flags across concurrent store actions — all three actions race on a single `loading` boolean; premature spinner dismissal when two actions are in-flight; no current page calls multiple actions concurrently; defer to a store architecture pass [`payment.store.js`]
-- D19: `selectedSlot` not cleared when entering batch mode — stale slot persists; on exiting batch mode without re-selecting, `canSubmit` is immediately `true`; LOW severity, no data loss [`BookingRequestPage.vue: toggleBatchMode()`]
-
 ## Deferred from: code review of skillars-7-3-cancellation-refund-reliability-strikes (2026-06-25)
 - D1: `buildSort()` has identical branches for "price" and "rating" — pre-existing; both fall back to `displayName`; price sort is applied in Java post-enrichment [`CoachSearchService.java:buildSort`]
-- D2: `processAdminRefund` has no auth check or amount validation — stub; admin endpoint wired in Story 10.x [`CancellationRefundService.java:processAdminRefund`]
+- D2: `processAdminRefund` has no auth check or amount validation — stub; admin endpoint wired in Story 10.x [`CancellationRefundService.java:processAdminRefund`] — **[AUDIT 2026-08-04: STILL OPEN. Epic 10 has shipped; `CancellationRefundService.java:138-143` still writes a ledger entry with no auth check and no amount validation.]**
 - D3: `GET /coaches/me/strikes` has no pagination — unbounded list; low risk at current scale [`ReliabilityStrikeResource.java`]
 - D4: Concurrent strike issuance race — two simultaneous events for the same coach may both read count=N and both fire the threshold event; inherent to non-locking count approach [`ReliabilityStrikeService.java:issue`]
 - D5: `CoachCancellationHistory.createdAt` with `@Column(updatable=false)` + `@PrePersist` — in-memory entity is null until DB round-trip if ever used with batch `saveAll`; low risk given single-save usage [`CoachCancellationHistory.java`]
@@ -661,7 +626,7 @@
 - D1: Running balance incorrect when two ParentCreditLedger entries share an identical createdAt instant and straddle a page boundary — the strict-less-than predicate in sumByParentIdAndCreatedAtBefore excludes the prior-page twin from the opening balance, understating the running balance for the current page by that twin's amount; extremely rare in practice; inherent in the chosen pagination anchor design [RevenueReportingService.java:211]
 
 ## Deferred from: code review of skillars-8-1-messaging-module-foundation-conversation-threads (2026-06-26)
-- D1: PLAYER role identity mismatch — conv.getPlayerId() stores PlayerProfile.id (TSID Long) but callerUserId is user.id (different TSID sequence); verifyIsParty always returns false for PLAYER callers and findActiveByPlayerId always returns empty list. By-design for Story 8.1 (players are shadow accounts that don't authenticate independently); Story 8.2 must introduce a playerId→userId mapping. [MessagingService.java:verifyIsParty, getConversations]
+- D1: PLAYER role identity mismatch — conv.getPlayerId() stores PlayerProfile.id (TSID Long) but callerUserId is user.id (different TSID sequence); verifyIsParty always returns false for PLAYER callers and findActiveByPlayerId always returns empty list. By-design for Story 8.1 (players are shadow accounts that don't authenticate independently); Story 8.2 must introduce a playerId→userId mapping. [MessagingService.java:verifyIsParty, getConversations] — **[AUDIT 2026-08-04: STILL OPEN. Story 8.2 has shipped; no playerId→userId mapping exists anywhere in `platform.messaging`.]**
 - D2: N+1 query pattern in getConversations — 3 queries per conversation (findLastApproved, countUnread, resolveOtherPartyName); acceptable for MVP conversation volumes; batch-optimize when conversation counts grow. [MessagingService.java:toSummary]
 - D3: content.length() counts UTF-16 code units, not Unicode codepoints — a 1000-emoji message uses 2000 surrogate-pair chars and passes the 2000-char guard but contains only 1000 codepoints. No downstream column length limit today; address if DB text constraints are added. [MessagingService.java:sendMessage]
 - D4: Instant.EPOCH as "never read" sentinel is undocumented — all messages with createdAt > epoch count as unread, which is correct for current data; fragile if a historical data migration backfills timestamps at or before epoch. [MessagingService.java:toSummary]
@@ -679,7 +644,6 @@
 - D1: V76 partial index predicate hardcodes status literals (`'EXHAUSTED', 'EXPIRED'`) with no in-diff verification against the full status enum — a future added status could silently fall inside the "active" partial index instead of being excluded. [`src/main/resources/db/migration/V76__missing_indexes.sql`]
 - D2: No test verifies NULL `provider_asset_id` videos can coexist, the actual rationale for the new partial unique index; a regression turning it into a full unique index would pass current tests undetected. [`src/test/java/com/softropic/skillars/platform/video/repo/VideoRepositoryIT.java`]
 - D3: Concurrency test `deployTemplateTwiceForSameBooking_secondFails` masks `barrier.await()` failures (`catch (Exception ignored) {}`) and accepts both the pre-check 403 and DB-race 409 as valid outcomes, so it can pass without ever exercising the new `uq_sessions_booking_id` race path. [`src/test/java/com/softropic/skillars/platform/session/api/SessionTemplateResourceIT.java`]
-- D4: Story task list (Task 3) still references the old filename `V78__drill_dedup_session_booking_unique.sql`; only the Completion Notes File List reflects the actual `V78__drill_dedup_unique.sql`. [`_bmad-output/implementation-artifacts/skillars-deferred-3.md`]
 
 ## Deferred from: code review of skillars-deferred-4 (2026-07-02)
 - D1: `lockAtMostFor` timeouts on `QuotaReservationTimeoutService` and `NeglectedSkillDetectionService` are not validated against their unbounded work loops (an un-chunked `do/while` batch drain and an un-chunked per-player loop, respectively) — under data growth, ShedLock could force-expire the lock mid-run and let a second instance start an overlapping execution, reopening the exact race AC1 exists to close. [`src/main/java/com/softropic/skillars/platform/video/service/QuotaReservationTimeoutService.java:28`, `src/main/java/com/softropic/skillars/platform/development/service/NeglectedSkillDetectionService.java:58`]
@@ -690,10 +654,6 @@
 - D1: `resolveParentName()` can render `"null null"` when a user's `first_name`/`last_name` are null — pre-existing behavior, not introduced by this diff; the new `parentName` assertion (AC5) only checks non-null/non-empty, so this garbage value would pass undetected. [`src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java`]
 - D2: `declineBooking_wrongCoach_returns403` reads `createResp.getBody().get("id")` without asserting the booking-creation POST succeeded first — mirrors the same pre-existing gap in `acceptBooking_wrongCoach_returns403`; a transient creation failure surfaces as an opaque NPE/404 instead of a clear assertion failure. [`src/test/java/com/softropic/skillars/platform/booking/api/BookingRequestResourceIT.java`]
 - D3: Hardcoded `PLAYER_ID = 9360000001L` in the new IT is reused against the shared `SecurityIT.SEC_DATA_SQL_PATH` fixture — possible cross-test collision risk if that fixture seeds rows for the same player ID outside the tables cleaned in `@AfterEach`; not provable from this diff alone. [`src/test/java/com/softropic/skillars/platform/development/service/NeglectedSkillDetectionServiceIT.java:41,47`]
-
-
-
-# new issues
 
 ## Deferred from: code review of skillars-11-3-remove-legacy-session-pack-system (2026-08-04)
 - D1: `V89__drop_legacy_session_packs.sql`'s `DROP TABLE` has no `IF EXISTS` guard — not blocking (Flyway won't re-run an applied migration, table confirmed empty at this dev/UAT stage), but there's no prior DROP TABLE in this codebase to establish a convention either way; adopt `IF EXISTS` for future destructive migrations. [`src/main/resources/db/migration/V89__drop_legacy_session_packs.sql`]
@@ -722,8 +682,9 @@
 - D9: Stringly-typed computed `status` field and hardcoded `CONFLICT_STATUSES` list rather than shared enums — consistent with existing codebase convention; legacy also uses string status constants. [`src/main/java/com/softropic/skillars/platform/payment/contract/SessionPackPurchaseResponse.java`, `PackSessionService.java`]
 
 ## Deferred from: code review of skillars-11-2-cutover-booking-and-frontend (2026-08-03)
-- D1: TOCTOU race between `PackSessionService.hasActivePack()` and `getActivePackId()` — `BookingDuplicationService` calls them as two independent, unlocked reads; if the active pack is consumed/expired between the two calls, `getActivePackId()`'s unfiltered "most recent pack ever" fallback can attach an exhausted/expired pack id to the duplicated booking instead of failing loudly. A safe fix requires either a dedicated non-fallback query for payment-critical callers or restructuring the two-call pattern into one atomic check. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`, `src/main/java/com/softropic/skillars/platform/booking/service/BookingDuplicationService.java`]
 - D2: Pack-selection-criteria mismatch when a player+coach pair has 2+ simultaneously-active packs: the frontend displays the soonest-expiring pack, while the backend's `getActivePackId` (duplication/homework-gating) picks the oldest-created pack FIFO — the pack shown to a parent may not be the one actually deducted. May be intentional (display urgency vs. FIFO consumption order), needs product input. [`src/frontend/src/pages/parent/ParentPlayerPortalPage.vue`, `src/frontend/src/pages/parent/SessionPackPurchasePage.vue`, `src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchaseRepository.java`]
-- D3: Shared `sessionPacks` Pinia store ref gets narrowed to a single child's packs by whichever page last called `loadPlayerPacks(playerId)` — not an active bug today (every current consumer reloads its own scope on mount) but fragile for any future view showing packs across multiple children without an explicit reload. [`src/frontend/src/stores/booking.store.js`]
-- D4: `SessionPackDashboardPage.vue`'s coach-name resolver doesn't negative-cache failed `getCoachProfile` lookups, so a failing/slow lookup repeats on every `sessionPacks` store update. Minor perf nit, largely moot once the missing `coachId` field (patched in this same review) lands. [`src/frontend/src/pages/parent/SessionPackDashboardPage.vue`]
-- D5: No UI anywhere in the app collects or saves a Stripe payment method (`savePaymentMethod`/`confirmCardSetup` in `payment.api.js` have zero callers app-wide) — pre-existing gap, but this story's cutover retires the only purchase path that worked without a saved card, so any parent without a pre-existing saved payment method cannot complete a first real purchase once this ships. Resolved as ship-as-is (dev/UAT stage, no live production traffic yet per the epic) but must be closed with a dedicated Stripe Elements card-collection story before real purchase traffic. [`src/frontend/src/pages/parent/SessionPackPurchasePage.vue`, `src/frontend/src/api/payment.api.js`]
+
+## Deferred from: skillars-deferred-11-stripe-card-collection
+- D1: Coach subscription card collection (`CoachSubscriptionPage.vue`, which still has the raw "Payment Method ID" text input this story removed from the player-subscribe path) is blocked on a real schema constraint: `StripeCustomer`'s `@Id` is `parent_id` (a `Long` user id), and `POST /api/payment/setup-intent` / `GET /api/payment/payment-method` are both `@PreAuthorize(HAS_PARENT_ROLE)`. Supporting coach card collection requires either a second customer table or re-keying `payment.stripe_customers` — a schema migration with its own design decision, out of scope here. [`src/main/java/com/softropic/skillars/platform/payment/repo/StripeCustomer.java`, `src/frontend/src/pages/coach/CoachSubscriptionPage.vue`]
+- D2: 11.2 D2 (pack-selection-criteria mismatch: frontend shows soonest-expiring, backend `getActivePackId`/`findActivePackId` picks oldest-created FIFO) still needs product input — this story's AC 7 deliberately preserved the existing FIFO backend ordering rather than resolving the mismatch. [`src/frontend/src/pages/parent/SessionPackPurchasePage.vue`, `src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`]
+- D3: AC 5's instruction to remove the shared i18n key `subscription.paymentMethodId` (and `subscription.paymentMethodHint`) turned out to be still in active use by the explicitly out-of-scope `CoachSubscriptionPage.vue` — removing it would have broken that page's raw payment-method-id input. Kept both keys in all four locale files; only removed the confirmed-orphaned `subscription.player.paymentMethodRequired`. [`src/frontend/src/pages/coach/CoachSubscriptionPage.vue`, `src/frontend/src/i18n/{en-US,en,de,fr-FR}/index.js`]

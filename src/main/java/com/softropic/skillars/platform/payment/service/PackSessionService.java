@@ -91,6 +91,22 @@ public class PackSessionService {
             .orElse(null);
     }
 
+    /**
+     * Single-snapshot resolution of the active pack to attach to a new booking. Unlike the
+     * hasActivePack()/getActivePackId() pair, this is one query — no window between an
+     * existence check and a separate resolve where the pack could be consumed/expire, and no
+     * unfiltered "most recent pack ever" fallback that could attach an exhausted/expired pack.
+     */
+    @Transactional(readOnly = true)
+    public UUID findActivePackId(Long playerId, UUID coachId) {
+        List<SessionPackPurchase> packs = sessionPackPurchaseRepository.findActivePacks(playerId, coachId, Instant.now());
+        if (packs.isEmpty()) {
+            throw new OperationNotAllowedException(
+                "No effective session credits available for this coach", SecurityError.MISSING_RIGHTS);
+        }
+        return packs.get(0).getPurchaseId();
+    }
+
     @Transactional
     public PauseConflictResponse pausePack(Long parentId, UUID purchaseId, PausePackRequest req) {
         SessionPackPurchase purchase = sessionPackPurchaseRepository.findByIdForUpdate(purchaseId)

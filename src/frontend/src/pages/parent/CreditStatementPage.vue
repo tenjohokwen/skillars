@@ -22,7 +22,7 @@
         <q-btn
           color="primary"
           :label="t('creditStatement.apply')"
-          :loading="paymentStore.loading"
+          :loading="paymentStore.loading.creditStatement"
           @click="loadStatement"
         />
       </div>
@@ -32,7 +32,7 @@
         :columns="columns"
         row-key="txId"
         flat
-        :loading="paymentStore.loading"
+        :loading="paymentStore.loading.creditStatement"
         :pagination="{ rowsPerPage: 20 }"
       >
         <template #body-cell-createdAt="props">

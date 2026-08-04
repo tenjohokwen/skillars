@@ -3,14 +3,17 @@ package com.softropic.skillars.platform.payment.service;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
+import com.softropic.skillars.platform.payment.contract.SavedPaymentMethodResponse;
 import com.softropic.skillars.platform.payment.contract.SessionPackPurchaseResponse;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchase;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
 import com.softropic.skillars.platform.payment.repo.SessionPackTier;
 import com.softropic.skillars.platform.payment.repo.SessionPackTierRepository;
+import com.softropic.skillars.platform.payment.repo.StripeCustomer;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import com.stripe.model.PaymentMethod;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -38,6 +41,7 @@ class SessionPackPaymentServiceTest {
     @Mock CoachProfileRepository coachProfileRepository;
     @Mock PlayerProfileRepository playerProfileRepository;
     @Mock PaymentGateway paymentGateway;
+    @Mock StripeClient stripeClient;
 
     @InjectMocks SessionPackPaymentService sessionPackPaymentService;
 
@@ -92,6 +96,69 @@ class SessionPackPaymentServiceTest {
 
         assertThat(responses).hasSize(1);
         assertThat(responses.get(0).purchaseId()).isEqualTo(forCoach.getPurchaseId());
+    }
+
+    // ─── getSavedPaymentMethod (Deferred-11 AC 4) ─────────────────────────────────
+
+    @Test
+    void getSavedPaymentMethod_noStripeCustomerRow_returnsHasCardFalse() {
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
+
+        SavedPaymentMethodResponse response = sessionPackPaymentService.getSavedPaymentMethod(PARENT_ID);
+
+        assertThat(response).isEqualTo(new SavedPaymentMethodResponse(false, null, null, null, null));
+    }
+
+    @Test
+    void getSavedPaymentMethod_rowWithNullPaymentMethodId_returnsHasCardFalse() {
+        StripeCustomer customer = new StripeCustomer();
+        customer.setParentId(PARENT_ID);
+        customer.setStripeCustomerId("cus_test");
+        customer.setStripePaymentMethodId(null);
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(customer));
+
+        SavedPaymentMethodResponse response = sessionPackPaymentService.getSavedPaymentMethod(PARENT_ID);
+
+        assertThat(response).isEqualTo(new SavedPaymentMethodResponse(false, null, null, null, null));
+    }
+
+    @Test
+    void getSavedPaymentMethod_rowWithPaymentMethodId_returnsHasCardTrueWithDetails() throws Exception {
+        StripeCustomer customer = new StripeCustomer();
+        customer.setParentId(PARENT_ID);
+        customer.setStripeCustomerId("cus_test");
+        customer.setStripePaymentMethodId("pm_test_123");
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(customer));
+
+        PaymentMethod.Card card = new PaymentMethod.Card();
+        card.setBrand("visa");
+        card.setLast4("4242");
+        card.setExpMonth(12L);
+        card.setExpYear(2030L);
+        PaymentMethod paymentMethod = new PaymentMethod();
+        paymentMethod.setCard(card);
+        when(stripeClient.retrievePaymentMethod("pm_test_123")).thenReturn(paymentMethod);
+
+        SavedPaymentMethodResponse response = sessionPackPaymentService.getSavedPaymentMethod(PARENT_ID);
+
+        assertThat(response).isEqualTo(new SavedPaymentMethodResponse(true, "visa", "4242", 12L, 2030L));
+    }
+
+    @Test
+    void getSavedPaymentMethod_stripeErrorsOnRetrieve_returnsHasCardTrueWithNullDetails() throws Exception {
+        // AC 4: a parent must never be told they have no card when they do — a transient Stripe
+        // failure on retrieve must not downgrade hasCard to false.
+        StripeCustomer customer = new StripeCustomer();
+        customer.setParentId(PARENT_ID);
+        customer.setStripeCustomerId("cus_test");
+        customer.setStripePaymentMethodId("pm_test_123");
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(customer));
+        when(stripeClient.retrievePaymentMethod("pm_test_123"))
+            .thenThrow(new com.stripe.exception.ApiException("Stripe unavailable", "req_1", null, 500, null));
+
+        SavedPaymentMethodResponse response = sessionPackPaymentService.getSavedPaymentMethod(PARENT_ID);
+
+        assertThat(response).isEqualTo(new SavedPaymentMethodResponse(true, null, null, null, null));
     }
 
     private String statusOf(List<SessionPackPurchaseResponse> responses, UUID purchaseId) {

@@ -44,6 +44,10 @@ public class StripeClient {
         return Customer.create(params);
     }
 
+    public PaymentMethod retrievePaymentMethod(String id) throws StripeException {
+        return PaymentMethod.retrieve(id);
+    }
+
     public void attachPaymentMethod(String stripeCustomerId, String paymentMethodId) throws StripeException {
         PaymentMethod pm = PaymentMethod.retrieve(paymentMethodId);
         com.stripe.param.PaymentMethodAttachParams attachParams =

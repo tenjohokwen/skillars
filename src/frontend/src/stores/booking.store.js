@@ -105,6 +105,7 @@ export const useBookingStore = defineStore('booking', () => {
   const hasWindows = computed(() => windows.value.length > 0)
 
   const sessionPacks = ref([])
+  const sessionPacksPlayerId = ref(null)
   const packsLoading = ref(false)
   const packsError = ref(null)
 
@@ -224,6 +225,10 @@ export const useBookingStore = defineStore('booking', () => {
       sessionPacks.value = playerId
         ? packs.filter((p) => String(p.playerId) === String(playerId))
         : packs
+      // AC 8: tag which player this snapshot belongs to, so a future consumer can detect a
+      // mismatch (e.g. a stale sessionPacks left over from a different child) instead of
+      // silently trusting it. `null` means "all players" (playerId not passed).
+      sessionPacksPlayerId.value = playerId ?? null
     } catch (e) {
       packsError.value = e?.response?.data?.message ?? e?.message ?? 'Failed to load session packs'
     } finally {
@@ -550,6 +555,7 @@ export const useBookingStore = defineStore('booking', () => {
     error,
     hasWindows,
     sessionPacks,
+    sessionPacksPlayerId,
     packsLoading,
     packsError,
     creditsForCoach,

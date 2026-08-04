@@ -8,12 +8,22 @@
         <q-card class="glass-card q-mb-md">
           <q-card-section>
             <div class="text-subtitle2 text-grey-6">{{ $t('payment.credits.balance') }}</div>
-            <div v-if="store.loading" class="text-h4">
+            <div v-if="store.loading.creditBalance" class="text-h4">
               <q-skeleton type="text" width="120px" />
             </div>
             <div v-else class="text-h4 text-weight-bold">
               {{ balance !== null ? `€${Number(balance).toFixed(2)}` : '—' }}
             </div>
+          </q-card-section>
+        </q-card>
+
+        <!-- Payment method -->
+        <q-card class="glass-card q-mb-md">
+          <q-card-section>
+            <div class="text-h6">{{ $t('payment.card.title') }}</div>
+          </q-card-section>
+          <q-card-section class="q-pt-none">
+            <PaymentMethodCard />
           </q-card-section>
         </q-card>
 
@@ -56,6 +66,7 @@ import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { usePaymentStore } from 'src/stores/payment.store'
 import { cashOut } from 'src/api/payment.api'
+import PaymentMethodCard from 'src/components/payment/PaymentMethodCard.vue'
 
 const { t } = useI18n()
 const $q = useQuasar()

@@ -18,7 +18,36 @@ import {
   fetchCoachRevenueSummary,
   fetchCoachTransactions,
   fetchCreditStatement,
+  getStripeConfig,
+  getSavedPaymentMethod,
 } from 'src/api/payment.api'
+
+// AC 6 / Task 4: each async action owns its own loading/error key instead of a single shared
+// pair, so a faster action completing doesn't clear a slower one's spinner or overwrite its
+// error. Keys match the action name (minus the "fetch"/"get" prefix).
+const LOADING_KEYS = [
+  'stripeStatus',
+  'creditBalance',
+  'sessionPackTiers',
+  'coachStrikes',
+  'coachSubscription',
+  'coachTiers',
+  'playerSubscription',
+  'playerTiers',
+  'revenueSummary',
+  'transactions',
+  'creditStatement',
+  'stripeConfig',
+  'savedPaymentMethod',
+]
+
+function emptyKeyedState() {
+  return Object.fromEntries(LOADING_KEYS.map((key) => [key, false]))
+}
+
+function emptyKeyedErrorState() {
+  return Object.fromEntries(LOADING_KEYS.map((key) => [key, null]))
+}
 
 export const usePaymentStore = defineStore('payment', {
   state: () => ({
@@ -35,52 +64,54 @@ export const usePaymentStore = defineStore('payment', {
     transactionPage: null,
     creditStatement: [],
     creditStatementPage: null,
-    loading: false,
-    error: null,
+    stripeConfig: null,
+    savedPaymentMethod: null,
+    loading: emptyKeyedState(),
+    error: emptyKeyedErrorState(),
   }),
   actions: {
     async fetchStripeStatus() {
-      this.loading = true
-      this.error = null
+      this.loading.stripeStatus = true
+      this.error.stripeStatus = null
       try {
         this.stripeStatus = await getStripeStatus()
       } catch (err) {
-        this.error = err
+        this.error.stripeStatus = err
       } finally {
-        this.loading = false
+        this.loading.stripeStatus = false
       }
     },
     async fetchCreditBalance() {
-      this.loading = true
-      this.error = null
+      this.loading.creditBalance = true
+      this.error.creditBalance = null
       try {
         this.creditBalance = await fetchCreditBalance()
       } catch (err) {
-        this.error = err
+        this.error.creditBalance = err
       } finally {
-        this.loading = false
+        this.loading.creditBalance = false
       }
     },
     async fetchSessionPackTiers() {
-      this.loading = true
-      this.error = null
+      this.loading.sessionPackTiers = true
+      this.error.sessionPackTiers = null
       try {
         this.sessionPackTiers = await fetchMySessionPackTiers()
       } catch (err) {
-        this.error = err
+        this.error.sessionPackTiers = err
       } finally {
-        this.loading = false
+        this.loading.sessionPackTiers = false
       }
     },
     async fetchCoachStrikes() {
-      this.loading = true
-      this.error = null
+      this.loading.coachStrikes = true
+      this.error.coachStrikes = null
       try {
         this.coachStrikes = await fetchMyStrikes()
       } catch (err) {
-        this.error = err
+        this.error.coachStrikes = err
       } finally {
-        this.loading = false
+        this.loading.coachStrikes = false
       }
     },
     async acknowledgeStrike(strikeId) {
@@ -91,25 +122,25 @@ export const usePaymentStore = defineStore('payment', {
 
     // Coach subscription actions
     async fetchCoachSubscription() {
-      this.loading = true
-      this.error = null
+      this.loading.coachSubscription = true
+      this.error.coachSubscription = null
       try {
         this.coachSubscription = await fetchMyCoachSubscription()
       } catch (err) {
-        this.error = err
+        this.error.coachSubscription = err
       } finally {
-        this.loading = false
+        this.loading.coachSubscription = false
       }
     },
     async fetchCoachTiers() {
-      this.loading = true
-      this.error = null
+      this.loading.coachTiers = true
+      this.error.coachTiers = null
       try {
         this.coachTiers = await fetchCoachTiers()
       } catch (err) {
-        this.error = err
+        this.error.coachTiers = err
       } finally {
-        this.loading = false
+        this.loading.coachTiers = false
       }
     },
     async subscribeCoach(payload) {
@@ -128,25 +159,25 @@ export const usePaymentStore = defineStore('payment', {
 
     // Player subscription actions
     async fetchPlayerSubscription(playerId) {
-      this.loading = true
-      this.error = null
+      this.loading.playerSubscription = true
+      this.error.playerSubscription = null
       try {
         this.playerSubscription = await fetchMyPlayerSubscription(playerId)
       } catch (err) {
-        this.error = err
+        this.error.playerSubscription = err
       } finally {
-        this.loading = false
+        this.loading.playerSubscription = false
       }
     },
     async fetchPlayerTiers() {
-      this.loading = true
-      this.error = null
+      this.loading.playerTiers = true
+      this.error.playerTiers = null
       try {
         this.playerTiers = await fetchPlayerTiers()
       } catch (err) {
-        this.error = err
+        this.error.playerTiers = err
       } finally {
-        this.loading = false
+        this.loading.playerTiers = false
       }
     },
     async subscribePlayer(payload) {
@@ -164,40 +195,64 @@ export const usePaymentStore = defineStore('payment', {
     },
 
     async fetchRevenueSummary(from, to) {
-      this.loading = true
-      this.error = null
+      this.loading.revenueSummary = true
+      this.error.revenueSummary = null
       try {
         this.revenueSummary = await fetchCoachRevenueSummary(from, to)
       } catch (err) {
-        this.error = err
+        this.error.revenueSummary = err
       } finally {
-        this.loading = false
+        this.loading.revenueSummary = false
       }
     },
     async fetchTransactions(from, to, page = 0) {
-      this.loading = true
-      this.error = null
+      this.loading.transactions = true
+      this.error.transactions = null
       try {
         const res = await fetchCoachTransactions(from, to, page)
         this.transactionPage = res
         this.transactions = res.content
       } catch (err) {
-        this.error = err
+        this.error.transactions = err
       } finally {
-        this.loading = false
+        this.loading.transactions = false
       }
     },
     async fetchCreditStatement(from, to, page = 0) {
-      this.loading = true
-      this.error = null
+      this.loading.creditStatement = true
+      this.error.creditStatement = null
       try {
         const res = await fetchCreditStatement(from, to, page)
         this.creditStatementPage = res
         this.creditStatement = res.content
       } catch (err) {
-        this.error = err
+        this.error.creditStatement = err
       } finally {
-        this.loading = false
+        this.loading.creditStatement = false
+      }
+    },
+
+    // Card collection (Deferred-11)
+    async fetchStripeConfig() {
+      this.loading.stripeConfig = true
+      this.error.stripeConfig = null
+      try {
+        this.stripeConfig = await getStripeConfig()
+      } catch (err) {
+        this.error.stripeConfig = err
+      } finally {
+        this.loading.stripeConfig = false
+      }
+    },
+    async fetchSavedPaymentMethod() {
+      this.loading.savedPaymentMethod = true
+      this.error.savedPaymentMethod = null
+      try {
+        this.savedPaymentMethod = await getSavedPaymentMethod()
+      } catch (err) {
+        this.error.savedPaymentMethod = err
+      } finally {
+        this.loading.savedPaymentMethod = false
       }
     },
   },
