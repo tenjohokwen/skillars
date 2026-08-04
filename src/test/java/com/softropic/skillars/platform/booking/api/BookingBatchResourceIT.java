@@ -134,15 +134,6 @@ class BookingBatchResourceIT {
             );
 
             jdbcTemplate.update(
-                "INSERT INTO booking.session_packs_purchased " +
-                "(id, parent_id, player_id, coach_id, session_count, credits_remaining, status, purchased_at, expires_at) " +
-                "VALUES (?, ?, ?, ?, 10, 10, 'ACTIVE', ?, ?)",
-                UUID.randomUUID(), PARENT_ID, PLAYER_ID, coachProfileId,
-                Timestamp.from(Instant.now()),
-                Timestamp.from(Instant.now().plus(365, ChronoUnit.DAYS))
-            );
-
-            jdbcTemplate.update(
                 "INSERT INTO main.platform_config (id, key, value, value_type, description, updated_at) " +
                 "VALUES (50, 'booking.batch.maxSize', '5', 'LONG', 'Batch max size', ?) ON CONFLICT DO NOTHING",
                 Timestamp.from(Instant.now())
@@ -157,7 +148,6 @@ class BookingBatchResourceIT {
         transactionTemplate.execute(status -> {
             jdbcTemplate.update("DELETE FROM booking.bookings WHERE parent_id = ?", PARENT_ID);
             jdbcTemplate.update("DELETE FROM booking.booking_batches WHERE parent_id = ?", PARENT_ID);
-            jdbcTemplate.update("DELETE FROM booking.session_packs_purchased WHERE parent_id = ?", PARENT_ID);
             jdbcTemplate.update("DELETE FROM marketplace.coach_pricing WHERE coach_id IN (?, ?)", coachProfileId, coach2ProfileId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id IN (?, ?)", coachProfileId, coach2ProfileId);
             jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = ?", PLAYER_ID);

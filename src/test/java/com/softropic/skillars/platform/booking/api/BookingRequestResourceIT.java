@@ -144,16 +144,6 @@ class BookingRequestResourceIT {
                 UUID.randomUUID(), coachProfileId, windowDow, WINDOW_TZ
             );
 
-            // Session pack with 3 credits
-            jdbcTemplate.update(
-                "INSERT INTO booking.session_packs_purchased " +
-                "(id, parent_id, player_id, coach_id, session_count, credits_remaining, status, purchased_at, expires_at) " +
-                "VALUES (?, ?, ?, ?, 3, 3, 'ACTIVE', ?, ?)",
-                UUID.randomUUID(), PARENT_ID, PLAYER_ID, coachProfileId,
-                Timestamp.from(Instant.now()),
-                Timestamp.from(Instant.now().plus(180, ChronoUnit.DAYS))
-            );
-
             // Second coach (for wrong-coach tests)
             insertUser(COACH_USER_ID2, COACH_EMAIL2, passwordHash, "COACH");
             jdbcTemplate.update(
@@ -182,7 +172,6 @@ class BookingRequestResourceIT {
             jdbcTemplate.update("DELETE FROM payment.parent_credit_ledger WHERE parent_id = ?", PARENT_ID);
             jdbcTemplate.execute("SET SESSION session_replication_role = 'origin'");
             jdbcTemplate.update("DELETE FROM booking.bookings WHERE parent_id = ?", PARENT_ID);
-            jdbcTemplate.update("DELETE FROM booking.session_packs_purchased WHERE parent_id = ?", PARENT_ID);
             jdbcTemplate.update("DELETE FROM marketplace.coach_availability_windows WHERE coach_id = ?", coachProfileId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_pricing WHERE coach_id = ?", coachProfileId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id IN (?, ?)", coachProfileId, coachProfileId2);
@@ -226,12 +215,7 @@ class BookingRequestResourceIT {
 
     @Test
     void createBookingRequest_noCredits_succeeds_paymentDeferred() {
-        // Remove the legacy session pack — Sprint 7.2: credit depletion no longer blocks booking
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM booking.session_packs_purchased WHERE parent_id = ?", PARENT_ID);
-            return null;
-        });
-
+        // Sprint 7.2: credit depletion no longer blocks booking
         String cookies = loginAndGetCookies(PARENT_EMAIL);
 
         ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
@@ -256,11 +240,7 @@ class BookingRequestResourceIT {
     void createBookingRequest_secondRequestWhenCreditExhausted_succeeds_paymentDeferred() {
         // Sprint 7.2: second booking when credits exhausted is allowed; payment is deferred to accept time
         transactionTemplate.execute(status -> {
-            jdbcTemplate.update(
-                "UPDATE booking.session_packs_purchased SET credits_remaining = 1 WHERE parent_id = ?",
-                PARENT_ID
-            );
-            // Insert an in-flight booking consuming the single legacy credit
+            // Insert an in-flight booking to simulate credit exhaustion
             jdbcTemplate.update(
                 "INSERT INTO booking.bookings " +
                 "(id, parent_id, player_id, coach_id, requested_start_time, requested_end_time, status, canonical_timezone, version, created_at, updated_at) " +

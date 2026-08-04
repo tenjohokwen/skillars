@@ -5,10 +5,8 @@ import com.softropic.skillars.platform.booking.repo.BookingBatchRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequestRepository;
-import com.softropic.skillars.platform.booking.repo.SessionPackPurchasedRepository;
 import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.platform.booking.service.BookingStateMachine;
-import com.softropic.skillars.platform.booking.service.SessionPackService;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
@@ -51,14 +49,12 @@ class ExpiredPackBookingValidationTest {
 
     @Mock BookingRepository bookingRepository;
     @Mock BookingStateMachine bookingStateMachine;
-    @Mock SessionPackService sessionPackService;
     @Mock CoachProfileRepository coachProfileRepository;
     @Mock PaymentGateway paymentGateway;
     @Mock CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
     @Mock PlayerProfileRepository playerProfileRepository;
     @Mock UserRepository userRepository;
     @Mock ApplicationEventPublisher eventPublisher;
-    @Mock SessionPackPurchasedRepository sessionPackPurchasedRepository;
     @Mock BookingRescheduleRequestRepository rescheduleRequestRepository;
     @Mock BookingBatchRepository batchRepository;
     @Mock SessionPackPurchaseRepository sessionPackPurchaseRepository;

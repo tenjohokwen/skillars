@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-08-03 # skillars-11-1 dev complete, status review; full mvn verify green
+# last_updated: 2026-08-04 # skillars-11-3 code review passed, status done; 1 patch applied, 3 deferred
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-08-03 # skillars-11-2-cutover-booking-and-frontend done — manual UAT explicitly skipped (no environment available), full mvn verify green (833 tests)
+last_updated: 2026-08-04 # skillars-11-3 code review passed, status done; 1 patch applied, 3 deferred
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -289,5 +289,5 @@ development_status:
   skillars-epic-11: in-progress
   skillars-11-1-payment-path-parity-gaps: done  # code review 2026-08-03: 4 patches applied (scheduler save/publish ordering, N+1 tier lookup, duplicate-id dedup in pausePack, missing forfeiture-query index), 9 pre-existing issues deferred, 1 decision (premature PAUSED status) accepted as intended
   skillars-11-2-cutover-booking-and-frontend: done  # 2026-08-03: code review fixed a critical missing coachId field + 2 other patches, 5 deferred, 1 decision resolved (payment-method UI gap → urgent follow-up). Full mvn verify (833 tests, unit+IT) green — fixed 2 IT fixture regressions (legacy vs new-path session-pack table mismatch). Manual UAT explicitly skipped by user decision (no environment available) — revisit once a UAT environment exists
-  skillars-11-3-remove-legacy-session-pack-system: backlog
+  skillars-11-3-remove-legacy-session-pack-system: done  # 2026-08-04: legacy system deleted, V89 drops table, 7 IT fixtures fixed; mvn -o verify (1597 tests: 777 unit + 820 IT) + eslint + quasar build all green. Code review: 1 patch applied (stale test comment), 3 deferred (migration IF EXISTS guard, rollout staging, pre-existing homework pack_id FK gap), 13 dismissed as false positives after cross-checking against payment-module parity tests from 11.1/11.2
   skillars-epic-11-retrospective: optional

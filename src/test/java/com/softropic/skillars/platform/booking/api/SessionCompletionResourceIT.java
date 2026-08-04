@@ -136,15 +136,6 @@ class SessionCompletionResourceIT {
                 coachProfile2Id
             );
 
-            jdbcTemplate.update(
-                "INSERT INTO booking.session_packs_purchased " +
-                "(id, parent_id, player_id, coach_id, session_count, credits_remaining, status, purchased_at, expires_at) " +
-                "VALUES (?, ?, ?, ?, 5, 5, 'ACTIVE', ?, ?)",
-                UUID.randomUUID(), PARENT_ID, PLAYER_ID, coachProfileId,
-                Timestamp.from(Instant.now()),
-                Timestamp.from(Instant.now().plus(180, ChronoUnit.DAYS))
-            );
-
             insertUpcomingBooking(bookingId);
             return null;
         });
@@ -155,7 +146,6 @@ class SessionCompletionResourceIT {
         transactionTemplate.execute(status -> {
             jdbcTemplate.update("DELETE FROM booking.session_completion_data WHERE booking_id = ?", bookingId);
             jdbcTemplate.update("DELETE FROM booking.bookings WHERE parent_id = ?", PARENT_ID);
-            jdbcTemplate.update("DELETE FROM booking.session_packs_purchased WHERE parent_id = ?", PARENT_ID);
             jdbcTemplate.update("DELETE FROM marketplace.coach_pricing WHERE coach_id IN (?, ?)", coachProfileId, coachProfile2Id);
             jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id IN (?, ?)", coachProfileId, coachProfile2Id);
             jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = ?", PLAYER_ID);

@@ -136,15 +136,6 @@ class RescheduleResourceIT {
                 coachProfile2Id
             );
 
-            jdbcTemplate.update(
-                "INSERT INTO booking.session_packs_purchased " +
-                "(id, parent_id, player_id, coach_id, session_count, credits_remaining, status, purchased_at, expires_at) " +
-                "VALUES (?, ?, ?, ?, 5, 5, 'ACTIVE', ?, ?)",
-                UUID.randomUUID(), PARENT_ID, PLAYER_ID, coachProfileId,
-                Timestamp.from(Instant.now()),
-                Timestamp.from(Instant.now().plus(180, ChronoUnit.DAYS))
-            );
-
             // Story 11.2: BookingDuplicationService's pack-eligibility check now queries
             // payment.session_pack_purchases exclusively (PackSessionService.hasActivePack),
             // not the legacy table above — an active pack is needed there too.
@@ -173,7 +164,6 @@ class RescheduleResourceIT {
         transactionTemplate.execute(status -> {
             jdbcTemplate.update("DELETE FROM booking.booking_reschedule_requests WHERE booking_id = ?", bookingId);
             jdbcTemplate.update("DELETE FROM booking.bookings WHERE parent_id = ?", PARENT_ID);
-            jdbcTemplate.update("DELETE FROM booking.session_packs_purchased WHERE parent_id = ?", PARENT_ID);
             jdbcTemplate.update("DELETE FROM payment.session_pack_purchases WHERE parent_id = ?", PARENT_ID);
             jdbcTemplate.update("DELETE FROM payment.session_pack_tiers WHERE pack_tier_id = ?", packTierId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_pricing WHERE coach_id IN (?, ?)", coachProfileId, coachProfile2Id);

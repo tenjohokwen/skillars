@@ -695,6 +695,11 @@
 
 # new issues
 
+## Deferred from: code review of skillars-11-3-remove-legacy-session-pack-system (2026-08-04)
+- D1: `V89__drop_legacy_session_packs.sql`'s `DROP TABLE` has no `IF EXISTS` guard — not blocking (Flyway won't re-run an applied migration, table confirmed empty at this dev/UAT stage), but there's no prior DROP TABLE in this codebase to establish a convention either way; adopt `IF EXISTS` for future destructive migrations. [`src/main/resources/db/migration/V89__drop_legacy_session_packs.sql`]
+- D2: Code deletion and the destructive `DROP TABLE` migration ship together with no staged rollout (remove references first, verify, drop table in a later release). Not applicable now — no live/production system exists yet — but relevant once this app has real deployed traffic and rolling deploys. [`src/main/resources/db/migration/V89__drop_legacy_session_packs.sql`]
+- D3: `session.homework_assignments.pack_id` has no FK and now points at nothing meaningful — pre-existing design (column never had a `REFERENCES` clause, per V45), not introduced by this diff. [`src/test/java/com/softropic/skillars/platform/session/api/HomeworkResourceIT.java`]
+
 ## Deferred from: code review of skillars-deferred-10 (2026-07-02)
 - D0: `pr-build.yml`'s Docker build never runs/scans the built image (`push: false`, no `load: true`) — user decision: `deploy.yml`'s existing smoke test is the real safety net; add `load: true` + a smoke command here only if PR-time runtime validation becomes worth the added CI cost. [`.github/workflows/pr-build.yml`]
 - D1: `ci.yml`'s push trigger (`branches: [main]`, untouched by this diff) has the same branch-name mismatch flagged as a patch in `pr-build.yml` — the repo's default branch is `master`. Pre-existing, not introduced by this diff, but potentially means the image-publish pipeline has never auto-triggered on push; AC1 forbids changing `ci.yml`'s behavior in this story so this needs a dedicated follow-up. [`.github/workflows/ci.yml:4`]

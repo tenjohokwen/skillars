@@ -100,16 +100,8 @@ class HomeworkResourceIT extends BaseSessionIT {
             coachProfileId = insertCoachProfile(COACH_USER_ID);
             insertSubscription(coachProfileId, "INSTRUCTOR");
 
-            // Active session pack
+            // homework_assignments.pack_id is a plain UUID column with no FK — any valid UUID works.
             packId = UUID.randomUUID();
-            jdbcTemplate.update(
-                "INSERT INTO booking.session_packs_purchased " +
-                "(id, parent_id, player_id, coach_id, session_count, credits_remaining, status, purchased_at, expires_at) " +
-                "VALUES (?, ?, ?, ?, 5, 5, 'ACTIVE', ?, ?)",
-                packId, PARENT_ID, PLAYER_ID, coachProfileId,
-                Timestamp.from(Instant.now()),
-                Timestamp.from(Instant.now().plus(180, ChronoUnit.DAYS))
-            );
 
             // Story 11.2: HomeworkAssignmentService's active-pack gating now queries
             // payment.session_pack_purchases exclusively (PackSessionService.hasActivePack),
@@ -153,7 +145,6 @@ class HomeworkResourceIT extends BaseSessionIT {
         transactionTemplate.execute(status -> {
             jdbcTemplate.update("DELETE FROM session.homework_completions WHERE player_id = ?", PLAYER_ID);
             jdbcTemplate.update("DELETE FROM session.homework_assignments WHERE player_id = ?", PLAYER_ID);
-            jdbcTemplate.update("DELETE FROM booking.session_packs_purchased WHERE parent_id = ?", PARENT_ID);
             jdbcTemplate.update("DELETE FROM payment.session_pack_purchases WHERE parent_id = ?", PARENT_ID);
             jdbcTemplate.update("DELETE FROM payment.session_pack_tiers WHERE pack_tier_id = ?", packTierId);
             jdbcTemplate.update("DELETE FROM session.drills WHERE id = ?", drillId);
@@ -209,11 +200,8 @@ class HomeworkResourceIT extends BaseSessionIT {
 
     @Test
     void getLockerRoomDrills_packExhausted_returns200EmptyList() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("UPDATE booking.session_packs_purchased SET status = 'EXHAUSTED', credits_remaining = 0 WHERE id = ?", packId);
-            return jdbcTemplate.update(
-                "UPDATE payment.session_pack_purchases SET remaining_sessions = 0 WHERE purchase_id = ?", paymentPurchaseId);
-        });
+        transactionTemplate.execute(status -> jdbcTemplate.update(
+            "UPDATE payment.session_pack_purchases SET remaining_sessions = 0 WHERE purchase_id = ?", paymentPurchaseId));
         String cookies = loginAndGetCookies(PARENT_EMAIL);
         ResponseEntity<List> response = httpTestClient.makeHttpRequest(
             baseUrl() + "/api/session/players/" + PLAYER_ID + "/homework",

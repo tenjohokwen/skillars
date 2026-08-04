@@ -18,12 +18,6 @@ export const addAvailabilityBlock = (data) =>
 export const deleteAvailabilityBlock = (id) =>
   api.delete(`/api/bookings/coaches/me/availability/blocks/${id}`)
 
-export const getPlayerPacks = (playerId, coachId) =>
-  api.get(`/api/bookings/players/${playerId}/packs`, { params: coachId ? { coachId } : {} })
-
-export const purchaseSessionPack = (playerId, request) =>
-  api.post(`/api/bookings/players/${playerId}/packs/purchase`, request)
-
 export const createBookingRequest = (request) => api.post('/api/bookings/requests', request)
 
 export const acceptBooking = (id) => api.put(`/api/bookings/requests/${id}/accept`)
@@ -66,9 +60,6 @@ export const duplicateNextWeek = (id) => api.post(`/api/bookings/${id}/duplicate
 export const getBatchConfig = () => api.get('/api/bookings/batches/config')
 export const createBatch = (data) => api.post('/api/bookings/batches', data)
 export const acceptAllBatch = (batchId) => api.post(`/api/bookings/batches/${batchId}/accept-all`)
-
-export const pauseSessionPack = (playerId, packId, data) =>
-  api.post(`/api/bookings/players/${playerId}/packs/${packId}/pause`, data)
 
 export const cancelBooking = (bookingId) => api.post(`/api/bookings/${bookingId}/cancel`)
 export const coachCancelBooking = (bookingId, cancelReason) =>

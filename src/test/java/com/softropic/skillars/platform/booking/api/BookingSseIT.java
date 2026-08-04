@@ -152,15 +152,6 @@ class BookingSseIT {
                 "VALUES (?, ?, ?, '08:00', '18:00', ?)",
                 UUID.randomUUID(), coachProfileId, windowDow, WINDOW_TZ
             );
-            jdbcTemplate.update(
-                "INSERT INTO booking.session_packs_purchased " +
-                "(id, parent_id, player_id, coach_id, session_count, credits_remaining, status, purchased_at, expires_at) " +
-                "VALUES (?, ?, ?, ?, 3, 3, 'ACTIVE', ?, ?)",
-                UUID.randomUUID(), SSE_PARENT_ID, SSE_PLAYER_ID, coachProfileId,
-                Timestamp.from(Instant.now()),
-                Timestamp.from(Instant.now().plus(180, ChronoUnit.DAYS))
-            );
-
             // Pre-create a booking in REQUESTED status
             bookingId = UUID.randomUUID();
             jdbcTemplate.update(
@@ -188,7 +179,6 @@ class BookingSseIT {
     void tearDown() {
         transactionTemplate.execute(status -> {
             jdbcTemplate.update("DELETE FROM booking.bookings WHERE parent_id IN (?, ?)", SSE_PARENT_ID, OTHER_USER_ID);
-            jdbcTemplate.update("DELETE FROM booking.session_packs_purchased WHERE parent_id = ?", SSE_PARENT_ID);
             jdbcTemplate.update("DELETE FROM marketplace.coach_availability_windows WHERE coach_id = ?", coachProfileId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_pricing WHERE coach_id = ?", coachProfileId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
