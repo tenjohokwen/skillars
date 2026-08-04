@@ -44,6 +44,8 @@ import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -110,6 +112,7 @@ public class BookingService {
     private final BookingBatchRepository batchRepository;
     private final SessionPackPurchaseRepository sessionPackPurchaseRepository;
     private final CoachPricingRepository coachPricingRepository;
+    private final EntityManager entityManager;
 
     private static final List<String> ACTIVE_SLOT_STATUSES =
         List.of("REQUESTED", "ACCEPTED", "PAYMENT_PENDING", "CONFIRMED", "UPCOMING", "IN_PROGRESS", "PAUSED");
@@ -125,13 +128,7 @@ public class BookingService {
     private void transitionInternal(UUID bookingId, BookingEvent event, TransitionContext context, boolean publishEvent) {
         validateActorAuthorization(event, context);
         Booking booking = getBookingOrThrow(bookingId);
-        BookingStatus currentStatus;
-        try {
-            currentStatus = BookingStatus.valueOf(booking.getStatus());
-        } catch (IllegalArgumentException e) {
-            throw new ResourceNotFoundException(
-                "Booking " + bookingId + " has unrecognised status '" + booking.getStatus() + "'", "booking");
-        }
+        BookingStatus currentStatus = readStatusOrThrow(booking);
         bookingStateMachine.validate(currentStatus, event);
         BookingStatus newStatus = bookingStateMachine.targetStatus(currentStatus, event);
 
@@ -193,11 +190,27 @@ public class BookingService {
         }
 
         // AC 1/2: acquire a per-coach lock before the authoritative overlap check so two
-        // concurrent requests for the same coach are serialized, not interleaved. The lookup
-        // result itself is unused beyond the lock it acquires — orElseThrow both documents that
-        // and guards against the lock silently no-op'ing if the coach row vanished mid-request.
-        coachProfileRepository.findByIdForUpdate(req.coachId())
+        // concurrent requests for the same coach are serialized, not interleaved. The row is then
+        // re-read under that lock (Deferred-12 AC3): a suspension committed between the unlocked
+        // read at the top of this method and the lock being granted would otherwise still let the
+        // booking through. orElseThrow guards against the lock silently no-op'ing if the coach row
+        // vanished mid-request.
+        CoachProfile lockedCoach = coachProfileRepository.findByIdForUpdate(req.coachId())
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+        // The explicit refresh is required, not defensive: findByIdForUpdate is a JPQL query and the
+        // same row is already managed from the findById above, so Hibernate takes the DB lock but
+        // returns the existing instance without overwriting its in-memory state. Reading getStatus()
+        // off lockedCoach without this would re-check the same stale value and could never fire.
+        entityManager.refresh(lockedCoach, LockModeType.PESSIMISTIC_WRITE);
+        if (lockedCoach.getStatus() == CoachProfileStatus.SUSPENDED) {
+            throw new OperationNotAllowedException("Coach is suspended", metaData, BookingError.COACH_UNAVAILABLE);
+        }
+        if (lockedCoach.getStatus() != CoachProfileStatus.ACTIVE
+                && lockedCoach.getStatus() != CoachProfileStatus.REDUCED
+                && lockedCoach.getStatus() != CoachProfileStatus.PENDING_REVIEW) {
+            throw new OperationNotAllowedException("Coach profile is not active", metaData, SecurityError.MISSING_RIGHTS);
+        }
+
         List<Booking> overlapping = bookingRepository.findOverlappingBookings(
             req.coachId(), req.requestedStartTime(), req.requestedEndTime(), ACTIVE_SLOT_STATUSES, null);
         if (!overlapping.isEmpty()) {
@@ -280,8 +293,7 @@ public class BookingService {
         }
 
         TransitionContext ctx = new TransitionContext(ActorRole.COACH, coachUserId);
-        transitionInternal(bookingId, BookingEvent.ACCEPT, ctx, false);
-        transitionInternal(bookingId, BookingEvent.INITIATE_PAYMENT, ctx, true);
+        acceptAndInitiatePayment(bookingId, ctx);
 
         Booking updated = getBookingOrThrow(bookingId);
         BigDecimal sessionPrice = resolveSessionPrice(updated);
@@ -298,6 +310,26 @@ public class BookingService {
 
         // Return PAYMENT_PENDING status — PaymentLifecycleService handles CONFIRMED/DECLINED
         return toResponse(updated, coach.getDisplayName(), resolvePlayerName(updated.getPlayerId()), null, null, null, null);
+    }
+
+    /**
+     * Moves a REQUESTED booking to PAYMENT_PENDING in the one step every accept path must take:
+     * ACCEPT then INITIATE_PAYMENT. Both the single-booking flow and the batch flow call this, so
+     * they cannot drift apart again — the batch flow previously issued only ACCEPT, leaving its
+     * bookings in a state from which PAYMENT_CAPTURED/PAYMENT_FAILED are illegal transitions
+     * (Deferred-12 AC6). The intermediate ACCEPTED status change is not published: callers observe
+     * one status-change event per accept, carrying PAYMENT_PENDING.
+     *
+     * <p>Note on the transaction boundary: {@code acceptBooking} reaches this method by plain
+     * self-invocation, so the proxy is bypassed and both legs simply run inside acceptBooking's
+     * own transaction. The annotation is what covers the batch caller, which does come through the
+     * proxy. Both paths are atomic across the two legs — but by different mechanisms, so do not
+     * assume this annotation is what makes the single-booking flow safe.
+     */
+    @Transactional
+    public void acceptAndInitiatePayment(UUID bookingId, TransitionContext context) {
+        transitionInternal(bookingId, BookingEvent.ACCEPT, context, false);
+        transitionInternal(bookingId, BookingEvent.INITIATE_PAYMENT, context, true);
     }
 
     private BigDecimal resolveSessionPrice(Booking booking) {
@@ -506,6 +538,15 @@ public class BookingService {
         log.info("Booking {} cancelled due to pack pause", bookingId);
     }
 
+    private BookingStatus readStatusOrThrow(Booking booking) {
+        try {
+            return BookingStatus.valueOf(booking.getStatus());
+        } catch (IllegalArgumentException e) {
+            throw new ResourceNotFoundException(
+                "Booking " + booking.getId() + " has unrecognised status '" + booking.getStatus() + "'", "booking");
+        }
+    }
+
     public Booking getBookingOrThrow(UUID bookingId) {
         return bookingRepository.findById(bookingId)
             .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking"));
@@ -528,7 +569,18 @@ public class BookingService {
             throw new OperationNotAllowedException("Parent does not own this booking", SecurityError.MISSING_RIGHTS);
         }
         long hoursBeforeSession = ChronoUnit.HOURS.between(Instant.now(), booking.getRequestedStartTime());
-        boolean refundEligible = booking.getRequestedStartTime().isAfter(Instant.now().plus(24, ChronoUnit.HOURS));
+        // Deferred-12 AC4: money only ever leaves the parent (credit debit / pack unit deduction)
+        // once payment has been captured, i.e. from CONFIRMED onwards. Everything else — notably
+        // PAYMENT_PENDING and ACCEPTED, where batch bookings briefly rest — has nothing to refund,
+        // so a >24h cancellation there must not mint a BOOKING_REFUND credit or restore a pack unit.
+        // Deliberately a whitelist: a blacklist would leave newly-added pre-payment statuses open.
+        // Mirrors applyRefundLogic's existing CONFIRMED/UPCOMING condition rather than adding a
+        // third refund rule.
+        BookingStatus statusBeforeCancel = readStatusOrThrow(booking);
+        boolean paymentWasCaptured = statusBeforeCancel == BookingStatus.CONFIRMED
+            || statusBeforeCancel == BookingStatus.UPCOMING;
+        boolean refundEligible = paymentWasCaptured
+            && booking.getRequestedStartTime().isAfter(Instant.now().plus(24, ChronoUnit.HOURS));
         BigDecimal sessionPrice = resolveSessionPrice(booking);
         String parentEmail = resolveEmail(parentUserId, bookingId);
         String coachEmail = resolveCoachEmail(booking.getCoachId(), bookingId);

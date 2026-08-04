@@ -61,6 +61,8 @@ class BookingStateMachineTest {
             Arguments.of(ACCEPTED, CANCEL_PARENT, CANCELLED_PARENT),
             Arguments.of(PAYMENT_PENDING, PAYMENT_CAPTURED, CONFIRMED),
             Arguments.of(PAYMENT_PENDING, PAYMENT_FAILED, DECLINED),
+            // Deferred-12 AC4: escape hatch out of a booking whose payment never captured
+            Arguments.of(PAYMENT_PENDING, CANCEL_PARENT, CANCELLED_PARENT),
             Arguments.of(CONFIRMED, CANCEL_COACH, CANCELLED_COACH),
             Arguments.of(CONFIRMED, CANCEL_PARENT, CANCELLED_PARENT),
             Arguments.of(UPCOMING, START, IN_PROGRESS),

@@ -33,6 +33,13 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -290,6 +297,113 @@ class AdminReviewQueueIT {
                 assertThat(hcee.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
                 assertThat(hcee.getResponseBodyAsString()).contains("\"errorKey\":\"RESOURCE_NOT_FOUND\"");
             });
+    }
+
+    @Test
+    void approveReview_calledTwice_secondReturns409AndWritesNoDuplicateLog() {
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+        String approveUrl = baseUrl() + "/api/admin/reviews/" + reviewId + "/approve";
+
+        ResponseEntity<Void> first = httpTestClient.makeHttpRequest(
+            approveUrl, HttpMethod.POST, null, authenticatedHeaders(adminCookies), Void.class);
+        assertThat(first.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            approveUrl, HttpMethod.POST, null, authenticatedHeaders(adminCookies), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException hcee = (HttpClientErrorException) e;
+                assertThat(hcee.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(hcee.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"reviews.alreadyApproved\"");
+            });
+
+        Integer logRows = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM reviews.review_moderation_log WHERE review_id = ? AND action = 'APPROVED'",
+            Integer.class, reviewId);
+        assertThat(logRows).isEqualTo(1);
+    }
+
+    /**
+     * AC1's stated guarantee is that the guard holds under <em>concurrent</em> calls — the admin
+     * double-click — not merely sequential ones. The sequential test above passes unchanged against
+     * a plain {@code findById}, so it does not exercise the pessimistic read at all. This one does:
+     * two requests are released simultaneously and exactly one must win.
+     */
+    @Test
+    void approveReview_concurrentDoubleClick_onlyOneSucceedsAndOneLogRowIsWritten() throws Exception {
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+        String approveUrl = baseUrl() + "/api/admin/reviews/" + reviewId + "/approve";
+
+        CyclicBarrier bothReady = new CyclicBarrier(2);
+        AtomicInteger okCount = new AtomicInteger();
+        AtomicInteger conflictCount = new AtomicInteger();
+
+        Callable<Void> approve = () -> {
+            bothReady.await(10, TimeUnit.SECONDS);
+            try {
+                httpTestClient.makeHttpRequest(
+                    approveUrl, HttpMethod.POST, null, authenticatedHeaders(adminCookies), Void.class);
+                okCount.incrementAndGet();
+            } catch (HttpClientErrorException e) {
+                if (e.getStatusCode() == HttpStatus.CONFLICT
+                        && e.getResponseBodyAsString().contains("\"errorKey\":\"reviews.alreadyApproved\"")) {
+                    conflictCount.incrementAndGet();
+                } else {
+                    throw e;
+                }
+            }
+            return null;
+        };
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        Future<Void> a = executor.submit(approve);
+        Future<Void> b = executor.submit(approve);
+        a.get(30, TimeUnit.SECONDS);
+        b.get(30, TimeUnit.SECONDS);
+        executor.shutdown();
+
+        assertThat(okCount.get()).as("exactly one concurrent approve may succeed").isEqualTo(1);
+        assertThat(conflictCount.get()).as("the loser must get the 409, not a duplicate success").isEqualTo(1);
+
+        Integer logRows = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM reviews.review_moderation_log WHERE review_id = ? AND action = 'APPROVED'",
+            Integer.class, reviewId);
+        assertThat(logRows)
+            .as("the pessimistic read must stop the second caller before it writes a second log row")
+            .isEqualTo(1);
+    }
+
+    /**
+     * Pins the validation-error contract of POST /api/admin/reviews/{id}/block, which changes as a
+     * side effect of routing AdminReviewResource through ReviewApiAdvice (assignableTypes). The
+     * request body field is `reason`, not `body`, so it misses ReviewApiAdvice#handleValidation's
+     * size-on-body branch and lands in the generic branch. Pre-change the global ApiAdvice answered
+     * with a generated help code as errorKey plus an `invalid.reason` field error.
+     */
+    @Test
+    void blockReview_blankReason_returns400WithReviewShapedValidationError() {
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/admin/reviews/" + reviewId + "/block",
+            HttpMethod.POST,
+            Map.of("reason", "  "),
+            authenticatedHeaders(adminCookies),
+            Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException hcee = (HttpClientErrorException) e;
+                assertThat(hcee.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(hcee.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"reviews.validationError\"")
+                    .contains("reason");
+            });
+
+        String moderationStatus = jdbcTemplate.queryForObject(
+            "SELECT moderation_status FROM reviews.coach_reviews WHERE review_id = ?",
+            String.class, reviewId);
+        assertThat(moderationStatus).isEqualTo("UNDER_REVIEW");
     }
 
     @Test

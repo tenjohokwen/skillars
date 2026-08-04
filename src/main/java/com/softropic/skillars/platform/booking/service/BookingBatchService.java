@@ -8,7 +8,6 @@ import com.softropic.skillars.platform.booking.contract.BatchBookingCreatedRespo
 import com.softropic.skillars.platform.booking.contract.BatchBookingRequestedEvent;
 import com.softropic.skillars.platform.booking.contract.BatchRuleViolationException;
 import com.softropic.skillars.platform.booking.contract.BatchSlot;
-import com.softropic.skillars.platform.booking.contract.BookingEvent;
 import com.softropic.skillars.platform.booking.contract.CreateBatchRequest;
 import com.softropic.skillars.platform.booking.contract.TransitionContext;
 import com.softropic.skillars.platform.booking.repo.Booking;
@@ -156,7 +155,11 @@ public class BookingBatchService {
 
         for (Booking b : requestedBookings) {
             try {
-                bookingService.transition(b.getId(), BookingEvent.ACCEPT, new TransitionContext(ActorRole.COACH, coachUserId));
+                // Must be the accept-then-initiate pair, not a bare ACCEPT: PaymentLifecycleService
+                // settles these bookings with PAYMENT_CAPTURED/PAYMENT_FAILED, which the state
+                // machine only permits from PAYMENT_PENDING (Deferred-12 AC6). INITIATE_PAYMENT is
+                // authorised for ActorRole.COACH, so the context below covers both legs.
+                bookingService.acceptAndInitiatePayment(b.getId(), new TransitionContext(ActorRole.COACH, coachUserId));
                 acceptedIds.add(b.getId());
             } catch (Exception e) {
                 log.warn("Failed to accept booking {} in batch {}: {}", b.getId(), batchId, e.getMessage());

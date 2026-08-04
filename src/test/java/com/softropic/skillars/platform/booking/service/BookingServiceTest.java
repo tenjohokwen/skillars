@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.booking.service;
 
 import com.softropic.skillars.platform.booking.contract.BookingAcceptedEvent;
+import com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent;
 import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.BookingDeclinedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingRequestedEvent;
@@ -29,9 +30,13 @@ import com.softropic.skillars.platform.security.repo.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEvent;
 import org.springframework.context.ApplicationEventPublisher;
+
+import jakarta.persistence.EntityManager;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -67,6 +72,10 @@ class BookingServiceTest {
     @Mock private BookingBatchRepository bookingBatchRepository;
     @Mock private SessionPackPurchaseRepository sessionPackPurchaseRepository;
     @Mock private CoachPricingRepository coachPricingRepository;
+    // Deferred-12 AC3: createBookingRequest re-reads the coach row under the pessimistic lock via
+    // EntityManager.refresh. A mock makes that a no-op here, which is fine — the real behaviour is
+    // proven by BookingServiceConcurrencyIT against a live database, as the AC requires.
+    @Mock private EntityManager entityManager;
 
     private BookingStateMachine bookingStateMachine;
     private BookingService bookingService;
@@ -84,7 +93,7 @@ class BookingServiceTest {
             paymentGateway, coachAvailabilityWindowRepository, playerProfileRepository,
             userRepository, eventPublisher,
             rescheduleRequestRepository, bookingBatchRepository,
-            sessionPackPurchaseRepository, coachPricingRepository
+            sessionPackPurchaseRepository, coachPricingRepository, entityManager
         );
     }
 
@@ -330,6 +339,86 @@ class BookingServiceTest {
 
         assertThatThrownBy(() -> bookingService.acceptBooking(booking.getId(), COACH_USER_ID))
             .isInstanceOf(BookingStateTransitionException.class);
+    }
+
+    // ---- cancelBookingAsParent tests (Deferred-12 AC4) ----
+
+    @Test
+    void cancelBookingAsParent_paymentPendingBooking_cancelsWithoutRefundEligibility() {
+        // A booking stuck in PAYMENT_PENDING (crash between the INITIATE_PAYMENT commit and the
+        // AFTER_COMMIT payment listener) must be cancellable — and must not mint a refund, because
+        // nothing was ever captured and the pack unit has not been deducted yet.
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "PAYMENT_PENDING");
+        booking.setRequestedStartTime(Instant.now().plus(72, java.time.temporal.ChronoUnit.HOURS));
+        booking.setRequestedEndTime(Instant.now().plus(73, java.time.temporal.ChronoUnit.HOURS));
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        bookingService.cancelBookingAsParent(booking.getId(), PARENT_ID);
+
+        assertThat(booking.getStatus()).isEqualTo("CANCELLED_PARENT");
+        assertThat(capturedParentCancellation().isRefundEligible())
+            .as("no payment was captured from PAYMENT_PENDING — refunding would credit money never taken")
+            .isFalse();
+    }
+
+    @Test
+    void cancelBookingAsParent_acceptedBatchBooking_cancelsWithoutRefundEligibility() {
+        // ACCEPTED is transiently reachable inside the accept transaction and carries the identical
+        // hole. The guard is a whitelist precisely so this state is covered without naming it.
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "ACCEPTED");
+        booking.setRequestedStartTime(Instant.now().plus(72, java.time.temporal.ChronoUnit.HOURS));
+        booking.setRequestedEndTime(Instant.now().plus(73, java.time.temporal.ChronoUnit.HOURS));
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        bookingService.cancelBookingAsParent(booking.getId(), PARENT_ID);
+
+        assertThat(booking.getStatus()).isEqualTo("CANCELLED_PARENT");
+        assertThat(capturedParentCancellation().isRefundEligible()).isFalse();
+    }
+
+    @Test
+    void cancelBookingAsParent_confirmedBookingMoreThan24hOut_staysRefundEligible() {
+        // Regression guard: the whitelist must not break the legitimate refund path.
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");
+        booking.setRequestedStartTime(Instant.now().plus(72, java.time.temporal.ChronoUnit.HOURS));
+        booking.setRequestedEndTime(Instant.now().plus(73, java.time.temporal.ChronoUnit.HOURS));
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        bookingService.cancelBookingAsParent(booking.getId(), PARENT_ID);
+
+        assertThat(booking.getStatus()).isEqualTo("CANCELLED_PARENT");
+        assertThat(capturedParentCancellation().isRefundEligible()).isTrue();
+    }
+
+    private BookingCancelledByParentEvent capturedParentCancellation() {
+        // Must be an ApplicationEvent captor, not Object: BookingCancelledByParentEvent extends
+        // ApplicationEvent, so the production call binds to publishEvent(ApplicationEvent) and a
+        // verify() on the publishEvent(Object) overload would never match.
+        ArgumentCaptor<ApplicationEvent> captor = ArgumentCaptor.forClass(ApplicationEvent.class);
+        verify(eventPublisher, org.mockito.Mockito.atLeastOnce()).publishEvent(captor.capture());
+        return captor.getAllValues().stream()
+            .filter(BookingCancelledByParentEvent.class::isInstance)
+            .map(BookingCancelledByParentEvent.class::cast)
+            .reduce((first, second) -> second)
+            .orElseThrow(() -> new AssertionError("No BookingCancelledByParentEvent published"));
     }
 
     // ---- declineBooking tests ----

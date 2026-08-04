@@ -17,6 +17,7 @@ public enum ReviewErrorCode implements ErrorCode {
     CANNOT_FLAG_OWN_REVIEW("reviews.cannotFlagOwnReview"),
     CANNOT_FLAG_OWN_COACHED_REVIEW("reviews.cannotFlagOwnCoachedReview"),
     ALREADY_FLAGGED("reviews.alreadyFlagged"),
+    ALREADY_APPROVED("reviews.alreadyApproved"),
     REVIEW_NOT_FOUND("reviews.reviewNotFound");
 
     private final String code;

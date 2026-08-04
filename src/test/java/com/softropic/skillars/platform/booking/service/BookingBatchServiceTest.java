@@ -160,7 +160,10 @@ class BookingBatchServiceTest {
         service.acceptAll(BATCH_ID, COACH_USER_ID);
 
         assertThat(batch.getStatus()).isEqualTo("FULLY_ACCEPTED");
-        verify(bookingService, times(2)).transition(any(), any(), any());
+        // Deferred-12 AC6: the batch flow now takes the same accept-then-initiate-payment step as
+        // the single-booking flow, so its bookings rest in PAYMENT_PENDING where the payment
+        // listener's PAYMENT_CAPTURED/PAYMENT_FAILED transitions are legal.
+        verify(bookingService, times(2)).acceptAndInitiatePayment(any(), any());
         verify(eventPublisher).publishEvent(any(BatchBookingAcceptedEvent.class));
     }
 

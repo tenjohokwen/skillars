@@ -27,9 +27,14 @@ public class BookingStateMachine {
             BookingEvent.CANCEL_PARENT,       BookingStatus.CANCELLED_PARENT,
             BookingEvent.CANCEL_DUE_TO_PAUSE, BookingStatus.CANCELLED
         ));
+        // CANCEL_PARENT is the parent's escape hatch from a booking whose payment never captured —
+        // e.g. a crash between the INITIATE_PAYMENT commit and the AFTER_COMMIT payment listener
+        // completing (Deferred-12 AC4). cancelBookingAsParent's refund whitelist keeps such a
+        // cancellation from issuing a refund for money that was never taken.
         t.put(BookingStatus.PAYMENT_PENDING, Map.of(
             BookingEvent.PAYMENT_CAPTURED, BookingStatus.CONFIRMED,
-            BookingEvent.PAYMENT_FAILED,   BookingStatus.DECLINED   // was REFUND_PENDING — see Story 7.2
+            BookingEvent.PAYMENT_FAILED,   BookingStatus.DECLINED,  // was REFUND_PENDING — see Story 7.2
+            BookingEvent.CANCEL_PARENT,    BookingStatus.CANCELLED_PARENT
         ));
         t.put(BookingStatus.CONFIRMED, Map.of(
             BookingEvent.SCHEDULE_UPCOMING,   BookingStatus.UPCOMING,

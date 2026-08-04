@@ -17,7 +17,15 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Order(Ordered.HIGHEST_PRECEDENCE)
-@RestControllerAdvice(basePackages = "com.softropic.skillars.platform.reviews.api")
+// assignableTypes is additive to basePackages (OR semantics): AdminReviewResource lives in
+// platform.admin.api but raises review-domain errors, so it needs this advice's review-shaped
+// responses. The class is referenced fully-qualified rather than imported to avoid an
+// import-level reviews.api → admin.api dependency; admin.api already depends on reviews.contract.
+// Note this routes EVERY exception from AdminReviewResource here, including bean-validation
+// failures on /block — see AdminReviewQueueIT#blockReview_blankReason_... which pins that contract.
+@RestControllerAdvice(
+    basePackages = "com.softropic.skillars.platform.reviews.api",
+    assignableTypes = com.softropic.skillars.platform.admin.api.AdminReviewResource.class)
 public class ReviewApiAdvice {
 
     @ExceptionHandler(OperationNotAllowedException.class)
@@ -29,7 +37,8 @@ public class ReviewApiAdvice {
         HttpStatus status;
         if (ReviewErrorCode.ALREADY_SUBMITTED.getErrorCode().equals(code)
                 || ReviewErrorCode.RESPONSE_ALREADY_SUBMITTED.getErrorCode().equals(code)
-                || ReviewErrorCode.ALREADY_FLAGGED.getErrorCode().equals(code)) {
+                || ReviewErrorCode.ALREADY_FLAGGED.getErrorCode().equals(code)
+                || ReviewErrorCode.ALREADY_APPROVED.getErrorCode().equals(code)) {
             status = HttpStatus.CONFLICT;
         } else if (ReviewErrorCode.BODY_TOO_LONG.getErrorCode().equals(code)
                 || ReviewErrorCode.RESPONSE_TOO_LONG.getErrorCode().equals(code)) {

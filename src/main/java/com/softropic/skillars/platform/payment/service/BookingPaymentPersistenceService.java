@@ -12,6 +12,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -136,7 +137,14 @@ public class BookingPaymentPersistenceService {
             .build());
     }
 
-    @Transactional
+    /**
+     * REQUIRES_NEW, unlike the confirm* methods: this only ever runs from the batch listener's
+     * catch block, i.e. after that booking's settle attempt has already thrown and rolled back its
+     * own transaction. Its own transaction keeps the DECLINED write independent of both the failed
+     * settle and the listener's surrounding transaction, so the booking is never left stranded in
+     * PAYMENT_PENDING with no record of why.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void declineBatchBooking(UUID bookingId, UUID batchId) {
         BookingPayment bp = new BookingPayment();
         bp.setBookingId(bookingId);

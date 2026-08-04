@@ -22,6 +22,7 @@ import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import jakarta.persistence.EntityManager;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -59,6 +60,10 @@ class ExpiredPackBookingValidationTest {
     @Mock BookingBatchRepository batchRepository;
     @Mock SessionPackPurchaseRepository sessionPackPurchaseRepository;
     @Mock CoachPricingRepository coachPricingRepository;
+    // Deferred-12 AC3: createBookingRequest re-reads the locked coach row via EntityManager.refresh
+    // before the overlap check; a mock keeps that a no-op here. The real re-read is proven against a
+    // live database in BookingServiceConcurrencyIT.
+    @Mock EntityManager entityManager;
 
     @InjectMocks BookingService bookingService;
 

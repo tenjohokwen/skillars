@@ -243,6 +243,87 @@ class BookingServiceConcurrencyIT {
         }
     }
 
+    /**
+     * Deferred-12 AC3: an admin suspends the coach in the window between
+     * createBookingRequest()'s first, unlocked status read and its later
+     * coachProfileRepository.findByIdForUpdate() acquiring the per-coach lock.
+     *
+     * <p>The race is driven deterministically rather than by luck: a second connection takes
+     * {@code SELECT … FOR UPDATE} on the coach row and flips the status to SUSPENDED without
+     * committing. The booking thread's unlocked read therefore still observes ACTIVE (READ
+     * COMMITTED), then blocks on the same row lock. Once the suspending transaction commits, the
+     * booking thread acquires the lock over a row that is now SUSPENDED.
+     *
+     * <p>This must be a real IT: with a mocked repository the "re-check" would read whatever the
+     * mock was told to return and would pass even against a fix that does nothing. It also fails
+     * against a fix that merely calls getStatus() on findByIdForUpdate's return value, because that
+     * is the same managed instance loaded earlier in the method and still carries stale state.
+     */
+    @Test
+    void createBookingRequest_coachSuspendedAfterUnlockedRead_isRejectedWithCoachUnavailable() throws Exception {
+        CreateBookingRequest req = new CreateBookingRequest(
+            coachProfileId, PLAYER_ID_1, slotStart, slotEnd, WINDOW_TZ, null, null);
+
+        CountDownLatch suspensionStagedAndLockHeld = new CountDownLatch(1);
+        AtomicReference<Throwable> suspenderFailure = new AtomicReference<>();
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        Future<?> suspender = executor.submit(() -> {
+            try {
+                transactionTemplate.execute(status -> {
+                    jdbcTemplate.queryForObject(
+                        "SELECT status FROM marketplace.coach_profiles WHERE id = ? FOR UPDATE",
+                        String.class, coachProfileId);
+                    jdbcTemplate.update(
+                        "UPDATE marketplace.coach_profiles SET status = 'SUSPENDED' WHERE id = ?",
+                        coachProfileId);
+                    suspensionStagedAndLockHeld.countDown();
+                    // Hold the lock long enough for the booking thread to pass its unlocked read
+                    // and block on findByIdForUpdate; the repository's lock timeout is 5s.
+                    try {
+                        Thread.sleep(1500);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return null;
+                });
+            } catch (Throwable t) {
+                suspenderFailure.set(t);
+            }
+        });
+
+        AtomicReference<Throwable> bookingOutcome = new AtomicReference<>();
+        Future<?> booker = executor.submit(() -> {
+            try {
+                suspensionStagedAndLockHeld.await(10, TimeUnit.SECONDS);
+                bookingService.createBookingRequest(PARENT_ID_1, req);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (Throwable t) {
+                bookingOutcome.set(t);
+            }
+        });
+
+        suspender.get(30, TimeUnit.SECONDS);
+        booker.get(30, TimeUnit.SECONDS);
+        executor.shutdown();
+
+        if (suspenderFailure.get() != null) {
+            throw new AssertionError("Suspending thread failed", suspenderFailure.get());
+        }
+
+        assertThat(bookingOutcome.get())
+            .as("Booking must be rejected once the locked re-read sees the SUSPENDED coach")
+            .isInstanceOf(OperationNotAllowedException.class);
+        assertThat(((OperationNotAllowedException) bookingOutcome.get()).getErrorCode())
+            .isEqualTo(BookingError.COACH_UNAVAILABLE);
+
+        assertThat(bookingRepository.findAllByCoachId(coachProfileId))
+            .as("No booking row may be persisted for a coach suspended before the lock was taken")
+            .isEmpty();
+    }
+
     private Booking seedRequestedBooking(long parentId, long playerId, Instant start, Instant end) {
         return transactionTemplate.execute(status -> {
             Booking booking = new Booking();

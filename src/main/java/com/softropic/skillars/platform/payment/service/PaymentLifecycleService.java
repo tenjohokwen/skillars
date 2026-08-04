@@ -8,13 +8,17 @@ import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -34,6 +38,21 @@ public class PaymentLifecycleService {
     private final BookingRepository bookingRepository;
     private final CoachPricingRepository coachPricingRepository;
     private final BookingPaymentPersistenceService persistenceService;
+    private final PlatformTransactionManager transactionManager;
+
+    /**
+     * Settles one batch booking per transaction. Without this, every booking in a batch shares the
+     * listener's transaction: one failure marks it rollback-only and the successfully-settled
+     * siblings are silently discarded at commit, stranded in PAYMENT_PENDING while the swallowed
+     * UnexpectedRollbackException leaves no trace (reproduced during the Deferred-12 code review).
+     */
+    private TransactionTemplate perBookingTx;
+
+    @PostConstruct
+    void initPerBookingTx() {
+        perBookingTx = new TransactionTemplate(transactionManager);
+        perBookingTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    }
 
     // ─── Single booking ───────────────────────────────────────────────────────
 
@@ -99,6 +118,13 @@ public class PaymentLifecycleService {
 
     // ─── Batch booking ────────────────────────────────────────────────────────
 
+    // REQUIRES_NEW, matching onBookingAccepted above: during AFTER_COMMIT the accept transaction is
+    // still bound to the thread but already committed, so the nested @Transactional calls in
+    // PackSessionService/BookingPaymentPersistenceService would join a completed transaction and
+    // lose their writes. Without this the batch bookings settle in memory and stay PAYMENT_PENDING
+    // in the database (found while proving Deferred-12 AC6 end-to-end; BatchPaymentIT never caught
+    // it because it invokes this listener directly, with no surrounding transaction).
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onBatchBookingAccepted(BatchBookingAcceptedEvent event) {
         List<UUID> packIds = new ArrayList<>();
@@ -119,19 +145,18 @@ public class PaymentLifecycleService {
             if (bookingPaymentRepository.existsById(bookingId)) continue;
             Booking b = bookingRepository.findById(bookingId).orElse(null);
             if (b == null) continue;
-            boolean deducted = false;
             try {
-                packSessionService.deductSession(b.getSessionPackPurchaseId());
-                deducted = true;
-                persistenceService.confirmPackBatchPayment(bookingId, event.getBatchId(),
-                    event.getParentId(), event.getParentEmail(), event.getCoachDisplayName(),
-                    b.getRequestedStartTime(), b.getCanonicalTimezone());
+                // Deduct + confirm in one transaction of this booking's own, so the two are atomic
+                // and a failure cannot mark a sibling's transaction rollback-only. The rollback also
+                // undoes the deduction, which is why no manual restoreSession compensation is needed.
+                perBookingTx.executeWithoutResult(s -> {
+                    packSessionService.deductSession(b.getSessionPackPurchaseId());
+                    persistenceService.confirmPackBatchPayment(bookingId, event.getBatchId(),
+                        event.getParentId(), event.getParentEmail(), event.getCoachDisplayName(),
+                        b.getRequestedStartTime(), b.getCanonicalTimezone());
+                });
             } catch (Exception e) {
                 log.error("Pack session deduction failed in batch: bookingId={} batchId={}", bookingId, event.getBatchId());
-                if (deducted) {
-                    try { packSessionService.restoreSession(b.getSessionPackPurchaseId()); }
-                    catch (Exception re) { log.error("Session restore failed: purchaseId={}", b.getSessionPackPurchaseId()); }
-                }
                 persistenceService.declineBatchBooking(bookingId, event.getBatchId());
             }
         }
@@ -191,10 +216,20 @@ public class PaymentLifecycleService {
                 ? price.min(remainingCredit) : BigDecimal.ZERO;
             remainingCredit = remainingCredit.subtract(bookingCreditShare);
             BigDecimal bookingStripeShare = price.subtract(bookingCreditShare);
-            persistenceService.confirmCreditBatchPayment(bookingId, event.getBatchId(),
-                bookingCreditShare, bookingStripeShare, finalPaymentIntentId,
-                event.getParentId(), event.getParentEmail(), event.getCoachDisplayName(),
-                b.getRequestedStartTime(), b.getCanonicalTimezone());
+            final BigDecimal creditShare = bookingCreditShare;
+            final BigDecimal stripeShare = bookingStripeShare;
+            try {
+                // Own transaction per booking, as in the pack loop above: one booking failing to
+                // settle must not discard the siblings that already succeeded.
+                perBookingTx.executeWithoutResult(s ->
+                    persistenceService.confirmCreditBatchPayment(bookingId, event.getBatchId(),
+                        creditShare, stripeShare, finalPaymentIntentId,
+                        event.getParentId(), event.getParentEmail(), event.getCoachDisplayName(),
+                        b.getRequestedStartTime(), b.getCanonicalTimezone()));
+            } catch (Exception e) {
+                log.error("Credit batch settle failed: bookingId={} batchId={}", bookingId, event.getBatchId());
+                persistenceService.declineBatchBooking(bookingId, event.getBatchId());
+            }
         }
     }
 }

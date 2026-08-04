@@ -5,6 +5,7 @@ import com.softropic.skillars.platform.admin.repo.ReviewModerationLog;
 import com.softropic.skillars.platform.admin.repo.ReviewModerationLogRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.reviews.contract.AdminReviewQueueEntryDto;
+import com.softropic.skillars.platform.reviews.contract.ReviewErrorCode;
 import com.softropic.skillars.platform.reviews.contract.ReviewFlagDto;
 import com.softropic.skillars.platform.reviews.contract.ReviewModerationResolvedEvent;
 import com.softropic.skillars.platform.reviews.contract.ReviewModerationStatus;
@@ -12,6 +13,7 @@ import com.softropic.skillars.platform.reviews.repo.CoachReview;
 import com.softropic.skillars.platform.reviews.repo.CoachReviewRepository;
 import com.softropic.skillars.platform.reviews.repo.ReviewFlagRepository;
 import com.softropic.skillars.platform.reviews.service.CoachRatingService;
+import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -70,9 +72,19 @@ public class AdminReviewService {
 
     @Transactional
     public void approveReview(UUID reviewId, Long adminId) {
-        CoachReview review = reviewRepository.findById(reviewId)
+        // Pessimistic read, not findById: CoachReview has no @Version and review_moderation_log has
+        // no unique constraint beyond its PK, so a plain check-then-act loses the admin-double-click
+        // race — both callers would read UNDER_REVIEW and each write a log row + event. This is the
+        // first read of the row in this method, so the locked query returns fresh state (contrast
+        // BookingService.createBookingRequest, where an earlier findById makes the entity managed
+        // and the later locked read returns stale in-memory state).
+        CoachReview review = reviewRepository.findByIdForUpdate(reviewId)
             .orElseThrow(() -> new ResourceNotFoundException("Review not found", "coach_review"));
         ReviewModerationStatus previousStatus = review.getModerationStatus();
+
+        if (previousStatus == ReviewModerationStatus.APPROVED) {
+            throw new OperationNotAllowedException("Review already approved", ReviewErrorCode.ALREADY_APPROVED);
+        }
 
         review.setModerationStatus(ReviewModerationStatus.APPROVED);
         review.setHeldReason(null);

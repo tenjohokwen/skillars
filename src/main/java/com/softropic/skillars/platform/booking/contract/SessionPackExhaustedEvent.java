@@ -7,17 +7,19 @@ import java.util.UUID;
 public class SessionPackExhaustedEvent extends ApplicationEvent {
 
     private final UUID packId;
-    private final Long playerId;
+    // Deferred-12 AC5: the publisher has always passed SessionPackPurchase.parentId into this slot
+    // (PackSessionService.deductSession) — the field was simply misnamed playerId.
+    private final Long parentId;
     private final UUID coachId;
 
-    public SessionPackExhaustedEvent(Object source, UUID packId, Long playerId, UUID coachId) {
+    public SessionPackExhaustedEvent(Object source, UUID packId, Long parentId, UUID coachId) {
         super(source);
         this.packId = packId;
-        this.playerId = playerId;
+        this.parentId = parentId;
         this.coachId = coachId;
     }
 
     public UUID getPackId() { return packId; }
-    public Long getPlayerId() { return playerId; }
+    public Long getParentId() { return parentId; }
     public UUID getCoachId() { return coachId; }
 }
