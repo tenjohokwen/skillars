@@ -294,6 +294,57 @@ class RescheduleResourceIT {
         assertThat(newStart).isEqualTo(proposedStart);
     }
 
+    /**
+     * Deferred-14 AC4. acceptReschedule rewrites the booking's time window; before this story it did
+     * so with no overlap check, so a collision was caught only by the V87 exclusion constraint at
+     * commit — an unmapped 500 rather than the clean booking.slotUnavailable every other accept path
+     * returns. 403 (not 409) is deliberate: it matches createBookingRequest and acceptBooking, which
+     * BookingServiceConcurrencyIT pins.
+     */
+    @Test
+    void acceptReschedule_proposedSlotTakenByAnotherBooking_returns403AndLeavesBookingUnchanged() {
+        UUID rescheduleId = insertPendingReschedule();
+        // insertPendingReschedule proposes now+7d for 1h — occupy exactly that window.
+        Instant proposed = Instant.now().plus(7, ChronoUnit.DAYS);
+        UUID blockerId = UUID.randomUUID();
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update(
+                "INSERT INTO booking.bookings " +
+                "(id, parent_id, player_id, coach_id, requested_start_time, requested_end_time, " +
+                "status, canonical_timezone, version, created_at, updated_at) " +
+                "VALUES (?, ?, ?, ?, ?, ?, 'CONFIRMED', 'Europe/Berlin', 0, ?, ?)",
+                blockerId, PARENT_ID, PLAYER_ID, coachProfileId,
+                Timestamp.from(proposed), Timestamp.from(proposed.plus(1, ChronoUnit.HOURS)),
+                Timestamp.from(Instant.now()), Timestamp.from(Instant.now())
+            );
+            return null;
+        });
+
+        Timestamp originalStart = jdbcTemplate.queryForObject(
+            "SELECT requested_start_time FROM booking.bookings WHERE id = ?", Timestamp.class, bookingId);
+
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/reschedule/" + rescheduleId + "/accept",
+            HttpMethod.PUT, null, authenticatedHeaders(coachCookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString()).contains("booking.slotUnavailable");
+            });
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT requested_start_time FROM booking.bookings WHERE id = ?", Timestamp.class, bookingId))
+            .as("booking window must be untouched")
+            .isEqualTo(originalStart);
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM booking.booking_reschedule_requests WHERE id = ?", String.class, rescheduleId))
+            .as("reschedule request must stay PENDING")
+            .isEqualTo("PENDING");
+    }
+
     @Test
     void declineReschedule_asOwningCoach_returns204AndSetsDeclined() {
         UUID rescheduleId = insertPendingReschedule();

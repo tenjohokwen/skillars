@@ -5,6 +5,7 @@ import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.gemini.GeminiClient;
 import com.softropic.skillars.infrastructure.gemini.GeminiException;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.admin.service.AdminReviewService;
 import com.softropic.skillars.platform.messaging.contract.ModerationVerdict;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.AfterEach;
@@ -34,6 +35,9 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -68,6 +72,7 @@ class ReviewModerationIT {
     private GeminiClient geminiClient;
 
     @Autowired private JdbcTemplate jdbcTemplate;
+    @Autowired private AdminReviewService adminReviewService;
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private HttpTestClient httpTestClient;
     @Autowired private PasswordEncoder passwordEncoder;
@@ -133,6 +138,9 @@ class ReviewModerationIT {
     @AfterEach
     void tearDown() {
         transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "DELETE FROM reviews.review_moderation_log WHERE review_id IN " +
+                "(SELECT review_id FROM reviews.coach_reviews WHERE coach_id = ?)", coachProfileId);
             jdbcTemplate.update("DELETE FROM reviews.coach_reviews WHERE coach_id = ?", coachProfileId);
             jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id = ?", coachProfileId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
@@ -239,6 +247,90 @@ class ReviewModerationIT {
             "SELECT review_count FROM marketplace.coach_profiles WHERE id = ?",
             Integer.class, coachProfileId);
         assertThat(reviewCount).isEqualTo(0);
+    }
+
+    /**
+     * Deferred-14 AC2. Reproduces the race Deferred-13 D1 described: an admin blocks a PENDING
+     * review while the Gemini call for that same review is still in flight. A SAFE verdict landing
+     * afterwards must NOT revert the admin's BLOCK.
+     *
+     * <p>Ordering matters and is the whole test. The moderation listener is AFTER_COMMIT and not
+     * {@code @Async}, so it runs on the request thread — which is why the other tests in this class
+     * can assert final status straight after the POST returns. Here the POST therefore has to run on
+     * a background thread: it parks inside the listener while the main thread performs and commits
+     * the admin block. The Gemini call itself happens outside any transaction, so the admin's
+     * {@code findByIdForUpdate} does not contend with the listener — which is exactly why the race is
+     * reachable in production.
+     *
+     * <p>Mutation-verified: reverting the PENDING guard in ReviewModerationService makes this fail
+     * with moderation_status = APPROVED. Asserting on observed final state rather than on timing is
+     * deliberate — Deferred-13's review found that barrier tests which only prove "the second caller
+     * waits" pass against both the fixed and the unfixed code.
+     */
+    @Test
+    void adminBlocksWhileGeminiInFlight_blockSurvivesSafeVerdict() throws Exception {
+        final long adminId = 8030_000_099L;
+        CountDownLatch geminiEntered = new CountDownLatch(1);
+        CountDownLatch releaseGemini = new CountDownLatch(1);
+
+        when(geminiClient.evaluate(any())).thenAnswer(invocation -> {
+            geminiEntered.countDown();
+            assertThat(releaseGemini.await(20, TimeUnit.SECONDS)).isTrue();
+            return ModerationVerdict.SAFE;
+        });
+
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        AtomicReference<Throwable> submitFailure = new AtomicReference<>();
+        Thread submitter = new Thread(() -> {
+            try {
+                httpTestClient.makeHttpRequest(
+                    reviewsUrl("/coaches/" + coachProfileId),
+                    HttpMethod.POST,
+                    Map.of("rating", 5, "body", "Excellent coaching session!"),
+                    authenticatedHeaders(parentCookies),
+                    Map.class);
+            } catch (Throwable t) {
+                submitFailure.set(t);
+            }
+        }, "review-submitter");
+        submitter.start();
+
+        // The listener is AFTER_COMMIT, so by the time Gemini is entered the review row is committed
+        // and visible to this thread.
+        assertThat(geminiEntered.await(20, TimeUnit.SECONDS)).isTrue();
+        UUID reviewId = jdbcTemplate.queryForObject(
+            "SELECT review_id FROM reviews.coach_reviews WHERE coach_id = ?", UUID.class, coachProfileId);
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT moderation_status FROM reviews.coach_reviews WHERE review_id = ?",
+            String.class, reviewId)).isEqualTo("PENDING");
+
+        adminReviewService.blockReview(reviewId, "Admin decision during moderation", adminId);
+
+        releaseGemini.countDown();
+        submitter.join(30_000);
+        assertThat(submitter.isAlive()).isFalse();
+        assertThat(submitFailure.get()).isNull();
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT moderation_status FROM reviews.coach_reviews WHERE review_id = ?",
+            String.class, reviewId))
+            .as("SAFE verdict must not revert the admin's BLOCK")
+            .isEqualTo("BLOCKED");
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM reviews.review_moderation_log WHERE review_id = ? AND action = 'BLOCKED'",
+            Integer.class, reviewId))
+            .as("exactly one admin BLOCKED audit row")
+            .isEqualTo(1);
+
+        // The blocked review must never have reached the public aggregate. blockReview itself only
+        // recomputes when previousStatus == APPROVED (it was PENDING here), so a non-zero count could
+        // only come from the listener writing APPROVED and recomputing.
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT review_count FROM marketplace.coach_profiles WHERE id = ?",
+            Integer.class, coachProfileId))
+            .as("listener must not have published the blocked review")
+            .isEqualTo(0);
     }
 
     // ── helpers ──

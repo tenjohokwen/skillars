@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.booking.contract.BatchBookingCreatedRespo
 import com.softropic.skillars.platform.booking.contract.BatchBookingRequestedEvent;
 import com.softropic.skillars.platform.booking.contract.BatchRuleViolationException;
 import com.softropic.skillars.platform.booking.contract.BatchSlot;
+import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.CreateBatchRequest;
 import com.softropic.skillars.platform.booking.contract.TransitionContext;
 import com.softropic.skillars.platform.booking.repo.Booking;
@@ -22,17 +23,22 @@ import com.softropic.skillars.platform.security.contract.exception.OperationNotA
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -50,6 +56,25 @@ public class BookingBatchService {
     private final ApplicationEventPublisher eventPublisher;
     private final ConfigService configService;
     private final BookingService bookingService;
+    private final PlatformTransactionManager transactionManager;
+
+    /**
+     * REQUIRES_NEW per booking, mirroring {@code PaymentLifecycleService.perBookingTx}. A failure in
+     * one booking's accept must not mark the enclosing transaction rollback-only, which is what made
+     * acceptAll's per-booking catch unable to actually skip a booking.
+     */
+    private TransactionTemplate perBookingTx;
+
+    /** Carries the batch-status write and the settlement event, together, in one commit. */
+    private TransactionTemplate trailingTx;
+
+    @PostConstruct
+    void initTransactionTemplates() {
+        perBookingTx = new TransactionTemplate(transactionManager);
+        perBookingTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        trailingTx = new TransactionTemplate(transactionManager);
+        trailingTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    }
 
     private static final Set<String> POST_ACCEPTANCE_STATUSES = Set.of(
         "ACCEPTED", "PAYMENT_PENDING", "CONFIRMED", "UPCOMING", "IN_PROGRESS",
@@ -134,6 +159,18 @@ public class BookingBatchService {
         return new BatchBookingCreatedResponse(batch.getId(), req.slots().size());
     }
 
+    /**
+     * Accepts every REQUESTED booking in a batch.
+     *
+     * <p><strong>This method is deliberately NOT atomic.</strong> Each booking is accepted and
+     * committed on its own (Deferred-14 AC3) so that one bad slot cannot fail the whole batch — which
+     * is the semantics {@code PARTIALLY_ACCEPTED} always assumed but never actually had. The
+     * consequence is a real, accepted residual: a crash between the last per-booking commit and the
+     * trailing transaction leaves those bookings in PAYMENT_PENDING with no settlement event, and
+     * nothing sweeps that state (tracked in deferred-work.md under the deferred-14 heading). The
+     * trailing transaction exists to make that window as small as possible. Do not "simplify" this
+     * back into a single transaction, and do not describe it as all-or-nothing.
+     */
     @Transactional
     public void acceptAll(UUID batchId, Long coachUserId) {
         BookingBatch batch = batchRepository.findById(batchId)
@@ -155,11 +192,15 @@ public class BookingBatchService {
 
         for (Booking b : requestedBookings) {
             try {
-                // Must be the accept-then-initiate pair, not a bare ACCEPT: PaymentLifecycleService
-                // settles these bookings with PAYMENT_CAPTURED/PAYMENT_FAILED, which the state
-                // machine only permits from PAYMENT_PENDING (Deferred-12 AC6). INITIATE_PAYMENT is
-                // authorised for ActorRole.COACH, so the context below covers both legs.
-                bookingService.acceptAndInitiatePayment(b.getId(), new TransitionContext(ActorRole.COACH, coachUserId));
+                // Each booking settles in its own transaction (Deferred-14 AC3). The catch below used
+                // to be a lie: acceptAndInitiatePayment is a cross-bean @Transactional call, so a
+                // failure inside it marks THIS transaction rollback-only. Swallowing the exception
+                // let the loop finish and the batch row be written, and the whole request then died
+                // at commit — 500, zero bookings accepted, batch left PENDING. Verified before this
+                // fix: a batch whose second slot collides with a CONFIRMED booking returned
+                // 500 generic.unknown and accepted nothing. Same defect class Deferred-12 fixed in
+                // PaymentLifecycleService; same remedy.
+                perBookingTx.executeWithoutResult(tx -> acceptOneBooking(b, coach.getId(), coachUserId));
                 acceptedIds.add(b.getId());
             } catch (Exception e) {
                 log.warn("Failed to accept booking {} in batch {}: {}", b.getId(), batchId, e.getMessage());
@@ -173,19 +214,72 @@ public class BookingBatchService {
 
         String newBatchStatus = acceptedIds.size() == requestedBookings.size()
             ? "FULLY_ACCEPTED" : "PARTIALLY_ACCEPTED";
-        batch.setStatus(newBatchStatus);
-        batchRepository.save(batch);
 
+        // Resolved before the trailing transaction opens so that it contains only the batch write and
+        // the publish — nothing that can fail on a lookup.
         String parentEmail = resolveEmail(batch.getParentId());
         String parentName = resolveParentName(batch.getParentId());
+        String coachEmail = resolveEmail(coach.getUserId());
+        Long parentId = batch.getParentId();
+        UUID coachId = batch.getCoachId();
+        BigDecimal totalAmount = batch.getTotalAmount();
 
-        eventPublisher.publishEvent(new BatchBookingAcceptedEvent(
-            this, batchId, acceptedIds, batch.getParentId(), batch.getCoachId(),
-            batch.getTotalAmount(), resolveEmail(coach.getUserId()), parentEmail,
-            coach.getDisplayName(), parentName, acceptedIds.size()
-        ));
+        // Deferred-14 AC3a. The batch status and the settlement event must become durable together,
+        // and in their own transaction. With per-booking commits above, leaving this pair in the
+        // enclosing transaction meant a failure at ITS commit would strand every booking durably in
+        // PAYMENT_PENDING with BatchBookingAcceptedEvent never published — and nothing recovers that:
+        // no scheduler reads PAYMENT_PENDING, and the only way out of that status is a
+        // parent-initiated CANCEL_PARENT. The stranded rows would also hold the coach's slots via the
+        // V87 exclusion constraint. Re-read inside: `batch` above belongs to the enclosing
+        // transaction's persistence context.
+        trailingTx.executeWithoutResult(tx ->
+            batchRepository.findById(batchId).ifPresent(fresh -> {
+                fresh.setStatus(newBatchStatus);
+                batchRepository.save(fresh);
+                eventPublisher.publishEvent(new BatchBookingAcceptedEvent(
+                    this, batchId, acceptedIds, parentId, coachId,
+                    totalAmount, coachEmail, parentEmail,
+                    coach.getDisplayName(), parentName, acceptedIds.size()
+                ));
+            }));
 
         log.info("Batch accepted: batchId={} acceptedCount={}", batchId, acceptedIds.size());
+    }
+
+    /**
+     * Accepts one batch booking inside its own transaction.
+     *
+     * <p>The lock-then-check pair mirrors {@code BookingService.acceptBooking} (Deferred-14 AC4):
+     * the batch path never ran the app-layer overlap check, so a collision could only be caught by
+     * the V87 exclusion constraint at commit — which in a batched flush loses the constraint name and
+     * surfaces as an unmapped 500 rather than the clean {@code booking.slotUnavailable} the
+     * single-booking path returns. Checking here also resolves intra-batch collisions: because each
+     * accept commits independently, a slot taken by an earlier booking in this same batch is visible
+     * to the later one.
+     *
+     * <p>excludeBookingId is mandatory — without it a booking already moved to an active status would
+     * match itself and mask the real state-transition error.
+     */
+    private void acceptOneBooking(Booking booking, UUID coachId, Long coachUserId) {
+        coachProfileRepository.findByIdForUpdate(coachId)
+            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+
+        List<Booking> overlapping = bookingRepository.findOverlappingBookings(
+            coachId, booking.getRequestedStartTime(), booking.getRequestedEndTime(),
+            BookingService.ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED, booking.getId());
+        if (!overlapping.isEmpty()) {
+            throw new OperationNotAllowedException(
+                "This slot is no longer available — another booking was accepted for the same time",
+                Map.of("submitted coach id", coachId, "requested start time", booking.getRequestedStartTime(),
+                    "requested end time", booking.getRequestedEndTime()),
+                BookingError.SLOT_UNAVAILABLE);
+        }
+
+        // Must be the accept-then-initiate pair, not a bare ACCEPT: PaymentLifecycleService
+        // settles these bookings with PAYMENT_CAPTURED/PAYMENT_FAILED, which the state
+        // machine only permits from PAYMENT_PENDING (Deferred-12 AC6). INITIATE_PAYMENT is
+        // authorised for ActorRole.COACH, so the context below covers both legs.
+        bookingService.acceptAndInitiatePayment(booking.getId(), new TransitionContext(ActorRole.COACH, coachUserId));
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)

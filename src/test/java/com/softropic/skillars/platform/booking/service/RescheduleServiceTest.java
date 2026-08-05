@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.booking.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.CreateRescheduleRequest;
 import com.softropic.skillars.platform.booking.contract.RescheduleAcceptedEvent;
 import com.softropic.skillars.platform.booking.contract.RescheduleDeclinedEvent;
@@ -24,6 +25,7 @@ import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -162,6 +164,12 @@ class RescheduleServiceTest {
         pending.setProposedEndTime(proposedEnd);
         when(rescheduleRepo.findById(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
         when(rescheduleRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        // Deferred-14 AC4: accept now locks the coach and checks the PROPOSED window for overlap.
+        when(coachProfileRepository.findByIdForUpdate(coach.getId())).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(
+            coach.getId(), proposedStart, proposedEnd,
+            BookingService.ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED, BOOKING_ID))
+            .thenReturn(List.of());
 
         service.acceptReschedule(BOOKING_ID, RESCHEDULE_ID, COACH_USER_ID);
 
@@ -172,6 +180,39 @@ class RescheduleServiceTest {
         ArgumentCaptor<RescheduleAcceptedEvent> captor = ArgumentCaptor.forClass(RescheduleAcceptedEvent.class);
         verify(eventPublisher).publishEvent(captor.capture());
         assertThat(captor.getValue().getNewStartTime()).isEqualTo(proposedStart);
+    }
+
+    @Test
+    void acceptReschedule_proposedSlotOverlapsAnotherBooking_throwsSlotUnavailable() {
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+
+        Instant originalStart = confirmedBooking.getRequestedStartTime();
+        Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        Instant proposedEnd = proposedStart.plus(1, ChronoUnit.HOURS);
+        BookingRescheduleRequest pending = new BookingRescheduleRequest();
+        pending.setBookingId(BOOKING_ID);
+        pending.setStatus("PENDING");
+        pending.setProposedStartTime(proposedStart);
+        pending.setProposedEndTime(proposedEnd);
+        when(rescheduleRepo.findById(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+        when(coachProfileRepository.findByIdForUpdate(coach.getId())).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(
+            coach.getId(), proposedStart, proposedEnd,
+            BookingService.ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED, BOOKING_ID))
+            .thenReturn(List.of(new Booking()));
+
+        assertThatThrownBy(() -> service.acceptReschedule(BOOKING_ID, RESCHEDULE_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.SLOT_UNAVAILABLE));
+
+        assertThat(confirmedBooking.getRequestedStartTime())
+            .as("booking times must be left untouched when the proposed slot is taken")
+            .isEqualTo(originalStart);
+        assertThat(pending.getStatus()).isEqualTo("PENDING");
+        verify(bookingRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any(RescheduleAcceptedEvent.class));
     }
 
     @Test

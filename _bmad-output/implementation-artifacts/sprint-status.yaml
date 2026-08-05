@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-08-05 # skillars-deferred-13 code review complete → done
+# last_updated: 2026-08-05 # skillars-deferred-14 story created → ready-for-dev
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-08-05 # skillars-deferred-13 code review complete → done
+last_updated: 2026-08-05 # skillars-deferred-14 story created → ready-for-dev
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -307,3 +307,15 @@ development_status:
   # Also deletes 4 stale deferred-work.md entries verified already closed/obsolete: 9-3 D1/D2 (closed by deferred-12),
   # 3-11 D2 (closed by V87), 10-1 D1 (unreachable — messages.content is TEXT NOT NULL)
   skillars-deferred-13-admin-moderation-action-integrity: done  # 2026-08-05: all 7 ACs done, full mvn -o verify green (807 unit + 842 IT, 0 failures). Code review 2026-08-05: NO functional defect in src/main — all 7 ACs correctly implemented; 10 patches applied, 3 deferred, 7 dismissed as false positives. Two spec overrides: (1) AC4's COACH_PROFILE_MISSING now returns 500 + ERROR log, not 409 — an orphaned coach_profiles row is a data-integrity failure the caller cannot retry away, and a 4xx would hide it from 5xx-keyed alerting; ALREADY_BLOCKED stays 409. (2) AC1's evidence replaced: BOTH barrier-based concurrency ITs pass unchanged against a plain findById, so the dev's note claiming the CyclicBarrier IT "actually proves the lock" was wrong. Notably the obvious replacement (hold SELECT FOR UPDATE, assert timeout) ALSO passed the mutation — a plain findById still blocks later at the UPDATE, so waiting is not the discriminator; what separates them is what the request observes once unblocked. Shipped test has a concurrent tx block-and-commit mid-flight: locked read sees fresh BLOCKED → 409; plain findById holds the stale snapshot → 200 + duplicate audit row. Mutation-verified both directions. Also pinned enforcement-list aggregation + 30-day window (single-strike fixture left both open), blockReview 404 path, and AC3's "log row carrying reason". Fixed 4 doc defects, 3 introduced by AC7's own cleanup (dangling cross-ref into the deleted 9-3 section, duplicate "## Last audit: 2026-08-04" heading recreating the exact ambiguity trap AC7 warns about, audit block claiming a code review that had not run, "all 6 ACs" on a 7-AC story). Correction to AC3's framing: ReviewModerationResolvedEvent has ZERO listeners in src/main, so the "double-fire an event" half of deferred-12 D3 was inert; the duplicate-audit-row and double-recompute halves were real. DEFERRED (deferred-work.md D1, substantive): ReviewModerationService's Gemini AFTER_COMMIT listener can silently revert a committed admin BLOCK — unlocked findById + unconditional setModerationStatus in REQUIRES_NEW, exception swallowed — so AC1's lock only guards admin-vs-admin races, not admin-vs-moderation-pipeline. Post-patch full mvn -o verify green: 845 IT (+3 new), 0 failures
+
+  # Deferred 14: Moderation-Listener Write Safety & Batch/Reschedule Overlap Integrity
+  # Closes deferred-13 D1 (Gemini listener silently reverts a committed admin BLOCK — the half of AC1's
+  # invariant deferred-13 did not cover), deferred-13 D2 (re-scoped: the 409 mapping it asked for already
+  # existed since 3.11; the real residue is the missing app-layer overlap pre-check in acceptAll/acceptReschedule),
+  # deferred-13 D3 (ReviewFlagIT fixture cleanup convention), 3-3 Group C (cross-field end>start validation → 400 not 403).
+  # Adds one item found during story creation: BookingBatchService.acceptAll cannot partially succeed — its
+  # per-booking catch swallows the exception but not the rollback-only marker, so one bad booking fails the
+  # whole batch with UnexpectedRollbackException (same defect class deferred-12 fixed in PaymentLifecycleService).
+  # Also deletes 2 stale deferred-work.md entries verified already closed: 3-11 D1 (closed by deferred-12's
+  # locked coach re-read) and 3-3 Group A canonicalTimezone IANA validation (closed in BookingService).
+  skillars-deferred-14-moderation-listener-batch-overlap-integrity: review  # 2026-08-05: all 8 ACs done, full mvn -o verify green (812 unit + 850 IT, 0 failures). AC2 mutation-verified in both directions — with AC1's PENDING guard disabled the new ReviewModerationIT race test fails with "expected BLOCKED but was APPROVED"; guard restored, passes. AC3's pre-fix 500 was reproduced before any fix, and the reproduction CORRECTED the story's predicted mechanism: not UnexpectedRollbackException but a commit-time batched-flush DataIntegrityViolationException carrying constraint [null], which is why ApiAdvice's name-keyed 409 mapping (wired by Story 3.11) never matched and the caller got generic.unknown/500. That means deferred-13 D2's CONCLUSION (500) was right for a reason neither D2 nor the story-creation audit had identified, even though D2's stated reason (no mapping exists) was wrong. AC3a added during story review: per-booking commits made BookingBatchStatusListener a second, earlier writer of batch.status, so the batch write + settlement event now commit together in a trailing REQUIRES_NEW tx; acceptAll is explicitly documented as no longer atomic. All 3 predicted test breakages materialised and were fixed as specified. One IT assertion corrected mid-implementation (not a spec change): the accepted batch booking does not rest in PAYMENT_PENDING — it settles onward, which only became observable because the fix works; assertion now also pins a payment.booking_payments row so a healthy-looking batch row with no settlement cannot pass

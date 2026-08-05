@@ -91,8 +91,32 @@ public class ReviewModerationService {
         final ReviewModerationStatus finalStatus = status;
         try {
             requiresNewTx.execute(tx -> {
-                reviewRepository.findById(reviewId).ifPresentOrElse(
+                // findByIdForUpdate, not findById: this verdict must lose to any decision already
+                // recorded against the row. The Gemini call above runs outside any transaction and
+                // can take seconds, which is ample room for an admin to resolve the review in the
+                // meantime; an unlocked read plus an unconditional write would silently revert it.
+                // This is the FIRST read of the row in this transaction (REQUIRES_NEW suspends the
+                // AFTER_COMMIT thread's stale EntityManager), so the locked query returns fresh DB
+                // state and needs no entityManager.refresh — contrast BookingService
+                // .createBookingRequest, where an earlier findById forces one.
+                reviewRepository.findByIdForUpdate(reviewId).ifPresentOrElse(
                     review -> {
+                        // PENDING is the whole guard. ReviewSubmissionService.submitReview and
+                        // .updateReview are the only publishers of ReviewSubmittedEvent and both set
+                        // PENDING immediately before publishing, so PENDING is the only status this
+                        // delivery may claim. Every other writer must win:
+                        //   - AdminReviewService.approveReview/blockReview — admin decisions;
+                        //   - ReviewFlagService.flag — auto-holds APPROVED -> UNDER_REVIEW at the
+                        //     configured flag threshold (only reachable once already resolved);
+                        //   - a duplicate delivery of this same event, which this also makes
+                        //     idempotent for free.
+                        ReviewModerationStatus current = review.getModerationStatus();
+                        if (current != ReviewModerationStatus.PENDING) {
+                            log.warn("ReviewModerationService: review {} already resolved as {} — "
+                                    + "discarding moderation verdict {}",
+                                reviewId, current, finalStatus);
+                            return;
+                        }
                         review.setModerationStatus(finalStatus);
                         if (finalStatus == ReviewModerationStatus.UNDER_REVIEW) {
                             review.setHeldReason(geminiFailure[0]
@@ -100,20 +124,24 @@ public class ReviewModerationService {
                                 : HeldReason.GEMINI_UNCERTAIN);
                         }
                         reviewRepository.save(review);
+                        // Recompute on APPROVED (new rating added) and BLOCKED (re-edit of previously
+                        // APPROVED review must be removed from the aggregate). Inside the guarded
+                        // branch, not beside it: a skipped write must not recompute, and neither must
+                        // a review that was not found at all.
+                        if (finalStatus == ReviewModerationStatus.APPROVED
+                                || finalStatus == ReviewModerationStatus.BLOCKED) {
+                            coachRatingService.recompute(coachId);
+                        }
                     },
                     () -> log.warn("ReviewModerationService: review not found: {}", reviewId)
                 );
-                // Recompute on APPROVED (new rating added) and BLOCKED (re-edit of previously
-                // APPROVED review must be removed from the aggregate).
-                if (finalStatus == ReviewModerationStatus.APPROVED
-                        || finalStatus == ReviewModerationStatus.BLOCKED) {
-                    coachRatingService.recompute(coachId);
-                }
                 return null;
             });
         } catch (Exception e) {
             // Swallow to prevent AFTER_COMMIT exception propagating as HTTP 500.
             // The review was committed; status update will be resolved via admin queue (Epic 10).
+            // Note this also swallows a lock-acquisition failure on the read above, which leaves the
+            // review PENDING rather than mis-resolved — the safe direction.
             log.error("ReviewModerationService: status write failed for reviewId={}, coachId={}: {}",
                 reviewId, coachId, e.getMessage(), e);
         }

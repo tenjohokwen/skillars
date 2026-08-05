@@ -213,6 +213,56 @@ class BookingRequestResourceIT {
         assertThat(response.getBody()).doesNotContainKey("effectiveCreditsRemaining");
     }
 
+    /**
+     * Deferred-14 AC6. An end-before-start window is a malformed request, not a security violation.
+     * Before this story the service layer caught it with SecurityError.MISSING_RIGHTS and the caller
+     * saw 403; bean validation now short-circuits it to 400 before the service is reached.
+     */
+    @Test
+    void createBookingRequest_endBeforeStart_returns400NotForbidden() {
+        String cookies = loginAndGetCookies(PARENT_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + BOOKINGS_BASE,
+            HttpMethod.POST,
+            Map.of(
+                "coachId", coachProfileId.toString(),
+                "playerId", PLAYER_ID,
+                "requestedStartTime", slotEnd.toString(),
+                "requestedEndTime", slotStart.toString(),
+                "canonicalTimezone", WINDOW_TZ
+            ),
+            authenticatedHeaders(cookies),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    /** Equal start and end is also rejected — the window must be strictly positive. */
+    @Test
+    void createBookingRequest_zeroLengthWindow_returns400() {
+        String cookies = loginAndGetCookies(PARENT_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + BOOKINGS_BASE,
+            HttpMethod.POST,
+            Map.of(
+                "coachId", coachProfileId.toString(),
+                "playerId", PLAYER_ID,
+                "requestedStartTime", slotStart.toString(),
+                "requestedEndTime", slotStart.toString(),
+                "canonicalTimezone", WINDOW_TZ
+            ),
+            authenticatedHeaders(cookies),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
     @Test
     void createBookingRequest_noCredits_succeeds_paymentDeferred() {
         // Sprint 7.2: credit depletion no longer blocks booking

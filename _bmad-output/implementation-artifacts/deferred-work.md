@@ -75,9 +75,11 @@ re-verified by three independent review layers with repository access. Scope, so
   so the null-content branch is unreachable, and `AdminQueueService.buildSummary()` already yields
   `"[message not found]"` rather than `null` via `Optional.map`); `skillars-3-11` D2 (closed by
   `V87__booking_overlap_exclusion_constraint.sql`, which added the DB-level exclusion constraint
-  the item asked for — **but see D2 of the code-review section below**: that entry also recorded two
-  app-layer bypass paths, and the constraint changes their failure mode rather than fixing them, so
-  the residue has been re-opened as its own item).
+  the item asked for — that entry also recorded two app-layer bypass paths, and the constraint
+  changed their failure mode rather than fixing them, so the residue was re-opened as its own item.
+  **That residue is now closed too**: `skillars-deferred-14` AC4 added the app-layer lock + overlap
+  pre-check to both bypass paths, and its `deferred-13` code-review section was deleted with it —
+  which is why the cross-reference that used to stand here is gone).
 - **Not re-deleted / explicitly left alone:** the separate `## Deferred from: code review of
   skillars-10-1 patches (2026-06-30)` heading's own D1 and D2 (`findBeforePivot`/`findAfterPivot`
   null-pivot and exact-timestamp-collision items) — unrelated to the `buildSummary()` item deleted
@@ -86,10 +88,12 @@ re-verified by three independent review layers with repository access. Scope, so
   platform-wide event-reliability concern, too large for this story, left in the file.
 - **Not re-checked:** every other forward-reference in the file, and the deployment/infrastructure
   (`deploy-*`) sections again — same gap the 2026-08-04 audit above already flagged.
-- **Added by the code review itself (2026-08-05):** three new items under
-  `## Deferred from: code review of skillars-deferred-13-admin-moderation-action-integrity` below.
-  D1 is the substantive one — the Gemini moderation listener can silently revert a committed admin
-  BLOCK, which means `deferred-13` AC1's lock is only half the guarantee it reads as.
+- **Added by the code review itself (2026-08-05):** three new items under a
+  `## Deferred from: code review of skillars-deferred-13-admin-moderation-action-integrity` heading.
+  D1 was the substantive one — the Gemini moderation listener could silently revert a committed admin
+  BLOCK, which meant `deferred-13` AC1's lock was only half the guarantee it read as.
+  **All three were closed by `skillars-deferred-14` and that heading no longer exists** (see the
+  deferred-14 audit block below); this bullet is kept only as the record of where they came from.
 - **One AC was overridden by the review, not merely implemented:** `deferred-13` AC4 specified
   `409 CONFLICT` for `COACH_PROFILE_MISSING`; the review changed it to `500` (with an ERROR log) on
   the grounds that an orphaned `coach_profiles` row is a data-integrity failure the caller neither
@@ -97,21 +101,74 @@ re-verified by three independent review layers with repository access. Scope, so
   remains `409`. Recorded here because the story file's AC4 text now differs from what shipped in
   `deferred-13`'s original spec.
 
+## Last audit: 2026-08-05 (skillars-deferred-14 story creation)
+
+Written while scoping `skillars-deferred-14`. Unlike a code-review audit, this one had no independent
+review layers — every claim below comes from a direct read of the named file during story creation.
+Scope, so the gaps stay explicit:
+
+- **Deleted as already closed, verified by direct read:**
+  - `skillars-3-11` D1 (coach-suspension race in `createBookingRequest`) — closed by `skillars-deferred-12`.
+    `BookingService.java:198-212` now does `findByIdForUpdate` + `entityManager.refresh(lockedCoach,
+    PESSIMISTIC_WRITE)` + a re-check of `SUSPENDED` and the active-status whitelist under that lock.
+    That was the only item under its heading, so the heading went with it.
+  - The `canonicalTimezone not IANA-validated` bullet under `skillars-3-3` Group A — closed.
+    `BookingService.java:178-183` wraps `ZoneId.of(req.canonicalTimezone())` in `try/catch
+    (DateTimeException)`. The other two Group A bullets are untouched and still open.
+- **Corrected, not deleted:** `skillars-deferred-13` D2's premise is wrong — the 409 mapping it asks
+  for has existed since Story 3.11, and the `createBatch` path it names is not reachable by the
+  constraint at all. Annotated inline and re-scoped to the real residue (the missing app-layer
+  overlap pre-check). Also fixed D3's wrong test-method name (`...returns409...` → `...returns500...`).
+- **Closed by shipped code in `skillars-deferred-14` (deleted 2026-08-05, after implementation):**
+  `skillars-deferred-13` D1 (moderation listener now takes a locked read and writes only while the
+  review is still `PENDING`; mutation-verified — with the guard removed the new
+  `ReviewModerationIT#adminBlocksWhileGeminiInFlight_blockSurvivesSafeVerdict` fails with
+  `expected BLOCKED but was APPROVED`), D2 (both bypass paths now run the app-layer lock + overlap
+  pre-check), D3 (orphan fixture moved to `@AfterEach`), and the `skillars-3-3` Group C
+  cross-field-validation bullet (`@AssertTrue isEndAfterStart()` → 400). Both headings became empty
+  and were removed.
+- **Correction to this audit's own earlier reading of D2.** The entry claimed no 409 mapping existed;
+  that was wrong (Story 3.11 wired one). But D2's *conclusion* — that a batch-path overlap surfaces
+  as a 500 — turned out to be **right for a reason neither the entry nor this audit had identified**.
+  Reproduced before fixing: a batch whose second slot collided returned
+  `500 generic.unknown`, because Hibernate defers the batch's UPDATEs to commit, the JDBC batch fails
+  as one, and the resulting `DataIntegrityViolationException` carries `constraint [null]` — so
+  `ApiAdvice`'s name-keyed `CONSTRAINT_MAPPINGS`/`CONFLICT_CONSTRAINTS` lookup cannot match it and the
+  409 mapping never applies. The mapping is real but unreachable on that path. The app-layer
+  pre-check now makes it moot for both bypass paths; the constraint remains the backstop.
+- **Added by this audit:** one new item under `## Deferred from: skillars-deferred-14 story creation
+  (2026-08-05)` — no automatic sweeper exists for bookings stranded in `PAYMENT_PENDING`, and the
+  only recovery is a parent-initiated cancel, while the stranded row holds the coach's slot. Found
+  while scoping `deferred-14` AC3a, which narrows that window but deliberately does not close it.
+- **Examined and deliberately left alone:** `skillars-10-2` D1 (`AFTER_COMMIT` refund drop — still a
+  platform-wide event-reliability concern, same reason `deferred-13` left it) and `skillars-8-2`
+  D1/D2 (deleted-player `UserNotFoundException` crashing `getConversations()` — real and still open,
+  but messaging-module scope).
+- **Not re-checked:** every other item in this file. In particular no `deploy-*` section was read —
+  the same gap the 2026-08-04 and 2026-08-05 audits below already flagged, now three audits running.
+
 ---
 
-## Deferred from: code review of skillars-deferred-13-admin-moderation-action-integrity (2026-08-05)
-- D1: **The Gemini moderation listener can silently revert a committed admin BLOCK.** `ReviewModerationService`'s `AFTER_COMMIT` handler calls Gemini outside any transaction, then opens a `REQUIRES_NEW` tx and does a plain unlocked `reviewRepository.findById(reviewId)` followed by an **unconditional** `setModerationStatus(finalStatus)` — no already-resolved guard, no lock. If an admin blocks a `PENDING` review during the multi-second Gemini call, a `SAFE` verdict overwrites `BLOCKED` → `APPROVED`, re-publishes the review, and calls `coachRatingService.recompute()`, while the `BLOCKED` row remains in `review_moderation_log`. The enclosing `catch (Exception e)` swallows the failure. Strictly pre-existing — this diff does not touch `ReviewModerationService` — but it defeats the exact invariant `deferred-13` AC1 establishes, so the pessimistic lock on `blockReview()` is only half the guarantee. The fix mirrors what AC1 just did to `blockReview()`: locked read + a guard that refuses to overwrite an admin-set terminal status. [`src/main/java/com/softropic/skillars/platform/reviews/service/ReviewModerationService.java:93-110`]
-- D2: **Booking exclusion-constraint violations have no 409 mapping.** `V87__booking_overlap_exclusion_constraint.sql` records in its own header that `BookingBatchService.createBatch` and `RescheduleService.acceptReschedule` bypass the app-layer overlap check. With the DB constraint now in place, those two paths surface an overlap as a raw `DataIntegrityViolationException` → 500 rather than a clean 409. The only `DataIntegrityViolationException` catch in the booking module is in `BookingCompletionService.java:141`, for an unrelated purpose. Pre-existing and out of `deferred-13`'s scope; recorded here because `deferred-13` AC7 deleted the `skillars-3-11` D2 entry that used to be the tracking home for the two-bypass-path fact (the fact itself survives in the V87 header comment, so nothing was lost — only its place in this ledger). [`src/main/resources/db/migration/V87__booking_overlap_exclusion_constraint.sql`, `BookingBatchService.createBatch`, `RescheduleService.acceptReschedule`]
-- D3: `ReviewFlagIT.flagReviewWithMissingCoachProfile_returns409WithCoachProfileMissing` cleans its orphan `coach_reviews` fixture in an in-test `try/finally` rather than in `@AfterEach` as Task 5 and the story's Dev Notes both specify (`orphanReviewId` is method-local, so `tearDown` cannot see it). The `finally` covers normal and assertion-failure paths; a throw from the seeding `transactionTemplate.execute` before the `try` is entered would leak a row. Harmless to other tests (random coach id, no FK) — convention deviation on a checked box, not a live hazard. [`src/test/java/com/softropic/skillars/platform/reviews/api/ReviewFlagIT.java:343-349`]
+## Deferred from: skillars-deferred-14 story creation (2026-08-05)
+- D1: **No automatic sweeper for bookings stranded in `PAYMENT_PENDING`.** `INITIATE_PAYMENT` commits the booking into `PAYMENT_PENDING`, and settlement happens in `PaymentLifecycleService.onBookingAccepted` / `onBatchBookingAccepted` — both `AFTER_COMMIT` listeners with no retry and no dead-letter queue. If the listener never runs (JVM death between commit and listener, or the listener's own `REQUIRES_NEW` transaction failing outright), the booking sits in `PAYMENT_PENDING` forever. Verified 2026-08-05: **no `@Scheduled` method anywhere in `src/main` reads `PAYMENT_PENDING`** (27 schedulers checked); `BookingExpiryScheduler.expireStaleRequests` (`:43-46`) queries `findRequestedBookingsOlderThan` and only ever declines `REQUESTED` bookings.
+
+  Recovery today is **partial and manual only**: `deferred-12` AC4 added `CANCEL_PARENT` as a transition out of `PAYMENT_PENDING` (`BookingStateMachine.java:34-38`, with a comment naming this exact crash window), and `cancelBookingAsParent`'s refund whitelist correctly declines to refund money that was never taken. But that hatch requires **the parent** to notice and act — the transition map offers no `CANCEL_COACH`, no admin path, and no system path out of `PAYMENT_PENDING`. Meanwhile `PAYMENT_PENDING` is in `ACTIVE_SLOT_STATUSES` (`BookingService.java:118`) and in the `V87` exclusion constraint's `WHERE` clause, so a stranded booking **holds the coach's slot indefinitely** and blocks any other booking for that window, with the coach having no way to clear it.
+
+  `BookingPaymentPersistenceService.declineBatchBooking` (`:140-158`) covers only the adjacent case where a settle attempt *ran and threw* — not the case where the listener never ran at all. Related to but distinct from `skillars-10-2` D1 (which is about the refund path specifically); this is the accept/settle path and has a concrete slot-blocking side effect that D1 does not. A sweeper would need a grace period well clear of Stripe's capture latency, and `PAYMENT_FAILED` (→ `DECLINED`) is the natural terminal transition — it already exists in the map. **Do not fold this into `skillars-deferred-14`**: that story's AC3a narrows the window it would otherwise widen, but deliberately does not close this pre-existing gap. [`PaymentLifecycleService.onBookingAccepted`, `onBatchBookingAccepted`, `BookingExpiryScheduler.java:43-46`, `BookingStateMachine.java:34-38`]
+
+## Deferred from: code review of skillars-deferred-14-moderation-listener-batch-overlap-integrity (2026-08-05)
+- D1: **`RescheduleService.acceptReschedule`'s new coach lock widens a pre-existing race against `declineReschedule`.** AC4 inserted `coachProfileRepository.findByIdForUpdate(coach.getId())` in the middle of `acceptReschedule` (`:128-129`), after the `"PENDING".equals(req.getStatus())` check (`:108`) but before the final `req.setStatus("ACCEPTED")` write (`:144`). `declineReschedule` takes no coach lock and no lock on the reschedule row itself, so if it runs and commits while `acceptReschedule` is blocked waiting on the (now newly-introduced) lock acquisition, `acceptReschedule` resumes holding a stale in-memory `req` still read as `PENDING`, proceeds through the overlap check, and overwrites the concurrent decline with `ACCEPTED` — silently reinstating a reschedule the coach just declined. The underlying TOCTOU class predates this story (status was already read-then-written-later with no re-check), but AC4's lock acquisition is a blocking DB call that can meaningfully widen the window versus the near-instant prior code path. Pre-existing defect class; not in `deferred-14`'s scope (AC4 only asked for an overlap check, not accept/decline mutual exclusion). Fix would re-verify `req.getStatus() == PENDING` (or lock the reschedule row) immediately after the coach lock is acquired. [`src/main/java/com/softropic/skillars/platform/booking/service/RescheduleService.java:94-145`]
+- D2: **`acceptOneBooking` (batch) and `acceptReschedule` never re-check `SUSPENDED` after acquiring the coach lock**, mirroring a gap that already exists in the reference implementation they were told to copy. `BookingService.acceptBooking` (`:283-284`) takes `findByIdForUpdate` purely for the overlap-check lock and never re-reads `coach.getStatus()` under it; `deferred-14`'s Task 6 explicitly directs both new call sites to mirror that exact shape, so the gap is now present at three call sites instead of one. An admin suspending a coach in the window between the initial unlocked coach fetch and the later lock acquisition can still let a batch-accept or reschedule-accept through. Distinct from the *already-closed* `skillars-3-11` D1 (that was in `createBookingRequest`, closed by `deferred-12`'s `entityManager.refresh(..., PESSIMISTIC_WRITE)` re-check) — this is the accept-time paths, which were never in scope for that fix. [`src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java:263-265`, `src/main/java/com/softropic/skillars/platform/booking/service/RescheduleService.java:128-129`, `src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java:283-284`]
+- D3: **`ReviewModerationService`'s new `PENDING`-only guard (AC1) cannot distinguish a stale in-flight Gemini verdict for a superseded edit from a fresh one.** `ReviewSubmissionService.updateReview` resets a `PENDING`-or-`APPROVED` review back to `PENDING` and publishes a new `ReviewSubmittedEvent` on every edit. If a review is edited again while the *previous* edit's Gemini call is still in flight, two `ReviewSubmittedEvent` deliveries race against the same `PENDING` status with no version/timestamp to tell them apart — whichever Gemini call resolves first wins and writes its verdict (possibly evaluating stale, already-overwritten content) against the shared `PENDING` guard; the second, fresher delivery then finds a non-`PENDING` status and discards itself as "already resolved" even though the real resolution reflects stale content. AC1's guard is correctly scoped to the admin-vs-listener race it targets (three writers enumerated in the code comment: admin decisions, the flag-threshold auto-hold, and duplicate delivery of the *same* event) but does not cover a *second, different* event racing the first. **[AUDIT 2026-08-05: the scenario as written is NOT reachable today — corrected.** The finding's stated window is "editing a review again within the multi-second Gemini latency of the prior edit". `ReviewSubmissionService.updateReview:82-86` rejects any edit whose `lastModifiedAt` falls within the last 365 days, `submitReview` and `updateReview` both stamp `lastModifiedAt` at write time, and the moderation listener deliberately does not touch it (AC1). So a second `ReviewSubmittedEvent` for the same review cannot be published until 365 days after the first — by which point the first Gemini call has long returned. Two deliveries cannot be in flight concurrently. Keep the item: the **design** limitation is real and would become reachable the moment the 365-day edit rule is relaxed or an admin/GDPR path republishes the event, and the guard carries no version or nonce to survive that. Do not treat it as a live defect.**] A full fix needs a version/timestamp carried on `ReviewSubmittedEvent` and checked against the row under the same lock. [`src/main/java/com/softropic/skillars/platform/reviews/service/ReviewModerationService.java:93-124`, `ReviewSubmissionService.java:82-86`]
+- D4: **`BookingBatchService.acceptAll`'s batch-status formula (`acceptedIds.size() == requestedBookings.size()`) only considers bookings that were still `REQUESTED` when `acceptAll` started**, so a booking already moved out of `REQUESTED` by some other path before `acceptAll` runs is invisible to it — pre-existing, since this exact formula shipped unchanged from before this diff. What's new: `updateBatchStatusFromBooking` (driven by `BookingBatchStatusListener`, `AFTER_COMMIT`) now fires **mid-`acceptAll`**, once per successful per-booking commit (Deferred-14 AC3's `REQUIRES_NEW` restructuring), instead of only after `acceptAll`'s own atomic write as before. On a fully-successful batch, the listener's own recompute — which reads *all* current booking rows, not just the ones `acceptAll` started with — writes a durable, more-accurate status before `acceptAll`'s trailing transaction runs its own (less-accurate) formula and overwrites it.
+
+  **[AUDIT 2026-08-05: the finding's conclusion "both paths converge, so no new regression" is wrong — corrected, and the item is stronger than filed.** Trace a batch of 3 where one booking was declined individually before `acceptAll` runs. *Before* this diff: `acceptAll` wrote `FULLY_ACCEPTED` (2 accepted == 2 `REQUESTED` at start), committed, and the `AFTER_COMMIT` listener then recomputed over all 3 rows and **corrected** it to `PARTIALLY_ACCEPTED`. *After* this diff: the listener fires at the last per-booking commit and writes `PARTIALLY_ACCEPTED`, then the trailing transaction overwrites it with the naive `FULLY_ACCEPTED`. **The winner flipped, and it flipped toward the wrong value** — that is a behaviour change this diff introduced, not merely a pre-existing bug it left alone. It is **self-correcting in practice**: settlement transitions each booking and republishes `BookingStatusChangedEvent`, so the listener runs once more after the trailing commit and restores the correct value; the exposure is a transient wrong read between the trailing commit and settlement completing. Not patched in `deferred-14` because the real fix is to unify the two formulas, and `updateBatchStatusFromBooking` is shared with the individual accept/decline paths — genuinely outside that story. Whoever picks this up should fix the formula, not the ordering.**] [`src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java:215-244,285-317`]
 
 ## Deferred from: code review of skillars-deferred-11-stripe-card-collection (2026-08-04)
 - `PackSessionServiceParityTest` mocks `findActivePacks` to already return ordered results and only asserts `packs.get(0)` — doesn't exercise the real repository `ORDER BY`, so a regression to actual query ordering wouldn't be caught. [`src/test/java/com/softropic/skillars/platform/payment/service/PackSessionServiceParityTest.java`]
 - `PaymentMethodCard.vue`'s `watch(showForm)` has no in-flight guard against rapid toggle races between async `mountCardElement()` and sync `unmountCardElement()` — low-probability, self-heals on the next full remount. [`PaymentMethodCard.vue:124-127`]
 - `PaymentMethodCard.vue`'s `stripeUnavailable` state has no retry affordance short of a full page reload — AC2 only requires the unavailable message + disabled submit, which is satisfied; a retry action would be a UX enhancement beyond spec scope. [`PaymentMethodCard.vue:86-106`]
 - No frontend tests (Vitest/Vue Test Utils) were added for `PaymentMethodCard.vue` or the new `payment.store.js` actions (`fetchStripeConfig`, `fetchSavedPaymentMethod`) — real coverage gap on a component with non-trivial lifecycle logic. [`PaymentMethodCard.vue`, `payment.store.js`]
-
-## Deferred from: code review of skillars-3-11-coach-slot-double-booking-prevention (2026-07-31)
-- D1: Coach-suspension race window between the unlocked initial status check and the later lock acquisition in `createBookingRequest` — `coach.getStatus()` is validated via a plain `findById` (`BookingService.java:154-164`), then the coach row is locked later (after the external `paymentGateway.isCoachPaymentReady` call, per this story's own explicit ordering requirement) without re-checking status. If an admin suspends the coach in that window, a booking can still be created. Pre-existing pattern (the unlocked initial read predates this story); the new lock creates a cheap opportunity to close it in a future change. [src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java:154-164,191]
 
 ## Deferred from: code review of skillars-deferred-9-frontend-ux-polish (2026-07-02)
 - D1: AC7 `portal` sub-block left untranslated in `de/index.js` — pre-existing (already English in both `en` and `de` before this story); explicitly out of this story's scope per the Dev Agent Record. [de/index.js]
@@ -359,9 +416,6 @@ re-verified by three independent review layers with repository access. Scope, so
 - `canonicalTimezone` sent as parent's browser timezone — session time in coach notification email shown in parent's TZ, not coach's; canonical timezone for a session should be the coach's timezone; revisit in Story 3.5 (Scheduling Views & Timezone Management) [BookingRequestPage.vue:121] — **[AUDIT 2026-08-04: STILL OPEN. Story 3.5 has shipped; `BookingRequestPage.vue:294,312` still send `Intl.DateTimeFormat().resolvedOptions().timeZone`.]**
 - `formatSlot()` in BookingRequestPage uses `toLocaleString()` with no timezone — slots display in parent's local time, not coach's timezone; inconsistent with ParentBookingsPage which uses `{ timeZone: timezone }`; address in Story 3.5 [BookingRequestPage.vue:104]
 
-## Deferred from: code review of skillars-3-3-booking-request-approval-workflow Group C (2026-06-15)
-- No cross-field `@AssertTrue` on `CreateBookingRequest` enforcing `requestedEndTime > requestedStartTime` — currently caught at service layer with a security-semantics error (`OperationNotAllowedException`) instead of a 400 Bad Request; add class-level constraint to return proper validation error [CreateBookingRequest.java]
-
 ## Deferred from: code review of skillars-3-3-booking-request-approval-workflow Group B (2026-06-15)
 - No duplicate-booking guard for same slot — multiple REQUESTED bookings for same player/coach/timeslot are possible; credit soft-reservation handles the economic constraint; add a unique partial index on (player_id, coach_id, requested_start_time) WHERE status IN (...) in a future scheduling-conflicts story [BookingService.java:createBookingRequest, V31 migration]
 - N+1 player name + credit queries in `getParentBookings` — already tracked from Group A
@@ -372,7 +426,6 @@ re-verified by three independent review layers with repository access. Scope, so
 
 ## Deferred from: code review of skillars-3-3-booking-request-approval-workflow Group A (2026-06-15)
 - `requestedEndTime` minimum duration not validated — 1-second bookings accepted; minimum session length not in scope for Story 3.3; add a `@PositiveDuration(min=15m)` or service-level check in a future session-constraints story [CreateBookingRequest.java:16]
-- `canonicalTimezone` not IANA-validated before storage — invalid string passed by client causes DateTimeException at reminder notification time; add `ZoneId.of(canonicalTimezone)` validation in BookingService.createBookingRequest [CreateBookingRequest.java:17, BookingService.java]
 - N+1 queries in `getParentBookings` — player names and effective credits each fire separate SQL per booking row; batch player name lookup the same way coach names are batched; catch when booking volume per parent grows [BookingService.java:getParentBookings]
 
 ## Deferred from: code review of skillars-3-2-session-pack-purchase-credit-dashboard (2026-06-13)

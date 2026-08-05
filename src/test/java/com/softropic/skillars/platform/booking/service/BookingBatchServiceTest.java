@@ -19,12 +19,15 @@ import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -36,6 +39,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -52,8 +56,21 @@ class BookingBatchServiceTest {
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock ConfigService configService;
     @Mock BookingService bookingService;
+    @Mock PlatformTransactionManager transactionManager;
+    @Mock TransactionStatus transactionStatus;
 
     @InjectMocks BookingBatchService service;
+
+    /**
+     * @InjectMocks does not run @PostConstruct, so the REQUIRES_NEW TransactionTemplates acceptAll
+     * depends on would be null. Initialise them by hand — the same shape ReviewModerationServiceTest
+     * uses for its own hand-built TransactionTemplate.
+     */
+    @BeforeEach
+    void initTemplates() {
+        lenient().when(transactionManager.getTransaction(any())).thenReturn(transactionStatus);
+        service.initTransactionTemplates();
+    }
 
     private static final long PARENT_ID = 9000001L;
     private static final long PLAYER_ID = 9000002L;
@@ -151,9 +168,17 @@ class BookingBatchServiceTest {
 
         UUID bookingId1 = UUID.randomUUID();
         UUID bookingId2 = UUID.randomUUID();
+        Instant slot1 = Instant.now().plus(3, ChronoUnit.DAYS);
+        Instant slot2 = Instant.now().plus(4, ChronoUnit.DAYS);
         Booking b1 = new Booking(); b1.setId(bookingId1); b1.setStatus("REQUESTED");
+        b1.setRequestedStartTime(slot1); b1.setRequestedEndTime(slot1.plus(1, ChronoUnit.HOURS));
         Booking b2 = new Booking(); b2.setId(bookingId2); b2.setStatus("REQUESTED");
+        b2.setRequestedStartTime(slot2); b2.setRequestedEndTime(slot2.plus(1, ChronoUnit.HOURS));
         when(bookingRepository.findByBatchIdAndStatus(BATCH_ID, "REQUESTED")).thenReturn(List.of(b1, b2));
+        // Deferred-14 AC4: each accept now locks the coach and re-checks for slot overlap first.
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any()))
+            .thenReturn(List.of());
         when(batchRepository.save(any())).thenReturn(batch);
         when(userRepository.findById(any())).thenReturn(Optional.empty());
 

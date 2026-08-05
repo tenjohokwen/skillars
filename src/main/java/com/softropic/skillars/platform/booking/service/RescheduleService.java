@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.booking.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.security.SecurityError;
+import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.BookingStatus;
 import com.softropic.skillars.platform.booking.contract.CreateRescheduleRequest;
 import com.softropic.skillars.platform.booking.contract.RescheduleAcceptedEvent;
@@ -22,6 +23,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -113,6 +116,26 @@ public class RescheduleService {
         if (!req.getProposedStartTime().isAfter(Instant.now())) {
             throw new OperationNotAllowedException(
                 "Proposed start time is no longer in the future", SecurityError.MISSING_RIGHTS);
+        }
+
+        // Deferred-14 AC4. Reschedule rewrites the booking's time window with no overlap check, so
+        // until now the only thing standing between it and a double-booked coach was the V87
+        // exclusion constraint — which fires at commit and, in a batched flush, loses the constraint
+        // name and surfaces as an unmapped 500 instead of a clean booking.slotUnavailable. Lock the
+        // coach first so two concurrent reschedules for the same coach serialise, then check the
+        // PROPOSED window (not the current one). excludeBookingId is mandatory: this booking is
+        // itself in an active status and would otherwise match itself.
+        coachProfileRepository.findByIdForUpdate(coach.getId())
+            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+        List<Booking> overlapping = bookingRepository.findOverlappingBookings(
+            coach.getId(), req.getProposedStartTime(), req.getProposedEndTime(),
+            BookingService.ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED, bookingId);
+        if (!overlapping.isEmpty()) {
+            throw new OperationNotAllowedException(
+                "The proposed slot is no longer available — another booking occupies that time",
+                Map.of("submitted coach id", coach.getId(), "proposed start time", req.getProposedStartTime(),
+                    "proposed end time", req.getProposedEndTime()),
+                BookingError.SLOT_UNAVAILABLE);
         }
 
         booking.setRequestedStartTime(req.getProposedStartTime());

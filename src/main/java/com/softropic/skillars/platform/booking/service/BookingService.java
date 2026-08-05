@@ -117,7 +117,10 @@ public class BookingService {
     private static final List<String> ACTIVE_SLOT_STATUSES =
         List.of("REQUESTED", "ACCEPTED", "PAYMENT_PENDING", "CONFIRMED", "UPCOMING", "IN_PROGRESS", "PAUSED");
 
-    private static final List<String> ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED =
+    // Package-private, not private: BookingBatchService and RescheduleService run the same
+    // accept-time overlap check against this exact status set (Deferred-14 AC4). Keeping one
+    // definition is the point — a second copy would drift from the V87 constraint's WHERE clause.
+    static final List<String> ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED =
         ACTIVE_SLOT_STATUSES.stream().filter(s -> !s.equals("REQUESTED")).toList();
 
     @Transactional

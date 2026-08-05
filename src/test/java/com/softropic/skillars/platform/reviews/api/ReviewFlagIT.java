@@ -74,12 +74,15 @@ class ReviewFlagIT {
 
     private UUID coachProfileId;
     private UUID reviewId;
+    /** Set only by the orphan-coach-profile test; null for every other test. Cleaned in tearDown. */
+    private UUID orphanReviewId;
 
     @BeforeEach
     void setUp() {
         String passwordHash = passwordEncoder.encode(TEST_PASSWORD);
         coachProfileId = UUID.randomUUID();
         reviewId = UUID.randomUUID();
+        orphanReviewId = null;
 
         transactionTemplate.execute(status -> {
             jdbcTemplate.update(
@@ -156,6 +159,10 @@ class ReviewFlagIT {
     @AfterEach
     void tearDown() {
         transactionTemplate.execute(status -> {
+            if (orphanReviewId != null) {
+                jdbcTemplate.update("DELETE FROM reviews.review_flags WHERE review_id = ?", orphanReviewId);
+                jdbcTemplate.update("DELETE FROM reviews.coach_reviews WHERE review_id = ?", orphanReviewId);
+            }
             jdbcTemplate.update("DELETE FROM reviews.review_flags WHERE review_id = ?", reviewId);
             jdbcTemplate.update("DELETE FROM reviews.coach_reviews WHERE review_id = ?", reviewId);
             jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id = ?", coachProfileId);
@@ -319,7 +326,9 @@ class ReviewFlagIT {
     @Test
     void flagReviewWithMissingCoachProfile_returns500WithCoachProfileMissing() {
         UUID orphanCoachId = UUID.randomUUID();
-        UUID orphanReviewId = UUID.randomUUID();
+        // Field, not a local: tearDown has to be able to see it. A local plus an in-test try/finally
+        // leaks the row if the seeding below throws before the try is entered (Deferred-14 AC7).
+        orphanReviewId = UUID.randomUUID();
         transactionTemplate.execute(status -> {
             jdbcTemplate.update(
                 "INSERT INTO reviews.coach_reviews " +
@@ -331,28 +340,20 @@ class ReviewFlagIT {
             return null;
         });
 
-        try {
-            String cookies = loginAndGetCookies(FLAGGING_EMAIL);
-            assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
-                reviewsUrl("/" + orphanReviewId + "/flag"),
-                HttpMethod.POST,
-                Map.of("reason", "FAKE_REVIEW"),
-                authenticatedHeaders(cookies),
-                Map.class))
-                .isInstanceOf(HttpServerErrorException.class)
-                .satisfies(e -> {
-                    HttpServerErrorException ex = (HttpServerErrorException) e;
-                    assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
-                    assertThat(ex.getResponseBodyAsString())
-                        .contains("\"errorKey\":\"reviews.coachProfileMissing\"");
-                });
-        } finally {
-            transactionTemplate.execute(status -> {
-                jdbcTemplate.update("DELETE FROM reviews.review_flags WHERE review_id = ?", orphanReviewId);
-                jdbcTemplate.update("DELETE FROM reviews.coach_reviews WHERE review_id = ?", orphanReviewId);
-                return null;
+        String cookies = loginAndGetCookies(FLAGGING_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            reviewsUrl("/" + orphanReviewId + "/flag"),
+            HttpMethod.POST,
+            Map.of("reason", "FAKE_REVIEW"),
+            authenticatedHeaders(cookies),
+            Map.class))
+            .isInstanceOf(HttpServerErrorException.class)
+            .satisfies(e -> {
+                HttpServerErrorException ex = (HttpServerErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"reviews.coachProfileMissing\"");
             });
-        }
     }
 
     // ── helpers ──

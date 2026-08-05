@@ -146,6 +146,10 @@ class BookingBatchResourceIT {
     @AfterEach
     void tearDown() {
         transactionTemplate.execute(status -> {
+            // acceptAll now settles accepted bookings end-to-end, so this fixture writes payment rows.
+            jdbcTemplate.update(
+                "DELETE FROM payment.booking_payments WHERE booking_id IN " +
+                "(SELECT id FROM booking.bookings WHERE parent_id = ?)", PARENT_ID);
             jdbcTemplate.update("DELETE FROM booking.bookings WHERE parent_id = ?", PARENT_ID);
             jdbcTemplate.update("DELETE FROM booking.booking_batches WHERE parent_id = ?", PARENT_ID);
             jdbcTemplate.update("DELETE FROM marketplace.coach_pricing WHERE coach_id IN (?, ?)", coachProfileId, coach2ProfileId);
@@ -270,6 +274,80 @@ class BookingBatchResourceIT {
         String batchStatus = jdbcTemplate.queryForObject(
             "SELECT status FROM booking.booking_batches WHERE id = ?", String.class, batchId);
         assertThat(batchStatus).isEqualTo("FULLY_ACCEPTED");
+
+        // Deferred-14 AC3a. Status and settlement are asserted together deliberately: the failure this
+        // guards is a batch row that reads FULLY_ACCEPTED while BatchBookingAcceptedEvent never fired,
+        // leaving every booking stranded in PAYMENT_PENDING with no sweeper to recover it. A
+        // status-only assertion passes straight through that state.
+        Integer settled = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM payment.booking_payments bp " +
+            "JOIN booking.bookings b ON b.id = bp.booking_id WHERE b.batch_id = ?",
+            Integer.class, batchId);
+        assertThat(settled).as("every booking in a fully-accepted batch must have been settled").isEqualTo(2);
+    }
+
+    /**
+     * Deferred-14 AC3/AC5. A batch where one slot collides with an existing CONFIRMED booking for the
+     * same coach must accept the other slot and skip only the colliding one, ending PARTIALLY_ACCEPTED.
+     *
+     * <p>Written first as a reproduction of the pre-fix behaviour, where acceptAll could not partially
+     * succeed at all: the per-booking {@code catch (Exception e)} swallowed the failure but not the
+     * rollback-only marker Spring sets when the cross-bean {@code acceptAndInitiatePayment} transaction
+     * fails, so the whole request died at commit with zero bookings accepted and the batch left PENDING.
+     * See the story's Debug Log for the exact pre-fix observation.
+     */
+    @Test
+    void acceptAll_oneSlotCollides_acceptsOtherAndEndsPartiallyAccepted() {
+        UUID batchId = createBatchInDb(2);
+        // Batch slots are now+3d and now+4d (1h each) — collide with the second one only.
+        Instant collidingStart = Instant.now().plus(4, ChronoUnit.DAYS);
+        UUID blockerId = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO booking.bookings " +
+                "(id, parent_id, player_id, coach_id, requested_start_time, requested_end_time, " +
+                "status, canonical_timezone, version, created_at, updated_at) " +
+                "VALUES (?, ?, ?, ?, ?, ?, 'CONFIRMED', 'Europe/Berlin', 0, ?, ?)",
+                blockerId, PARENT_ID, PLAYER_ID, coachProfileId,
+                Timestamp.from(collidingStart), Timestamp.from(collidingStart.plus(1, ChronoUnit.HOURS)),
+                Timestamp.from(Instant.now()), Timestamp.from(Instant.now())
+            );
+            return null;
+        });
+
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+        ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/batches/" + batchId + "/accept-all",
+            HttpMethod.POST, null, authenticatedHeaders(coachCookies), Void.class
+        );
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+
+        // The accepted booking does not stay in PAYMENT_PENDING: the trailing transaction publishes
+        // BatchBookingAcceptedEvent, and PaymentLifecycleService settles it on AFTER_COMMIT. Asserting
+        // "not REQUESTED" therefore covers whichever terminal settle outcome this fixture produces,
+        // while still proving the slot was accepted at all.
+        Integer accepted = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM booking.bookings WHERE batch_id = ? AND status <> 'REQUESTED'",
+            Integer.class, batchId);
+        assertThat(accepted).as("the non-colliding slot must still be accepted").isEqualTo(1);
+
+        Integer stillRequested = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM booking.bookings WHERE batch_id = ? AND status = 'REQUESTED'",
+            Integer.class, batchId);
+        assertThat(stillRequested).as("the colliding slot must be skipped, not accepted").isEqualTo(1);
+
+        String batchStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM booking.booking_batches WHERE id = ?", String.class, batchId);
+        assertThat(batchStatus).isEqualTo("PARTIALLY_ACCEPTED");
+
+        // Deferred-14 AC3a. A batch row that says PARTIALLY_ACCEPTED while no settlement ever ran is
+        // precisely the stranded state the trailing transaction exists to prevent, and it would be
+        // invisible to every other assertion here. Pin that the settlement event actually fired.
+        Integer settled = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM payment.booking_payments bp " +
+            "JOIN booking.bookings b ON b.id = bp.booking_id WHERE b.batch_id = ?",
+            Integer.class, batchId);
+        assertThat(settled).as("the accepted booking must have been settled, not stranded").isEqualTo(1);
     }
 
     @Test
