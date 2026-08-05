@@ -26,7 +26,11 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import javax.sql.DataSource;
+
+import java.sql.Connection;
 import java.sql.Date;
+import java.sql.PreparedStatement;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -39,6 +43,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -72,6 +77,7 @@ class AdminReviewQueueIT {
     private GeminiClient geminiClient;
 
     @Autowired private JdbcTemplate jdbcTemplate;
+    @Autowired private DataSource dataSource;
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private HttpTestClient httpTestClient;
     @Autowired private PasswordEncoder passwordEncoder;
@@ -327,8 +333,17 @@ class AdminReviewQueueIT {
     /**
      * AC1's stated guarantee is that the guard holds under <em>concurrent</em> calls — the admin
      * double-click — not merely sequential ones. The sequential test above passes unchanged against
-     * a plain {@code findById}, so it does not exercise the pessimistic read at all. This one does:
-     * two requests are released simultaneously and exactly one must win.
+     * a plain {@code findById}; this one releases two requests simultaneously and requires exactly
+     * one to win.
+     * <p>
+     * <strong>Scope of the evidence (corrected by code review 2026-08-05):</strong> this does
+     * <em>not</em> prove the pessimistic read. The barrier synchronises the two threads before the
+     * HTTP call; everything after it — connect, auth filter, dispatch, transaction begin — is
+     * unsynchronised and can be wider than the read-to-commit window. If thread A commits before B
+     * issues its {@code SELECT}, a plain {@code findById} also observes the resolved status and
+     * returns 409, so this test would pass against the very mutation it appears to catch. It is a
+     * cheap regression net for the guard, nothing more. The lock itself is pinned by
+     * {@code blockReview_whenAConcurrentBlockCommitsFirst_readsFreshStateAndRefuses}.
      */
     @Test
     void approveReview_concurrentDoubleClick_onlyOneSucceedsAndOneLogRowIsWritten() throws Exception {
@@ -357,11 +372,17 @@ class AdminReviewQueueIT {
         };
 
         ExecutorService executor = Executors.newFixedThreadPool(2);
-        Future<Void> a = executor.submit(approve);
-        Future<Void> b = executor.submit(approve);
-        a.get(30, TimeUnit.SECONDS);
-        b.get(30, TimeUnit.SECONDS);
-        executor.shutdown();
+        try {
+            Future<Void> a = executor.submit(approve);
+            Future<Void> b = executor.submit(approve);
+            a.get(30, TimeUnit.SECONDS);
+            b.get(30, TimeUnit.SECONDS);
+        } finally {
+            // shutdownNow in a finally: if either get() throws, a still-running request would
+            // otherwise outlive @AfterEach and INSERT a moderation-log row keyed to a deleted review.
+            executor.shutdownNow();
+            executor.awaitTermination(30, TimeUnit.SECONDS);
+        }
 
         assertThat(okCount.get()).as("exactly one concurrent approve may succeed").isEqualTo(1);
         assertThat(conflictCount.get()).as("the loser must get the 409, not a duplicate success").isEqualTo(1);
@@ -431,6 +452,213 @@ class AdminReviewQueueIT {
             "SELECT review_count FROM marketplace.coach_profiles WHERE id = ?",
             Integer.class, coachProfileId);
         assertThat(reviewCount).isEqualTo(0);
+    }
+
+    @Test
+    void blockReview_calledTwice_secondReturns409AndWritesNoDuplicateLog() {
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+        String blockUrl = baseUrl() + "/api/admin/reviews/" + reviewId + "/block";
+
+        ResponseEntity<Void> first = httpTestClient.makeHttpRequest(
+            blockUrl, HttpMethod.POST, Map.of("reason", "Clearly fake review"),
+            authenticatedHeaders(adminCookies), Void.class);
+        assertThat(first.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            blockUrl, HttpMethod.POST, Map.of("reason", "Clearly fake review"),
+            authenticatedHeaders(adminCookies), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException hcee = (HttpClientErrorException) e;
+                assertThat(hcee.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(hcee.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"reviews.alreadyBlocked\"");
+            });
+
+        Integer logRows = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM reviews.review_moderation_log WHERE review_id = ? AND action = 'BLOCKED'",
+            Integer.class, reviewId);
+        assertThat(logRows).isEqualTo(1);
+
+        // AC3 requires the surviving row to carry the reason, not merely to exist.
+        String loggedReason = jdbcTemplate.queryForObject(
+            "SELECT reason FROM reviews.review_moderation_log WHERE review_id = ? AND action = 'BLOCKED'",
+            String.class, reviewId);
+        assertThat(loggedReason)
+            .as("the single log row must carry the reason from the first (winning) call")
+            .isEqualTo("Clearly fake review");
+    }
+
+    /**
+     * AC1 closes with "ResourceNotFoundException on a missing review is unchanged (still 404,
+     * errorKey = RESOURCE_NOT_FOUND)", but Task 3 never asked for the test and only the /approve
+     * path had one. Added by code review 2026-08-05. The block path matters independently: it
+     * carries a request body, so a regression could plausibly surface as a validation error instead.
+     */
+    @Test
+    void blockReview_notFound_returns404WithConsistentErrorShape() {
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+        UUID missingReviewId = UUID.randomUUID();
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/admin/reviews/" + missingReviewId + "/block",
+            HttpMethod.POST,
+            Map.of("reason", "Clearly fake review"),
+            authenticatedHeaders(adminCookies),
+            Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException hcee = (HttpClientErrorException) e;
+                assertThat(hcee.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+                assertThat(hcee.getResponseBodyAsString()).contains("\"errorKey\":\"RESOURCE_NOT_FOUND\"");
+            });
+    }
+
+    /**
+     * AC1's stated guarantee is that the guard holds under <em>concurrent</em> calls — the admin
+     * double-click — not merely sequential ones. Mirrors
+     * {@code approveReview_concurrentDoubleClick_onlyOneSucceedsAndOneLogRowIsWritten}: two requests
+     * are released simultaneously and exactly one must win.
+     * <p>
+     * <strong>Scope of the evidence (corrected by code review 2026-08-05):</strong> this does
+     * <em>not</em> prove the pessimistic read, and the story's Task 3 claim that it does was wrong.
+     * The barrier synchronises the threads before the HTTP call; if thread A commits before B issues
+     * its {@code SELECT}, a plain {@code findById} also observes {@code BLOCKED} and returns 409 —
+     * green against the exact mutation this appears to catch. Kept as a cheap regression net for the
+     * guard. The lock is pinned deterministically by
+     * {@code blockReview_whenAConcurrentBlockCommitsFirst_readsFreshStateAndRefuses} below.
+     */
+    @Test
+    void blockReview_concurrentDoubleClick_onlyOneSucceedsAndOneLogRowIsWritten() throws Exception {
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+        String blockUrl = baseUrl() + "/api/admin/reviews/" + reviewId + "/block";
+
+        CyclicBarrier bothReady = new CyclicBarrier(2);
+        AtomicInteger okCount = new AtomicInteger();
+        AtomicInteger conflictCount = new AtomicInteger();
+
+        Callable<Void> block = () -> {
+            bothReady.await(10, TimeUnit.SECONDS);
+            try {
+                httpTestClient.makeHttpRequest(
+                    blockUrl, HttpMethod.POST, Map.of("reason", "Clearly fake review"),
+                    authenticatedHeaders(adminCookies), Void.class);
+                okCount.incrementAndGet();
+            } catch (HttpClientErrorException e) {
+                if (e.getStatusCode() == HttpStatus.CONFLICT
+                        && e.getResponseBodyAsString().contains("\"errorKey\":\"reviews.alreadyBlocked\"")) {
+                    conflictCount.incrementAndGet();
+                } else {
+                    throw e;
+                }
+            }
+            return null;
+        };
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<Void> a = executor.submit(block);
+            Future<Void> b = executor.submit(block);
+            a.get(30, TimeUnit.SECONDS);
+            b.get(30, TimeUnit.SECONDS);
+        } finally {
+            // shutdownNow in a finally: if either get() throws, a still-running request would
+            // otherwise outlive @AfterEach and INSERT a moderation-log row keyed to a deleted review.
+            executor.shutdownNow();
+            executor.awaitTermination(30, TimeUnit.SECONDS);
+        }
+
+        assertThat(okCount.get()).as("exactly one concurrent block may succeed").isEqualTo(1);
+        assertThat(conflictCount.get()).as("the loser must get the 409, not a duplicate success").isEqualTo(1);
+
+        Integer logRows = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM reviews.review_moderation_log WHERE review_id = ? AND action = 'BLOCKED'",
+            Integer.class, reviewId);
+        assertThat(logRows)
+            .as("the guard must stop the second caller before it writes a second log row")
+            .isEqualTo(1);
+    }
+
+    /**
+     * The deterministic proof of AC1's pessimistic read, added by code review 2026-08-05 after both
+     * barrier-based tests were found to pass unchanged against a plain {@code findById}. Verified by
+     * mutation: reverting {@code blockReview}'s {@code findByIdForUpdate} to {@code findById} makes
+     * this test fail every run.
+     * <p>
+     * Simply holding {@code SELECT … FOR UPDATE} is <em>not</em> enough to tell the two apart — a
+     * plain {@code findById} still blocks later, at the {@code UPDATE}, so the request waits either
+     * way. The discriminator is what the request <em>observes</em> once it is unblocked. Here a
+     * concurrent transaction blocks the review and commits while the request is in flight:
+     * <ul>
+     *   <li>with {@code findByIdForUpdate} the read itself waits, so after the commit it observes
+     *       the fresh {@code BLOCKED} status, the guard fires, and the caller gets 409 — no second
+     *       audit row;</li>
+     *   <li>with a plain {@code findById} the read completes immediately against the pre-commit
+     *       READ COMMITTED snapshot, observes a stale {@code UNDER_REVIEW}, sails through the guard,
+     *       then blocks at the {@code UPDATE} — and on release writes a duplicate log row and
+     *       answers 200. That is exactly the forged-audit-row defect AC1 exists to prevent.</li>
+     * </ul>
+     * No {@code Thread.sleep}: the wait is a {@code Future.get} timeout and the release is an
+     * explicit commit.
+     */
+    @Test
+    void blockReview_whenAConcurrentBlockCommitsFirst_readsFreshStateAndRefuses() throws Exception {
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+        String blockUrl = baseUrl() + "/api/admin/reviews/" + reviewId + "/block";
+
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try (Connection firstAdmin = dataSource.getConnection()) {
+            firstAdmin.setAutoCommit(false);
+
+            // Stand in for an admin whose block has written but not yet committed: this takes the
+            // row lock and changes the status the guard reads.
+            try (PreparedStatement ps = firstAdmin.prepareStatement(
+                    "UPDATE reviews.coach_reviews SET moderation_status = 'BLOCKED', held_reason = NULL "
+                    + "WHERE review_id = ?")) {
+                ps.setObject(1, reviewId);
+                ps.executeUpdate();
+            }
+            try (PreparedStatement ps = firstAdmin.prepareStatement(
+                    "INSERT INTO reviews.review_moderation_log (log_id, review_id, admin_id, action, reason, created_at) "
+                    + "VALUES (gen_random_uuid(), ?, ?, 'BLOCKED', 'First admin wins', NOW())")) {
+                ps.setObject(1, reviewId);
+                ps.setLong(2, ADMIN_ID);
+                ps.executeUpdate();
+            }
+
+            Future<Integer> second = executor.submit(() -> {
+                try {
+                    ResponseEntity<Void> resp = httpTestClient.makeHttpRequest(
+                        blockUrl, HttpMethod.POST, Map.of("reason", "Second admin loses"),
+                        authenticatedHeaders(adminCookies), Void.class);
+                    return resp.getStatusCode().value();
+                } catch (HttpClientErrorException e) {
+                    return e.getStatusCode().value();
+                }
+            });
+
+            assertThatThrownBy(() -> second.get(5, TimeUnit.SECONDS))
+                .as("the second block must be held up by the first admin's uncommitted row lock")
+                .isInstanceOf(TimeoutException.class);
+
+            firstAdmin.commit();
+
+            assertThat(second.get(30, TimeUnit.SECONDS))
+                .as("after the lock releases, a locked read observes the fresh BLOCKED status and "
+                    + "409s; a plain findById would still hold the stale UNDER_REVIEW snapshot and "
+                    + "answer 200")
+                .isEqualTo(HttpStatus.CONFLICT.value());
+        } finally {
+            executor.shutdownNow();
+            executor.awaitTermination(30, TimeUnit.SECONDS);
+        }
+
+        Integer logRows = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM reviews.review_moderation_log WHERE review_id = ? AND action = 'BLOCKED'",
+            Integer.class, reviewId);
+        assertThat(logRows)
+            .as("only the first admin's audit row may exist — the whole point of AC1")
+            .isEqualTo(1);
     }
 
     // ── helpers ──

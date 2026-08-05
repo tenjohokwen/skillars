@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.reviews.service;
 
 import com.softropic.skillars.platform.config.service.ConfigService;
+import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.reviews.contract.HeldReason;
 import com.softropic.skillars.platform.reviews.contract.ReviewErrorCode;
@@ -43,13 +44,14 @@ public class ReviewFlagService {
                 "Cannot flag your own review", ReviewErrorCode.CANNOT_FLAG_OWN_REVIEW);
         }
 
-        coachProfileRepository.findById(review.getCoachId()).ifPresent(profile -> {
-            if (flaggedBy.equals(profile.getUserId())) {
-                throw new OperationNotAllowedException(
-                    "Coach cannot flag reviews of their own profile",
-                    ReviewErrorCode.CANNOT_FLAG_OWN_COACHED_REVIEW);
-            }
-        });
+        CoachProfile coachProfile = coachProfileRepository.findById(review.getCoachId())
+            .orElseThrow(() -> new OperationNotAllowedException(
+                "Coach profile not found for review", ReviewErrorCode.COACH_PROFILE_MISSING));
+        if (flaggedBy.equals(coachProfile.getUserId())) {
+            throw new OperationNotAllowedException(
+                "Coach cannot flag reviews of their own profile",
+                ReviewErrorCode.CANNOT_FLAG_OWN_COACHED_REVIEW);
+        }
 
         if (reviewFlagRepository.existsByReviewIdAndFlaggedBy(reviewId, flaggedBy)) {
             throw new OperationNotAllowedException(

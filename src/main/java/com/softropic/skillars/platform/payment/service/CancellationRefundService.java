@@ -15,7 +15,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
-import java.math.BigDecimal;
 import java.util.Set;
 import java.util.UUID;
 
@@ -132,14 +131,6 @@ public class CancellationRefundService {
     public void onPlayerNoShow(PlayerNoShowEvent event) {
         // No credit action — session fee forfeited, coach earnings unaffected (AC 3)
         log.info("Player no-show recorded: bookingId={}", event.getBookingId());
-    }
-
-    @Transactional
-    public void processAdminRefund(UUID bookingId, BigDecimal amount, Long parentId) {
-        creditWalletService.writeLedgerEntry(
-            parentId, amount, "BOOKING_REFUND", bookingId, "Admin-approved refund"
-        );
-        log.info("Admin refund issued: bookingId={} amount={}", bookingId, amount);
     }
 
     private void saveCancellationHistory(UUID coachId, UUID bookingId, String reason) {

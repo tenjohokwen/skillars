@@ -18,6 +18,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
@@ -301,6 +302,57 @@ class ReviewFlagIT {
                 assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
                 assertThat(ex.getResponseBodyAsString()).contains("cannotFlagOwnCoachedReview");
             });
+    }
+
+    /**
+     * Not reachable in production today — {@code GdprErasureService} anonymises
+     * {@code coach_profiles} rows and never deletes them, and no other code path deletes one.
+     * This pins the fail-closed guard as defence-in-depth, not a live bug fix.
+     * {@code V67__reviews_module_init.sql} has no FK on {@code coach_id}, so an orphaned review
+     * is directly insertable via {@code jdbcTemplate}.
+     * <p>
+     * Expects <strong>500</strong>, not the 409 that deferred-13 AC4 originally specified: the code
+     * review of 2026-08-05 ruled that an orphaned profile is a data-integrity failure the caller
+     * neither caused nor can retry away, so it must reach 5xx-keyed alerting rather than sit in the
+     * client-error bucket. See {@code ReviewApiAdvice#handleOperationNotAllowed}.
+     */
+    @Test
+    void flagReviewWithMissingCoachProfile_returns500WithCoachProfileMissing() {
+        UUID orphanCoachId = UUID.randomUUID();
+        UUID orphanReviewId = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO reviews.coach_reviews " +
+                "(review_id, coach_id, author_id, author_role, rating, body, moderation_status, created_at, last_modified_at) " +
+                "VALUES (?, ?, ?, 'PARENT', 4, 'Great coach!', 'APPROVED', ?, ?)",
+                orphanReviewId, orphanCoachId, PARENT_ID,
+                Timestamp.from(Instant.now().minusSeconds(3600)),
+                Timestamp.from(Instant.now().minusSeconds(3600)));
+            return null;
+        });
+
+        try {
+            String cookies = loginAndGetCookies(FLAGGING_EMAIL);
+            assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+                reviewsUrl("/" + orphanReviewId + "/flag"),
+                HttpMethod.POST,
+                Map.of("reason", "FAKE_REVIEW"),
+                authenticatedHeaders(cookies),
+                Map.class))
+                .isInstanceOf(HttpServerErrorException.class)
+                .satisfies(e -> {
+                    HttpServerErrorException ex = (HttpServerErrorException) e;
+                    assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+                    assertThat(ex.getResponseBodyAsString())
+                        .contains("\"errorKey\":\"reviews.coachProfileMissing\"");
+                });
+        } finally {
+            transactionTemplate.execute(status -> {
+                jdbcTemplate.update("DELETE FROM reviews.review_flags WHERE review_id = ?", orphanReviewId);
+                jdbcTemplate.update("DELETE FROM reviews.coach_reviews WHERE review_id = ?", orphanReviewId);
+                return null;
+            });
+        }
     }
 
     // ── helpers ──

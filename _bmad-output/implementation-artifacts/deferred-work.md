@@ -37,11 +37,72 @@ Scope of that audit, so the gaps in it are explicit:
 
 ### Known tracking defect found by the audit
 
-`skillars-deferred-5` is marked `done` in `sprint-status.yaml`, but its **AC4 was never implemented** —
-`ReviewApiAdvice` still does not cover `platform.admin.api`. The item is retained below under the
-`skillars-9-3` section. Treat other `done` markers with corresponding care.
+`skillars-deferred-5` is marked `done` in `sprint-status.yaml`, but the 2026-08-04 audit read its
+**AC4 as never implemented** — `ReviewApiAdvice` not covering `platform.admin.api`. Treat other
+`done` markers with corresponding care: the general lesson stands even though this specific instance
+turned out to be closed.
+
+**Resolved 2026-08-04 (deferred-13):** that reading was wrong by the time it was written. The gap was
+already closed by `skillars-deferred-12` — `ReviewApiAdvice.java:26-28` carries
+`assignableTypes = AdminReviewResource.class` alongside `basePackages`, confirmed by direct read
+during `deferred-13` and re-confirmed by its code review. The `skillars-9-3` section that used to
+hold this item (tracked there as D2) was removed by `deferred-13` as already-closed, so the
+cross-reference that stood here is gone; the sentence above has been corrected to match. See the
+`deferred-13` audit note below for the full list.
+
+## Last audit: 2026-08-05 (deferred-13 code review)
+
+Written by the `deferred-13` **code review** on 2026-08-05, superseding the dev-authored draft of
+2026-08-04 that claimed this provenance before any review had run. The item-level claims below were
+re-verified by three independent review layers with repository access. Scope, so gaps stay explicit:
+
+- Closed by code in this story: `skillars-deferred-12` D3 (`blockReview()` now uses
+  `findByIdForUpdate` + an `ALREADY_BLOCKED` guard, mirroring `approveReview()`); `skillars-9-3` D3
+  (`ReviewFlagService.flag()`'s coach-profile lookup now fails closed with
+  `COACH_PROFILE_MISSING` instead of silently skipping the self-flag guard); `skillars-10-2` D3
+  (enforcement list now batches strike counts via `countByCoachIdInAndCreatedAtAfter`, mirroring
+  `CoachSearchService.loadReliabilityStrikes()`).
+- Closed by deletion, not by fixing: `skillars-7-3` D2 (`processAdminRefund` removed outright — it
+  had zero call sites in `src/main` or `src/test`, and Epic 10 already wired the real admin-refund
+  path through `DisputeService.resolveDispute()`, which has auth, amount validation, an
+  already-resolved guard, and an audit log entry).
+- Deleted as already-closed-or-obsolete, evidence re-verified by direct read on 2026-08-04:
+  `skillars-9-3` D1 and D2 (closed by `skillars-deferred-12`: `AdminReviewService.approveReview()`
+  has both the pessimistic read and the `ALREADY_APPROVED` guard; `ReviewApiAdvice.java:26-28`
+  carries `assignableTypes = AdminReviewResource.class` alongside `basePackages`); the D1 under
+  `## Deferred from: code review of skillars-10-1-admin-moderation-queue-message-content-actions
+  (2026-06-30)` (obsolete — `V65__messaging_module_init.sql:22` declares `content TEXT NOT NULL`,
+  so the null-content branch is unreachable, and `AdminQueueService.buildSummary()` already yields
+  `"[message not found]"` rather than `null` via `Optional.map`); `skillars-3-11` D2 (closed by
+  `V87__booking_overlap_exclusion_constraint.sql`, which added the DB-level exclusion constraint
+  the item asked for — **but see D2 of the code-review section below**: that entry also recorded two
+  app-layer bypass paths, and the constraint changes their failure mode rather than fixing them, so
+  the residue has been re-opened as its own item).
+- **Not re-deleted / explicitly left alone:** the separate `## Deferred from: code review of
+  skillars-10-1 patches (2026-06-30)` heading's own D1 and D2 (`findBeforePivot`/`findAfterPivot`
+  null-pivot and exact-timestamp-collision items) — unrelated to the `buildSummary()` item deleted
+  above despite both sections starting with `skillars-10-1`; still open, untouched by this story.
+  `skillars-10-2` D1 (`AFTER_COMMIT` listener failure silently drops refunds) — explicitly a
+  platform-wide event-reliability concern, too large for this story, left in the file.
+- **Not re-checked:** every other forward-reference in the file, and the deployment/infrastructure
+  (`deploy-*`) sections again — same gap the 2026-08-04 audit above already flagged.
+- **Added by the code review itself (2026-08-05):** three new items under
+  `## Deferred from: code review of skillars-deferred-13-admin-moderation-action-integrity` below.
+  D1 is the substantive one — the Gemini moderation listener can silently revert a committed admin
+  BLOCK, which means `deferred-13` AC1's lock is only half the guarantee it reads as.
+- **One AC was overridden by the review, not merely implemented:** `deferred-13` AC4 specified
+  `409 CONFLICT` for `COACH_PROFILE_MISSING`; the review changed it to `500` (with an ERROR log) on
+  the grounds that an orphaned `coach_profiles` row is a data-integrity failure the caller neither
+  caused nor can retry away, and a 4xx would hide it from 5xx-keyed alerting. `ALREADY_BLOCKED`
+  remains `409`. Recorded here because the story file's AC4 text now differs from what shipped in
+  `deferred-13`'s original spec.
 
 ---
+
+## Deferred from: code review of skillars-deferred-13-admin-moderation-action-integrity (2026-08-05)
+- D1: **The Gemini moderation listener can silently revert a committed admin BLOCK.** `ReviewModerationService`'s `AFTER_COMMIT` handler calls Gemini outside any transaction, then opens a `REQUIRES_NEW` tx and does a plain unlocked `reviewRepository.findById(reviewId)` followed by an **unconditional** `setModerationStatus(finalStatus)` — no already-resolved guard, no lock. If an admin blocks a `PENDING` review during the multi-second Gemini call, a `SAFE` verdict overwrites `BLOCKED` → `APPROVED`, re-publishes the review, and calls `coachRatingService.recompute()`, while the `BLOCKED` row remains in `review_moderation_log`. The enclosing `catch (Exception e)` swallows the failure. Strictly pre-existing — this diff does not touch `ReviewModerationService` — but it defeats the exact invariant `deferred-13` AC1 establishes, so the pessimistic lock on `blockReview()` is only half the guarantee. The fix mirrors what AC1 just did to `blockReview()`: locked read + a guard that refuses to overwrite an admin-set terminal status. [`src/main/java/com/softropic/skillars/platform/reviews/service/ReviewModerationService.java:93-110`]
+- D2: **Booking exclusion-constraint violations have no 409 mapping.** `V87__booking_overlap_exclusion_constraint.sql` records in its own header that `BookingBatchService.createBatch` and `RescheduleService.acceptReschedule` bypass the app-layer overlap check. With the DB constraint now in place, those two paths surface an overlap as a raw `DataIntegrityViolationException` → 500 rather than a clean 409. The only `DataIntegrityViolationException` catch in the booking module is in `BookingCompletionService.java:141`, for an unrelated purpose. Pre-existing and out of `deferred-13`'s scope; recorded here because `deferred-13` AC7 deleted the `skillars-3-11` D2 entry that used to be the tracking home for the two-bypass-path fact (the fact itself survives in the V87 header comment, so nothing was lost — only its place in this ledger). [`src/main/resources/db/migration/V87__booking_overlap_exclusion_constraint.sql`, `BookingBatchService.createBatch`, `RescheduleService.acceptReschedule`]
+- D3: `ReviewFlagIT.flagReviewWithMissingCoachProfile_returns409WithCoachProfileMissing` cleans its orphan `coach_reviews` fixture in an in-test `try/finally` rather than in `@AfterEach` as Task 5 and the story's Dev Notes both specify (`orphanReviewId` is method-local, so `tearDown` cannot see it). The `finally` covers normal and assertion-failure paths; a throw from the seeding `transactionTemplate.execute` before the `try` is entered would leak a row. Harmless to other tests (random coach id, no FK) — convention deviation on a checked box, not a live hazard. [`src/test/java/com/softropic/skillars/platform/reviews/api/ReviewFlagIT.java:343-349`]
 
 ## Deferred from: code review of skillars-deferred-11-stripe-card-collection (2026-08-04)
 - `PackSessionServiceParityTest` mocks `findActivePacks` to already return ordered results and only asserts `packs.get(0)` — doesn't exercise the real repository `ORDER BY`, so a regression to actual query ordering wouldn't be caught. [`src/test/java/com/softropic/skillars/platform/payment/service/PackSessionServiceParityTest.java`]
@@ -51,7 +112,6 @@ Scope of that audit, so the gaps in it are explicit:
 
 ## Deferred from: code review of skillars-3-11-coach-slot-double-booking-prevention (2026-07-31)
 - D1: Coach-suspension race window between the unlocked initial status check and the later lock acquisition in `createBookingRequest` — `coach.getStatus()` is validated via a plain `findById` (`BookingService.java:154-164`), then the coach row is locked later (after the external `paymentGateway.isCoachPaymentReady` call, per this story's own explicit ordering requirement) without re-checking status. If an admin suspends the coach in that window, a booking can still be created. Pre-existing pattern (the unlocked initial read predates this story); the new lock creates a cheap opportunity to close it in a future change. [src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java:154-164,191]
-- D2: No DB-level exclusion constraint backing the new overlap prevention — all double-booking protection lives in app-layer checks at each write path (`createBookingRequest`, `acceptBooking`). Pre-existing architectural trade-off, explicitly justified in this story's own Dev Notes ("no dedicated calendar-slot row to lock"), but the code review found two other write paths (`BookingBatchService.createBatch`, `RescheduleService.acceptReschedule`) that already bypass the app-layer check entirely — worth revisiting as a DB-level backstop (e.g. Postgres `EXCLUDE USING gist` on a `tstzrange`) rather than relying on every future write path remembering to call it. [src/main/resources/db/migration/, src/main/java/com/softropic/skillars/platform/booking/repo/BookingRepository.java]
 
 ## Deferred from: code review of skillars-deferred-9-frontend-ux-polish (2026-07-02)
 - D1: AC7 `portal` sub-block left untranslated in `de/index.js` — pre-existing (already English in both `en` and `de` before this story); explicitly out of this story's scope per the Dev Agent Record. [de/index.js]
@@ -63,21 +123,13 @@ Scope of that audit, so the gaps in it are explicit:
 
 ## Deferred from: code review of skillars-10-2-coach-enforcement-strike-management (2026-06-30)
 - D1: `AFTER_COMMIT` listener failure silently drops refunds — `CancellationRefundService.onBookingCancelledByAdmin()` follows the same `REQUIRES_NEW` pattern as all other listeners; if the refund transaction fails after the suspension commits, the booking stays CANCELLED with no refund issued and no retry. Pre-existing pattern shared by `onBookingCancelledByCoach`, `onCoachNoShow`, etc. Address in a platform-wide payment resilience pass. [CancellationRefundService.java:onBookingCancelledByAdmin]
-- D3: N+1 strike count queries in `getCoachesUnderEnforcement` — one `countByCoachIdAndCreatedAtAfter` per coach per page. Spec acknowledges at MVP scale (admin-only, low traffic); optimize via batch query if list size becomes a concern. [AdminCoachEnforcementService.java:252]
 
 ## Deferred from: code review of skillars-10-1 patches (2026-06-30)
 - D1: `findBeforePivot`/`findAfterPivot` return empty context when pivot message `createdAt` is null at JPA layer — DB NOT NULL prevents this in production; only affects test fixtures that construct Message in-memory without setCreatedAt(). [MessageRepository.java:33-37]
 - D2: Context window (`findBeforePivot`/`findAfterPivot`) excludes soft-deleted messages while `findAllForAdmin` includes them — chronological gap in admin message detail view with no indication; intentional spec asymmetry between views; UX concern for service layer mapping. [MessageRepository.java:33-40]
 
 ## Deferred from: code review of skillars-10-1-admin-moderation-queue-message-content-actions (2026-06-30)
-- D1: `buildSummary()` MESSAGE_REPORT returns null `summary` when `message.content` is null — JSON serializes as `"summary": null` instead of a fallback string; depends on whether messages can have null content in this schema. [AdminQueueService.java:59]
 - D2: `findBeforePivot` / `findAfterPivot` strict `<`/`>` on `createdAt` excludes messages sharing the exact pivot timestamp from context window — low-probability collision but possible when two messages arrive within the same millisecond. [MessageRepository.java:33-37]
-
-## Deferred from: code review of skillars-9-3-review-visibility-flagging-admin-resolution (2026-06-30)
-- D1: Double-approve produces spurious audit log + event — No guard in `AdminReviewService.approveReview()` against re-approving an already-APPROVED review. Idempotent on state but creates duplicate `review_moderation_log` entries and fires duplicate `ReviewModerationResolvedEvent`. Defer to Epic 10 when admin UI enforces valid state transitions. [AdminReviewService.java:72-94] — **[AUDIT 2026-08-04: STILL OPEN. Epic 10 has shipped; `AdminReviewService.approveReview` reads `previousStatus` then sets APPROVED with no already-APPROVED guard. No longer blocked on anything.]**
-- D2: `ReviewApiAdvice` scope excludes `AdminReviewResource` — Advice covers `platform.reviews.api` only; admin controller is in `platform.admin.api`. `ResourceNotFoundException` from approve/block falls to the global handler, which may return a different error shape than the reviews API. Acceptable if global handler is consistent; verify before Epic 10 admin UI integration. [ReviewApiAdvice.java:21] — **[AUDIT 2026-08-04: STILL OPEN, AND MIS-TRACKED. This was AC4 of `skillars-deferred-5`, which is marked `done` in sprint-status.yaml — but `ReviewApiAdvice.java:20` is still `@RestControllerAdvice(basePackages = "com.softropic.skillars.platform.reviews.api")` with no `platform.admin.api`. A shipped story has an unmet AC.]**
-- D3: Coach flag guard silently skips when coach profile is missing — `coachProfileRepository.findById(...).ifPresent(...)` in `ReviewFlagService.flag()` returns empty if profile is deleted/deactivated; the coach-self-flag guard is silently bypassed. AC9 mandates profile retention, making this rare, but a stricter guard (throw if profile not found) would be safer. [ReviewFlagService.java:44-50]
-
 
 ## Deferred from: code review of skillars-8-4 (2026-06-27)
 - W3: Redundant explicit indexes in V66 — `idx_message_reports_message_id` and `idx_conversation_reports_conversation_id` are covered by the unique constraint leading column. Minor storage waste. [`V66__messaging_reports.sql:27-28`]
@@ -617,7 +669,6 @@ Scope of that audit, so the gaps in it are explicit:
 
 ## Deferred from: code review of skillars-7-3-cancellation-refund-reliability-strikes (2026-06-25)
 - D1: `buildSort()` has identical branches for "price" and "rating" — pre-existing; both fall back to `displayName`; price sort is applied in Java post-enrichment [`CoachSearchService.java:buildSort`]
-- D2: `processAdminRefund` has no auth check or amount validation — stub; admin endpoint wired in Story 10.x [`CancellationRefundService.java:processAdminRefund`] — **[AUDIT 2026-08-04: STILL OPEN. Epic 10 has shipped; `CancellationRefundService.java:138-143` still writes a ledger entry with no auth check and no amount validation.]**
 - D3: `GET /coaches/me/strikes` has no pagination — unbounded list; low risk at current scale [`ReliabilityStrikeResource.java`]
 - D4: Concurrent strike issuance race — two simultaneous events for the same coach may both read count=N and both fire the threshold event; inherent to non-locking count approach [`ReliabilityStrikeService.java:issue`]
 - D5: `CoachCancellationHistory.createdAt` with `@Column(updatable=false)` + `@PrePersist` — in-memory entity is null until DB round-trip if ever used with batch `saveAll`; low risk given single-save usage [`CoachCancellationHistory.java`]
@@ -692,6 +743,5 @@ Scope of that audit, so the gaps in it are explicit:
 ## Deferred from: code review of skillars-deferred-12-booking-payment-review-integrity (2026-08-04)
 - D1: AC3's coach-suspension race IT (`BookingServiceConcurrencyIT#createBookingRequest_coachSuspendedAfterUnlockedRead…`) orders the two threads with `Thread.sleep(1500)` rather than a real barrier. If the booking thread is slow to reach its unlocked read, the suspender commits first, the *unlocked* check rejects with the same `COACH_UNAVAILABLE`, and the test passes green even with the `entityManager.refresh(...)` line deleted. RED-then-GREEN was verified by hand at implementation time, so the fix is proven — but the test is not a durable guard. Assert on something only the locked re-read can produce. [`src/test/java/com/softropic/skillars/platform/booking/service/BookingServiceConcurrencyIT.java:450`]
 - D2: Parent-cancel can race the AFTER_COMMIT payment settle. `cancelBookingAsParent` reads `PAYMENT_PENDING`, computes `refundEligible=false` and commits `CANCELLED_PARENT` while `PaymentLifecycleService` is mid-capture; the listener's subsequent `PAYMENT_CAPTURED` from `CANCELLED_PARENT` is an illegal transition, thrown and swallowed inside the listener. Net: money captured, booking cancelled, no refund, no compensation. `transitionInternal` takes no lock and `@Version` does not help across the two commits. Narrow window, but real. [`src/main/java/com/softropic/skillars/platform/booking/service/BookingStateMachine.java:34`, `BookingService.java:563`]
-- D3: `AdminReviewService.blockReview()` still has the unguarded double-call gap and unlocked `findById` read that AC1 just closed for `approveReview()` — a double-block writes two moderation log rows and double-triggers the rating recompute. Explicitly out of scope for deferred-12 per its Dev Notes; carried forward. [`src/main/java/com/softropic/skillars/platform/admin/service/AdminReviewService.java:98`]
 - D4: `readStatusOrThrow` (extracted from `transitionInternal`) is now also used by `cancelBookingAsParent`, so a booking whose `status` column holds a value outside `BookingStatus` returns 404 "booking not found" to a parent who can see it in their list. A 409/5xx is the honest answer — the row exists, the server cannot interpret it. Only reachable via bad data or a rolling deploy that introduces a status the running node does not know. [`src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java:535`]
 - D5: `BatchAcceptPaymentIT` teardown issues unscoped `DELETE FROM main.refresh_tokens`, `main.login_attempts` and `main.sec`, and wraps `DELETE FROM payment.parent_credit_ledger` in `SET SESSION session_replication_role = 'replica'` / `'origin'` without try/finally — an exception in between returns a pooled connection with FK enforcement disabled for whichever test picks it up next. This mirrors the existing fixture pattern across the IT suite, so it is a suite-wide cleanup rather than a defect of this story. [`src/test/java/com/softropic/skillars/platform/booking/service/BatchAcceptPaymentIT.java:784`]

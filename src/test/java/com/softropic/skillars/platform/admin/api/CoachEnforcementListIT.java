@@ -156,6 +156,55 @@ class CoachEnforcementListIT {
         assertThat(allContent).hasSize(2);
         assertThat(allContent.get(0).get("coachId")).isEqualTo(coachProfileId1.toString());
         assertThat(allContent.get(1).get("coachId")).isEqualTo(coachProfileId2.toString());
+        // Pins the getOrDefault(id, 0L) zero-fill (AC6): coach 2 has no strikes and is therefore
+        // absent from the GROUP BY result entirely. Aggregation and the 30-day window are pinned
+        // separately by listEnforcementCoaches_countsOnlyInWindowStrikesAndAggregatesPerCoach.
+        assertThat(((Number) allContent.get(0).get("activeStrikes")).longValue()).isEqualTo(1L);
+        assertThat(((Number) allContent.get(1).get("activeStrikes")).longValue()).isEqualTo(0L);
+    }
+
+    /**
+     * Added by code review 2026-08-05. The single-strike fixture above leaves most of AC6 unpinned:
+     * with no coach holding more than one strike and no strike outside the window, a batched query
+     * that collapsed every group to 1, or one that dropped the {@code createdAt > :since} predicate
+     * altogether, would still pass. This seeds a second in-window strike and one 45 days old, so the
+     * expected count (2) distinguishes real aggregation from both mutations.
+     * <p>
+     * Seeded here rather than in {@code setUp} because {@code getEnforcementProfile_returnsAllFields}
+     * pins {@code activeStrikes == 1} on the untouched single-coach path. {@code tearDown} already
+     * deletes strikes by {@code coach_id}, so these rows need no extra cleanup.
+     */
+    @Test
+    void listEnforcementCoaches_countsOnlyInWindowStrikesAndAggregatesPerCoach() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_reliability_strikes (id, coach_id, booking_id, reason, created_at, acknowledged) VALUES (?, ?, gen_random_uuid(), 'COACH_NO_SHOW', ?, false)",
+                UUID.randomUUID(), coachProfileId1, Timestamp.from(Instant.now().minusSeconds(86400L)));
+            // 45 days old — outside the 30-day window, must not be counted.
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_reliability_strikes (id, coach_id, booking_id, reason, created_at, acknowledged) VALUES (?, ?, gen_random_uuid(), 'COACH_NO_SHOW', ?, false)",
+                UUID.randomUUID(), coachProfileId1, Timestamp.from(Instant.now().minusSeconds(45L * 86400L)));
+            return null;
+        });
+
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+        ResponseEntity<Map> allResp = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/admin/coaches",
+            HttpMethod.GET, null, authenticatedHeaders(adminCookies), Map.class);
+        assertThat(allResp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> allContent = (List<Map<String, Object>>) allResp.getBody().get("content");
+        assertThat(allContent).hasSize(2);
+
+        assertThat(allContent.get(0).get("coachId")).isEqualTo(coachProfileId1.toString());
+        assertThat(((Number) allContent.get(0).get("activeStrikes")).longValue())
+            .as("two in-window strikes must aggregate to 2; the 45-day-old one must be excluded")
+            .isEqualTo(2L);
+
+        assertThat(allContent.get(1).get("coachId")).isEqualTo(coachProfileId2.toString());
+        assertThat(((Number) allContent.get(1).get("activeStrikes")).longValue())
+            .as("a coach absent from the GROUP BY result must report 0, not fail")
+            .isEqualTo(0L);
     }
 
     @Test

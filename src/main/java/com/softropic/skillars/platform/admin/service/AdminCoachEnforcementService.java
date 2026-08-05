@@ -44,8 +44,10 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -260,8 +262,14 @@ public class AdminCoachEnforcementService {
         Page<CoachProfile> coaches = coachProfileRepository.findByStatusInOrderByStatusChangedAtAsc(statuses, pageable);
 
         OffsetDateTime since = OffsetDateTime.now().minusDays(30);
+        List<UUID> ids = coaches.getContent().stream().map(CoachProfile::getId).toList();
+        Map<UUID, Long> strikeCounts = ids.isEmpty()
+            ? Map.of()
+            : strikeRepository.countByCoachIdInAndCreatedAtAfter(ids, since).stream()
+                .collect(Collectors.toMap(row -> (UUID) row[0], row -> (Long) row[1]));
+
         return coaches.map(coach -> {
-            long activeStrikes = strikeRepository.countByCoachIdAndCreatedAtAfter(coach.getId(), since);
+            long activeStrikes = strikeCounts.getOrDefault(coach.getId(), 0L);
             return new CoachEnforcementListItemDto(
                 coach.getId(), coach.getDisplayName(), coach.getStatus().name(),
                 activeStrikes, coach.getStatusChangedAt());

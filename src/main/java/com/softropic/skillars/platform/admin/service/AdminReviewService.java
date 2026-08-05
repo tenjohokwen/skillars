@@ -108,9 +108,15 @@ public class AdminReviewService {
 
     @Transactional
     public void blockReview(UUID reviewId, String reason, Long adminId) {
-        CoachReview review = reviewRepository.findById(reviewId)
+        // Pessimistic read, not findById: same admin-double-click race as approveReview above.
+        // This is the first read of the row in this method, so the locked query returns fresh state.
+        CoachReview review = reviewRepository.findByIdForUpdate(reviewId)
             .orElseThrow(() -> new ResourceNotFoundException("Review not found", "coach_review"));
         ReviewModerationStatus previousStatus = review.getModerationStatus();
+
+        if (previousStatus == ReviewModerationStatus.BLOCKED) {
+            throw new OperationNotAllowedException("Review already blocked", ReviewErrorCode.ALREADY_BLOCKED);
+        }
 
         review.setModerationStatus(ReviewModerationStatus.BLOCKED);
         review.setHeldReason(null);

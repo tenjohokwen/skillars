@@ -18,6 +18,8 @@ public enum ReviewErrorCode implements ErrorCode {
     CANNOT_FLAG_OWN_COACHED_REVIEW("reviews.cannotFlagOwnCoachedReview"),
     ALREADY_FLAGGED("reviews.alreadyFlagged"),
     ALREADY_APPROVED("reviews.alreadyApproved"),
+    ALREADY_BLOCKED("reviews.alreadyBlocked"),
+    COACH_PROFILE_MISSING("reviews.coachProfileMissing"),
     REVIEW_NOT_FOUND("reviews.reviewNotFound");
 
     private final String code;

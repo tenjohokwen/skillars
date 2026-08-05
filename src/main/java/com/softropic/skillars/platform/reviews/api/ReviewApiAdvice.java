@@ -38,8 +38,21 @@ public class ReviewApiAdvice {
         if (ReviewErrorCode.ALREADY_SUBMITTED.getErrorCode().equals(code)
                 || ReviewErrorCode.RESPONSE_ALREADY_SUBMITTED.getErrorCode().equals(code)
                 || ReviewErrorCode.ALREADY_FLAGGED.getErrorCode().equals(code)
-                || ReviewErrorCode.ALREADY_APPROVED.getErrorCode().equals(code)) {
+                || ReviewErrorCode.ALREADY_APPROVED.getErrorCode().equals(code)
+                || ReviewErrorCode.ALREADY_BLOCKED.getErrorCode().equals(code)) {
             status = HttpStatus.CONFLICT;
+        } else if (ReviewErrorCode.COACH_PROFILE_MISSING.getErrorCode().equals(code)) {
+            // Deliberately 500, not 409 (code review 2026-08-05 overrode deferred-13 AC4, which
+            // specified CONFLICT). An orphaned coach_profiles row is a data-integrity failure the
+            // caller did not cause and cannot resolve by retrying — unlike ALREADY_BLOCKED, which is
+            // a genuine conflict. Filing it as 4xx would hide it in the "user error" bucket where
+            // 5xx-keyed alerting never sees it. The state is unreachable in production today
+            // (GdprErasureService anonymises coach profiles, never deletes them), so if this ever
+            // fires it should page. Logged at ERROR below for the same reason.
+            // This branch must stay explicit: the else fallback is 403, so an unlisted code would
+            // silently become FORBIDDEN rather than reaching any 5xx.
+            log.error("Data-integrity failure: {} — {}", code, ex.getMessage());
+            status = HttpStatus.INTERNAL_SERVER_ERROR;
         } else if (ReviewErrorCode.BODY_TOO_LONG.getErrorCode().equals(code)
                 || ReviewErrorCode.RESPONSE_TOO_LONG.getErrorCode().equals(code)) {
             status = HttpStatus.BAD_REQUEST;
