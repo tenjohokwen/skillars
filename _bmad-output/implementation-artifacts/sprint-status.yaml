@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-08-05 # skillars-deferred-14 story created → ready-for-dev
+# last_updated: 2026-08-05 # skillars-deferred-15 → review
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-08-05 # skillars-deferred-14 story created → ready-for-dev
+last_updated: 2026-08-05 # skillars-deferred-15 → review
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -319,3 +319,30 @@ development_status:
   # Also deletes 2 stale deferred-work.md entries verified already closed: 3-11 D1 (closed by deferred-12's
   # locked coach re-read) and 3-3 Group A canonicalTimezone IANA validation (closed in BookingService).
   skillars-deferred-14-moderation-listener-batch-overlap-integrity: review  # 2026-08-05: all 8 ACs done, full mvn -o verify green (812 unit + 850 IT, 0 failures). AC2 mutation-verified in both directions — with AC1's PENDING guard disabled the new ReviewModerationIT race test fails with "expected BLOCKED but was APPROVED"; guard restored, passes. AC3's pre-fix 500 was reproduced before any fix, and the reproduction CORRECTED the story's predicted mechanism: not UnexpectedRollbackException but a commit-time batched-flush DataIntegrityViolationException carrying constraint [null], which is why ApiAdvice's name-keyed 409 mapping (wired by Story 3.11) never matched and the caller got generic.unknown/500. That means deferred-13 D2's CONCLUSION (500) was right for a reason neither D2 nor the story-creation audit had identified, even though D2's stated reason (no mapping exists) was wrong. AC3a added during story review: per-booking commits made BookingBatchStatusListener a second, earlier writer of batch.status, so the batch write + settlement event now commit together in a trailing REQUIRES_NEW tx; acceptAll is explicitly documented as no longer atomic. All 3 predicted test breakages materialised and were fixed as specified. One IT assertion corrected mid-implementation (not a spec change): the accepted batch booking does not rest in PAYMENT_PENDING — it settles onward, which only became observable because the fix works; assertion now also pins a payment.booking_payments row so a healthy-looking batch row with no settlement cannot pass
+
+  # Deferred 15: PAYMENT_PENDING Recovery Sweeper & Accept-Path Concurrency Integrity
+  # Closes deferred-14 story-creation D1 (no sweeper for bookings stranded in PAYMENT_PENDING — the
+  # residual window deferred-14 AC3a narrowed but deliberately did not close; a stranded row holds the
+  # coach's slot via ACTIVE_SLOT_STATUSES + the V87 constraint and only the parent can clear it),
+  # deferred-14 review D1 (reschedule accept/decline TOCTOU — accept re-checks nothing after the coach
+  # lock and decline takes no lock at all), D2 (no SUSPENDED check on any of the three accept paths),
+  # D4 (batch-status formula counts only the REQUESTED subset at loop start), and 7-2 Group 2 D2
+  # (session-pack expiry-warning email).
+  # Two ledger corrections made during story creation: D2 is broader than filed — the accept paths never
+  # check coach status at all, and AdminCoachEnforcementService.suspendCoach takes no lock, so the
+  # accept-side lock serialises against nothing. And 7-2 D2's observable behaviour is ZERO warning
+  # emails, not fourteen: SessionPackExpiryNotifier publishes with no transaction bound and its
+  # @TransactionalEventListener(AFTER_COMMIT) discards the event — so delivery and dedupe must ship
+  # together or the fix turns silence into 14 emails per pack.
+  # Also downgrades (does not close) 8-2 D1/D2: no path in src/main deletes a player_profiles row.
+  # SPEC CORRECTED 2026-08-05 after review of the draft: AC1's two "money-safety guards" were both wrong.
+  # chargeAndCapture/chargeAndCaptureForBatch run BEFORE the DB writes recording them, so a crash leaves
+  # money captured with no booking_payments row and no ledger entry — the draft sweeper would have declined
+  # already-charged bookings. And the credit-ledger guard's premise was backwards: writeLedgerEntry is plain
+  # @Transactional, so the batch BOOKING_DEDUCTION commits AFTER the per-booking REQUIRES_NEW confirms and
+  # has rolled back in the very window it was meant to detect. No substitute signal exists (no capture lookup
+  # on PaymentGateway, no payment_intent.*/charge.* webhook handler, lastPaymentIntentId is transactional and
+  # per-parent). AC1 now auto-declines ONLY pack-funded bookings (that path never calls Stripe) and
+  # report-only-logs the rest; new deferred-work item D1 tracks the pre-capture-record fix that would
+  # allow full coverage, incl. making the 4 existsById idempotency checks status-aware.
+  skillars-deferred-15-payment-pending-sweeper-accept-path-integrity: review  # 2026-08-05: all 7 ACs done, full mvn -o verify green (805 unit + 866 IT, 0 failures, 20:39). Both pre-fix behaviours reproduced before any code was written: a booking stranded in PAYMENT_PENDING survives every scheduler AND blocks the coach's slot (booking.slotUnavailable; Postgres' excl_bkg_coach_slot_overlap rejected a second seed independently), and the pack expiry warning is delivered ZERO times, not fourteen — confirming story creation's correction to 7-2 Group 2 D2 by execution. THREE SPEC CORRECTIONS: (1) AC4's locked re-check alone leaves acceptAll returning a silent no-op for a suspended coach, because the per-booking loop swallows the throw — shipped an additional UNLOCKED pre-check in acceptAll, deliberately not a locked one (taking the coach lock there would make every per-booking REQUIRES_NEW transaction block on its own caller's lock until the 5s timeout). (2) AC3's re-check is inert without entityManager.refresh — findByIdForUpdate is JPQL and returns the already-managed stale instance. (3) Task 6's expectation that the AC5 IT would discriminate is WRONG: with the naive formula restored the IT still passes, because the naive value is only wrong precisely when updateBatchStatusFromBooking stops early-returning, so the AFTER_COMMIT listener recomputes after settlement and repairs it before the response is observable; AC5's proof is its unit test instead (expected PARTIALLY_ACCEPTED but was FULLY_ACCEPTED under mutation). Code review 2026-08-05: ZERO AC violations; 6 patches applied, 1 rejected, 4 deferred. Headline review finding — BOTH writer-side locks this story added (AdminCoachEnforcementService.suspendCoach, RescheduleService.declineReschedule) were COMPLETELY UNTESTED: every existing test drove them sequentially and the accept-side race tests staged their contending write with raw SELECT FOR UPDATE SQL, a lock-shaped stand-in that passes against a plain findById. Verified by mutation — reverting both to findById passed the entire suite. Exactly the 'decorative lock' failure deferred-13's review recorded, reproduced inside the story that cites it. Closed with two tests using the real service as the method under test, both mutation-verified: the stale-read suspension redoes the suspension and leaves a duplicate COACH_SUSPEND audit row (expected 0 but was 1), the stale-read decline overwrites a committed accept. Rejected the dedupe/backoff proposal for reportUnrecoverable — repetition IS the alert; silencing an unresolved booking with money possibly captured at Stripe would be strictly worse than noise. TESTING TRAP recorded for the next scheduler test: invoking a @SchedulerLock method from a test goes through the proxy, so with lockAtLeastFor=PT2M every call after the first is silently skipped; the first fix (DELETE the shedlock row) is WORSE than nothing because JdbcTemplateLockProvider caches inserted names and thereafter only UPDATEs — 5 of 6 sweeps were skipped and the three negative cases passed vacuously. BasePaymentIT.releaseSchedulerLock now backdates lock_until. Also corrected: the '812 unit' baseline quoted since deferred-14 was inflated — target/surefire-reports/ holds report files for two ITs (SessionPackPaymentResourceIT 6 + SubscriptionLifecycleIT 13 = 19), so the true unit baseline was 793. DEFERRED (4 items in deferred-work.md): credit-funded stranded bookings still cannot be swept (no durable pre-capture record — the residual AC1 knowingly leaves open)

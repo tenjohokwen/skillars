@@ -58,6 +58,9 @@ public class SessionPackPurchase {
     @Column(name = "expired_notified_at")
     private Instant expiredNotifiedAt;
 
+    @Column(name = "expiry_warned_at")
+    private Instant expiryWarnedAt;
+
     @Column(name = "stripe_payment_intent_id")
     private String stripePaymentIntentId;
 

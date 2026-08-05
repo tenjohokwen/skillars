@@ -406,6 +406,56 @@ class BookingBatchResourceIT {
         assertThat(batchStatus).isEqualTo("PARTIALLY_ACCEPTED");
     }
 
+    /**
+     * Deferred-15 AC5. A booking declined individually BEFORE acceptAll runs is not in the REQUESTED
+     * subset the loop iterates, so the old {@code acceptedIds.size() == requestedBookings.size()}
+     * formula could never see it and wrote FULLY_ACCEPTED over a batch that was not.
+     *
+     * <p>The AFTER_COMMIT listener always computed this correctly over all rows; since Deferred-14's
+     * per-booking commits it fires mid-loop and the trailing transaction then overwrote its correct
+     * value with the naive one. Both writers now share {@code computeBatchStatus}.
+     *
+     * <p><strong>This test is an end-state regression guard; it does NOT discriminate the fix, and
+     * no IT at this level can.</strong> Mutation-verified 2026-08-05: with the naive
+     * {@code acceptedIds.size() == requestedBookings.size()} formula restored, this test still
+     * passes. The reason is structural — the naive formula is only wrong when every REQUESTED
+     * booking was accepted, which is exactly when {@code updateBatchStatusFromBooking} stops
+     * early-returning; settlement then republishes BookingStatusChangedEvent, the listener recomputes
+     * over all rows after the trailing commit, and repairs the value before the request is observable.
+     * The real exposure is the transient wrong read in between. The discriminating evidence for AC5
+     * is {@code BookingBatchServiceTest.acceptAll_batchAlreadyContainsADeclinedBooking_endsPartiallyAccepted},
+     * where no listener exists to clean up: it fails with "expected PARTIALLY_ACCEPTED but was
+     * FULLY_ACCEPTED" under the same mutation. Do not delete that unit test in favour of this one.
+     */
+    @Test
+    void acceptAll_withASiblingDeclinedBeforehand_endsPartiallyAccepted() {
+        UUID batchId = createBatchInDb(3);
+        UUID declinedId = jdbcTemplate.queryForList(
+            "SELECT id FROM booking.bookings WHERE batch_id = ? ORDER BY requested_start_time", UUID.class, batchId)
+            .get(2);
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update("UPDATE booking.bookings SET status = 'DECLINED' WHERE id = ?", declinedId);
+            return null;
+        });
+
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+        ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/batches/" + batchId + "/accept-all",
+            HttpMethod.POST, null, authenticatedHeaders(coachCookies), Void.class
+        );
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM booking.bookings WHERE batch_id = ? AND status <> 'REQUESTED' AND status <> 'DECLINED'",
+            Integer.class, batchId))
+            .as("the two REQUESTED slots must still be accepted")
+            .isEqualTo(2);
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM booking.booking_batches WHERE id = ?", String.class, batchId))
+            .as("two of three accepted is not a fully accepted batch — this read FULLY_ACCEPTED before AC5")
+            .isEqualTo("PARTIALLY_ACCEPTED");
+    }
+
     // ---- Helpers ----
 
     private UUID createBatchInDb(int bookingCount) {

@@ -324,6 +324,82 @@ class BookingServiceConcurrencyIT {
             .isEmpty();
     }
 
+    /**
+     * Deferred-15 AC4: an admin suspends the coach while a coach-accept is parked on the coach-row
+     * lock. Same deterministic staging as the createBookingRequest test above — the accepting thread
+     * passes its unlocked read, blocks on findByIdForUpdate, and is granted the lock over a row that
+     * is by then SUSPENDED.
+     *
+     * <p>This is more than an abstract race: suspendCoach cancels only the coach's REQUESTED
+     * bookings, so a booking accepted inside its window moves to PAYMENT_PENDING and survives the
+     * suspension entirely, invisible to that sweep.
+     *
+     * <p>Mutation-verified in both directions. Removing the entityManager.refresh alone is enough to
+     * break it: findByIdForUpdate is JPQL and the coach row is already managed from the findByUserId
+     * earlier in acceptBooking, so the locked read hands back the stale ACTIVE instance and the
+     * check never fires. Asserting on the booking's final stored status, not on whether it waited.
+     */
+    @Test
+    void acceptBooking_coachSuspendedAfterUnlockedRead_isRejectedWithCoachUnavailable() throws Exception {
+        Booking booking = seedRequestedBooking(PARENT_ID_1, PLAYER_ID_1, slotStart, slotEnd);
+
+        CountDownLatch suspensionStagedAndLockHeld = new CountDownLatch(1);
+        AtomicReference<Throwable> suspenderFailure = new AtomicReference<>();
+        AtomicReference<Throwable> acceptOutcome = new AtomicReference<>();
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        Future<?> suspender = executor.submit(() -> {
+            try {
+                transactionTemplate.execute(status -> {
+                    jdbcTemplate.queryForObject(
+                        "SELECT status FROM marketplace.coach_profiles WHERE id = ? FOR UPDATE",
+                        String.class, coachProfileId);
+                    jdbcTemplate.update(
+                        "UPDATE marketplace.coach_profiles SET status = 'SUSPENDED' WHERE id = ?", coachProfileId);
+                    suspensionStagedAndLockHeld.countDown();
+                    try {
+                        Thread.sleep(1500);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return null;
+                });
+            } catch (Throwable t) {
+                suspenderFailure.set(t);
+            }
+        });
+
+        Future<?> accepter = executor.submit(() -> {
+            try {
+                suspensionStagedAndLockHeld.await(10, TimeUnit.SECONDS);
+                bookingService.acceptBooking(booking.getId(), COACH_USER_ID);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (Throwable t) {
+                acceptOutcome.set(t);
+            }
+        });
+
+        suspender.get(30, TimeUnit.SECONDS);
+        accepter.get(30, TimeUnit.SECONDS);
+        executor.shutdown();
+
+        if (suspenderFailure.get() != null) {
+            throw new AssertionError("Suspending thread failed", suspenderFailure.get());
+        }
+
+        assertThat(acceptOutcome.get())
+            .as("the accept must fail once the locked re-read sees the SUSPENDED coach")
+            .isInstanceOf(OperationNotAllowedException.class);
+        assertThat(((OperationNotAllowedException) acceptOutcome.get()).getErrorCode())
+            .isEqualTo(BookingError.COACH_UNAVAILABLE);
+        assertThat(bookingRepository.findById(booking.getId()).orElseThrow().getStatus())
+            .as("a booking accepted here would rest in PAYMENT_PENDING, which suspendCoach's "
+                + "REQUESTED-only cancellation sweep never sees")
+            .isEqualTo("REQUESTED");
+    }
+
     private Booking seedRequestedBooking(long parentId, long playerId, Instant start, Instant end) {
         return transactionTemplate.execute(status -> {
             Booking booking = new Booking();

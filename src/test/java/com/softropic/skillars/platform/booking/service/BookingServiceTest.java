@@ -286,6 +286,34 @@ class BookingServiceTest {
         verify(eventPublisher).publishEvent(any(BookingAcceptedEvent.class));
     }
 
+    /**
+     * Deferred-15 AC4, review follow-up. The equivalent check in BookingBatchService and
+     * RescheduleService each got a fast mock-based test; this one was reachable only through the
+     * thread-based BookingServiceConcurrencyIT and the end-to-end SuspendedCoachBookingBlockIT.
+     * Note what this test does NOT prove: entityManager is a mock here, so refresh() is a no-op and
+     * the locked instance is simply whatever findByIdForUpdate returns. That the refresh is load
+     * bearing against a real persistence context is proven only by the IT.
+     */
+    @Test
+    void acceptBooking_suspendedCoach_throwsCoachUnavailable() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        CoachProfile suspended = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        suspended.setStatus(CoachProfileStatus.SUSPENDED);
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(suspended));
+
+        assertThatThrownBy(() -> bookingService.acceptBooking(booking.getId(), COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.COACH_UNAVAILABLE));
+
+        assertThat(booking.getStatus()).isEqualTo("REQUESTED");
+        verify(eventPublisher, never()).publishEvent(any(BookingAcceptedEvent.class));
+    }
+
     @Test
     void acceptBooking_alreadyDeclined_throwsBookingStateTransitionException() {
         Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "DECLINED");

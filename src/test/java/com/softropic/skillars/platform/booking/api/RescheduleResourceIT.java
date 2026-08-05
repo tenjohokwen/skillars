@@ -3,7 +3,9 @@ package com.softropic.skillars.platform.booking.api;
 import com.softropic.skillars.config.TestConfig;
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.booking.service.RescheduleService;
 import com.softropic.skillars.platform.security.SecurityIT;
+import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -30,6 +32,12 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -62,6 +70,7 @@ class RescheduleResourceIT {
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private HttpTestClient httpTestClient;
     @Autowired private PasswordEncoder passwordEncoder;
+    @Autowired private RescheduleService rescheduleService;
 
     @LocalServerPort private int randomServerPort;
 
@@ -408,6 +417,182 @@ class RescheduleResourceIT {
     }
 
     // ---- Helpers ----
+
+    /**
+     * Deferred-15 AC3: accept and decline are mutually exclusive.
+     *
+     * <p>The race is driven deterministically rather than by luck, following
+     * BookingServiceConcurrencyIT: a second connection takes {@code SELECT … FOR UPDATE} on the
+     * reschedule row and flips it to DECLINED without committing. The accepting thread's unlocked
+     * read at the top of acceptReschedule therefore still observes PENDING (READ COMMITTED) — the
+     * exact stale view a caller holds while parked — and then blocks on findByIdForUpdate. Once the
+     * declining transaction commits, the accept acquires the lock over a row that is now DECLINED.
+     *
+     * <p>The assertion is on FINAL STORED STATE, not on whether the accept waited: per deferred-13,
+     * barrier tests routinely pass against unfixed code because waiting is not the discriminator.
+     * Mutation-verified in both directions — remove either the post-lock PENDING re-check or the
+     * entityManager.refresh that precedes it and the accept overwrites the decline with ACCEPTED.
+     */
+    @Test
+    void acceptReschedule_declineCommitsWhileAcceptWaitsOnTheLock_acceptFailsAndDeclineStands() throws Exception {
+        Instant proposedStart = Instant.now().plus(9, ChronoUnit.DAYS);
+        Instant proposedEnd = proposedStart.plus(1, ChronoUnit.HOURS);
+        UUID rescheduleId = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO booking.booking_reschedule_requests (id, booking_id, proposed_by, " +
+                "proposed_start_time, proposed_end_time, status) VALUES (?, ?, 'PARENT', ?, ?, 'PENDING')",
+                rescheduleId, bookingId, Timestamp.from(proposedStart), Timestamp.from(proposedEnd));
+            return null;
+        });
+        Instant originalStart = jdbcTemplate.queryForObject(
+            "SELECT requested_start_time FROM booking.bookings WHERE id = ?", Timestamp.class, bookingId).toInstant();
+
+        CountDownLatch declineStagedAndLockHeld = new CountDownLatch(1);
+        AtomicReference<Throwable> declinerFailure = new AtomicReference<>();
+        AtomicReference<Throwable> acceptOutcome = new AtomicReference<>();
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        Future<?> decliner = executor.submit(() -> {
+            try {
+                transactionTemplate.execute(status -> {
+                    jdbcTemplate.queryForObject(
+                        "SELECT status FROM booking.booking_reschedule_requests WHERE id = ? FOR UPDATE",
+                        String.class, rescheduleId);
+                    jdbcTemplate.update(
+                        "UPDATE booking.booking_reschedule_requests SET status = 'DECLINED' WHERE id = ?",
+                        rescheduleId);
+                    declineStagedAndLockHeld.countDown();
+                    // Hold the lock long enough for the accept to pass its unlocked read and block
+                    // on findByIdForUpdate; the repository's lock timeout is 5s.
+                    try {
+                        Thread.sleep(1500);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return null;
+                });
+            } catch (Throwable t) {
+                declinerFailure.set(t);
+            }
+        });
+
+        Future<?> accepter = executor.submit(() -> {
+            try {
+                declineStagedAndLockHeld.await(10, TimeUnit.SECONDS);
+                rescheduleService.acceptReschedule(bookingId, rescheduleId, COACH_USER_ID);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (Throwable t) {
+                acceptOutcome.set(t);
+            }
+        });
+
+        decliner.get(30, TimeUnit.SECONDS);
+        accepter.get(30, TimeUnit.SECONDS);
+        executor.shutdown();
+
+        if (declinerFailure.get() != null) {
+            throw new AssertionError("Declining thread failed", declinerFailure.get());
+        }
+
+        assertThat(acceptOutcome.get())
+            .as("the accept must fail once its locked re-read sees the committed decline")
+            .isInstanceOf(OperationNotAllowedException.class);
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM booking.booking_reschedule_requests WHERE id = ?", String.class, rescheduleId))
+            .as("the coach's decline must stand — this is the discriminator, not whether the accept waited")
+            .isEqualTo("DECLINED");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT requested_start_time FROM booking.bookings WHERE id = ?", Timestamp.class, bookingId).toInstant())
+            .as("a silently overwritten decline also rewrites the booking's times")
+            .isEqualTo(originalStart);
+    }
+
+    /**
+     * Deferred-15 AC3, review follow-up — the mirror image of the test above, and the only thing
+     * that exercises declineReschedule's own lock.
+     *
+     * <p>The accept-side test stages its contending decline with raw {@code SELECT … FOR UPDATE}
+     * SQL, which is a lock-shaped stand-in: it proves acceptReschedule re-reads under a lock, but it
+     * would pass just as well if declineReschedule had kept its plain findById. Mutual exclusion
+     * needs BOTH sides to take the lock, so both sides need a test. Here the real
+     * declineReschedule is the method under test and the accept is the stand-in.
+     *
+     * <p>Same discriminator as before — not whether the decline waits, but what it observes once
+     * unblocked. A locked read taken after the concurrent accept commits sees ACCEPTED and refuses;
+     * a plain findById holds the stale PENDING snapshot and silently overwrites the accept with
+     * DECLINED, leaving the booking's rewritten times behind with a DECLINED request beside them.
+     */
+    @Test
+    void declineReschedule_acceptCommitsWhileDeclineWaitsOnTheLock_declineFailsAndAcceptStands() throws Exception {
+        Instant proposedStart = Instant.now().plus(11, ChronoUnit.DAYS);
+        Instant proposedEnd = proposedStart.plus(1, ChronoUnit.HOURS);
+        UUID rescheduleId = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO booking.booking_reschedule_requests (id, booking_id, proposed_by, " +
+                "proposed_start_time, proposed_end_time, status) VALUES (?, ?, 'PARENT', ?, ?, 'PENDING')",
+                rescheduleId, bookingId, Timestamp.from(proposedStart), Timestamp.from(proposedEnd));
+            return null;
+        });
+
+        CountDownLatch acceptStagedAndLockHeld = new CountDownLatch(1);
+        AtomicReference<Throwable> stagerFailure = new AtomicReference<>();
+        AtomicReference<Throwable> declineOutcome = new AtomicReference<>();
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        Future<?> stager = executor.submit(() -> {
+            try {
+                transactionTemplate.execute(status -> {
+                    jdbcTemplate.queryForObject(
+                        "SELECT status FROM booking.booking_reschedule_requests WHERE id = ? FOR UPDATE",
+                        String.class, rescheduleId);
+                    jdbcTemplate.update(
+                        "UPDATE booking.booking_reschedule_requests SET status = 'ACCEPTED' WHERE id = ?",
+                        rescheduleId);
+                    acceptStagedAndLockHeld.countDown();
+                    try {
+                        Thread.sleep(1500);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return null;
+                });
+            } catch (Throwable t) {
+                stagerFailure.set(t);
+            }
+        });
+
+        Future<?> decliner = executor.submit(() -> {
+            try {
+                acceptStagedAndLockHeld.await(10, TimeUnit.SECONDS);
+                rescheduleService.declineReschedule(bookingId, rescheduleId, COACH_USER_ID);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (Throwable t) {
+                declineOutcome.set(t);
+            }
+        });
+
+        stager.get(30, TimeUnit.SECONDS);
+        decliner.get(30, TimeUnit.SECONDS);
+        executor.shutdown();
+
+        if (stagerFailure.get() != null) {
+            throw new AssertionError("Staging thread failed", stagerFailure.get());
+        }
+
+        assertThat(declineOutcome.get())
+            .as("the decline must fail once its locked re-read sees the committed accept")
+            .isInstanceOf(OperationNotAllowedException.class);
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM booking.booking_reschedule_requests WHERE id = ?", String.class, rescheduleId))
+            .as("the accept must stand — a stale-read decline overwrites it silently")
+            .isEqualTo("ACCEPTED");
+    }
 
     private void insertConfirmedBooking(UUID id) {
         Instant futureStart = Instant.now().plus(2, ChronoUnit.DAYS);

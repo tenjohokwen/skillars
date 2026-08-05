@@ -63,6 +63,15 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
         """)
     List<Booking> findRequestedBookingsOlderThan(@Param("threshold") Instant threshold);
 
+    // Deferred-15 AC1. updatedAt, not createdAt: createdAt predates the accept by however long the
+    // request sat in the coach's inbox, so it says nothing about how long settlement has been stuck.
+    // updatedAt is stamped by Booking's @PreUpdate on the transition into PAYMENT_PENDING.
+    @Query("""
+        SELECT b FROM Booking b
+        WHERE b.status = 'PAYMENT_PENDING' AND b.updatedAt < :threshold
+        """)
+    List<Booking> findPaymentPendingOlderThan(@Param("threshold") Instant threshold);
+
     // Uses <= :windowEnd (not BETWEEN :now AND :windowEnd) so bookings whose start time
     // is already past (scheduler downtime) are caught as well — catch-up behaviour.
     @Query("""

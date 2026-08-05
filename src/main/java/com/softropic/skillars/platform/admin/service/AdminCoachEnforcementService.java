@@ -98,7 +98,11 @@ public class AdminCoachEnforcementService {
 
     @Transactional
     public void suspendCoach(UUID coachId, String reason, boolean notifyCoach, Long adminId) {
-        CoachProfile coach = coachProfileRepository.findById(coachId)
+        // Deferred-15 AC4: locked read. The three accept paths re-check SUSPENDED under this same
+        // row lock — but two writers serialise only when BOTH take it. With a plain findById the
+        // suspension could read, write and commit entirely inside the window an accept path holds
+        // its lock, making that lock decorative.
+        CoachProfile coach = coachProfileRepository.findByIdForUpdate(coachId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
 
         if (coach.getStatus() == CoachProfileStatus.SUSPENDED) {

@@ -43,6 +43,7 @@ class RescheduleServiceTest {
     @Mock private CoachProfileRepository coachProfileRepository;
     @Mock private UserRepository userRepository;
     @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private jakarta.persistence.EntityManager entityManager;
 
     private RescheduleService service;
 
@@ -58,7 +59,8 @@ class RescheduleServiceTest {
     @BeforeEach
     void setUp() {
         service = new RescheduleService(
-            bookingService, bookingRepository, rescheduleRepo, coachProfileRepository, userRepository, eventPublisher
+            bookingService, bookingRepository, rescheduleRepo, coachProfileRepository, userRepository,
+            eventPublisher, entityManager
         );
 
         confirmedBooking = new Booking();
@@ -73,6 +75,7 @@ class RescheduleServiceTest {
         coach.setId(COACH_ID);
         coach.setUserId(COACH_USER_ID);
         coach.setDisplayName("Test Coach");
+        coach.setStatus(com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus.ACTIVE);
     }
 
     @Test
@@ -163,6 +166,8 @@ class RescheduleServiceTest {
         pending.setProposedStartTime(proposedStart);
         pending.setProposedEndTime(proposedEnd);
         when(rescheduleRepo.findById(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+        // Deferred-15 AC3: the authoritative read is the locked one.
+        when(rescheduleRepo.findByIdForUpdate(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
         when(rescheduleRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         // Deferred-14 AC4: accept now locks the coach and checks the PROPOSED window for overlap.
         when(coachProfileRepository.findByIdForUpdate(coach.getId())).thenReturn(Optional.of(coach));
@@ -196,6 +201,7 @@ class RescheduleServiceTest {
         pending.setProposedStartTime(proposedStart);
         pending.setProposedEndTime(proposedEnd);
         when(rescheduleRepo.findById(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+        when(rescheduleRepo.findByIdForUpdate(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
         when(coachProfileRepository.findByIdForUpdate(coach.getId())).thenReturn(Optional.of(coach));
         when(bookingRepository.findOverlappingBookings(
             coach.getId(), proposedStart, proposedEnd,
@@ -249,7 +255,8 @@ class RescheduleServiceTest {
         BookingRescheduleRequest pending = new BookingRescheduleRequest();
         pending.setBookingId(BOOKING_ID);
         pending.setStatus("PENDING");
-        when(rescheduleRepo.findById(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+        // Deferred-15 AC3: decline takes the same reschedule-row lock accept does.
+        when(rescheduleRepo.findByIdForUpdate(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
         when(rescheduleRepo.save(any())).thenAnswer(i -> i.getArgument(0));
 
         service.declineReschedule(BOOKING_ID, RESCHEDULE_ID, COACH_USER_ID);
@@ -260,5 +267,65 @@ class RescheduleServiceTest {
         ArgumentCaptor<RescheduleDeclinedEvent> captor = ArgumentCaptor.forClass(RescheduleDeclinedEvent.class);
         verify(eventPublisher).publishEvent(captor.capture());
         assertThat(captor.getValue().getBookingId()).isEqualTo(BOOKING_ID);
+    }
+
+    /**
+     * Deferred-15 AC3. The unlocked read at the top of acceptReschedule still says PENDING — that is
+     * exactly the stale view a caller holds while parked on the lock. Only the locked re-read sees
+     * the decline that committed in the meantime, and it is what must stop the overwrite.
+     */
+    @Test
+    void acceptReschedule_declinedWhileWaitingForTheLock_throwsAndLeavesBookingUntouched() {
+        Instant originalStart = confirmedBooking.getRequestedStartTime();
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+
+        BookingRescheduleRequest staleView = new BookingRescheduleRequest();
+        staleView.setBookingId(BOOKING_ID);
+        staleView.setStatus("PENDING");
+        staleView.setProposedStartTime(Instant.now().plus(5, ChronoUnit.DAYS));
+        staleView.setProposedEndTime(Instant.now().plus(5, ChronoUnit.DAYS).plus(1, ChronoUnit.HOURS));
+        BookingRescheduleRequest lockedView = new BookingRescheduleRequest();
+        lockedView.setBookingId(BOOKING_ID);
+        lockedView.setStatus("DECLINED");
+
+        when(rescheduleRepo.findById(RESCHEDULE_ID)).thenReturn(Optional.of(staleView));
+        when(rescheduleRepo.findByIdForUpdate(RESCHEDULE_ID)).thenReturn(Optional.of(lockedView));
+
+        assertThatThrownBy(() -> service.acceptReschedule(BOOKING_ID, RESCHEDULE_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class);
+
+        assertThat(confirmedBooking.getRequestedStartTime()).isEqualTo(originalStart);
+        assertThat(lockedView.getStatus()).isEqualTo("DECLINED");
+        verify(bookingRepository, never()).save(any());
+        verify(rescheduleRepo, never()).save(any());
+    }
+
+    /** Deferred-15 AC4: a suspended coach cannot accept a reschedule. */
+    @Test
+    void acceptReschedule_suspendedCoach_throwsCoachUnavailable() {
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+
+        BookingRescheduleRequest pending = new BookingRescheduleRequest();
+        pending.setBookingId(BOOKING_ID);
+        pending.setStatus("PENDING");
+        pending.setProposedStartTime(Instant.now().plus(5, ChronoUnit.DAYS));
+        pending.setProposedEndTime(Instant.now().plus(5, ChronoUnit.DAYS).plus(1, ChronoUnit.HOURS));
+        when(rescheduleRepo.findById(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+        when(rescheduleRepo.findByIdForUpdate(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+
+        CoachProfile suspended = new CoachProfile();
+        suspended.setId(COACH_ID);
+        suspended.setUserId(COACH_USER_ID);
+        suspended.setStatus(com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus.SUSPENDED);
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(suspended));
+
+        assertThatThrownBy(() -> service.acceptReschedule(BOOKING_ID, RESCHEDULE_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.COACH_UNAVAILABLE));
+
+        verify(rescheduleRepo, never()).save(any());
     }
 }

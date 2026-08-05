@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.admin.api;
 import com.softropic.skillars.config.TestConfig;
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.admin.service.AdminCoachEnforcementService;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -29,6 +30,12 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -61,6 +68,7 @@ class CoachSuspensionIT {
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private HttpTestClient httpTestClient;
     @Autowired private PasswordEncoder passwordEncoder;
+    @Autowired private AdminCoachEnforcementService adminCoachEnforcementService;
 
     @LocalServerPort private int randomServerPort;
 
@@ -152,6 +160,87 @@ class CoachSuspensionIT {
             jdbcTemplate.execute("DELETE FROM main.sec");
             return null;
         });
+    }
+
+    /**
+     * Deferred-15 AC4, review follow-up. AC4's whole argument is that the coach lock the accept
+     * paths take is worthless unless the suspension writer takes it too — yet nothing exercised
+     * that change: every other test drives suspendCoach sequentially, and the accept-side race
+     * tests stage their contending suspension with raw {@code SELECT … FOR UPDATE} SQL, which is a
+     * lock-shaped stand-in rather than this method. Reverting suspendCoach to a plain findById
+     * passed the entire suite. This test closes that hole.
+     *
+     * <p>Waiting is not the discriminator — a plain findById also blocks, just later, at its own
+     * UPDATE (the lesson deferred-13's review recorded). What separates them is what the call
+     * observes once unblocked: a locked read is taken AFTER the concurrent suspension commits and
+     * sees SUSPENDED, so the already-suspended early-return fires and nothing further happens; a
+     * plain findById holds the stale ACTIVE snapshot it took before blocking, sails past that
+     * guard, and redoes the whole suspension — writing a duplicate COACH_SUSPEND audit row and
+     * re-running the booking-cancellation sweep. The audit row is the assertion.
+     */
+    @Test
+    void suspendCoach_concurrentSuspensionCommitsFirst_isNotRedoneOnAStaleRead() throws Exception {
+        CountDownLatch suspensionStagedAndLockHeld = new CountDownLatch(1);
+        AtomicReference<Throwable> stagerFailure = new AtomicReference<>();
+        AtomicReference<Throwable> serviceFailure = new AtomicReference<>();
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        Future<?> stager = executor.submit(() -> {
+            try {
+                transactionTemplate.execute(status -> {
+                    jdbcTemplate.queryForObject(
+                        "SELECT status FROM marketplace.coach_profiles WHERE id = ? FOR UPDATE",
+                        String.class, coachProfileId);
+                    jdbcTemplate.update(
+                        "UPDATE marketplace.coach_profiles SET status = 'SUSPENDED', status_changed_at = ? WHERE id = ?",
+                        Timestamp.from(Instant.now()), coachProfileId);
+                    suspensionStagedAndLockHeld.countDown();
+                    // Hold the lock long enough for the service call to take its unlocked read (if
+                    // it has one) and then block.
+                    try {
+                        Thread.sleep(1500);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return null;
+                });
+            } catch (Throwable t) {
+                stagerFailure.set(t);
+            }
+        });
+
+        Future<?> suspender = executor.submit(() -> {
+            try {
+                suspensionStagedAndLockHeld.await(10, TimeUnit.SECONDS);
+                adminCoachEnforcementService.suspendCoach(coachProfileId, "Concurrent duplicate", false, ADMIN_ID);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (Throwable t) {
+                serviceFailure.set(t);
+            }
+        });
+
+        stager.get(30, TimeUnit.SECONDS);
+        suspender.get(30, TimeUnit.SECONDS);
+        executor.shutdown();
+
+        if (stagerFailure.get() != null) {
+            throw new AssertionError("Staging thread failed", stagerFailure.get());
+        }
+        if (serviceFailure.get() != null) {
+            throw new AssertionError("suspendCoach threw unexpectedly", serviceFailure.get());
+        }
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM admin.admin_action_log WHERE action_type = 'COACH_SUSPEND' AND reference_id = ?",
+            Integer.class, coachProfileId.toString()))
+            .as("the locked read must see the committed suspension and early-return; a stale read "
+                + "redoes the suspension and leaves a duplicate audit row")
+            .isZero();
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM marketplace.coach_profiles WHERE id = ?", String.class, coachProfileId))
+            .isEqualTo("SUSPENDED");
     }
 
     @Test

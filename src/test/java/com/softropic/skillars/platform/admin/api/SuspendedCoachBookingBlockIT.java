@@ -31,6 +31,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -123,6 +124,12 @@ class SuspendedCoachBookingBlockIT {
     @AfterEach
     void tearDown() {
         transactionTemplate.execute(status -> {
+            // FK-safe order: reschedule requests → bookings → batches, before the coach/player rows
+            // they reference. The AC4 tests below seed all three.
+            jdbcTemplate.update("DELETE FROM booking.booking_reschedule_requests WHERE booking_id IN " +
+                "(SELECT id FROM booking.bookings WHERE coach_id = ?)", coachProfileId);
+            jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id = ?", coachProfileId);
+            jdbcTemplate.update("DELETE FROM booking.booking_batches WHERE coach_id = ?", coachProfileId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_availability_windows WHERE coach_id = ?", coachProfileId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_pricing WHERE coach_id = ?", coachProfileId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
@@ -183,7 +190,105 @@ class SuspendedCoachBookingBlockIT {
         jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id = ?", coachProfileId);
     }
 
+    // ── Deferred-15 AC4: the same block on all three ACCEPT paths ──
+    //
+    // Until this story none of them checked the coach's status at all — only ownership. A coach
+    // suspended by an admin could still accept work, and because suspendCoach only cancels
+    // REQUESTED bookings, anything accepted in that window moved to PAYMENT_PENDING and survived
+    // the suspension sweep entirely.
+
+    @Test
+    void suspendedCoachAcceptingSingleBooking_returns403WithCoachUnavailableCode() {
+        UUID bookingId = seedBooking("REQUESTED", null, slotStart, slotEnd);
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        HttpClientErrorException ex = expectClientError(
+            baseUrl() + BOOKINGS_BASE + "/" + bookingId + "/accept", HttpMethod.PUT, coachCookies);
+
+        assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(ex.getResponseBodyAsString()).contains("booking.coachUnavailable");
+        assertThat(statusOf(bookingId)).isEqualTo("REQUESTED");
+    }
+
+    @Test
+    void suspendedCoachAcceptingBatch_returns403WithCoachUnavailableCode() {
+        UUID batchId = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO booking.booking_batches (id, parent_id, coach_id, requested_count, total_amount, status) " +
+                "VALUES (?, ?, ?, 1, 50.00, 'PENDING')", batchId, PARENT_ID, coachProfileId);
+            return null;
+        });
+        UUID bookingId = seedBooking("REQUESTED", batchId, slotStart, slotEnd);
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        HttpClientErrorException ex = expectClientError(
+            baseUrl() + "/api/bookings/batches/" + batchId + "/accept-all", HttpMethod.POST, coachCookies);
+
+        assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(ex.getResponseBodyAsString()).contains("booking.coachUnavailable");
+        assertThat(statusOf(bookingId))
+            .as("acceptAll must fail as a whole, not swallow the per-booking throw and report a silent no-op")
+            .isEqualTo("REQUESTED");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM booking.booking_batches WHERE id = ?", String.class, batchId))
+            .isEqualTo("PENDING");
+    }
+
+    @Test
+    void suspendedCoachAcceptingReschedule_returns403WithCoachUnavailableCode() {
+        UUID bookingId = seedBooking("CONFIRMED", null, slotStart, slotEnd);
+        UUID rescheduleId = UUID.randomUUID();
+        Instant proposedStart = slotStart.plus(7, ChronoUnit.DAYS);
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO booking.booking_reschedule_requests (id, booking_id, proposed_by, " +
+                "proposed_start_time, proposed_end_time, status) VALUES (?, ?, 'PARENT', ?, ?, 'PENDING')",
+                rescheduleId, bookingId, Timestamp.from(proposedStart),
+                Timestamp.from(proposedStart.plus(1, ChronoUnit.HOURS)));
+            return null;
+        });
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        HttpClientErrorException ex = expectClientError(
+            baseUrl() + "/api/bookings/" + bookingId + "/reschedule/" + rescheduleId + "/accept",
+            HttpMethod.PUT, coachCookies);
+
+        assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(ex.getResponseBodyAsString()).contains("booking.coachUnavailable");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM booking.booking_reschedule_requests WHERE id = ?", String.class, rescheduleId))
+            .isEqualTo("PENDING");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT requested_start_time FROM booking.bookings WHERE id = ?", Timestamp.class, bookingId).toInstant())
+            .as("the booking's window must not be rewritten")
+            .isEqualTo(slotStart);
+    }
+
     // ── helpers ──
+
+    private UUID seedBooking(String status, UUID batchId, Instant start, Instant end) {
+        UUID bookingId = UUID.randomUUID();
+        transactionTemplate.execute(tx -> {
+            jdbcTemplate.update(
+                "INSERT INTO booking.bookings (id, parent_id, player_id, coach_id, requested_start_time, " +
+                "requested_end_time, status, canonical_timezone, batch_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                bookingId, PARENT_ID, PLAYER_ID, coachProfileId,
+                Timestamp.from(start), Timestamp.from(end), status, WINDOW_TZ, batchId);
+            return null;
+        });
+        return bookingId;
+    }
+
+    private String statusOf(UUID bookingId) {
+        return jdbcTemplate.queryForObject("SELECT status FROM booking.bookings WHERE id = ?", String.class, bookingId);
+    }
+
+    private HttpClientErrorException expectClientError(String url, HttpMethod method, String cookies) {
+        return (HttpClientErrorException) org.junit.jupiter.api.Assertions.assertThrows(
+            HttpClientErrorException.class,
+            () -> httpTestClient.makeHttpRequest(url, method, null, authenticatedHeaders(cookies), Map.class));
+    }
 
     private String loginAndGetCookies(String email) {
         ResponseEntity<Map> loginResponse = httpTestClient.makeHttpRequest(

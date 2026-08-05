@@ -277,11 +277,21 @@ public class BookingService {
         }
 
         // AC 3: re-check for a slot conflict that may have appeared since this booking was
-        // REQUESTED (e.g. the coach already accepted a different overlapping request). The lookup
-        // result itself is unused beyond the lock it acquires — orElseThrow both documents that
-        // and guards against the lock silently no-op'ing if the coach row vanished mid-request.
-        coachProfileRepository.findByIdForUpdate(coach.getId())
+        // REQUESTED (e.g. the coach already accepted a different overlapping request).
+        CoachProfile lockedCoach = coachProfileRepository.findByIdForUpdate(coach.getId())
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+        // Deferred-15 AC4: a suspended coach must not be able to accept work. The refresh is
+        // required, not defensive — this row is already managed from the findByUserId above, so the
+        // JPQL locked read returns that instance without overwriting its in-memory state and the
+        // check could never fire. Identical reasoning to createBookingRequest:203-207. Note the
+        // second-order effect this closes: suspendCoach only cancels REQUESTED bookings, so a
+        // booking accepted inside its window moves to PAYMENT_PENDING and survives with a
+        // suspended coach, invisible to that sweep.
+        entityManager.refresh(lockedCoach, LockModeType.PESSIMISTIC_WRITE);
+        if (lockedCoach.getStatus() == CoachProfileStatus.SUSPENDED) {
+            throw new OperationNotAllowedException("Coach is suspended",
+                Map.of("submitted coach id", coach.getId()), BookingError.COACH_UNAVAILABLE);
+        }
         // excludeBookingId=bookingId: without this, retrying acceptBooking on a booking already
         // moved to one of these statuses would match itself and mask the real state-transition error.
         List<Booking> overlapping = bookingRepository.findOverlappingBookings(

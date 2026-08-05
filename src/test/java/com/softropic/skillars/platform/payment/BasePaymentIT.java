@@ -71,6 +71,30 @@ public abstract class BasePaymentIT {
     }
 
     /**
+     * Releases a ShedLock so a {@code @SchedulerLock}-annotated method can be invoked again.
+     *
+     * <p>Not optional housekeeping: calling a scheduled bean method from a test goes through the
+     * Spring proxy, so ShedLock applies. With {@code lockAtLeastFor} set (PT2M across this
+     * codebase), a second invocation inside the same test class is silently SKIPPED — the log line
+     * is "held by another instance", and the assertions that follow then pass or fail for reasons
+     * that have nothing to do with the code under test. Call this before every invocation.
+     *
+     * <p><strong>Expire the row; do not delete it.</strong> {@code JdbcTemplateLockProvider} caches
+     * the lock names it has already inserted and issues only an {@code UPDATE … WHERE name = ? AND
+     * lock_until <= now()} thereafter. Deleting the row therefore leaves nothing for that UPDATE to
+     * match and every later run is skipped — strictly worse than doing nothing. Backdating
+     * {@code lock_until} works on both paths: the UPDATE matches, and on the very first call (no row
+     * yet) this simply affects zero rows and the provider inserts as usual.
+     */
+    protected void releaseSchedulerLock(String lockName) {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "UPDATE main.shedlock SET lock_until = now() - interval '1 minute' WHERE name = ?", lockName);
+            return null;
+        });
+    }
+
+    /**
      * Inserts a minimal parent user row (required as the FK target for player_profiles.parent_id).
      */
     protected void insertTestParent(long userId, String email) {

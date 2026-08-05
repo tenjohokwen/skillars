@@ -187,6 +187,17 @@ public class BookingBatchService {
             throw new OperationNotAllowedException("Batch has already been processed", SecurityError.MISSING_RIGHTS);
         }
 
+        // Deferred-15 AC4. Deliberately an UNLOCKED check here, with the authoritative locked one in
+        // acceptOneBooking: taking the coach lock in this transaction would make every per-booking
+        // REQUIRES_NEW transaction below block on a lock its own caller holds, on a different
+        // connection, until the 5s timeout. This check is what turns a suspended coach's acceptAll
+        // into a clean 403 booking.coachUnavailable — without it the per-booking throws are
+        // swallowed by the loop's catch and the caller sees a silent no-op.
+        if (coach.getStatus() == CoachProfileStatus.SUSPENDED) {
+            throw new OperationNotAllowedException("Coach is suspended",
+                Map.of("submitted coach id", coach.getId()), BookingError.COACH_UNAVAILABLE);
+        }
+
         List<Booking> requestedBookings = bookingRepository.findByBatchIdAndStatus(batchId, "REQUESTED");
         List<UUID> acceptedIds = new ArrayList<>();
 
@@ -212,9 +223,6 @@ public class BookingBatchService {
             return;
         }
 
-        String newBatchStatus = acceptedIds.size() == requestedBookings.size()
-            ? "FULLY_ACCEPTED" : "PARTIALLY_ACCEPTED";
-
         // Resolved before the trailing transaction opens so that it contains only the batch write and
         // the publish — nothing that can fail on a lookup.
         String parentEmail = resolveEmail(batch.getParentId());
@@ -232,9 +240,15 @@ public class BookingBatchService {
         // parent-initiated CANCEL_PARENT. The stranded rows would also hold the coach's slots via the
         // V87 exclusion constraint. Re-read inside: `batch` above belongs to the enclosing
         // transaction's persistence context.
+        //
+        // Deferred-15 AC5: the status is now computed from every booking in the batch, re-read
+        // inside this transaction — the same formula and the same input the listener uses, so the
+        // two writers can no longer disagree. The bookings must be re-read here for the same reason
+        // the batch is: `requestedBookings` belongs to the enclosing persistence context and
+        // predates the per-booking commits.
         trailingTx.executeWithoutResult(tx ->
             batchRepository.findById(batchId).ifPresent(fresh -> {
-                fresh.setStatus(newBatchStatus);
+                fresh.setStatus(computeBatchStatus(bookingRepository.findByBatchId(batchId)));
                 batchRepository.save(fresh);
                 eventPublisher.publishEvent(new BatchBookingAcceptedEvent(
                     this, batchId, acceptedIds, parentId, coachId,
@@ -261,8 +275,17 @@ public class BookingBatchService {
      * match itself and mask the real state-transition error.
      */
     private void acceptOneBooking(Booking booking, UUID coachId, Long coachUserId) {
-        coachProfileRepository.findByIdForUpdate(coachId)
+        CoachProfile lockedCoach = coachProfileRepository.findByIdForUpdate(coachId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+        // Deferred-15 AC4. No entityManager.refresh here, unlike the other two accept paths: this
+        // method runs inside a REQUIRES_NEW transaction with its own persistence context, so the
+        // coach row is not already managed and the locked read genuinely returns fresh state. (On
+        // BookingService.acceptBooking and RescheduleService.acceptReschedule the row IS
+        // pre-managed from an earlier findByUserId, which is why they must refresh.)
+        if (lockedCoach.getStatus() == CoachProfileStatus.SUSPENDED) {
+            throw new OperationNotAllowedException("Coach is suspended",
+                Map.of("submitted coach id", coachId), BookingError.COACH_UNAVAILABLE);
+        }
 
         List<Booking> overlapping = bookingRepository.findOverlappingBookings(
             coachId, booking.getRequestedStartTime(), booking.getRequestedEndTime(),
@@ -295,25 +318,40 @@ public class BookingBatchService {
             return;
         }
 
-        long acceptedCount = allBookings.stream()
-            .filter(b -> POST_ACCEPTANCE_STATUSES.contains(b.getStatus()))
-            .count();
-        long totalCount = allBookings.size();
-
-        String newStatus;
-        if (acceptedCount == totalCount) {
-            newStatus = "FULLY_ACCEPTED";
-        } else if (acceptedCount == 0) {
-            newStatus = "DECLINED";
-        } else {
-            newStatus = "PARTIALLY_ACCEPTED";
-        }
+        String newStatus = computeBatchStatus(allBookings);
 
         batchRepository.findById(batchId).ifPresent(batch -> {
             batch.setStatus(newStatus);
             batchRepository.save(batch);
             log.info("Batch status updated: batchId={} newStatus={}", batchId, newStatus);
         });
+    }
+
+    /**
+     * The single batch-status formula (Deferred-15 AC5). Both writers of {@code booking_batches
+     * .status} — this class's trailing transaction in acceptAll and the AFTER_COMMIT
+     * {@code BookingBatchStatusListener} via {@link #updateBatchStatusFromBooking} — now compute it
+     * from the same input: every booking in the batch.
+     *
+     * <p>acceptAll used to compare {@code acceptedIds.size()} against the REQUESTED subset captured
+     * at loop start, so a batch already containing an individually-declined booking read
+     * FULLY_ACCEPTED. Since Deferred-14's per-booking commits the listener fires mid-loop, which made
+     * the naive value the one that won.
+     */
+    private String computeBatchStatus(List<Booking> allInBatch) {
+        // Without this, an empty list yields FULLY_ACCEPTED via a vacuous 0 == 0. Not reachable
+        // today — updateBatchStatusFromBooking early-returns on empty, and acceptAll only reaches
+        // its trailing transaction after accepting at least one booking — but this method is now the
+        // single formula both writers share, which makes it the place the degenerate case belongs.
+        // PENDING, not FULLY_ACCEPTED: a batch with no bookings has decided nothing.
+        if (allInBatch.isEmpty()) return "PENDING";
+
+        long acceptedCount = allInBatch.stream()
+            .filter(b -> POST_ACCEPTANCE_STATUSES.contains(b.getStatus()))
+            .count();
+        if (acceptedCount == allInBatch.size()) return "FULLY_ACCEPTED";
+        if (acceptedCount == 0) return "DECLINED";
+        return "PARTIALLY_ACCEPTED";
     }
 
     private String resolveEmail(Long userId) {

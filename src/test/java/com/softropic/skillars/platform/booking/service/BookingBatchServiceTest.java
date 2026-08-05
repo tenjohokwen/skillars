@@ -14,6 +14,7 @@ import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
@@ -181,6 +182,11 @@ class BookingBatchServiceTest {
             .thenReturn(List.of());
         when(batchRepository.save(any())).thenReturn(batch);
         when(userRepository.findById(any())).thenReturn(Optional.empty());
+        // Deferred-15 AC5: the trailing transaction now re-reads every booking in the batch and runs
+        // the same formula the listener does. Here that read returns what the per-booking commits
+        // would have written — both bookings settled into PAYMENT_PENDING.
+        when(bookingRepository.findByBatchId(BATCH_ID))
+            .thenReturn(List.of(bookingInStatus("PAYMENT_PENDING"), bookingInStatus("PAYMENT_PENDING")));
 
         service.acceptAll(BATCH_ID, COACH_USER_ID);
 
@@ -264,6 +270,93 @@ class BookingBatchServiceTest {
     }
 
     // ---- Helpers ----
+
+    /**
+     * Deferred-15 AC5: acceptAll used to compare acceptedIds.size() against the REQUESTED subset
+     * captured at loop start, so a booking declined individually BEFORE acceptAll ran was invisible
+     * to it and the batch read FULLY_ACCEPTED. The trailing transaction now counts every booking in
+     * the batch, exactly as the AFTER_COMMIT listener always did.
+     */
+    @Test
+    void acceptAll_batchAlreadyContainsADeclinedBooking_endsPartiallyAccepted() {
+        BookingBatch batch = new BookingBatch();
+        batch.setId(BATCH_ID);
+        batch.setCoachId(COACH_ID);
+        batch.setParentId(PARENT_ID);
+        batch.setStatus("PENDING");
+        batch.setTotalAmount(BigDecimal.ZERO);
+        when(batchRepository.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+
+        CoachProfile coach = buildActiveCoach();
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+
+        Instant slot = Instant.now().plus(3, ChronoUnit.DAYS);
+        Booking requested = new Booking();
+        requested.setId(UUID.randomUUID());
+        requested.setStatus("REQUESTED");
+        requested.setRequestedStartTime(slot);
+        requested.setRequestedEndTime(slot.plus(1, ChronoUnit.HOURS));
+        // Only the REQUESTED one is offered to the loop — the DECLINED sibling never appears there,
+        // which is precisely why the old formula could not see it.
+        when(bookingRepository.findByBatchIdAndStatus(BATCH_ID, "REQUESTED")).thenReturn(List.of(requested));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(bookingRepository.findByBatchId(BATCH_ID))
+            .thenReturn(List.of(bookingInStatus("PAYMENT_PENDING"), bookingInStatus("DECLINED")));
+        when(batchRepository.save(any())).thenReturn(batch);
+        when(userRepository.findById(any())).thenReturn(Optional.empty());
+
+        service.acceptAll(BATCH_ID, COACH_USER_ID);
+
+        assertThat(batch.getStatus())
+            .as("one of the two bookings in this batch is DECLINED — the batch is not fully accepted")
+            .isEqualTo("PARTIALLY_ACCEPTED");
+    }
+
+    /** Deferred-15 AC4: a suspended coach cannot accept a batch, and fails the batch as a whole. */
+    @Test
+    void acceptAll_suspendedCoach_throwsCoachUnavailableAndAcceptsNothing() {
+        BookingBatch batch = new BookingBatch();
+        batch.setId(BATCH_ID);
+        batch.setCoachId(COACH_ID);
+        batch.setParentId(PARENT_ID);
+        batch.setStatus("PENDING");
+        when(batchRepository.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+
+        CoachProfile suspended = buildActiveCoach();
+        suspended.setStatus(CoachProfileStatus.SUSPENDED);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(suspended));
+
+        assertThatThrownBy(() -> service.acceptAll(BATCH_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.COACH_UNAVAILABLE));
+
+        verify(bookingService, never()).acceptAndInitiatePayment(any(), any());
+        assertThat(batch.getStatus()).isEqualTo("PENDING");
+    }
+
+    /**
+     * Deferred-15 AC5, review follow-up: the degenerate input. Exercised through
+     * updateBatchStatusFromBooking's sibling path — an empty batch must not read FULLY_ACCEPTED via
+     * a vacuous 0 == 0. That method's own early-return means no write happens at all here, which is
+     * the behaviour being pinned.
+     */
+    @Test
+    void updateBatchStatusFromBooking_emptyBatch_writesNothing() {
+        when(bookingRepository.findByBatchId(BATCH_ID)).thenReturn(List.of());
+
+        service.updateBatchStatusFromBooking(BATCH_ID);
+
+        verify(batchRepository, never()).save(any());
+    }
+
+    private Booking bookingInStatus(String status) {
+        Booking b = new Booking();
+        b.setId(UUID.randomUUID());
+        b.setStatus(status);
+        return b;
+    }
 
     private CoachProfile buildActiveCoach() {
         CoachProfile coach = new CoachProfile();
