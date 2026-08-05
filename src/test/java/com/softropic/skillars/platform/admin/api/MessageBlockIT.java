@@ -75,6 +75,7 @@ class MessageBlockIT {
 
     private UUID coachProfileId;
     private UUID alertId;
+    private UUID moderationAlertId;
 
     @BeforeEach
     void setUp() {
@@ -120,6 +121,11 @@ class MessageBlockIT {
                 "INSERT INTO admin.admin_alerts (alert_id, type, reference_id, reference_type, status, created_at) VALUES (?, 'MESSAGE_REPORT', ?, 'MESSAGE', 'OPEN', ?)",
                 alertId, String.valueOf(MESSAGE_ID), Timestamp.from(Instant.now()));
 
+            moderationAlertId = UUID.randomUUID();
+            jdbcTemplate.update(
+                "INSERT INTO admin.admin_alerts (alert_id, type, reference_id, reference_type, status, created_at) VALUES (?, 'MODERATION_UNRESOLVED', ?, 'MESSAGE', 'OPEN', ?)",
+                moderationAlertId, String.valueOf(MESSAGE_ID), Timestamp.from(Instant.now()));
+
             return null;
         });
     }
@@ -128,7 +134,7 @@ class MessageBlockIT {
     void tearDown() {
         transactionTemplate.execute(status -> {
             jdbcTemplate.update("DELETE FROM admin.admin_action_log WHERE reference_id = ?", String.valueOf(MESSAGE_ID));
-            jdbcTemplate.update("DELETE FROM admin.admin_alerts WHERE alert_id = ?", alertId);
+            jdbcTemplate.update("DELETE FROM admin.admin_alerts WHERE alert_id IN (?, ?)", alertId, moderationAlertId);
             jdbcTemplate.update("DELETE FROM messaging.message_reports WHERE id = ?", MESSAGE_REPORT_ID);
             jdbcTemplate.update("DELETE FROM messaging.messages WHERE id = ?", MESSAGE_ID);
             jdbcTemplate.update("DELETE FROM messaging.conversations WHERE id = ?", CONVERSATION_ID);
@@ -173,6 +179,11 @@ class MessageBlockIT {
             "SELECT status FROM admin.admin_alerts WHERE alert_id = ?",
             String.class, alertId);
         assertThat(alertStatus).isEqualTo("RESOLVED");
+
+        String moderationAlertStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM admin.admin_alerts WHERE alert_id = ?",
+            String.class, moderationAlertId);
+        assertThat(moderationAlertStatus).isEqualTo("RESOLVED");
 
         String loggedReason = jdbcTemplate.queryForObject(
             "SELECT reason FROM admin.admin_action_log WHERE reference_id = ? AND action_type = 'MESSAGE_BLOCK'",

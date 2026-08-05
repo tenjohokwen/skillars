@@ -74,9 +74,12 @@ class AdminQueueIT {
     private static final long CONVERSATION_ID  = 9000_001_001L;
     private static final long MESSAGE_ID       = 9000_001_002L;
 
+    private static final long MODERATION_HELD_MESSAGE_ID = 9000_001_003L;
+
     private UUID coachProfileId;
     private UUID messageAlertId;
     private UUID reviewAlertId;
+    private UUID moderationHeldAlertId;
     private UUID reviewId;
 
     @BeforeEach
@@ -127,6 +130,15 @@ class AdminQueueIT {
                 "INSERT INTO admin.admin_alerts (alert_id, type, reference_id, reference_type, status, created_at) VALUES (?, 'REVIEW_FLAG', ?, 'REVIEW', 'OPEN', ?)",
                 reviewAlertId, reviewId.toString(), Timestamp.from(Instant.now()));
 
+            // AC3: a message swept/held for moderation review raises its own alert type
+            jdbcTemplate.update(
+                "INSERT INTO messaging.messages (id, conversation_id, sender_id, sender_role, content, moderation_status, created_at) VALUES (?, ?, ?, 'COACH', 'Held for moderation review', 'UNDER_REVIEW', ?)",
+                MODERATION_HELD_MESSAGE_ID, CONVERSATION_ID, COACH_USER_ID, Timestamp.from(Instant.now()));
+            moderationHeldAlertId = UUID.randomUUID();
+            jdbcTemplate.update(
+                "INSERT INTO admin.admin_alerts (alert_id, type, reference_id, reference_type, status, created_at) VALUES (?, 'MODERATION_UNRESOLVED', ?, 'MESSAGE', 'OPEN', ?)",
+                moderationHeldAlertId, String.valueOf(MODERATION_HELD_MESSAGE_ID), Timestamp.from(Instant.now()));
+
             return null;
         });
     }
@@ -134,8 +146,8 @@ class AdminQueueIT {
     @AfterEach
     void tearDown() {
         transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM admin.admin_alerts WHERE alert_id IN (?, ?)", messageAlertId, reviewAlertId);
-            jdbcTemplate.update("DELETE FROM messaging.messages WHERE id = ?", MESSAGE_ID);
+            jdbcTemplate.update("DELETE FROM admin.admin_alerts WHERE alert_id IN (?, ?, ?)", messageAlertId, reviewAlertId, moderationHeldAlertId);
+            jdbcTemplate.update("DELETE FROM messaging.messages WHERE id IN (?, ?)", MESSAGE_ID, MODERATION_HELD_MESSAGE_ID);
             jdbcTemplate.update("DELETE FROM messaging.conversations WHERE id = ?", CONVERSATION_ID);
             jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
             jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
@@ -201,7 +213,107 @@ class AdminQueueIT {
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(((Number) resp.getBody().get("messageReports")).longValue()).isGreaterThanOrEqualTo(1L);
-        assertThat(((Number) resp.getBody().get("total")).longValue()).isGreaterThanOrEqualTo(2L);
+        assertThat(((Number) resp.getBody().get("moderationHolds")).longValue()).isGreaterThanOrEqualTo(1L);
+        assertThat(((Number) resp.getBody().get("total")).longValue()).isGreaterThanOrEqualTo(3L);
+    }
+
+    // AC3: a held message must reach the admin queue under its own alert type, with a content preview
+    @Test
+    void filterByModerationUnresolved_returnsHeldMessageWithContentPreview() {
+        String cookies = loginAndGetCookies(ADMIN_EMAIL);
+        ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
+            baseUrl() + QUEUE_URL + "?type=MODERATION_UNRESOLVED",
+            HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> content = (List<Map<String, Object>>) resp.getBody().get("content");
+        assertThat(content).isNotEmpty();
+        Map<String, Object> entry = content.stream()
+            .filter(e -> moderationHeldAlertId.toString().equals(e.get("alertId")))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("Moderation-held alert not found"));
+        assertThat(entry.get("referenceId")).isEqualTo(String.valueOf(MODERATION_HELD_MESSAGE_ID));
+        assertThat(entry.get("summary")).isEqualTo("Held for moderation review");
+    }
+
+    // ── Code review 2026-08-05 ──
+
+    @Test
+    void moderationUnresolvedSummary_leadsWithTheReason() {
+        // The reason distinguishes "the classifier ran and was unsure" from "nothing ever assessed
+        // this content", which is the difference an admin triages on.
+        transactionTemplate.execute(status -> jdbcTemplate.update(
+            "UPDATE admin.admin_alerts SET reason = 'MODERATION_ORPHAN_SWEPT' WHERE alert_id = ?",
+            moderationHeldAlertId));
+
+        String cookies = loginAndGetCookies(ADMIN_EMAIL);
+        ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
+            baseUrl() + QUEUE_URL + "?type=MODERATION_UNRESOLVED",
+            HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> content = (List<Map<String, Object>>) resp.getBody().get("content");
+        Map<String, Object> entry = content.stream()
+            .filter(e -> moderationHeldAlertId.toString().equals(e.get("alertId")))
+            .findFirst().orElseThrow(() -> new AssertionError("Moderation-held alert not found"));
+        assertThat(entry.get("summary")).isEqualTo("MODERATION_ORPHAN_SWEPT: Held for moderation review");
+    }
+
+    @Test
+    void queuePageSurvivesContentThatWouldSplitASurrogatePairAtTheTruncationPoint() {
+        // "a" + 60 emoji is 61 CODE POINTS but 121 UTF-16 chars. The old code tested length() > 100,
+        // saw 121, and cut at char index 100 — the high surrogate of the 50th emoji — producing an
+        // unpaired surrogate that is not encodable as UTF-8, which fails the whole page in Jackson
+        // rather than corrupting one field. The fix counts code points, sees 61, and truncates
+        // nothing. Messages accept up to 2000 code points, so this is reachable content.
+        String astral = "a" + "😀".repeat(60);
+        transactionTemplate.execute(status -> jdbcTemplate.update(
+            "UPDATE messaging.messages SET content = ? WHERE id = ?", astral, MODERATION_HELD_MESSAGE_ID));
+
+        String cookies = loginAndGetCookies(ADMIN_EMAIL);
+        ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
+            baseUrl() + QUEUE_URL + "?type=MODERATION_UNRESOLVED",
+            HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> content = (List<Map<String, Object>>) resp.getBody().get("content");
+        String summary = (String) content.stream()
+            .filter(e -> moderationHeldAlertId.toString().equals(e.get("alertId")))
+            .findFirst().orElseThrow(() -> new AssertionError("Moderation-held alert not found"))
+            .get("summary");
+
+        // Under the code-point limit, so it comes back whole and intact.
+        assertThat(summary).isEqualTo(astral);
+        assertThat(Character.isHighSurrogate(summary.charAt(summary.length() - 1))).isFalse();
+    }
+
+    @Test
+    void queuePreviewTruncatesAstralContentOnACodePointBoundary() {
+        // Now past the limit: "a" + 120 emoji is 121 code points / 241 chars. The cut lands at code
+        // point 100 (char offset 199), never mid-pair — where the old char-index cut at 100 would
+        // have split the 50th emoji.
+        String astral = "a" + "😀".repeat(120);
+        transactionTemplate.execute(status -> jdbcTemplate.update(
+            "UPDATE messaging.messages SET content = ? WHERE id = ?", astral, MODERATION_HELD_MESSAGE_ID));
+
+        String cookies = loginAndGetCookies(ADMIN_EMAIL);
+        ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
+            baseUrl() + QUEUE_URL + "?type=MODERATION_UNRESOLVED",
+            HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> content = (List<Map<String, Object>>) resp.getBody().get("content");
+        String summary = (String) content.stream()
+            .filter(e -> moderationHeldAlertId.toString().equals(e.get("alertId")))
+            .findFirst().orElseThrow(() -> new AssertionError("Moderation-held alert not found"))
+            .get("summary");
+
+        assertThat(summary.codePointCount(0, summary.length())).isEqualTo(100);
+        assertThat(Character.isHighSurrogate(summary.charAt(summary.length() - 1))).isFalse();
+        assertThat(summary).isEqualTo("a" + "😀".repeat(99));
     }
 
     // ── helpers ──

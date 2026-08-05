@@ -28,6 +28,7 @@ class RetentionSchedulerTest {
     @Mock MessageRepository messageRepository;
     @Mock ConversationRepository conversationRepository;
     @Mock ConfigService configService;
+    @Mock org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     MessageRetentionScheduler scheduler;
 
@@ -39,7 +40,8 @@ class RetentionSchedulerTest {
                 return action.doInTransaction(null);
             }
         };
-        scheduler = new MessageRetentionScheduler(messageRepository, conversationRepository, configService, txTemplate);
+        scheduler = new MessageRetentionScheduler(
+            messageRepository, conversationRepository, configService, eventPublisher, txTemplate);
         when(configService.getInt("platform.message_retention_months", 24)).thenReturn(24);
     }
 

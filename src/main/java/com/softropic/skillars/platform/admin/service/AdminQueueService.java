@@ -27,6 +27,9 @@ import java.util.UUID;
 @Slf4j
 public class AdminQueueService {
 
+    /** Content-preview length in code points, for the message-backed alert summaries. */
+    private static final int PREVIEW_CODE_POINTS = 100;
+
     private final AdminAlertRepository adminAlertRepository;
     private final MessageRepository messageRepository;
     private final ConversationReportRepository conversationReportRepository;
@@ -64,10 +67,7 @@ public class AdminQueueService {
                 try {
                     Long msgId = Long.parseLong(alert.getReferenceId());
                     yield messageRepository.findById(msgId)
-                        .map(m -> {
-                            String c = m.getContent();
-                            return c != null && c.length() > 100 ? c.substring(0, 100) : c;
-                        })
+                        .map(m -> preview(m.getContent()))
                         .orElse("[message not found]");
                 } catch (NumberFormatException e) {
                     yield "[invalid referenceId]";
@@ -94,9 +94,37 @@ public class AdminQueueService {
                     yield "[invalid referenceId]";
                 }
             }
+            case MODERATION_UNRESOLVED -> {
+                try {
+                    Long msgId = Long.parseLong(alert.getReferenceId());
+                    // Lead with the reason: MODERATION_UNCERTAIN (the classifier ran and was
+                    // unsure) and MODERATION_ORPHAN_SWEPT (no verdict ever landed — nothing has
+                    // assessed this content at all) warrant different scrutiny from the reviewer.
+                    String prefix = alert.getReason() != null ? alert.getReason() + ": " : "";
+                    yield messageRepository.findById(msgId)
+                        .map(m -> prefix + preview(m.getContent()))
+                        .orElse(prefix + "[message not found]");
+                } catch (NumberFormatException e) {
+                    yield "[invalid referenceId]";
+                }
+            }
             case STRIKE_THRESHOLD -> "";
             default -> "";
         };
+    }
+
+    /**
+     * Truncates a content preview on a code-point boundary. {@code substring(0, 100)} cuts at a
+     * UTF-16 index and will split a surrogate pair — content such as {@code "a" + "😀".repeat(60)}
+     * ends the preview on an unpaired high surrogate, which is not encodable as UTF-8, so Jackson
+     * fails the whole queue page mid-serialization rather than corrupting one field. Messages can
+     * carry up to 2000 code points (up to 4000 UTF-16 chars), so this is reachable content, not a
+     * theoretical edge.
+     */
+    private static String preview(String content) {
+        if (content == null) return null;
+        if (content.codePointCount(0, content.length()) <= PREVIEW_CODE_POINTS) return content;
+        return content.substring(0, content.offsetByCodePoints(0, PREVIEW_CODE_POINTS));
     }
 
     private String topFlagReason(UUID reviewId) {
@@ -124,6 +152,7 @@ public class AdminQueueService {
             counts.getOrDefault(AdminAlertType.REVIEW_FLAG, 0L),
             counts.getOrDefault(AdminAlertType.STRIKE_THRESHOLD, 0L),
             counts.getOrDefault(AdminAlertType.DISPUTE_RAISED, 0L),
+            counts.getOrDefault(AdminAlertType.MODERATION_UNRESOLVED, 0L),
             total);
     }
 }

@@ -34,6 +34,12 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -264,6 +270,57 @@ class SoftDeleteIT {
                 assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
                 assertThat(ex.getResponseBodyAsString()).contains("messaging.moderationPending");
             });
+    }
+
+    // AC5: a concurrent double soft-delete must lose cleanly — exactly one 204, one 409
+    // messaging.alreadyDeleted, and a single deleted_at. Drives the real service method (not a raw
+    // SELECT FOR UPDATE stand-in) and asserts on the observed HTTP outcomes, per deferred-15's
+    // finding that a lock-shaped stand-in can pass against a plain findById. Mutation-verified —
+    // see Completion Notes for the recorded result of reverting findByIdForUpdate to findById.
+    @Test
+    void concurrentDoubleSoftDelete_exactlyOneSucceeds_oneConflicts() throws Exception {
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+        Long conversationId = ensureConversation(coachCookies);
+        Long messageId = sendMsg(coachCookies, conversationId, "Delete me concurrently");
+
+        CountDownLatch startLatch = new CountDownLatch(1);
+        AtomicInteger successCount = new AtomicInteger(0);
+        AtomicInteger conflictCount = new AtomicInteger(0);
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        List<Future<?>> futures = new java.util.ArrayList<>();
+        for (int i = 0; i < 2; i++) {
+            futures.add(executor.submit(() -> {
+                try {
+                    startLatch.await();
+                    httpTestClient.makeHttpRequest(
+                        baseUrl() + MESSAGING_BASE + "/conversations/" + conversationId + "/messages/" + messageId,
+                        HttpMethod.DELETE, null, authenticatedHeaders(coachCookies), Void.class);
+                    successCount.incrementAndGet();
+                } catch (HttpClientErrorException e) {
+                    if (e.getStatusCode() == HttpStatus.CONFLICT) {
+                        conflictCount.incrementAndGet();
+                    } else {
+                        throw new RuntimeException(e);
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }));
+        }
+        startLatch.countDown();
+        for (Future<?> f : futures) {
+            f.get(30, TimeUnit.SECONDS);
+        }
+        executor.shutdown();
+
+        assertThat(successCount.get()).isEqualTo(1);
+        assertThat(conflictCount.get()).isEqualTo(1);
+
+        Integer deletedCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM messaging.messages WHERE id = ? AND deleted_at IS NOT NULL",
+            Integer.class, messageId);
+        assertThat(deletedCount).isEqualTo(1);
     }
 
     private Long ensureConversation(String cookies) {

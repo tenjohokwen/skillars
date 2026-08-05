@@ -16,6 +16,7 @@ import com.softropic.skillars.platform.messaging.repo.ConversationRepository;
 import com.softropic.skillars.platform.messaging.repo.Message;
 import com.softropic.skillars.platform.messaging.repo.MessageRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.service.AgePolicyService;
 import lombok.RequiredArgsConstructor;
@@ -30,10 +31,13 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import com.softropic.skillars.platform.security.contract.MessagingPolicy;
+
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -99,17 +103,39 @@ public class MessagingService {
             List<Conversation> all = conversationRepository.findActiveByParentId(callerUserId);
             // N+1 note: getMessagingPolicy is called once here to filter, then again in resolveOtherPartyName —
             // 2 lookups per surviving conversation. Acceptable for MVP; reduce in a later optimisation story.
+            // Read path: an orphaned player_profiles row must cost this one conversation, not the
+            // whole list — findMessagingPolicy degrades locally instead of 404-ing the caller.
             conversations = all.stream()
-                .filter(c -> AgeMessagingPolicy.from(
-                    agePolicyService.getMessagingPolicy(c.getPlayerId())).parentHasAccess())
+                .filter(c -> agePolicyService.findMessagingPolicy(c.getPlayerId())
+                    .map(policy -> AgeMessagingPolicy.from(policy).parentHasAccess())
+                    .orElseGet(() -> {
+                        log.error("getConversations: no player profile for playerId={} (conversationId={}) "
+                                + "— excluding from parent's list", c.getPlayerId(), c.getId());
+                        return false;
+                    }))
                 .toList();
         } else {
-            // PLAYER: all conversations belong to the same player (callerUserId), one policy lookup suffices
-            AgeMessagingPolicy callerPolicy = AgeMessagingPolicy.from(
-                agePolicyService.getMessagingPolicy(callerUserId));
-            conversations = callerPolicy.visibleToPlayer()
-                ? conversationRepository.findActiveByPlayerId(callerUserId)
-                : List.of();
+            // PLAYER: resolve the caller's own player-profile id once — Conversation.playerId and
+            // the age-policy lookup both key on the player-profile id, not the caller's user id.
+            // A caller with no player profile (or an unresolvable policy) gets an empty list, not
+            // a 404 for the whole endpoint.
+            Optional<PlayerProfile> callerProfile = playerProfileRepository.findByUserId(callerUserId);
+            if (callerProfile.isEmpty()) {
+                log.error("getConversations: no player profile for callerUserId={} — returning empty list", callerUserId);
+                conversations = List.of();
+            } else {
+                Long playerId = callerProfile.get().getId();
+                Optional<MessagingPolicy> policy = agePolicyService.findMessagingPolicy(playerId);
+                if (policy.isEmpty()) {
+                    log.error("getConversations: no messaging policy resolvable for playerId={} "
+                            + "(callerUserId={}) — returning empty list", playerId, callerUserId);
+                    conversations = List.of();
+                } else {
+                    conversations = AgeMessagingPolicy.from(policy.get()).visibleToPlayer()
+                        ? conversationRepository.findActiveByPlayerId(playerId)
+                        : List.of();
+                }
+            }
         }
 
         return conversations.stream()
@@ -121,7 +147,8 @@ public class MessagingService {
 
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public MessageDto sendMessage(Long conversationId, String content, Long senderUserId, String role) {
-        if (content == null || content.isBlank() || content.length() > 2000) {
+        if (content == null || content.isBlank()
+                || content.codePointCount(0, content.length()) > 2000) {
             throw new OperationNotAllowedException(
                 "Message content is invalid: must be 1–2000 characters",
                 MessagingErrorCode.INVALID_CONTENT);
@@ -163,15 +190,16 @@ public class MessagingService {
                     "Conversation is blocked — no new messages can be sent",
                     MessagingErrorCode.CONVERSATION_BLOCKED);
             }
+            Instant now = Instant.now();
             var message = new Message();
             message.setConversationId(conversationId);
             message.setSenderId(senderUserId);
             message.setSenderRole(SenderRole.valueOf(role));
             message.setContent(content);
             message.setModerationStatus(MessageModerationStatus.PENDING);
-            message.setCreatedAt(Instant.now());
+            message.setCreatedAt(now);
             Message saved = messageRepository.save(message);
-            c.setLastMessageAt(Instant.now());
+            c.setLastMessageAt(now);
             conversationRepository.save(c);
             savedMessageId[0] = saved.getId();
             return null;
@@ -257,7 +285,12 @@ public class MessagingService {
 
     @Transactional
     public void softDeleteMessage(Long conversationId, Long messageId, Long callerUserId) {
-        Message message = messageRepository.findById(messageId)
+        // Locked read: the deletedAt check below must run under the row lock so a concurrent
+        // double-delete loses cleanly (409) instead of both callers observing null and both
+        // committing a 204. Do not add @Version to Message — see Dev Notes: ModerationResultApplier,
+        // AdminMessageService and MessageModerationSweeper all save() this row, and optimistic
+        // locking would turn their benign interleavings into OptimisticLockingFailureExceptions.
+        Message message = messageRepository.findByIdForUpdate(messageId)
             .orElseThrow(() -> new ResourceNotFoundException("Message not found", "message"));
         if (!message.getConversationId().equals(conversationId)) {
             throw new OperationNotAllowedException(
@@ -300,7 +333,10 @@ public class MessagingService {
                 yield coach.map(c -> Objects.equals(c.getId(), conv.getCoachId())).orElse(false);
             }
             case "PARENT" -> Objects.equals(conv.getParentId(), callerUserId);
-            default -> Objects.equals(conv.getPlayerId(), callerUserId);
+            case "PLAYER" -> playerProfileRepository.findByUserId(callerUserId)
+                .map(p -> Objects.equals(p.getId(), conv.getPlayerId()))
+                .orElse(false);
+            default -> throw new IllegalArgumentException("Unknown messaging role: " + role);
         };
         if (!isParty) {
             throw new OperationNotAllowedException(
@@ -341,16 +377,26 @@ public class MessagingService {
             String playerFirstName = playerName.contains(" ")
                 ? playerName.substring(0, playerName.indexOf(' '))
                 : playerName;
-            AgeMessagingPolicy agePolicy = AgeMessagingPolicy.from(
-                agePolicyService.getMessagingPolicy(conv.getPlayerId()));
+            Optional<MessagingPolicy> policy = agePolicyService.findMessagingPolicy(conv.getPlayerId());
+            if (policy.isEmpty()) {
+                log.error("resolveOtherPartyName: no player profile for playerId={} (conversationId={}) "
+                        + "— falling back to Unknown Player label", conv.getPlayerId(), conv.getId());
+                return "Unknown Player";
+            }
+            AgeMessagingPolicy agePolicy = AgeMessagingPolicy.from(policy.get());
             return switch (agePolicy) {
                 case PROHIBITED, PARENT_MANAGED -> "Parent of " + playerFirstName;
                 case SUPERVISED -> playerFirstName + " & parent";
                 case UNRESTRICTED -> playerFirstName;
             };
         } else if ("PARENT".equals(role)) {
-            AgeMessagingPolicy agePolicy = AgeMessagingPolicy.from(
-                agePolicyService.getMessagingPolicy(conv.getPlayerId()));
+            Optional<MessagingPolicy> policyOpt = agePolicyService.findMessagingPolicy(conv.getPlayerId());
+            if (policyOpt.isEmpty()) {
+                log.error("resolveOtherPartyName: no player profile for playerId={} (conversationId={}) "
+                        + "— falling back to Unknown Player label", conv.getPlayerId(), conv.getId());
+                return "Unknown Player";
+            }
+            AgeMessagingPolicy agePolicy = AgeMessagingPolicy.from(policyOpt.get());
             return switch (agePolicy) {
                 case PROHIBITED, PARENT_MANAGED ->
                     coachProfileRepository.findById(conv.getCoachId())
@@ -386,7 +432,8 @@ public class MessagingService {
         return switch (role) {
             case "COACH" -> conv.getCoachLastReadAt();
             case "PARENT" -> conv.getParentLastReadAt();
-            default -> conv.getPlayerLastReadAt();
+            case "PLAYER" -> conv.getPlayerLastReadAt();
+            default -> throw new IllegalArgumentException("Unknown messaging role: " + role);
         };
     }
 
@@ -395,7 +442,8 @@ public class MessagingService {
         switch (role) {
             case "COACH" -> conv.setCoachLastReadAt(now);
             case "PARENT" -> conv.setParentLastReadAt(now);
-            default -> conv.setPlayerLastReadAt(now);
+            case "PLAYER" -> conv.setPlayerLastReadAt(now);
+            default -> throw new IllegalArgumentException("Unknown messaging role: " + role);
         }
     }
 

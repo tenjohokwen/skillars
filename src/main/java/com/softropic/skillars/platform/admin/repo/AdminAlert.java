@@ -53,4 +53,8 @@ public class AdminAlert {
 
     @Column(name = "resolved_by")
     private Long resolvedBy;
+
+    /** Why the alert was raised. Populated only by the messaging moderation path; null elsewhere. */
+    @Column(length = 64)
+    private String reason;
 }

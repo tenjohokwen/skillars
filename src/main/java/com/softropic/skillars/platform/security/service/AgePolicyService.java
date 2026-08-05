@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
 import java.time.Period;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -49,9 +50,23 @@ public class AgePolicyService {
         return ageTier != AgeTier.U10;
     }
 
+    /** Write paths only: refusing on an unresolvable player is the safe answer there. */
     public MessagingPolicy getMessagingPolicy(Long playerId) {
         PlayerProfile player = playerProfileRepository.findById(playerId)
             .orElseThrow(() -> new UserNotFoundException(playerId));
+        return resolvePolicy(player);
+    }
+
+    /**
+     * Read paths: an orphaned player_profiles row should cost the one conversation/label that
+     * depends on it, never fail the whole caller. Shares resolvePolicy with the throwing variant
+     * so tier-boundary config lookups cannot drift between the two.
+     */
+    public Optional<MessagingPolicy> findMessagingPolicy(Long playerId) {
+        return playerProfileRepository.findById(playerId).map(this::resolvePolicy);
+    }
+
+    private MessagingPolicy resolvePolicy(PlayerProfile player) {
         AgeTier tier = getAgeTier(player.getDateOfBirth());
         return switch (tier) {
             case U10       -> MessagingPolicy.prohibited();

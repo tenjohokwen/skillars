@@ -6,4 +6,5 @@ public record AdminQueueSummaryDto(
     long reviewFlags,
     long strikeAlerts,
     long disputes,
+    long moderationHolds,
     long total) {}

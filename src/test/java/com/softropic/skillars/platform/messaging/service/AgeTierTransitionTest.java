@@ -58,7 +58,16 @@ class AgeTierTransitionTest {
     @InjectMocks
     private MessagingService messagingService;
 
+    /**
+     * PLAYER_ID is a player-PROFILE id (what {@code Conversation.playerId} holds and what the age
+     * policy is keyed by); PLAYER_USER_ID is the id the caller authenticates as. They are
+     * deliberately different values — collapsing them into one, as this test did before code
+     * review, makes the pre-fix comparison ({@code conv.playerId == callerUserId}) and the fixed
+     * one ({@code profile.getId() == conv.playerId}) evaluate identically, so every PLAYER-role
+     * case here would pass against the unfixed code and prove nothing.
+     */
     private static final Long PLAYER_ID = 1001L;
+    private static final Long PLAYER_USER_ID = 1101L;
     private static final Long PARENT_ID = 1002L;
     private static final Long COACH_USER_ID = 1003L;
     private static final UUID COACH_PROFILE_ID = UUID.randomUUID();
@@ -80,15 +89,23 @@ class AgeTierTransitionTest {
         conversation.setParentId(PARENT_ID);
     }
 
+    /** PLAYER identity now resolves through playerProfileRepository.findByUserId, not a direct id compare. */
+    private void stubCallerPlayerProfile(Long callerUserId, Long playerProfileId) {
+        PlayerProfile profile = new PlayerProfile();
+        profile.setId(playerProfileId);
+        lenient().when(playerProfileRepository.findByUserId(callerUserId)).thenReturn(Optional.of(profile));
+    }
+
     // ── sendMessage: PLAYER role blocked ──
 
     @Test
     void sendMessage_playerRole_parentManagedPolicy_throws403PlayerRestricted() {
+        stubCallerPlayerProfile(PLAYER_USER_ID, PLAYER_ID);
         when(conversationRepository.findById(CONVERSATION_ID)).thenReturn(Optional.of(conversation));
         when(agePolicyService.getMessagingPolicy(PLAYER_ID)).thenReturn(MessagingPolicy.parentManaged());
 
         assertThatThrownBy(() ->
-            messagingService.sendMessage(CONVERSATION_ID, "Hello", PLAYER_ID, "PLAYER"))
+            messagingService.sendMessage(CONVERSATION_ID, "Hello", PLAYER_USER_ID, "PLAYER"))
             .isInstanceOf(OperationNotAllowedException.class)
             .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode().getErrorCode())
                 .isEqualTo(MessagingErrorCode.PLAYER_DIRECT_MESSAGING_RESTRICTED.getErrorCode()));
@@ -96,11 +113,12 @@ class AgeTierTransitionTest {
 
     @Test
     void sendMessage_playerRole_prohibitedPolicy_throws403PlayerRestricted() {
+        stubCallerPlayerProfile(PLAYER_USER_ID, PLAYER_ID);
         when(conversationRepository.findById(CONVERSATION_ID)).thenReturn(Optional.of(conversation));
         when(agePolicyService.getMessagingPolicy(PLAYER_ID)).thenReturn(MessagingPolicy.prohibited());
 
         assertThatThrownBy(() ->
-            messagingService.sendMessage(CONVERSATION_ID, "Hello", PLAYER_ID, "PLAYER"))
+            messagingService.sendMessage(CONVERSATION_ID, "Hello", PLAYER_USER_ID, "PLAYER"))
             .isInstanceOf(OperationNotAllowedException.class)
             .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode().getErrorCode())
                 .isEqualTo(MessagingErrorCode.PLAYER_DIRECT_MESSAGING_RESTRICTED.getErrorCode()));
@@ -108,6 +126,7 @@ class AgeTierTransitionTest {
 
     @Test
     void sendMessage_playerRole_supervisedPolicy_succeeds() {
+        stubCallerPlayerProfile(PLAYER_USER_ID, PLAYER_ID);
         when(conversationRepository.findById(CONVERSATION_ID)).thenReturn(Optional.of(conversation));
         when(agePolicyService.getMessagingPolicy(PLAYER_ID)).thenReturn(MessagingPolicy.supervised());
         Message savedMsg = stubMessage(SenderRole.PLAYER, 999L);
@@ -117,7 +136,7 @@ class AgeTierTransitionTest {
             .thenReturn(new ModerationResult(MessageModerationStatus.APPROVED, Instant.now()));
         when(messageRepository.findById(999L)).thenReturn(Optional.of(savedMsg));
 
-        messagingService.sendMessage(CONVERSATION_ID, "Hello", PLAYER_ID, "PLAYER");
+        messagingService.sendMessage(CONVERSATION_ID, "Hello", PLAYER_USER_ID, "PLAYER");
         // No exception = success
     }
 
@@ -154,9 +173,19 @@ class AgeTierTransitionTest {
 
     @Test
     void getConversations_playerRole_prohibitedPolicy_returnsEmptyList() {
-        when(agePolicyService.getMessagingPolicy(PLAYER_ID)).thenReturn(MessagingPolicy.prohibited());
+        stubCallerPlayerProfile(PLAYER_USER_ID, PLAYER_ID);
+        when(agePolicyService.findMessagingPolicy(PLAYER_ID)).thenReturn(Optional.of(MessagingPolicy.prohibited()));
 
-        List<ConversationSummaryDto> result = messagingService.getConversations(PLAYER_ID, "PLAYER");
+        List<ConversationSummaryDto> result = messagingService.getConversations(PLAYER_USER_ID, "PLAYER");
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void getConversations_playerRole_noPlayerProfile_returnsEmptyListNot404() {
+        // AC4: an orphaned/missing profile must degrade to an empty list, never throw for the caller's
+        // whole conversation list. playerProfileRepository.findByUserId is unstubbed -> Optional.empty().
+        List<ConversationSummaryDto> result = messagingService.getConversations(PLAYER_USER_ID, "PLAYER");
 
         assertThat(result).isEmpty();
     }
@@ -166,7 +195,18 @@ class AgeTierTransitionTest {
     @Test
     void getConversations_parentRole_unrestrictedConversationExcluded() {
         when(conversationRepository.findActiveByParentId(PARENT_ID)).thenReturn(List.of(conversation));
-        when(agePolicyService.getMessagingPolicy(PLAYER_ID)).thenReturn(MessagingPolicy.unrestricted());
+        when(agePolicyService.findMessagingPolicy(PLAYER_ID)).thenReturn(Optional.of(MessagingPolicy.unrestricted()));
+
+        List<ConversationSummaryDto> result = messagingService.getConversations(PARENT_ID, "PARENT");
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void getConversations_parentRole_orphanedPlayerProfile_excludedFromList_notThrown() {
+        // AC4: an orphaned player_profiles row must cost this one conversation, not crash the list.
+        when(conversationRepository.findActiveByParentId(PARENT_ID)).thenReturn(List.of(conversation));
+        when(agePolicyService.findMessagingPolicy(PLAYER_ID)).thenReturn(Optional.empty());
 
         List<ConversationSummaryDto> result = messagingService.getConversations(PARENT_ID, "PARENT");
 

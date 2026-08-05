@@ -252,6 +252,67 @@ class ConversationResourceIT {
             });
     }
 
+    // ── AC6a: length guard counts Unicode code points, not UTF-16 code units ──
+
+    @Test
+    void sendMessage_2000AstralCodePoints_accepted() {
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+        Long conversationId = ensureConversation(coachCookies);
+
+        // U+1F600 (😀) is one code point but two UTF-16 chars (a surrogate pair) — 2000 code
+        // points is therefore 4000 chars, which the old content.length() guard would have rejected.
+        String content = "😀".repeat(2000);
+
+        ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
+            baseUrl() + MESSAGING_BASE + "/conversations/" + conversationId + "/messages",
+            HttpMethod.POST,
+            Map.of("content", content),
+            authenticatedHeaders(coachCookies),
+            Map.class);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+    }
+
+    @Test
+    void sendMessage_2001AstralCodePoints_rejected() {
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+        Long conversationId = ensureConversation(coachCookies);
+
+        String content = "😀".repeat(2001);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + MESSAGING_BASE + "/conversations/" + conversationId + "/messages",
+            HttpMethod.POST,
+            Map.of("content", content),
+            authenticatedHeaders(coachCookies),
+            Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(ex.getResponseBodyAsString()).contains("messaging.invalidContent");
+            });
+    }
+
+    // ── AC6b: message.createdAt and conversation.lastMessageAt share one captured Instant ──
+
+    @Test
+    void sendMessage_createdAtNeverAfterConversationLastMessageAt() {
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+        Long conversationId = ensureConversation(coachCookies);
+        Long messageId = sendMsgReturningId(coachCookies, conversationId, "Timestamp check");
+
+        Timestamp createdAt = jdbcTemplate.queryForObject(
+            "SELECT created_at FROM messaging.messages WHERE id = ?", Timestamp.class, messageId);
+        Timestamp lastMessageAt = jdbcTemplate.queryForObject(
+            "SELECT last_message_at FROM messaging.conversations WHERE id = ?", Timestamp.class, conversationId);
+
+        // isEqualTo, not isLessThanOrEqualTo: the pre-fix code called Instant.now() twice in
+        // sequence, so "createdAt <= lastMessageAt" was already guaranteed by a monotonic clock
+        // and the assertion could not fail. Equality is what capturing one Instant establishes.
+        assertThat(createdAt.getTime()).isEqualTo(lastMessageAt.getTime());
+    }
+
     // ── AC5: Get messages paginated ──
 
     @Test
@@ -454,6 +515,16 @@ class ConversationResourceIT {
             Map.of("content", content),
             authenticatedHeaders(cookies),
             Map.class);
+    }
+
+    private Long sendMsgReturningId(String cookies, Long conversationId, String content) {
+        ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
+            baseUrl() + MESSAGING_BASE + "/conversations/" + conversationId + "/messages",
+            HttpMethod.POST,
+            Map.of("content", content),
+            authenticatedHeaders(cookies),
+            Map.class);
+        return toLong(resp.getBody().get("messageId"));
     }
 
     private Map.Entry<String, Object> createConversation(String cookies) {

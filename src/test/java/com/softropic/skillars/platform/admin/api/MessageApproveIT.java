@@ -77,6 +77,7 @@ class MessageApproveIT {
 
     private UUID coachProfileId;
     private UUID alertId;
+    private UUID moderationAlertId;
 
     @BeforeEach
     void setUp() {
@@ -126,6 +127,13 @@ class MessageApproveIT {
                 "INSERT INTO admin.admin_alerts (alert_id, type, reference_id, reference_type, status, created_at) VALUES (?, 'MESSAGE_REPORT', ?, 'MESSAGE', 'OPEN', ?)",
                 alertId, String.valueOf(MESSAGE_ID), Timestamp.from(Instant.now()));
 
+            // AC3: this same message was also swept/held for moderation review — a reported message
+            // can carry both alert types at once, and approving must resolve both.
+            moderationAlertId = UUID.randomUUID();
+            jdbcTemplate.update(
+                "INSERT INTO admin.admin_alerts (alert_id, type, reference_id, reference_type, status, created_at) VALUES (?, 'MODERATION_UNRESOLVED', ?, 'MESSAGE', 'OPEN', ?)",
+                moderationAlertId, String.valueOf(MESSAGE_ID), Timestamp.from(Instant.now()));
+
             return null;
         });
     }
@@ -134,7 +142,7 @@ class MessageApproveIT {
     void tearDown() {
         transactionTemplate.execute(status -> {
             jdbcTemplate.update("DELETE FROM admin.admin_action_log WHERE reference_id = ?", String.valueOf(MESSAGE_ID));
-            jdbcTemplate.update("DELETE FROM admin.admin_alerts WHERE alert_id = ?", alertId);
+            jdbcTemplate.update("DELETE FROM admin.admin_alerts WHERE alert_id IN (?, ?)", alertId, moderationAlertId);
             jdbcTemplate.update("DELETE FROM messaging.message_reports WHERE id = ?", MESSAGE_REPORT_ID);
             jdbcTemplate.update("DELETE FROM messaging.messages WHERE id = ?", MESSAGE_ID);
             jdbcTemplate.update("DELETE FROM messaging.conversations WHERE id = ?", CONVERSATION_ID);
@@ -163,6 +171,52 @@ class MessageApproveIT {
         @SuppressWarnings("unchecked")
         List<?> reports = (List<?>) resp.getBody().get("reports");
         assertThat(reports).hasSize(1);
+    }
+
+    // AC6c: findBeforePivot/findAfterPivot must not drop a message sharing the pivot's exact
+    // createdAt — the tiebreaker is on id, since Instant.now() will not collide reliably.
+    @Test
+    void adminMessageDetail_siblingSharesExactPivotTimestamp_appearsInContextWindow() {
+        long siblingBeforeId = MESSAGE_ID - 1; // TSID is time-ordered; a smaller id sorts "before"
+        long siblingAfterId = MESSAGE_ID + 1;
+        Timestamp pivotCreatedAt = jdbcTemplate.queryForObject(
+            "SELECT created_at FROM messaging.messages WHERE id = ?", Timestamp.class, MESSAGE_ID);
+
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO messaging.messages (id, conversation_id, sender_id, sender_role, content, moderation_status, created_at) " +
+                "VALUES (?, ?, ?, 'COACH', 'Sibling before, same timestamp', 'APPROVED', ?)",
+                siblingBeforeId, CONVERSATION_ID, COACH_USER_ID, pivotCreatedAt);
+            jdbcTemplate.update(
+                "INSERT INTO messaging.messages (id, conversation_id, sender_id, sender_role, content, moderation_status, created_at) " +
+                "VALUES (?, ?, ?, 'COACH', 'Sibling after, same timestamp', 'APPROVED', ?)",
+                siblingAfterId, CONVERSATION_ID, COACH_USER_ID, pivotCreatedAt);
+            return null;
+        });
+
+        try {
+            String cookies = loginAndGetCookies(ADMIN_EMAIL);
+            ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
+                baseUrl() + "/api/admin/messages/" + MESSAGE_ID,
+                HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+            assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> contextBefore = (List<Map<String, Object>>) resp.getBody().get("contextBefore");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> contextAfter = (List<Map<String, Object>>) resp.getBody().get("contextAfter");
+
+            assertThat(contextBefore).anyMatch(m -> Long.valueOf(siblingBeforeId).equals(toLong(m.get("messageId"))));
+            assertThat(contextAfter).anyMatch(m -> Long.valueOf(siblingAfterId).equals(toLong(m.get("messageId"))));
+            // The pivot itself must still be excluded from both windows
+            assertThat(contextBefore).noneMatch(m -> Long.valueOf(MESSAGE_ID).equals(toLong(m.get("messageId"))));
+            assertThat(contextAfter).noneMatch(m -> Long.valueOf(MESSAGE_ID).equals(toLong(m.get("messageId"))));
+        } finally {
+            transactionTemplate.execute(status -> {
+                jdbcTemplate.update("DELETE FROM messaging.messages WHERE id IN (?, ?)", siblingBeforeId, siblingAfterId);
+                return null;
+            });
+        }
     }
 
     @Test
@@ -194,6 +248,11 @@ class MessageApproveIT {
             String.class, alertId);
         assertThat(alertStatus).isEqualTo("RESOLVED");
 
+        String moderationAlertStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM admin.admin_alerts WHERE alert_id = ?",
+            String.class, moderationAlertId);
+        assertThat(moderationAlertStatus).isEqualTo("RESOLVED");
+
         Integer logCount = jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM admin.admin_action_log WHERE reference_id = ? AND action_type = 'MESSAGE_APPROVE'",
             Integer.class, String.valueOf(MESSAGE_ID));
@@ -212,6 +271,12 @@ class MessageApproveIT {
     }
 
     // ── helpers ──
+
+    private Long toLong(Object val) {
+        if (val == null) return null;
+        if (val instanceof Number n) return n.longValue();
+        return Long.parseLong(val.toString());
+    }
 
     private String loginAndGetCookies(String email) {
         ResponseEntity<Map> loginResponse = httpTestClient.makeHttpRequest(

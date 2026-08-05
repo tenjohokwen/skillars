@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.admin.contract.AdminAlertType;
 import com.softropic.skillars.platform.admin.repo.AdminAlert;
 import com.softropic.skillars.platform.admin.repo.AdminAlertRepository;
 import com.softropic.skillars.platform.messaging.contract.ConversationReportedEvent;
+import com.softropic.skillars.platform.messaging.contract.MessageHeldForReviewEvent;
 import com.softropic.skillars.platform.messaging.contract.MessageReportedEvent;
 import com.softropic.skillars.platform.payment.contract.event.StrikeThresholdReachedEvent;
 import com.softropic.skillars.platform.reviews.contract.ReviewFlaggedEvent;
@@ -78,6 +79,19 @@ class AdminAlertEventListenerTest {
         assertThat(saved.getType()).isEqualTo(AdminAlertType.REVIEW_FLAG);
         assertThat(saved.getReferenceId()).isEqualTo(reviewId.toString());
         assertThat(saved.getReferenceType()).isEqualTo(AdminAlertReferenceType.REVIEW);
+    }
+
+    @Test
+    void onMessageHeldForReview_insertsModerationUnresolvedAlert() {
+        long messageId = 54321L;
+        listener.onMessageHeldForReview(new MessageHeldForReviewEvent(messageId, 77L, "MODERATION_ORPHAN_SWEPT"));
+
+        ArgumentCaptor<AdminAlert> captor = ArgumentCaptor.forClass(AdminAlert.class);
+        verify(adminAlertRepository).save(captor.capture());
+        AdminAlert saved = captor.getValue();
+        assertThat(saved.getType()).isEqualTo(AdminAlertType.MODERATION_UNRESOLVED);
+        assertThat(saved.getReferenceId()).isEqualTo(String.valueOf(messageId));
+        assertThat(saved.getReferenceType()).isEqualTo(AdminAlertReferenceType.MESSAGE);
     }
 
     @Test

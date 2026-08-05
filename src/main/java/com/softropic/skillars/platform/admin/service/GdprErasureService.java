@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.admin.service;
 
+import com.softropic.skillars.platform.admin.repo.AdminAlertRepository;
 import com.softropic.skillars.platform.admin.repo.GdprRequest;
 import com.softropic.skillars.platform.admin.repo.GdprRequestRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
@@ -47,6 +48,7 @@ import java.util.stream.Collectors;
 public class GdprErasureService {
 
     private final GdprRequestRepository gdprRequestRepository;
+    private final AdminAlertRepository adminAlertRepository;
     private final UserRepository userRepository;
     private final CoachProfileRepository coachProfileRepository;
     private final PlayerProfileRepository playerProfileRepository;
@@ -103,6 +105,9 @@ public class GdprErasureService {
 
         // Hard-delete messages (all rows including soft-deleted — Article 17)
         messageRepository.deleteAllBySenderId(userId);
+        // Close any admin alert left pointing at a message we just erased — otherwise it sits OPEN
+        // forever, since every admin action on it now 404s and there is no dismiss endpoint.
+        adminAlertRepository.resolveOpenAlertsForDeletedMessages();
 
         // Hard-delete non-APPROVED reviews; anonymise APPROVED
         coachReviewRepository.deleteNonApprovedByAuthorId(userId, ReviewModerationStatus.APPROVED);

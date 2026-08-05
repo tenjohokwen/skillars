@@ -18,6 +18,7 @@ import com.softropic.skillars.platform.messaging.repo.MessageReport;
 import com.softropic.skillars.platform.messaging.repo.MessageReportRepository;
 import com.softropic.skillars.platform.messaging.repo.MessageRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -39,6 +40,7 @@ public class MessagingReportService {
     private final MessageReportRepository messageReportRepository;
     private final ConversationReportRepository conversationReportRepository;
     private final CoachProfileRepository coachProfileRepository;
+    private final PlayerProfileRepository playerProfileRepository;
     private final ApplicationEventPublisher eventPublisher;
 
     public ReportResponse reportMessage(Long conversationId, Long messageId, Long reporterUserId,
@@ -124,7 +126,11 @@ public class MessagingReportService {
         return new ReportResponse(saved.getId());
     }
 
-    // Duplicates MessagingService.verifyIsParty() — injecting MessagingService would create a circular dep
+    // Duplicates MessagingService.verifyIsParty() — injecting MessagingService would create a
+    // circular dep. Deliberately kept in sync with that copy: both fixed together for
+    // skillars-deferred-16 (silent default->player-id-vs-user-id compare, and no rejection of an
+    // unrecognised role). Do not "solve" the duplication by injecting MessagingService or
+    // extracting a shared bean — the circular dependency is real.
     private void verifyIsParty(Conversation conv, Long callerUserId, String role) {
         boolean isParty = switch (role) {
             case "COACH" -> {
@@ -132,7 +138,10 @@ public class MessagingReportService {
                 yield coach.map(c -> Objects.equals(c.getId(), conv.getCoachId())).orElse(false);
             }
             case "PARENT" -> Objects.equals(conv.getParentId(), callerUserId);
-            default -> Objects.equals(conv.getPlayerId(), callerUserId);
+            case "PLAYER" -> playerProfileRepository.findByUserId(callerUserId)
+                .map(p -> Objects.equals(p.getId(), conv.getPlayerId()))
+                .orElse(false);
+            default -> throw new IllegalArgumentException("Unknown messaging role: " + role);
         };
         if (!isParty) {
             throw new OperationNotAllowedException(

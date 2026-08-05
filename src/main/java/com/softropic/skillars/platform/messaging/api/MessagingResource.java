@@ -217,17 +217,24 @@ public class MessagingResource {
         }
     }
 
-    private String resolveRole(Authentication auth) {
-        return resolveRole(auth, null);
-    }
-
     private String resolveRole(Authentication auth, String roleHint) {
         if ("PARENT".equals(roleHint) &&
             auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_PARENT"))) {
             return "PARENT";
         }
+        // Symmetric escape for PLAYER. Without it, a caller who is both a parent and a
+        // self-registered player can never reach the PLAYER branch — ROLE_COACH and ROLE_PARENT
+        // are matched first below — so their own conversations are invisible in the list and a
+        // direct fetch 403s, because verifyIsParty evaluates the PARENT arm against their user id.
+        if ("PLAYER".equals(roleHint) &&
+            auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_PLAYER"))) {
+            return "PLAYER";
+        }
         if (auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_COACH"))) return "COACH";
         if (auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_PARENT"))) return "PARENT";
-        return "PLAYER";
+        if (auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_PLAYER"))) return "PLAYER";
+        throw new OperationNotAllowedException(
+            "Caller does not hold a recognised messaging role",
+            MessagingErrorCode.NOT_A_PARTY);
     }
 }

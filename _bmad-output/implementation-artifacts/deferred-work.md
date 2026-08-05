@@ -239,7 +239,152 @@ creation D1 (whose heading emptied and was removed with it), `deferred-14` revie
 - **Still open and deliberately not closed:** `## Deferred from: skillars-deferred-15 story creation`
   D1 (no durable pre-capture record). It is what confines the sweeper to pack-funded bookings.
 
+## Last audit: 2026-08-05 (skillars-deferred-16 story creation)
+
+Written while scoping `skillars-deferred-16`. Like the `deferred-14` and `deferred-15` story-creation
+audits and unlike a code-review audit, this one had no independent review layers — every claim comes
+from a direct read of the named file at commit `0d06925`. Scope was **the messaging module and its
+admin consumer only**; nothing outside `platform.messaging` / `platform.admin` was re-read except the
+one booking-module item corrected below. Gaps stay explicit:
+
+- **Ten items annotated `OWNED BY skillars-deferred-16`, each naming the AC that closes it** (they are
+  deleted by that story once shipped, not now): `skillars-8-3` W2 (split across AC1 and AC2),
+  `skillars-8-2` D1 and D2, `skillars-8-1` D1, D3, D5 and D6, `skillars-8-4` W3 and W4, and
+  `skillars-10-1` D2 under the `…-admin-moderation-queue-message-content-actions (2026-06-30)` heading
+  (**not** the `…-10-1 patches` heading's D2, which stays — two headings begin with `skillars-10-1` and
+  each has a `D2`).
+- **Three items deleted as already closed or unreachable, verified by direct read:**
+  - `skillars-8-3` W5 (`content` dereferenced before its null check in `GeminiModerationService.moderate`)
+    — **closed.** `:38-41` now opens the method with `if (content == null || content.isBlank())` before
+    any dereference, returning a `SAFE` result.
+  - `skillars-8-3` W3 (`conv.getParentId()` returned without a null guard for SUPERVISED in
+    `ModerationResultApplier.resolveRecipient`) — **unreachable.** `Conversation.parentId` is
+    `nullable = false` (`Conversation.java:29-30`) and `V65__messaging_module_init.sql` declares
+    `parent_id BIGINT NOT NULL`, so `:105` cannot return null. The item's second clause ("same pattern in
+    `MessagingService.resolveRecipient`") names a method that no longer exists — `resolveRecipient` lives
+    only in `ModerationResultApplier` and `AdminMessageService` now. Same precedent as the null-content
+    `10-1` item `deferred-13` deleted.
+  - `skillars-7-2` Group 4 D14 (`CANCEL_PARENT` not permitted from `PAYMENT_PENDING`) — **closed, and its
+    audit annotation was wrong.** The item carried `[AUDIT 2026-08-04: STILL OPEN … BookingStateMachine
+    .java:30-32 maps PAYMENT_PENDING to PAYMENT_CAPTURED and PAYMENT_FAILED only]`. `BookingStateMachine
+    .java:34-38` now maps `PAYMENT_PENDING → {PAYMENT_CAPTURED, PAYMENT_FAILED, CANCEL_PARENT}` with a
+    comment naming `deferred-12` AC4 as the change. Out of this story's module, deleted anyway because a
+    wrong `STILL OPEN` marker is worse than no marker in a file whose value is that its annotations can
+    be trusted.
+- **Three owned items were found to be mis-stated, and are corrected inline:**
+  - `skillars-8-4` W4 says the soft-delete race "requires `@Version` on `Message`". It does not, and that
+    fix would be harmful — five paths write the row (`ModerationResultApplier.applyResult:63`,
+    `AdminMessageService.approveMessage:101`/`blockMessage:144`, `deferred-16`'s new sweeper, and
+    `softDeleteMessage:281`), so optimistic locking would turn benign moderation-pipeline interleavings
+    into `OptimisticLockingFailureException`s thrown from a request thread with SSE callbacks registered
+    and no retry. `deferred-16` AC5 uses the codebase's established `findByIdForUpdate` instead.
+  - `skillars-8-1` D1's stated blocker is gone. Its `[AUDIT 2026-08-04: STILL OPEN … no playerId→userId
+    mapping exists anywhere in `platform.messaging`]` is literally true but out of date:
+    `V84__player_self_registration.sql` (shipped outside the story flow, commit `1f24a5e`) added
+    `main.player_profiles.user_id` with a `chk_pp_owner` CHECK, seeded `ROLE_PLAYER` as authority 102,
+    and `PlayerProfileRepository.findByUserId`/`existsByUserId` now exist. The mapping the item asked for
+    is available in `platform.security.repo`, which is why the item is now closable.
+  - `skillars-8-1` D5's stated harm does not exist. It warns that "any consumer using `lastMessageAt` as a
+    cursor may miss the just-sent message"; there is no such consumer. `countUnread`'s `:since` comes from
+    `resolveLastReadAt` (the per-role `*LastReadAt` columns), and `lastMessageAt` is read only for the two
+    conversation-list sorts (`MessagingService:117,:222`) and a relative-time label
+    (`MessagingPage.vue:30`). `deferred-16` AC6b keeps the fix as plain correctness and drops the framing.
+- **Scope correction found while drafting AC4, recorded because neither owned item mentions it:**
+  `skillars-8-2` D1/D2 and `skillars-8-1` D1/D6 all name `MessagingService`, but
+  `MessagingReportService.verifyIsParty:127-141` is an acknowledged hand-copy of
+  `MessagingService.verifyIsParty` — its own comment says "Duplicates `MessagingService.verifyIsParty()` —
+  injecting `MessagingService` would create a circular dep" — carrying the identical silent
+  `default -> Objects.equals(conv.getPlayerId(), callerUserId)` arm, and it gates the abuse-report
+  endpoints. `deferred-16` AC4 fixes both copies and keeps the duplication (the circular dependency is
+  real; untangling it is a separate job).
+- **Added by this audit:** one new item under `## Deferred from: skillars-deferred-16 story creation
+  (2026-08-05)` — `messaging.conversations.parent_id` is `NOT NULL` while a self-registered adult
+  player's profile has `parent_id IS NULL`, so conversation creation for such a player would fail at the
+  DB. Found while scoping AC4; not reachable today and deliberately not fixed by `deferred-16`.
+- **Examined and deliberately left alone** (recorded so the next audit does not re-litigate them):
+  `skillars-8-1` D2 (N+1 in `getConversations` — real, unchanged, an MVP-volume tradeoff; belongs with the
+  other N+1 items in a performance pass, and `deferred-16` AC4 edits those exact lines without turning
+  into a batching rewrite); `skillars-8-3` W1 (age-policy and party checks outside a transaction — the
+  `NOT_SUPPORTED` propagation is spec-designed and load-bearing for `deferred-16` AC1, and `sendMessage`
+  already re-checks `BLOCKED` inside the transaction at `:159-165`); `skillars-10-1` patches D1 (null
+  pivot `createdAt` — `V65` declares `created_at … NOT NULL` and the only caller reads it off a persisted
+  row, so test-fixture-only; `deferred-16` AC6c edits those same two queries and deliberately does not
+  fold it in); `skillars-10-1` patches D2 (context window excludes soft-deleted messages while
+  `findAllForAdmin` includes them — verified still true at `MessageRepository:32-40`, but it is a product
+  call about what an admin should see, not a defect); `skillars-8-4` W5 (`IS_AUTHENTICATED` on the report
+  endpoints — consistent with every other endpoint in `MessagingResource`, 403 preserved at the service
+  layer); `skillars-8-1` D4 (`Instant.EPOCH` sentinel undocumented — a comment already stands at
+  `MessagingService:323`).
+- **Not re-checked:** every item outside `platform.messaging`/`platform.admin`. No `deploy-*` section was
+  read — the same gap the 2026-08-04 and the three 2026-08-05 audits flagged, now five audits running.
+
+### Implementation outcome (2026-08-05, `skillars-deferred-16` shipped)
+
+All ten owned items are **closed by shipped code and deleted from this file**: `skillars-8-3` W2,
+`skillars-8-2` D1/D2 (heading emptied and removed with them), `skillars-8-1` D1/D3/D5/D6 (D2 and D4
+left in place), `skillars-8-4` W3/W4 (W5 left in place), and `skillars-10-1` D2 under the
+`…-admin-moderation-queue-message-content-actions` heading (heading emptied and removed; the separate
+`…-10-1 patches` heading's own D2 is untouched). What implementation found that the story-creation
+audit above did not:
+
+- **Task 1's `PENDING`-reader grep audit confirmed the story-creation claim exactly**, re-run
+  independently before any code changed: three `PENDING` references in `src/main`
+  (`ModerationResultApplier:40` fallback, `MessagingService:171` write, `Message.java:39` column
+  default), all writes/defaults, and `MessageRetentionScheduler` remains the module's only
+  `@Scheduled` method (age-based deletion, not status-based). No re-scope of AC2 was needed.
+- **AC1 mutation-verified.** With the `PENDING`/`deletedAt` guard in `ModerationResultApplier
+  .applyResult` temporarily removed, `ModerationResultApplierTest`'s two guard cases fail exactly as
+  the Task 1 probe predicted: an admin `BLOCKED` message reverts to `APPROVED` (`expected: BLOCKED but
+  was: APPROVED`), and a soft-deleted `PENDING` message accepts the verdict anyway. Both pass again
+  with the guard restored.
+- **AC2 mutation-verified.** With `MessageModerationSweeper.sweepOne`'s re-read guard removed, the
+  sweeper unconditionally writes `UNDER_REVIEW` onto a message that had already resolved to
+  `APPROVED` or been soft-deleted between the select and the sweep transaction opening —
+  `MessageModerationSweeperTest`'s `sweep_messageAlreadyResolvedBetweenSelectAndSweep...` and
+  `sweep_messageSoftDeletedBetweenSelectAndSweep...` both fail on an unwanted `save()` invocation.
+  Restored, both pass.
+- **AC5 mutation-verified.** Reverting `softDeleteMessage`'s `findByIdForUpdate` to `findById` makes
+  `SoftDeleteIT`'s `concurrentDoubleSoftDelete_exactlyOneSucceeds_oneConflicts` fail with 2 successful
+  204s instead of 1 success + 1 `409 messaging.alreadyDeleted` (`expected: 1 but was: 2`) — the lock,
+  not the guard ordering, is what makes the losing caller observe the conflict. Restored, passes.
+- **Correction: AC6d's premise was already false at story-creation time, found before writing `V91`.**
+  The story's AC6d and Task 8(d) describe `idx_message_reports_message_id` and
+  `idx_conversation_reports_conversation_id` as still present and needing a `DROP INDEX IF EXISTS` in
+  the new migration. Both were **already dropped** by `V81__drop_redundant_report_indexes.sql`, which
+  pre-dates this story and cites the identical justification (redundant against the leading column of
+  the two `uq_*` unique constraints). `V91__messaging_moderation_recovery.sql` carries no DDL for
+  AC6d — re-adding an already-applied `DROP INDEX IF EXISTS` would have been harmless but misleading
+  to the next reader auditing what `V91` actually changed.
+- **A pre-existing unit test, `AgeTierTransitionTest`, encoded the exact PLAYER-identity bug AC4
+  fixes** — found only because `mvn -o verify` failed on it after the identity change, not by design.
+  Its `sendMessage_playerRole_*` cases passed a caller id that the test treated as interchangeable
+  with the player-profile id (the pre-fix bug's premise, verbatim), and its `getConversations_*`
+  cases stubbed the now-dead `getMessagingPolicy` call on the read paths AC4 switched to
+  `findMessagingPolicy`. Fixed alongside the identity change: 4 existing cases updated to resolve the
+  caller's profile via `findByUserId` as production code now does, plus 2 new cases
+  (`getConversations_playerRole_noPlayerProfile_returnsEmptyListNot404`,
+  `getConversations_parentRole_orphanedPlayerProfile_excludedFromList_notThrown`) pinning the AC4
+  behaviour directly. An independent confirmation, from an unrelated pre-existing test breaking, that
+  the read paths previously assumed exactly the identity shape AC4 replaces.
+- Full `mvn -o verify` green after every mutation guard above was restored: 0 failures, 0 errors.
+  **The counts originally recorded here — "840 unit + 883 IT" — were WRONG, and wrong in exactly the
+  way `skillars-deferred-15`'s correction warned about. They summed the report DIRECTORY, not the
+  classes surefire ran.** `target/surefire-reports/` held 98 `.txt` files against 95 from the final
+  run; all three stale ones are ITs, and `MessagingIdentityIT` (5 tests) was double-counted against
+  failsafe. `target/failsafe-reports/` held 140, one being `StrandedPaymentPendingProbeIT` for a
+  class that no longer exists in `src/test`. True totals were **≈816 unit + ≈881 IT**. Caught by the
+  2026-08-05 code review, which re-derived them from file timestamps. The lesson `deferred-15`
+  recorded was quoted in this very bullet and still not applied: filter the report files by the
+  final run's timestamp, do not trust the directory listing.
+
 ---
+
+## Deferred from: skillars-deferred-16 story creation (2026-08-05)
+- D1: **`messaging.conversations.parent_id` is `NOT NULL`, but a self-registered adult player has no parent — so a conversation cannot be created for one.** `V84__player_self_registration.sql` dropped `main.player_profiles.parent_id`'s NOT NULL and added `user_id` under a `chk_pp_owner` CHECK (exactly one of the two is ever set), so a profile created by `ShadowAccountService.createSelfOwnedPlayerProfile:83-105` has `parentId == null`. `MessagingService.initiateConversation:81` passes `player.getParentId()` straight into `ConversationCreationHelper.tryCreate`, and both `Conversation.parentId` (`:29-30`) and `V65__messaging_module_init.sql`'s `parent_id BIGINT NOT NULL` reject it — the resulting `DataIntegrityViolationException` is caught at `:82`, the re-query at `:84` finds nothing, and the original exception is rethrown as a 500.
+
+  **Not reachable today**, which is why `skillars-deferred-16` deliberately does not fix it: `initiateConversation` requires a `CONFIRMED`/`UPCOMING`/`IN_PROGRESS`/`COMPLETED` booking between the coach and the player (`:60-65`), and every booking-creation endpoint is `@PreAuthorize(HAS_PARENT_ROLE)` (`BookingResource:36,43`, `BookingBatchResource:34,40`), so a player with no parent can never acquire the booking that would let a coach open the conversation. It becomes reachable the moment player-initiated booking exists.
+
+  The fix is not a one-line `nullable` change: `parent_id` is read as a party identity by `MessagingService.verifyIsParty:302`, as an SSE recipient by `ModerationResultApplier.resolveRecipient:105` and `AdminMessageService.resolveRecipient:192-201`, and gates both parental-oversight endpoints (`:203-256`). Making it nullable means deciding what each of those does for a conversation with no parent, which is the same product decision as "should adult players message coaches at all". Pair it with that decision rather than doing it defensively. [`src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java:79-89`, `ConversationCreationHelper.java:25-36`, `src/main/resources/db/migration/V65__messaging_module_init.sql`, `V84__player_self_registration.sql`]
 
 ## Deferred from: skillars-deferred-15 story creation (2026-08-05)
 - D1: **No durable pre-capture record for a Stripe charge, so a stranded credit-funded booking cannot be reconciled — by a sweeper or by anything else.** On both settlement paths the capture is an irreversible external side effect that happens *before* the DB writes recording it, and those writes join a transaction that can still fail: single bookings do `paymentGateway.chargeAndCapture(...)` (`PaymentLifecycleService:102`) then `persistPaymentSuccess` (`:114`), and batches do `chargeAndCaptureForBatch` for the whole batch upfront (`:190-191`) then a per-booking `confirmCreditBatchPayment` loop (`:209-233`). A JVM death or transaction failure in between leaves **money captured at Stripe, the booking in `PAYMENT_PENDING`, and no `payment.booking_payments` row** — for a batch, potentially several such siblings while earlier ones committed normally.
@@ -274,23 +419,11 @@ creation D1 (whose heading emptied and was removed with it), `deferred-14` revie
 - D1: `findBeforePivot`/`findAfterPivot` return empty context when pivot message `createdAt` is null at JPA layer — DB NOT NULL prevents this in production; only affects test fixtures that construct Message in-memory without setCreatedAt(). [MessageRepository.java:33-37]
 - D2: Context window (`findBeforePivot`/`findAfterPivot`) excludes soft-deleted messages while `findAllForAdmin` includes them — chronological gap in admin message detail view with no indication; intentional spec asymmetry between views; UX concern for service layer mapping. [MessageRepository.java:33-40]
 
-## Deferred from: code review of skillars-10-1-admin-moderation-queue-message-content-actions (2026-06-30)
-- D2: `findBeforePivot` / `findAfterPivot` strict `<`/`>` on `createdAt` excludes messages sharing the exact pivot timestamp from context window — low-probability collision but possible when two messages arrive within the same millisecond. [MessageRepository.java:33-37]
-
 ## Deferred from: code review of skillars-8-4 (2026-06-27)
-- W3: Redundant explicit indexes in V66 — `idx_message_reports_message_id` and `idx_conversation_reports_conversation_id` are covered by the unique constraint leading column. Minor storage waste. [`V66__messaging_reports.sql:27-28`]
-- W4: `softDeleteMessage` ALREADY_DELETED race window — two concurrent soft-deletes by the same user both pass `deletedAt == null` at READ_COMMITTED; second silently succeeds instead of 409. Requires `@Version` on `Message`. [`MessagingService.java:263`]
 - W5: `@PreAuthorize(IS_AUTHENTICATED)` on report endpoints instead of party-check annotation — consistent with module pattern; 403 preserved at service layer. Architectural note for future hardening. [`MessagingResource.java:140,151,168`]
 
 ## Deferred from: code review of skillars-8-3 (2026-06-26)
 - W1: TOCTOU — age policy + party checks run without a transaction before committed message save; spec-designed (NOT_SUPPORTED), window is narrow [`MessagingService.java:129-145`]
-- W2: Message orphaned in PENDING on JVM crash or `applyResult()` DB exception after initial tx commit; no cleanup path or retry mechanism [`MessagingService.java:167` / `GeminiModerationService.java:53`]
-- W3: `conv.getParentId()` returned without null guard for SUPERVISED policy in `ModerationResultApplier.resolveRecipient()` — same pattern in `MessagingService.resolveRecipient()` [`ModerationResultApplier.java:104`]
-- W5: `content` dereferenced before null check in `GeminiModerationService.moderate()`; guarded only at the single current call-site [`GeminiModerationService.java:35`]
-
-## Deferred from: code review of skillars-8-2 (2026-06-26)
-- D1: `resolveOtherPartyName()` COACH branch — `agePolicyService.getMessagingPolicy()` throws `UserNotFoundException` for deleted players, crashing coach's entire `getConversations()` call; blast radius expanded from send-path (8.1 deferral) to read-path [`MessagingService.java:311`]
-- D2: `getConversations()` PARENT stream filter — same `UserNotFoundException` propagation for deleted players crashes parent's entire conversation list [`MessagingService.java:103-105`] — **[AUDIT 2026-08-05 (deferred-15 story creation), applies to D1 and D2 both: the throw is real and unguarded (`AgePolicyService.getMessagingPolicy:52-54`; call sites at `MessagingService:102-105` and `:311`), but NO path in `src/main` deletes a `player_profiles` row.** `GdprErasureService` anonymises the `User` login/email and deletes development data (`:83-84,180-190`) while leaving the profile intact; `UserAdminService.deleteUserInTransaction:136-138` deletes only never-activated `User` rows. So "deleted player" is reachable through a data-integrity failure, not through any ordinary deletion flow. Keep both items — the fail-hard-on-orphan behaviour is still wrong and the blast radius (whole conversation list) is still as described — but treat them as hardening, not as a live user-facing crash. Messaging-module scope; deliberately not folded into `deferred-15`.**]
 
 ## Deferred from: adversarial code review of skillars-7-2 Group 2 Service Layer (2026-06-24)
 - D1: Non-atomic idempotency check in `onBookingAccepted` (`existsById` bare SELECT outside TX) — root cause addressed by P3 (TX boundary restructure); revisit if duplicate event replay observed in production [`PaymentLifecycleService.java:52-55`]
@@ -795,7 +928,6 @@ creation D1 (whose heading emptied and was removed with it), `deferred-14` revie
 
 ### Group 4 adversarial deferred (Booking module) — 2026-06-24
 - D13: `getParentBookings` does not clamp negative `effectiveCredits` to 0 — inconsistency with `getParentPlayerSchedule`; pre-existing [`BookingService.java:316`]
-- D14: `CANCEL_PARENT` not permitted from `PAYMENT_PENDING` — booking stuck if Stripe webhook never fires; design gap; MVP acceptable; Story 7.3 [`BookingStateMachine.java:30`] — **[AUDIT 2026-08-04: STILL OPEN. Story 7.3 has shipped; `BookingStateMachine.java:30-32` maps PAYMENT_PENDING to PAYMENT_CAPTURED and PAYMENT_FAILED only.]**
 - D15: Past-elapsed `requestedStartTime` at CANCEL_PARENT gives NONE refund eligibility — correct path is NO_SHOW_COACH event; edge case [`BookingService.java:471`]
 - D16: `Booking` identity columns (`parentId`, `playerId`, `coachId`) lack `updatable = false` — defence-in-depth; no current mutation path; pre-existing [`Booking.java:31-37`]
 
@@ -818,12 +950,8 @@ creation D1 (whose heading emptied and was removed with it), `deferred-14` revie
 - D1: Running balance incorrect when two ParentCreditLedger entries share an identical createdAt instant and straddle a page boundary — the strict-less-than predicate in sumByParentIdAndCreatedAtBefore excludes the prior-page twin from the opening balance, understating the running balance for the current page by that twin's amount; extremely rare in practice; inherent in the chosen pagination anchor design [RevenueReportingService.java:211]
 
 ## Deferred from: code review of skillars-8-1-messaging-module-foundation-conversation-threads (2026-06-26)
-- D1: PLAYER role identity mismatch — conv.getPlayerId() stores PlayerProfile.id (TSID Long) but callerUserId is user.id (different TSID sequence); verifyIsParty always returns false for PLAYER callers and findActiveByPlayerId always returns empty list. By-design for Story 8.1 (players are shadow accounts that don't authenticate independently); Story 8.2 must introduce a playerId→userId mapping. [MessagingService.java:verifyIsParty, getConversations] — **[AUDIT 2026-08-04: STILL OPEN. Story 8.2 has shipped; no playerId→userId mapping exists anywhere in `platform.messaging`.]**
 - D2: N+1 query pattern in getConversations — 3 queries per conversation (findLastApproved, countUnread, resolveOtherPartyName); acceptable for MVP conversation volumes; batch-optimize when conversation counts grow. [MessagingService.java:toSummary]
-- D3: content.length() counts UTF-16 code units, not Unicode codepoints — a 1000-emoji message uses 2000 surrogate-pair chars and passes the 2000-char guard but contains only 1000 codepoints. No downstream column length limit today; address if DB text constraints are added. [MessagingService.java:sendMessage]
 - D4: Instant.EPOCH as "never read" sentinel is undocumented — all messages with createdAt > epoch count as unread, which is correct for current data; fragile if a historical data migration backfills timestamps at or before epoch. [MessagingService.java:toSummary]
-- D5: Two separate Instant.now() calls in sendMessage — message.createdAt is captured before conv.lastMessageAt, creating a few-millisecond gap. Any consumer using lastMessageAt as a cursor may miss the just-sent message if createdAt < lastMessageAt. [MessagingService.java:sendMessage]
-- D6: Default role arm (else/default → "PLAYER") silently absorbs unknown or null role values across verifyIsParty, resolveLastReadAt, and updateLastRead. Safe while resolveRole() is the sole producer; add an explicit throw for unknown roles in a hardening pass. [MessagingService.java]
 
 ## Deferred from: code review of skillars-10-4-gdpr-data-tools-account-deletion (2026-06-30)
 - D1: DB connection held during S3 upload — `GdprExportService.buildExport()` annotated `@Transactional` keeps a DB connection checked out from the pool for the entire ZIP build + S3 put. Resolved if Patch 1 (remove `@Transactional`) is applied; defer this entry only if Patch 1 is skipped. [GdprExportService.java:180]
@@ -892,3 +1020,13 @@ creation D1 (whose heading emptied and was removed with it), `deferred-14` revie
 - D2: `BookingService.acceptBooking` / `RescheduleService.acceptReschedule` call `coachProfileRepository.findByIdForUpdate` and then immediately `entityManager.refresh(lockedCoach, PESSIMISTIC_WRITE)` — two separate `SELECT ... FOR UPDATE` round trips on the same row for the same lock. Verified this is the exact idiom already established in `BookingService.createBookingRequest:201-215` (`skillars-deferred-12` AC3), which this diff was explicitly directed to mirror byte-for-byte — a pre-existing pattern, not introduced here. [`src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java:279-289`]
 - D3: `BookingRepository.findPaymentPendingOlderThan`'s correctness assumes `updatedAt` reflects only the transition into `PAYMENT_PENDING`. `@PreUpdate` stamps `updatedAt` on any field change, so an unrelated write to a `PAYMENT_PENDING` booking would silently reset the stranded-booking clock and let it evade the sweep indefinitely. Verified no such write path exists anywhere in `src/main` today — speculative risk against a future path, not a live defect. [`src/main/java/com/softropic/skillars/platform/booking/repo/BookingRepository.java`]
 - D4: The batch-status trailing transaction in `BookingBatchService.acceptAll` and the `AFTER_COMMIT` listener's `updateBatchStatusFromBooking` both read-then-write `computeBatchStatus` unlocked — a last-writer-wins race remains between them, though both now compute from the same correct formula (unlike the pre-`skillars-deferred-15` AC5 disagreement between two different formulas). This residual non-atomicity was already explicitly documented and accepted in `skillars-deferred-14`'s own commit message ("acceptAll is explicitly documented as no longer atomic"). [`src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java:249-258,308-321`]
+
+## Deferred from: code review of skillars-deferred-16-messaging-moderation-recovery-identity-safety (2026-08-05)
+- D1: The new throwing `default` role arms raise `IllegalArgumentException`, which `MessagingApiAdvice` does not handle — a role string outside `{COACH, PARENT, PLAYER}` yields 500 with a stack trace rather than the 403 `messaging.notAParty` the old silent-PLAYER fallback produced. Latent: `MessagingResource.resolveRole` now guarantees one of the three values for every controller entry, but the guard and the throws live in different classes with no shared enum, so the invariant is convention only. The exception type was prescribed verbatim by the story (AC4). [`src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java:339,436,446`, `MessagingReportService.java:144`]
+- D2: `softDeleteMessage` takes the `PESSIMISTIC_WRITE` row lock before any authorization check — `findByIdForUpdate` runs first, and the conversation-membership and sender-ownership guards run after it, so any authenticated caller can lock an arbitrary message row (and block `applyResult` / the sweeper / the legitimate owner) for the duration of the transaction before receiving their 403. Introduced by converting `findById` → `findByIdForUpdate`, but AC5 explicitly prescribed "take the locked read first and keep every existing guard in its current order after it". Transactions here are short, so impact is contention, not denial. [`src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java:293-302`]
+- D3: AC4's orphaned-profile fail-safety is list-only, producing three different outcomes for one conversation: `getConversations` excludes it, `getMessages` returns it in full (no age-policy lookup at all — only `verifyIsParty` on `parentId`), and `sendMessage` 404s on the throwing variant. The "excluding from parent's list" ERROR log reads like an access-control decision but is not one. Resolving the inconsistency is a product call about what a parent should see for an unresolvable player, beyond AC4's stated scope. [`src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java:108-116,168,215-228`]
+- D4: Rolling-deploy ordering for the new `AdminAlertType.MODERATION_UNRESOLVED`. `V91` correctly widens the CHECK before the enum ships, but nothing gates *creation* of the new alert type until every instance carries the new enum — an older instance reading such a row hits `Enum.valueOf` and 500s the whole `GET /api/admin/queue` and `/queue/summary` page, not just the affected row. The sweeper's first tick fires at startup of the first upgraded instance. Not reachable on the current single-instance Docker Compose deployment. [`src/main/java/com/softropic/skillars/platform/admin/contract/AdminAlertType.java:4`, `AdminQueueService.java:50-58,128-133`]
+- D5: AC6a's code-point guard admits 2000 code points = up to **4000** UTF-16 chars, which is exactly `platform.messaging.moderation.gemini.max-input-chars`. `GeminiModerationService` truncates with `content.substring(0, maxInputChars)` only when `length() > maxInputChars`, so at 4000 == 4000 the branch is not taken and no surrogate is split — safe by exact coincidence. Lowering `max-input-chars` (the reviews profile already uses 2000) or raising the code-point limit ships an unpaired surrogate into the moderation prompt. Nothing in code or tests ties the two constants together. Separately, `codePointCount` validates count but not validity: a lone surrogate escape in the JSON body passes the guard and is silently mangled to `?` by the JDBC UTF-8 encoder. [`src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java:150-151`, `GeminiModerationService.java:43-45`, `application.yaml:263,268`]
+- D6: `SoftDeleteIT.concurrentDoubleSoftDelete_exactlyOneSucceeds_oneConflicts` synchronises the *start* of two HTTP round-trips (TCP connect, auth filter chain, controller dispatch) rather than the read-check-write critical section, so it can pass by request serialisation rather than by the lock. The dev recorded a successful mutation verification (reverting to `findById` produced two 204s), so the fix is proven — but the test is not a durable guard, the same class of finding `skillars-deferred-13` and `-15` reviews both raised. Its `SELECT COUNT(*) ... WHERE id = ? AND deleted_at IS NOT NULL` assertion is additionally tautological over a primary key. [`src/test/java/com/softropic/skillars/platform/messaging/api/SoftDeleteIT.java`]
+- D7: No test walks AC3's chain end to end — sweep → `MessageHeldForReviewEvent` → alert → queue listing → approve → alert RESOLVED. `AdminQueueIT`, `MessageApproveIT` and `MessageBlockIT` all hand-insert the `MODERATION_UNRESOLVED` alert row via `jdbcTemplate`, and `MessageModerationSweeperIT` stops at asserting the alert exists. Each link is covered in isolation; the seam between the sweeper's event and the admin queue's rendering and resolution is unpinned. [`src/test/java/com/softropic/skillars/platform/admin/api/AdminQueueIT.java:130-140`, `MessageApproveIT.java:127-134`, `MessageModerationSweeperIT.java`]
+- D8: `PlaybackServiceIT.authorizePlayback_performance_p99Under200ms` is a structurally flaky perf assertion and currently fails on `master`. It computes `latencies[(int) (iterations * 0.99)]` over a sorted 100-element array, i.e. `latencies[99]` — the **maximum**, not the p99 — so it asserts that the single slowest of 100 un-warmed `authorizePlayback` calls stays under 200 ms, a figure dominated by JIT warmup, GC and Testcontainers latency rather than by the code under test. Confirmed pre-existing during the deferred-16 code review by running it in a clean `git worktree` at HEAD `0d06925` (no review changes): fails at 267 ms. Observed 217 ms / 390 ms / 267 ms across three runs on one machine, and notably *worse* in isolation than inside the full suite. Fix is either a real percentile (`latencies[98]` for p99 of 100 samples, or more samples), a warmup loop before measuring, or dropping the wall-clock assertion in favour of a benchmark that is not part of the correctness gate. Left alone here because it is in the video module and entirely outside this story's scope. [`src/test/java/com/softropic/skillars/platform/video/service/PlaybackServiceIT.java:106-120`]
