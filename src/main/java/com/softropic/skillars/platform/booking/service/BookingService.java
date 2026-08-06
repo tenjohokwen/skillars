@@ -178,13 +178,6 @@ public class BookingService {
                 SecurityError.MISSING_RIGHTS);
         }
 
-        try {
-            ZoneId.of(req.canonicalTimezone());
-        } catch (DateTimeException e) {
-            throw new OperationNotAllowedException("Invalid timezone: " + req.canonicalTimezone(),
-                Map.of("submitted timezone", req.canonicalTimezone()), SecurityError.MISSING_RIGHTS);
-        }
-
         List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachId(req.coachId());
         if (!isSlotWithinAvailabilityWindow(req.requestedStartTime(), req.requestedEndTime(), windows)) {
             throw new OperationNotAllowedException("Requested slot is not within coach availability",
@@ -244,13 +237,15 @@ public class BookingService {
             }
         }
 
+        String canonicalTimezone = resolveCoachTimezone(coach);
+
         Booking booking = new Booking();
         booking.setParentId(parentId);
         booking.setPlayerId(req.playerId());
         booking.setCoachId(req.coachId());
         booking.setRequestedStartTime(req.requestedStartTime());
         booking.setRequestedEndTime(req.requestedEndTime());
-        booking.setCanonicalTimezone(req.canonicalTimezone());
+        booking.setCanonicalTimezone(canonicalTimezone);
         booking.setNotes(req.notes());
         booking.setSessionPackPurchaseId(req.sessionPackPurchaseId());
         bookingRepository.save(booking);
@@ -259,7 +254,7 @@ public class BookingService {
         eventPublisher.publishEvent(new BookingRequestedEvent(
             this, booking.getId(), parentId, req.playerId(), req.coachId(),
             coach.getDisplayName(), coachEmail, req.notes(),
-            req.requestedStartTime(), req.canonicalTimezone()
+            req.requestedStartTime(), canonicalTimezone
         ));
 
         return toResponse(booking, coach.getDisplayName(), player.getName(), null, null, null, null);
@@ -724,6 +719,33 @@ public class BookingService {
             log.warn("Could not resolve email for userId={} bookingId={} — notification will be skipped", userId, bookingId);
             return "";
         });
+    }
+
+    /**
+     * Resolves the coach's canonical timezone for a booking, falling back to UTC when it is
+     * missing or not a real IANA zone.
+     *
+     * <p>Nothing validates {@code coach_profiles.canonical_timezone} on its write path — the
+     * profile-builder requests are {@code @NotBlank} only — and this value is stamped onto the
+     * booking and rendered unguarded by several frontend pages, where an unrecognized zone throws
+     * and kills the render. Falling back rather than failing keeps a parent from being blocked by
+     * the coach's misconfiguration; the WARN keeps the bad row observable. Mirrors the guard
+     * {@code AvailabilityService.getAvailabilityCalendar} applies to this same value.
+     */
+    private String resolveCoachTimezone(CoachProfile coach) {
+        String timezone = coach.getCanonicalTimezone();
+        if (timezone == null || timezone.isBlank()) {
+            log.warn("Coach coachId={} has no canonical timezone — defaulting booking to UTC", coach.getId());
+            return "UTC";
+        }
+        try {
+            ZoneId.of(timezone);
+            return timezone;
+        } catch (DateTimeException e) {
+            log.warn("Coach coachId={} has an invalid canonical timezone '{}' — defaulting booking to UTC",
+                coach.getId(), timezone);
+            return "UTC";
+        }
     }
 
     private String resolvePlayerName(Long playerId) {

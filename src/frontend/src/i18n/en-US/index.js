@@ -282,6 +282,7 @@ export default {
     expired: 'Your session has expired. Please log in again.',
     drillLibrary: {
       title: 'Drill Library',
+      loadError: 'Failed to load drills. Please try again.',
       platformTab: 'Platform Library',
       myLibraryTab: 'My Library',
       searchPlaceholder: 'Search drills...',

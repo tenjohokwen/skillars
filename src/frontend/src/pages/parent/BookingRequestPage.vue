@@ -35,27 +35,30 @@
         <q-list v-else-if="bookingStore.computedSlots.length > 0" bordered separator>
           <q-item
             v-for="slot in bookingStore.computedSlots"
-            :key="slot.startTime"
+            :key="slot.startDatetime"
             clickable
             :disable="
               batchMode
-                ? (!bookingStore.isSlotInBasket(slot.startTime) && batchAtMax) ||
-                  bookedStartTimes.has(slot.startTime)
-                : bookedStartTimes.has(slot.startTime)
+                ? (!bookingStore.isSlotInBasket(slot.startDatetime) && batchAtMax) ||
+                  bookedStartTimes.has(slot.startDatetime)
+                : bookedStartTimes.has(slot.startDatetime)
             "
             :active="
               batchMode
-                ? bookingStore.isSlotInBasket(slot.startTime)
-                : selectedSlot?.startTime === slot.startTime
+                ? bookingStore.isSlotInBasket(slot.startDatetime)
+                : selectedSlot?.startDatetime === slot.startDatetime
             "
             active-class="bg-primary text-white"
             @click="batchMode ? toggleSlotInBasket(slot) : selectSlot(slot)"
           >
             <q-item-section>
-              <q-item-label>{{ formatSlot(slot.startTime) }}</q-item-label>
-              <q-item-label caption>{{ formatSlot(slot.endTime) }}</q-item-label>
+              <q-item-label>{{ formatSlot(slot.startDatetime) }}</q-item-label>
+              <q-item-label caption>{{ formatSlot(slot.endDatetime) }}</q-item-label>
             </q-item-section>
-            <q-item-section v-if="batchMode && bookingStore.isSlotInBasket(slot.startTime)" side>
+            <q-item-section
+              v-if="batchMode && bookingStore.isSlotInBasket(slot.startDatetime)"
+              side
+            >
               <q-chip dense color="positive" text-color="white" size="sm">{{
                 t('booking.batch.added')
               }}</q-chip>
@@ -135,12 +138,12 @@
           <q-list separator>
             <q-item
               v-for="slot in bookingStore.batchBasket"
-              :key="slot.startTime"
+              :key="slot.startDatetime"
               class="q-py-sm"
             >
               <q-item-section>
-                <q-item-label>{{ formatSlot(slot.startTime) }}</q-item-label>
-                <q-item-label caption>{{ formatSlot(slot.endTime) }}</q-item-label>
+                <q-item-label>{{ formatSlot(slot.startDatetime) }}</q-item-label>
+                <q-item-label caption>{{ formatSlot(slot.endDatetime) }}</q-item-label>
               </q-item-section>
               <q-item-section side>
                 <q-btn
@@ -149,7 +152,7 @@
                   dense
                   icon="close"
                   size="sm"
-                  @click="bookingStore.removeSlotFromBasket(slot.startTime)"
+                  @click="bookingStore.removeSlotFromBasket(slot.startDatetime)"
                 />
               </q-item-section>
             </q-item>
@@ -256,8 +259,8 @@ function selectSlot(slot) {
 }
 
 function toggleSlotInBasket(slot) {
-  if (bookingStore.isSlotInBasket(slot.startTime)) {
-    bookingStore.removeSlotFromBasket(slot.startTime)
+  if (bookingStore.isSlotInBasket(slot.startDatetime)) {
+    bookingStore.removeSlotFromBasket(slot.startDatetime)
   } else if (bookingStore.batchBasketSize < maxBatchSize.value) {
     bookingStore.addSlotToBasket(slot)
   }
@@ -274,8 +277,35 @@ function toggleBatchMode() {
   }
 }
 
+// timeZoneName is deliberate: these instants are rendered in the coach's zone, not the parent's,
+// so an unlabelled "3:00 PM" would read as local time to a parent in another zone.
+function formatInZone(date, timeZone) {
+  try {
+    return new Intl.DateTimeFormat('en', {
+      timeZone,
+      dateStyle: 'medium',
+      timeStyle: 'short',
+      timeZoneName: 'short',
+    }).format(date)
+  } catch {
+    // Intl.DateTimeFormat throws RangeError on an unrecognized zone. Nothing validates
+    // coach_profiles.canonical_timezone as a real IANA zone, so fall back rather than let a
+    // throw inside a v-for label abort the render of the entire slot list.
+    return new Intl.DateTimeFormat('en', {
+      timeZone: 'UTC',
+      dateStyle: 'medium',
+      timeStyle: 'short',
+      timeZoneName: 'short',
+    }).format(date)
+  }
+}
+
 function formatSlot(isoString) {
-  return new Date(isoString).toLocaleString()
+  // Guard the date before formatting: .format() throws RangeError on an Invalid Date, and a
+  // zone-only fallback would rethrow it. Both throw sites have to be handled separately.
+  const date = new Date(isoString)
+  if (Number.isNaN(date.getTime())) return '—'
+  return formatInZone(date, bookingStore.coachTimezone || 'UTC')
 }
 
 function goToPurchase() {
@@ -289,9 +319,8 @@ async function submit() {
     await bookingStore.submitBookingRequest({
       coachId,
       playerId: playerId.value,
-      requestedStartTime: selectedSlot.value.startTime,
-      requestedEndTime: selectedSlot.value.endTime,
-      canonicalTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      requestedStartTime: selectedSlot.value.startDatetime,
+      requestedEndTime: selectedSlot.value.endDatetime,
       notes: notes.value || null,
       sessionPackPurchaseId: selectedPackId.value,
     })
@@ -309,7 +338,9 @@ async function submitBatchRequest() {
     return
   }
   try {
-    await bookingStore.submitBatch(coachId, playerId.value, Intl.DateTimeFormat().resolvedOptions().timeZone)
+    // totalAmount is currently a display-only stub for the acceptance email preview, not used
+    // for settlement (see BookingBatchService.java:233,255) — do not compute a real total here.
+    await bookingStore.submitBatch(coachId, playerId.value, 0)
     batchReviewOpen.value = false
     $q.notify({ message: t('booking.batch.submitted'), type: 'positive' })
     router.push('/parent/bookings')

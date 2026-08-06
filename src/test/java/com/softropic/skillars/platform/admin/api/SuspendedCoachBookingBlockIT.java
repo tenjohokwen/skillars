@@ -157,8 +157,7 @@ class SuspendedCoachBookingBlockIT {
                     "coachId", coachProfileId.toString(),
                     "playerId", PLAYER_ID,
                     "requestedStartTime", slotStart.toString(),
-                    "requestedEndTime", slotEnd.toString(),
-                    "canonicalTimezone", WINDOW_TZ
+                    "requestedEndTime", slotEnd.toString()
                 ),
                 authenticatedHeaders(parentCookies), Map.class));
 
@@ -179,8 +178,7 @@ class SuspendedCoachBookingBlockIT {
                 "coachId", coachProfileId.toString(),
                 "playerId", PLAYER_ID,
                 "requestedStartTime", slotStart.toString(),
-                "requestedEndTime", slotEnd.toString(),
-                "canonicalTimezone", WINDOW_TZ
+                "requestedEndTime", slotEnd.toString()
             ),
             authenticatedHeaders(parentCookies), Map.class);
 

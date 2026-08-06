@@ -52,6 +52,16 @@ public class AvailabilityService {
         String timezone = windows.isEmpty() ? "UTC" : windows.get(0).getCanonicalTimezone();
         if (timezone == null || timezone.isBlank()) timezone = "UTC";
 
+        // Deferred-17 AC4: the zone the client displays slots in must be the same column the
+        // booking's own canonicalTimezone comes from (coach_profiles, see BookingService), so it
+        // is read here from the coach profile. This is deliberately NOT the `timezone` variable
+        // above: that one comes from coach_availability_windows, a separate and independently
+        // writable column, and only feeds this method's internal slot-computation zone.
+        String coachTimezone = coachProfileRepository.findById(coachId)
+            .map(CoachProfile::getCanonicalTimezone)
+            .orElse(null);
+        if (coachTimezone == null || coachTimezone.isBlank()) coachTimezone = "UTC";
+
         ZoneId zoneId;
         try {
             zoneId = ZoneId.of(timezone);
@@ -100,7 +110,7 @@ public class AvailabilityService {
                 b.getId(), b.getStartDatetime(), b.getEndDatetime(), b.getReason()))
             .toList();
 
-        return new CoachAvailabilityResponse(windowResponses, blockResponses, computedSlots);
+        return new CoachAvailabilityResponse(windowResponses, blockResponses, computedSlots, coachTimezone);
     }
 
     @Transactional

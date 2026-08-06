@@ -152,7 +152,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { useSessionStore } from 'src/stores/session.store'
@@ -285,8 +285,31 @@ async function handleEditClone(cloneId) {
   if (clone) sessionStore.selectedDrill = clone
 }
 
-onMounted(() => {
-  sessionStore.fetchDrills('PLATFORM')
+// AC5: fetchDrills catches its own failure into sessionStore.error and never rethrows, so a
+// try/catch here would be dead code — watching the store's error state is the only way to
+// surface a failed initial load instead of leaving the page silently empty.
+//
+// Scoped to the initial load: sessionStore.error is a single store-wide ref written by eight
+// actions (searchDrills, cloneDrill, addTag, removeTag, fetchTagSuggestions, initiateVideoUpload,
+// removeVideo), several of which are reachable from this page and its DrillDetailPanel. An
+// unscoped watch attaches "failed to load drills" to failures that have nothing to do with
+// loading drills — and cloneDrill, which both sets error and rethrows, would raise two
+// contradictory toasts. flush: 'sync' makes the callback run at assignment time, strictly before
+// the awaited fetchDrills below resumes and flips the flag.
+const initialLoadDone = ref(false)
+watch(
+  () => sessionStore.error,
+  (err) => {
+    if (err && !initialLoadDone.value) {
+      $q.notify({ type: 'negative', message: t('session.drillLibrary.loadError') })
+    }
+  },
+  { flush: 'sync' },
+)
+
+onMounted(async () => {
+  await sessionStore.fetchDrills('PLATFORM')
+  initialLoadDone.value = true
 })
 </script>
 

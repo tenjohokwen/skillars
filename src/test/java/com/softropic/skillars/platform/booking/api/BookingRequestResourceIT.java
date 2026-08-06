@@ -77,6 +77,14 @@ class BookingRequestResourceIT {
 
     // Availability window covering next day 08:00–18:00 Europe/Berlin
     private static final String WINDOW_TZ = "Europe/Berlin";
+    /**
+     * coach_profiles.canonical_timezone — a separate, independently-writable column from
+     * coach_availability_windows.canonical_timezone (WINDOW_TZ). They hold the same value in this
+     * fixture, but a booking's canonicalTimezone is sourced from THIS one (deferred-17 AC3), so
+     * assertions on a booking's zone must name this constant. Anything that diverges the two
+     * columns then changes only the fixture, not the assertions.
+     */
+    private static final String COACH_PROFILE_TZ = WINDOW_TZ;
     private Instant slotStart;
     private Instant slotEnd;
 
@@ -129,7 +137,7 @@ class BookingRequestResourceIT {
                 "INSERT INTO marketplace.coach_profiles " +
                 "(id, user_id, display_name, bio, city, languages, canonical_timezone, status) " +
                 "VALUES (?, ?, 'Book Coach', 'Bio', 'Berlin', ARRAY['English']::varchar[], ?, 'ACTIVE')",
-                coachProfileId, COACH_USER_ID, WINDOW_TZ
+                coachProfileId, COACH_USER_ID, COACH_PROFILE_TZ
             );
             jdbcTemplate.update(
                 "INSERT INTO marketplace.coach_pricing (coach_id, per_session_price, currency) VALUES (?, 50.00, 'EUR')",
@@ -197,8 +205,7 @@ class BookingRequestResourceIT {
                 "coachId", coachProfileId.toString(),
                 "playerId", PLAYER_ID,
                 "requestedStartTime", slotStart.toString(),
-                "requestedEndTime", slotEnd.toString(),
-                "canonicalTimezone", WINDOW_TZ
+                "requestedEndTime", slotEnd.toString()
             ),
             authenticatedHeaders(cookies),
             Map.class
@@ -211,6 +218,36 @@ class BookingRequestResourceIT {
         // coach+player-wide legacy credit rollup has no equivalent on the new payment-path
         // schema; the frontend now reads pack data from GET /api/payment/session-packs instead.
         assertThat(response.getBody()).doesNotContainKey("effectiveCreditsRemaining");
+    }
+
+    /**
+     * Deferred-17 AC3. The coach fixture's canonical_timezone is COACH_PROFILE_TZ ("Europe/Berlin"); this
+     * sends a deliberately different, and now-unknown, client-supplied canonicalTimezone
+     * ("America/New_York" — CreateBookingRequest no longer has this field, so Spring's
+     * ignore-unknown-JSON-properties default silently drops it) and asserts on the actual response
+     * body value, not just the status code, per Task 1's warning that a status-only assertion
+     * cannot discriminate the fix from a no-op. Pre-fix this test failed: the client's value won.
+     */
+    @Test
+    void createBookingRequest_ignoresClientTimezone_usesCoachProfileTimezone() {
+        String cookies = loginAndGetCookies(PARENT_EMAIL);
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + BOOKINGS_BASE,
+            HttpMethod.POST,
+            Map.of(
+                "coachId", coachProfileId.toString(),
+                "playerId", PLAYER_ID,
+                "requestedStartTime", slotStart.toString(),
+                "requestedEndTime", slotEnd.toString(),
+                "canonicalTimezone", "America/New_York"
+            ),
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(response.getBody().get("canonicalTimezone")).isEqualTo(COACH_PROFILE_TZ);
     }
 
     /**
@@ -229,8 +266,7 @@ class BookingRequestResourceIT {
                 "coachId", coachProfileId.toString(),
                 "playerId", PLAYER_ID,
                 "requestedStartTime", slotEnd.toString(),
-                "requestedEndTime", slotStart.toString(),
-                "canonicalTimezone", WINDOW_TZ
+                "requestedEndTime", slotStart.toString()
             ),
             authenticatedHeaders(cookies),
             Map.class
@@ -252,8 +288,7 @@ class BookingRequestResourceIT {
                 "coachId", coachProfileId.toString(),
                 "playerId", PLAYER_ID,
                 "requestedStartTime", slotStart.toString(),
-                "requestedEndTime", slotStart.toString(),
-                "canonicalTimezone", WINDOW_TZ
+                "requestedEndTime", slotStart.toString()
             ),
             authenticatedHeaders(cookies),
             Map.class
@@ -275,8 +310,7 @@ class BookingRequestResourceIT {
                 "coachId", coachProfileId.toString(),
                 "playerId", PLAYER_ID,
                 "requestedStartTime", slotStart.toString(),
-                "requestedEndTime", slotEnd.toString(),
-                "canonicalTimezone", WINDOW_TZ
+                "requestedEndTime", slotEnd.toString()
             ),
             authenticatedHeaders(cookies),
             Map.class
@@ -297,7 +331,7 @@ class BookingRequestResourceIT {
                 "VALUES (?, ?, ?, ?, ?, ?, 'REQUESTED', ?, 0, ?, ?)",
                 UUID.randomUUID(), PARENT_ID, PLAYER_ID, coachProfileId,
                 Timestamp.from(slotStart.plusSeconds(7200)), Timestamp.from(slotEnd.plusSeconds(7200)),
-                WINDOW_TZ, Timestamp.from(Instant.now()), Timestamp.from(Instant.now())
+                COACH_PROFILE_TZ, Timestamp.from(Instant.now()), Timestamp.from(Instant.now())
             );
             return null;
         });
@@ -311,8 +345,7 @@ class BookingRequestResourceIT {
                 "coachId", coachProfileId.toString(),
                 "playerId", PLAYER_ID,
                 "requestedStartTime", slotStart.toString(),
-                "requestedEndTime", slotEnd.toString(),
-                "canonicalTimezone", WINDOW_TZ
+                "requestedEndTime", slotEnd.toString()
             ),
             authenticatedHeaders(cookies),
             Map.class
@@ -349,8 +382,7 @@ class BookingRequestResourceIT {
                     "coachId", coachProfileId.toString(),
                     "playerId", PLAYER_ID,  // owned by PARENT_ID, not this parent
                     "requestedStartTime", slotStart.toString(),
-                    "requestedEndTime", slotEnd.toString(),
-                    "canonicalTimezone", WINDOW_TZ
+                    "requestedEndTime", slotEnd.toString()
                 ),
                 authenticatedHeaders(cookies),
                 Map.class
@@ -408,7 +440,6 @@ class BookingRequestResourceIT {
                     "playerId", PLAYER_ID,
                     "requestedStartTime", slotStart.toString(),
                     "requestedEndTime", slotEnd.toString(),
-                    "canonicalTimezone", WINDOW_TZ,
                     "sessionPackPurchaseId", purchaseId.toString()
                 ),
                 authenticatedHeaders(cookies),
@@ -447,8 +478,7 @@ class BookingRequestResourceIT {
                     "coachId", coachProfileId.toString(),
                     "playerId", PLAYER_ID,
                     "requestedStartTime", slotStart.toString(),
-                    "requestedEndTime", slotEnd.toString(),
-                    "canonicalTimezone", WINDOW_TZ
+                    "requestedEndTime", slotEnd.toString()
                 ),
                 authenticatedHeaders(cookies),
                 Map.class
@@ -477,8 +507,7 @@ class BookingRequestResourceIT {
                 "coachId", coachProfileId.toString(),
                 "playerId", PLAYER_ID,
                 "requestedStartTime", farFuture.toString(),
-                "requestedEndTime", farFuture.plusSeconds(3600).toString(),
-                "canonicalTimezone", WINDOW_TZ
+                "requestedEndTime", farFuture.plusSeconds(3600).toString()
             ),
             authenticatedHeaders(cookies),
             Map.class
@@ -499,8 +528,7 @@ class BookingRequestResourceIT {
                 "coachId", coachProfileId.toString(),
                 "playerId", PLAYER_ID,
                 "requestedStartTime", slotStart.toString(),
-                "requestedEndTime", slotEnd.toString(),
-                "canonicalTimezone", WINDOW_TZ
+                "requestedEndTime", slotEnd.toString()
             ),
             authenticatedHeaders(parentCookies),
             Map.class
@@ -530,8 +558,7 @@ class BookingRequestResourceIT {
                 "coachId", coachProfileId.toString(),
                 "playerId", PLAYER_ID,
                 "requestedStartTime", slotStart.toString(),
-                "requestedEndTime", slotEnd.toString(),
-                "canonicalTimezone", WINDOW_TZ
+                "requestedEndTime", slotEnd.toString()
             ),
             authenticatedHeaders(parentCookies),
             Map.class
@@ -562,8 +589,7 @@ class BookingRequestResourceIT {
                 "coachId", coachProfileId.toString(),
                 "playerId", PLAYER_ID,
                 "requestedStartTime", slotStart.toString(),
-                "requestedEndTime", slotEnd.toString(),
-                "canonicalTimezone", WINDOW_TZ
+                "requestedEndTime", slotEnd.toString()
             ),
             authenticatedHeaders(parentCookies),
             Map.class
@@ -594,8 +620,7 @@ class BookingRequestResourceIT {
                 "coachId", coachProfileId.toString(),
                 "playerId", PLAYER_ID,
                 "requestedStartTime", slotStart.toString(),
-                "requestedEndTime", slotEnd.toString(),
-                "canonicalTimezone", WINDOW_TZ
+                "requestedEndTime", slotEnd.toString()
             ),
             authenticatedHeaders(parentCookies),
             Map.class
@@ -626,8 +651,7 @@ class BookingRequestResourceIT {
                 "coachId", coachProfileId.toString(),
                 "playerId", PLAYER_ID,
                 "requestedStartTime", slotStart.toString(),
-                "requestedEndTime", slotEnd.toString(),
-                "canonicalTimezone", WINDOW_TZ
+                "requestedEndTime", slotEnd.toString()
             ),
             authenticatedHeaders(cookies),
             Map.class
@@ -644,7 +668,7 @@ class BookingRequestResourceIT {
                 "VALUES (?, ?, ?, ?, ?, ?, 'REQUESTED', ?, 0, ?, ?)",
                 UUID.randomUUID(), PARENT_ID, PLAYER_ID, coachProfileId,
                 Timestamp.from(laterStart), Timestamp.from(laterEnd),
-                WINDOW_TZ, Timestamp.from(Instant.now()), Timestamp.from(Instant.now())
+                COACH_PROFILE_TZ, Timestamp.from(Instant.now()), Timestamp.from(Instant.now())
             );
             return null;
         });
@@ -680,8 +704,7 @@ class BookingRequestResourceIT {
                 "coachId", coachProfileId.toString(),
                 "playerId", PLAYER_ID,
                 "requestedStartTime", slotStart.toString(),
-                "requestedEndTime", slotEnd.toString(),
-                "canonicalTimezone", WINDOW_TZ
+                "requestedEndTime", slotEnd.toString()
             ),
             authenticatedHeaders(parentCookies),
             Map.class

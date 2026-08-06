@@ -5,5 +5,6 @@ import java.util.List;
 public record CoachAvailabilityResponse(
     List<AvailabilityWindowResponse> windows,
     List<AvailabilityBlockResponse> blocks,
-    List<AvailableSlotResponse> computedSlots
+    List<AvailableSlotResponse> computedSlots,
+    String canonicalTimezone
 ) {}

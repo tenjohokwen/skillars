@@ -288,6 +288,7 @@ export default {
     expired: 'Votre session a expire. Veuillez vous reconnecter.',
     drillLibrary: {
       title: "Bibliothèque d'exercices",
+      loadError: 'Échec du chargement des exercices. Veuillez réessayer.',
       platformTab: 'Bibliothèque de la plateforme',
       myLibraryTab: 'Ma bibliothèque',
       searchPlaceholder: 'Rechercher des exercices...',

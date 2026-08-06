@@ -377,6 +377,81 @@ audit above did not:
   recorded was quoted in this very bullet and still not applied: filter the report files by the
   final run's timestamp, do not trust the directory listing.
 
+## Last audit: 2026-08-06 (skillars-deferred-17 story creation)
+
+Written while scoping `skillars-deferred-17`. Story creation set out only to verify one item —
+`skillars-3-3` Group D's `canonicalTimezone` bug — before grooming a story around it. Tracing that
+item's data flow through `BookingRequestPage.vue` and `booking.store.js` surfaced two live defects in
+the same file that were **never tracked in this ledger at all**. The user was informed mid-investigation
+(parent-facing booking-request submission, single and batch both, is currently non-functional in
+production) and chose to make the newly-found breakage the anchor of `skillars-deferred-17`, with the
+ledger items folded in alongside it. Every claim below comes from a direct read of the tree at commit
+`8bb6c8a`, confirmed by manual data-flow tracing rather than by running the app (no reproduction harness
+exists for this — see the story's Task 1).
+
+- **New, not previously tracked here — now owned by `skillars-deferred-17` AC1.** `AvailableSlotResponse`
+  (`AvailableSlotResponse.java:6-7`) serializes `startDatetime`/`endDatetime`; `BookingRequestPage.vue` and
+  `booking.store.js` read `.startTime`/`.endTime` throughout (18 occurrences in the page, 4 more in the
+  store) everywhere a slot object is touched. Confirmed
+  by cross-reference: `WeeklyCalendar.vue:118-120,167-168` reads the sibling availability-block endpoint's
+  `startDatetime`/`endDatetime` correctly, and no camelCase-transforming interceptor exists anywhere in
+  `src/frontend` (grepped for `camelCase`/`transformResponse` — no hits). Effect: every rendered slot shows
+  `"Invalid Date"`, and submitting sends `requestedStartTime: undefined`, which `CreateBookingRequest`'s
+  `@NotNull @Future` rejects with 400. The single-booking flow cannot complete a booking today.
+- **New, not previously tracked here — now owned by `skillars-deferred-17` AC2.** `git log -p` on
+  `BookingRequestPage.vue` shows `submitBatchRequest()`'s call `bookingStore.submitBatch(coachId,
+  playerId.value, 0)` was changed to pass `Intl.DateTimeFormat().resolvedOptions().timeZone` as the third
+  argument — almost certainly an attempted fix for the same class of timezone bug `skillars-3-3` Group D
+  reports, aimed at the wrong parameter. `submitBatch`'s third argument (`booking.store.js:509`) binds
+  directly into `CreateBatchRequest.totalAmount` (`CreateBatchRequest.java:17`, `@NotNull BigDecimal`);
+  `CreateBatchRequest`/`BatchSlot` have no `canonicalTimezone` field to receive a timezone at all, because
+  `BookingBatchService.createBatch:131` already derives it server-side from `coach.getCanonicalTimezone()`
+  and never needed the client to send one. Sending a zone string where Jackson expects a `BigDecimal` fails
+  deserialization before validation runs. The batch-booking flow cannot complete a submission today.
+- **`skillars-3-3` Group D, both bullets — owned by `skillars-deferred-17` AC3 (canonicalTimezone
+  bullet) and AC4 (formatSlot bullet).** Re-verified the 2026-08-04 `STILL OPEN` annotation is still
+  accurate, and additionally confirmed *why* the single-booking path is wrong while the batch path (found
+  while investigating AC2 above) is already right: `BookingService.createBookingRequest` trusts
+  `req.canonicalTimezone()` verbatim after only syntactic `ZoneId.of()` validation
+  (`BookingService.java:181-186,253`), where `BookingBatchService.createBatch` ignores client input and
+  uses `coach.getCanonicalTimezone()` (`:131`). The fix is to make the single-booking path consistent with
+  the batch path that already ships correctly, not to invent new behavior.
+- **`skillars-4-1` D5 — owned by `skillars-deferred-17` AC5.** Re-verified the 2026-08-04 `STILL OPEN`
+  annotation is still accurate: `DrillLibraryPage.vue:288-290`'s `onMounted` still has no error branch
+  around `sessionStore.fetchDrills('PLATFORM')`.
+- **Examined and deliberately NOT folded in.** Whether `CoachProfile.canonicalTimezone` should itself be
+  validated as a real IANA zone at profile-creation time (`ProfileBuilderStep1Request`/
+  `ProfileBuilderStep4Request` are both merely `@NotBlank`) is a separate, pre-existing gap shared by both
+  booking-creation paths — `skillars-deferred-17` makes the two paths *consistent*, it does not add new
+  validation neither currently has. Also examined: computing a real `totalAmount` for batch submissions
+  client-side, rejected as a feature (this page loads no pricing data today) rather than a bug fix — see
+  the story's "Items examined and deliberately NOT folded in" for detail.
+- **Not re-checked:** every other item in this file. No `deploy-*` section was read — the same gap every
+  prior audit in this file has flagged, now six audits running.
+
+**IMPLEMENTATION OUTCOME (2026-08-06, `skillars-deferred-17` dev):** All 6 ACs closed, backend `mvn -o
+verify` and frontend `eslint` both green. AC1/AC2 confirmed fixed by static re-inspection (grep for
+`.startTime`/`.endTime` on slot objects returns zero hits post-fix; no test framework exists for these
+two — see the story's Dev Notes on why manual dev-server exercise, not an automated test, is this
+project's established verification path for frontend-only fixes). AC3 was pinned with a real backend
+probe (`BookingRequestResourceIT.createBookingRequest_ignoresClientTimezone_usesCoachProfileTimezone`,
+sends a client `canonicalTimezone` deliberately different from the coach fixture's, asserts on the
+response body value) that failed pre-fix (client's zone won) and passes post-fix (coach's zone wins) —
+mutation-verified in both directions by construction, not by inspection. AC4 uncovered one story-text
+inaccuracy worth recording for the next reader: `AvailabilityService.getAvailabilityCalendar` does
+**not** already load a `CoachProfile` — its zone fallback (`:52`) reads only `windows.get(0)`, there is
+no existing `coachProfileRepository` call in that method to reuse. Fixed by adding one new read-only
+`coachProfileRepository.findById(coachId)` lookup (mirrors the endpoint's existing tolerance for an
+unknown `coachId` — falls back to `"UTC"` rather than throwing, since `AvailabilityResource.getAvailability`
+never validates the coach exists before calling this method). Also added
+`AvailabilityResourceIT.getAvailability_windowTimezoneDivergesFromProfile_responseUsesProfileTimezone`,
+seeding `coach_availability_windows.canonical_timezone` to a different zone than
+`coach_profiles.canonical_timezone` and asserting the response's top-level `canonicalTimezone` follows
+the profile column — the exact divergence this AC exists to prevent. Post-fix line numbers in
+`BookingRequestPage.vue` drifted as expected from AC1's edits: `formatSlot()` is now at `:277`, `submit()`
+at `:298`, `submitBatchRequest()` at `:318` — no `canonicalTimezone` references remain in the file
+(`grep -c` confirms zero).
+
 ---
 
 ## Deferred from: skillars-deferred-16 story creation (2026-08-05)
@@ -594,7 +669,6 @@ audit above did not:
 - D2: V39 seed drills use `gen_random_uuid()` — non-deterministic IDs differ between environments; migration already written; deterministic UUIDs would require a V40 fix migration [`V39__session_foundation_20_drills.sql`]
 - D3: Feature gate config key format relies on `tier.name()` matching DB key suffix exactly — new tier addition requires a matching migration; acceptable by convention; no compile-time enforcement [`DrillLibraryService.java:86`]
 - D4: `POST /api/session/plans` returns 201 empty body — intentional stub per story dev notes; full implementation in Story 4.4 [`SessionPlanResource.java`]
-- D5: `DrillLibraryPage.vue` `onMounted` no error handling — stub page; Story 4.2 builds full UI [`DrillLibraryPage.vue:15`] — **[AUDIT 2026-08-04: STILL OPEN. Story 4.2 has shipped and built the full UI, but `onMounted` still has no error branch.]**
 - D6: New coach with no profile gets `ResourceNotFoundException` → 404 from `getCoachIdByUserId` on private drill list — edge case; Story 4.2 to guard on the frontend; backend always requires a complete profile [`CoachProfileService.java`]
 - D7: `listPrivateDrills` no explicit `library_type = 'COACH'` filter — safe today due to DB `chk_drill_owner` constraint preventing PLATFORM drills from having a non-null `owner_coach_id` [`DrillRepository.java`]
 - D8: `DrillResponse.ownerCoachId` is always null for PLATFORM drills — nullable contract undocumented; Story 4.2 frontend rendering should null-check [`DrillResponse.java`]
@@ -632,10 +706,6 @@ audit above did not:
 ## Deferred from: code review of skillars-3-3-booking-request-approval-workflow Group E (2026-06-15)
 - Authority id 9502 leaked in `playerNotOwnedByParent_returns403` test — `finally` block cleans user + user_authority but not the authority row; `@AfterEach` only deletes ids 9500, 9501; add `DELETE FROM main.authority WHERE id = 9502` to the finally block [BookingRequestResourceIT.java:289]
 - `declineBooking` unit test uses `any(BookingDeclinedEvent.class)` — `canonicalTimezone` field not captured/asserted via `ArgumentCaptor`; regression where timezone is null would pass [BookingServiceTest.java:244]
-
-## Deferred from: code review of skillars-3-3-booking-request-approval-workflow Group D (2026-06-15)
-- `canonicalTimezone` sent as parent's browser timezone — session time in coach notification email shown in parent's TZ, not coach's; canonical timezone for a session should be the coach's timezone; revisit in Story 3.5 (Scheduling Views & Timezone Management) [BookingRequestPage.vue:121] — **[AUDIT 2026-08-04: STILL OPEN. Story 3.5 has shipped; `BookingRequestPage.vue:294,312` still send `Intl.DateTimeFormat().resolvedOptions().timeZone`.]**
-- `formatSlot()` in BookingRequestPage uses `toLocaleString()` with no timezone — slots display in parent's local time, not coach's timezone; inconsistent with ParentBookingsPage which uses `{ timeZone: timezone }`; address in Story 3.5 [BookingRequestPage.vue:104]
 
 ## Deferred from: code review of skillars-3-3-booking-request-approval-workflow Group B (2026-06-15)
 - No duplicate-booking guard for same slot — multiple REQUESTED bookings for same player/coach/timeslot are possible; credit soft-reservation handles the economic constraint; add a unique partial index on (player_id, coach_id, requested_start_time) WHERE status IN (...) in a future scheduling-conflicts story [BookingService.java:createBookingRequest, V31 migration]
@@ -1030,3 +1100,16 @@ audit above did not:
 - D6: `SoftDeleteIT.concurrentDoubleSoftDelete_exactlyOneSucceeds_oneConflicts` synchronises the *start* of two HTTP round-trips (TCP connect, auth filter chain, controller dispatch) rather than the read-check-write critical section, so it can pass by request serialisation rather than by the lock. The dev recorded a successful mutation verification (reverting to `findById` produced two 204s), so the fix is proven — but the test is not a durable guard, the same class of finding `skillars-deferred-13` and `-15` reviews both raised. Its `SELECT COUNT(*) ... WHERE id = ? AND deleted_at IS NOT NULL` assertion is additionally tautological over a primary key. [`src/test/java/com/softropic/skillars/platform/messaging/api/SoftDeleteIT.java`]
 - D7: No test walks AC3's chain end to end — sweep → `MessageHeldForReviewEvent` → alert → queue listing → approve → alert RESOLVED. `AdminQueueIT`, `MessageApproveIT` and `MessageBlockIT` all hand-insert the `MODERATION_UNRESOLVED` alert row via `jdbcTemplate`, and `MessageModerationSweeperIT` stops at asserting the alert exists. Each link is covered in isolation; the seam between the sweeper's event and the admin queue's rendering and resolution is unpinned. [`src/test/java/com/softropic/skillars/platform/admin/api/AdminQueueIT.java:130-140`, `MessageApproveIT.java:127-134`, `MessageModerationSweeperIT.java`]
 - D8: `PlaybackServiceIT.authorizePlayback_performance_p99Under200ms` is a structurally flaky perf assertion and currently fails on `master`. It computes `latencies[(int) (iterations * 0.99)]` over a sorted 100-element array, i.e. `latencies[99]` — the **maximum**, not the p99 — so it asserts that the single slowest of 100 un-warmed `authorizePlayback` calls stays under 200 ms, a figure dominated by JIT warmup, GC and Testcontainers latency rather than by the code under test. Confirmed pre-existing during the deferred-16 code review by running it in a clean `git worktree` at HEAD `0d06925` (no review changes): fails at 267 ms. Observed 217 ms / 390 ms / 267 ms across three runs on one machine, and notably *worse* in isolation than inside the full suite. Fix is either a real percentile (`latencies[98]` for p99 of 100 samples, or more samples), a warmup loop before measuring, or dropping the wall-clock assertion in favour of a benchmark that is not part of the correctness gate. Left alone here because it is in the video module and entirely outside this story's scope. [`src/test/java/com/softropic/skillars/platform/video/service/PlaybackServiceIT.java:106-120`]
+
+## Deferred from: code review of skillars-deferred-17-booking-request-slot-payload-timezone-integrity (2026-08-06)
+
+- **D1 — No session-duration cap: one click books the entire availability segment.** `AvailabilityService.computeAvailableSlots` (`AvailabilityService.java:170-201`) returns whole window-minus-block *segments*; there is no fixed-length slicing anywhere, and no duration bound exists in the booking package (grepped for `Duration.between` / `durationMinutes` / `sessionDuration` / `MAX_DURATION` — nothing). Backend validation is only: start in the future (`BookingService.java:171-174`), end after start (`:175-179`), range inside a window (`:182-186`). A coach with a 09:00–17:00 window and no blocks presents exactly one row, and one click books an 8-hour session that locks out the whole day via `findOverlappingBookings` and consumes one pack credit. Batch mode multiplies this by ten (`CreateBatchRequest.java:16`, `@Size(max = 10)`), and `BookingBatchService:106-113` performs no availability-window check at all. **Newly reachable, not newly introduced:** both submit paths were dead before deferred-17 (`requestedStartTime: undefined` → 400; `submitBatch` sent a timezone string into a `BigDecimal`). Real fix is slot slicing or a session-duration field — a product decision well outside this story.
+- **D2 — The now-live already-booked guard only covers the current parent+player.** `bookedStartTimes` (`BookingRequestPage.vue:234-246`) filters `parentBookings` by `coachId` *and* `playerId`, so it can only ever hold the current parent/child's own bookings, and `computeAvailableSlots` never subtracts bookings from the returned segments (only `coach_availability_blocks`, `AvailabilityService.java:73-75`). Another parent's — or the same parent's other child's — `REQUESTED`/`ACCEPTED` booking renders as an enabled, clickable row; submit reaches the overlap check at `BookingService.java:210-218` → `SLOT_UNAVAILABLE` → generic `booking.requests.submitError` toast (`:311-312`), and the slot stays in the list to be clicked again. Also newly reachable rather than newly introduced. The string comparison itself is sound (both sides are `Instant` under `WRITE_DATES_AS_TIMESTAMPS: false`, verified).
+- **D3 — `formatSlot` hardcodes the `'en'` locale.** `BookingRequestPage.vue:280` — the pre-change `new Date(x).toLocaleString()` used the viewer's browser locale; `new Intl.DateTimeFormat('en', …)` pins English for everyone. The app demonstrably has German and French users (this same story added `de` and `fr-FR` translations). Left alone because AC4 explicitly prescribed mirroring `ParentBookingsPage.vue:184-190`, which hardcodes `'en'` too — fixing this page alone would create a new cross-page inconsistency. Systemic: also affects `SessionPackDashboardPage.vue:175-182`, `CoachBookingRequestsPage.vue:147-149`, `useTimezone.js:4-10`. Should be one sweep using vue-i18n's active `locale`.
+- **D4 — `AvailabilityManagerPage.vue:333` still sources its display timezone from `windows[0]`.** `coachTimezone.value = store.windows[0].canonicalTimezone ?? 'UTC'` reads `coach_availability_windows.canonical_timezone` — the exact independently-writable column deferred-17 AC4 exists to stop displaying from, one page over. The new `bookingStore.coachTimezone` (`booking.store.js:101,174,555`) is populated by the same `loadAvailability()` call this page already makes and is simply unused here. Same line also dereferences `windows[0]` unguarded (pre-existing). Outside AC4's scope, which named `BookingRequestPage.vue` only.
+- **D5 — The availability endpoint returns `200` + `"UTC"` for a nonexistent `coachId`.** `AvailabilityService.java:55-61`'s new `coachProfileRepository.findById(coachId).orElse(null)` → blank/null → `"UTC"` collapses two genuinely different conditions ("no such coach" and "coach has no timezone set") into one cheerful success with empty lists. Deliberate on the dev's part — it mirrors `AvailabilityResource.getAvailability`'s existing tolerance for a caller-supplied `coachId` it never validates — so the real gap is the missing existence check on the endpoint itself, which predates this story.
+- **D6 — Zero frontend regression coverage for deferred-17's headline fix.** There is no frontend test suite in this repo (no `*.spec.js` outside `node_modules`, no `src/frontend/test`). Every test added or touched by deferred-17 is backend-only, so reverting the `.vue` and `booking.store.js` changes — the edits that actually made booking submission work at all — would leave the entire suite green. The story explicitly forbids introducing a test framework as part of its scope; this restates the standing gap already recorded for `skillars-5-4` W9.
+- **D7 — `docker compose build` silently no-ops.** `docker-compose.yml`/`docker-compose.local.yml` reference `image: ${APP_IMAGE}` (`skillars:local`) with no `build:` key in either file, so `docker compose build app` does nothing without erroring, leaving whatever image was last built manually. Surfaced by the deferred-17 dev's own live-verification session, where it cost significant time (the first pass falsely showed AC4 failing because the deployed jar predated the fix). Fix is either a `build:` block in `docker-compose.local.yml` or an explicit `docker build -t skillars:local .` step documented in `docs/deployment/local-deployment.md`.
+- **D8 — Reconcile the two `canonical_timezone` columns to a single source of truth.** `coach_profiles.canonical_timezone` (`V26__marketplace_coach_profiles.sql:11`) and `coach_availability_windows.canonical_timezone` (`V26:55`) are independently writable — `CoachProfileService.java:90` sets the profile's from Step 1 and `:173` sets each window's from its own Step 4 payload, and `AvailabilityService.updateWindow` never re-syncs a window after a profile-level change. Deferred-17 AC4 worked around the divergence for one page by making display read the profile column; it did not remove the divergence. Deferred from the deferred-17 code review's D1 decision (Mbah, 2026-08-06: accept and document). Real fix needs a migration, a backfill rule for which value wins on existing rows, and a product decision on whether per-window zones are a deliberate feature (a coach who coaches across zones) or an accident of the profile-builder form. Note the display-side risk is largely contained once the slot label carries `timeZoneName` — instants are absolute, so no wrong moment is ever transmitted, only a differently-labelled one.
+- **D9 — `windows.get(0)`'s zone is applied to every window's slot computation.** `AvailabilityService.getAvailabilityCalendar` computes a single `zoneId` from `windows.get(0).getCanonicalTimezone()` (`:52`, `:64`) and then uses that one zone to materialize *every* window's `LocalTime` boundaries into `Instant`s (`:88-89`, inside the per-window loop). A coach whose windows carry different zones — which the schema explicitly permits, see D8 — gets correct instants only for whichever window happens to sort first, and silently wrong ones for all the rest. Found during the deferred-17 code review while investigating D1; entirely pre-existing, unrelated to that story's changes, and not previously tracked. Fix is to read `window.getCanonicalTimezone()` inside the loop (with the existing `"UTC"`/`DateTimeException` fallback per window), but see D8 first — if the columns are reconciled, this collapses to a non-issue.
+- **D10 — Validate `canonicalTimezone` as a real IANA zone on the profile-builder write path.** `ProfileBuilderStep1Request.java:15` and `ProfileBuilderStep4Request.java:20` are `@NotBlank` only; `CoachProfileService.java:90` stores the string verbatim. Nothing in the system has ever called `ZoneId.of()` on `coach_profiles.canonical_timezone`. Deferred-17 removed the one incidental check that existed (`ZoneId.of(req.canonicalTimezone())` on the *client-supplied* value in `BookingService`), and its code review restored an equivalent guard on the read side (UTC fallback + WARN at `BookingService.java:246`). That protects newly created bookings but not: rows already stored with a bad value, nor read paths that touch the profile column outside booking creation. Deferred from the deferred-17 code review's D2 decision (Mbah, 2026-08-06: guard read now, defer write-path). Worth pairing with a one-line audit query over `coach_profiles.canonical_timezone` to establish whether any real rows are affected today — this is latent risk, not an observed failure.

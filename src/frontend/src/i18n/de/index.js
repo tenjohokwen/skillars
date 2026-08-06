@@ -558,6 +558,7 @@ export default {
   session: {
     drillLibrary: {
       title: 'Übungsbibliothek',
+      loadError: 'Übungen konnten nicht geladen werden. Bitte versuche es erneut.',
       platformTab: 'Plattform-Bibliothek',
       myLibraryTab: 'Meine Bibliothek',
       searchPlaceholder: 'Übungen suchen...',

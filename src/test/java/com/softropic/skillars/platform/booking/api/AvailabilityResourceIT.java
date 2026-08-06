@@ -137,6 +137,46 @@ class AvailabilityResourceIT {
         assertThat((List<?>) response.getBody().get("windows")).isEmpty();
         assertThat((List<?>) response.getBody().get("blocks")).isEmpty();
         assertThat((List<?>) response.getBody().get("computedSlots")).isEmpty();
+        assertThat(response.getBody().get("canonicalTimezone")).isEqualTo("Europe/Berlin");
+    }
+
+    /**
+     * Deferred-17 AC4. The window's own canonical_timezone is a separate, independently-writable
+     * column from the coach profile's — this seeds them to different zones and asserts the
+     * response's top-level canonicalTimezone reflects the coach profile's zone, not the window's.
+     *
+     * <p>Scope, precisely: this pins where the top-level <em>response field</em> is sourced from.
+     * It does not assert that the computedSlots instants agree with that zone — they are still
+     * materialized from the window's zone (see AvailabilityService), a known and accepted split
+     * recorded as D8 in deferred-work.md. The windows assertion is load-bearing: without it, a
+     * seeded window that never reached the response (wrong coach, or a weekStart that filters out
+     * day_of_week=2) would leave this test green while exercising no divergence at all.
+     */
+    @Test
+    void getAvailability_windowTimezoneDivergesFromProfile_responseUsesProfileTimezone() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_availability_windows " +
+                "(id, coach_id, day_of_week, start_time, end_time, canonical_timezone) " +
+                "VALUES (?, ?, 2, '09:00', '17:00', 'America/New_York')",
+                UUID.randomUUID(), coachProfileId
+            );
+            return null;
+        });
+
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + AVAILABILITY_BASE + "/" + coachProfileId + "/availability?weekStart=2026-06-16",
+            HttpMethod.GET,
+            null,
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat((List<?>) response.getBody().get("windows")).hasSize(1);
+        assertThat(response.getBody().get("canonicalTimezone")).isEqualTo("Europe/Berlin");
     }
 
     @Test

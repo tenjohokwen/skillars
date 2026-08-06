@@ -98,6 +98,7 @@ export const useBookingStore = defineStore('booking', () => {
   const windows = ref([])
   const blocks = ref([])
   const computedSlots = ref([])
+  const coachTimezone = ref(null)
   const weekStart = ref(null)
   const loading = ref(false)
   const error = ref(null)
@@ -128,8 +129,8 @@ export const useBookingStore = defineStore('booking', () => {
   const batchError = ref(null)
 
   const batchBasketSize = computed(() => batchBasket.value.length)
-  const isSlotInBasket = computed(() => (startTime) =>
-    batchBasket.value.some((s) => s.startTime === startTime),
+  const isSlotInBasket = computed(() => (startDatetime) =>
+    batchBasket.value.some((s) => s.startDatetime === startDatetime),
   )
 
   const coachSchedule = ref(null)
@@ -163,6 +164,12 @@ export const useBookingStore = defineStore('booking', () => {
   async function loadAvailability(coachId, date) {
     loading.value = true
     error.value = null
+    // Clear on entry, not only on success: a failed load must not leave the previous coach's
+    // slots and timezone on screen under the new coach's title.
+    windows.value = []
+    blocks.value = []
+    computedSlots.value = []
+    coachTimezone.value = null
     try {
       const ws = date ?? currentMonday()
       weekStart.value = ws
@@ -170,6 +177,7 @@ export const useBookingStore = defineStore('booking', () => {
       windows.value = res.windows ?? []
       blocks.value = res.blocks ?? []
       computedSlots.value = res.computedSlots ?? []
+      coachTimezone.value = res.canonicalTimezone ?? null
     } catch (e) {
       error.value = e
     } finally {
@@ -498,8 +506,8 @@ export const useBookingStore = defineStore('booking', () => {
     batchBasket.value.push(slot)
   }
 
-  function removeSlotFromBasket(startTime) {
-    batchBasket.value = batchBasket.value.filter((s) => s.startTime !== startTime)
+  function removeSlotFromBasket(startDatetime) {
+    batchBasket.value = batchBasket.value.filter((s) => s.startDatetime !== startDatetime)
   }
 
   function clearBatchBasket() {
@@ -514,8 +522,8 @@ export const useBookingStore = defineStore('booking', () => {
         coachId,
         playerId,
         slots: batchBasket.value.map((s) => ({
-          requestedStartTime: s.startTime,
-          requestedEndTime: s.endTime,
+          requestedStartTime: s.startDatetime,
+          requestedEndTime: s.endDatetime,
         })),
         totalAmount,
       })
@@ -550,6 +558,7 @@ export const useBookingStore = defineStore('booking', () => {
     windows,
     blocks,
     computedSlots,
+    coachTimezone,
     weekStart,
     loading,
     error,

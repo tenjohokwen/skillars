@@ -256,7 +256,7 @@ class BookingServiceTest {
         Instant pastTime = Instant.now().minusSeconds(3600);
         CreateBookingRequest req = new CreateBookingRequest(
             COACH_ID, PLAYER_ID, pastTime, pastTime.plusSeconds(3600),
-            "Europe/Berlin", null, null
+            null, null
         );
 
         assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
@@ -544,7 +544,7 @@ class BookingServiceTest {
             .withHour(10).withMinute(0).withSecond(0).withNano(0);
         Instant start = slotStart.toInstant();
         Instant end = slotStart.plusHours(1).toInstant();
-        return new CreateBookingRequest(coachId, playerId, start, end, "Europe/Berlin", "test notes", null);
+        return new CreateBookingRequest(coachId, playerId, start, end, "test notes", null);
     }
 
     private Booking makeBooking(Long parentId, Long playerId, UUID coachId, String status) {
