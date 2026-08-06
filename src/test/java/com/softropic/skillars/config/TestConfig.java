@@ -49,7 +49,7 @@ public class TestConfig {
     @Bean
     @ServiceConnection
     PostgreSQLContainer<?> postgresContainer(@Value("${spring.application.name}") String dbName) {
-        return new PostgreSQLContainer<>(DockerImageName.parse("postgres:14.18"))
+        return new CustomPostgresContainer(DockerImageName.parse("postgres:14.18"))
                 .withDatabaseName(dbName)
                 .withPassword("postgres")
                 .withUsername("postgres")

@@ -8,7 +8,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.Instant;
 import java.util.List;
@@ -23,7 +22,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 // constraint's scope (see V87), so overlapping rows here don't trip that constraint — this test
 // is purely about the JPQL query's own boundary correctness.
 @SpringBootTest
-@Testcontainers
 @ActiveProfiles({"dev", "test"})
 @Import(TestConfig.class)
 class BookingRepositoryIT {

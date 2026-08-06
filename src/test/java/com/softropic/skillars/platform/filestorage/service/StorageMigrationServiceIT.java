@@ -11,13 +11,13 @@ import com.softropic.skillars.platform.filestorage.repo.FileStorageObject;
 import com.softropic.skillars.platform.filestorage.repo.FileStorageObjectRepository;
 import com.softropic.skillars.platform.filestorage.repo.OutboxReplicationJobRepository;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.testcontainers.containers.MinIOContainer;
-import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.utility.DockerImageName;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
@@ -44,7 +44,6 @@ class StorageMigrationServiceIT extends BaseStorageIT {
 
     static final String DEST_BUCKET = "test-dest";
 
-    @Container
     static final MinIOContainer destinationMinio =
         new MinIOContainer(DockerImageName.parse("minio/minio:RELEASE.2024-01-13T07-53-03Z"));
 
@@ -67,6 +66,8 @@ class StorageMigrationServiceIT extends BaseStorageIT {
 
     @BeforeAll
     static void setUpDestination() {
+        destinationMinio.start();
+
         S3Client destS3Client = S3Client.builder()
             .endpointOverride(URI.create(destinationMinio.getS3URL()))
             .credentialsProvider(StaticCredentialsProvider.create(
@@ -101,6 +102,11 @@ class StorageMigrationServiceIT extends BaseStorageIT {
 
         destinationService = new S3StorageService(destS3Client, destTransferManager,
             destProperties, Executors.newFixedThreadPool(2));
+    }
+
+    @AfterAll
+    static void tearDownDestination() {
+        destinationMinio.stop();
     }
 
     @BeforeEach

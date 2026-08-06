@@ -1,9 +1,7 @@
 package com.softropic.skillars.platform.config.api;
 
 import com.softropic.skillars.config.E2ESecurityConfig;
-import com.softropic.skillars.config.PostgresContainerConfig;
-import com.softropic.skillars.config.RedisContainerConfig;
-import com.softropic.skillars.config.TestMailConfig;
+import com.softropic.skillars.config.TestConfig;
 import com.softropic.skillars.e2e.AdminLogin;
 import com.softropic.skillars.platform.config.contract.ConfigValueResponse;
 import com.softropic.skillars.platform.config.contract.UpdateConfigRequest;
@@ -15,12 +13,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.web.client.RestTemplateBuilder;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
-import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -35,7 +30,6 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.util.List;
 import java.util.Map;
@@ -45,9 +39,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
                 properties = {"enable.test.mail=true"})
-@Testcontainers
-@Import({PostgresContainerConfig.class, RedisContainerConfig.class,
-         E2ESecurityConfig.class, TestMailConfig.class, ConfigResourceIT.TestConfig.class})
+@Import({TestConfig.class, E2ESecurityConfig.class})
 @ActiveProfiles({"dev", "test"})
 @TestPropertySource(properties = {"spring.cloud.compatibility-verifier.enabled=false"})
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
@@ -64,15 +56,6 @@ class ConfigResourceIT {
     // Same bcrypt hash as the admin fixture (same password, self-contained salt)
     private static final String NONADMIN_PASSWORD_HASH =
             "$2a$10$Sdo/qTAcMcYaIAV6XXw3dejlsDwL93g6zb.uPUwFohPpC8q3bEg5i";
-
-    @TestConfiguration(proxyBeanMethods = false)
-    static class TestConfig {
-        @Bean
-        @Primary
-        RestTemplate restTemplate(RestTemplateBuilder builder) {
-            return builder.build();
-        }
-    }
 
     @LocalServerPort
     int port;

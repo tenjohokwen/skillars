@@ -11,7 +11,6 @@ import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.sql.Date;
 import java.sql.Timestamp;
@@ -34,7 +33,6 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code acceptAll} through to a settled booking. These tests do, for all three settle branches.
  */
 @SpringBootTest
-@Testcontainers
 @ActiveProfiles({"dev", "test"})
 @Import(TestConfig.class)
 class BatchAcceptPaymentIT {

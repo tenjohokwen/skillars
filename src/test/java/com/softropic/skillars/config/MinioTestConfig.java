@@ -1,6 +1,7 @@
 package com.softropic.skillars.config;
 
 import com.softropic.skillars.infrastructure.blobstore.config.BlobstoreProperties;
+
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
@@ -10,8 +11,13 @@ import org.testcontainers.utility.DockerImageName;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.NoSuchBucketException;
 
+/**
+ * MinIO container for the storage/video IT families only — deliberately kept out of
+ * {@link TestConfig} so tests that never touch blob storage don't pay for a MinIO container
+ * and bucket-creation on every context startup.
+ */
 @TestConfiguration(proxyBeanMethods = false)
-public class MinioContainerConfig {
+public class MinioTestConfig {
 
     static final String TEST_BUCKET = "test-storage";
 

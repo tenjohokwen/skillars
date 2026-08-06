@@ -1,11 +1,9 @@
 package com.softropic.skillars.e2e;
 
 import com.softropic.skillars.config.E2ESecurityConfig;
-import com.softropic.skillars.config.PostgresContainerConfig;
-import com.softropic.skillars.config.RedisContainerConfig;
 import com.softropic.skillars.config.TestClockConfig;
+import com.softropic.skillars.config.TestConfig;
 import com.softropic.skillars.config.TestDataCleaner;
-import com.softropic.skillars.config.TestMailConfig;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,8 +18,7 @@ import org.springframework.test.context.TestPropertySource;
 @ActiveProfiles({"dev", "test"})
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
                 properties = {"enable.test.mail=true"})
-@Import({PostgresContainerConfig.class, RedisContainerConfig.class,
-         E2ESecurityConfig.class, TestClockConfig.class, TestMailConfig.class})
+@Import({TestConfig.class, E2ESecurityConfig.class, TestClockConfig.class})
 @TestPropertySource(properties = {
     "spring.cloud.compatibility-verifier.enabled=false"
 })

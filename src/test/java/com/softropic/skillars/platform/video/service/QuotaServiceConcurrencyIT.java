@@ -22,7 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
-class QuotaServiceConcurrencyTest extends BaseVideoIT {
+class QuotaServiceConcurrencyIT extends BaseVideoIT {
 
     @Autowired QuotaService quotaService;
 
