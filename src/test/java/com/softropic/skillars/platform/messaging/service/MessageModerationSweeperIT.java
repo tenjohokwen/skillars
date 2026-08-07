@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.messaging.service;
 
 import com.softropic.skillars.config.TestConfig;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -61,6 +62,16 @@ class MessageModerationSweeperIT {
         });
     }
 
+    @AfterEach
+    void tearDown() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update("DELETE FROM admin.admin_alerts WHERE reference_type = 'MESSAGE' AND reference_id IN " +
+                "(SELECT id::text FROM messaging.messages WHERE conversation_id = ?)", CONVERSATION_ID);
+            jdbcTemplate.update("DELETE FROM messaging.messages WHERE conversation_id = ?", CONVERSATION_ID);
+            jdbcTemplate.update("DELETE FROM messaging.conversations WHERE id = ?", CONVERSATION_ID);
+            return null;
+        });
+    }
 
     private static final java.util.concurrent.atomic.AtomicLong NEXT_MESSAGE_ID =
         new java.util.concurrent.atomic.AtomicLong(9870_100_001L);

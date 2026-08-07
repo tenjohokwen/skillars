@@ -3,7 +3,6 @@ package com.softropic.skillars.platform.payment;
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
-import org.junit.jupiter.api.AfterEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -30,32 +29,6 @@ public abstract class BasePaymentIT extends AbstractIntegrationTest {
     @InjectWireMock("stripe-service")
     protected WireMockServer wireMockServer;
 
-    @AfterEach
-    void cleanPaymentData() {
-        transactionTemplate.execute(status -> {
-            // Delete in FK-safe order: children before parents
-            jdbcTemplate.execute("DELETE FROM payment.booking_payments");
-            // parent_credit_ledger is append-only (V79 triggers); bypass for test cleanup only
-            jdbcTemplate.execute("SET SESSION session_replication_role = 'replica'");
-            jdbcTemplate.execute("DELETE FROM payment.parent_credit_ledger");
-            jdbcTemplate.execute("SET SESSION session_replication_role = 'origin'");
-            // booking.bookings references payment.session_pack_purchases — clean bookings first
-            jdbcTemplate.execute("DELETE FROM booking.booking_reschedule_requests");
-            jdbcTemplate.execute("DELETE FROM booking.session_completion_data");
-            jdbcTemplate.execute("DELETE FROM booking.bookings");
-            jdbcTemplate.execute("DELETE FROM payment.session_pack_purchases");
-            jdbcTemplate.execute("DELETE FROM payment.session_pack_tiers");
-            jdbcTemplate.execute("DELETE FROM payment.stripe_customers");
-            jdbcTemplate.execute("DELETE FROM marketplace.coach_pricing");
-            // P8: coach_profiles and users were not cleaned, causing insertTestCoach to silently
-            // return a stale UUID via ON CONFLICT DO NOTHING on repeated test-class runs
-            jdbcTemplate.execute("DELETE FROM marketplace.coach_profiles");
-            jdbcTemplate.execute("DELETE FROM main.player_profiles WHERE parent_id IN " +
-                "(SELECT id FROM main.\"user\" WHERE login LIKE '%@test.com')");
-            jdbcTemplate.execute("DELETE FROM main.\"user\" WHERE login LIKE '%@test.com'");
-            return null;
-        });
-    }
 
     /**
      * Inserts a minimal parent user row (required as the FK target for player_profiles.parent_id).
