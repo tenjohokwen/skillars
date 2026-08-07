@@ -48,7 +48,11 @@ if [ ! -f "$LOG" ]; then
   exit 1
 fi
 
-last=$(grep -oE 'missCount = [0-9]+' "$LOG" | tail -1 | grep -oE '[0-9]+' || true)
+# -a (--text) is REQUIRED, not defensive. The build log contains null bytes from test output,
+# so without it grep decides the file is binary and prints "binary file matches" INSTEAD of the
+# match -- making this gate silently find nothing. That single missing flag is what made three
+# successive attempts at this gate look like a file-plumbing problem.
+last=$(grep -aoE 'missCount = [0-9]+' "$LOG" | tail -1 | grep -oE '[0-9]+' || true)
 
 if [ -z "$last" ]; then
   echo "assert-context-count: no 'missCount = N' found in $LOG." >&2
