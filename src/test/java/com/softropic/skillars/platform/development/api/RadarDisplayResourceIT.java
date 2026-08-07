@@ -4,7 +4,6 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
-import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,7 +16,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
@@ -49,8 +47,6 @@ class RadarDisplayResourceIT extends AbstractIntegrationTest {
     @Autowired private PasswordEncoder passwordEncoder;
     @LocalServerPort private int randomServerPort;
 
-    @MockitoBean
-    VideoProviderAdapter videoProviderAdapter;
 
     private static final long COACH_USER_ID   = 9590000001L;
     private static final long ACADEMY_USER_ID = 9590000002L;

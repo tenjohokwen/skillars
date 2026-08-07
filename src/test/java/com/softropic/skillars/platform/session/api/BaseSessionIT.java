@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.session.api;
 
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.e2e.HttpTestClient;
@@ -23,6 +25,21 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 abstract class BaseSessionIT extends AbstractIntegrationTest {
+
+    /**
+     * Hoisted to the family base rather than the root, per AC4.2.
+     *
+     * <p>Trap-check discharged before hoisting: every {@code *IT} that references
+     * {@code VideoProviderAdapter} already mocks it, including the only three that drive Bunny
+     * over WireMock ({@code VideoUploadInitializationIT}, {@code VideoRetryUploadIT},
+     * {@code VideoUploadConfirmationIT}) -- so this cannot silently make a live WireMock stub
+     * unreachable. It stays OFF {@code AbstractIntegrationTest}: ~100 classes never reference the
+     * adapter and could in principle reach it transitively, which static analysis cannot rule out.
+     *
+     * <p>No manual reset needed -- {@code MockReset.AFTER} is the default.
+     */
+    @MockitoBean
+    protected VideoProviderAdapter videoProviderAdapter;
 
     protected static final String LOGIN_ENDPOINT = "/api/auth/login";
     protected static final String DRILLS_BASE    = "/api/session/drills";

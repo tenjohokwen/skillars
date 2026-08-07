@@ -1,6 +1,5 @@
 package com.softropic.skillars.platform.video.service;
 
-import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.security.contract.AgeTier;
 import com.softropic.skillars.platform.security.contract.PlayerPosition;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
@@ -20,7 +19,6 @@ import com.softropic.skillars.platform.video.repo.VideoRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -38,8 +36,6 @@ import static org.mockito.Mockito.verify;
 
 class VideoApprovalServiceIT extends BaseVideoIT {
 
-    @MockitoBean
-    VideoProviderAdapter videoProviderAdapter;
 
     @Autowired VideoApprovalService videoApprovalService;
     @Autowired VideoRepository videoRepository;

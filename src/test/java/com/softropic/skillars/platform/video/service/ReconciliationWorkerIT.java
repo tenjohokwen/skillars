@@ -1,7 +1,6 @@
 package com.softropic.skillars.platform.video.service;
 
 import com.softropic.skillars.infrastructure.video.AssetStatus;
-import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.video.BaseVideoIT;
 import com.softropic.skillars.platform.video.contract.AccessState;
 import com.softropic.skillars.platform.video.contract.OperationalState;
@@ -12,7 +11,6 @@ import com.softropic.skillars.platform.video.repo.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -20,8 +18,6 @@ import static org.mockito.Mockito.*;
 
 class ReconciliationWorkerIT extends BaseVideoIT {
 
-    @MockitoBean
-    VideoProviderAdapter videoProviderAdapter;
 
     @Autowired ReconciliationWorkerScheduler scheduler;
     @Autowired VideoRepository videoRepository;

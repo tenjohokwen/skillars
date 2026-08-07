@@ -1,6 +1,5 @@
 package com.softropic.skillars.platform.video.service;
 
-import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.video.BaseVideoIT;
 import com.softropic.skillars.platform.video.contract.AccessState;
 import com.softropic.skillars.platform.video.contract.OperationalState;
@@ -18,8 +17,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 @TestPropertySource(properties = {"app.video.webhook.max-attempts=2"})
 class WebhookPipelineIT extends BaseVideoIT {
 
-    @MockitoBean
-    VideoProviderAdapter videoProviderAdapter;
 
     // Mocked to isolate webhook pipeline tests from the async moderation pipeline.
     // Without this mock, VideoUploadedEvent triggers ModerationOrchestrationService which:

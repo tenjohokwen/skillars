@@ -2,7 +2,6 @@ package com.softropic.skillars.platform.development.service;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
-import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
 import com.softropic.skillars.platform.development.repo.PlayerSkillStat;
 import com.softropic.skillars.platform.development.repo.SluRepository;
@@ -11,7 +10,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -50,8 +48,6 @@ class SluCalculationServiceIT extends AbstractIntegrationTest {
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private SluRepository sluRepository;
 
-    @MockitoBean
-    VideoProviderAdapter videoProviderAdapter;
 
 
     @Test

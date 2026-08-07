@@ -1,7 +1,6 @@
 package com.softropic.skillars.platform.video.service;
 
 import com.softropic.skillars.infrastructure.video.VideoMetadata;
-import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.video.BaseVideoIT;
 import com.softropic.skillars.platform.video.contract.AccessState;
 import com.softropic.skillars.platform.video.contract.OperationalState;
@@ -36,8 +35,6 @@ import static org.mockito.Mockito.when;
 @RecordApplicationEvents
 class VideoUploadPipelineIT extends BaseVideoIT {
 
-    @MockitoBean
-    VideoProviderAdapter videoProviderAdapter;
 
     @MockitoBean
     QuotaService quotaProvider;

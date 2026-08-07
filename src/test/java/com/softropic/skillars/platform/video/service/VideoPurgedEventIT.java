@@ -1,6 +1,5 @@
 package com.softropic.skillars.platform.video.service;
 
-import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.session.service.VideoPhysicalDeletionListener;
 import com.softropic.skillars.platform.video.BaseVideoIT;
 import com.softropic.skillars.platform.video.contract.AccessState;
@@ -13,7 +12,6 @@ import com.softropic.skillars.platform.video.repo.VideoRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -35,7 +33,6 @@ import static org.mockito.Mockito.verify;
  */
 class VideoPurgedEventIT extends BaseVideoIT {
 
-    @MockitoBean VideoProviderAdapter videoProviderAdapter;
     @MockitoSpyBean VideoPhysicalDeletionListener physicalDeletionListener;
 
     @Autowired VideoDeletionService videoDeletionService;

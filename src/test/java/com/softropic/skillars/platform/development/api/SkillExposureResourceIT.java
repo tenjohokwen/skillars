@@ -4,7 +4,6 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
-import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.springframework.http.HttpEntity;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,7 +18,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.client.RestTemplate;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
@@ -54,8 +52,6 @@ class SkillExposureResourceIT extends AbstractIntegrationTest {
     @Autowired private PasswordEncoder passwordEncoder;
     @LocalServerPort private int randomServerPort;
 
-    @MockitoBean
-    VideoProviderAdapter videoProviderAdapter;
 
     private static final long COACH_USER_ID   = 9570000001L;
     private static final long COACH2_USER_ID  = 9570000002L;
