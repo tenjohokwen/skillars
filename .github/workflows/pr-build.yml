@@ -45,37 +45,35 @@ jobs:
       # No -q: it suppresses phase markers, the surefire/failsafe summaries and all
       # per-class timings, which are the numbers this project's test-performance work
       # is measured against. Do not add it back.
-      # The context-count gate below reads missCount from build.log.
+      # Build, then assert the context count IN THE SAME SHELL that produced the log.
       #
-      # `mvn ... 2>&1 | tee build.log` produced a log with NO missCount lines in it, even
-      # though the step's own output contained 16725 of them (run 31198763463) -- so the gate
-      # could not find its input and failed every build. A plain redirect captures them
-      # correctly (verified locally: 18062 occurrences). Rather than keep guessing at why the
-      # pipe dropped them, write the file with a redirect and stream it for live output.
+      # Two earlier attempts asserted from a separate step -- first reading a tee'd /tmp/build.log,
+      # then a redirected $GITHUB_WORKSPACE/build.log. Both reported "no missCount found" even
+      # though the build step's own output contained thousands of the lines, so the gate failed
+      # every build for a reason that was never pinned down. Asserting here removes the cross-step
+      # file handoff that both failures had in common, which is the only thing they shared.
       #
-      # The check at the end fails the step loudly if the capture is ever empty again, so a
-      # broken capture can never look like a passing gate.
+      # `set +e` around maven so a test failure does not abort the step before the gate runs;
+      # the maven status is re-applied at the end so a red suite still fails the build.
       - name: Build and test
         run: |
-          set -o pipefail
-          mvn -B verify > "$GITHUB_WORKSPACE/build.log" 2>&1 &
-          mvn_pid=$!
-          tail -f "$GITHUB_WORKSPACE/build.log" --pid=$mvn_pid || true
-          wait $mvn_pid
-          mvn_status=$?
-          if ! grep -q 'missCount = [0-9]' "$GITHUB_WORKSPACE/build.log"; then
-            echo "::error::build.log captured no 'missCount' lines -- the context-count gate has no input." >&2
-            exit 1
-          fi
-          exit $mvn_status
+          set +e
+          mvn -B verify 2>&1 | tee build.log
+          mvn_status=${PIPESTATUS[0]}
+
+          echo "::group::Spring context count (AC3)"
+          .github/scripts/assert-context-count.sh build.log 42
+          gate_status=$?
+          echo "::endgroup::"
+          # NB: stay under `set +e` here -- restoring `set -e` before the gate would abort the
+          # step on a gate failure before gate_status could be captured.
+
+          if [ "$mvn_status" -ne 0 ]; then exit "$mvn_status"; fi
+          exit "$gate_status"
 
       - name: Assert container ceiling (AC1)
         if: always()
         run: .github/scripts/container-sampler.sh assert /tmp/container-samples.txt 1
-
-      - name: Assert Spring context count (AC3)
-        if: always()
-        run: .github/scripts/assert-context-count.sh "$GITHUB_WORKSPACE/build.log" 42
 
       - name: Upload test reports
         if: always()
