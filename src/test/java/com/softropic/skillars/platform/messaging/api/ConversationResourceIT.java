@@ -431,6 +431,32 @@ class ConversationResourceIT extends AbstractIntegrationTest {
 
     // ── Concurrent conversation creation (upsert correctness) ──
 
+    /**
+     * FLAKY — fails intermittently on CI, passes locally. Not disabled, because when it fails it
+     * fails on a real assertion rather than on infrastructure.
+     *
+     * <p>Observed during story deferred-19: failed on CI runs {@code 31194113235} and
+     * {@code 31211821469} with an {@code ExecutionException} out of {@link Future#get()}, then
+     * passed on {@code 31213258706} and {@code 31215286590} with no change to this class or to
+     * the code under test in between. Roughly 50% on a 4-vCPU runner.
+     *
+     * <p>The five threads below race a single upsert, so the outcome depends on how the runner
+     * interleaves them; a slower or more contended machine changes the timing. The exception
+     * surfaces from {@code f.get()}, which means one request thread threw — most likely a 500
+     * from a lost upsert race, i.e. <strong>plausibly the very defect this test exists to catch,
+     * surfacing only under CI's timing.</strong> That has not been confirmed: the assertion error
+     * is wrapped by {@code ExecutionException} and the underlying response body was never
+     * captured.
+     *
+     * <p><strong>Do not "fix" this by adding a sleep, a retry, or {@code @Disabled}.</strong> The
+     * next step is to capture the failing response — log the status and body inside the lambda —
+     * so the next CI failure says whether the upsert genuinely lost the race. If it did, the
+     * product has a concurrency bug and this test is doing its job.
+     *
+     * <p>It is unrelated to deferred-19's consolidation work: it neither shares state with other
+     * classes nor depends on the reset listener, and it failed and passed on both sides of every
+     * change in that story.
+     */
     @Test
     void createConversation_concurrent_returnsSameConversationIdWithout500() throws Exception {
         String coachCookies = loginAndGetCookies(COACH_EMAIL);
