@@ -54,10 +54,19 @@ spring:
       # threshold is hit, "skipping repeated attempt to load context" for every later class
       # sharing that key.
       #
-      # Tests are single-threaded per context (no forkCount > 1 -- deliberately out of scope),
-      # so a small pool is sufficient. minimum-idle 0 means a cached-but-inactive context holds
-      # no connections at all.
-      maximum-pool-size: 4
+      # SIZING: 4 was too small and cost ~6.5 minutes of the suite. Test CLASSES run
+      # sequentially, but individual tests are not single-threaded -- the batch-accept tests
+      # process sibling bookings concurrently, exhausted a 4-connection pool, and then blocked
+      # for the full 30 s connection-timeout. It showed up as per-test times quantised at
+      # exactly 30.1 s and 60.1 s (one or two timeouts each) in BatchAcceptPaymentIT and
+      # BookingBatchResourceIT, which between them were 392 s of 724 s of total IT time.
+      #
+      # minimum-idle 0 is what makes a larger maximum safe: an inactive cached context holds
+      # NO connections, and idle-timeout returns them after 10 s. Only the context currently
+      # running a test draws from the server, so the ~20 cached contexts do not multiply into
+      # PostgreSQL's 100-connection limit the way the production sizing (25 max / 8 min-idle)
+      # did. Keep minimum-idle at 0 if you raise this further.
+      maximum-pool-size: 16
       minimum-idle: 0
       idle-timeout: 10000
 
