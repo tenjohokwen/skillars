@@ -31,6 +31,19 @@
 			<org.mapstruct.version>1.6.3</org.mapstruct.version>
 			<node.version>v22.16.0</node.version>
 			<spring-cloud.version>2025.0.1</spring-cloud.version>
+			<!--
+			  Backend-only iteration switch: `mvn -o verify -DskipFrontend` skips all five
+			  frontend-maven-plugin executions (install-node-and-npm, npm install,
+			  npm install -g @quasar/cli, npm test, npx quasar build).
+
+			  WARNING: this changes the packaged artifact. maven-resources-plugin copies
+			  src/frontend/dist/spa -> target/classes/static at process-resources; on a clean
+			  tree with this flag that directory does not exist, so the resulting jar ships
+			  with NO UI. Fine for backend iteration, unacceptable for anything deployed.
+			  MUST NOT be set in any CI workflow; pr-build.yml builds a Docker image from
+			  this same artifact. See docs/testing/readme.md.
+			-->
+			<skipFrontend>false</skipFrontend>
 		</properties>
 	
 		<dependencyManagement>
@@ -478,6 +491,9 @@
 				<configuration>
 					<nodeVersion>${node.version}</nodeVersion>
 					<workingDirectory>src/frontend</workingDirectory>
+					<!-- Plugin-level config merges into every execution above; none of the
+					     five overrides <skip>, so -DskipFrontend disables all of them. -->
+					<skip>${skipFrontend}</skip>
 				</configuration>
 			</plugin>
 			<plugin>
