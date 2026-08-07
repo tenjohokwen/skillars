@@ -9,6 +9,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.TestExecutionListeners;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.wiremock.spring.ConfigureWireMock;
@@ -71,6 +72,12 @@ import org.wiremock.spring.EnableWireMock;
     @ConfigureWireMock(name = "bunny-service"),
     @ConfigureWireMock(name = "stripe-service")
 })
+// MERGE_WITH_DEFAULTS keeps Spring's own listeners (notably SqlScriptsTestExecutionListener and
+// MockitoResetTestExecutionListener) and adds ours. @TestExecutionListeners does NOT contribute
+// to MergedContextConfiguration, so this adds no contexts.
+@TestExecutionListeners(
+    listeners = DatabaseResetTestExecutionListener.class,
+    mergeMode = TestExecutionListeners.MergeMode.MERGE_WITH_DEFAULTS)
 public abstract class AbstractIntegrationTest {
 
     /**

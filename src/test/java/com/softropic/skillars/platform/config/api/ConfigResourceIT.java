@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.config.api;
 
+import com.softropic.skillars.platform.security.SecurityIT;
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.config.E2ESecurityConfig;
@@ -12,6 +13,7 @@ import com.softropic.skillars.platform.security.service.LoginAttemptsService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.context.jdbc.Sql;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.web.client.RestTemplateBuilder;
@@ -36,6 +38,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
+// AC5.5 triage: this class authenticates but seeded no security key of its own -- it was
+// free-riding on rows another test class happened to leave in main.sec. The deterministic
+// reset removes that leftover, so the class must now declare the seed it always needed.
+// main.sec is NOT Flyway-seeded reference data (no migration inserts into it), so this is
+// the "fix the class" bucket, not the "fix the reset" bucket.
+@Sql({SecurityIT.SEC_DATA_SQL_PATH})
 @Import(E2ESecurityConfig.class)
 class ConfigResourceIT extends AbstractIntegrationTest {
 
