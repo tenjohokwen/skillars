@@ -11,7 +11,12 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Temporarily raised from 15 while story deferred-19 establishes a baseline: the
+    # unrefactored suite builds 37 Spring contexts and the only prior CI datapoint
+    # (9m54s) came from a run that failed early and skipped the Docker + Trivy steps.
+    # A timeout here yields no test counts at all, which is what we are trying to measure.
+    # deferred-19 Task 9b (AC10.5) sets the final value from the measured duration.
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
@@ -31,8 +36,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-
 
+      # No -q: it suppresses phase markers, the surefire/failsafe summaries and all
+      # per-class timings, which are the numbers this project's test-performance work
+      # is measured against. Do not add it back.
       - name: Build and test
-        run: mvn -B verify -q
+        run: mvn -B verify
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: test-reports-pr-${{ github.event.pull_request.number }}
+          path: |
+            target/surefire-reports/
+            target/failsafe-reports/
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Build Docker image (no push)
         uses: ./.github/actions/docker-build
