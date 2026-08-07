@@ -44,6 +44,21 @@
 			  this same artifact. See docs/testing/readme.md.
 			-->
 			<skipFrontend>false</skipFrontend>
+
+			<!--
+			  Security overrides of Spring Boot 3.5.11's managed versions. Trivy fails the
+			  pr-build scan on CRITICAL/HIGH findings; these are the ones with a fix available.
+			  Remove an override once the Boot parent's own managed version reaches or exceeds it.
+
+			  thymeleaf  CVE-2026-41901 / CVE-2026-40478 - server-side template injection.
+			             Boot 3.5.11 manages 3.1.3.RELEASE; Trivy reports the fix as 3.1.5.RELEASE.
+			             Thymeleaf is genuinely used here (the registration/notification email
+			             templates), so this is a reachable code path, not a dormant dependency.
+			  netty      CVE-2026-42587 - netty-codec-http. Trivy reports the fix as
+			             4.1.133.Final on the 4.1.x line, which is the line Boot 3.5.11 is on.
+			-->
+			<thymeleaf.version>3.1.5.RELEASE</thymeleaf.version>
+			<netty.version>4.1.133.Final</netty.version>
 		</properties>
 	
 		<dependencyManagement>

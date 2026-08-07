@@ -15,6 +15,18 @@ logging:
 # annotations so that adding one is a deliberate act.
 # ---------------------------------------------------------------------------------------------
 spring:
+  # Surefire/failsafe reported "going to kill self fork JVM. The exit has elapsed 30 seconds
+  # after System.exit(0)" at the end of the run. Consolidation is what made this appear: the
+  # suite now holds ~21 cached ApplicationContexts alive until JVM exit instead of evicting
+  # them as it goes, and Spring closes every one of them in a shutdown hook -- each stopping a
+  # Quartz scheduler, a Hikari pool, task executors and WireMock servers. Bounding the two
+  # slowest parts keeps that under Surefire's 30 s patience.
+  #
+  # Test-profile only. Production still waits for jobs to finish on shutdown.
+  quartz:
+    wait-for-jobs-to-complete-on-shutdown: false
+  lifecycle:
+    timeout-per-shutdown-phase: 5s
   cloud:
     compatibility-verifier:
       enabled: false   # was on 83 classes
