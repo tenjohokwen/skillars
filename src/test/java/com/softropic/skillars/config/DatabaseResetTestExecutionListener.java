@@ -165,8 +165,15 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
         new java.util.concurrent.atomic.AtomicBoolean();
 
     private static void recordCost(long nanos) {
-        RESET_COUNT.incrementAndGet();
-        RESET_NANOS.addAndGet(nanos);
+        long count = RESET_COUNT.incrementAndGet();
+        long total = RESET_NANOS.addAndGet(nanos);
+        // Report periodically as well as at exit: Failsafe kills the forked JVM without always
+        // running shutdown hooks, so a shutdown-only report is frequently lost.
+        if (count % 25 == 0) {
+            long ms = total / 1_000_000;
+            System.out.printf("[deferred-19] database reset: %d invocations, %d ms total, "
+                + "%.1f ms mean%n", count, ms, (double) ms / count);
+        }
         if (HOOK_REGISTERED.compareAndSet(false, true)) {
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 long n = RESET_COUNT.get();
@@ -296,23 +303,75 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
     }
 
     /**
-     * One statement, so PostgreSQL takes its ACCESS EXCLUSIVE locks atomically and FK ordering
-     * between the tables does not matter.
+     * Clears every application table, skipping the ones that are already empty.
+     *
+     * <h3>Why this is not a TRUNCATE any more (AC5.6)</h3>
+     *
+     * The first implementation issued one
+     * {@code TRUNCATE <~100 tables> RESTART IDENTITY CASCADE}. Measured cost:
+     *
+     * <pre>  CI (Linux):            814 invocations,  81 s total,   99.7 ms mean
+     *   local (Docker Desktop): 814 invocations, 828 s total, ~1018 ms mean</pre>
+     *
+     * AC5.6 says to switch to deleting only from non-empty tables if the cost is material, having
+     * measured first. On CI it is not material. Locally it is ~14 minutes of a 41-minute run,
+     * because every statement crosses Docker Desktop's VM boundary, and TRUNCATE does real file
+     * work and takes an ACCESS EXCLUSIVE lock on every table named — even the empty ones, which
+     * after the first reset is nearly all of them.
+     *
+     * <p>This version runs one server-side {@code DO} block instead: a single round trip that
+     * tests each table with {@code EXISTS (SELECT 1 …)} and only issues a {@code DELETE} for the
+     * few that actually hold rows. An {@code EXISTS} against an empty table stops at the first
+     * page; a {@code DELETE} it never issues costs nothing.
+     *
+     * <h3>Two details that matter</h3>
+     *
+     * <p><strong>{@code session_replication_role = 'replica'}</strong> suspends FK triggers for
+     * the duration, so deletion order between tables is irrelevant — the property TRUNCATE got
+     * from naming every table in one statement. It is restored to {@code 'origin'} in the same
+     * block. This is the same mechanism {@code BasePaymentIT} already used to delete from the
+     * append-only {@code parent_credit_ledger}, so it is an established pattern here rather than
+     * a new privilege requirement (the test container runs as superuser {@code postgres}).
+     *
+     * <p><strong>Sequences are no longer restarted.</strong> TRUNCATE carried
+     * {@code RESTART IDENTITY}; DELETE has no equivalent. This codebase's fixtures use explicit
+     * hard-coded ids (see the fixture-id registry in {@code docs/testing/test-data-isolation.md}),
+     * so nothing should depend on a sequence restarting at 1 — but that is an assumption this
+     * change introduces, and it is the first thing to suspect if a test starts failing on an
+     * unexpected generated id.
      */
     private void truncateApplicationTables(JdbcTemplate jdbc) {
         List<String[]> tables = applicationTables(jdbc);
         if (tables.isEmpty()) {
             return;
         }
-        StringBuilder sb = new StringBuilder("TRUNCATE ");
+        StringBuilder values = new StringBuilder();
         for (int i = 0; i < tables.size(); i++) {
             if (i > 0) {
-                sb.append(", ");
+                values.append(',');
             }
-            sb.append(quote(tables.get(i)[0])).append('.').append(quote(tables.get(i)[1]));
+            values.append('(').append(literal(tables.get(i)[0])).append(',')
+                  .append(literal(tables.get(i)[1])).append(')');
         }
-        sb.append(" RESTART IDENTITY CASCADE");
-        jdbc.execute(sb.toString());
+        jdbc.execute(
+            "DO $$\n"
+            + "DECLARE r record; has_rows boolean;\n"
+            + "BEGIN\n"
+            + "  SET CONSTRAINTS ALL DEFERRED;\n"
+            + "  PERFORM set_config('session_replication_role', 'replica', true);\n"
+            + "  FOR r IN SELECT * FROM (VALUES " + values + ") AS t(s, n) LOOP\n"
+            + "    EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.%I)', r.s, r.n) INTO has_rows;\n"
+            + "    IF has_rows THEN\n"
+            + "      EXECUTE format('DELETE FROM %I.%I', r.s, r.n);\n"
+            + "    END IF;\n"
+            + "  END LOOP;\n"
+            + "  PERFORM set_config('session_replication_role', 'origin', true);\n"
+            + "END $$;");
+    }
+
+    /** Single-quoted SQL string literal, for embedding in the DO block's VALUES list. */
+    private static String literal(String value) {
+        return "'" + value.replace("'", "''") + "'";
     }
 
     private void restoreReferenceData(JdbcTemplate jdbc) {
