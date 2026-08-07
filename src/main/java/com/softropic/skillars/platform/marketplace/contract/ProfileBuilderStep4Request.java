@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.marketplace.contract;
 
+import com.softropic.skillars.infrastructure.validation.IanaTimezone;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -11,12 +13,15 @@ import java.time.LocalTime;
 import java.util.List;
 
 public record ProfileBuilderStep4Request(
-    @NotEmpty @Size(max = 14) List<AvailabilityWindowRequest> windows
+    // @NotNull on the element, not just @Valid: Bean Validation skips the cascade on a null list
+    // element, so {"windows":[null]} passed every constraint here and NPE'd inside
+    // CoachProfileService.validateAvailabilityWindows -> 500. Found by the 2026-08-07 code review.
+    @NotEmpty @Size(max = 14) List<@NotNull @Valid AvailabilityWindowRequest> windows
 ) {
     public record AvailabilityWindowRequest(
         @Min(1) @Max(7) short dayOfWeek,
         @NotNull LocalTime startTime,
         @NotNull LocalTime endTime,
-        @NotBlank String canonicalTimezone
+        @NotBlank @IanaTimezone String canonicalTimezone
     ) {}
 }

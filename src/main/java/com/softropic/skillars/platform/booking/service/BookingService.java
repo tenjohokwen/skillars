@@ -114,7 +114,10 @@ public class BookingService {
     private final CoachPricingRepository coachPricingRepository;
     private final EntityManager entityManager;
 
-    private static final List<String> ACTIVE_SLOT_STATUSES =
+    // Package-private, not private: AvailabilityService reuses this exact status set to exclude
+    // already-booked slots from the availability calendar (Deferred-18 AC1) — same rationale as
+    // ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED below. Keeping one definition is the point.
+    static final List<String> ACTIVE_SLOT_STATUSES =
         List.of("REQUESTED", "ACCEPTED", "PAYMENT_PENDING", "CONFIRMED", "UPCOMING", "IN_PROGRESS", "PAUSED");
 
     // Package-private, not private: BookingBatchService and RescheduleService run the same

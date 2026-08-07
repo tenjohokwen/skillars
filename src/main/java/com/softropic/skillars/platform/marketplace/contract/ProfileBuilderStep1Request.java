@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.marketplace.contract;
 
+import com.softropic.skillars.infrastructure.validation.IanaTimezone;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.Size;
@@ -12,5 +13,5 @@ public record ProfileBuilderStep1Request(
     @Size(max = 100) String city,
     @Size(max = 100) String district,
     @NotEmpty List<@NotBlank String> languages,
-    @NotBlank String canonicalTimezone
+    @NotBlank @IanaTimezone String canonicalTimezone
 ) {}

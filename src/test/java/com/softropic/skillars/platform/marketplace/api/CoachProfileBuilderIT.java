@@ -158,6 +158,34 @@ class CoachProfileBuilderIT {
     }
 
     @Test
+    void saveStep1_invalidTimezone_returns400WithResolvedMessage() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/1",
+            HttpMethod.PUT,
+            step1Payload("John Coach", "Bio", "Berlin", "Mitte", List.of("English"), "Not/AZone"),
+            authenticatedHeaders(cookies),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                // Must resolve to the real message, not leak the raw "{validation.timezone.invalid}"
+                // template placeholder — the exact defect this story exists to prevent (AC4/B3).
+                // Asserting the RESOLVED sentence, not just the key: the key alone is satisfied by
+                // ApiAdvice echoing the whole unsplit "key|fallback" template, so the key-only
+                // assertion could not tell a working pipe split from a broken one.
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("validation.timezone.invalid")
+                    .contains("Timezone must be a recognized timezone identifier")
+                    .doesNotContain("{validation.timezone.invalid}")
+                    .doesNotContain("validation.timezone.invalid|");
+            });
+    }
+
+    @Test
     void saveStep1_missingDisplayName_returns400() {
         String cookies = loginAndGetCookies(COACH_EMAIL);
 
@@ -276,6 +304,163 @@ class CoachProfileBuilderIT {
         ))
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    // ----- AC4 (Deferred-18): @Valid cascade + IANA timezone validation on Step 4 windows -----
+
+    @Test
+    void saveStep4_invalidWindowTimezone_returns400WithResolvedMessage() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies);
+        saveStep2(cookies);
+        saveStep3(cookies);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/4",
+            HttpMethod.PUT,
+            Map.of("windows", List.of(Map.of("dayOfWeek", 1, "startTime", "09:00:00", "endTime", "11:00:00",
+                "canonicalTimezone", "Not/AZone"))),
+            authenticatedHeaders(cookies),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("validation.timezone.invalid")
+                    .contains("Timezone must be a recognized timezone identifier")
+                    .doesNotContain("{validation.timezone.invalid}")
+                    .doesNotContain("validation.timezone.invalid|");
+            });
+    }
+
+    // Proves the `@Valid` cascade added by this story actually runs — before it, nothing nested
+    // inside `windows` was validated at all, so `dayOfWeek`/`startTime`/`endTime` reached
+    // CoachProfileService.saveStep4 unchecked.
+    //
+    // Asserting the STATUS ALONE proves nothing here, which is what the 2026-08-07 code review
+    // caught: without @Valid, dayOfWeek 9 sails past validateAvailabilityWindows (which checks only
+    // end > start and per-day overlap) into the V26 CHECK (day_of_week BETWEEN 1 AND 7), and
+    // ApiAdvice.integrityViolationHandler maps a non-CONFLICT_CONSTRAINTS violation to 400 as well.
+    // The discriminator is the field-error entry, which only the Bean Validation path produces.
+    @Test
+    void saveStep4_dayOfWeekOutOfRange_returns400WithFieldError() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies);
+        saveStep2(cookies);
+        saveStep3(cookies);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/4",
+            HttpMethod.PUT,
+            Map.of("windows", List.of(Map.of("dayOfWeek", 9, "startTime", "09:00:00", "endTime", "11:00:00",
+                "canonicalTimezone", "Europe/Berlin"))),
+            authenticatedHeaders(cookies),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                // fieldErrors[].field names the cascaded element; the DB-constraint path returns a
+                // generic dataError body with no fieldErrors at all.
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("dayOfWeek")
+                    .doesNotContain("generic.dataError");
+            });
+    }
+
+    // The @Valid cascade is skipped entirely for a NULL list element, so this payload passed every
+    // constraint and NPE'd inside validateAvailabilityWindows -> 500. Guards the @NotNull added to
+    // the element type by the 2026-08-07 code review.
+    @Test
+    void saveStep4_nullWindowElement_returns400NotServerError() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies);
+        saveStep2(cookies);
+        saveStep3(cookies);
+
+        Map<String, Object> payload = new java.util.HashMap<>();
+        payload.put("windows", java.util.Collections.singletonList(null));
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/4",
+            HttpMethod.PUT,
+            payload,
+            authenticatedHeaders(cookies),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    @Test
+    void saveStep4_missingStartTime_returns400() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies);
+        saveStep2(cookies);
+        saveStep3(cookies);
+
+        Map<String, Object> window = new java.util.HashMap<>();
+        window.put("dayOfWeek", 1);
+        window.put("startTime", null);
+        window.put("endTime", "11:00:00");
+        window.put("canonicalTimezone", "Europe/Berlin");
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/4",
+            HttpMethod.PUT,
+            Map.of("windows", List.of(window)),
+            authenticatedHeaders(cookies),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    @Test
+    void saveStep4_missingEndTime_returns400() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies);
+        saveStep2(cookies);
+        saveStep3(cookies);
+
+        Map<String, Object> window = new java.util.HashMap<>();
+        window.put("dayOfWeek", 1);
+        window.put("startTime", "09:00:00");
+        window.put("endTime", null);
+        window.put("canonicalTimezone", "Europe/Berlin");
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/4",
+            HttpMethod.PUT,
+            Map.of("windows", List.of(window)),
+            authenticatedHeaders(cookies),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    @Test
+    void saveStep4_validTimezone_stillSucceeds() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies);
+        saveStep2(cookies);
+        saveStep3(cookies);
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/4",
+            HttpMethod.PUT,
+            Map.of("windows", List.of(Map.of("dayOfWeek", 1, "startTime", "09:00:00", "endTime", "11:00:00",
+                "canonicalTimezone", "America/Los_Angeles"))),
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody().get("stepSaved")).isEqualTo(4);
     }
 
     @Test

@@ -107,6 +107,7 @@ class AvailabilityResourceIT {
     @AfterEach
     void tearDown() {
         transactionTemplate.execute(status -> {
+            jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id = ?", coachProfileId);
             jdbcTemplate.update("DELETE FROM booking.coach_availability_blocks WHERE coach_id = ?", coachProfileId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_availability_windows WHERE coach_id = ?", coachProfileId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
@@ -177,6 +178,69 @@ class AvailabilityResourceIT {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat((List<?>) response.getBody().get("windows")).hasSize(1);
         assertThat(response.getBody().get("canonicalTimezone")).isEqualTo("Europe/Berlin");
+    }
+
+    /**
+     * AC1 end-to-end over HTTP against the real query. The only other AC1 coverage mocks
+     * BookingRepository, so nothing exercised the actual findOverlappingBookings JPQL with the
+     * padded bounds, ACTIVE_SLOT_STATUSES and a null excludeBookingId on this path — flagged by the
+     * 2026-08-07 code review. The booking belongs to a parent/player unrelated to the caller, which
+     * is the whole point of AC1: the deleted frontend guard only ever saw the current parent's own.
+     */
+    @Test
+    void getAvailability_activeBookingFromAnotherRequester_isCarvedOutOfComputedSlots() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_availability_windows " +
+                "(id, coach_id, day_of_week, start_time, end_time, canonical_timezone) " +
+                "VALUES (?, ?, 2, '09:00', '17:00', 'Europe/Berlin')",
+                UUID.randomUUID(), coachProfileId
+            );
+            // Tuesday 2026-06-16, 10:00-11:00Z, inside the 07:00-15:00Z window (09:00-17:00 CEST).
+            jdbcTemplate.update(
+                "INSERT INTO booking.bookings " +
+                "(id, parent_id, player_id, coach_id, requested_start_time, requested_end_time, " +
+                " status, canonical_timezone) " +
+                "VALUES (?, 9399999998, 9399999999, ?, ?, ?, 'REQUESTED', 'Europe/Berlin')",
+                UUID.randomUUID(), coachProfileId,
+                Timestamp.from(Instant.parse("2026-06-16T10:00:00Z")),
+                Timestamp.from(Instant.parse("2026-06-16T11:00:00Z"))
+            );
+            return null;
+        });
+
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + AVAILABILITY_BASE + "/" + coachProfileId + "/availability?weekStart=2026-06-16",
+            HttpMethod.GET,
+            null,
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat((List<?>) response.getBody().get("windows")).hasSize(1);
+        // Two segments, not one: the booking splits the window. Without AC1's exclusion the window
+        // comes back as a single undivided slot, which is what this assertion discriminates against.
+        assertThat((List<?>) response.getBody().get("computedSlots")).hasSize(2);
+        // A booking is not a block — the transient pseudo-block must not leak into `blocks`.
+        assertThat((List<?>) response.getBody().get("blocks")).isEmpty();
+    }
+
+    @Test
+    void getAvailability_unknownCoachId_returns404() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + AVAILABILITY_BASE + "/" + UUID.randomUUID() + "/availability?weekStart=2026-06-16",
+            HttpMethod.GET,
+            null,
+            authenticatedHeaders(cookies),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
     }
 
     @Test

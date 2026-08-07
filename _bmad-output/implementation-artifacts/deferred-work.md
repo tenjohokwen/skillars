@@ -452,6 +452,101 @@ the profile column — the exact divergence this AC exists to prevent. Post-fix 
 at `:298`, `submitBatchRequest()` at `:318` — no `canonicalTimezone` references remain in the file
 (`grep -c` confirms zero).
 
+## Last audit: 2026-08-06 (skillars-deferred-18 story creation)
+
+Written while scoping `skillars-deferred-18`. Like the prior story-creation audits, this one had no
+independent review layers — every claim comes from a direct read of the tree at commit `f2de881`.
+Scope: the four items the `skillars-deferred-17` code review deferred from `AvailabilityService` and
+the coach-profile-builder write path (D2, D5, D9, D10 below). No other item in this file was re-checked.
+
+- **Four items annotated `OWNED BY skillars-deferred-18`, each naming the AC that closes it** (they are
+  deleted by that story once shipped, not now): D2 (already-booked slots visible to other
+  parents/players, closed by AC1), D9 (per-window timezone using `windows.get(0)` instead of the
+  window's own zone, closed by AC2), D5 (200+"UTC" for a nonexistent `coachId`, closed by AC3), and D10
+  (no IANA validation on the profile-builder write path, closed by AC4).
+- **All four re-verified still open and reproducible exactly as originally described** — no drift found
+  between the 2026-08-06 review that raised them and this same-day story creation. Full detail of each
+  re-verification is in the story file itself rather than duplicated here.
+- **Deliberately not folded in:** D1 (no session-duration cap — a product decision, not a bug fix) and
+  D3 (`formatSlot` hardcodes `'en'` — a systemic 4+-page i18n sweep, not an `AvailabilityService` bug),
+  D4 (`AvailabilityManagerPage.vue` still reads `windows[0]`'s zone — a different bug in a different
+  file, about which page reads which field, not about `AvailabilityService`'s own computation), D6
+  (no frontend test coverage — blocked on the standing no-test-runner gap), D7 (`docker compose build`
+  no-op — deployment/tooling, lowest priority per project convention), and D8 (reconciling the two
+  `canonical_timezone` columns — needs a migration, a backfill rule, and a product decision on
+  per-window zones; explicitly not a prerequisite for D9, which this story does close).
+- **Not re-checked:** every other item in this file. No `deploy-*` section was read — the same gap every
+  prior audit in this file has flagged, now seven audits running.
+
+### Implementation outcome (2026-08-07, `skillars-deferred-18` shipped)
+
+All four owned items are **closed by shipped code and deleted from this file**: D2 (AC1), D9 (AC2), D5
+(AC3), D10 (AC4). A senior-dev review of the drafted story (2026-08-07) found three of the four
+prescribed fixes were themselves defective before any code was written — all three were corrected in
+the story text first, then implemented as corrected:
+
+- **AC1 reuses `BookingRepository.findOverlappingBookings` instead of adding a second query.** The
+  story as drafted asked for a new repository method duplicating overlap semantics that already
+  existed and were already used by `BookingService.createBookingRequest` with a `null`
+  `excludeBookingId` — the exact call shape this AC needed. Shipped: one call per
+  `getAvailabilityCalendar` invocation, `BookingService.ACTIVE_SLOT_STATUSES` relaxed to
+  package-private (same rationale as its neighbor `ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED`), zero
+  new queries.
+- **AC2's fetch window is now padded by TWO days on each side, not left untouched.** The story as
+  drafted forbade touching the outer `zoneId`'s fetch-window role; the review found that once each
+  window computes its own instants in its own zone (this AC's whole point), a window far enough from
+  `windows.get(0)`'s zone could have its instants fall entirely outside an unpadded fetch range —
+  silently dropping that window's blocks and bookings from the fetch, reproducing AC1's exact failure
+  mode through AC2. Shipped with the pad, plus a response-mapping-time filter back to the unpadded
+  week so `blockResponses` (the API's `blocks` field) stays exactly week-scoped.
+
+  **Corrected 2026-08-07 by the code review of this story, on two counts.** (1) AC2 prescribed a
+  ONE-day pad, which is arithmetically too small for the divergence it exists to cover: region zones
+  alone span 25h (`Pacific/Niue` at UTC-11 to `Pacific/Kiritimati` at UTC+14) and `ZoneId.of` also
+  accepts fixed offsets to ±18:00 (36h), so at 24h the gap AC2 identified stayed open for the widest
+  zone pairs. Widened to `minusDays(2)`/`plusDays(9)`. (2) The claim previously recorded here — that
+  `AvailabilityServiceTest` gained "a regression test that fails without the pad" — was **false**.
+  That test stubbed the block fetch with `any(), any()` matchers, so the mock returned the block
+  whatever bounds were passed and reverting the pad changed nothing it observed; the only test that
+  failed under the dev's mutation check was a separate argument-captor test that re-asserts the
+  formula rather than any behaviour. Both tests were rewritten: the fetch stubs now apply the real
+  queries' half-open overlap predicates, and the scenario uses a Niue/Kiritimati pair with a block
+  and a booking placed beyond a one-day pad, so reverting either the pad or the per-window zone now
+  genuinely fails.
+- **AC4's `ProfileBuilderStep4Request.windows` gained `@Valid`, without which nothing shipped would
+  have run.** The story as drafted added `@IanaTimezone` to the nested `AvailabilityWindowRequest`
+  record without a `@Valid` cascade on the containing `List` — Bean Validation does not descend into
+  container elements without it, so the new constraint (and the pre-existing `@NotBlank`,
+  `@Min`/`@Max` on `dayOfWeek`, `@NotNull` on `startTime`/`endTime`) would all have stayed dead code
+  for Step 4 payloads. Fixed to `List<@Valid AvailabilityWindowRequest>`, matching this codebase's own
+  convention elsewhere. Also mandated (not merely suggested) the `CamPhoneValidator` pipe-template
+  message pattern over `LangIso2`'s bare `{...}` template — `LangIso2`'s shape resolves to nothing
+  without a `ValidationMessages.properties` entry this codebase has never had, which would have
+  returned the literal, unresolved `{validation.timezone.invalid}` string to the client: the exact
+  defect this story exists to fix, reproduced one validator later. `CoachProfileBuilderIT` proves both
+  the message resolves and the three newly-activated nested constraints now return 400.
+- **AC3 shipped as drafted.** `getAvailabilityCalendar` now loads `CoachProfile` once via `findById`,
+  `orElseThrow`s `ResourceNotFoundException` for a nonexistent `coachId`, and reuses that same lookup
+  for `coachTimezone` — no second query. A real coach with a blank/missing `canonicalTimezone` keeps
+  its `"UTC"` fallback.
+- **Also fixed, found during story drafting rather than during implementation:** `BookingRequestPage.vue`
+  still called `bookingStore.loadParentBookings()` in `onMounted` after `bookedStartTimes` (its only
+  consumer) was deleted — an orphaned network call fetching data nothing on the page used. Removed
+  alongside `bookedStartTimes`.
+- **Unflagged-but-intended UX change worth recording:** `BookingService.ACTIVE_SLOT_STATUSES` includes
+  `REQUESTED`, so a parent's own pending request now makes a slot disappear from the list entirely
+  rather than render disabled (the old `bookedStartTimes` behavior). Correct and consistent with the
+  accept-path check using the same status set.
+- **Residual, deliberately not closed by this story:** the availability list `BookingRequestPage.vue`
+  books from is fetched once in `onMounted` and never refreshed — a booking made by another parent
+  between page load and submit can still surface a `SLOT_UNAVAILABLE` error, narrower than before AC1
+  but not eliminated. No new item opened for this; it is the same class as D1 above (a product-shaped
+  gap, not a bug this story's scope covers).
+- **No data audit of existing `canonical_timezone` rows was run**, per D10's own suggestion. AC4 guards
+  new writes only. Decision recorded in the story's Dev Notes: no evidence today that a bad value is
+  already stored, and the existing read-side `"UTC"` fallback/WARN already handles it if one is found
+  later. Not reopened as a new item — this was D10's own suggestion, not a newly discovered gap.
+
 ---
 
 ## Deferred from: skillars-deferred-16 story creation (2026-08-05)
@@ -1103,13 +1198,18 @@ at `:298`, `submitBatchRequest()` at `:318` — no `canonicalTimezone` reference
 
 ## Deferred from: code review of skillars-deferred-17-booking-request-slot-payload-timezone-integrity (2026-08-06)
 
-- **D1 — No session-duration cap: one click books the entire availability segment.** `AvailabilityService.computeAvailableSlots` (`AvailabilityService.java:170-201`) returns whole window-minus-block *segments*; there is no fixed-length slicing anywhere, and no duration bound exists in the booking package (grepped for `Duration.between` / `durationMinutes` / `sessionDuration` / `MAX_DURATION` — nothing). Backend validation is only: start in the future (`BookingService.java:171-174`), end after start (`:175-179`), range inside a window (`:182-186`). A coach with a 09:00–17:00 window and no blocks presents exactly one row, and one click books an 8-hour session that locks out the whole day via `findOverlappingBookings` and consumes one pack credit. Batch mode multiplies this by ten (`CreateBatchRequest.java:16`, `@Size(max = 10)`), and `BookingBatchService:106-113` performs no availability-window check at all. **Newly reachable, not newly introduced:** both submit paths were dead before deferred-17 (`requestedStartTime: undefined` → 400; `submitBatch` sent a timezone string into a `BigDecimal`). Real fix is slot slicing or a session-duration field — a product decision well outside this story.
-- **D2 — The now-live already-booked guard only covers the current parent+player.** `bookedStartTimes` (`BookingRequestPage.vue:234-246`) filters `parentBookings` by `coachId` *and* `playerId`, so it can only ever hold the current parent/child's own bookings, and `computeAvailableSlots` never subtracts bookings from the returned segments (only `coach_availability_blocks`, `AvailabilityService.java:73-75`). Another parent's — or the same parent's other child's — `REQUESTED`/`ACCEPTED` booking renders as an enabled, clickable row; submit reaches the overlap check at `BookingService.java:210-218` → `SLOT_UNAVAILABLE` → generic `booking.requests.submitError` toast (`:311-312`), and the slot stays in the list to be clicked again. Also newly reachable rather than newly introduced. The string comparison itself is sound (both sides are `Instant` under `WRITE_DATES_AS_TIMESTAMPS: false`, verified).
+- **D1 — No session-duration cap: one click books the entire availability segment.** `AvailabilityService.computeAvailableSlots` (`AvailabilityService.java:214-245`) returns whole window-minus-block *segments*; there is no fixed-length slicing anywhere, and no duration bound exists in the booking package (grepped for `Duration.between` / `durationMinutes` / `sessionDuration` / `MAX_DURATION` — nothing). Backend validation is only: start in the future (`BookingService.java:171-174`), end after start (`:175-179`), range inside a window (`:182-186`). A coach with a 09:00–17:00 window and no blocks presents exactly one row, and one click books an 8-hour session that locks out the whole day via `findOverlappingBookings` and consumes one pack credit. Batch mode multiplies this by ten (`CreateBatchRequest.java:16`, `@Size(max = 10)`), and `BookingBatchService:106-113` performs no availability-window check at all. **Newly reachable, not newly introduced:** both submit paths were dead before deferred-17 (`requestedStartTime: undefined` → 400; `submitBatch` sent a timezone string into a `BigDecimal`). Real fix is slot slicing or a session-duration field — a product decision well outside this story. [Line citation refreshed 2026-08-07 by `skillars-deferred-18`, which edited `getAvailabilityCalendar`/`computeAvailableSlots` in the same file.]
 - **D3 — `formatSlot` hardcodes the `'en'` locale.** `BookingRequestPage.vue:280` — the pre-change `new Date(x).toLocaleString()` used the viewer's browser locale; `new Intl.DateTimeFormat('en', …)` pins English for everyone. The app demonstrably has German and French users (this same story added `de` and `fr-FR` translations). Left alone because AC4 explicitly prescribed mirroring `ParentBookingsPage.vue:184-190`, which hardcodes `'en'` too — fixing this page alone would create a new cross-page inconsistency. Systemic: also affects `SessionPackDashboardPage.vue:175-182`, `CoachBookingRequestsPage.vue:147-149`, `useTimezone.js:4-10`. Should be one sweep using vue-i18n's active `locale`.
 - **D4 — `AvailabilityManagerPage.vue:333` still sources its display timezone from `windows[0]`.** `coachTimezone.value = store.windows[0].canonicalTimezone ?? 'UTC'` reads `coach_availability_windows.canonical_timezone` — the exact independently-writable column deferred-17 AC4 exists to stop displaying from, one page over. The new `bookingStore.coachTimezone` (`booking.store.js:101,174,555`) is populated by the same `loadAvailability()` call this page already makes and is simply unused here. Same line also dereferences `windows[0]` unguarded (pre-existing). Outside AC4's scope, which named `BookingRequestPage.vue` only.
-- **D5 — The availability endpoint returns `200` + `"UTC"` for a nonexistent `coachId`.** `AvailabilityService.java:55-61`'s new `coachProfileRepository.findById(coachId).orElse(null)` → blank/null → `"UTC"` collapses two genuinely different conditions ("no such coach" and "coach has no timezone set") into one cheerful success with empty lists. Deliberate on the dev's part — it mirrors `AvailabilityResource.getAvailability`'s existing tolerance for a caller-supplied `coachId` it never validates — so the real gap is the missing existence check on the endpoint itself, which predates this story.
 - **D6 — Zero frontend regression coverage for deferred-17's headline fix.** There is no frontend test suite in this repo (no `*.spec.js` outside `node_modules`, no `src/frontend/test`). Every test added or touched by deferred-17 is backend-only, so reverting the `.vue` and `booking.store.js` changes — the edits that actually made booking submission work at all — would leave the entire suite green. The story explicitly forbids introducing a test framework as part of its scope; this restates the standing gap already recorded for `skillars-5-4` W9.
 - **D7 — `docker compose build` silently no-ops.** `docker-compose.yml`/`docker-compose.local.yml` reference `image: ${APP_IMAGE}` (`skillars:local`) with no `build:` key in either file, so `docker compose build app` does nothing without erroring, leaving whatever image was last built manually. Surfaced by the deferred-17 dev's own live-verification session, where it cost significant time (the first pass falsely showed AC4 failing because the deployed jar predated the fix). Fix is either a `build:` block in `docker-compose.local.yml` or an explicit `docker build -t skillars:local .` step documented in `docs/deployment/local-deployment.md`.
 - **D8 — Reconcile the two `canonical_timezone` columns to a single source of truth.** `coach_profiles.canonical_timezone` (`V26__marketplace_coach_profiles.sql:11`) and `coach_availability_windows.canonical_timezone` (`V26:55`) are independently writable — `CoachProfileService.java:90` sets the profile's from Step 1 and `:173` sets each window's from its own Step 4 payload, and `AvailabilityService.updateWindow` never re-syncs a window after a profile-level change. Deferred-17 AC4 worked around the divergence for one page by making display read the profile column; it did not remove the divergence. Deferred from the deferred-17 code review's D1 decision (Mbah, 2026-08-06: accept and document). Real fix needs a migration, a backfill rule for which value wins on existing rows, and a product decision on whether per-window zones are a deliberate feature (a coach who coaches across zones) or an accident of the profile-builder form. Note the display-side risk is largely contained once the slot label carries `timeZoneName` — instants are absolute, so no wrong moment is ever transmitted, only a differently-labelled one.
-- **D9 — `windows.get(0)`'s zone is applied to every window's slot computation.** `AvailabilityService.getAvailabilityCalendar` computes a single `zoneId` from `windows.get(0).getCanonicalTimezone()` (`:52`, `:64`) and then uses that one zone to materialize *every* window's `LocalTime` boundaries into `Instant`s (`:88-89`, inside the per-window loop). A coach whose windows carry different zones — which the schema explicitly permits, see D8 — gets correct instants only for whichever window happens to sort first, and silently wrong ones for all the rest. Found during the deferred-17 code review while investigating D1; entirely pre-existing, unrelated to that story's changes, and not previously tracked. Fix is to read `window.getCanonicalTimezone()` inside the loop (with the existing `"UTC"`/`DateTimeException` fallback per window), but see D8 first — if the columns are reconciled, this collapses to a non-issue.
-- **D10 — Validate `canonicalTimezone` as a real IANA zone on the profile-builder write path.** `ProfileBuilderStep1Request.java:15` and `ProfileBuilderStep4Request.java:20` are `@NotBlank` only; `CoachProfileService.java:90` stores the string verbatim. Nothing in the system has ever called `ZoneId.of()` on `coach_profiles.canonical_timezone`. Deferred-17 removed the one incidental check that existed (`ZoneId.of(req.canonicalTimezone())` on the *client-supplied* value in `BookingService`), and its code review restored an equivalent guard on the read side (UTC fallback + WARN at `BookingService.java:246`). That protects newly created bookings but not: rows already stored with a bad value, nor read paths that touch the profile column outside booking creation. Deferred from the deferred-17 code review's D2 decision (Mbah, 2026-08-06: guard read now, defer write-path). Worth pairing with a one-line audit query over `coach_profiles.canonical_timezone` to establish whether any real rows are affected today — this is latent risk, not an observed failure.
+
+## Deferred from: code review of skillars-deferred-18-availability-slot-timezone-integrity (2026-08-07)
+
+- **D1 — A DST gap can produce a zero-length or negative-duration slot in `computedSlots`.** `AvailabilityService.java:117-118` materializes `windowStart`/`windowEnd` via `date.atTime(...).atZone(zone)`, and `LocalDateTime.atZone()` silently shifts a nonexistent local time forward by the gap length. The DB guard `chk_availability_time_order CHECK (end_time > start_time)` (`V26:56`) constrains only *local* times, so it cannot stop the instants inverting. Concrete: `Europe/Berlin`, window `02:30–03:00` on 2026-03-29 — `02:30` is in the spring-forward gap and resolves to `01:30Z`, while `03:00` resolves to `01:00Z`, so `windowStart > windowEnd`. `computeAvailableSlots` seeds `segments` with `{windowStart, windowEnd}` unconditionally and emits it, so the API returns an `AvailableSlotResponse` with `startDatetime` after `endDatetime`; the frontend renders it clickable and submitting hits `BookingService.java:178-182` ("end must be after start") → 400 behind a generic toast. **Pre-existing, not introduced:** for a single-window coach the outer zone and the window zone are the same value, so the identical inversion occurred before this story. Fix is a `windowEnd.isAfter(windowStart)` guard before the `computeAvailableSlots` call; deferred because the trigger requires a window whose local range straddles a DST gap (a ~02:30 Sunday coaching window), which no real coach is likely to have configured.
+- **D2 — `blocks` week-scoping and the fetch bounds both hang off an unordered `findByCoachId`.** `AvailabilityService.java:85-86` derives `weekStartExact`/`weekEndExact` from `zoneId`, i.e. from `windows.get(0)`, and `CoachAvailabilityWindowRepository.findByCoachId` issues no `ORDER BY`. For a coach with windows in two zones, two identical requests can therefore return different `blocks` sets and use different fetch bounds purely from row-order variation; and a block that visibly punches a hole in a divergent-zone window's slot is absent from the response's `blocks` array, so `AvailabilityManagerPage.vue` renders a gap it cannot explain. This story narrowed the outer zone's role from a fetch bound to a response filter but did not remove the arbitrariness, which is the same divergence class as D8 below and is not independently fixable — picking a deterministic zone requires deciding *which* column is authoritative. Adding `ORDER BY id` to `findByCoachId` would make it deterministic-but-still-arbitrary, which is arguably worse (it hides the problem). Blocked on D8.
+- **D3 — A parent's own pending request now makes the slot vanish rather than render disabled, with no affordance.** `BookingService.ACTIVE_SLOT_STATUSES` (reused by AC1's fetch) includes `REQUESTED`, `PAYMENT_PENDING` and `PAUSED`, whereas the frontend `bookedStartTimes` set this story deleted covered only `REQUESTED, ACCEPTED, CONFIRMED, UPCOMING, IN_PROGRESS`. So a slot held by the parent's own pending request — or by a `PAUSED` booking — is now simply absent from the list on their next visit, where before it rendered as a clickable-but-disabled row. The story's Dev Notes flag this as "unflagged-but-intended" and the backend behavior is correct (it matches the accept-path overlap check); what is missing is the UX replacement — a "you already requested this" state needs the booking data the page no longer loads, so restoring it is a product decision about the booking-request page, not a bug fix.
+- **D4 — `@IanaTimezone` accepts fixed offsets, so its name and message overstate what it enforces.** `IanaTimezoneValidator.java:19` uses `ZoneId.of(value)`, which also accepts `"+05:00"`, `"Z"`, `"GMT+2"`, `"UTC+02:00"`. Those are not IANA region IDs and are DST-blind: a coach whose `canonical_timezone` is `"+01:00"` gets wall-clock times an hour wrong for half the year, and every consumer (`AvailabilityService`, `BookingService.isSlotWithinAvailabilityWindow`, the frontend `Intl` formatting) silently agrees on the wrong time. AC4 declared strictness out of scope and the 2026-08-07 review decision (Mbah) kept `ZoneId.of` and reworded the message/Javadoc instead of tightening, so the honesty gap is closed but the behaviour gap is not. Real fix is `ZoneId.of(v) instanceof java.time.ZoneRegion` (or `getAvailableZoneIds().contains(v)`), which needs its own test surface *and* an answer for values already stored — see the D10 audit-query decision in the story's Dev Notes, which deliberately ran no audit. Pairs with D5: tightening this makes D5 strictly worse.
+- **D5 — the profile builder hard-400s on any zone the JVM's tzdb doesn't know.** `ProfileBuilderStep1.vue:90` and `ProfileBuilderStep4.vue:75` both send `Intl.DateTimeFormat().resolvedOptions().timeZone` verbatim, with no zone picker and no fallback, and `@IanaTimezone` is now the only gate on that value. A browser on newer tzdata than the deployed JVM (`Europe/Kyiv`, added tzdata 2022b; `America/Ciudad_Juarez`, 2022g) makes Step 1 and Step 4 uncompletable, with a validation error about the coach's own machine and no way to override. Before this story the value was simply stored, so this is a newly reachable lockout, mitigated only by the deployed JDK 17 being patched recently enough. Fix options: an explicit zone picker in the profile builder, an alias/normalization fallback, or a documented floor on the runtime's tzdata version. Not urgent while the JDK is current; becomes a support incident the first time it isn't.
+- **D6 — `ApiAdvice` can never resolve a non-English message bundle, so AC4's `messages_de`/`messages_fr` entries are inert.** `SecurityAdviceFilter.java:59` stores `locale.getDisplayLanguage()` — a *display name* like `"German"` — and `ApiAdvice.processFieldErrors:462` feeds it to `Locale.forLanguageTag(chosenLang)`. `Locale.forLanguageTag("German")` yields language `"german"`, not `"de"` (verified by execution 2026-08-07), so `messages_de.properties` is never selected; every field-error message resolves through the base `messages.properties` or the inline pipe fallback. This affects every custom validator in the codebase, not just `@IanaTimezone` — `validation.phone.*` has the same dead translations. It is also why the review could not close the "i18n keys are untested" gap with a test: there is no request shape that reaches the German bundle. Fix is to carry a real language tag (`locale.toLanguageTag()` or the `Locale` itself) instead of the display name; needs a sweep of all three `chosenLang` call sites in `ApiAdvice` plus `VideoApiAdvice:155`.

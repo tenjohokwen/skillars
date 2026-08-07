@@ -38,10 +38,7 @@
             :key="slot.startDatetime"
             clickable
             :disable="
-              batchMode
-                ? (!bookingStore.isSlotInBasket(slot.startDatetime) && batchAtMax) ||
-                  bookedStartTimes.has(slot.startDatetime)
-                : bookedStartTimes.has(slot.startDatetime)
+              batchMode ? !bookingStore.isSlotInBasket(slot.startDatetime) && batchAtMax : false
             "
             :active="
               batchMode
@@ -100,11 +97,7 @@
       <q-card v-if="activePacksForCoach.length > 0" flat bordered class="q-mb-md">
         <q-card-section>
           <div class="text-subtitle1 q-mb-sm">{{ t('booking.requests.selectPack') }}</div>
-          <q-option-group
-            v-model="selectedPackId"
-            :options="packOptions"
-            color="primary"
-          />
+          <q-option-group v-model="selectedPackId" :options="packOptions" color="primary" />
         </q-card-section>
       </q-card>
 
@@ -228,25 +221,13 @@ const activePacksForCoach = computed(() =>
 const packOptions = computed(() => [
   { label: t('booking.packs.perSession'), value: null },
   ...activePacksForCoach.value.map((p) => ({
-    label: t('booking.requests.packOptionLabel', { remaining: p.creditsRemaining, total: p.sessionCount }),
+    label: t('booking.requests.packOptionLabel', {
+      remaining: p.creditsRemaining,
+      total: p.sessionCount,
+    }),
     value: p.id,
   })),
 ])
-
-const ACTIVE_BOOKING_STATUSES = new Set(['REQUESTED', 'ACCEPTED', 'CONFIRMED', 'UPCOMING', 'IN_PROGRESS'])
-const bookedStartTimes = computed(
-  () =>
-    new Set(
-      bookingStore.parentBookings
-        .filter(
-          (b) =>
-            String(b.coachId) === String(coachId) &&
-            String(b.playerId) === String(playerId.value) &&
-            ACTIVE_BOOKING_STATUSES.has(b.status),
-        )
-        .map((b) => b.requestedStartTime),
-    ),
-)
 
 const canSubmit = computed(
   // Do NOT gate on hasCredits: AC 3 allows booking via platform credit (Cases A/B) or full
@@ -354,7 +335,6 @@ onMounted(async () => {
   if (playerId.value) {
     await bookingStore.loadPlayerPacks(playerId.value)
   }
-  bookingStore.loadParentBookings()
   try {
     const res = await getBatchConfig()
     maxBatchSize.value = res.maxSize

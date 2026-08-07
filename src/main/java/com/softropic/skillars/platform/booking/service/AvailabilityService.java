@@ -47,6 +47,13 @@ public class AvailabilityService {
 
     @Transactional(readOnly = true)
     public CoachAvailabilityResponse getAvailabilityCalendar(UUID coachId, LocalDate weekStart) {
+        // Deferred-18 AC3: a coachId matching no CoachProfile row now 404s instead of silently
+        // falling through to an empty 200. This lookup is also reused below for `coachTimezone` —
+        // do not add a second findById. A real coach with a blank/missing canonicalTimezone keeps
+        // its existing "UTC" fallback unchanged; only non-existence becomes a 404.
+        CoachProfile profile = coachProfileRepository.findById(coachId)
+            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+
         List<CoachAvailabilityWindow> windows = windowRepository.findByCoachId(coachId);
 
         String timezone = windows.isEmpty() ? "UTC" : windows.get(0).getCanonicalTimezone();
@@ -57,9 +64,7 @@ public class AvailabilityService {
         // is read here from the coach profile. This is deliberately NOT the `timezone` variable
         // above: that one comes from coach_availability_windows, a separate and independently
         // writable column, and only feeds this method's internal slot-computation zone.
-        String coachTimezone = coachProfileRepository.findById(coachId)
-            .map(CoachProfile::getCanonicalTimezone)
-            .orElse(null);
+        String coachTimezone = profile.getCanonicalTimezone();
         if (coachTimezone == null || coachTimezone.isBlank()) coachTimezone = "UTC";
 
         ZoneId zoneId;
@@ -69,12 +74,36 @@ public class AvailabilityService {
             zoneId = ZoneId.of("UTC");
         }
 
-        Instant weekStartInstant = weekStart.atStartOfDay(zoneId).toInstant();
-        Instant weekEndInstant = weekStart.plusDays(7).atStartOfDay(zoneId).toInstant();
+        // Deferred-18 AC2: each window below now materializes its instants in its OWN zone, which
+        // can diverge from `zoneId` (derived from windows.get(0) only). Padding the fetch bounds
+        // keeps every window's instants inside the range used to fetch blocks/bookings, regardless
+        // of that divergence. `weekStartExact`/`weekEndExact` preserve the unpadded bounds so
+        // `blockResponses` (the API's `blocks` field) stays exactly week-scoped — padding must
+        // widen what's fetched for filtering, not what's returned.
+        //
+        // TWO days, not one. AC2 prescribed a one-day pad, but one day is arithmetically too small
+        // for the divergence it exists to cover, and the 2026-08-07 code review found the gap:
+        // region zones alone span 25h (Pacific/Niue at UTC-11 to Pacific/Kiritimati at UTC+14), and
+        // ZoneId.of additionally accepts fixed offsets up to +/-18:00 (a case AC4 deliberately keeps
+        // valid), for a worst case of 36h. Coverage requires the pad to exceed the offset spread on
+        // each side; at 24h a window leading the outer zone by more than a day had its overlapping
+        // bookings fall outside the fetch entirely, silently reproducing the very AC1 failure mode
+        // this padding exists to prevent. 48h covers every case ZoneId.of can produce.
+        Instant weekStartInstant = weekStart.minusDays(2).atStartOfDay(zoneId).toInstant();
+        Instant weekEndInstant = weekStart.plusDays(9).atStartOfDay(zoneId).toInstant();
+        Instant weekStartExact = weekStart.atStartOfDay(zoneId).toInstant();
+        Instant weekEndExact = weekStart.plusDays(7).atStartOfDay(zoneId).toInstant();
 
         List<CoachAvailabilityBlock> weekBlocks =
             blockRepository.findByCoachIdAndEndDatetimeAfterAndStartDatetimeBefore(
                 coachId, weekStartInstant, weekEndInstant);
+
+        // Deferred-18 AC1: active bookings for any requester (not just the current parent/player),
+        // fetched once for the whole padded week rather than once per window, reusing the same
+        // overlap query and active-status set BookingService.createBookingRequest's own check uses
+        // so the two never drift.
+        List<Booking> weekBookings = bookingRepository.findOverlappingBookings(
+            coachId, weekStartInstant, weekEndInstant, BookingService.ACTIVE_SLOT_STATUSES, null);
 
         List<AvailableSlotResponse> computedSlots = new ArrayList<>();
         for (int dayOffset = 0; dayOffset < 7; dayOffset++) {
@@ -87,15 +116,44 @@ public class AvailabilityService {
                 .toList();
 
             for (CoachAvailabilityWindow window : dayWindows) {
-                Instant windowStart = date.atTime(window.getStartTime()).atZone(zoneId).toInstant();
-                Instant windowEnd = date.atTime(window.getEndTime()).atZone(zoneId).toInstant();
+                // Null/blank guarded explicitly, mirroring the outer zone derivation above:
+                // ZoneId.of(null) throws NullPointerException, not DateTimeException, so the catch
+                // alone would 500 the whole calendar instead of falling back to UTC. Unreachable
+                // today (canonical_timezone is NOT NULL in V26), but the asymmetry with :59-60 is
+                // exactly the kind that survives a later schema change.
+                String windowTimezone = window.getCanonicalTimezone();
+                ZoneId windowZoneId;
+                try {
+                    windowZoneId = (windowTimezone == null || windowTimezone.isBlank())
+                        ? ZoneId.of("UTC")
+                        : ZoneId.of(windowTimezone);
+                } catch (DateTimeException e) {
+                    windowZoneId = ZoneId.of("UTC");
+                }
 
-                List<CoachAvailabilityBlock> overlapping = weekBlocks.stream()
+                Instant windowStart = date.atTime(window.getStartTime()).atZone(windowZoneId).toInstant();
+                Instant windowEnd = date.atTime(window.getEndTime()).atZone(windowZoneId).toInstant();
+
+                List<CoachAvailabilityBlock> occupied = new ArrayList<>(weekBlocks.stream()
                     .filter(b -> b.getEndDatetime().isAfter(windowStart)
                         && b.getStartDatetime().isBefore(windowEnd))
-                    .toList();
+                    .toList());
 
-                computedSlots.addAll(computeAvailableSlots(windowStart, windowEnd, overlapping));
+                // AC1: merge overlapping bookings in as transient (never-saved) pseudo-blocks —
+                // computeAvailableSlots only ever reads getStartDatetime()/getEndDatetime(), so it
+                // does not care whether they're persisted. Deliberately NOT added to weekBlocks —
+                // that list also feeds blockResponses below, and a booking is not a block.
+                for (Booking booking : weekBookings) {
+                    if (booking.getRequestedEndTime().isAfter(windowStart)
+                            && booking.getRequestedStartTime().isBefore(windowEnd)) {
+                        CoachAvailabilityBlock pseudoBlock = new CoachAvailabilityBlock();
+                        pseudoBlock.setStartDatetime(booking.getRequestedStartTime());
+                        pseudoBlock.setEndDatetime(booking.getRequestedEndTime());
+                        occupied.add(pseudoBlock);
+                    }
+                }
+
+                computedSlots.addAll(computeAvailableSlots(windowStart, windowEnd, occupied));
             }
         }
 
@@ -106,6 +164,7 @@ public class AvailabilityService {
             .toList();
 
         List<AvailabilityBlockResponse> blockResponses = weekBlocks.stream()
+            .filter(b -> b.getEndDatetime().isAfter(weekStartExact) && b.getStartDatetime().isBefore(weekEndExact))
             .map(b -> new AvailabilityBlockResponse(
                 b.getId(), b.getStartDatetime(), b.getEndDatetime(), b.getReason()))
             .toList();

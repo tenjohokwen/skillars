@@ -1,7 +1,9 @@
 package com.softropic.skillars.platform.booking.service;
 
+import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.booking.contract.AvailabilityWindowResponse;
 import com.softropic.skillars.platform.booking.contract.AvailableSlotResponse;
+import com.softropic.skillars.platform.booking.contract.CoachAvailabilityResponse;
 import com.softropic.skillars.platform.booking.contract.UpdateWindowRequest;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
@@ -14,11 +16,13 @@ import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import org.instancio.Instancio;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -27,10 +31,14 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.instancio.Select.field;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -140,6 +148,50 @@ class AvailabilityServiceTest {
         assertThat(response.hasConflict()).isTrue();
     }
 
+    /**
+     * Stubs the block fetch with the REAL query's half-open overlap semantics
+     * ({@code endDatetime > :from AND startDatetime < :to}) instead of returning a fixed list for
+     * any bounds. Without this, a test cannot observe the fetch bounds at all: a wildcard
+     * {@code any(), any()} stub hands back the same rows however narrow the range is, so any test
+     * claiming to guard the padding passes identically with the padding reverted. That is exactly
+     * the hole the 2026-08-07 code review found in this file.
+     */
+    private void stubBlockFetch(UUID coachId, List<CoachAvailabilityBlock> allBlocks) {
+        when(blockRepository.findByCoachIdAndEndDatetimeAfterAndStartDatetimeBefore(eq(coachId), any(), any()))
+            .thenAnswer(inv -> {
+                Instant from = inv.getArgument(1);
+                Instant to = inv.getArgument(2);
+                return allBlocks.stream()
+                    .filter(b -> b.getEndDatetime().isAfter(from) && b.getStartDatetime().isBefore(to))
+                    .toList();
+            });
+    }
+
+    /**
+     * Same idea for the booking fetch, mirroring {@code BookingRepository.findOverlappingBookings}'
+     * JPQL ({@code requestedStartTime < :endTime AND requestedEndTime > :startTime}).
+     */
+    private void stubBookingFetch(UUID coachId, List<Booking> allBookings) {
+        when(bookingRepository.findOverlappingBookings(eq(coachId), any(), any(), anyList(), isNull()))
+            .thenAnswer(inv -> {
+                Instant from = inv.getArgument(1);
+                Instant to = inv.getArgument(2);
+                return allBookings.stream()
+                    .filter(b -> b.getRequestedStartTime().isBefore(to)
+                        && b.getRequestedEndTime().isAfter(from))
+                    .toList();
+            });
+    }
+
+    private CoachAvailabilityBlock makeBlock(UUID coachId, Instant start, Instant end) {
+        CoachAvailabilityBlock block = new CoachAvailabilityBlock();
+        block.setId(UUID.randomUUID());
+        block.setCoachId(coachId);
+        block.setStartDatetime(start);
+        block.setEndDatetime(end);
+        return block;
+    }
+
     private CoachProfile makeCoachProfile(UUID coachId, Long userId) {
         CoachProfile profile = new CoachProfile();
         profile.setId(coachId);
@@ -167,6 +219,225 @@ class AvailabilityServiceTest {
         booking.setRequestedStartTime(startTime);
         booking.setRequestedEndTime(startTime.plusSeconds(3600));
         return booking;
+    }
+
+    // ----- getAvailabilityCalendar tests (Deferred-18 AC1-AC3) -----
+
+    @Test
+    void getAvailabilityCalendar_unknownCoachId_throwsResourceNotFoundException() {
+        UUID coachId = UUID.randomUUID();
+        when(coachProfileRepository.findById(coachId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.getAvailabilityCalendar(coachId, LocalDate.of(2026, 6, 15)))
+            .isInstanceOf(ResourceNotFoundException.class);
+
+        verifyNoInteractions(windowRepository, blockRepository, bookingRepository);
+    }
+
+    @Test
+    void getAvailabilityCalendar_activeBookingFromAnyRequester_excludedFromComputedSlots_notLeakedIntoBlockResponses() {
+        UUID coachId = UUID.randomUUID();
+        CoachProfile profile = makeCoachProfile(coachId, COACH_USER_ID);
+        LocalDate weekStart = LocalDate.of(2026, 6, 15); // Monday
+
+        CoachAvailabilityWindow window = makeWindow(UUID.randomUUID(), coachId);
+        window.setDayOfWeek((short) 1);
+        window.setStartTime(LocalTime.of(9, 0));
+        window.setEndTime(LocalTime.of(17, 0));
+        window.setCanonicalTimezone("Europe/Berlin");
+
+        // 10:00-11:00 Berlin (CEST, UTC+2) — a REQUESTED booking belonging to a different
+        // parent/player than whoever is viewing this calendar; AC1 has no notion of "current
+        // parent" at all, unlike the deleted frontend bookedStartTimes guard.
+        Instant bookingStart = Instant.parse("2026-06-15T08:00:00Z");
+        Instant bookingEnd = Instant.parse("2026-06-15T09:00:00Z");
+        Booking otherRequestersBooking = makeBooking(coachId, bookingStart);
+        otherRequestersBooking.setRequestedEndTime(bookingEnd);
+        otherRequestersBooking.setStatus("REQUESTED");
+
+        when(coachProfileRepository.findById(coachId)).thenReturn(Optional.of(profile));
+        when(windowRepository.findByCoachId(coachId)).thenReturn(List.of(window));
+        when(blockRepository.findByCoachIdAndEndDatetimeAfterAndStartDatetimeBefore(eq(coachId), any(), any()))
+            .thenReturn(List.of());
+        when(bookingRepository.findOverlappingBookings(
+                eq(coachId), any(), any(), eq(BookingService.ACTIVE_SLOT_STATUSES), isNull()))
+            .thenReturn(List.of(otherRequestersBooking));
+
+        CoachAvailabilityResponse response = service.getAvailabilityCalendar(coachId, weekStart);
+
+        ZoneId berlin = ZoneId.of("Europe/Berlin");
+        Instant windowStart = weekStart.atTime(9, 0).atZone(berlin).toInstant();
+        Instant windowEnd = weekStart.atTime(17, 0).atZone(berlin).toInstant();
+
+        assertThat(response.computedSlots()).containsExactlyInAnyOrder(
+            new AvailableSlotResponse(windowStart, bookingStart),
+            new AvailableSlotResponse(bookingEnd, windowEnd));
+        // A booking is not a block — the transient pseudo-block must never leak into the response.
+        assertThat(response.blocks()).isEmpty();
+    }
+
+    @Test
+    void getAvailabilityCalendar_padsFetchBoundsByOneDayEachSide_toCoverDivergentWindowZones() {
+        UUID coachId = UUID.randomUUID();
+        CoachProfile profile = makeCoachProfile(coachId, COACH_USER_ID);
+        LocalDate weekStart = LocalDate.of(2026, 6, 15); // Monday
+
+        CoachAvailabilityWindow laWindow = makeWindow(UUID.randomUUID(), coachId);
+        laWindow.setDayOfWeek((short) 1);
+        laWindow.setCanonicalTimezone("America/Los_Angeles");
+
+        when(coachProfileRepository.findById(coachId)).thenReturn(Optional.of(profile));
+        when(windowRepository.findByCoachId(coachId)).thenReturn(List.of(laWindow));
+        when(blockRepository.findByCoachIdAndEndDatetimeAfterAndStartDatetimeBefore(eq(coachId), any(), any()))
+            .thenReturn(List.of());
+        when(bookingRepository.findOverlappingBookings(eq(coachId), any(), any(), anyList(), isNull()))
+            .thenReturn(List.of());
+
+        service.getAvailabilityCalendar(coachId, weekStart);
+
+        // windows.get(0) (laWindow) still drives the OUTER fetch-window zone — only the per-window
+        // instant computation (asserted separately below) reads each window's own zone.
+        ZoneId outerZone = ZoneId.of("America/Los_Angeles");
+        Instant expectedStart = weekStart.minusDays(2).atStartOfDay(outerZone).toInstant();
+        Instant expectedEnd = weekStart.plusDays(9).atStartOfDay(outerZone).toInstant();
+
+        ArgumentCaptor<Instant> startCaptor = ArgumentCaptor.forClass(Instant.class);
+        ArgumentCaptor<Instant> endCaptor = ArgumentCaptor.forClass(Instant.class);
+        verify(blockRepository).findByCoachIdAndEndDatetimeAfterAndStartDatetimeBefore(
+            eq(coachId), startCaptor.capture(), endCaptor.capture());
+        assertThat(startCaptor.getValue()).isEqualTo(expectedStart);
+        assertThat(endCaptor.getValue()).isEqualTo(expectedEnd);
+
+        verify(bookingRepository).findOverlappingBookings(
+            eq(coachId), eq(expectedStart), eq(expectedEnd), eq(BookingService.ACTIVE_SLOT_STATUSES), isNull());
+    }
+
+    @Test
+    void getAvailabilityCalendar_windowZoneDivergesWidelyFromOuterZone_blockStillSubtractedButStaysOutOfBlockResponses() {
+        // Regression guard for the fetch-window gap AC2 introduces if left under-padded: a window
+        // whose own zone diverges from windows.get(0)'s by more than the pad has instants that fall
+        // outside the fetch range, silently dropping its overlapping blocks/bookings.
+        //
+        // Zones are chosen to exceed a ONE-day pad on purpose: Pacific/Niue is UTC-11 and
+        // Pacific/Kiritimati is UTC+14, a 25h spread. This is what the previous version of this
+        // test could not do — it stubbed the fetch with any()/any() matchers, so the block came
+        // back whatever bounds were passed and reverting the pad changed nothing it observed.
+        // stubBlockFetch applies the real query predicate, so the bounds now actually matter.
+        UUID coachId = UUID.randomUUID();
+        CoachProfile profile = makeCoachProfile(coachId, COACH_USER_ID);
+        LocalDate weekStart = LocalDate.of(2026, 6, 15); // Monday
+
+        CoachAvailabilityWindow niueWindow = makeWindow(UUID.randomUUID(), coachId); // windows.get(0) -> outer zoneId
+        niueWindow.setDayOfWeek((short) 1);
+        niueWindow.setStartTime(LocalTime.of(9, 0));
+        niueWindow.setEndTime(LocalTime.of(11, 0));
+        niueWindow.setCanonicalTimezone("Pacific/Niue"); // UTC-11
+
+        CoachAvailabilityWindow kiritimatiWindow = makeWindow(UUID.randomUUID(), coachId);
+        kiritimatiWindow.setDayOfWeek((short) 1);
+        kiritimatiWindow.setStartTime(LocalTime.of(0, 0));
+        kiritimatiWindow.setEndTime(LocalTime.of(2, 0));
+        kiritimatiWindow.setCanonicalTimezone("Pacific/Kiritimati"); // UTC+14
+
+        // Kiritimati window Monday 00:00-02:00 = 2026-06-14T10:00Z..12:00Z — a full 25h ahead of
+        // the outer Niue zone. The block below sits inside that window but ENDS at exactly
+        // 2026-06-14T11:00:00Z, which is the instant a one-day pad would have used as its lower
+        // fetch bound (2026-06-14T00:00 Niue). The query predicate is endDatetime > :from, so a
+        // one-day pad drops this block and the window comes back as one undivided segment.
+        // The two-day pad (2026-06-13T11:00Z) fetches it and the window is correctly split.
+        CoachAvailabilityBlock beyondOneDayPadBlock = makeBlock(coachId,
+            Instant.parse("2026-06-14T10:30:00Z"), Instant.parse("2026-06-14T11:00:00Z"));
+
+        when(coachProfileRepository.findById(coachId)).thenReturn(Optional.of(profile));
+        when(windowRepository.findByCoachId(coachId)).thenReturn(List.of(niueWindow, kiritimatiWindow));
+        stubBlockFetch(coachId, List.of(beyondOneDayPadBlock));
+        stubBookingFetch(coachId, List.of());
+
+        CoachAvailabilityResponse response = service.getAvailabilityCalendar(coachId, weekStart);
+
+        assertThat(response.computedSlots()).containsExactlyInAnyOrder(
+            // Niue window, whole: Monday 09:00-11:00 at UTC-11
+            new AvailableSlotResponse(
+                Instant.parse("2026-06-15T20:00:00Z"), Instant.parse("2026-06-15T22:00:00Z")),
+            // Kiritimati window, split by the block that only the two-day pad reaches
+            new AvailableSlotResponse(
+                Instant.parse("2026-06-14T10:00:00Z"), Instant.parse("2026-06-14T10:30:00Z")),
+            new AvailableSlotResponse(
+                Instant.parse("2026-06-14T11:00:00Z"), Instant.parse("2026-06-14T12:00:00Z")));
+
+        // AC2: blockResponses (the API's `blocks` field) stays exactly week-scoped — the padding
+        // that made the block fetchable at all must not leak it into the response. weekStartExact
+        // is 2026-06-15T11:00Z (Niue), and the block ends well before it.
+        assertThat(response.blocks()).isEmpty();
+    }
+
+    @Test
+    void getAvailabilityCalendar_bookingOnDivergentZoneWindow_excludedEvenBeyondOneDayOfPadding() {
+        // The AC1 x AC2 combination the Dev Notes mandate ("a coach with per-window-divergent zones
+        // AND an overlapping booking on one of those windows"), which no test covered: the AC1 test
+        // used a single Europe/Berlin window, and the AC2 divergence test used a block with the
+        // booking fetch stubbed empty. This also pins the padding for the BOOKING query specifically
+        // — it shares the same bounds as the block query but is a separate call.
+        UUID coachId = UUID.randomUUID();
+        CoachProfile profile = makeCoachProfile(coachId, COACH_USER_ID);
+        LocalDate weekStart = LocalDate.of(2026, 6, 15); // Monday
+
+        CoachAvailabilityWindow niueWindow = makeWindow(UUID.randomUUID(), coachId);
+        niueWindow.setDayOfWeek((short) 1);
+        niueWindow.setStartTime(LocalTime.of(9, 0));
+        niueWindow.setEndTime(LocalTime.of(11, 0));
+        niueWindow.setCanonicalTimezone("Pacific/Niue"); // UTC-11, windows.get(0)
+
+        CoachAvailabilityWindow kiritimatiWindow = makeWindow(UUID.randomUUID(), coachId);
+        kiritimatiWindow.setDayOfWeek((short) 1);
+        kiritimatiWindow.setStartTime(LocalTime.of(0, 0));
+        kiritimatiWindow.setEndTime(LocalTime.of(2, 0));
+        kiritimatiWindow.setCanonicalTimezone("Pacific/Kiritimati"); // UTC+14
+
+        // 2026-06-14T10:15Z..10:45Z — inside the Kiritimati window (10:00Z-12:00Z), but the whole
+        // booking ends before a one-day pad's lower bound of 2026-06-14T11:00Z, so requestedEndTime
+        // > :startTime fails and the booking is never fetched under the old pad.
+        Booking booking = makeBooking(coachId, Instant.parse("2026-06-14T10:15:00Z"));
+        booking.setRequestedEndTime(Instant.parse("2026-06-14T10:45:00Z"));
+        booking.setStatus("REQUESTED");
+
+        when(coachProfileRepository.findById(coachId)).thenReturn(Optional.of(profile));
+        when(windowRepository.findByCoachId(coachId)).thenReturn(List.of(niueWindow, kiritimatiWindow));
+        stubBlockFetch(coachId, List.of());
+        stubBookingFetch(coachId, List.of(booking));
+
+        CoachAvailabilityResponse response = service.getAvailabilityCalendar(coachId, weekStart);
+
+        assertThat(response.computedSlots()).containsExactlyInAnyOrder(
+            new AvailableSlotResponse(
+                Instant.parse("2026-06-15T20:00:00Z"), Instant.parse("2026-06-15T22:00:00Z")),
+            new AvailableSlotResponse(
+                Instant.parse("2026-06-14T10:00:00Z"), Instant.parse("2026-06-14T10:15:00Z")),
+            new AvailableSlotResponse(
+                Instant.parse("2026-06-14T10:45:00Z"), Instant.parse("2026-06-14T12:00:00Z")));
+
+        assertThat(response.blocks()).isEmpty();
+    }
+
+    @Test
+    void getAvailabilityCalendar_coachExistsWithBlankTimezone_returns200WithUtcFallbackNot404() {
+        // AC3 explicitly forbids collapsing "coach doesn't exist" and "coach exists but has no zone"
+        // into the same 404. Nothing pinned the second half — every other fixture seeds
+        // Europe/Berlin — so a later refactor merging the two conditions would go unnoticed.
+        UUID coachId = UUID.randomUUID();
+        CoachProfile profile = makeCoachProfile(coachId, COACH_USER_ID);
+        profile.setCanonicalTimezone("   ");
+
+        when(coachProfileRepository.findById(coachId)).thenReturn(Optional.of(profile));
+        when(windowRepository.findByCoachId(coachId)).thenReturn(List.of());
+        stubBlockFetch(coachId, List.of());
+        stubBookingFetch(coachId, List.of());
+
+        CoachAvailabilityResponse response = service.getAvailabilityCalendar(coachId, LocalDate.of(2026, 6, 15));
+
+        assertThat(response.canonicalTimezone()).isEqualTo("UTC");
+        assertThat(response.windows()).isEmpty();
+        assertThat(response.computedSlots()).isEmpty();
     }
 
     // ----- computeAvailableSlots tests -----

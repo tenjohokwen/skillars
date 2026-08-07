@@ -1,6 +1,6 @@
 # Story Deferred-14: Moderation-Listener Write Safety & Batch/Reschedule Overlap Integrity
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
