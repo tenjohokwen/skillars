@@ -50,8 +50,6 @@ class IntegrationTestConventionTest {
         // Sliced @SpringBootTest(classes = ...) — starts no containers at all.
         "com.softropic.skillars.infrastructure.security.RateLimitingAspectIT",
         "com.softropic.skillars.infrastructure.feature.PropertiesFeatureToggleServiceIT",
-        // Needs its own FailureEventCapture inner @Configuration to observe fail-closed behaviour.
-        "com.softropic.skillars.platform.messaging.api.ModerationFailClosedIT",
         // Sliced @SpringBootTest for the moderation sweeper.
         "com.softropic.skillars.platform.messaging.service.MessageModerationSweeperIT"
     );

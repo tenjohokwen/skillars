@@ -27,6 +27,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -131,6 +133,16 @@ class ReviewUpdateIT extends AbstractIntegrationTest {
 
     @Test
     void updateReview_afterOneYear_returns204() {
+        // This class never referenced GeminiClient, so before the mock was hoisted onto
+        // AbstractIntegrationTest it ran against the REAL client -- which resolves to
+        // ${wiremock.server.baseUrl:http://localhost:9999}, a dead port, and therefore always
+        // threw. Moderation fails closed on that, which is what left the review UNDER_REVIEW.
+        //
+        // The assertion below depended on that entirely by accident. Stub it explicitly so the
+        // test states the condition it is actually exercising -- an unreachable moderation
+        // service -- instead of relying on a fallback port happening to be closed.
+        when(geminiClient.evaluate(any())).thenThrow(
+            new RuntimeException("moderation service unavailable"));
         String parentCookies = loginAndGetCookies(PARENT_EMAIL);
         httpTestClient.makeHttpRequest(
             reviewsUrl("/" + reviewId),
