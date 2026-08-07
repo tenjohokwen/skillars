@@ -513,17 +513,17 @@ Add a `<skipFrontend>false</skipFrontend>` property in `pom.xml` and wire it to 
   - [ ] Measure the per-test truncate cost **and watch for `ACCESS EXCLUSIVE` lock waits**; record both.
 
 - [ ] **Task 7 — AC6: hard-coded values**
-  - [ ] Image tags + credentials → `SharedContainers` constants with production-tracking comments.
+  - [x] Image tags + credentials → `SharedContainers` constants with production-tracking comments.
   - [ ] Bump PostgreSQL to `17-alpine` **as its own commit**; full verify; report result. If it fails, revert the version only, keep the constant, and add a `deferred-work.md` item.
   - [ ] Delete `TestConfig.spyDataSource`, `TestConfig.hikariConfig`, `TestConfig.provideListener()` after verifying each is unreferenced.
 
-- [ ] **Task 8 — AC7: guardrail**
-  - [ ] Write the guardrail test. **Run it against the pre-refactor tree (e.g. a stashed worktree at `21ef489`) and confirm it fails** — then run it against the refactored tree and confirm it passes.
-  - [ ] Pin the `@TestPropertySource` count to the surviving number, with a comment explaining how to change it.
+- [x] **Task 8 — AC7: guardrail**
+  - [x] Write the guardrail test. **Run it against the pre-refactor tree (e.g. a stashed worktree at `21ef489`) and confirm it fails** — then run it against the refactored tree and confirm it passes.
+  - [x] Pin the `@TestPropertySource` count to the surviving number, with a comment explaining how to change it.
 
 - [x] **Task 9 — AC9: frontend skip flag**
   - [x] Add `skipFrontend`; verify each of the five executions is skipped by reading the build log.
-  - [ ] Measure the delta.
+  - [x] Measure the delta.
 
 - [ ] **Task 9b — AC10: make `pr-build.yml` observe and enforce the outcome**
   - [ ] Wire the `missCount > 10` context gate and the container-ceiling sampler; verify each **fails** against the pre-refactor tree before trusting it.
@@ -791,6 +791,61 @@ BUILD SUCCESS. 109 files changed, 925 insertions, 1459 deletions.
 Residual class-level annotations are the documented exceptions only: `RateLimitingAspectIT`,
 `PropertiesFeatureToggleServiceIT`, `ModerationFailClosedIT`, `MessageModerationSweeperIT`
 (sliced `@SpringBootTest`), plus 5 `@TestPropertySource` forks that genuinely change behaviour.
+
+#### CI run 2 ([`31184780327`](https://github.com/tenjohokwen/skillars/actions/runs/31184780327)) — post-consolidation, and what it exposed
+
+| Metric | Baseline | After consolidation |
+|---|---|---|
+| Wall clock | 10m10s | **8m03s** (−21%) |
+| Unit (surefire) | 825 — 0F 0E | 825 — 0F 0E ✅ |
+| IT (failsafe) | 905 — 1F 16E | 905 — **2F 90E** ⚠️ |
+| `missCount` | not instrumented | 64 (`failureCount = 8`) |
+
+No tests were lost (905 both times) and the suite got measurably faster, but the error count
+rose from 17 to 92. Two distinct causes, both diagnosed:
+
+**(1) Connection-pool exhaustion — a real defect in AC1 as specified, now fixed.**
+
+8 contexts failed to load with:
+
+```
+Failed to initialize dependency 'flywayInitializer' of LoadTimeWeaverAware bean 'entityManagerFactory'
+Caused by: Connection is not available, request timed out after 30000ms
+           (total=1, active=1, idle=0, waiting=0)
+```
+
+Production sizing (`application.yaml:71-72`) is `maximum-pool-size: 25` / `minimum-idle: 8`,
+chosen so four app nodes fit inside PostgreSQL's default `max_connections` of 100. That was
+harmless while **every Spring context had its own PostgreSQL container** — one pool per
+database. Sharing one container means every cached context keeps its own live pool against the
+**same** database, and Spring caches up to 32 contexts: ~20 × 8 `minimum-idle` = **160
+connections against a 100-connection server**. The pool cannot grow, Flyway blocks acquiring a
+connection, and the context dies after the 30 s timeout.
+
+This also explains `missCount = 64` against only 21 distinct keys — failed contexts are retried,
+and once the failure threshold is hit, every later class sharing that key reports *"skipping
+repeated attempt to load context"*. That cascade alone is **30 of the 90 errors**.
+
+**AC1 does not mention connection pooling at all.** It is a genuine gap in the story's analysis,
+not a mistake in following it: consolidating containers without also bounding the per-context
+pool cannot work. Fixed in `application-test.yaml` only (`maximum-pool-size: 4`,
+`minimum-idle: 0`, `idle-timeout: 10000`); tests are single-threaded per context, so a small
+pool suffices and an inactive cached context now holds zero connections.
+
+**(2) Cross-class data leakage — exactly what AC5/Task 6 exists to fix, and now unavoidable.**
+
+~50 `DataIntegrityViolation` errors: `delete from main.videos` FK violations (23),
+`DELETE FROM main.revinfo` (14 — the pre-existing baseline failure), duplicate
+`INSERT INTO main.user_authority` (8), `DELETE FROM main.videos` FK (5).
+
+The story predicted this precisely: *"Expect failures on the first full run from classes that
+were silently relying on rows another test class left behind."* Consolidating ~90 classes onto
+one shared context means they share one database for the whole run, and the hand-written
+per-class `@AfterEach` cleanup is not sufficient at that blast radius.
+
+**The operational conclusion is that Task 6 is load-bearing, not follow-up polish.** The
+consolidation in Tasks 3/4 cannot be green without `DatabaseResetTestExecutionListener`. These
+two commits should not be merged to master before Task 6 lands.
 
 #### Work NOT yet done — honest status
 
