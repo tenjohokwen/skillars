@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.video.service;
 
+import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.security.contract.AccountRole;
 import com.softropic.skillars.platform.security.contract.event.AccountDeletionRequestedEvent;
 import com.softropic.skillars.platform.video.BaseVideoIT;
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
@@ -24,6 +26,7 @@ import static org.mockito.Mockito.doNothing;
 
 class AccountDeletionCascadeIT extends BaseVideoIT {
 
+    @MockitoBean VideoProviderAdapter videoProviderAdapter;
 
     @Autowired AccountDeletionCascadeListener listener;
     @Autowired VideoDeletionService videoDeletionService;

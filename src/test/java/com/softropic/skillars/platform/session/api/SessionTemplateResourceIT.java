@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.session.api;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
+import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.security.SecurityIT;
 import com.softropic.skillars.platform.session.repo.Session;
 import com.softropic.skillars.platform.session.repo.SessionRepository;
@@ -12,6 +13,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.web.client.HttpClientErrorException;
 
@@ -56,6 +58,8 @@ class SessionTemplateResourceIT extends BaseSessionIT {
     private UUID drillId;
     private UUID sessionId;
 
+    @MockitoBean
+    VideoProviderAdapter videoProviderAdapter;
 
     @Autowired
     SessionRepository sessionRepository;

@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.video.service;
 
 import com.softropic.skillars.infrastructure.video.AssetStatus;
+import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.video.BaseVideoIT;
 import com.softropic.skillars.platform.video.contract.*;
 import com.softropic.skillars.platform.video.contract.exception.TerminalStateViolationException;
@@ -9,6 +10,7 @@ import com.softropic.skillars.platform.video.repo.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.time.Instant;
 import java.util.List;
@@ -21,6 +23,8 @@ import static org.mockito.Mockito.*;
 
 class AdminVideoIT extends BaseVideoIT {
 
+    @MockitoBean
+    VideoProviderAdapter videoProviderAdapter;
 
     @Autowired AdminVideoService adminVideoService;
     @Autowired VideoRepository videoRepository;

@@ -4,6 +4,7 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.security.SecurityIT;
@@ -52,6 +53,7 @@ class ParentDevelopmentPortalResourceIT extends AbstractIntegrationTest {
     @Autowired private PasswordEncoder passwordEncoder;
     @LocalServerPort private int randomServerPort;
 
+    @MockitoBean VideoProviderAdapter videoProviderAdapter;
     @MockitoBean FileStorageService fileStorageService;
     @MockitoBean CoachProfileService coachProfileService;
 

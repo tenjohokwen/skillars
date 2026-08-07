@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.video.service;
 
 import com.softropic.skillars.infrastructure.video.PlaybackTokenClaims;
 import com.softropic.skillars.infrastructure.video.SignedPlaybackUrl;
+import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.video.BaseVideoIT;
 import com.softropic.skillars.platform.video.contract.AccessState;
 import com.softropic.skillars.platform.video.contract.OperationalState;
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -28,6 +30,8 @@ import static org.mockito.Mockito.when;
 @TestPropertySource(properties = "app.video.playback.revocation-window-hours=24")
 class PlaybackRevocationIT extends BaseVideoIT {
 
+    @MockitoBean
+    VideoProviderAdapter videoProviderAdapter;
 
     @Autowired
     PlaybackService playbackService;

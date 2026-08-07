@@ -2,12 +2,14 @@ package com.softropic.skillars.platform.session.api;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
+import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.web.client.HttpClientErrorException;
 
@@ -43,6 +45,8 @@ class SessionBuilderResourceIT extends BaseSessionIT {
 
     private UUID drillId;
 
+    @MockitoBean
+    VideoProviderAdapter videoProviderAdapter;
 
     @BeforeEach
     void setUp() {

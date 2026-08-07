@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.video.service;
 
 import com.softropic.skillars.infrastructure.video.UploadCredentials;
+import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.video.BaseVideoIT;
 import com.softropic.skillars.platform.video.contract.AccessState;
 import com.softropic.skillars.platform.video.contract.ConfirmUploadResponse;
@@ -36,6 +37,8 @@ class VideoRetryUploadIT extends BaseVideoIT {
     @MockitoBean
     QuotaService quotaProvider;
 
+    @MockitoBean
+    VideoProviderAdapter videoProviderAdapter;
 
     @Autowired
     VideoService videoService;

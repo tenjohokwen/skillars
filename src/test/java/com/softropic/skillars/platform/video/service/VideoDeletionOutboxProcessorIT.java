@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.video.service;
 
+import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.video.BaseVideoIT;
 import com.softropic.skillars.platform.video.contract.AccessState;
 import com.softropic.skillars.platform.video.contract.LifecycleTrigger;
@@ -14,6 +15,7 @@ import com.softropic.skillars.platform.video.repo.VideoRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
@@ -28,6 +30,7 @@ import static org.mockito.Mockito.verify;
 
 class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
 
+    @MockitoBean VideoProviderAdapter videoProviderAdapter;
 
     @Autowired VideoDeletionOutboxProcessor processor;
     @Autowired VideoRepository videoRepository;
