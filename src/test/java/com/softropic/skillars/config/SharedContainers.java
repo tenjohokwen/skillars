@@ -57,7 +57,7 @@ public final class SharedContainers {
      * <p>MUST track the production image in {@code docker-compose.yml:64}. Any divergence means
      * every integration test validates against a database the product does not run on.
      */
-    static final String POSTGRES_IMAGE = "postgres:14.18";
+    static final String POSTGRES_IMAGE = "postgres:17-alpine";
 
     /** Test Redis image. Tracks {@code docker-compose.yml:89}. */
     static final String REDIS_IMAGE = "redis:7-alpine";
