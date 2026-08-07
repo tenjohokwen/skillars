@@ -847,6 +847,47 @@ per-class `@AfterEach` cleanup is not sufficient at that blast radius.
 consolidation in Tasks 3/4 cannot be green without `DatabaseResetTestExecutionListener`. These
 two commits should not be merged to master before Task 6 lands.
 
+#### CI run 3 ([`31186124117`](https://github.com/tenjohokwen/skillars/actions/runs/31186124117)) — with the connection-pool cap
+
+| Metric | Baseline | Run 2 (consolidation) | Run 3 (+ pool cap) |
+|---|---|---|---|
+| Wall clock | 10m10s | 8m03s | 12m57s |
+| Unit (surefire) | 825 — 0F 0E | 825 — 0F 0E | **828** — 0F 0E |
+| IT (failsafe) | 905 — 1F 16E | 905 — 2F 90E | 905 — 2F **52E** |
+| `failureCount` | — | **8** | **0** ✅ |
+| `missCount` | — | 64 | **37** |
+
+**The pool cap fully resolved the context-load failures**: `failureCount` 8 → **0**, and the
+"skipping repeated attempt to load context" cascade is gone entirely. Errors dropped 90 → 52.
+Unit tests rose 825 → 828: the three `IntegrationTestConventionTest` cases, all passing.
+
+Run 3 is slower (12m57s vs 8m03s) because tests that previously aborted on a dead context now
+actually execute. It is not a like-for-like comparison and must not be reported as a regression
+against the 8m03s figure.
+
+**All 52 remaining errors are cross-class data leakage — nothing infrastructural is left:**
+
+| Count | Error |
+|---|---|
+| 23 | `delete from main.videos` batch FK violation |
+| 14 | `DELETE FROM main.revinfo` FK violation (`user_aud_rev_fkey`) — pre-existing baseline |
+| 8 | duplicate `INSERT INTO main.user_authority` |
+| 5 | `DELETE FROM main.videos` FK violation |
+| 2 | `IllegalState: A tenant with the name 'Cleanup Corp' already exists` — pre-existing baseline |
+
+Every one is a hand-written per-class `@AfterEach` cleanup failing on rows another class left
+behind. **This is precisely and exclusively AC5's remit**, and it confirms the operational
+conclusion: Task 6 is the remaining blocker, and there is no other blocker.
+
+**On `missCount = 37` vs the 21 distinct keys the offline script reports.** With
+`failureCount = 0` the gap is not retries. The likely explanation is that the ~11 `@WebMvcTest`
+slice classes build their own contexts, which the script deliberately excludes (it counts only
+`@SpringBootTest`). 21 + slices lands at or above `maxSize = 32`, so the LRU cache evicts and
+rebuilds, inflating `missCount`. **Consequence for AC3:** the `missCount > 10` gate as written
+would also be counting container-free slice contexts, so either the gate needs to discount them
+or the ceiling needs restating. Worth resolving before Task 9b wires the gate — a gate that
+measures the wrong population is the failure mode AC3 itself warns about.
+
 #### Work NOT yet done — honest status
 
 This story is large and the following remain **unstarted or incomplete**. Nothing below has been
