@@ -6,7 +6,6 @@ import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.SecurityIT;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -91,19 +90,6 @@ class FamilyDataIsolationIT extends AbstractIntegrationTest {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.execute("DELETE FROM main.player_profiles");
-            jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
-            jdbcTemplate.execute("DELETE FROM main.login_attempts");
-            jdbcTemplate.execute("DELETE FROM main.user_authority");
-            jdbcTemplate.execute("DELETE FROM main.\"user\"");
-            jdbcTemplate.execute("DELETE FROM main.authority WHERE id = " + AUTHORITY_PARENT_ID);
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @Test
     void getPlayerProfile_ownPlayer_returns200() {

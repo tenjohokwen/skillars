@@ -7,7 +7,6 @@ import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.platform.security.SecurityIT;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -126,29 +125,6 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
         );
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id IN (?, ?, ?)",
-                coachProfileId, academyProfileId, scoutProfileId);
-            jdbcTemplate.update("DELETE FROM development.player_timeline_events WHERE player_id = ?", PLAYER_ID);
-            jdbcTemplate.update("DELETE FROM development.performance_reports WHERE player_id = ?", PLAYER_ID);
-            jdbcTemplate.update("DELETE FROM development.coach_branding WHERE coach_id IN (?, ?, ?)",
-                coachProfileId, academyProfileId, scoutProfileId);
-            jdbcTemplate.update("DELETE FROM development.player_skill_stats WHERE player_id = ?", PLAYER_ID);
-            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = ?", PLAYER_ID);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_subscriptions WHERE coach_id IN (?, ?, ?)",
-                coachProfileId, academyProfileId, scoutProfileId);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id IN (?, ?, ?)",
-                coachProfileId, academyProfileId, scoutProfileId);
-            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?, ?, ?)",
-                COACH_USER_ID, ACADEMY_USER_ID, SCOUT_USER_ID, PARENT_USER_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?, ?, ?)",
-                COACH_USER_ID, ACADEMY_USER_ID, SCOUT_USER_ID, PARENT_USER_ID);
-            jdbcTemplate.update("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     // ── Timeline Tests ──────────────────────────────────────────────────────────
 

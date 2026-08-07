@@ -5,7 +5,6 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.SecurityIT;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -129,24 +128,6 @@ class ReviewUpdateIT extends AbstractIntegrationTest {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM reviews.coach_reviews WHERE coach_id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = ?", PLAYER_ID);
-            jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
-            jdbcTemplate.execute("DELETE FROM main.login_attempts");
-            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?, ?)",
-                PARENT_ID, PARENT_ID2, COACH_USER_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?, ?)",
-                PARENT_ID, PARENT_ID2, COACH_USER_ID);
-            jdbcTemplate.execute("DELETE FROM main.authority WHERE id IN (8010, 8011)");
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @Test
     void updateReview_afterOneYear_returns204() {

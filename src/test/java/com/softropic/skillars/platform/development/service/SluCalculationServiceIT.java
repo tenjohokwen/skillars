@@ -7,7 +7,6 @@ import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
 import com.softropic.skillars.platform.development.repo.PlayerSkillStat;
 import com.softropic.skillars.platform.development.repo.SluRepository;
 import com.softropic.skillars.platform.security.SecurityIT;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
@@ -54,14 +53,6 @@ class SluCalculationServiceIT extends AbstractIntegrationTest {
     @MockitoBean
     VideoProviderAdapter videoProviderAdapter;
 
-    @AfterEach
-    void cleanUp() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM development.player_skill_stats WHERE player_id = ?", TEST_PLAYER_ID);
-            jdbcTemplate.update("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @Test
     void onBookingCompleted_withStructuredSession_writesPlayerSkillStatRows() {

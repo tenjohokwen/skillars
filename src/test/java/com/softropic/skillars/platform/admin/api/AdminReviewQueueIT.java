@@ -156,26 +156,6 @@ class AdminReviewQueueIT extends AbstractIntegrationTest {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM reviews.review_moderation_log WHERE review_id = ?", reviewId);
-            jdbcTemplate.update("DELETE FROM reviews.review_flags WHERE review_id = ?", reviewId);
-            jdbcTemplate.update("DELETE FROM reviews.coach_reviews WHERE review_id = ?", reviewId);
-            jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = 8060000002");
-            jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
-            jdbcTemplate.execute("DELETE FROM main.login_attempts");
-            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?, ?)",
-                PARENT_ID, COACH_USER_ID, ADMIN_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?, ?)",
-                PARENT_ID, COACH_USER_ID, ADMIN_ID);
-            jdbcTemplate.execute("DELETE FROM main.authority WHERE id IN (8060, 8061, 8062)");
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @Test
     void adminCanViewQueue() {

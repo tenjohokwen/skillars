@@ -6,7 +6,6 @@ import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.platform.security.SecurityIT;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -83,19 +82,6 @@ class GdprExportIT extends AbstractIntegrationTest {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM admin.gdpr_requests WHERE user_id IN (?, ?)", PARENT_ID, PARENT_B_ID);
-            jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
-            jdbcTemplate.execute("DELETE FROM main.login_attempts");
-            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?)", PARENT_ID, PARENT_B_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?)", PARENT_ID, PARENT_B_ID);
-            jdbcTemplate.execute("DELETE FROM main.authority WHERE id = 9200");
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @Test
     void requestExport_parentUser_returns202WithRequestId() {

@@ -7,7 +7,6 @@ import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagReposi
 import com.softropic.skillars.platform.development.repo.SluTargetRepository;
 import com.softropic.skillars.platform.development.repo.SluWeeklySnapshotRepository;
 import com.softropic.skillars.platform.security.SecurityIT;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -48,16 +47,6 @@ class NeglectedSkillDetectionServiceIT extends AbstractIntegrationTest {
     private short evalYear;
     private short evalWeek;
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM development.neglected_skill_flags WHERE player_id = ?", PLAYER_ID);
-            jdbcTemplate.update("DELETE FROM development.player_slu_weekly_snapshot WHERE player_id = ?", PLAYER_ID);
-            jdbcTemplate.update("DELETE FROM development.player_slu_targets WHERE player_id = ?", PLAYER_ID);
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @Test
     void multipleCoachesHighestTargetGovernsDetection_IT() {

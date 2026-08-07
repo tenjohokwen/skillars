@@ -5,7 +5,6 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.SecurityIT;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -142,35 +141,6 @@ class ReviewFlagIT extends AbstractIntegrationTest {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            if (orphanReviewId != null) {
-                jdbcTemplate.update("DELETE FROM reviews.review_flags WHERE review_id = ?", orphanReviewId);
-                jdbcTemplate.update("DELETE FROM reviews.coach_reviews WHERE review_id = ?", orphanReviewId);
-            }
-            jdbcTemplate.update("DELETE FROM reviews.review_flags WHERE review_id = ?", reviewId);
-            jdbcTemplate.update("DELETE FROM reviews.coach_reviews WHERE review_id = ?", reviewId);
-            jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id IN (8050000003, 8050000004)");
-            jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
-            jdbcTemplate.execute("DELETE FROM main.login_attempts");
-            // Extra users seeded by flagThresholdReached test — cleaned here in case the test fails mid-run
-            for (int i = 0; i < 2; i++) {
-                long userId = 8050_000_020L + i;
-                jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id = ?", userId);
-                jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id = ?", userId);
-            }
-            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?, ?)",
-                PARENT_ID, FLAGGING_USER_ID, COACH_USER_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?, ?)",
-                PARENT_ID, FLAGGING_USER_ID, COACH_USER_ID);
-            jdbcTemplate.execute("DELETE FROM main.authority WHERE id IN (8050, 8051)");
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @Test
     void flagSubmitted_createsFlag_returns201() {

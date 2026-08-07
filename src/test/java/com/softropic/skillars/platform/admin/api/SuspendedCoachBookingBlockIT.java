@@ -6,7 +6,6 @@ import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.SecurityIT;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -110,28 +109,6 @@ class SuspendedCoachBookingBlockIT extends AbstractIntegrationTest {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            // FK-safe order: reschedule requests → bookings → batches, before the coach/player rows
-            // they reference. The AC4 tests below seed all three.
-            jdbcTemplate.update("DELETE FROM booking.booking_reschedule_requests WHERE booking_id IN " +
-                "(SELECT id FROM booking.bookings WHERE coach_id = ?)", coachProfileId);
-            jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM booking.booking_batches WHERE coach_id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_availability_windows WHERE coach_id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_pricing WHERE coach_id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = ?", PLAYER_ID);
-            jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
-            jdbcTemplate.execute("DELETE FROM main.login_attempts");
-            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?)", PARENT_ID, COACH_USER_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?)", PARENT_ID, COACH_USER_ID);
-            jdbcTemplate.execute("DELETE FROM main.authority WHERE id IN (9050, 9051)");
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @Test
     void bookingRequestForSuspendedCoach_returns403WithCoachUnavailableCode() {

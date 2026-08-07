@@ -5,7 +5,6 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.platform.tenant.contract.ApiKeyEnvironment;
 import com.softropic.skillars.platform.tenant.service.TenantService;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -85,15 +84,6 @@ class TenantContextExceptionIT extends AbstractIntegrationTest {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.execute("delete from main.tenant_api_key");
-            jdbcTemplate.execute("delete from main.tenant");
-            jdbcTemplate.execute("delete from main.sec");
-            return null;
-        });
-    }
 
     private String url(String path) {
         return "http://localhost:" + port + path;

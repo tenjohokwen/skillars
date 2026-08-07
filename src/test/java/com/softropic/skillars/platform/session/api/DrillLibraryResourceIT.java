@@ -3,7 +3,6 @@ package com.softropic.skillars.platform.session.api;
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.platform.security.SecurityIT;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
@@ -114,31 +113,6 @@ class DrillLibraryResourceIT extends BaseSessionIT {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM session.drill_video_refs WHERE drill_id IN " +
-                "(SELECT id FROM session.drills WHERE owner_coach_id IN (?, ?, ?, ?))",
-                coachProfileId, coachProfileId2, scoutCoachProfileId, instructorCoachProfileId);
-            jdbcTemplate.update("DELETE FROM session.drills WHERE owner_coach_id IN (?, ?, ?, ?)",
-                coachProfileId, coachProfileId2, scoutCoachProfileId, instructorCoachProfileId);
-            jdbcTemplate.update("DELETE FROM session.drills WHERE id IN (?, ?, ?, ?)",
-                anotherCoachDrillId, archivedDrillId, sameNamePlatformDrillIdA, sameNamePlatformDrillIdB);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_subscriptions WHERE coach_id IN (?, ?, ?, ?)",
-                coachProfileId, coachProfileId2, scoutCoachProfileId, instructorCoachProfileId);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id IN (?, ?, ?, ?)",
-                coachProfileId, coachProfileId2, scoutCoachProfileId, instructorCoachProfileId);
-            jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
-            jdbcTemplate.execute("DELETE FROM main.login_attempts");
-            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?, ?, ?, ?)",
-                COACH_USER_ID, COACH_USER_ID2, PARENT_USER_ID, SCOUT_COACH_USER_ID, INSTR_COACH_USER_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?, ?, ?, ?)",
-                COACH_USER_ID, COACH_USER_ID2, PARENT_USER_ID, SCOUT_COACH_USER_ID, INSTR_COACH_USER_ID);
-            jdbcTemplate.execute("DELETE FROM main.authority WHERE id IN (9550, 9551)");
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     // ── GET /api/session/drills?library=PLATFORM ─────────────────────────────
 

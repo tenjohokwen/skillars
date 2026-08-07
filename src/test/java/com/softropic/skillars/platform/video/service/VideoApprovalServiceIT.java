@@ -17,7 +17,6 @@ import com.softropic.skillars.platform.video.repo.VideoApprovalRequest;
 import com.softropic.skillars.platform.video.repo.VideoApprovalRequestRepository;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -66,18 +65,6 @@ class VideoApprovalServiceIT extends BaseVideoIT {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM main.video_approval_requests");
-            jdbcTemplate.update("DELETE FROM main.videos");
-            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE parent_id IN (?, ?)",
-                PARENT_ID, OTHER_PARENT_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?)",
-                PARENT_ID, OTHER_PARENT_ID);
-            return null;
-        });
-    }
 
     private void insertTestUser(long userId, String email) {
         Timestamp now = Timestamp.from(Instant.now());

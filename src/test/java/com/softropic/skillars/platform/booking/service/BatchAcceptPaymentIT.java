@@ -3,7 +3,6 @@ package com.softropic.skillars.platform.booking.service;
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -81,28 +80,6 @@ class BatchAcceptPaymentIT extends AbstractIntegrationTest {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM payment.booking_payments WHERE booking_id IN " +
-                "(SELECT id FROM booking.bookings WHERE coach_id = ?)", coachProfileId);
-            jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM booking.booking_batches WHERE coach_id = ?", coachProfileId);
-            jdbcTemplate.execute("SET SESSION session_replication_role = 'replica'");
-            jdbcTemplate.update("DELETE FROM payment.parent_credit_ledger WHERE parent_id = ?", PARENT_ID);
-            jdbcTemplate.execute("SET SESSION session_replication_role = 'origin'");
-            jdbcTemplate.update("DELETE FROM payment.session_pack_purchases WHERE coach_id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM payment.session_pack_tiers WHERE coach_id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_pricing WHERE coach_id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = ?", PLAYER_ID);
-            jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
-            jdbcTemplate.execute("DELETE FROM main.login_attempts");
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?)", PARENT_ID, COACH_USER_ID);
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @Test
     void acceptAll_creditBasedBatch_bookingsReachConfirmed() {

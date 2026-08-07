@@ -6,7 +6,6 @@ import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.SecurityIT;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -70,20 +69,6 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.execute("DELETE FROM main.parent_player_links");
-            jdbcTemplate.execute("DELETE FROM main.player_profiles");
-            jdbcTemplate.execute("DELETE FROM main.phone_otp_tokens");
-            jdbcTemplate.execute("DELETE FROM main.email_verification_tokens");
-            jdbcTemplate.execute("DELETE FROM main.user_authority");
-            jdbcTemplate.execute("DELETE FROM main.\"user\"");
-            jdbcTemplate.execute("DELETE FROM main.authority");
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @Test
     void registerParent_validData_returns200AndUserIsUnverified() {

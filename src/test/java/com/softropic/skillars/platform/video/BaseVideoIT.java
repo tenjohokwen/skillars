@@ -3,7 +3,6 @@ package com.softropic.skillars.platform.video;
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
-import org.junit.jupiter.api.AfterEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -22,11 +21,4 @@ public abstract class BaseVideoIT extends AbstractIntegrationTest {
     @InjectWireMock("bunny-service")
     protected WireMockServer wireMockServer;
 
-    @AfterEach
-    void tearDownSec() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 }

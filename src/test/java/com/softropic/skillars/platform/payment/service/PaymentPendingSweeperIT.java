@@ -71,13 +71,6 @@ class PaymentPendingSweeperIT extends BasePaymentIT {
 
     // Runs before BasePaymentIT.cleanPaymentData (JUnit 5 orders subclass @AfterEach first), which
     // deletes coach_profiles — the availability windows seeded above reference that row.
-    @AfterEach
-    void cleanWindows() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM marketplace.coach_availability_windows WHERE coach_id = ?", coachId);
-            return null;
-        });
-    }
 
     // ── fixtures ──
 

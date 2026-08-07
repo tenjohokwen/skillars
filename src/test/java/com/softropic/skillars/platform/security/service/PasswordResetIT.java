@@ -14,7 +14,6 @@ import com.softropic.skillars.utils.TestMailManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.junit.jupiter.api.AfterEach;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.jdbc.Sql;
@@ -51,13 +50,6 @@ public class PasswordResetIT extends AbstractIntegrationTest {
 
     private ChangePasswordDto changePasswordDto;
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @BeforeEach
     void setUp() {
@@ -69,7 +61,6 @@ public class PasswordResetIT extends AbstractIntegrationTest {
 
     @Test
     @Sql(scripts = {"/sql/authorityData.sql", "/sql/userData.sql", "/sql/secData.sql"})
-    @Sql(scripts = "/sql/cleanup.sql", executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
     void testPasswordReset_Success() {
         // --- 1. Initiate Password Reset ---
         String helpCode = accountManagementFacade.sendPasswordResetMail(changePasswordDto);
@@ -97,7 +88,6 @@ public class PasswordResetIT extends AbstractIntegrationTest {
     
     @Test
     @Sql(scripts = {"/sql/authorityData.sql", "/sql/userData.sql", "/sql/secData.sql"})
-    @Sql(scripts = "/sql/cleanup.sql", executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
     void testFinishPasswordReset_WithInvalidKey() {
         KeyAndPasswordDto keyAndPasswordDto = new KeyAndPasswordDto("invalidKey", "newPassword");
         
@@ -109,7 +99,6 @@ public class PasswordResetIT extends AbstractIntegrationTest {
     
     @Test
     @Sql(scripts = {"/sql/authorityData.sql", "/sql/userData.sql", "/sql/secData.sql"})
-    @Sql(scripts = "/sql/cleanup.sql", executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
     void testFinishPasswordReset_WithExpiredKey() {
         // Manually set an expired reset key in the DB
         String expiredKey = "expiredResetKey";

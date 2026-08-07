@@ -6,7 +6,6 @@ import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.messaging.contract.ModerationVerdict;
 import com.softropic.skillars.platform.security.SecurityIT;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -170,26 +169,6 @@ class ParentalOversightResourceIT extends AbstractIntegrationTest {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM messaging.messages WHERE id = ?", MESSAGE_ID);
-            jdbcTemplate.update("DELETE FROM messaging.conversations WHERE id IN (?, ?, ?)",
-                U10_CONV_ID, SUPERVISED_CONV_ID, ADULT_CONV_ID);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id IN (?, ?, ?, ?)",
-                U10_PLAYER_ID, SUPERVISED_PLAYER_ID, ADULT_PLAYER_ID, OTHER_PLAYER_ID);
-            jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
-            jdbcTemplate.execute("DELETE FROM main.login_attempts");
-            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?, ?)",
-                PARENT_ID, COACH_USER_ID, OTHER_PARENT_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?, ?)",
-                PARENT_ID, COACH_USER_ID, OTHER_PARENT_ID);
-            jdbcTemplate.execute("DELETE FROM main.authority WHERE id IN (9810, 9811)");
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     // ── AC5: Parent can access minor player's conversations ──
 

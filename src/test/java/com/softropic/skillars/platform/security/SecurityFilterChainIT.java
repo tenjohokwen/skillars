@@ -10,7 +10,6 @@ import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.service.LoginAttemptsService;
 import com.softropic.skillars.utils.TestMailManager;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -65,19 +64,6 @@ public class SecurityFilterChainIT extends AbstractIntegrationTest {
     private static final String ACCOUNT_URL = "/v1/account/";
     private static final String OTP_URL = "/otp";
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.execute("delete from main.persistent_token");
-            jdbcTemplate.execute("delete from main.user_addresses");
-            jdbcTemplate.execute("delete from main.user_authority");
-            jdbcTemplate.execute("delete from main.audit_log");
-            jdbcTemplate.execute("delete from main.user");
-            jdbcTemplate.execute("delete from main.authority");
-            jdbcTemplate.execute("delete from main.sec");
-            return 0;
-        });
-    }
 
 
     private HttpHeaders baseHeaders() {

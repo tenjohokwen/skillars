@@ -8,7 +8,6 @@ import com.softropic.skillars.platform.notification.contract.Recipient;
 import com.softropic.skillars.platform.notification.service.MailManager;
 import com.softropic.skillars.utils.TestMailManager;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -33,13 +32,6 @@ public class MailManagerIT extends AbstractIntegrationTest {
     @Autowired
     private TransactionTemplate transactionTemplate;
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @Test
     void contextLoads() {

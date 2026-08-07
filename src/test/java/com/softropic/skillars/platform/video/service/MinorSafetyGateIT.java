@@ -15,7 +15,6 @@ import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.repo.VideoApprovalRequestRepository;
 import com.softropic.skillars.platform.video.repo.VideoModerationScanRepository;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -64,17 +63,6 @@ class MinorSafetyGateIT extends BaseVideoIT {
         doNothing().when(videoProviderAdapter).triggerTranscoding(any());
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM main.video_approval_requests");
-            jdbcTemplate.update("DELETE FROM main.video_moderation_scans");
-            jdbcTemplate.update("DELETE FROM main.videos");
-            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE parent_id = ?", PARENT_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id = ?", PARENT_ID);
-            return null;
-        });
-    }
 
     @Test
     void minorPlayer_moderationPasses_gateFlags_setsHiddenAndCreatesApprovalRow() {

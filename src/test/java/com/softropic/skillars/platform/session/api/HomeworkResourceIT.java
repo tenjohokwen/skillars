@@ -4,7 +4,6 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.security.SecurityIT;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
@@ -129,29 +128,6 @@ class HomeworkResourceIT extends BaseSessionIT {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM session.homework_completions WHERE player_id = ?", PLAYER_ID);
-            jdbcTemplate.update("DELETE FROM session.homework_assignments WHERE player_id = ?", PLAYER_ID);
-            jdbcTemplate.update("DELETE FROM payment.session_pack_purchases WHERE parent_id = ?", PARENT_ID);
-            jdbcTemplate.update("DELETE FROM payment.session_pack_tiers WHERE pack_tier_id = ?", packTierId);
-            jdbcTemplate.update("DELETE FROM session.drills WHERE id = ?", drillId);
-            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = ?", PLAYER_ID);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_subscriptions WHERE coach_id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?, ?)",
-                                PARENT_ID,
-                                WRONG_PARENT_ID,
-                                COACH_USER_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?, ?)",
-                                PARENT_ID,
-                                WRONG_PARENT_ID,
-                                COACH_USER_ID);
-            jdbcTemplate.update("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @Test
     void getLockerRoomDrills_parentOwner_returns200WithDrills() {

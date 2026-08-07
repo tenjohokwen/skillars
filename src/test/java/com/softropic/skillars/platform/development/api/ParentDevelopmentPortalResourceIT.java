@@ -8,7 +8,6 @@ import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.security.SecurityIT;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -102,21 +101,6 @@ class ParentDevelopmentPortalResourceIT extends AbstractIntegrationTest {
             .thenReturn(Map.of(COACH_A_ID, "Marcus Alves", COACH_B_ID, "Janet Rose"));
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM development.player_skill_stats WHERE player_id IN (?, ?)",
-                PLAYER_ID, OTHER_PLAYER_ID);
-            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id IN (?, ?)",
-                PLAYER_ID, OTHER_PLAYER_ID);
-            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?)",
-                PARENT_USER_ID, OTHER_PARENT_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?)",
-                PARENT_USER_ID, OTHER_PARENT_ID);
-            jdbcTemplate.update("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @Test
     @SuppressWarnings("unchecked")

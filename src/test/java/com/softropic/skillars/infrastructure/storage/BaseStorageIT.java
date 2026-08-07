@@ -3,7 +3,6 @@ package com.softropic.skillars.infrastructure.storage;
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.config.MinioTestConfig;
-import org.junit.jupiter.api.AfterEach;
 import org.springframework.context.annotation.Import;
 
 /**
@@ -16,11 +15,4 @@ import org.springframework.context.annotation.Import;
 @Import(MinioTestConfig.class)
 public abstract class BaseStorageIT extends AbstractIntegrationTest {
 
-    @AfterEach
-    void tearDownSec() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 }

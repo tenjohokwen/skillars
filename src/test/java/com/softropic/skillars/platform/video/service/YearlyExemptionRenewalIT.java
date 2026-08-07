@@ -9,7 +9,6 @@ import com.softropic.skillars.platform.video.repo.SubscriptionLifecycleOutbox;
 import com.softropic.skillars.platform.video.repo.SubscriptionLifecycleOutboxRepository;
 import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
@@ -61,15 +60,6 @@ class YearlyExemptionRenewalIT extends BaseVideoIT {
         });
     }
 
-    @AfterEach
-    void clean() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.execute("DELETE FROM main.subscription_lifecycle_outbox");
-            jdbcTemplate.execute("DELETE FROM main.videos WHERE owner_id = '" + PLAYER_ID + "'");
-            jdbcTemplate.update("DELETE FROM main.platform_config WHERE id IN (8101, 8102)");
-            return null;
-        });
-    }
 
     /**
      * When a YEARLY subscription expires, videos should have lifecycle_locked_at reset.

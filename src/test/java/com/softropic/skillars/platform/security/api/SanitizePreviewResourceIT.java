@@ -6,7 +6,6 @@ import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.SecurityIT;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -91,17 +90,6 @@ class SanitizePreviewResourceIT extends AbstractIntegrationTest {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM main.refresh_tokens WHERE user_id = ?", COACH_ID);
-            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id = ?", COACH_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id = ?", COACH_ID);
-            jdbcTemplate.update("DELETE FROM main.authority WHERE id = ?", 9200);
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @Test
     void preview_emailDetected_returnsDetectionFound() {

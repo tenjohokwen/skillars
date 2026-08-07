@@ -6,7 +6,6 @@ import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.security.SecurityIT;
 import com.softropic.skillars.platform.session.repo.Session;
 import com.softropic.skillars.platform.session.repo.SessionRepository;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -109,29 +108,6 @@ class SessionTemplateResourceIT extends BaseSessionIT {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM session.session_templates WHERE coach_id IN (?, ?)",
-                instrCoachId, otherCoachId);
-            jdbcTemplate.update("DELETE FROM session.sessions WHERE booking_id IN (?, ?, ?)",
-                confirmedBookingId, otherCoachBookingId, cancelledBookingId);
-            jdbcTemplate.update("DELETE FROM session.sessions WHERE id = ?", sessionId);
-            jdbcTemplate.update("DELETE FROM session.drills WHERE id = ?", drillId);
-            jdbcTemplate.update("DELETE FROM booking.bookings WHERE id IN (?, ?, ?)",
-                confirmedBookingId, otherCoachBookingId, cancelledBookingId);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_subscriptions WHERE coach_id IN (?, ?, ?)",
-                instrCoachId, scoutCoachId, otherCoachId);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE user_id IN (?, ?, ?)",
-                INSTR_COACH_USER_ID, SCOUT_COACH_USER_ID, OTHER_COACH_USER_ID);
-            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?, ?)",
-                INSTR_COACH_USER_ID, SCOUT_COACH_USER_ID, OTHER_COACH_USER_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?, ?)",
-                INSTR_COACH_USER_ID, SCOUT_COACH_USER_ID, OTHER_COACH_USER_ID);
-            jdbcTemplate.update("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     // --- createTemplate ---
 

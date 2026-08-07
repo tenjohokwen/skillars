@@ -4,7 +4,6 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.infrastructure.persistence.EntityStatus;
 import com.softropic.skillars.platform.security.repo.Secret;
-import com.softropic.skillars.utils.DbCleaner;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -32,8 +31,6 @@ class SecretServiceIT extends AbstractIntegrationTest {
     @Autowired
     private SecretService secretService;
 
-    @Autowired
-    private DbCleaner dbCleaner;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -50,7 +47,6 @@ class SecretServiceIT extends AbstractIntegrationTest {
 
     @AfterEach
     void cleanup() {
-        dbCleaner.cleanDb();
     }
 
     @AfterAll

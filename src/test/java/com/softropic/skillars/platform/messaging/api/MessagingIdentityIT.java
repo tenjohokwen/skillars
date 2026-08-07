@@ -6,7 +6,6 @@ import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.messaging.contract.ModerationVerdict;
 import com.softropic.skillars.platform.security.SecurityIT;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -195,32 +194,6 @@ class MessagingIdentityIT extends AbstractIntegrationTest {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM messaging.message_reports WHERE message_id IN " +
-                "(SELECT id FROM messaging.messages WHERE conversation_id IN (?, ?, ?))",
-                conversationOkId, conversationOrphanId, conversationSelfPlayerId);
-            jdbcTemplate.update("DELETE FROM messaging.conversation_reports WHERE conversation_id IN (?, ?, ?)",
-                conversationOkId, conversationOrphanId, conversationSelfPlayerId);
-            jdbcTemplate.update("DELETE FROM messaging.messages WHERE conversation_id IN (?, ?, ?)",
-                conversationOkId, conversationOrphanId, conversationSelfPlayerId);
-            jdbcTemplate.update("DELETE FROM messaging.conversations WHERE id IN (?, ?, ?)",
-                conversationOkId, conversationOrphanId, conversationSelfPlayerId);
-            jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id IN (?, ?, ?)", PLAYER_ID_OK, SELF_PLAYER_PROFILE_ID, SELF_PLAYER2_PROFILE_ID);
-            jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
-            jdbcTemplate.execute("DELETE FROM main.login_attempts");
-            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?, ?, ?, ?)",
-                PARENT_ID, COACH_USER_ID, SELF_PLAYER_USER_ID, SELF_PLAYER2_USER_ID, NO_ROLE_USER_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?, ?, ?, ?)",
-                PARENT_ID, COACH_USER_ID, SELF_PLAYER_USER_ID, SELF_PLAYER2_USER_ID, NO_ROLE_USER_ID);
-            jdbcTemplate.execute("DELETE FROM main.authority WHERE id IN (9860, 9861, 9862)");
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @Test
     void coachConversationList_orphanedPlayerProfile_returns200WithBothConversations() {

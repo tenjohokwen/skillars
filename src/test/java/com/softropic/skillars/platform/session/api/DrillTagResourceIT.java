@@ -3,7 +3,6 @@ package com.softropic.skillars.platform.session.api;
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.platform.security.SecurityIT;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
@@ -68,28 +67,6 @@ class DrillTagResourceIT extends BaseSessionIT {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM session.drill_tags WHERE coach_id IN (?, ?)",
-                coachProfileId, coachProfileId2);
-            jdbcTemplate.update("DELETE FROM session.drills WHERE owner_coach_id IN (?, ?)",
-                coachProfileId, coachProfileId2);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_subscriptions WHERE coach_id IN (?, ?)",
-                coachProfileId, coachProfileId2);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id IN (?, ?)",
-                coachProfileId, coachProfileId2);
-            jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
-            jdbcTemplate.execute("DELETE FROM main.login_attempts");
-            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?)",
-                COACH_USER_ID, COACH_USER_ID2);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?)",
-                COACH_USER_ID, COACH_USER_ID2);
-            jdbcTemplate.execute("DELETE FROM main.authority WHERE id = 9560");
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     // ── POST /{drillId}/tags ──────────────────────────────────────────────────────
 

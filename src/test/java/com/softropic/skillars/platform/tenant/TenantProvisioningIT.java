@@ -12,7 +12,6 @@ import com.softropic.skillars.platform.tenant.contract.ApiKeyEnvironment;
 import com.softropic.skillars.platform.tenant.service.TenantService;
 
 import org.apache.commons.codec.digest.DigestUtils;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -47,15 +46,6 @@ class TenantProvisioningIT extends AbstractIntegrationTest {
     @Autowired
     private TransactionTemplate transactionTemplate;
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.execute("delete from main.tenant_api_key");
-            jdbcTemplate.execute("delete from main.tenant");
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @Test
     void createTenant_persistsEntities() {

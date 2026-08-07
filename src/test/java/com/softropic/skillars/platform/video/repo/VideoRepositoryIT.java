@@ -4,7 +4,6 @@ import com.softropic.skillars.platform.video.BaseVideoIT;
 import com.softropic.skillars.platform.video.contract.AccessState;
 import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.contract.Visibility;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -18,10 +17,6 @@ class VideoRepositoryIT extends BaseVideoIT {
 
     @Autowired VideoRepository videoRepository;
 
-    @AfterEach
-    void tearDown() {
-        jdbcTemplate.update("DELETE FROM main.videos WHERE owner_id = ?", OWNER_ID);
-    }
 
     @Test
     void duplicateProviderAssetId_throwsDataIntegrity() {
