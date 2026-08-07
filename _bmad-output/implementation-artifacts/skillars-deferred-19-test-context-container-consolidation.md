@@ -1001,6 +1001,44 @@ cleanup ordering.
 Safe because AC5.4's side effect holds: every test method now starts from an empty database,
 so `secData.sql`'s fixed-PK insert is idempotent by construction.
 
+#### CI progression, all runs (Task 6 complete)
+
+| Run | Change | IT failures + errors | `failureCount` |
+|---|---|---|---|
+| `31180425880` | **baseline** (pre-story) | 1F + 16E = **17** | — |
+| `31184780327` | consolidation (Tasks 3/4) | 2F + 90E = 92 | 8 |
+| `31186124117` | + connection-pool cap | 2F + 52E = 54 | 0 |
+| `31190871807` | + reset listener (6A) | 1F + 5E = 6 | 0 |
+| `31192540977` | + cleanup deletion (6B) | 1F + 15E = 16 | 0 |
+| `31194113235` | + 6B fixup | **1F + 2E = 3** | 0 |
+
+Unit tests 828 — 0F 0E throughout. `missCount = 37`, wall clock 15m34s.
+
+**Net: 17 → 3 problems**, i.e. the story's work has fixed pre-existing breakage as well as
+its own regressions.
+
+**The commit-B regression was an error in this implementation, not in the story.** The
+stripper filtered on what a teardown's *body* did. The correct rule is
+**a teardown is redundant only if its class actually receives the reset listener** — which
+gets the two cases exactly backwards:
+
+- the four **allowlisted** classes deliberately do not extend `AbstractIntegrationTest`, so
+  they get **no** listener and their cleanup was load-bearing (restored);
+- `BasePaymentIT.cleanPaymentData` **does** get the listener, so it was redundant *and*
+  failing against an already-empty database — it survived the automated strip only because
+  its `SET SESSION session_replication_role` (bypassing the V79 append-only trigger) defeated
+  the conservative call-filter (removed deliberately).
+
+That rule also resolves the 27 held-back teardowns without inspecting any of them.
+
+**The 3 remaining problems — none diagnosed, no causes asserted:**
+
+| Test | Symptom | Note |
+|---|---|---|
+| `ReviewUpdateIT.updateReview_afterOneYear_returns204` | `expected "UNDER_REVIEW" but was "PENDING"` | Present since run 4. A moderation state transition, not data leakage. |
+| `ModerationFailClosedIT.geminiFailure_...` | `ScriptStatementFailed` | **Allowlisted, so it has no reset listener.** Its teardown was restored and it still fails, which suggests it depends on ambient database state that now differs because every *other* class truncates. Likely fix: let it extend `AbstractIntegrationTest` and carry `@Import(FailureEventCapture.class)`, which preserves its separate context *and* gives it the reset. |
+| `ConversationResourceIT.createConversation_concurrent_...` | `ExecutionException` | A concurrency test; appeared in this run only. Could be flaky — needs a re-run to establish whether it is reproducible before anyone changes it. |
+
 #### Work NOT yet done — honest status
 
 This story is large and the following remain **unstarted or incomplete**. Nothing below has been
