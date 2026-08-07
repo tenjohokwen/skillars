@@ -39,7 +39,7 @@ jobs:
         id: pre_deploy
         run: |
           PREV=$(ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
-            "cd /opt/payam && \
+            "cd /opt/skillars && \
              CID=\$(docker compose ps -q --status running app 2>/dev/null | head -1) && \
              [ -n \"\$CID\" ] && docker inspect --format='{{.Config.Image}}' \"\$CID\" || echo 'none'")
           PREV="${PREV:-none}"
@@ -58,7 +58,7 @@ jobs:
         run: |
           IMAGE="ghcr.io/${{ github.repository }}:${IMAGE_TAG}"
           ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
-            "cd /opt/payam && \
+            "cd /opt/skillars && \
              docker compose pull app && \
              sed -i \"s|^APP_IMAGE=.*|APP_IMAGE=${IMAGE}|\" .env && \
              docker compose up -d --no-deps app"
@@ -71,7 +71,7 @@ jobs:
           RESULT="fail"
           for i in $(seq 1 12); do
             STATUS=$(ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "
-              CID=\$(cd /opt/payam && docker compose ps -q --status running app 2>/dev/null | head -1)
+              CID=\$(cd /opt/skillars && docker compose ps -q --status running app 2>/dev/null | head -1)
               [ -n \"\$CID\" ] && docker exec \"\$CID\" wget -qO- http://localhost:8367/manage/health 2>/dev/null \
                 | grep -q '\"status\":\"UP\"' && echo 1 || echo 0
             " 2>/dev/null || echo 0)
@@ -95,7 +95,7 @@ jobs:
             echo "ERROR: previous image reference contains unsafe characters; aborting revert." >&2
             echo "outcome=failed" >> $GITHUB_OUTPUT
           elif ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
-                 "cd /opt/payam && \
+                 "cd /opt/skillars && \
                   sed -i \"s|^APP_IMAGE=.*|APP_IMAGE=${PREV}|\" .env && \
                   docker compose pull app && \
                   docker compose up -d --no-deps app"; then
