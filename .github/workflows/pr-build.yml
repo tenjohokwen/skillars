@@ -11,12 +11,12 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Temporarily raised from 15 while story deferred-19 establishes a baseline: the
-    # unrefactored suite builds 37 Spring contexts and the only prior CI datapoint
-    # (9m54s) came from a run that failed early and skipped the Docker + Trivy steps.
-    # A timeout here yields no test counts at all, which is what we are trying to measure.
-    # deferred-19 Task 9b (AC10.5) sets the final value from the measured duration.
-    timeout-minutes: 45
+    # AC10.5. Measured post-refactor duration is 15m19s-15m34s across four consecutive runs
+    # (31190871807, 31192540977, 31194113235). 25 leaves ~60% headroom for runner variance
+    # and image pulls while still catching a real regression -- the old value of 15 against a
+    # ~10-minute run could not have detected a 50% slowdown, which is what AC10.5 objects to.
+    # Revisit if the suite's honest duration changes.
+    timeout-minutes: 25
     permissions:
       contents: read
     steps:
@@ -36,11 +36,26 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-
 
+      # AC1: assert at most one postgres, one redis and one minio container is alive at any
+      # instant. The containers are JVM-static (SharedContainers), so any breach means
+      # something has re-bound their lifetime to the Spring context.
+      - name: Start container sampler
+        run: .github/scripts/container-sampler.sh start /tmp/container-samples.txt
+
       # No -q: it suppresses phase markers, the surefire/failsafe summaries and all
       # per-class timings, which are the numbers this project's test-performance work
       # is measured against. Do not add it back.
+      # tee: the context-count gate below reads missCount from this log.
       - name: Build and test
-        run: mvn -B verify
+        run: set -o pipefail && mvn -B verify 2>&1 | tee /tmp/build.log
+
+      - name: Assert container ceiling (AC1)
+        if: always()
+        run: .github/scripts/container-sampler.sh assert /tmp/container-samples.txt 1
+
+      - name: Assert Spring context count (AC3)
+        if: always()
+        run: .github/scripts/assert-context-count.sh /tmp/build.log 42
 
       - name: Upload test reports
         if: always()

@@ -7,8 +7,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # See pr-build.yml — raised while deferred-19 baselines the suite; Task 9b sets the final value.
-    timeout-minutes: 45
+    # AC10.5 — see pr-build.yml for the derivation. The enforcement gates live in pr-build,
+    # which is where regressions should be caught; this job only needs to not hang.
+    timeout-minutes: 25
     permissions:
       contents: read
 
