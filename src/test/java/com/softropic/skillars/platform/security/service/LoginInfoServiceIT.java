@@ -1,7 +1,8 @@
 package com.softropic.skillars.platform.security.service;
 
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.infrastructure.util.TestClockProvider;
-import com.softropic.skillars.config.TestConfig;
 import com.softropic.skillars.platform.security.contract.LoginData;
 import com.softropic.skillars.platform.security.repo.LoginInfo;
 import com.softropic.skillars.platform.security.contract.exception.SecException;
@@ -12,11 +13,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -32,13 +29,8 @@ import static com.softropic.skillars.infrastructure.security.SecurityError.OTP_M
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = {"rate.limiting.enabled=false"})
-@Import(TestConfig.class)
-@TestPropertySource(properties = "spring.cloud.compatibility-verifier.enabled=false")
 @Transactional
-class LoginInfoServiceIT {
+class LoginInfoServiceIT extends AbstractIntegrationTest {
 
     // Minimal valid values that satisfy LoginInfo column constraints
     private static final String CLIENT_ID  = "myTestClient";

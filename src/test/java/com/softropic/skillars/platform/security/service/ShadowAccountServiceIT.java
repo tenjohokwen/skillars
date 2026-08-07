@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.security.service;
 
-import com.softropic.skillars.config.TestConfig;
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.platform.security.SecurityIT;
 import com.softropic.skillars.platform.security.contract.AgeTier;
 import com.softropic.skillars.platform.security.contract.CreatePlayerProfileRequest;
@@ -12,11 +13,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -28,15 +25,8 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@Import(TestConfig.class)
-@TestPropertySource(properties = {
-    "spring.cloud.compatibility-verifier.enabled=false",
-    "rate.limiting.enabled=false"
-})
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
-class ShadowAccountServiceIT {
+class ShadowAccountServiceIT extends AbstractIntegrationTest {
 
     private static final long PARENT_A_ID = 555000000000000001L;
     private static final long PARENT_B_ID = 555000000000000002L;

@@ -1,7 +1,8 @@
 package com.softropic.skillars.platform.tenant;
 
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.e2e.AdminLogin;
-import com.softropic.skillars.config.TestConfig;
 import com.softropic.skillars.platform.security.service.LoginAttemptsService;
 import com.softropic.skillars.platform.tenant.contract.ApiKeyDto;
 import com.softropic.skillars.platform.tenant.service.ApiKeyService;
@@ -13,10 +14,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.web.client.RestTemplateBuilder;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -27,8 +26,6 @@ import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.authentication.BadCredentialsException;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
@@ -37,12 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-                properties = {"ledger.database.spy=true", "enable.test.mail=true"})
-@Import(TestConfig.class)
-@TestPropertySource(properties = "spring.cloud.compatibility-verifier.enabled=false")
-class TenantAdminResourceIT {
+class TenantAdminResourceIT extends AbstractIntegrationTest {
 
     @Autowired
     private TenantService tenantService;

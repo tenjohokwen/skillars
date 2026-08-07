@@ -1,17 +1,15 @@
 package com.softropic.skillars.platform.reviews.api;
 
-import com.softropic.skillars.config.TestConfig;
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.e2e.HttpTestClient;
-import com.softropic.skillars.infrastructure.gemini.GeminiClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
@@ -21,8 +19,6 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -38,16 +34,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@Import(TestConfig.class)
-@TestPropertySource(properties = {
-    "spring.cloud.compatibility-verifier.enabled=false",
-    "rate.limiting.enabled=false",
-    "allowed.clients=testClientId"
-})
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
-class ReviewFlagIT {
+class ReviewFlagIT extends AbstractIntegrationTest {
 
     private static final String LOGIN_ENDPOINT = "/api/auth/login";
     private static final String REVIEWS_BASE   = "/api/reviews";
@@ -62,8 +50,6 @@ class ReviewFlagIT {
     private static final String FLAGGING_EMAIL     = "flagger.flag@skillars-test.com";
     private static final String COACH_EMAIL        = "coach.flag@skillars-test.com";
 
-    @MockitoBean
-    private GeminiClient geminiClient;
 
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
@@ -388,9 +374,6 @@ class ReviewFlagIT {
         return headers;
     }
 
-    private String baseUrl() {
-        return "http://localhost:" + randomServerPort;
-    }
 
     private String reviewsUrl(String path) {
         return baseUrl() + REVIEWS_BASE + path;

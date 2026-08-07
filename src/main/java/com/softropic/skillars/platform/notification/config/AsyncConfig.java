@@ -10,7 +10,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
 import org.springframework.scheduling.annotation.EnableAsync;
-import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.Set;
@@ -22,7 +21,10 @@ import io.micrometer.core.instrument.Tag;
 
 @Configuration
 @EnableAsync
-@EnableScheduling
+// @EnableScheduling moved to infrastructure.config.SchedulingConfig so it can be switched off
+// under the test profile. @EnableSchedulerLock deliberately stays here and stays unconditional:
+// tests invoke scheduled methods directly through the Spring proxy, so the lock advisor must
+// still apply (see BasePaymentIT.releaseSchedulerLock).
 // order: ShedLock's default InterceptMode.PROXY_METHOD wraps @SchedulerLock methods with a genuine
 // AOP advisor on the same proxy chain as @Transactional (see DataSourceConfig's @EnableTransactionManagement,
 // also un-ordered). Both default to Ordered.LOWEST_PRECEDENCE, so without an explicit order their relative

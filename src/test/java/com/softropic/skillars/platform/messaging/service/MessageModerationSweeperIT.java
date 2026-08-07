@@ -9,7 +9,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.sql.Timestamp;
@@ -33,7 +32,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 @ActiveProfiles({"dev", "test"})
 @SpringBootTest
 @Import(TestConfig.class)
-@TestPropertySource(properties = "spring.cloud.compatibility-verifier.enabled=false")
 class MessageModerationSweeperIT {
 
     private static final String LOCK_NAME = "MessageModerationSweeper_sweep";

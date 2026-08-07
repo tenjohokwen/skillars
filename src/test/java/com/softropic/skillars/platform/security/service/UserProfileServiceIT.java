@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.security.service;
 
-import com.softropic.skillars.config.TestConfig;
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.platform.security.repo.Address;
 import com.softropic.skillars.platform.security.repo.Authority;
 import com.softropic.skillars.platform.security.repo.User;
@@ -13,8 +14,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.context.event.EventListener;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContext;
@@ -24,7 +23,6 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -36,13 +34,9 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = {"enable.test.mail=true"})
-@Import(TestConfig.class)
 @Sql(scripts = {"/sql/authorityData.sql", "/sql/userData.sql", "/sql/secData.sql"})
 @Sql(scripts = "/sql/cleanup.sql", executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
-class UserProfileServiceIT {
+class UserProfileServiceIT extends AbstractIntegrationTest {
 
     private static final String LOGIN      = "me@yahoo.com";
     private static final String CORRECT_PW = "admin*123!";

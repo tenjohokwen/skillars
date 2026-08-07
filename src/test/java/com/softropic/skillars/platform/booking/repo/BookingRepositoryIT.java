@@ -1,13 +1,11 @@
 package com.softropic.skillars.platform.booking.repo;
 
-import com.softropic.skillars.config.TestConfig;
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
-import org.springframework.test.context.ActiveProfiles;
 
 import java.time.Instant;
 import java.util.List;
@@ -21,10 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 // rows use REQUESTED status, which is outside the DB-level excl_bkg_coach_slot_overlap exclusion
 // constraint's scope (see V87), so overlapping rows here don't trip that constraint — this test
 // is purely about the JPQL query's own boundary correctness.
-@SpringBootTest
-@ActiveProfiles({"dev", "test"})
-@Import(TestConfig.class)
-class BookingRepositoryIT {
+class BookingRepositoryIT extends AbstractIntegrationTest {
 
     @Autowired private BookingRepository bookingRepository;
 

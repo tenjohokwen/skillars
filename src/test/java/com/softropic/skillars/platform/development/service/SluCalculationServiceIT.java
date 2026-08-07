@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.development.service;
 
-import com.softropic.skillars.config.TestConfig;
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
 import com.softropic.skillars.platform.development.repo.PlayerSkillStat;
@@ -9,12 +10,8 @@ import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -28,16 +25,8 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@Import(TestConfig.class)
-@TestPropertySource(properties = {
-    "spring.cloud.compatibility-verifier.enabled=false",
-    "rate.limiting.enabled=false",
-    "allowed.clients=testClientId"
-})
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
-class SluCalculationServiceIT {
+class SluCalculationServiceIT extends AbstractIntegrationTest {
 
     private static final long   TEST_PLAYER_ID = 9900000001L;
     private static final UUID   TEST_COACH_ID  = UUID.fromString("99000000-0000-0000-0000-000000000001");

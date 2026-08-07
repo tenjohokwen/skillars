@@ -1,23 +1,20 @@
 package com.softropic.skillars.infrastructure.storage;
 
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.config.MinioTestConfig;
-import com.softropic.skillars.config.TestConfig;
 import org.junit.jupiter.api.AfterEach;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.transaction.support.TransactionTemplate;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-                properties = {"enable.test.mail=true"})
-@Import({TestConfig.class, MinioTestConfig.class})
-@ActiveProfiles({"dev", "test"})
-public abstract class BaseStorageIT {
-
-    @Autowired protected JdbcTemplate jdbcTemplate;
-    @Autowired protected TransactionTemplate transactionTemplate;
+/**
+ * Base class for the storage IT family.
+ *
+ * <p>This is one of the deliberate context forks documented in {@code docs/testing/}. Importing
+ * {@link MinioTestConfig} is what causes {@code SharedContainers.Minio} to be touched, so only
+ * a JVM that runs a storage test pays for a MinIO container at all.
+ */
+@Import(MinioTestConfig.class)
+public abstract class BaseStorageIT extends AbstractIntegrationTest {
 
     @AfterEach
     void tearDownSec() {

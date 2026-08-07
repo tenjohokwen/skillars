@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.development.service;
 
-import com.softropic.skillars.config.TestConfig;
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.platform.development.repo.NeglectedSkillFlag;
 import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagRepository;
 import com.softropic.skillars.platform.development.repo.SluTargetRepository;
@@ -9,11 +10,7 @@ import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -33,16 +30,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * target. A unit test with a pre-baked MAX() stub cannot catch a regression where the
  * repository JPQL accidentally scopes the MAX by a specific coach_id.
  */
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@Import(TestConfig.class)
-@TestPropertySource(properties = {
-    "spring.cloud.compatibility-verifier.enabled=false",
-    "rate.limiting.enabled=false",
-    "allowed.clients=testClientId"
-})
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
-class NeglectedSkillDetectionServiceIT {
+class NeglectedSkillDetectionServiceIT extends AbstractIntegrationTest {
 
     private static final long PLAYER_ID = 9360000001L;
     private static final String SKILL_CODE = "PAC";

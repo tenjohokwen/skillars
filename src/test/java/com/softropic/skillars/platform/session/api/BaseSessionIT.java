@@ -1,9 +1,10 @@
 package com.softropic.skillars.platform.session.api;
 
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
@@ -21,19 +22,15 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-abstract class BaseSessionIT {
+abstract class BaseSessionIT extends AbstractIntegrationTest {
 
     protected static final String LOGIN_ENDPOINT = "/api/auth/login";
     protected static final String DRILLS_BASE    = "/api/session/drills";
     protected static final String CLIENT_ID      = "testClientId";
     protected static final String TEST_PASSWORD  = "TestPass@123!";
 
-    @Autowired protected JdbcTemplate jdbcTemplate;
-    @Autowired protected TransactionTemplate transactionTemplate;
-    @Autowired protected HttpTestClient httpTestClient;
     @Autowired protected PasswordEncoder passwordEncoder;
 
-    @LocalServerPort protected int randomServerPort;
 
     protected String loginAndGetCookies(String email) {
         ResponseEntity<Map> loginResponse = httpTestClient.makeHttpRequest(
@@ -66,9 +63,6 @@ abstract class BaseSessionIT {
         return headers;
     }
 
-    protected String baseUrl() {
-        return "http://localhost:" + randomServerPort;
-    }
 
     protected void insertAuthority(int id, String name) {
         transactionTemplate.execute(status -> {

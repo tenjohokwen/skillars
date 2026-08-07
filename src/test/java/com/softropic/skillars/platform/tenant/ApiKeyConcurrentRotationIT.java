@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.tenant;
 
-import com.softropic.skillars.config.TestConfig;
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.platform.tenant.contract.ApiKeyEnvironment;
 import com.softropic.skillars.platform.tenant.contract.ApiKeyStatus;
 import com.softropic.skillars.platform.tenant.repo.TenantApiKey;
@@ -13,11 +14,7 @@ import com.softropic.skillars.platform.tenant.service.TenantService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.ArrayList;
@@ -31,12 +28,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-                properties = {"ledger.database.spy=true", "enable.test.mail=true"})
-@Import(TestConfig.class)
-@TestPropertySource(properties = "spring.cloud.compatibility-verifier.enabled=false")
-class ApiKeyConcurrentRotationIT {
+class ApiKeyConcurrentRotationIT extends AbstractIntegrationTest {
 
     @Autowired private TenantService tenantService;
     @Autowired private ApiKeyService apiKeyService;

@@ -1,9 +1,10 @@
 package com.softropic.skillars.platform.security.repo;
 
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 
 import com.softropic.skillars.infrastructure.validation.PhoneNumber;
 import com.softropic.skillars.infrastructure.validation.Provider;
-import com.softropic.skillars.config.TestConfig;
 import com.softropic.skillars.platform.security.SecurityIT;
 import com.softropic.skillars.platform.security.repo.Address;
 import com.softropic.skillars.platform.security.repo.User;
@@ -13,12 +14,8 @@ import org.instancio.Instancio;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,13 +28,8 @@ import java.util.Set;
 
 import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
 
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-                properties = {"ledger.database.spy=true", "enable.test.mail=true"})
-@Import(TestConfig.class)
-@TestPropertySource(properties = "spring.cloud.compatibility-verifier.enabled=false")
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
-class UserRepositoryIT {
+class UserRepositoryIT extends AbstractIntegrationTest {
 
     @Autowired
     private UserRepository userRepo;

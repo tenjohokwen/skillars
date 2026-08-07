@@ -12,16 +12,12 @@ import com.softropic.skillars.platform.video.repo.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
-@TestPropertySource(properties = {
-    "app.video.reconciliation.fixed-delay-ms=86400000"  // prevent background scheduler from racing with manual calls
-})
 class ReconciliationWorkerIT extends BaseVideoIT {
 
     @MockitoBean

@@ -1,15 +1,13 @@
 package com.softropic.skillars.platform.booking.service;
 
-import com.softropic.skillars.config.TestConfig;
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.sql.Date;
@@ -32,10 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code BookingBatchServiceTest} mocks {@code BookingService}; nothing drove
  * {@code acceptAll} through to a settled booking. These tests do, for all three settle branches.
  */
-@SpringBootTest
-@ActiveProfiles({"dev", "test"})
-@Import(TestConfig.class)
-class BatchAcceptPaymentIT {
+class BatchAcceptPaymentIT extends AbstractIntegrationTest {
 
     @Autowired private BookingBatchService bookingBatchService;
     @Autowired private BookingRepository bookingRepository;

@@ -25,7 +25,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -46,11 +45,6 @@ import static org.mockito.Mockito.when;
 @ActiveProfiles({"dev", "test"})
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Import({TestConfig.class, ModerationFailClosedIT.FailureEventCapture.class})
-@TestPropertySource(properties = {
-    "spring.cloud.compatibility-verifier.enabled=false",
-    "rate.limiting.enabled=false",
-    "allowed.clients=testClientId"
-})
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
 class ModerationFailClosedIT {
 

@@ -1,11 +1,12 @@
 package com.softropic.skillars.platform.security;
 
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.platform.security.contract.Gender;
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.config.CommonConfig;
-import com.softropic.skillars.config.TestConfig;
 import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.service.MailManager;
 import com.softropic.skillars.platform.security.api.AccountManagementFacade;
@@ -22,17 +23,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
@@ -48,13 +45,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-                properties = {"ledger.database.spy=true", "enable.test.mail=true"})
-@Import(TestConfig.class)
-@TestPropertySource(properties = "spring.cloud.compatibility-verifier.enabled=false")
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
-public class SecurityIT {
+public class SecurityIT extends AbstractIntegrationTest {
     private final static ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     public static final String USER_DATA_SQL_PATH = "/sql/userData.sql";
     public static final String SEC_DATA_SQL_PATH = "/sql/secData.sql";
@@ -355,9 +347,6 @@ public class SecurityIT {
                 });
     }
 
-    private String baseUrl() {
-        return "http://localhost:" + randomServerPort;
-    }
 
     private static UserDto getUserData(boolean otpEnabled) {
         final UserDto userDto = new UserDto();
