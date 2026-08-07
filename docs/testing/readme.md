@@ -100,16 +100,21 @@ All figures from CI (`ubuntu-latest`, 4 vCPU) unless marked local. Story `deferr
 | Unit tests | 825 — 0F 0E | 828 — 0F 0E |
 | Integration tests | 905 — 1F **16E** | 905 — 1F **2E** |
 | CI wall clock | 10m10s | 15m34s |
-| Local wall clock | 30:45 | not re-measured |
+| Local wall clock | 30:45 | **41:32 — WORSE** |
 | Test PostgreSQL | `14.18` | **`17-alpine`** (matches production) |
 
-**Read the wall clock honestly.** CI got *slower*, not faster. Three reasons, none of them a
+**Read the wall clock honestly. The suite got slower in both environments, and locally it got
+much slower — 30:45 to 41:32.** The story's headline projection (8-15 min locally) was not
+achieved and was never achievable from this design: it assumed container-per-context startup
+dominated the local runtime, and the reset added a per-method cost the projection did not model. Three reasons, none of them a
 regression in the sense that matters:
 
 1. The 10m10s baseline was a **red** run in which 17 tests errored early and a whole family of
    contexts never finished starting. The 15m34s run executes strictly more work.
-2. The per-test database reset costs **99.7 ms mean over 814 invocations — ~81 s total**. That is
-   the price of determinism and it is the single largest deliberate addition.
+2. The per-test database reset costs **99.7 ms mean over 814 invocations — ~81 s total** on CI.
+   **On macOS/Docker Desktop the same 814 invocations cost 828 s — ~1018 ms each, 10x the CI
+   figure, i.e. ~14 of the local 41:32.** Docker Desktop's VM boundary makes each round trip an
+   order of magnitude dearer.
 3. The local 30:45 figure that motivated this story was a macOS/Docker-Desktop artefact. On Linux
    the container-per-context cost was never the dominant term, so removing it does not produce the
    3× speedup the story projected. **The story projected 8–15 min locally; that projection was
