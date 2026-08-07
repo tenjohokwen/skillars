@@ -6,6 +6,24 @@
         </encoder>
     </appender>
 
+    <!--
+      Spring's DefaultContextCache logs its statistics at DEBUG on every context
+      access, e.g.
+
+        Spring test ApplicationContext cache statistics: [DefaultContextCache@1b2c3d4
+        size = 7, maxSize = 32, parentContextCount = 0, hitCount = 122, missCount = 7,
+        failureCount = 0]
+
+      `missCount` is the number of contexts actually BUILT. Because it also counts
+      rebuilds after LRU eviction it is an upper bound on the number of distinct
+      contexts, which is exactly the right thing to gate on. The pr-build workflow
+      reads the final occurrence of this line and fails when missCount exceeds the
+      ceiling (story deferred-19, AC3).
+
+      Keep this at DEBUG. Raising the root level instead would flood the build log.
+    -->
+    <logger name="org.springframework.test.context.cache" level="DEBUG"/>
+
     <root level="WARN">
         <appender-ref ref="CONSOLE"/>
     </root>
