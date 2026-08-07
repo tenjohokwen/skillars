@@ -1,9 +1,5 @@
 # Test data isolation
 
-> **Status:** target design for `skillars-deferred-19`, except the **fixture-id registry** and the
-> **collisions** section, which are a factual record of the tree at commit `21ef489`. See
-> [readme.md](readme.md).
-
 ## The rule
 
 > **Every test method starts with an empty database and an empty Redis. Seed everything you need.
@@ -15,7 +11,7 @@ Once all integration tests share one Spring context, they share one database. Th
 consequence of [consolidating contexts](why-inheritance-over-import.md) and it is the thing most likely
 to bite — so it is worth being precise about what actually changed.
 
-**Cross-class database sharing was already the operating model.** TODAY, the largest Spring context
+**Cross-class database sharing was already the operating model.** Before this work, the largest Spring context
 serves **30 test classes against one database**, and the second-largest serves 15. Consolidating widens
 the blast radius from 30 classes to ~130. It does not introduce a new mechanism.
 
@@ -34,7 +30,7 @@ The replacement is one deterministic reset that cannot drift — and as a side e
 `secData.sql` idempotent-by-construction, which is what makes deleting all that hand-written teardown
 safe rather than reckless.
 
-## How it works — TARGET
+## How it works
 
 `DatabaseResetTestExecutionListener` runs before every test method and:
 
@@ -96,10 +92,17 @@ migration reference data into individual test classes is never the right fix. Se
 database leaves both holding rows that no longer exist. The reset listener evicts them; do not rely on
 the refresh schedule.
 
-## Three tables must never be truncated
+## Three tables must never be truncated — and exclusions alone are not enough
 
 Getting these wrong produces **silent, suite-wide** failures, not loud ones. All three are exclusions,
 not preferences.
+
+> **Correction.** An earlier draft of this document said the three exclusions below were sufficient.
+> They are not. Excluding infrastructure tables does nothing for the **reference data Flyway seeds**,
+> which the truncate destroys for the rest of the JVM — Flyway will not replay it, because the
+> `flyway_schema_history` row is intact and later runs are no-op validation passes. See
+> [Reference data](#reference-data-must-be-restored-not-re-seeded) below; that section is as
+> load-bearing as these three.
 
 ### `flyway_schema_history`
 
@@ -247,3 +250,56 @@ cheap improvement.
 
 Do the deletions in a **separate commit** from the listener, so that if a class turns out to depend on
 cleanup ordering, `git bisect` isolates it immediately.
+
+## Reference data must be restored, not re-seeded
+
+**33 of the 91 migrations contain `INSERT INTO`.** They seed four tables:
+
+| Table | Migrations | Read by |
+|---|---|---|
+| `main.platform_config` | 30 | `ConfigResourceIT`, `ConfigGuardIT`, `SubscriptionLifecycleIT`, and `ConfigService`'s cache |
+| `session.drills` | 4 (incl. V39's 20 `PLATFORM` drills) | `DrillLibraryResourceIT:96` |
+| `main.authority` | 2 (V21, V84) | broadly |
+| `development.skill_definitions` | 1 | development family |
+
+Flyway will **not** re-insert these after a truncate. The first truncated test method would destroy
+them for the remainder of the JVM, and every later assertion against them would read as a product bug.
+
+**How the listener solves it.** On the first reset it derives the reference set by scanning
+`db/migration/*.sql` for `INSERT INTO` targets, snapshots those tables into a `_refdata` schema with
+`CREATE TABLE … AS SELECT *`, and replays them after every truncate with `INSERT INTO … SELECT *`.
+
+Two properties worth preserving if you ever touch this:
+
+- **It is self-maintaining.** A new seeding migration is picked up automatically. There is no list to
+  update and nothing to drift.
+- **It reads the migrations, not the database.** An earlier implementation treated "whatever is
+  non-empty at the first reset" as reference data. That is wrong: the snapshot runs inside
+  `beforeTestMethod`, by which point the application context has already written its own rows. It
+  captured `main.sec` — security key material created at startup, not by any migration — and restored
+  it before every test, so `secData.sql`'s fixed-primary-key insert collided:
+  `duplicate key value violates unique constraint "sec_pkey"`.
+
+### If a test fails because its data is gone, triage before you fix
+
+Two buckets, and they have opposite remedies:
+
+| Symptom | Bucket | Fix |
+|---|---|---|
+| The class relied on rows **another test class** left behind | the class is wrong | Add the seed it always needed. `ConfigResourceIT` and `StorageResourceIT` both failed with `401 on /authenticate` because they authenticated without seeding `main.sec`; both got an `@Sql` seed. |
+| **Flyway-seeded reference data** vanished (`platform_config`, the V39 drills, `authority`, `skill_definitions`) | the reset is wrong | Fix the reset. Never re-seed migration data into individual classes. |
+
+### Cost
+
+Measured, not estimated: **814 invocations, 99.7 ms mean, ~81 s total** across a full CI run. No
+`ACCESS EXCLUSIVE` lock waits were observed — consistent with scheduling being disabled under the
+`test` profile first, which removes the concurrent scheduler connections the truncate would otherwise
+contend with. Cheap enough that the `DELETE`-from-non-empty-tables alternative is not needed.
+
+### One class does not get the reset
+
+`ModerationFailClosedIT` is allowlisted out of `AbstractIntegrationTest` so it can carry its own
+`FailureEventCapture` configuration — which means it does **not** receive
+`DatabaseResetTestExecutionListener` and still depends on ambient database state. It is currently
+failing for that reason. The likely fix is to let it extend `AbstractIntegrationTest` and add
+`@Import(FailureEventCapture.class)`, which keeps its separate context *and* gives it the reset.

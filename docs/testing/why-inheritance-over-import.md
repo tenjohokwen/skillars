@@ -55,7 +55,7 @@ None of that is visible in the header you are copying. Adding one property, or o
 is a locally-correct one-line change whose real cost — a container pair and ~35 seconds — appears
 nowhere near the diff and nowhere in review.
 
-## What it actually cost — TODAY, measured at `21ef489`
+## What it actually cost — measured at `21ef489`, before the migration
 
 | | |
 |---|---|
@@ -169,8 +169,15 @@ just configuration. Three things must live there and have nowhere else to go:
 1. **Reset hooks for the test doubles Spring does *not* reset for you.** `@MockitoBean` defaults to
    `MockReset.AFTER` and the framework already clears those after every test method — so Mockito mocks
    are safe. But the non-Mockito stub beans (`StubPaymentGateway` and any other `@Primary` test double in
-   `TestConfig`) get no such treatment, and once one context serves ~90 classes, any state they
+   `TestConfig`) get no such treatment, and once one context serves ~81 classes, any state they
    accumulate persists for the whole run. The base class is where that reset belongs.
+
+   **This was audited, not assumed.** `TestMailManager` keeps a `Map<String, Envelope> sentMails`
+   of every message sent and already exposed a `clear()` that nothing called — left alone it would
+   accumulate across all ~905 test methods, so a test awaiting `getEnvelope(helpCode)` could match
+   an envelope left by an earlier class. `DatabaseResetTestExecutionListener` now clears it.
+   `StubPaymentGateway` (no fields) and the `@Primary` `RestTemplate` were checked and are
+   stateless, so they are deliberately *not* reset.
 2. **The database/Redis reset lifecycle** (see [test-data-isolation.md](test-data-isolation.md)).
 3. **Shared fixtures** — `JdbcTemplate`, `TransactionTemplate`, `HttpTestClient`, `@LocalServerPort`,
    `baseUrl()` — currently duplicated across the four base classes.
@@ -190,8 +197,9 @@ The credible alternative is a **composed meta-annotation** — a single `@Integr
 declarations. It delivers essentially the same cache-key guarantee, stays composable, and leaves the
 inheritance slot free.
 
-**We chose inheritance anyway, for one reason:** the three behaviours listed above — mock resets,
-reset lifecycle, shared fixtures — cannot live on an annotation. Splitting configuration onto a
+**We chose inheritance anyway, for one reason:** the three behaviours listed above — stub-bean
+resets (*not* Mockito mock resets, which Spring already handles), reset lifecycle, shared fixtures —
+cannot live on an annotation. Splitting configuration onto a
 meta-annotation and behaviour onto a base class would mean two things to remember instead of one, and
 "remember to apply both" is the exact failure mode this whole exercise is correcting. If the behaviour
 ever moves out (into a JUnit extension, say), revisit this decision — the meta-annotation becomes the

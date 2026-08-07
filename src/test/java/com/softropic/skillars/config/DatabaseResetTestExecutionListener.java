@@ -125,7 +125,34 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
 
         flushRedis(ctx);
         evictInProcessCaches(ctx);
+        resetStatefulStubBeans(ctx);
         recordCost(System.nanoTime() - startNanos);
+    }
+
+    /**
+     * AC4.3's real leakage risk — and it is <em>not</em> Mockito.
+     *
+     * <p>{@code @MockitoBean} defaults to {@code MockReset.AFTER} and the default
+     * {@code MockitoResetTestExecutionListener} already clears those after every test method, so
+     * writing {@code Mockito.reset(...)} for them would be redundant ceremony. The genuine risk is
+     * the non-Mockito test doubles registered as {@code @Primary} beans in {@code TestConfig},
+     * which get no automatic treatment at all.
+     *
+     * <p>{@code TestMailManager} keeps a {@code Map<String, Envelope> sentMails} of every message
+     * sent. Context fragmentation used to bound that map to one context group's lifetime; now a
+     * single context serves ~81 classes for the whole run, so it would accumulate across all ~905
+     * test methods and a test awaiting {@code getEnvelope(helpCode)} could match an envelope left
+     * by an earlier class. It already exposed {@code clear()}; nothing called it.
+     *
+     * <p>Audited and found stateless, so deliberately not reset here: {@code StubPaymentGateway}
+     * (no fields) and the {@code @Primary} {@code RestTemplate}.
+     */
+    private void resetStatefulStubBeans(ApplicationContext ctx) {
+        com.softropic.skillars.utils.TestMailManager mailManager =
+            ctx.getBeanProvider(com.softropic.skillars.utils.TestMailManager.class).getIfAvailable();
+        if (mailManager != null) {
+            mailManager.clear();
+        }
     }
 
     // AC5.6: the truncate takes an ACCESS EXCLUSIVE lock and runs on every test method, so its

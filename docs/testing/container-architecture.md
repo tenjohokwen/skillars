@@ -1,9 +1,5 @@
 # Container architecture
 
-> **Status:** target design for `skillars-deferred-19`. Sections marked **TODAY** describe the tree at
-> commit `21ef489`; sections marked **TARGET** describe the state after the migration. See
-> [readme.md](readme.md).
-
 ## The rule
 
 > **Testcontainers containers are JVM-static singletons. They are never Spring beans.**
@@ -12,7 +8,7 @@ One PostgreSQL, one Redis, one MinIO per test JVM, shared by every Spring contex
 
 ## Why — the failure this prevents
 
-### TODAY
+### Before (commit `21ef489`)
 
 `TestConfig` declares the containers as context beans:
 
@@ -40,7 +36,7 @@ ceiling, with the overflow being evicted and rebuilt mid-run.
 Nothing about the test *code* had to change to fix this. The containers simply should not have been
 beans.
 
-### TARGET
+### Now
 
 ```java
 public final class SharedContainers {
@@ -108,7 +104,7 @@ production compose file and line it must track.
 
 | Service | Test image | Production (`docker-compose.yml`) |
 |---|---|---|
-| PostgreSQL | `postgres:14.18` — **TODAY** | `postgres:17-alpine` (`:64`) |
+| PostgreSQL | `postgres:17-alpine` | `postgres:17-alpine` (`:64`) — **now matched** |
 | Redis | `redis:7-alpine` | `redis:7-alpine` (`:89`) |
 | MinIO | `minio/minio:RELEASE.2024-01-13T07-53-03Z` | same (`docker-compose.uat.yml:74`) |
 

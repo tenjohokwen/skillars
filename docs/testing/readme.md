@@ -2,22 +2,6 @@
 
 How the integration-test suite is wired, why it is wired that way, and what you must do when you add a test.
 
-> ### ⚠️ Status: design documented, migration not yet applied
->
-> These documents describe a **target architecture** that is specified but **not yet implemented in the
-> codebase**. The migration is tracked as story
-> `skillars-deferred-19-test-context-container-consolidation`.
->
-> Every **measurement, defect and collision** recorded here is real and was taken from the tree at
-> commit `21ef489`. Every **prescription** ("extend `AbstractIntegrationTest`", "containers are
-> JVM-static") describes the state *after* deferred-19 lands. Sections describing the current tree are
-> marked **TODAY**; sections describing the target are marked **TARGET**.
->
-> When deferred-19 is complete, delete this banner, replace the projections with measurements, and drop
-> the TODAY/TARGET markers.
-
----
-
 ## The documents
 
 | Document | What it answers |
@@ -33,13 +17,17 @@ How the integration-test suite is wired, why it is wired that way, and what you 
 The Spring TestContext Framework caches an `ApplicationContext` per distinct *configuration*, and
 Testcontainers containers declared as `@Bean`s live and die with the context that owns them. Combine
 those two facts with ~130 test classes that each hand-copied their own configuration header, and you
-get **37 Spring contexts and ~74 Docker containers** for a suite that needs about seven distinct
-configurations. The fix is two-part: containers become JVM-static so context count stops driving Docker
-pressure, and configuration moves into a shared base class so context count stops growing by accident.
+got **37 Spring contexts and ~74 Docker containers** for a suite that needs about seven distinct
+configurations. The fix was two-part: containers became JVM-static so context count stops driving Docker
+pressure, and configuration moved into a shared base class so context count stops growing by accident.
+
+Measured outcome: **3 containers instead of ~74**, context cache keys **39 → 20**, and the suite's
+integration failures went from **17 to 3** — the reset fixed pre-existing breakage as well as the
+regressions consolidation introduced.
 
 ---
 
-## Writing a new integration test — TARGET
+## Writing a new integration test
 
 ```java
 class MyFeatureResourceIT extends AbstractIntegrationTest {
@@ -60,8 +48,8 @@ class MyFeatureResourceIT extends AbstractIntegrationTest {
 
 **Rules:**
 
-1. **Extend `AbstractIntegrationTest`** (or `AbstractVideoIT` / `AbstractPaymentIT` / `AbstractStorageIT`
-   / `AbstractE2ETest` if you need that family's collaborators).
+1. **Extend `AbstractIntegrationTest`** (or `BaseVideoIT` / `BasePaymentIT` / `BaseSessionIT` /
+   `BaseStorageIT` if you need that family's collaborators).
 2. **Do not add `@SpringBootTest`, `@ActiveProfiles`, `@Import(TestConfig.class)` or `@EnableWireMock`
    to your class.** The base carries them. A guardrail test fails the build if you do.
 3. **Do not add a `@MockitoBean` that another class also needs.** One extra mocked type on your class
@@ -79,7 +67,7 @@ class MyFeatureResourceIT extends AbstractIntegrationTest {
 
 ```bash
 mvn -o verify                    # everything, including the frontend build
-mvn -o verify -DskipFrontend     # backend + tests only  (TARGET — added by deferred-19)
+mvn -o verify -DskipFrontend     # backend + tests only
 mvn -o verify -Dit.test=MyIT     # one integration test class
 ```
 
@@ -88,4 +76,71 @@ mvn -o verify -Dit.test=MyIT     # one integration test class
 - **The frontend has no test runner.** `src/frontend/package.json` maps `npm test` to
   `echo "No test specified" && exit 0`, and the `frontend-maven-plugin` runs it every build. Standing
   gap, tracked separately.
-- **Test PostgreSQL is behind production.** See [container-architecture.md](container-architecture.md#image-versions).
+- ~~Test PostgreSQL is behind production.~~ **Closed.** Tests now run `postgres:17-alpine`, matching
+  `docker-compose.yml:64`. See [container-architecture.md](container-architecture.md#image-versions).
+- **`ModerationFailClosedIT` has no reset listener.** It is allowlisted out of
+  `AbstractIntegrationTest` to keep its own `FailureEventCapture` config, which means it does not get
+  `DatabaseResetTestExecutionListener` and still depends on ambient database state. Known-failing.
+- **`@DirtiesContext(AFTER_EACH_TEST_METHOD)` on `ConfigResourceIT`** rebuilds its context on every
+  test method, inflating the context count the CI gate measures.
+
+---
+
+## Before and after — measured
+
+All figures from CI (`ubuntu-latest`, 4 vCPU) unless marked local. Story `deferred-19`.
+
+| | Before (`21ef489`) | After |
+|---|---|---|
+| Docker containers | ~74 (one postgres + one redis per context) | **3** (1 postgres, 1 redis, 1 minio per JVM) |
+| Distinct context cache keys (offline analysis) | 39 | **20** |
+| Contexts actually built (`missCount`) | not instrumented | **37** |
+| Contexts serving exactly one class | 24 | 12 |
+| Largest shared context | 30 classes | **82 classes** |
+| Unit tests | 825 — 0F 0E | 828 — 0F 0E |
+| Integration tests | 905 — 1F **16E** | 905 — 1F **2E** |
+| CI wall clock | 10m10s | 15m34s |
+| Local wall clock | 30:45 | not re-measured |
+| Test PostgreSQL | `14.18` | **`17-alpine`** (matches production) |
+
+**Read the wall clock honestly.** CI got *slower*, not faster. Three reasons, none of them a
+regression in the sense that matters:
+
+1. The 10m10s baseline was a **red** run in which 17 tests errored early and a whole family of
+   contexts never finished starting. The 15m34s run executes strictly more work.
+2. The per-test database reset costs **99.7 ms mean over 814 invocations — ~81 s total**. That is
+   the price of determinism and it is the single largest deliberate addition.
+3. The local 30:45 figure that motivated this story was a macOS/Docker-Desktop artefact. On Linux
+   the container-per-context cost was never the dominant term, so removing it does not produce the
+   3× speedup the story projected. **The story projected 8–15 min locally; that projection was
+   built on a baseline that is not representative and should not be treated as achieved.**
+
+What did improve, and was the actual point: **the container count is now bounded and cannot grow
+with the test suite**, the context count is bounded and enforced, and the suite is meaningfully
+more correct — integration errors fell from 16 to 2, including pre-existing failures this story
+did not set out to fix.
+
+## The remaining contexts
+
+20 distinct configurations, each deliberate:
+
+| Configuration | Classes | Why it exists |
+|---|---|---|
+| `AbstractIntegrationTest` | 81 | The default. Anything that needs no special collaborator. |
+| `BaseVideoIT` / `BaseSessionIT` (+ `VideoProviderAdapter`) | 16 | Video/session families mock the outbound video adapter. |
+| `BaseStorageIT` (+ `MinioTestConfig`) | 7 | The only family that starts MinIO. |
+| `FileStorageService` mocked | 4 | Classes that must *not* hit real blob storage. |
+| `+ QuotaService` | 3 | Quota-mocking video classes. |
+| `E2ESecurityConfig` | 2 | `ConfigResourceIT`, `StorageResourceIT`. |
+| `+ BookingService` | 2 | Booking-mocking classes. |
+| `+ PlayerSubscriptionQueryPort, VideoLifecycleService` | 3 | Two lifecycle property variants. |
+| Sliced `@SpringBootTest` (no containers) | 2 | `RateLimitingAspectIT`, `PropertiesFeatureToggleServiceIT`. |
+| Single-class forks (`@TestPropertySource` or own config) | 5 | Properties that genuinely change behaviour; `ModerationFailClosedIT`'s `FailureEventCapture`. |
+
+**Why not the ≤ 10 the story targeted.** Reaching 10 would require hoisting `QuotaService`,
+`VideoLifecycleService` and `ModerationOrchestrationService` onto `BaseVideoIT`. That family
+**contains the real integration tests for those services** — `QuotaServiceConcurrencyIT`,
+`VideoRetryUploadIT`, `WebhookPipelineIT`, `VideoLifecycleLogIT`, `MinorSafetyGateIT`. Hoisting
+would replace the system under test in five classes, and they would keep passing while asserting
+nothing. 20 is the correct floor for this hierarchy; going lower needs per-service sub-bases, not
+a bigger mock set.
