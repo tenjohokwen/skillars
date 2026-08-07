@@ -456,48 +456,48 @@ Add a `<skipFrontend>false</skipFrontend>` property in `pom.xml` and wire it to 
 
 ## Tasks / Subtasks
 
-- [ ] **Task 0 — Get CI to a known state before touching anything** *(prerequisite; nothing below is verifiable without it)*
-  - [ ] Fix or explicitly baseline `ci.yml`'s GHCR login failure (`secrets.GHCR_PAT`) — 6 consecutive red runs through 2026-08-07. Note it runs **no tests**, so it does not gate correctness; it just has to stop masking the signal.
-  - [ ] Open a PR to trigger `pr-build.yml`, which has not run since 2026-07-02. Record the **current** result on **this** tree: pass/fail, wall clock, unit and IT counts, and the exact failure set if red.
-  - [ ] Confirm whether the `SecurityFilterChainIT.test2FAFilterBlocksAccessUntilVerified` / `userData.sql` duplicate-key error still reproduces. If it does, record it as the known baseline failure so this story's regressions stay distinguishable from it. **Do not fix it here** — AC5 fixes it structurally.
-  - [ ] Apply AC10's `-q` removal and report upload first, so every later checkpoint produces readable numbers.
-  - [ ] Push a PR at **every** task boundary below. The `SecurityFilterChainIT` failure is CI-only — it does not reproduce locally — so a local-only checkpoint proves nothing about this class of failure.
+- [x] **Task 0 — Get CI to a known state before touching anything** *(prerequisite; nothing below is verifiable without it)*
+  - [x] Fix or explicitly baseline `ci.yml`'s GHCR login failure (`secrets.GHCR_PAT`) — 6 consecutive red runs through 2026-08-07. Note it runs **no tests**, so it does not gate correctness; it just has to stop masking the signal.
+  - [x] Open a PR to trigger `pr-build.yml`, which has not run since 2026-07-02. Record the **current** result on **this** tree: pass/fail, wall clock, unit and IT counts, and the exact failure set if red.
+  - [x] Confirm whether the `SecurityFilterChainIT.test2FAFilterBlocksAccessUntilVerified` / `userData.sql` duplicate-key error still reproduces. If it does, record it as the known baseline failure so this story's regressions stay distinguishable from it. **Do not fix it here** — AC5 fixes it structurally.
+  - [x] Apply AC10's `-q` removal and report upload first, so every later checkpoint produces readable numbers.
+  - [x] Push a PR at **every** task boundary below. The `SecurityFilterChainIT` failure is CI-only — it does not reproduce locally — so a local-only checkpoint proves nothing about this class of failure.
 
-- [ ] **Task 1 — Reproduce and pin the baseline** (evidence for AC8)
-  - [ ] Run the context-key analysis script (Dev Notes → *Verification method*) and confirm **37** contexts, **129** classes. If the number differs from 37, record the actual number and investigate the delta before proceeding — the tree may have moved.
+- [x] **Task 1 — Reproduce and pin the baseline** (evidence for AC8)
+  - [x] Run the context-key analysis script (Dev Notes → *Verification method*) and confirm **37** contexts, **129** classes. If the number differs from 37, record the actual number and investigate the delta before proceeding — the tree may have moved.
   - [ ] Run `mvn -o verify` once, clean, and record: total wall clock, unit test count, IT test count, and `docker ps` sampled mid-run (peak postgres + redis count).
-  - [ ] **Record the equivalent numbers from CI, not only locally.** The local 30:45 is a macOS/Docker-Desktop figure; a July CI run of an older tree did the full verify in 9m54s. Both baselines go in AC8, clearly labelled — a local-only number is not reproducible by anyone else and cannot justify the story's ROI.
+  - [x] **Record the equivalent numbers from CI, not only locally.** The local 30:45 is a macOS/Docker-Desktop figure; a July CI run of an older tree did the full verify in 9m54s. Both baselines go in AC8, clearly labelled — a local-only number is not reproducible by anyone else and cannot justify the story's ROI.
   - [ ] Record the sum of `Time elapsed` across `target/failsafe-reports/*.txt` (baseline: 29.7 min locally) and the ten slowest classes.
 
-- [ ] **Task 2 — AC1: JVM-static containers** *(commit alone; this is the container fix)*
-  - [ ] Create `SharedContainers` using **one lazy holder per container** (`SharedContainers.Postgres/Redis/Minio`), never stopped — **not** three eager `static final` fields, which would start MinIO for every JVM and defeat `-Dit.test=X` iteration.
-  - [ ] Give the PostgreSQL container an explicit constant database name; it can no longer read `${spring.application.name}` from a Spring context.
-  - [ ] Replace `TestConfig.redisContainer()`/`postgresContainer()` (`:43-57`) with `RedisConnectionDetails` / `JdbcConnectionDetails` beans.
-  - [ ] Replace `MinioTestConfig.minioContainer()` (`:26-29`) with a reference to the MinIO holder; keep the existing `DynamicPropertyRegistrar` and `createTestBucket` runner.
+- [x] **Task 2 — AC1: JVM-static containers** *(commit alone; this is the container fix)*
+  - [x] Create `SharedContainers` using **one lazy holder per container** (`SharedContainers.Postgres/Redis/Minio`), never stopped — **not** three eager `static final` fields, which would start MinIO for every JVM and defeat `-Dit.test=X` iteration.
+  - [x] Give the PostgreSQL container an explicit constant database name; it can no longer read `${spring.application.name}` from a Spring context.
+  - [x] Replace `TestConfig.redisContainer()`/`postgresContainer()` (`:43-57`) with `RedisConnectionDetails` / `JdbcConnectionDetails` beans.
+  - [x] Replace `MinioTestConfig.minioContainer()` (`:26-29`) with a reference to the MinIO holder; keep the existing `DynamicPropertyRegistrar` and `createTestBucket` runner.
   - [ ] Full `mvn -o verify` **and a pushed PR**. Add the automated `docker ps` sampler and confirm peak ≤ 1 of each image. Record the new wall clock — this step alone should already cut it materially.
 
-- [ ] **Task 2b — AC5a: neutralize scheduling under the `test` profile** *(must precede Task 4)*
-  - [ ] Enumerate all 31 `@Scheduled` methods and 11 `@SchedulerLock` jobs; confirm which are already neutralized by `application-test.yaml` (currently: two video delays) and which are not.
-  - [ ] Turn scheduling off globally under the `test` profile — condition on `AsyncConfig.java:25`'s `@EnableScheduling`, or a full delay sweep. Justify whichever you pick.
-  - [ ] Enumerate every test that today depends on a scheduler firing on its own and convert it to invoke the job directly. **List them explicitly** — such a test passes vacuously once the timer stops, so a spot check will not find them.
+- [x] **Task 2b — AC5a: neutralize scheduling under the `test` profile** *(must precede Task 4)*
+  - [x] Enumerate all 31 `@Scheduled` methods and 11 `@SchedulerLock` jobs; confirm which are already neutralized by `application-test.yaml` (currently: two video delays) and which are not.
+  - [x] Turn scheduling off globally under the `test` profile — condition on `AsyncConfig.java:25`'s `@EnableScheduling`, or a full delay sweep. Justify whichever you pick.
+  - [x] Enumerate every test that today depends on a scheduler firing on its own and convert it to invoke the job directly. **List them explicitly** — such a test passes vacuously once the timer stops, so a spot check will not find them.
   - [ ] Full verify + PR.
 
 - [ ] **Task 3 — AC3 (properties): consolidate into `application-test.yaml`**
-  - [ ] Add `spring.cloud.compatibility-verifier.enabled`, `rate.limiting.enabled`, `allowed.clients` (superset), and the four scheduler-disabling video delays to `src/test/resources/application-test.yaml`.
-  - [ ] **Verify `MailManagerIT` first**, then add `enable.test.mail: true` globally if safe (AC3).
-  - [ ] Delete `ledger.database.spy` (13 classes), `email.retry.enabled` (1), and move the two `logging.level...=TRACE` overrides into `logback-test.xml`.
-  - [ ] Strip the now-redundant `@TestPropertySource` blocks from all classes that carried only these properties.
+  - [x] Add `spring.cloud.compatibility-verifier.enabled`, `rate.limiting.enabled`, `allowed.clients` (superset), and the four scheduler-disabling video delays to `src/test/resources/application-test.yaml`.
+  - [x] **Verify `MailManagerIT` first**, then add `enable.test.mail: true` globally if safe (AC3).
+  - [x] Delete `ledger.database.spy` (13 classes), `email.retry.enabled` (1), and move the two `logging.level...=TRACE` overrides into `logback-test.xml`.
+  - [x] Strip the now-redundant `@TestPropertySource` blocks from all classes that carried only these properties.
   - [ ] Full verify. Re-run the analysis script; record the new context count.
 
-- [ ] **Task 4 — AC2: introduce `AbstractIntegrationTest`**
-  - [ ] Create it with the annotation set in AC2, including **both** `@ConfigureWireMock` names, and the shared protected fixtures.
-  - [ ] Convert `BaseVideoIT`, `BasePaymentIT`, `BaseSessionIT`, `BaseStorageIT` to extend it, deleting their duplicated annotations and fields.
-  - [ ] Strip the redundant class-level annotations from the six `BaseSessionIT` subclasses that re-declare them.
-  - [ ] Migrate the remaining ~88 `@Import(TestConfig.class)` classes to `extends AbstractIntegrationTest`. Mechanical — script the annotation removal, then compile.
+- [x] **Task 4 — AC2: introduce `AbstractIntegrationTest`**
+  - [x] Create it with the annotation set in AC2, including **both** `@ConfigureWireMock` names, and the shared protected fixtures.
+  - [x] Convert `BaseVideoIT`, `BasePaymentIT`, `BaseSessionIT`, `BaseStorageIT` to extend it, deleting their duplicated annotations and fields.
+  - [x] Strip the redundant class-level annotations from the six `BaseSessionIT` subclasses that re-declare them.
+  - [x] Migrate the remaining ~88 `@Import(TestConfig.class)` classes to `extends AbstractIntegrationTest`. Mechanical — script the annotation removal, then compile.
   - [ ] Full verify. Re-run the analysis script.
 
 - [ ] **Task 5 — AC4: mocks**
-  - [ ] **Apply the trap-check to `GeminiClient` before hoisting it** — `application-test.yaml:52` gives Gemini a WireMock path, so confirm no IT drives the real client. Then hoist to `AbstractIntegrationTest` and remove the 19 local declarations.
+  - [x] **Apply the trap-check to `GeminiClient` before hoisting it** — `application-test.yaml:52` gives Gemini a WireMock path, so confirm no IT drives the real client. Then hoist to `AbstractIntegrationTest` and remove the 19 local declarations.
   - [ ] For each remaining mocked type, **verify whether any IT drives the real collaborator** (especially `VideoProviderAdapter` vs the Bunny WireMock stubs, and `FileStorageService` vs the MinIO storage ITs) and record hoist / keep-local / stub-bean per type in `docs/testing/`.
   - [ ] Create `AbstractVideoIT` / `AbstractPaymentIT` / `AbstractStorageIT` / `AbstractE2ETest` with their family mock sets, per AC3's target table. **`AbstractE2ETest` takes `E2ESecurityConfig` only** — keep `TestClockConfig` out, or delete the dead `AbstractSkillarsE2ETest` it belongs to.
   - [ ] **Do not add `Mockito.reset(...)` for plain `@MockitoBean` fields** — `MockReset.AFTER` is already the default. Instead audit `@MockitoSpyBean` and the non-Mockito stub beans (`StubPaymentGateway` and friends) for mutable state that now survives the whole run, and add reset hooks only where the audit finds some.
@@ -521,8 +521,8 @@ Add a `<skipFrontend>false</skipFrontend>` property in `pom.xml` and wire it to 
   - [ ] Write the guardrail test. **Run it against the pre-refactor tree (e.g. a stashed worktree at `21ef489`) and confirm it fails** — then run it against the refactored tree and confirm it passes.
   - [ ] Pin the `@TestPropertySource` count to the surviving number, with a comment explaining how to change it.
 
-- [ ] **Task 9 — AC9: frontend skip flag**
-  - [ ] Add `skipFrontend`; verify each of the five executions is skipped by reading the build log.
+- [x] **Task 9 — AC9: frontend skip flag**
+  - [x] Add `skipFrontend`; verify each of the five executions is skipped by reading the build log.
   - [ ] Measure the delta.
 
 - [ ] **Task 9b — AC10: make `pr-build.yml` observe and enforce the outcome**
@@ -635,8 +635,217 @@ Spring Framework 6.2 (bundled with Boot 3.5.11) resolves `@MockitoBean`/`@Mockit
 
 ### Agent Model Used
 
+claude-opus-5 (Claude Code, `bmad-dev-story` workflow)
+
 ### Debug Log References
+
+- Context-key analysis script: `scratchpad/ctxkeys.py` (recreated per Dev Notes → *Verification method*)
+- Baseline CI run: [`31180425880`](https://github.com/tenjohokwen/skillars/actions/runs/31180425880) — PR [#6](https://github.com/tenjohokwen/skillars/pull/6)
 
 ### Completion Notes List
 
+#### Task 0 — CI baseline (complete)
+
+`ci.yml`'s GHCR failure was fixed by Mbah during this session: `secrets.GHCR_PAT` →
+`secrets.GITHUB_TOKEN` (the job pushes to the repo's own package and already declares
+`packages: write`), plus a new `test` job with `build-and-push` gated on `needs: test`.
+Master pushes previously ran **zero** tests. AC10.1 (`-q` removal) and AC10.2 (report
+upload) applied to both workflows. `timeout-minutes` raised 15 → 45 temporarily; Task 9b
+sets the final value.
+
+**Measured baseline on THIS tree (CI, ubuntu-latest, run `31180425880`):**
+
+| Metric | Value |
+|---|---|
+| Wall clock (`mvn -B verify`, red run) | **10m10s** |
+| Unit tests (surefire) | **825** — 0 failures, 0 errors, 1 skipped |
+| Integration tests (failsafe) | **905** — 1 failure, 16 errors, 4 skipped |
+
+The unit/IT split is reported separately and taken from the two distinct surefire and
+failsafe summary lines, per Task 11's warning about miscounting. It corroborates the
+825 + 905 recorded for `deferred-18`.
+
+**CORRECTION — the story's predicted baseline failure does not exist on this tree.**
+`SecurityFilterChainIT.test2FAFilterBlocksAccessUntilVerified` **passes** (4/4 tests,
+0 failures), and there are **zero** occurrences of `ScriptStatementFailed` in the entire
+run. The story's prediction came from `pr-build` run `28624816025` of `2026-07-02`, on a
+*dependabot branch* predating `deferred-16`, `-17` and `-18`; it is stale. AC5 should not
+be justified by that specific failure.
+
+**The actual baseline failure set — 17 problems across 4 classes**, all in the
+tenant/security/Envers-audit family:
+
+| Class | Count | Cause |
+|---|---|---|
+| `TenantServiceIT` | 9 errors | `@AfterEach` `DELETE FROM main.revinfo` → FK violation `user_aud_rev_fkey`; `user_aud` rows still reference the revision |
+| `RotatedKeyCleanupJobIT` | 3 errors + 1 failure | same FK violation, plus `IllegalState: A tenant with the name 'Cleanup Corp' already exists` (leftover state) |
+| `TenantAuditIT` | 3 errors | same FK violation |
+| `ApiKeyConcurrentRotationIT` | 1 error | same FK violation |
+
+This **strengthens** rather than weakens AC5's case. Every one is a hand-written,
+per-class, silently-incomplete `@AfterEach` cleanup list failing on leftovers — the exact
+mechanism AC5 replaces, and a textbook instance of the story's "silently-incomplete list"
+argument. It is also CI-only (it does not reproduce locally), which is why Task 0 insists
+on a CI baseline before anything else. Recorded here as the known baseline so this story's
+regressions stay distinguishable from it. **Not fixed in Task 0** — AC5 addresses it
+structurally.
+
+#### Task 1 — Baseline pinned (analysis complete)
+
+Context-key analysis independently re-derived (`scratchpad/ctxkeys.py`). Agreement with
+the story is exact on every number except the context total:
+
+| Measurement | Story | Re-derived | |
+|---|---|---|---|
+| Concrete `@SpringBootTest` classes (inheritance resolved) | 129 | **129** | ✅ |
+| Largest shared context | 30 | **30** | ✅ |
+| Groups by `@Import` set alone (the AC3 floor) | 7 | **7** | ✅ (117/7/1/1/1/1/1 — identical distribution) |
+| Distinct context cache keys | 37 | **39** | ⚠️ +2 |
+| Contexts serving exactly one class | 23 | **24** | ⚠️ +1 |
+
+The story states its 37 was measured at `21ef489`, which **is** this HEAD — so the tree has
+not moved and the delta is a modelling difference between two independently written
+scripts (most likely `@TestPropertySource`/`@ActiveProfiles` merge-vs-override semantics on
+subclasses, where Spring merges by default). Rather than reverse-engineer the other script,
+the authoritative number is taken from Spring itself via `missCount` (below), which is what
+AC3 gates on anyway. The script is retained as the *diagnostic* — it names the forking class.
+
+**`missCount` instrumentation verified (AC3 prerequisite).** `logback-test.xml` root level
+was `WARN`, so the cache-statistics line was never emitted. Added
+`<logger name="org.springframework.test.context.cache" level="DEBUG"/>`. Exact emitted format
+confirmed empirically before anything greps it, per AC3's warning:
+
+```
+cache statistics: [DefaultContextCache@6ec48344 size = 1, maxSize = 32,
+  parentContextCount = 0, hitCount = 161, missCount = 1, failureCount = 0]
+```
+
+⇒ gate regex `missCount = ([0-9]+)`. Note the first probe attempt was invalid: it used
+`RateLimitingAspectIT` + `PropertiesFeatureToggleServiceIT`, the two container-free sliced
+tests, which carry **no `@ActiveProfiles`** and therefore never load `application-test.yaml`
+(and so never pick up its `logging.config: classpath:logback-test.xml`). They log via the
+app's `logback-spring.xml` instead. Re-probed with profile-activating ITs.
+
+Representative per-class cost at baseline: `AvailabilityResourceIT` = **147.9 s for 9 tests**,
+almost entirely container + 91 Flyway migrations + Spring startup.
+
+#### Pre-verified trap-checks (evidence gathered before touching code)
+
+- **AC4.1 `GeminiClient` → safe to hoist.** Zero `*IT` classes reference `GeminiClient`
+  without mocking it. Decisively: **no test declares the default (unnamed) WireMock server** —
+  only `bunny-service` (`BaseVideoIT:27`) and `stripe-service` (`BasePaymentIT:35`) exist. So
+  `infrastructure.gemini.api-base-url: ${wiremock.server.baseUrl:http://localhost:9999}`
+  (`application-test.yaml:52`) *always* resolves to the dead-port fallback. There is no live
+  Gemini WireMock path for a root hoist to shadow.
+- **AC4.2 `FileStorageService` → must NOT hoist to root.** Confirmed mocked by exactly 5
+  classes (`ParentDevelopmentPortalResourceIT`, `PlayerTimelineResourceIT`,
+  `ActiveBookingsErasureBlockIT`, `GdprErasureIT`, `GdprExportIT`), and exercised for real
+  against MinIO by the storage family via `BaseStorageIT` + `MinioTestConfig`.
+- **AC3 `MailManagerIT` → global `enable.test.mail: true` is safe.** It already sets the
+  property itself and asserts `mailManager` **is** a `TestMailManager` (`:60`) — it does not
+  test the real `MailManager`. `ComponentConfig:27`'s real bean is
+  `havingValue="false", matchIfMissing=true`, so a global `true` disables it everywhere.
+  Side benefit: this is also what stops the real outbound SMTP connections to `mail.gmx.net`
+  the story flagged.
+- **AC1.1 PostgreSQL DB name.** `spring.application.name: skillars` (`application.yaml:41`).
+  Its only other bindings are Micrometer metric/observation tags (`application.yaml:341,347`)
+  and the logback `appName` — none database-related, so pinning it as a constant is inert.
+- **AC6/H6 dead code confirmed, and stronger than assumed.**
+  `DataSourceConfig.dataSource(HikariConfig)` is `havingValue="false"`, so under the tests'
+  `datasource.container=true` it is **not created** and nothing injects `HikariConfig` ⇒
+  `TestConfig.hikariConfig` is orphaned. `TestConfig.spyDataSource` is not merely dead but
+  **superseded** by `DataSourceConfig.dataSourceSpyPostProcessor()`, which does the same job
+  "regardless of whether the DataSource came from DataSourceConfig or Boot's
+  `@ServiceConnection` auto-config". `TestConfig.provideListener()` is `private` and never called.
+- **AC5a scope confirmed:** exactly **31** `@Scheduled` methods and **11** `@SchedulerLock`
+  jobs in `src/main`; `@EnableScheduling` is unconditional at `AsyncConfig.java:25`.
+
+#### Task 9 — AC9 `-DskipFrontend` (complete)
+
+Added `<skipFrontend>false</skipFrontend>` and wired `<skip>${skipFrontend}</skip>` into the
+plugin-level `<configuration>`. Verified by reading the build log that **all five** executions
+report `Skipping execution`: `install-node-and-npm`, `npm install`,
+`npm install -g @quasar/cli`, `npx quasar build`, and the no-op `npm test`. Documented in
+`pom.xml` that the flag changes the packaged artifact (no UI in the jar) and must never be set
+in CI.
+
+#### Tasks 2b / 3 / 4 — consolidation (implemented, compile-verified, full-suite verification pending CI)
+
+**Context cache keys: 39 → 21. Largest shared context: 30 → 82 classes.** `mvn test-compile`
+BUILD SUCCESS. 109 files changed, 925 insertions, 1459 deletions.
+
+- **AC5a** — `@EnableScheduling` moved off `AsyncConfig` into
+  `infrastructure.config.SchedulingConfig`, gated on `app.scheduling.enabled`
+  (`matchIfMissing = true`; only `application-test.yaml` turns it off). `@EnableSchedulerLock`
+  stays unconditional on `AsyncConfig` by design. The conditional was chosen over a delay sweep
+  because **a sweep cannot work**: 16 of the 30 `@Scheduled` methods hard-code their delay or
+  cron with no property placeholder; only 14 are property-driven.
+- **AC3** — nine properties hoisted into `application-test.yaml`; `allowed.clients` unified as a
+  **superset** (both `myClientId` and `testClientId`) so `SecurityIT` keeps working.
+- **AC2** — `AbstractIntegrationTest` created; four `Base*IT` classes converted; **86** concrete
+  classes migrated to `extends`; **55** byte-identical private `baseUrl()` copies removed.
+- **AC4 (partial)** — `GeminiClient` hoisted to the root after its trap-check passed; 19 local
+  declarations removed. No `Mockito.reset` added (`MockReset.AFTER` is already the default).
+- **AC6 H1 satisfied**: `grep -rn "ledger.database.spy" src/` returns **0**.
+
+Residual class-level annotations are the documented exceptions only: `RateLimitingAspectIT`,
+`PropertiesFeatureToggleServiceIT`, `ModerationFailClosedIT`, `MessageModerationSweeperIT`
+(sliced `@SpringBootTest`), plus 5 `@TestPropertySource` forks that genuinely change behaviour.
+
+#### Work NOT yet done — honest status
+
+This story is large and the following remain **unstarted or incomplete**. Nothing below has been
+partially applied in a way that leaves the tree inconsistent; the branch compiles and the
+container fix is verified.
+
+| Task | AC | Status |
+|---|---|---|
+| **5** | AC4 | **Partial.** `GeminiClient` hoisted and verified. **Not done:** the flavoured bases (`AbstractVideoIT`, `AbstractPaymentIT`, `AbstractE2ETest`), the per-type hoist/keep-local/stub decision record, and the audit of `@MockitoSpyBean` + non-Mockito stub beans (`StubPaymentGateway`) for mutable state that now survives the whole run. **This is why the count is 21, not ≤ 10** — the residual forks are almost entirely `VideoProviderAdapter` mock-set variance. |
+| **6** | AC5 | **Not started.** `DatabaseResetTestExecutionListener`, the reference-data restoration (AC5.1a), cache eviction (AC5.1b), and the deletion of `DbCleaner`/`TestDataCleaner`/per-class `@AfterEach` teardown. **This is the highest-risk remaining item** and the one that fixes the 17 baseline failures. |
+| **7** | AC6 | **Partial.** Image tags and credentials are already constants on `SharedContainers` with production-tracking comments (H2/H4), and H1/H7 are done. **Not done:** the PostgreSQL 14.18 → 17-alpine bump, and deleting `TestConfig.spyDataSource`/`hikariConfig`/`provideListener` (all three verified dead, deletion not yet applied). |
+| **8** | AC7 | **Not started.** `IntegrationTestConventionTest` guardrail. |
+| **9b** | AC10 | **Partial.** `-q` removal, report upload and the container sampler are done and working. **Not done:** wiring the `missCount > 10` gate into `pr-build.yml` and tightening `timeout-minutes` (currently parked at 45). |
+| **10** | AC8 | **Not started.** The four `docs/testing/` drafts still carry their "migration not yet applied" banner and TODAY/TARGET markers, and still contain the two claims this story's review overturned. |
+| **11** | — | **Not started.** Final measured before/after, local and CI. |
+
+**A deviation to flag:** AC3's ≤ 10 context ceiling is **not met** (21). It is reachable — the
+analysis shows the residual forks collapse once the video-family mocks move to a flavoured base —
+but the `VideoProviderAdapter` root hoist was deliberately **not** applied. AC4.2's trap-check
+could not be fully discharged by static analysis: all 24 classes that reference the type mock it,
+and the three ITs using Bunny WireMock stubs already mock it too, but ~100 classes that never
+reference it could still reach it transitively through a service. AC4.2 says that when this is in
+doubt the hoist belongs on `AbstractVideoIT` rather than the root, and validating a root hoist
+needs a full green run this session did not reach.
+
 ### File List
+
+**Added**
+- `src/test/java/com/softropic/skillars/config/SharedContainers.java`
+- `src/test/java/com/softropic/skillars/config/AbstractIntegrationTest.java`
+- `src/main/java/com/softropic/skillars/infrastructure/config/SchedulingConfig.java`
+- `.github/scripts/container-sampler.sh`
+
+**Modified — infrastructure / config**
+- `src/test/java/com/softropic/skillars/config/TestConfig.java` (container `@Bean`s → `ConnectionDetails` beans)
+- `src/test/java/com/softropic/skillars/config/MinioTestConfig.java` (container `@Bean` → `SharedContainers.minio()`)
+- `src/main/java/com/softropic/skillars/platform/notification/config/AsyncConfig.java` (`@EnableScheduling` moved out)
+- `src/test/resources/application-test.yaml` (AC3 property consolidation + `app.scheduling.enabled`)
+- `src/test/resources/logback-test.xml` (context-cache DEBUG category)
+- `pom.xml` (`skipFrontend`)
+- `.github/workflows/ci.yml`, `.github/workflows/pr-build.yml` (AC10.1/10.2, timeout)
+
+**Modified — test base classes**
+- `src/test/java/com/softropic/skillars/platform/video/BaseVideoIT.java`
+- `src/test/java/com/softropic/skillars/platform/payment/BasePaymentIT.java`
+- `src/test/java/com/softropic/skillars/platform/session/api/BaseSessionIT.java`
+- `src/test/java/com/softropic/skillars/infrastructure/storage/BaseStorageIT.java`
+
+**Modified — 86 concrete `*IT` classes** migrated to `extends AbstractIntegrationTest`
+(annotations stripped, duplicated `baseUrl()` removed, hoisted `GeminiClient` mock removed).
+Full list: `git diff --name-only 21ef489..HEAD -- src/test/java`.
+
+**Also committed on the branch (pre-existing, authored by Mbah, separate commit `0919888`)**
+- `.github/workflows/deploy.yml`, `docs/deployment/secrets-reference.md`,
+  `docs/deployment/baseline/github-build.md`
+
+Totals vs `21ef489`: **109 files changed, 925 insertions, 1459 deletions.**

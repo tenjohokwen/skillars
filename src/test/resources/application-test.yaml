@@ -19,6 +19,36 @@ spring:
     compatibility-verifier:
       enabled: false   # was on 83 classes
 
+  datasource:
+    hikari:
+      # REQUIRED once the containers are shared (AC1). Not an optimisation -- without this the
+      # suite cannot start.
+      #
+      # Production sizing (application.yaml:71-72) is maximum-pool-size 25 / minimum-idle 8,
+      # chosen so four app nodes fit inside PostgreSQL's default max_connections of 100. That was
+      # also harmless while every Spring context had its OWN PostgreSQL container: one pool per
+      # database, 8 idle connections, no contention.
+      #
+      # With one shared container, every cached context keeps its own live pool against the SAME
+      # database, and Spring caches up to 32 contexts. ~20 contexts x 8 minimum-idle = 160
+      # connections against a 100-connection server. The pool then cannot grow, Flyway blocks
+      # acquiring a connection for flywayInitializer, and the context fails after the 30 s
+      # connection-timeout with:
+      #
+      #   Connection is not available, request timed out after 30000ms
+      #   (total=1, active=1, idle=0, waiting=0)
+      #
+      # which surfaces as "Failed to load ApplicationContext" and then, once the failure
+      # threshold is hit, "skipping repeated attempt to load context" for every later class
+      # sharing that key.
+      #
+      # Tests are single-threaded per context (no forkCount > 1 -- deliberately out of scope),
+      # so a small pool is sufficient. minimum-idle 0 means a cached-but-inactive context holds
+      # no connections at all.
+      maximum-pool-size: 4
+      minimum-idle: 0
+      idle-timeout: 10000
+
 rate:
   limiting:
     enabled: false     # was on 64 classes; read by RateLimitingAspect (@Value default is true)
