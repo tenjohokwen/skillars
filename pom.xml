@@ -30,7 +30,7 @@
 			<java.version>17</java.version>
 			<org.mapstruct.version>1.6.3</org.mapstruct.version>
 			<node.version>v22.16.0</node.version>
-			<spring-cloud.version>2025.0.1</spring-cloud.version>
+			<spring-cloud.version>2025.1.2</spring-cloud.version>
 			<!--
 			  Backend-only iteration switch: `mvn -o verify -DskipFrontend` skips all five
 			  frontend-maven-plugin executions (install-node-and-npm, npm install,
