@@ -92,10 +92,21 @@
 				  dependency we do not control the version of; drop the pin once that upstream
 				  ships the fixed version itself.
 
-				  bcprov  CVE-2025-14813 (CRITICAL). Arrives at 1.80 via
-				          spring-cloud-commons 4.3.1 (spring-cloud-starter). Fix: 1.81.1.
-				  beanutils CVE-2025-48734. Arrives at 1.9.4 via commons-validator 1.9.0.
-				          Fix: 1.11.0.
+				  bcprov  CVE-2025-14813 (CRITICAL). Trivy lists the fixed versions as
+				          1.80.2 / 1.81.1 / 1.84. Originally pinned to 1.81.1 when
+				          spring-cloud-commons 4.3.1 still brought the vulnerable 1.80;
+				          Dependabot has since carried the pin to 1.85 (PR #26).
+
+				          NOTE: this pin is no longer strictly required. Under spring-cloud
+				          2025.0.3, spring-cloud-commons 4.3.3 now brings 1.80.2 on its own
+				          (verified by resolving the tree with the pin removed), and 1.80.2 is
+				          already a fixed version. Per the rule above the pin could be dropped;
+				          it is kept for now only because 1.85 is strictly newer and the Trivy
+				          gate is green on it. Dropping it is a one-line change that the
+				          pr-build scan would confirm or reject.
+
+				  beanutils CVE-2025-48734. Still required: commons-validator 1.9.0 declares
+				          commons-beanutils 1.9.4, which is the vulnerable version. Fix: 1.11.0.
 				-->
 				<dependency>
 					<groupId>org.bouncycastle</groupId>
