@@ -65,8 +65,35 @@ updates:
     # stripe-java 33  PR #17 (28.3.0 -> 33.2.0) failed with 18 `cannot find symbol`
     #                 errors: SubscriptionService (8), StripeWebhookService (6),
     #                 StripeClient (4). Five majors of removed and renamed API.
+    #
+    # spring-cloud    MINOR is ignored too, and that is not a typo. Constraining the
+    #                 groups to minor/patch above was NOT enough to catch this one.
+    #                 spring-cloud uses release-train versioning, so 2025.0.1 -> 2025.1.2
+    #                 parses as an ordinary semver MINOR while actually being a different
+    #                 train pinned to a different Boot MAJOR. PR #21 passed the
+    #                 update-types constraint and then failed ~1500 tests with:
+    #
+    #                   Failed to introspect Class [org.springframework.cloud.context
+    #                     .refresh.ConfigDataContextRefresher]
+    #                   Caused by: ClassNotFoundException:
+    #                     org.springframework.boot.bootstrap.ConfigurableBootstrapContext
+    #
+    #                 That package is the Boot 4 location. Boot 3.5.16 ships the class as
+    #                 org.springframework.boot.ConfigurableBootstrapContext -- verified by
+    #                 listing the jar, not inferred. So 2025.1.x needs Boot 4 and can only
+    #                 move when the parent does. Patches still flow: 2025.0.2 and 2025.0.3
+    #                 both exist on the Boot 3 train.
+    #
+    #                 The general lesson, worth remembering before trusting update-types
+    #                 anywhere else: a semver update-type describes the version STRING, not
+    #                 compatibility. For anything versioned by release train or by date,
+    #                 "minor" is not a safety signal.
     ignore:
       - dependency-name: "org.springframework.boot:spring-boot-starter-parent"
         update-types: ["version-update:semver-major"]
       - dependency-name: "com.stripe:stripe-java"
         update-types: ["version-update:semver-major"]
+      - dependency-name: "org.springframework.cloud:spring-cloud-dependencies"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
