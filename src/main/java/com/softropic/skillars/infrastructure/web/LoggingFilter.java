@@ -1,7 +1,6 @@
 package com.softropic.skillars.infrastructure.web;
 
 import com.softropic.skillars.infrastructure.util.Constants;
-import com.softropic.skillars.infrastructure.security.TenantContext;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
@@ -15,7 +14,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -92,7 +90,6 @@ public class LoggingFilter extends OncePerRequestFilter {
 
             long   durationMs = System.currentTimeMillis() - startMs;
             int    httpStatus = response.getStatus();
-            String tenantId   = TenantContext.get(); // null for JWT paths — expected
 
             if (httpStatus >= 500) {
                 // request_error — 5xx only
@@ -104,17 +101,12 @@ public class LoggingFilter extends OncePerRequestFilter {
                         kv("status",     "ERROR"),
                         kv("httpStatus", httpStatus));
             } else {
-                // request_end — conditionally include tenantId when available
-                List<Object> args = new ArrayList<>();
-                args.add(kv("event",      "request_end"));
-                args.add(kv("operation",  operation));
-                args.add(kv("durationMs", durationMs));
-                args.add(kv("status",     "SUCCESS"));
-                args.add(kv("httpStatus", httpStatus));
-                if (tenantId != null) {
-                    args.add(kv("tenantId", tenantId));
-                }
-                log.info("Request completed", args.toArray());
+                log.info("Request completed",
+                        kv("event",      "request_end"),
+                        kv("operation",  operation),
+                        kv("durationMs", durationMs),
+                        kv("status",     "SUCCESS"),
+                        kv("httpStatus", httpStatus));
             }
 
         } finally {

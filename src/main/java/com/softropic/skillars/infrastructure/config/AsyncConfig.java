@@ -1,7 +1,6 @@
 package com.softropic.skillars.infrastructure.config;
 
 import com.softropic.skillars.infrastructure.threadpool.MdcDecorator;
-import com.softropic.skillars.infrastructure.threadpool.TenantContextTaskDecorator;
 
 import org.slf4j.LoggerFactory;
 import org.springframework.aop.interceptor.AsyncUncaughtExceptionHandler;
@@ -13,7 +12,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import java.util.concurrent.ThreadPoolExecutor;
 
 /**
- * General-purpose async executor configuration for multi-tenant applications.
+ * General-purpose async executor configuration.
  *
  * <p>This class is distinct from {@code com.softropic.skillars.platform.notification.config.AsyncConfig},
  * which owns the email send pool ({@code "sendMailPool"} bean). Both classes co-exist
@@ -22,12 +21,12 @@ import java.util.concurrent.ThreadPoolExecutor;
  * <p>{@code @EnableAsync} is intentionally omitted: the email {@code AsyncConfig}
  * already activates it project-wide. Adding it again here would be harmless but redundant.
  *
- * <p>The task decorator chain composes {@link MdcDecorator} (MDC propagation) with
- * {@link TenantContextTaskDecorator} (tenant identity propagation) so that every
- * {@code @Async} task carries both logging context and the tenant identifier from
- * the originating request.
+ * <p>{@link MdcDecorator} propagates MDC so every {@code @Async} task keeps the
+ * logging context of the originating request. This used to be composed with a
+ * TenantContextTaskDecorator; that was removed along with the tenant module, since
+ * nothing populates a tenant identifier any more.
  */
-@Configuration("tenantAsyncConfig")
+@Configuration("skillarsAsyncConfig")
 public class AsyncConfig implements AsyncConfigurer {
 
     @Bean(name = "taskExecutor")
@@ -39,12 +38,7 @@ public class AsyncConfig implements AsyncConfigurer {
         executor.setThreadNamePrefix("skillars-async-");
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
 
-        // Compose MdcDecorator (existing) + TenantContextTaskDecorator (new)
-        executor.setTaskDecorator(task -> {
-            Runnable withMdc    = new MdcDecorator().decorate(task);
-            Runnable withTenant = new TenantContextTaskDecorator().decorate(withMdc);
-            return withTenant;
-        });
+        executor.setTaskDecorator(task -> new MdcDecorator().decorate(task));
 
         executor.initialize();
         return executor;
