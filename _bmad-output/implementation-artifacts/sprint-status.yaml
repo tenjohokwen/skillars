@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-08-07 # skillars-deferred-19 → in-progress (test context/container consolidation)
+# last_updated: 2026-08-08 # skillars-deferred-19 → review (test context/container consolidation)
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-08-07 # skillars-deferred-19 → in-progress (test context/container consolidation)
+last_updated: 2026-08-08 # skillars-deferred-19 → review (test context/container consolidation)
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -446,4 +446,4 @@ development_status:
   # reported as if a 3x speedup were universal. Also accepted from the review log: the suite makes REAL
   # outbound SMTP calls from CI (mail.gmx.net:587, authenticating as blue-bone@gmx.de) — independent
   # evidence for AC3s global enable.test.mail, and a credential-exposure issue in its own right.
-  skillars-deferred-19-test-context-container-consolidation: in-progress  # amended after senior-dev review; AC5a and AC10 added, AC4.3 and AC5 rewritten
+  skillars-deferred-19-test-context-container-consolidation: review  # CI 31233411803: 828 unit + 905 IT, 0F/0E; 1 postgres/1 redis; AC3 <=10 contexts NOT met (20 is the floor - see story)

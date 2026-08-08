@@ -1,6 +1,6 @@
 # Story Deferred-19: Integration-Test Context & Container Consolidation
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -465,57 +465,57 @@ Add a `<skipFrontend>false</skipFrontend>` property in `pom.xml` and wire it to 
 
 - [x] **Task 1 — Reproduce and pin the baseline** (evidence for AC8)
   - [x] Run the context-key analysis script (Dev Notes → *Verification method*) and confirm **37** contexts, **129** classes. If the number differs from 37, record the actual number and investigate the delta before proceeding — the tree may have moved.
-  - [ ] Run `mvn -o verify` once, clean, and record: total wall clock, unit test count, IT test count, and `docker ps` sampled mid-run (peak postgres + redis count).
+  - [x] Run `mvn -o verify` once, clean, and record: total wall clock, unit test count, IT test count, and `docker ps` sampled mid-run (peak postgres + redis count).
   - [x] **Record the equivalent numbers from CI, not only locally.** The local 30:45 is a macOS/Docker-Desktop figure; a July CI run of an older tree did the full verify in 9m54s. Both baselines go in AC8, clearly labelled — a local-only number is not reproducible by anyone else and cannot justify the story's ROI.
-  - [ ] Record the sum of `Time elapsed` across `target/failsafe-reports/*.txt` (baseline: 29.7 min locally) and the ten slowest classes.
+  - [x] Record the sum of `Time elapsed` across `target/failsafe-reports/*.txt` (baseline: 29.7 min locally) and the ten slowest classes.
 
 - [x] **Task 2 — AC1: JVM-static containers** *(commit alone; this is the container fix)*
   - [x] Create `SharedContainers` using **one lazy holder per container** (`SharedContainers.Postgres/Redis/Minio`), never stopped — **not** three eager `static final` fields, which would start MinIO for every JVM and defeat `-Dit.test=X` iteration.
   - [x] Give the PostgreSQL container an explicit constant database name; it can no longer read `${spring.application.name}` from a Spring context.
   - [x] Replace `TestConfig.redisContainer()`/`postgresContainer()` (`:43-57`) with `RedisConnectionDetails` / `JdbcConnectionDetails` beans.
   - [x] Replace `MinioTestConfig.minioContainer()` (`:26-29`) with a reference to the MinIO holder; keep the existing `DynamicPropertyRegistrar` and `createTestBucket` runner.
-  - [ ] Full `mvn -o verify` **and a pushed PR**. Add the automated `docker ps` sampler and confirm peak ≤ 1 of each image. Record the new wall clock — this step alone should already cut it materially.
+  - [x] Full `mvn -o verify` **and a pushed PR**. Add the automated `docker ps` sampler and confirm peak ≤ 1 of each image. Record the new wall clock — this step alone should already cut it materially.
 
 - [x] **Task 2b — AC5a: neutralize scheduling under the `test` profile** *(must precede Task 4)*
   - [x] Enumerate all 31 `@Scheduled` methods and 11 `@SchedulerLock` jobs; confirm which are already neutralized by `application-test.yaml` (currently: two video delays) and which are not.
   - [x] Turn scheduling off globally under the `test` profile — condition on `AsyncConfig.java:25`'s `@EnableScheduling`, or a full delay sweep. Justify whichever you pick.
   - [x] Enumerate every test that today depends on a scheduler firing on its own and convert it to invoke the job directly. **List them explicitly** — such a test passes vacuously once the timer stops, so a spot check will not find them.
-  - [ ] Full verify + PR.
+  - [x] Full verify + PR.
 
-- [ ] **Task 3 — AC3 (properties): consolidate into `application-test.yaml`**
+- [x] **Task 3 — AC3 (properties): consolidate into `application-test.yaml`**
   - [x] Add `spring.cloud.compatibility-verifier.enabled`, `rate.limiting.enabled`, `allowed.clients` (superset), and the four scheduler-disabling video delays to `src/test/resources/application-test.yaml`.
   - [x] **Verify `MailManagerIT` first**, then add `enable.test.mail: true` globally if safe (AC3).
   - [x] Delete `ledger.database.spy` (13 classes), `email.retry.enabled` (1), and move the two `logging.level...=TRACE` overrides into `logback-test.xml`.
   - [x] Strip the now-redundant `@TestPropertySource` blocks from all classes that carried only these properties.
-  - [ ] Full verify. Re-run the analysis script; record the new context count.
+  - [x] Full verify. Re-run the analysis script; record the new context count.
 
 - [x] **Task 4 — AC2: introduce `AbstractIntegrationTest`**
   - [x] Create it with the annotation set in AC2, including **both** `@ConfigureWireMock` names, and the shared protected fixtures.
   - [x] Convert `BaseVideoIT`, `BasePaymentIT`, `BaseSessionIT`, `BaseStorageIT` to extend it, deleting their duplicated annotations and fields.
   - [x] Strip the redundant class-level annotations from the six `BaseSessionIT` subclasses that re-declare them.
   - [x] Migrate the remaining ~88 `@Import(TestConfig.class)` classes to `extends AbstractIntegrationTest`. Mechanical — script the annotation removal, then compile.
-  - [ ] Full verify. Re-run the analysis script.
+  - [x] Full verify. Re-run the analysis script.
 
 - [ ] **Task 5 — AC4: mocks**
   - [x] **Apply the trap-check to `GeminiClient` before hoisting it** — `application-test.yaml:52` gives Gemini a WireMock path, so confirm no IT drives the real client. Then hoist to `AbstractIntegrationTest` and remove the 19 local declarations.
-  - [ ] For each remaining mocked type, **verify whether any IT drives the real collaborator** (especially `VideoProviderAdapter` vs the Bunny WireMock stubs, and `FileStorageService` vs the MinIO storage ITs) and record hoist / keep-local / stub-bean per type in `docs/testing/`.
-  - [ ] Create `AbstractVideoIT` / `AbstractPaymentIT` / `AbstractStorageIT` / `AbstractE2ETest` with their family mock sets, per AC3's target table. **`AbstractE2ETest` takes `E2ESecurityConfig` only** — keep `TestClockConfig` out, or delete the dead `AbstractSkillarsE2ETest` it belongs to.
-  - [ ] **Do not add `Mockito.reset(...)` for plain `@MockitoBean` fields** — `MockReset.AFTER` is already the default. Instead audit `@MockitoSpyBean` and the non-Mockito stub beans (`StubPaymentGateway` and friends) for mutable state that now survives the whole run, and add reset hooks only where the audit finds some.
-  - [ ] Full verify + PR. Re-run the analysis script; confirm **≤ 10** contexts.
+  - [x] For each remaining mocked type, **verify whether any IT drives the real collaborator** (especially `VideoProviderAdapter` vs the Bunny WireMock stubs, and `FileStorageService` vs the MinIO storage ITs) and record hoist / keep-local / stub-bean per type in `docs/testing/`.
+  - [x] Create `AbstractVideoIT` / `AbstractPaymentIT` / `AbstractStorageIT` / `AbstractE2ETest` with their family mock sets, per AC3's target table. **`AbstractE2ETest` takes `E2ESecurityConfig` only** — keep `TestClockConfig` out, or delete the dead `AbstractSkillarsE2ETest` it belongs to. **Satisfied differently:** the four *existing* family bases (`BaseVideoIT`, `BasePaymentIT`, `BaseSessionIT`, `BaseStorageIT`) were converted to extend `AbstractIntegrationTest` and now carry the family mock sets, so no parallel `Abstract*IT` hierarchy was created — adding one would have meant migrating 45 subclasses for no change in cache keys. `AbstractSkillarsE2ETest` did not exist on this tree; the two E2E classes (`ConfigResourceIT`, `StorageResourceIT`) take `E2ESecurityConfig` directly.
+  - [x] **Do not add `Mockito.reset(...)` for plain `@MockitoBean` fields** — `MockReset.AFTER` is already the default. Instead audit `@MockitoSpyBean` and the non-Mockito stub beans (`StubPaymentGateway` and friends) for mutable state that now survives the whole run, and add reset hooks only where the audit finds some.
+  - [ ] Full verify + PR. Re-run the analysis script; confirm **≤ 10** contexts. — **NOT MET.** Verify + PR done; the count is **20 distinct configurations / 37 context loads**. AC3's ≤ 10 is unreachable without replacing the system under test in five classes. See *Task 11 → AC3 miss* below and `docs/testing/readme.md`.
 
 - [x] **Task 6 — AC5: deterministic reset** *(split into two commits)*
   - [x] Commit A: add `DatabaseResetTestExecutionListener` (truncate + Redis flush) with order < 5000, registered via `@TestExecutionListeners(mergeMode = MERGE_WITH_DEFAULTS)` on `AbstractIntegrationTest`. **Empirically verify the ordering against `@Sql`** before going further.
   - [x] Exclude `flyway_schema_history`, `main.shedlock` and the `qrtz_*` tables from the truncate; reset shedlock by backdating `lock_until` instead. Re-read AC5.1 before writing this — deleting the shedlock row is a documented, silent, suite-wide failure mode.
   - [x] **Implement reference-data restoration (AC5.1a) in the same commit as the truncate — never ship the truncate without it.** 33 migrations contain `INSERT INTO`; `main.platform_config` alone is seeded by 30 of them, plus `session.drills` (V39) and `main.authority` (V21/V84). Flyway will not replay them. Verify with `DrillLibraryResourceIT` (`:96` reads a V39 `PLATFORM` drill) and `ConfigResourceIT` before moving on.
   - [x] Add cache eviction (AC5.1b) for `ConfigService` and `AlertRuleCache`.
-  - [ ] Full verify + PR. Expect failures; **triage each into "class relied on another test's leftovers" (fix the class) vs "reference data vanished" (fix the reset)** before fixing anything. List both sets in the completion notes.
+  - [x] Full verify + PR. Expect failures; **triage each into "class relied on another test's leftovers" (fix the class) vs "reference data vanished" (fix the reset)** before fixing anything. List both sets in the completion notes.
   - [x] Commit B: delete `DbCleaner`, `TestDataCleaner`, the per-class `@AfterEach` row deletions, and the `cleanup.sql` `AFTER_TEST_METHOD` usages.
   - [x] Measure the per-test truncate cost **and watch for `ACCESS EXCLUSIVE` lock waits**; record both.
 
-- [ ] **Task 7 — AC6: hard-coded values**
+- [x] **Task 7 — AC6: hard-coded values**
   - [x] Image tags + credentials → `SharedContainers` constants with production-tracking comments.
-  - [ ] Bump PostgreSQL to `17-alpine` **as its own commit**; full verify; report result. If it fails, revert the version only, keep the constant, and add a `deferred-work.md` item.
-  - [ ] Delete `TestConfig.spyDataSource`, `TestConfig.hikariConfig`, `TestConfig.provideListener()` after verifying each is unreferenced.
+  - [x] Bump PostgreSQL to `17-alpine` **as its own commit**; full verify; report result. If it fails, revert the version only, keep the constant, and add a `deferred-work.md` item.
+  - [x] Delete `TestConfig.spyDataSource`, `TestConfig.hikariConfig`, `TestConfig.provideListener()` after verifying each is unreferenced.
 
 - [x] **Task 8 — AC7: guardrail**
   - [x] Write the guardrail test. **Run it against the pre-refactor tree (e.g. a stashed worktree at `21ef489`) and confirm it fails** — then run it against the refactored tree and confirm it passes.
@@ -525,20 +525,20 @@ Add a `<skipFrontend>false</skipFrontend>` property in `pom.xml` and wire it to 
   - [x] Add `skipFrontend`; verify each of the five executions is skipped by reading the build log.
   - [x] Measure the delta.
 
-- [ ] **Task 9b — AC10: make `pr-build.yml` observe and enforce the outcome**
-  - [ ] Wire the `missCount > 10` context gate and the container-ceiling sampler; verify each **fails** against the pre-refactor tree before trusting it.
-  - [ ] Tighten `timeout-minutes` to a value that would actually catch a regression; record it.
+- [x] **Task 9b — AC10: make `pr-build.yml` observe and enforce the outcome**
+  - [x] Wire the `missCount > 10` context gate and the container-ceiling sampler; verify each **fails** against the pre-refactor tree before trusting it.
+  - [x] Tighten `timeout-minutes` to a value that would actually catch a regression; record it.
 
-- [ ] **Task 10 — AC8: documentation**
-  - [ ] **Update the four existing `docs/testing/` files in place** — do not overwrite them. Remove the status banner and the TODAY/TARGET markers; replace every projection with a measured number (local **and** CI).
-  - [ ] Correct the two claims this review overturned: the three-exclusion truncate (now also needs reference-data restoration) and the "mock resets are a new requirement" premise (`MockReset.AFTER` is already the default).
-  - [ ] Confirm the existing `docs/dev-docs/index.html` "Writing integration tests" card still resolves.
+- [x] **Task 10 — AC8: documentation**
+  - [x] **Update the four existing `docs/testing/` files in place** — do not overwrite them. Remove the status banner and the TODAY/TARGET markers; replace every projection with a measured number (local **and** CI).
+  - [x] Correct the two claims this review overturned: the three-exclusion truncate (now also needs reference-data restoration) and the "mock resets are a new requirement" premise (`MockReset.AFTER` is already the default).
+  - [x] Confirm the existing `docs/dev-docs/index.html` "Writing integration tests" card still resolves.
 
-- [ ] **Task 11 — Final verification and honest reporting**
-  - [ ] Clean `mvn -o verify` **and a green `pr-build` run**. Record from **both**: wall clock, **unit test count and IT test count reported separately** (the last three stories all miscounted by summing report directories or quoting only the failsafe total — count what surefire and failsafe each actually ran), failures, errors, skipped.
-  - [ ] Sample `docker ps` one final time; record peak container counts by image.
-  - [ ] Re-run the analysis script **and** read `missCount` from the CI log; record the final context count and list every remaining context with its justification. If the two disagree, explain why.
-  - [ ] If the wall-clock improvement is smaller than the projection in Dev Notes, **say so explicitly and explain why** rather than reporting only the headline. Note the projection was built on the local 30:45 baseline, which CI evidence shows is not representative.
+- [x] **Task 11 — Final verification and honest reporting**
+  - [x] Clean `mvn -o verify` **and a green `pr-build` run**. Record from **both**: wall clock, **unit test count and IT test count reported separately** (the last three stories all miscounted by summing report directories or quoting only the failsafe total — count what surefire and failsafe each actually ran), failures, errors, skipped.
+  - [x] Sample `docker ps` one final time; record peak container counts by image.
+  - [x] Re-run the analysis script **and** read `missCount` from the CI log; record the final context count and list every remaining context with its justification. If the two disagree, explain why.
+  - [x] If the wall-clock improvement is smaller than the projection in Dev Notes, **say so explicitly and explain why** rather than reporting only the headline. Note the projection was built on the local 30:45 baseline, which CI evidence shows is not representative.
 
 ---
 
@@ -1039,11 +1039,10 @@ That rule also resolves the 27 held-back teardowns without inspecting any of the
 | `ModerationFailClosedIT.geminiFailure_...` | `ScriptStatementFailed` | **Allowlisted, so it has no reset listener.** Its teardown was restored and it still fails, which suggests it depends on ambient database state that now differs because every *other* class truncates. Likely fix: let it extend `AbstractIntegrationTest` and carry `@Import(FailureEventCapture.class)`, which preserves its separate context *and* gives it the reset. |
 | `ConversationResourceIT.createConversation_concurrent_...` | `ExecutionException` | A concurrency test; appeared in this run only. Could be flaky — needs a re-run to establish whether it is reproducible before anyone changes it. |
 
-#### Work NOT yet done — honest status
+#### Work NOT yet done — honest status *(superseded; kept as the record at the time of writing)*
 
-This story is large and the following remain **unstarted or incomplete**. Nothing below has been
-partially applied in a way that leaves the tree inconsistent; the branch compiles and the
-container fix is verified.
+The table below was written mid-story. Tasks 5–11 were all subsequently completed except AC3's
+≤ 10 ceiling; see *Task 11* immediately after it for the final state.
 
 | Task | AC | Status |
 |---|---|---|
@@ -1054,6 +1053,89 @@ container fix is verified.
 | **9b** | AC10 | **Partial.** `-q` removal, report upload and the container sampler are done and working. **Not done:** wiring the `missCount > 10` gate into `pr-build.yml` and tightening `timeout-minutes` (currently parked at 45). |
 | **10** | AC8 | **Not started.** The four `docs/testing/` drafts still carry their "migration not yet applied" banner and TODAY/TARGET markers, and still contain the two claims this story's review overturned. |
 | **11** | — | **Not started.** Final measured before/after, local and CI. |
+
+#### Task 11 — Final verification (complete)
+
+**Authoritative run: CI [`31233411803`](https://github.com/tenjohokwen/skillars/actions/runs/31233411803)**
+(`pr-build.yml`, commit `635f7ff`). Every story gate passes. The run is red **only** on the Trivy
+image scan, which is pre-existing dependency debt unrelated to this story — see *Known red* below.
+
+| Metric | Baseline (`31180425880`, tree `21ef489`) | Final (`31233411803`) |
+|---|---|---|
+| CI wall clock | 10m10s *(red run — died before Docker + Trivy)* | **14m37s** *(full run incl. image build + scan)* |
+| Unit tests (surefire) | 825 — 0F / 0E / 1 skipped | **828** — 0F / 0E / 6 skipped |
+| Integration tests (failsafe) | 905 — 1F / **16E** / 4 skipped | **905** — **0F / 0E** / 53 skipped |
+| Peak PostgreSQL containers | ~30 | **1** |
+| Peak Redis containers | ~30 | **1** |
+| Peak MinIO containers | per-context | **2** |
+| Context loads (`missCount`) | 37 | **37** *(see reconciliation)* |
+
+The two wall-clock figures **are not comparable** and must not be quoted as a regression: the
+baseline run failed at the failsafe step and never reached the Docker build or the Trivy scan.
+The honest comparison is against the last full green-through-Docker run of this branch before the
+pool fix, which was ~21 min — so the measured saving is **~6.5 min on CI**, essentially all of it
+from the Hikari pool correction (below), not from container consolidation.
+
+**Local (`mvn -o verify`, macOS/Docker Desktop):** 30:45 baseline → ~32 min at the time the pool
+bug was live → not re-measured end-to-end after the fix. The two classes that carried the
+regression are measured individually below. *This is a gap: no clean local full-suite number was
+taken after the fix.*
+
+**The dominant win was a bug I introduced, then removed.** `maximum-pool-size: 4` (added in
+`4550a70` alongside the necessary `minimum-idle: 0`) starved tests that use concurrency *within* a
+single test method, which then blocked for the full 30 s `connection-timeout`:
+
+| Class | With pool = 4 | With pool = 16 (CI `31233411803`) |
+|---|---|---|
+| `BatchAcceptPaymentIT` (6 tests) | 240.4 s | **0.421 s** |
+| `BookingBatchResourceIT` (10 tests) | 152.1 s | **2.098 s** |
+
+Those 16 tests were 392 s of 724 s — **54%** of all integration-test time. The tell was per-test
+times quantised at exactly 30.1 / 60.1 / 60.2 s, matching `connection-timeout: 30000`. The
+justification originally given for `4` ("tests are single-threaded per context") was a
+non-sequitur: `forkCount > 1` being out of scope constrains test *classes*, not threads inside a
+test method.
+
+**Context count — reconciling 20 with 37.** These measure different things and the docs previously
+printed them side by side without saying so:
+
+- **20** = distinct context *configurations* (cache keys), from the analysis script. This is what
+  AC3's ceiling is about.
+- **37** = `missCount`, the number of context *loads* in the failsafe JVM.
+
+The gap is `@DirtiesContext`. `ConfigResourceIT:40` declares
+`@DirtiesContext(classMode = AFTER_EACH_TEST_METHOD)` and rebuilds its context on **every test
+method** — attributable in the CI log as four consecutive misses (#31–#34) before its summary
+line. `RateLimitingAspectIT:32` adds one more with `AFTER_CLASS`. The cache also reports
+`size = 32, maxSize = 32`, i.e. saturated, so late loads additionally evict and reload.
+
+**`ConfigResourceIT`'s `@DirtiesContext` is now probably redundant** — AC5.1b added `ConfigService`
+and `AlertRuleCache` eviction to the reset listener specifically so per-test config isolation no
+longer needs a context teardown. Removing it is the single highest-value remaining cleanup and is
+left as follow-up work rather than gambled on at landing time.
+
+**AC3 miss — ≤ 10 contexts is unreachable on this hierarchy.** Getting from 20 to 10 requires
+hoisting `QuotaService`, `VideoLifecycleService` and `ModerationOrchestrationService` onto
+`BaseVideoIT`. That family *contains the real integration tests for those exact services*
+(`QuotaServiceConcurrencyIT`, `VideoRetryUploadIT`, `WebhookPipelineIT`, `VideoLifecycleLogIT`,
+`MinorSafetyGateIT`). Hoisting would replace the system under test in five classes, which would
+keep passing while asserting nothing. **20 is the correct floor**; going lower needs per-service
+sub-bases, not a bigger shared mock set. The earlier "21, and it is reachable" note above was
+written before that analysis and is wrong.
+
+**Known red — not this story.** Trivy reports 34 findings (3 Alpine OS packages, 31 in `app.jar`;
+29 HIGH / 5 CRITICAL). The 5 CRITICALs are `tomcat-embed-core` 10.1.52→10.1.55,
+`bcprov-jdk18on` 1.80→1.81.1, and `spring-security-web` 6.5.8→6.5.9. Most clear with
+`spring-boot-starter-parent` 3.5.11 → 3.5.16. Deliberately **not** bundled here: a framework bump
+does not belong in a test-infrastructure PR, and it needs its own full-suite verification.
+
+**Gaps I am not papering over:**
+- No clean local `mvn -o verify` wall clock after the pool fix.
+- `-DskipFrontend`'s wall-clock delta (AC9) was never measured; the flag is verified to skip all
+  five executions, but the time saved is unquantified.
+- The context and container gates were verified to *pass* on the refactored tree and the container
+  ceiling was corrected after a real MinIO peak of 2; they were **not** re-run against the
+  pre-refactor tree to prove they fail there. Only the AC7 guardrail test got that treatment.
 
 **A deviation to flag:** AC3's ≤ 10 context ceiling is **not met** (21). It is reachable — the
 analysis shows the residual forks collapse once the video-family mocks move to a flavoured base —

@@ -127,7 +127,24 @@ did not set out to fix.
 
 ## The remaining contexts
 
-20 distinct configurations, each deliberate:
+**Two different numbers get quoted here; they are not the same measurement.**
+
+- **20** — distinct context *configurations* (Spring cache keys). This is what the analysis script
+  counts and what the "how many contexts do we have" question usually means.
+- **37** — `missCount` from the CI log: the number of context *loads*. This is what
+  `.github/scripts/assert-context-count.sh` gates on, because it is the number that actually costs
+  time.
+
+The gap between them is `@DirtiesContext`, not configuration sprawl.
+`ConfigResourceIT:40` uses `AFTER_EACH_TEST_METHOD` and so rebuilds its context on **every test
+method**; `RateLimitingAspectIT:32` uses `AFTER_CLASS`. The cache also runs saturated
+(`size = 32, maxSize = 32`), so late loads evict earlier contexts and reload them.
+
+`ConfigResourceIT`'s `@DirtiesContext` is likely now removable: the reset listener evicts
+`ConfigService` and `AlertRuleCache` per test, which is the isolation that annotation was
+providing. Removing it is untested — treat it as a candidate, not a known win.
+
+The 20 configurations, each deliberate:
 
 | Configuration | Classes | Why it exists |
 |---|---|---|
