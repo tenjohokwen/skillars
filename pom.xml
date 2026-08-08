@@ -174,7 +174,7 @@
 		<dependency>
 			<groupId>com.stripe</groupId>
 			<artifactId>stripe-java</artifactId>
-			<version>28.3.0</version>
+			<version>33.2.0</version>
 		</dependency>
 		<dependency>
 			<groupId>org.flywaydb</groupId>
