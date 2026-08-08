@@ -137,7 +137,6 @@ public class ApiAdvice {
     //This seems to be the best way to handle constraint exceptions that cannot be caught and handled programmatically before db-write attempts
     // Map constraint names to human-readable error keys
     private static final Map<String, String> CONSTRAINT_MAPPINGS = Map.of(
-        "tenant_tenant_ref_key", "tenant.ref.duplicate",
         "user_login_key", "user.login.duplicate",
         "user_email_key", "user.email.duplicate",
         "excl_bkg_coach_slot_overlap", "booking.slotUnavailable"
