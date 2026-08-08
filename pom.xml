@@ -87,32 +87,25 @@
 				</dependency>
 
 				<!--
-				  Transitive security pins. Neither of these is exposed as a Boot property, so
-				  they are pinned here rather than in <properties>. Both arrive through a
-				  dependency we do not control the version of; drop the pin once that upstream
-				  ships the fixed version itself.
+				  Transitive security pin. Not exposed as a Boot property, so it is pinned here
+				  rather than in <properties>. It arrives through a dependency whose version we
+				  do not control; drop the pin once that upstream ships the fixed version itself.
 
-				  bcprov  CVE-2025-14813 (CRITICAL). Trivy lists the fixed versions as
-				          1.80.2 / 1.81.1 / 1.84. Originally pinned to 1.81.1 when
-				          spring-cloud-commons 4.3.1 still brought the vulnerable 1.80;
-				          Dependabot has since carried the pin to 1.85 (PR #26).
+				  beanutils CVE-2025-48734. commons-validator 1.9.0 declares commons-beanutils
+				          1.9.4, which is the vulnerable version. Fix: 1.11.0.
 
-				          NOTE: this pin is no longer strictly required. Under spring-cloud
-				          2025.0.3, spring-cloud-commons 4.3.3 now brings 1.80.2 on its own
-				          (verified by resolving the tree with the pin removed), and 1.80.2 is
-				          already a fixed version. Per the rule above the pin could be dropped;
-				          it is kept for now only because 1.85 is strictly newer and the Trivy
-				          gate is green on it. Dropping it is a one-line change that the
-				          pr-build scan would confirm or reject.
+				  The bcprov pin that used to sit here was REMOVED, by exactly the rule above.
+				  It was added for CVE-2025-14813 (CRITICAL) when spring-cloud-commons 4.3.1
+				  brought the vulnerable 1.80. Under spring-cloud 2025.0.3, spring-cloud-commons
+				  4.3.3 brings 1.80.2 on its own, and Trivy lists 1.80.2 as a fixed version
+				  (fixes are 1.80.2 / 1.81.1 / 1.84). Upstream now satisfies it, so carrying our
+				  own version here only creates a second thing to maintain: Dependabot had
+				  already walked the pin to 1.85 (PR #26) purely because it existed.
 
-				  beanutils CVE-2025-48734. Still required: commons-validator 1.9.0 declares
-				          commons-beanutils 1.9.4, which is the vulnerable version. Fix: 1.11.0.
+				  If a future bcprov CVE needs a version newer than whatever spring-cloud-commons
+				  ships, re-add the pin here rather than bumping spring-cloud for it. The
+				  pr-build Trivy scan is what tells you.
 				-->
-				<dependency>
-					<groupId>org.bouncycastle</groupId>
-					<artifactId>bcprov-jdk18on</artifactId>
-					<version>1.85</version>
-				</dependency>
 				<dependency>
 					<groupId>commons-beanutils</groupId>
 					<artifactId>commons-beanutils</artifactId>

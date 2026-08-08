@@ -94,31 +94,41 @@ All figures from CI (`ubuntu-latest`, 4 vCPU) unless marked local. Story `deferr
 |---|---|---|
 | Docker containers | ~74 (one postgres + one redis per context) | **3** (1 postgres, 1 redis, 1 minio per JVM) |
 | Distinct context cache keys (offline analysis) | 39 | **20** |
-| Contexts actually built (`missCount`) | not instrumented | **37** |
+| Contexts actually built (`missCount`) | not instrumented | **34** |
 | Contexts serving exactly one class | 24 | 12 |
 | Largest shared context | 30 classes | **82 classes** |
 | Unit tests | 825 — 0F 0E | 828 — 0F 0E |
-| Integration tests | 905 — 1F **16E** | 905 — 1F **2E** |
-| CI wall clock | 10m10s | 15m34s |
-| Local wall clock | 30:45 | **41:32 — WORSE** |
+| Integration tests | 905 — 1F **16E** | **905 — 0F 0E** |
+| CI wall clock | 10m10s | **10m48s** |
+| Local wall clock | 30:45 | **8:05** (`-DskipFrontend`, warm caches) |
 | Test PostgreSQL | `14.18` | **`17-alpine`** (matches production) |
 
-**Read the wall clock honestly. The suite got slower in both environments, and locally it got
-much slower — 30:45 to 41:32.** The story's headline projection (8-15 min locally) was not
-achieved and was never achievable from this design: it assumed container-per-context startup
-dominated the local runtime, and the reset added a per-method cost the projection did not model. Three reasons, none of them a
-regression in the sense that matters:
+**Read the wall clock honestly — in both directions.**
 
-1. The 10m10s baseline was a **red** run in which 17 tests errored early and a whole family of
-   contexts never finished starting. The 15m34s run executes strictly more work.
-2. The per-test database reset costs **99.7 ms mean over 814 invocations — ~81 s total** on CI.
-   **On macOS/Docker Desktop the same 814 invocations cost 828 s — ~1018 ms each, 10x the CI
-   figure, i.e. ~14 of the local 41:32.** Docker Desktop's VM boundary makes each round trip an
-   order of magnitude dearer.
-3. The local 30:45 figure that motivated this story was a macOS/Docker-Desktop artefact. On Linux
-   the container-per-context cost was never the dominant term, so removing it does not produce the
-   3× speedup the story projected. **The story projected 8–15 min locally; that projection was
-   built on a baseline that is not representative and should not be treated as achieved.**
+An earlier revision of this table reported 41:32 locally and called the story a wall-clock
+regression. That was accurate when written and is now wrong, for a reason worth recording: the
+regression was a **bug introduced by this story**, not a property of the design.
+`spring.datasource.hikari.maximum-pool-size` had been set to `4`, which starved tests that use
+concurrency *inside* a single test method; they then blocked for the full 30 s
+`connection-timeout`. Two classes alone (`BatchAcceptPaymentIT`, `BookingBatchResourceIT`) were
+392 s of 724 s of integration time. Raising the pool to 16 took them to 0.4 s and 2.1 s. The tell
+was per-test times quantised at exactly 30.1 s and 60.1 s — **round numbers are a timeout, not
+work.**
+
+Two caveats on the numbers above, so they are not over-read:
+
+1. The **10m10s baseline was a red run** in which 17 tests errored early and a whole family of
+   contexts never finished starting. The current run executes strictly more work, so CI is not
+   "flat" — it does more in the same time.
+2. The **8:05 local figure is not comparable to the 30:45 baseline**: it was measured with
+   `-DskipFrontend`, warm Maven and Docker caches, and the tenant tests disabled. Treat it as a
+   lower bound for a warm backend-only loop. A like-for-like local number has never been taken,
+   and the story's original 8–15 min projection should still not be treated as verified — it was
+   built on a macOS/Docker-Desktop baseline that was never representative.
+
+The per-test database reset costs **99.7 ms mean over 814 invocations (~81 s total) on CI**, and
+roughly 10× that on macOS/Docker Desktop, where the VM boundary makes each round trip far dearer.
+That per-method cost is real and was not modelled by the original projection.
 
 What did improve, and was the actual point: **the container count is now bounded and cannot grow
 with the test suite**, the context count is bounded and enforced, and the suite is meaningfully
@@ -129,20 +139,29 @@ did not set out to fix.
 
 **Two different numbers get quoted here; they are not the same measurement.**
 
-- **20** — distinct context *configurations* (Spring cache keys). This is what the analysis script
-  counts and what the "how many contexts do we have" question usually means.
-- **37** — `missCount` from the CI log: the number of context *loads*. This is what
+- **20** — distinct context *configurations* as counted by the offline analysis script. The script
+  **skips Boot slices**, so this is "how many full `@SpringBootTest` shapes do we have".
+- **~32** — actual Spring cache keys. Both CI runs report `size = 32, maxSize = 32`. The extra
+  ~11 are `@WebMvcTest` and friends, which build their own cut-down contexts: cheap, no
+  containers, but real cache entries. 20 + ~11 ≈ 32 reconciles the two.
+- **34** — `missCount` from the CI log: the number of context *loads*. This is what
   `.github/scripts/assert-context-count.sh` gates on, because it is the number that actually costs
   time.
 
-The gap between them is `@DirtiesContext`, not configuration sprawl.
-`ConfigResourceIT:40` uses `AFTER_EACH_TEST_METHOD` and so rebuilds its context on **every test
-method**; `RateLimitingAspectIT:32` uses `AFTER_CLASS`. The cache also runs saturated
-(`size = 32, maxSize = 32`), so late loads evict earlier contexts and reload them.
+**The cache is exactly full.** Spring's default `maxSize` is 32 and we have ~32 keys, so one more
+context configuration does not cost +1 load — it also evicts something still in use, which is then
+rebuilt. That is the thrashing this story existed to remove, and it is why the gate ceiling is
+**36** rather than something comfortable.
 
-`ConfigResourceIT`'s `@DirtiesContext` is likely now removable: the reset listener evicts
-`ConfigService` and `AlertRuleCache` per test, which is the isolation that annotation was
-providing. Removing it is untested — treat it as a candidate, not a known win.
+The 34-vs-32 gap is `@DirtiesContext` plus eviction. `RateLimitingAspectIT:32` still uses
+`AFTER_CLASS`. `ConfigResourceIT` used `AFTER_EACH_TEST_METHOD` and rebuilt its context on **every
+test method** — removing it took CI from 37 to 34, verified in isolation and in the full suite.
+The reset listener already provided that isolation by evicting `ConfigService` and `AlertRuleCache`
+per test, which is what AC5.1b was added for.
+
+> Local runs report 32 where CI reports 34, on the same 905 tests with the same 53 skipped. This
+> is **not fully explained** — most likely execution order interacting with eviction and with the
+> remaining `AFTER_CLASS` dirtying. The gate runs in CI and is set from the CI number.
 
 The 20 configurations, each deliberate:
 
