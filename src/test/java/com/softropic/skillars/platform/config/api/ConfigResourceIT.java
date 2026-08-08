@@ -26,7 +26,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
@@ -37,8 +36,17 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-//TODO this @DirtiesContext may not be needed. Eventually remove it and test the class in isolation as well as run full app tests
-@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
+// @DirtiesContext(AFTER_EACH_TEST_METHOD) was removed here. It predated story deferred-19's
+// deterministic reset and was rebuilding the whole ApplicationContext after every test method
+// purely to get per-test isolation -- four of the suite's 37 context loads came from this one
+// class. Two mechanisms now provide that isolation without destroying the context:
+//   1. DatabaseResetTestExecutionListener truncates between tests and evicts the in-process
+//      caches, ConfigService and AlertRuleCache, which is what AC5.1b was added for.
+//   2. This class's own @AfterEach restores platform_config to its seed value, deletes the
+//      test users and main.sec, and calls configService.invalidate() explicitly.
+// If config values ever start leaking between tests here, restore the annotation rather than
+// weakening the reset -- but check first that the leak is not a missing eviction in the
+// listener, which would affect every other class too.
 // AC5.5 triage: this class authenticates but seeded no security key of its own -- it was
 // free-riding on rows another test class happened to leave in main.sec. The deterministic
 // reset removes that leftover, so the class must now declare the seed it always needed.
