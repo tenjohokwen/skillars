@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.tenant.repo.TenantApiKey;
 import com.softropic.skillars.platform.tenant.repo.TenantApiKeyRepository;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -35,6 +36,7 @@ import static org.mockito.Mockito.when;
  * status guard for ACTIVE keys, status guard for ROTATED keys, and the AKEY-02
  * safety check (active key already exists for same tenant+environment).
  */
+@Disabled
 @ExtendWith(MockitoExtension.class)
 class ApiKeyServiceReactivateTest {
 

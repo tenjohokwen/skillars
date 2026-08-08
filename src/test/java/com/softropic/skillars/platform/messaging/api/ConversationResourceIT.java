@@ -1,22 +1,19 @@
 package com.softropic.skillars.platform.messaging.api;
 
-import com.softropic.skillars.config.TestConfig;
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.e2e.HttpTestClient;
-import com.softropic.skillars.infrastructure.gemini.GeminiClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.messaging.contract.ModerationVerdict;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.apache.hc.client5.http.config.RequestConfig;
 import org.apache.hc.client5.http.impl.classic.HttpClients;
 import org.apache.hc.core5.util.Timeout;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
@@ -25,8 +22,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
@@ -51,16 +46,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@Import(TestConfig.class)
-@TestPropertySource(properties = {
-    "spring.cloud.compatibility-verifier.enabled=false",
-    "rate.limiting.enabled=false",
-    "allowed.clients=testClientId"
-})
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
-class ConversationResourceIT {
+class ConversationResourceIT extends AbstractIntegrationTest {
 
     private static final String LOGIN_ENDPOINT   = "/api/auth/login";
     private static final String MESSAGING_BASE   = "/api/messaging";
@@ -74,7 +61,6 @@ class ConversationResourceIT {
     private static final String PARENT_EMAIL = "parent.messaging@skillars-test.com";
     private static final String COACH_EMAIL  = "coach.messaging@skillars-test.com";
 
-    @MockitoBean private GeminiClient geminiClient;
 
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
@@ -142,24 +128,6 @@ class ConversationResourceIT {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM messaging.messages WHERE conversation_id IN " +
-                "(SELECT id FROM messaging.conversations WHERE coach_id = ?)", coachProfileId);
-            jdbcTemplate.update("DELETE FROM messaging.conversations WHERE coach_id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
-            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = ?", PLAYER_ID);
-            jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
-            jdbcTemplate.execute("DELETE FROM main.login_attempts");
-            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?)", PARENT_ID, COACH_USER_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?)", PARENT_ID, COACH_USER_ID);
-            jdbcTemplate.execute("DELETE FROM main.authority WHERE id IN (9700, 9701)");
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     // ── AC2: Conversation creation ──
 
@@ -463,6 +431,32 @@ class ConversationResourceIT {
 
     // ── Concurrent conversation creation (upsert correctness) ──
 
+    /**
+     * FLAKY — fails intermittently on CI, passes locally. Not disabled, because when it fails it
+     * fails on a real assertion rather than on infrastructure.
+     *
+     * <p>Observed during story deferred-19: failed on CI runs {@code 31194113235} and
+     * {@code 31211821469} with an {@code ExecutionException} out of {@link Future#get()}, then
+     * passed on {@code 31213258706} and {@code 31215286590} with no change to this class or to
+     * the code under test in between. Roughly 50% on a 4-vCPU runner.
+     *
+     * <p>The five threads below race a single upsert, so the outcome depends on how the runner
+     * interleaves them; a slower or more contended machine changes the timing. The exception
+     * surfaces from {@code f.get()}, which means one request thread threw — most likely a 500
+     * from a lost upsert race, i.e. <strong>plausibly the very defect this test exists to catch,
+     * surfacing only under CI's timing.</strong> That has not been confirmed: the assertion error
+     * is wrapped by {@code ExecutionException} and the underlying response body was never
+     * captured.
+     *
+     * <p><strong>Do not "fix" this by adding a sleep, a retry, or {@code @Disabled}.</strong> The
+     * next step is to capture the failing response — log the status and body inside the lambda —
+     * so the next CI failure says whether the upsert genuinely lost the race. If it did, the
+     * product has a concurrency bug and this test is doing its job.
+     *
+     * <p>It is unrelated to deferred-19's consolidation work: it neither shares state with other
+     * classes nor depends on the reset listener, and it failed and passed on both sides of every
+     * change in that story.
+     */
     @Test
     void createConversation_concurrent_returnsSameConversationIdWithout500() throws Exception {
         String coachCookies = loginAndGetCookies(COACH_EMAIL);
@@ -573,9 +567,6 @@ class ConversationResourceIT {
         return headers;
     }
 
-    private String baseUrl() {
-        return "http://localhost:" + randomServerPort;
-    }
 
     private void insertUser(long id, String email, String passwordHash, String role) {
         jdbcTemplate.update(

@@ -20,7 +20,6 @@ import com.softropic.skillars.platform.video.repo.VideoWebhookEventRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.event.ApplicationEvents;
 import org.springframework.test.context.event.RecordApplicationEvents;
@@ -34,11 +33,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-@TestPropertySource(properties = {
-    "app.video.webhook.processor-delay-ms=86400000",
-    "app.video.reconciliation.fixed-delay-ms=86400000",
-    "app.video.upload.expiry-scheduler-delay-ms=86400000"
-})
 @RecordApplicationEvents
 class VideoUploadPipelineIT extends BaseVideoIT {
 

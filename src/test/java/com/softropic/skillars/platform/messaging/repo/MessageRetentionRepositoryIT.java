@@ -1,15 +1,11 @@
 package com.softropic.skillars.platform.messaging.repo;
 
-import com.softropic.skillars.config.TestConfig;
+import com.softropic.skillars.config.AbstractIntegrationTest;
 
-import org.junit.jupiter.api.AfterEach;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.sql.Timestamp;
@@ -20,12 +16,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 // ID range: 9350x — reserved for messaging retention repository tests
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-                properties = {"ledger.database.spy=true", "enable.test.mail=true"})
-@Import(TestConfig.class)
-@TestPropertySource(properties = "spring.cloud.compatibility-verifier.enabled=false")
-class MessageRetentionRepositoryIT {
+class MessageRetentionRepositoryIT extends AbstractIntegrationTest {
 
     private static final long CONVERSATION_ID           = 9350_000_001L;
     private static final long MESSAGE_WITH_REPORT_ID    = 9350_000_002L;
@@ -42,18 +33,6 @@ class MessageRetentionRepositoryIT {
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM messaging.message_reports WHERE id = ?", MESSAGE_REPORT_ID);
-            jdbcTemplate.update("DELETE FROM messaging.conversation_reports WHERE id = ?", CONVERSATION_REPORT_ID);
-            jdbcTemplate.update("DELETE FROM messaging.messages WHERE id IN (?, ?)",
-                MESSAGE_WITH_REPORT_ID, MESSAGE_WITHOUT_REPORT_ID);
-            jdbcTemplate.update("DELETE FROM messaging.conversations WHERE id IN (?, ?, ?)",
-                CONVERSATION_ID, ORPHAN_CONVERSATION_ID, REPORTED_ORPHAN_CONVERSATION_ID);
-            return null;
-        });
-    }
 
     @Test
     void retention_skipsMessagesWithOpenReports() {

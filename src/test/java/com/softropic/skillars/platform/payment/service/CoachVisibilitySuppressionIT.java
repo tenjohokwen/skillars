@@ -3,7 +3,6 @@ package com.softropic.skillars.platform.payment.service;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.BasePaymentIT;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
@@ -19,15 +18,6 @@ class CoachVisibilitySuppressionIT extends BasePaymentIT {
     private static final long COACH_USER_ID = 70001L;
     private static final String COACH_EMAIL = "coach.reliability@test.com";
 
-    @AfterEach
-    void cleanStrikesAndProfiles() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.execute("DELETE FROM marketplace.coach_reliability_strikes");
-            jdbcTemplate.execute("DELETE FROM marketplace.coach_profiles WHERE user_id = " + COACH_USER_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id = ?", COACH_USER_ID);
-            return null;
-        });
-    }
 
     @Test
     void threeStrikes_coachStatusBecomesReduced() {

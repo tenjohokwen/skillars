@@ -2,7 +2,6 @@ package com.softropic.skillars.platform.video.service;
 
 import com.softropic.skillars.platform.video.BaseVideoIT;
 import com.softropic.skillars.platform.video.contract.exception.QuotaExceededException;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -44,14 +43,6 @@ class QuotaServiceConcurrencyIT extends BaseVideoIT {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM main.video_quota_reservations WHERE user_id = ?", testOwnerId);
-            jdbcTemplate.update("DELETE FROM main.video_quotas WHERE user_id = ?", testOwnerId);
-            return null;
-        });
-    }
 
     @Test
     void concurrentReserve_onlyOneSucceeds() throws Exception {

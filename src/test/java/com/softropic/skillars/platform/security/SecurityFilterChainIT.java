@@ -1,29 +1,25 @@
 package com.softropic.skillars.platform.security;
 
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.softropic.skillars.e2e.HttpTestClient;
-import com.softropic.skillars.config.TestConfig;
 import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.service.MailManager;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.service.LoginAttemptsService;
 import com.softropic.skillars.utils.TestMailManager;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
@@ -39,12 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-                properties = {"ledger.database.spy=true", "enable.test.mail=true"})
-@Import(TestConfig.class)
-@TestPropertySource(properties = "spring.cloud.compatibility-verifier.enabled=false")
-public class SecurityFilterChainIT {
+public class SecurityFilterChainIT extends AbstractIntegrationTest {
 
     @Autowired
     private HttpTestClient httpTestClient;
@@ -73,23 +64,7 @@ public class SecurityFilterChainIT {
     private static final String ACCOUNT_URL = "/v1/account/";
     private static final String OTP_URL = "/otp";
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.execute("delete from main.persistent_token");
-            jdbcTemplate.execute("delete from main.user_addresses");
-            jdbcTemplate.execute("delete from main.user_authority");
-            jdbcTemplate.execute("delete from main.audit_log");
-            jdbcTemplate.execute("delete from main.user");
-            jdbcTemplate.execute("delete from main.authority");
-            jdbcTemplate.execute("delete from main.sec");
-            return 0;
-        });
-    }
 
-    private String baseUrl() {
-        return "http://localhost:" + randomServerPort;
-    }
 
     private HttpHeaders baseHeaders() {
         HttpHeaders headers = new HttpHeaders();

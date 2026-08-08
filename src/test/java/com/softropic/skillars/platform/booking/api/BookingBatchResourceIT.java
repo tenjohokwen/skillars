@@ -1,16 +1,14 @@
 package com.softropic.skillars.platform.booking.api;
 
-import com.softropic.skillars.config.TestConfig;
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.SecurityIT;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
@@ -18,8 +16,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
@@ -34,16 +30,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@Import(TestConfig.class)
-@TestPropertySource(properties = {
-    "spring.cloud.compatibility-verifier.enabled=false",
-    "rate.limiting.enabled=false",
-    "allowed.clients=testClientId"
-})
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
-class BookingBatchResourceIT {
+class BookingBatchResourceIT extends AbstractIntegrationTest {
 
     private static final String LOGIN_ENDPOINT = "/api/auth/login";
     private static final String CLIENT_ID      = "testClientId";
@@ -143,28 +131,6 @@ class BookingBatchResourceIT {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            // acceptAll now settles accepted bookings end-to-end, so this fixture writes payment rows.
-            jdbcTemplate.update(
-                "DELETE FROM payment.booking_payments WHERE booking_id IN " +
-                "(SELECT id FROM booking.bookings WHERE parent_id = ?)", PARENT_ID);
-            jdbcTemplate.update("DELETE FROM booking.bookings WHERE parent_id = ?", PARENT_ID);
-            jdbcTemplate.update("DELETE FROM booking.booking_batches WHERE parent_id = ?", PARENT_ID);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_pricing WHERE coach_id IN (?, ?)", coachProfileId, coach2ProfileId);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id IN (?, ?)", coachProfileId, coach2ProfileId);
-            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = ?", PLAYER_ID);
-            jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
-            jdbcTemplate.execute("DELETE FROM main.login_attempts");
-            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?, ?)", PARENT_ID, COACH_USER_ID, COACH_2_USER_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?, ?)", PARENT_ID, COACH_USER_ID, COACH_2_USER_ID);
-            jdbcTemplate.execute("DELETE FROM main.authority WHERE id IN (9800, 9801)");
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            jdbcTemplate.update("DELETE FROM main.platform_config WHERE id = 50");
-            return null;
-        });
-    }
 
     @Test
     void createBatch_asParentWithTwoSlots_returns201AndCreatesRecords() {
@@ -514,9 +480,6 @@ class BookingBatchResourceIT {
         return headers;
     }
 
-    private String baseUrl() {
-        return "http://localhost:" + randomServerPort;
-    }
 
     private void insertUser(long id, String email, String passwordHash, String role) {
         jdbcTemplate.update(

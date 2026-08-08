@@ -1,16 +1,11 @@
 package com.softropic.skillars.platform.payment;
 
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.github.tomakehurst.wiremock.WireMockServer;
-import com.softropic.skillars.config.TestConfig;
-import org.junit.jupiter.api.AfterEach;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.wiremock.spring.ConfigureWireMock;
-import org.wiremock.spring.EnableWireMock;
 import org.wiremock.spring.InjectWireMock;
 
 import java.sql.Date;
@@ -28,69 +23,12 @@ import java.util.UUID;
  * add WireMock stubs directly, OR use {@code @MockitoBean StripeClient} to mock at the
  * SDK-wrapper layer without HTTP stubs.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-                properties = {"enable.test.mail=true"})
-@Import(TestConfig.class)
-@ActiveProfiles({"dev", "test"})
-@EnableWireMock(@ConfigureWireMock(name = "stripe-service"))
-public abstract class BasePaymentIT {
+public abstract class BasePaymentIT extends AbstractIntegrationTest {
 
-    @Autowired protected JdbcTemplate jdbcTemplate;
-    @Autowired protected TransactionTemplate transactionTemplate;
 
     @InjectWireMock("stripe-service")
     protected WireMockServer wireMockServer;
 
-    @AfterEach
-    void cleanPaymentData() {
-        transactionTemplate.execute(status -> {
-            // Delete in FK-safe order: children before parents
-            jdbcTemplate.execute("DELETE FROM payment.booking_payments");
-            // parent_credit_ledger is append-only (V79 triggers); bypass for test cleanup only
-            jdbcTemplate.execute("SET SESSION session_replication_role = 'replica'");
-            jdbcTemplate.execute("DELETE FROM payment.parent_credit_ledger");
-            jdbcTemplate.execute("SET SESSION session_replication_role = 'origin'");
-            // booking.bookings references payment.session_pack_purchases — clean bookings first
-            jdbcTemplate.execute("DELETE FROM booking.booking_reschedule_requests");
-            jdbcTemplate.execute("DELETE FROM booking.session_completion_data");
-            jdbcTemplate.execute("DELETE FROM booking.bookings");
-            jdbcTemplate.execute("DELETE FROM payment.session_pack_purchases");
-            jdbcTemplate.execute("DELETE FROM payment.session_pack_tiers");
-            jdbcTemplate.execute("DELETE FROM payment.stripe_customers");
-            jdbcTemplate.execute("DELETE FROM marketplace.coach_pricing");
-            // P8: coach_profiles and users were not cleaned, causing insertTestCoach to silently
-            // return a stale UUID via ON CONFLICT DO NOTHING on repeated test-class runs
-            jdbcTemplate.execute("DELETE FROM marketplace.coach_profiles");
-            jdbcTemplate.execute("DELETE FROM main.player_profiles WHERE parent_id IN " +
-                "(SELECT id FROM main.\"user\" WHERE login LIKE '%@test.com')");
-            jdbcTemplate.execute("DELETE FROM main.\"user\" WHERE login LIKE '%@test.com'");
-            return null;
-        });
-    }
-
-    /**
-     * Releases a ShedLock so a {@code @SchedulerLock}-annotated method can be invoked again.
-     *
-     * <p>Not optional housekeeping: calling a scheduled bean method from a test goes through the
-     * Spring proxy, so ShedLock applies. With {@code lockAtLeastFor} set (PT2M across this
-     * codebase), a second invocation inside the same test class is silently SKIPPED — the log line
-     * is "held by another instance", and the assertions that follow then pass or fail for reasons
-     * that have nothing to do with the code under test. Call this before every invocation.
-     *
-     * <p><strong>Expire the row; do not delete it.</strong> {@code JdbcTemplateLockProvider} caches
-     * the lock names it has already inserted and issues only an {@code UPDATE … WHERE name = ? AND
-     * lock_until <= now()} thereafter. Deleting the row therefore leaves nothing for that UPDATE to
-     * match and every later run is skipped — strictly worse than doing nothing. Backdating
-     * {@code lock_until} works on both paths: the UPDATE matches, and on the very first call (no row
-     * yet) this simply affects zero rows and the provider inserts as usual.
-     */
-    protected void releaseSchedulerLock(String lockName) {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update(
-                "UPDATE main.shedlock SET lock_until = now() - interval '1 minute' WHERE name = ?", lockName);
-            return null;
-        });
-    }
 
     /**
      * Inserts a minimal parent user row (required as the FK target for player_profiles.parent_id).

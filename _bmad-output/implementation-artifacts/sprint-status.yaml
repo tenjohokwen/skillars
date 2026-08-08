@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-08-07 # skillars-deferred-18 → done (code review complete; live spot-check still open)
+# last_updated: 2026-08-08 # skillars-deferred-19 → review (test context/container consolidation)
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-08-07 # skillars-deferred-18 → done (code review complete; live spot-check still open)
+last_updated: 2026-08-08 # skillars-deferred-19 → review (test context/container consolidation)
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -389,3 +389,61 @@ development_status:
   # deployment/tooling), D8 (reconcile the two canonical_timezone columns — needs a migration + product
   # decision, and is not a prerequisite for D9).
   skillars-deferred-18-availability-slot-timezone-integrity: done  # 2026-08-07: all 5 ACs implemented and confirmed by adversarial code review (3 layers + orchestrator verification); 1 decision resolved, 13 patches applied, 3 deferred (D1-D3), 3 new items from the decision residue (D4-D6), 9 dismissed as false positives. ZERO functional defects in src/main — but the two most load-bearing test claims in the story were FALSE and both were rewritten and mutation-verified. (1) AC2's own reasoning identified a "~26h" zone divergence and then prescribed a 24h pad; region zones alone reach 25h (Pacific/Niue -11 to Pacific/Kiritimati +14) and ZoneId.of accepts fixed offsets to ±18:00 (36h, a case AC4 deliberately keeps valid), so the gap AC2 exists to close stayed open at its widest end and silently reproduced AC1's failure mode. Widened to minusDays(2)/plusDays(9). (2) The Task 3 test designated to guard that pad COULD NOT FAIL — it stubbed the block fetch with any(),any() so the mock returned the block whatever bounds were passed, while its comment claimed the opposite; the only test that failed the dev's mutation check was a separate argument-captor test asserting the formula, not the behaviour. Both rewritten with stubs that apply the real queries' half-open predicates; reverting the pad now fails 3 tests. (3) saveStep4_dayOfWeekOutOfRange asserted status only, but without @Valid the payload reaches V26's CHECK(day_of_week BETWEEN 1 AND 7) and ApiAdvice.integrityViolationHandler returns 400 for that too — so it passed either way; rewritten to assert the field-error entry, and removing the cascade now fails 5 Step-4 tests. (4) Both "resolved message" ITs passed with all four i18n entries deleted (ErrorMsg serializes errorKey and messageSource falls back to the pipe template's English half); strengthened, but the de/fr entries remain unreachable by ANY test because SecurityAdviceFilter:59 stores locale.getDisplayLanguage() ("German") and processFieldErrors:462 feeds it to Locale.forLanguageTag(), yielding "german" not "de" (verified by execution) — recorded as D6, it disables every non-English validator message in the codebase. Also fixed: List<@Valid> lacked @NotNull on the element so {"windows":[null]} NPE'd to 500; per-window ZoneId.of caught DateTimeException but not the NPE a null throws. DECISION (Mbah): keep ZoneId.of and reword the @IanaTimezone message/Javadoc rather than tighten to region-zones-only — tightening would override a stated AC decision and make the tzdb-lag lockout (D5) strictly worse. COUNT CORRECTION: the "903 tests" recorded pre-review was the failsafe total only, omitting 823 unit tests. Post-patch full mvn -o verify: 825 unit + 905 IT, 0 failures, 0 errors, 5 skipped, BUILD SUCCESS (30:45); ESLint clean. STILL OPEN: Task 7's live-app spot-check has never been run — the review had no browser tooling either, so the three frontend-visible behaviours remain unverified by anything but code reading and backend tests.
+
+  # Deferred 19: Integration-Test Context & Container Consolidation
+  # NOT a product defect — a build-infrastructure story. `mvn -o verify` costs 30:45 and Mbah observed
+  # ~30 postgres + ~30 redis containers alive at once. Root cause measured at 21ef489: TestConfig
+  # declares the containers as context @Beans (TestConfig.java:43-57), so container lifetime is bound
+  # 1:1 to the Spring ApplicationContext — and the 129 concrete @SpringBootTest classes fragment into
+  # 37 distinct context cache keys (23 of them serving a single class each). Mbah's @MockitoBean
+  # hypothesis is CONFIRMED and is one of three causes: the bean-override customizer is part of the
+  # cache key, and 29 classes declare mocks in 13 different combinations, accounting for 13 of the 37.
+  # The other two causes are the container-as-bean binding (the multiplier) and per-class property
+  # drift across 88 hand-copied @Import(TestConfig.class) headers (only 9 distinct properties exist,
+  # 5 near-universal). 37 needed contexts against Spring's default cache maxSize of 32 also means the
+  # LRU evicts and rebuilds mid-run — which is why Docker shows ~30, not 37.
+  # Plan: AC1 (JVM-static containers via ConnectionDetails beans, NOT @ServiceConnection @Beans) fixes
+  # the container explosion alone and is independently committable; AC2-AC4 (one AbstractIntegrationTest
+  # base, properties into application-test.yaml, mocks declared once) take 37 contexts to <=10; AC5 adds
+  # a deterministic truncate+FLUSHDB reset listener so each class seeds exactly what it needs; AC7 adds
+  # a guardrail test that must be proven to fail against the pre-refactor tree; AC8 writes docs/testing.
+  # Hard-coded values found and scoped in: `ledger.database.spy` reads NOTHING (real name is
+  # log.database.spy) yet 13 classes carry it as pure cache-key poison; tests run postgres:14.18 while
+  # production runs postgres:17-alpine; allowed.clients has two incompatible hard-coded values in one
+  # suite (main default myClientId,... vs 59 ITs overriding to testClientId only, while
+  # SecurityIT.CLIENT_ID is "myClientId") — fixed as a SUPERSET, not a replacement.
+  # Two traps caught during story creation and written into AC5 as hard exclusions: truncating
+  # main.shedlock would silently disable every @SchedulerLock job for the rest of the JVM
+  # (JdbcTemplateLockProvider caches lock names then only UPDATEs — the exact failure deferred-15's
+  # review recorded), and the qrtz_* tables are written concurrently by a live clustered Quartz
+  # check-in thread. Also flagged: do NOT raise spring.test.context.cache.maxSize as a shortcut — before
+  # AC1 that trades context rebuilds for more simultaneously-live containers.
+  # Out of scope (recorded, not fixed): withReuse/cross-run container reuse, forkCount>1 or parallel
+  # execution (incompatible with AC5's global truncate), wiring a real frontend test runner.
+  # SENIOR-DEV REVIEW 2026-08-07 (story-review.md) — audited, story amended. ACCEPTED: Blocker 1 (AC5's
+  # truncate destroys Flyway-seeded reference data — 33 of 91 migrations INSERT, main.platform_config
+  # alone is seeded by 30 of them, plus session.drills V39 and main.authority V21/V84; Flyway will not
+  # replay them and DrillLibraryResourceIT:96 reads a V39 row. New AC5.1a requires restoration, and
+  # AC5.5's "add the seed to the class" is now explicitly scoped to test data only). Major 1 (AC4.3 was
+  # built on a FALSE premise — @MockitoBean.reset() defaults to MockReset.AFTER, verified in spring-test
+  # bytecode, so cross-class stub leakage was never the risk; rewritten to target @MockitoSpyBean and the
+  # non-Mockito stub beans instead, and GeminiClient now gets the same WireMock trap-check the other
+  # hoists get). Major 2 (new AC5a, sequenced BEFORE AC2: @EnableScheduling is unconditional and there
+  # are 31 @Scheduled + 11 @SchedulerLock jobs incl. 5-second pollers — fragmentation currently caps
+  # their blast radius, consolidation removes that cap, and AC5s shedlock backdate makes all 11 eligible
+  # on all ~905 methods). Major 3 (ConfigService:47 and AlertRuleCache:43 cache DB rows on a scheduled
+  # refresh; new AC5.1b evicts them). All 7 moderates. All 6 CI items, as new AC10 + Task 0 + Task 9b.
+  # REJECTED/CORRECTED: Blocker 2 cited pr-build run 28624816025 as proof CI runs the whole build in
+  # ~10 min "including a Docker image build and a Trivy scan" — verified via gh: those two steps were
+  # SKIPPED because the run failed, so the ~10 min is the mvn step alone (9m54s); and the run is from
+  # 2026-07-02 on a dependabot branch, not this tree, so the 823-vs-905 gap is tree age (deferred-16/17/18
+  # landed after), NOT another instance of the miscounting Task 11 warns about. Blocker 3's "CI is red for
+  # five consecutive runs [SecurityFilterChainIT]" conflates two workflows: the 6 recent red runs are
+  # ci.yml failing in 8s at "Log in to GHCR" on a GHCR_PAT secret, and ci.yml runs NO tests; the
+  # SecurityFilterChainIT/userData.sql duplicate-key error is real but from the July pr-build run. Task 0
+  # now covers both separately. The reviews core insight stands and was accepted: the 30:45 is a
+  # macOS/Docker-Desktop figure, the ROI framing must be re-baselined on CI, and the story must not be
+  # reported as if a 3x speedup were universal. Also accepted from the review log: the suite makes REAL
+  # outbound SMTP calls from CI (mail.gmx.net:587, authenticating as blue-bone@gmx.de) — independent
+  # evidence for AC3s global enable.test.mail, and a credential-exposure issue in its own right.
+  skillars-deferred-19-test-context-container-consolidation: review  # CI 31233411803: 828 unit + 905 IT, 0F/0E; 1 postgres/1 redis; AC3 <=10 contexts NOT met (20 is the floor - see story)

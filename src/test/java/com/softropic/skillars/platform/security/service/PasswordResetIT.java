@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.security.service;
 
-import com.softropic.skillars.config.TestConfig;
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.service.MailManager;
 import com.softropic.skillars.platform.security.api.AccountManagementFacade;
@@ -13,13 +14,8 @@ import com.softropic.skillars.utils.TestMailManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
-import org.junit.jupiter.api.AfterEach;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -31,13 +27,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = {"enable.test.mail=true"})
-@Import(TestConfig.class)
-@TestPropertySource(properties = "spring.cloud.compatibility-verifier.enabled=false")
 @Transactional
-public class PasswordResetIT {
+public class PasswordResetIT extends AbstractIntegrationTest {
 
     @Autowired
     private AccountManagementFacade accountManagementFacade;
@@ -59,13 +50,6 @@ public class PasswordResetIT {
 
     private ChangePasswordDto changePasswordDto;
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @BeforeEach
     void setUp() {
@@ -77,7 +61,6 @@ public class PasswordResetIT {
 
     @Test
     @Sql(scripts = {"/sql/authorityData.sql", "/sql/userData.sql", "/sql/secData.sql"})
-    @Sql(scripts = "/sql/cleanup.sql", executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
     void testPasswordReset_Success() {
         // --- 1. Initiate Password Reset ---
         String helpCode = accountManagementFacade.sendPasswordResetMail(changePasswordDto);
@@ -105,7 +88,6 @@ public class PasswordResetIT {
     
     @Test
     @Sql(scripts = {"/sql/authorityData.sql", "/sql/userData.sql", "/sql/secData.sql"})
-    @Sql(scripts = "/sql/cleanup.sql", executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
     void testFinishPasswordReset_WithInvalidKey() {
         KeyAndPasswordDto keyAndPasswordDto = new KeyAndPasswordDto("invalidKey", "newPassword");
         
@@ -117,7 +99,6 @@ public class PasswordResetIT {
     
     @Test
     @Sql(scripts = {"/sql/authorityData.sql", "/sql/userData.sql", "/sql/secData.sql"})
-    @Sql(scripts = "/sql/cleanup.sql", executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
     void testFinishPasswordReset_WithExpiredKey() {
         // Manually set an expired reset key in the DB
         String expiredKey = "expiredResetKey";

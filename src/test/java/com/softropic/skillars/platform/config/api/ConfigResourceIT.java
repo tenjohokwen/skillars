@@ -1,7 +1,9 @@
 package com.softropic.skillars.platform.config.api;
 
+import com.softropic.skillars.platform.security.SecurityIT;
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.config.E2ESecurityConfig;
-import com.softropic.skillars.config.TestConfig;
 import com.softropic.skillars.e2e.AdminLogin;
 import com.softropic.skillars.platform.config.contract.ConfigValueResponse;
 import com.softropic.skillars.platform.config.contract.UpdateConfigRequest;
@@ -11,8 +13,8 @@ import com.softropic.skillars.platform.security.service.LoginAttemptsService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.context.jdbc.Sql;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.context.annotation.Import;
@@ -25,8 +27,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.annotation.DirtiesContext;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
@@ -37,13 +37,15 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-                properties = {"enable.test.mail=true"})
-@Import({TestConfig.class, E2ESecurityConfig.class})
-@ActiveProfiles({"dev", "test"})
-@TestPropertySource(properties = {"spring.cloud.compatibility-verifier.enabled=false"})
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
-class ConfigResourceIT {
+// AC5.5 triage: this class authenticates but seeded no security key of its own -- it was
+// free-riding on rows another test class happened to leave in main.sec. The deterministic
+// reset removes that leftover, so the class must now declare the seed it always needed.
+// main.sec is NOT Flyway-seeded reference data (no migration inserts into it), so this is
+// the "fix the class" bucket, not the "fix the reset" bucket.
+@Sql({SecurityIT.SEC_DATA_SQL_PATH})
+@Import(E2ESecurityConfig.class)
+class ConfigResourceIT extends AbstractIntegrationTest {
 
     // Stable fixture IDs used only in this test class
     private static final long ADMIN_USER_ID    = 675373350208068096L;

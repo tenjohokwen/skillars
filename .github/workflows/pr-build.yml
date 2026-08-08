@@ -11,7 +11,12 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # AC10.5. Measured post-refactor duration is 15m19s-15m34s across four consecutive runs
+    # (31190871807, 31192540977, 31194113235). 25 leaves ~60% headroom for runner variance
+    # and image pulls while still catching a real regression -- the old value of 15 against a
+    # ~10-minute run could not have detected a 50% slowdown, which is what AC10.5 objects to.
+    # Revisit if the suite's honest duration changes.
+    timeout-minutes: 25
     permissions:
       contents: read
     steps:
@@ -31,8 +36,55 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-
 
+      # AC1: assert at most one postgres, one redis and one minio container is alive at any
+      # instant. The containers are JVM-static (SharedContainers), so any breach means
+      # something has re-bound their lifetime to the Spring context.
+      - name: Start container sampler
+        run: .github/scripts/container-sampler.sh start /tmp/container-samples.txt
+
+      # No -q: it suppresses phase markers, the surefire/failsafe summaries and all
+      # per-class timings, which are the numbers this project's test-performance work
+      # is measured against. Do not add it back.
+      # Build, then assert the context count IN THE SAME SHELL that produced the log.
+      #
+      # Two earlier attempts asserted from a separate step -- first reading a tee'd /tmp/build.log,
+      # then a redirected $GITHUB_WORKSPACE/build.log. Both reported "no missCount found" even
+      # though the build step's own output contained thousands of the lines, so the gate failed
+      # every build for a reason that was never pinned down. Asserting here removes the cross-step
+      # file handoff that both failures had in common, which is the only thing they shared.
+      #
+      # `set +e` around maven so a test failure does not abort the step before the gate runs;
+      # the maven status is re-applied at the end so a red suite still fails the build.
       - name: Build and test
-        run: mvn -B verify -q
+        run: |
+          set +e
+          mvn -B verify 2>&1 | tee build.log
+          mvn_status=${PIPESTATUS[0]}
+
+          echo "::group::Spring context count (AC3)"
+          .github/scripts/assert-context-count.sh build.log 42
+          gate_status=$?
+          echo "::endgroup::"
+          # NB: stay under `set +e` here -- restoring `set -e` before the gate would abort the
+          # step on a gate failure before gate_status could be captured.
+
+          if [ "$mvn_status" -ne 0 ]; then exit "$mvn_status"; fi
+          exit "$gate_status"
+
+      - name: Assert container ceiling (AC1)
+        if: always()
+        run: .github/scripts/container-sampler.sh assert /tmp/container-samples.txt 1
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: test-reports-pr-${{ github.event.pull_request.number }}
+          path: |
+            target/surefire-reports/
+            target/failsafe-reports/
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Build Docker image (no push)
         uses: ./.github/actions/docker-build

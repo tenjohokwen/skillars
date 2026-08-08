@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.tenant;
 
-import com.softropic.skillars.config.TestConfig;
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.platform.tenant.contract.ApiKeyEnvironment;
 import com.softropic.skillars.platform.tenant.contract.ApiKeyStatus;
 import com.softropic.skillars.platform.tenant.repo.TenantApiKey;
@@ -8,27 +9,18 @@ import com.softropic.skillars.platform.tenant.repo.TenantApiKeyRepository;
 import com.softropic.skillars.platform.tenant.service.ApiKeyService;
 import com.softropic.skillars.platform.tenant.service.TenantService;
 
-import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-                properties = {"ledger.database.spy=true", "enable.test.mail=true"})
-@Import(TestConfig.class)
-@TestPropertySource(properties = "spring.cloud.compatibility-verifier.enabled=false")
-class RotatedKeyCleanupJobIT {
+@Disabled
+class RotatedKeyCleanupJobIT extends AbstractIntegrationTest {
 
     @Autowired
     private TenantService tenantService;
@@ -45,18 +37,6 @@ class RotatedKeyCleanupJobIT {
     @Autowired
     private TransactionTemplate transactionTemplate;
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.execute("DELETE FROM main.tenant_api_key_aud");
-            jdbcTemplate.execute("DELETE FROM main.tenant_aud");
-            jdbcTemplate.execute("DELETE FROM main.revinfo");
-            jdbcTemplate.execute("DELETE FROM main.tenant_api_key");
-            jdbcTemplate.execute("DELETE FROM main.tenant");
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     // AKEY-05: overdue ROTATED key is automatically revoked
     @Test

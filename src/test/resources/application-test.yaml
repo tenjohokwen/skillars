@@ -1,6 +1,97 @@
 logging:
   config: classpath:logback-test.xml
 
+# ---------------------------------------------------------------------------------------------
+# AC3 (story deferred-19): properties hoisted out of ~94 per-class @TestPropertySource blocks.
+#
+# Every one of these was hand-copied onto individual test classes, and the copies had diverged.
+# A property in a @TestPropertySource is part of the Spring context cache key, so a class that
+# spelled its set slightly differently from its neighbour paid for a whole separate
+# ApplicationContext -- which, before AC1, also meant its own PostgreSQL and Redis containers.
+# Declaring them once here removes them from the cache key entirely.
+#
+# Do NOT move a property back onto a test class unless it genuinely changes behaviour for that
+# class alone. IntegrationTestConventionTest pins the number of surviving @TestPropertySource
+# annotations so that adding one is a deliberate act.
+# ---------------------------------------------------------------------------------------------
+spring:
+  # Surefire/failsafe reported "going to kill self fork JVM. The exit has elapsed 30 seconds
+  # after System.exit(0)" at the end of the run. Consolidation is what made this appear: the
+  # suite now holds ~21 cached ApplicationContexts alive until JVM exit instead of evicting
+  # them as it goes, and Spring closes every one of them in a shutdown hook -- each stopping a
+  # Quartz scheduler, a Hikari pool, task executors and WireMock servers. Bounding the two
+  # slowest parts keeps that under Surefire's 30 s patience.
+  #
+  # Test-profile only. Production still waits for jobs to finish on shutdown.
+  quartz:
+    wait-for-jobs-to-complete-on-shutdown: false
+  lifecycle:
+    timeout-per-shutdown-phase: 5s
+  cloud:
+    compatibility-verifier:
+      enabled: false   # was on 83 classes
+
+  datasource:
+    hikari:
+      # REQUIRED once the containers are shared (AC1). Not an optimisation -- without this the
+      # suite cannot start.
+      #
+      # Production sizing (application.yaml:71-72) is maximum-pool-size 25 / minimum-idle 8,
+      # chosen so four app nodes fit inside PostgreSQL's default max_connections of 100. That was
+      # also harmless while every Spring context had its OWN PostgreSQL container: one pool per
+      # database, 8 idle connections, no contention.
+      #
+      # With one shared container, every cached context keeps its own live pool against the SAME
+      # database, and Spring caches up to 32 contexts. ~20 contexts x 8 minimum-idle = 160
+      # connections against a 100-connection server. The pool then cannot grow, Flyway blocks
+      # acquiring a connection for flywayInitializer, and the context fails after the 30 s
+      # connection-timeout with:
+      #
+      #   Connection is not available, request timed out after 30000ms
+      #   (total=1, active=1, idle=0, waiting=0)
+      #
+      # which surfaces as "Failed to load ApplicationContext" and then, once the failure
+      # threshold is hit, "skipping repeated attempt to load context" for every later class
+      # sharing that key.
+      #
+      # SIZING: 4 was too small and cost ~6.5 minutes of the suite. Test CLASSES run
+      # sequentially, but individual tests are not single-threaded -- the batch-accept tests
+      # process sibling bookings concurrently, exhausted a 4-connection pool, and then blocked
+      # for the full 30 s connection-timeout. It showed up as per-test times quantised at
+      # exactly 30.1 s and 60.1 s (one or two timeouts each) in BatchAcceptPaymentIT and
+      # BookingBatchResourceIT, which between them were 392 s of 724 s of total IT time.
+      #
+      # minimum-idle 0 is what makes a larger maximum safe: an inactive cached context holds
+      # NO connections, and idle-timeout returns them after 10 s. Only the context currently
+      # running a test draws from the server, so the ~20 cached contexts do not multiply into
+      # PostgreSQL's 100-connection limit the way the production sizing (25 max / 8 min-idle)
+      # did. Keep minimum-idle at 0 if you raise this further.
+      maximum-pool-size: 16
+      minimum-idle: 0
+      idle-timeout: 10000
+
+rate:
+  limiting:
+    enabled: false     # was on 64 classes; read by RateLimitingAspect (@Value default is true)
+
+allowed:
+  # H3: this is a SUPERSET, not a replacement. Main's default (application.yaml:296-297) is
+  # myClientId,hisClientId,herClientId,ourClientId, while 59 ITs overrode it to testClientId
+  # alone -- and SecurityIT.CLIENT_ID is "myClientId". Replacing rather than unioning would
+  # break SecurityIT and everything keyed on it. Both spellings are correct once both are allowed.
+  clients: myClientId,hisClientId,herClientId,ourClientId,testClientId
+
+enable:
+  # Makes TestConfig.mailManager() (a TestMailManager) the universal MailManager.
+  # ComponentConfig:27's real bean is @ConditionalOnProperty(havingValue="false",
+  # matchIfMissing=true), so setting this true globally disables it everywhere.
+  # Verified safe: MailManagerIT already set this itself and asserts the bean IS a
+  # TestMailManager -- it does not exercise the real MailManager.
+  # Side benefit: this stops the suite making real outbound SMTP connections to mail.gmx.net
+  # from CI, which the baseline run was still doing.
+  test:
+    mail: true
+
 platform:
   video:
     deletion:
@@ -13,6 +104,21 @@ platform:
         max-input-chars: 100
 
 app:
+  # AC5a (story deferred-19). Consolidating the suite onto a few long-lived Spring contexts
+  # removes the accidental protection context fragmentation used to provide: a 5-minute job in
+  # a context that lived 90 seconds never fired. One long-lived context means all 30 @Scheduled
+  # threads write to the same database the tests assert on for the whole run, and the per-test
+  # ShedLock backdate makes all 11 locked jobs eligible on every one of ~905 test methods.
+  #
+  # A delay sweep cannot achieve this: 16 of the 30 @Scheduled methods hard-code their delay or
+  # cron with no property placeholder. See infrastructure.config.SchedulingConfig.
+  #
+  # No integration test depends on a scheduler firing on its own -- verified by enumerating every
+  # Awaitility and Thread.sleep site in src/test (all are @Async, @TransactionalEventListener, SSE,
+  # CountDownLatch, or DB row-lock contention). Tests that exercise a sweeper invoke it directly,
+  # as BasePaymentIT.releaseSchedulerLock documents.
+  scheduling:
+    enabled: false
   payment:
     stripe:
       api-key: test_key

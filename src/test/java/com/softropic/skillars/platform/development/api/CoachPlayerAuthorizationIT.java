@@ -1,16 +1,14 @@
 package com.softropic.skillars.platform.development.api;
 
-import com.softropic.skillars.config.TestConfig;
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.SecurityIT;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
@@ -18,8 +16,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
@@ -39,16 +35,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * Verifies coach-player booking-relationship authorization (Story deferred-5, AC1/AC2)
  * and the admin bypass on the single-booking lookup endpoint (AC3).
  */
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@Import(TestConfig.class)
-@TestPropertySource(properties = {
-    "spring.cloud.compatibility-verifier.enabled=false",
-    "rate.limiting.enabled=false",
-    "allowed.clients=testClientId"
-})
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
-class CoachPlayerAuthorizationIT {
+class CoachPlayerAuthorizationIT extends AbstractIntegrationTest {
 
     private static final String LOGIN_ENDPOINT = "/api/auth/login";
     private static final String CLIENT_ID      = "testClientId";
@@ -120,28 +108,6 @@ class CoachPlayerAuthorizationIT {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id IN " +
-                "(SELECT id FROM marketplace.coach_profiles WHERE user_id IN (?, ?))",
-                COACH_USER_ID, DUAL_ROLE_USER_ID);
-            jdbcTemplate.update("DELETE FROM development.player_slu_weekly_snapshot WHERE player_id IN (?, ?)",
-                PLAYER_ID, DUAL_ROLE_PLAYER_ID);
-            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id IN (?, ?)", PLAYER_ID, DUAL_ROLE_PLAYER_ID);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE user_id IN (?, ?)",
-                COACH_USER_ID, DUAL_ROLE_USER_ID);
-            jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
-            jdbcTemplate.execute("DELETE FROM main.login_attempts");
-            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?, ?, ?, ?)",
-                COACH_USER_ID, PARENT_USER_ID, OTHER_PARENT_USER_ID, ADMIN_USER_ID, DUAL_ROLE_USER_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?, ?, ?, ?)",
-                COACH_USER_ID, PARENT_USER_ID, OTHER_PARENT_USER_ID, ADMIN_USER_ID, DUAL_ROLE_USER_ID);
-            jdbcTemplate.execute("DELETE FROM main.authority WHERE id IN (9330, 9331, 9332)");
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @Test
     void coachAccessPlayerWithoutRelationship_returns403() {
@@ -255,9 +221,6 @@ class CoachPlayerAuthorizationIT {
         return headers;
     }
 
-    private String baseUrl() {
-        return "http://localhost:" + randomServerPort;
-    }
 
     private void insertAuthority(int id, String name) {
         jdbcTemplate.update(

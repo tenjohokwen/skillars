@@ -1,17 +1,14 @@
 package com.softropic.skillars.infrastructure.config;
 
-import com.softropic.skillars.config.TestConfig;
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import net.javacrumbs.shedlock.core.LockConfiguration;
 import net.javacrumbs.shedlock.core.SimpleLock;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -24,11 +21,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Story deferred-4, AC 1: confirms Flyway created main.shedlock and that ShedLock's
  * JdbcTemplateLockProvider is wired up so distributed scheduler locking is active on startup.
  */
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest
-@Import(TestConfig.class)
-@TestPropertySource(properties = "spring.cloud.compatibility-verifier.enabled=false")
-class ShedLockConfigIT {
+class ShedLockConfigIT extends AbstractIntegrationTest {
 
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private net.javacrumbs.shedlock.core.LockProvider lockProvider;

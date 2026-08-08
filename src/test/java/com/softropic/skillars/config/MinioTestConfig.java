@@ -7,7 +7,6 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.test.context.DynamicPropertyRegistrar;
 import org.testcontainers.containers.MinIOContainer;
-import org.testcontainers.utility.DockerImageName;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.NoSuchBucketException;
 
@@ -21,18 +20,24 @@ public class MinioTestConfig {
 
     static final String TEST_BUCKET = "test-storage";
 
+    /*
+     * The MinIOContainer @Bean this used to declare made the container Startable inside the
+     * context, so Boot's TestcontainersLifecycleBeanPostProcessor stopped it whenever a context
+     * closed. The container now lives in SharedContainers for the life of the JVM; only this
+     * registrar (which is not Startable) remains in the context.
+     *
+     * SharedContainers.Minio is a lazy holder, so importing this class is still what decides
+     * whether a JVM pays for MinIO at all -- the property this class's javadoc describes is
+     * preserved.
+     */
     @Bean
-    MinIOContainer minioContainer() {
-        return new MinIOContainer(DockerImageName.parse("minio/minio:RELEASE.2024-01-13T07-53-03Z"));
-    }
-
-    @Bean
-    DynamicPropertyRegistrar minioPropertyRegistrar(MinIOContainer minioContainer) {
+    DynamicPropertyRegistrar minioPropertyRegistrar() {
+        final MinIOContainer minio = SharedContainers.minio();
         return registry -> {
-            registry.add("app.storage.endpoint-url", minioContainer::getS3URL);
+            registry.add("app.storage.endpoint-url", minio::getS3URL);
             registry.add("app.storage.bucket", () -> TEST_BUCKET);
-            registry.add("app.storage.s3.access-key", minioContainer::getUserName);
-            registry.add("app.storage.s3.secret-key", minioContainer::getPassword);
+            registry.add("app.storage.s3.access-key", minio::getUserName);
+            registry.add("app.storage.s3.secret-key", minio::getPassword);
             registry.add("app.storage.s3.path-style-access", () -> "true");
         };
     }

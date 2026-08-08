@@ -1,18 +1,14 @@
 package com.softropic.skillars.platform.session.api;
 
-import com.softropic.skillars.config.TestConfig;
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.security.SecurityIT;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.web.client.HttpClientErrorException;
@@ -26,14 +22,6 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@Import(TestConfig.class)
-@TestPropertySource(properties = {
-    "spring.cloud.compatibility-verifier.enabled=false",
-    "rate.limiting.enabled=false",
-    "allowed.clients=testClientId"
-})
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
 class SessionBuilderResourceIT extends BaseSessionIT {
 
@@ -100,27 +88,6 @@ class SessionBuilderResourceIT extends BaseSessionIT {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM session.sessions WHERE booking_id = ?", confirmedBookingId);
-            jdbcTemplate.update("DELETE FROM session.sessions WHERE booking_id = ?", requestedBookingId);
-            jdbcTemplate.update("DELETE FROM session.sessions WHERE booking_id = ?", otherCoachBookingId);
-            jdbcTemplate.update("DELETE FROM session.drills WHERE id = ?", drillId);
-            jdbcTemplate.update("DELETE FROM booking.bookings WHERE id IN (?, ?, ?)",
-                confirmedBookingId, requestedBookingId, otherCoachBookingId);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_subscriptions WHERE coach_id IN (?, ?, ?)",
-                instrCoachId, scoutCoachId, otherCoachId);
-            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE user_id IN (?, ?, ?)",
-                INSTR_COACH_USER_ID, SCOUT_COACH_USER_ID, OTHER_COACH_USER_ID);
-            jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?, ?)",
-                INSTR_COACH_USER_ID, SCOUT_COACH_USER_ID, OTHER_COACH_USER_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?, ?)",
-                INSTR_COACH_USER_ID, SCOUT_COACH_USER_ID, OTHER_COACH_USER_ID);
-            jdbcTemplate.update("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @Test
     void createSession_instructorCoach_validRequest_returns201WithSessionPlan() {

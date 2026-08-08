@@ -151,6 +151,7 @@ flowchart LR
       <div class="card"><h4>Session refresh mechanism</h4><p><a href="../session-refresh-mechanism.md">docs/session-refresh-mechanism.md</a> — deep dive on the JWT refresh-token rotation flow.</p></div>
       <div class="card"><h4>Time handling conventions</h4><p><a href="../handling-time.md">docs/handling-time.md</a> — how the codebase handles timezones/dates.</p></div>
       <div class="card"><h4>Frontend integration</h4><p><a href="../frontend-integration-guide.md">docs/frontend-integration-guide.md</a> and <a href="../frontend-implementation-spec.md">docs/frontend-implementation-spec.md</a>.</p></div>
+      <div class="card"><h4>Writing integration tests</h4><p><a href="../testing/readme.md">docs/testing/</a> — why tests extend <code>AbstractIntegrationTest</code> instead of copying <code>@Import(TestConfig.class)</code>, how the shared Testcontainers instances work, and the per-test database reset. <strong>Read before adding an <code>*IT</code> class.</strong></p></div>
     </div>
 
     <h2>Conventions &amp; Gotchas (platform-wide)</h2>

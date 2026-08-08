@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.security.service;
 
-import com.softropic.skillars.config.TestConfig;
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.infrastructure.persistence.EntityStatus;
 import com.softropic.skillars.infrastructure.util.ClockProvider;
 import com.softropic.skillars.infrastructure.util.RandomUtil;
@@ -20,14 +21,11 @@ import org.instancio.Instancio;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.context.SecurityContextImpl;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -40,11 +38,8 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {"logging.level.org.springframework.security=TRACE", "enable.test.mail=true"})
-@Import(TestConfig.class)
 @Sql({UserServiceIT.SEC_DATA_SQL_PATH})
-class UserServiceIT {
+class UserServiceIT extends AbstractIntegrationTest {
 
     public static final String  USER_DATA_SQL_PATH = "/sql/userData.sql";
     private static final String LOGIN_NAME         = "me@yahoo.com";

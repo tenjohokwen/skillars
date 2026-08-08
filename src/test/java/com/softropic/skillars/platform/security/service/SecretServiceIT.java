@@ -1,22 +1,19 @@
 package com.softropic.skillars.platform.security.service;
 
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.infrastructure.persistence.EntityStatus;
-import com.softropic.skillars.config.TestConfig;
 import com.softropic.skillars.platform.security.repo.Secret;
-import com.softropic.skillars.utils.DbCleaner;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
@@ -26,19 +23,14 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@ActiveProfiles({"dev", "test"})
 //TODO take note "webEnvironment=WebEnvironment.RANDOM_PORT" is needed so as to configure TestRestTemplate
-@SpringBootTest(webEnvironment= SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {"logging.level.org.springframework.security=TRACE"})
-@Import(TestConfig.class)
-class SecretServiceIT {
+class SecretServiceIT extends AbstractIntegrationTest {
     public static final String V_1 = "v1";
     public static final String JWT = "jwt";
 
     @Autowired
     private SecretService secretService;
 
-    @Autowired
-    private DbCleaner dbCleaner;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -55,7 +47,6 @@ class SecretServiceIT {
 
     @AfterEach
     void cleanup() {
-        dbCleaner.cleanDb();
     }
 
     @AfterAll

@@ -1,25 +1,21 @@
 package com.softropic.skillars.platform.security.api;
 
-import com.softropic.skillars.config.TestConfig;
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.SecurityIT;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
@@ -37,15 +33,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@Import(TestConfig.class)
-@TestPropertySource(properties = {
-    "spring.cloud.compatibility-verifier.enabled=false",
-    "rate.limiting.enabled=false"
-})
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
-class CoachRegistrationResourceIT {
+class CoachRegistrationResourceIT extends AbstractIntegrationTest {
 
     private static final String REGISTER_ENDPOINT = "/api/security/coach/register";
     private static final String VERIFY_EMAIL_ENDPOINT = "/api/security/coach/verify-email";
@@ -80,18 +69,6 @@ class CoachRegistrationResourceIT {
         });
     }
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.execute("DELETE FROM main.phone_otp_tokens");
-            jdbcTemplate.execute("DELETE FROM main.email_verification_tokens");
-            jdbcTemplate.execute("DELETE FROM main.user_authority");
-            jdbcTemplate.execute("DELETE FROM main.\"user\"");
-            jdbcTemplate.execute("DELETE FROM main.authority");
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @Test
     void registerCoach_validData_returns200AndUserIsUnverified() {
@@ -421,9 +398,6 @@ class CoachRegistrationResourceIT {
         assertThat(storedLangKey).isEqualTo("en");
     }
 
-    private String baseUrl() {
-        return "http://localhost:" + randomServerPort;
-    }
 
     private HttpHeaders jsonHeaders() {
         HttpHeaders headers = new HttpHeaders();

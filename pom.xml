@@ -31,6 +31,34 @@
 			<org.mapstruct.version>1.6.3</org.mapstruct.version>
 			<node.version>v22.16.0</node.version>
 			<spring-cloud.version>2025.0.1</spring-cloud.version>
+			<!--
+			  Backend-only iteration switch: `mvn -o verify -DskipFrontend` skips all five
+			  frontend-maven-plugin executions (install-node-and-npm, npm install,
+			  npm install -g @quasar/cli, npm test, npx quasar build).
+
+			  WARNING: this changes the packaged artifact. maven-resources-plugin copies
+			  src/frontend/dist/spa -> target/classes/static at process-resources; on a clean
+			  tree with this flag that directory does not exist, so the resulting jar ships
+			  with NO UI. Fine for backend iteration, unacceptable for anything deployed.
+			  MUST NOT be set in any CI workflow; pr-build.yml builds a Docker image from
+			  this same artifact. See docs/testing/readme.md.
+			-->
+			<skipFrontend>false</skipFrontend>
+
+			<!--
+			  Security overrides of Spring Boot 3.5.11's managed versions. Trivy fails the
+			  pr-build scan on CRITICAL/HIGH findings; these are the ones with a fix available.
+			  Remove an override once the Boot parent's own managed version reaches or exceeds it.
+
+			  thymeleaf  CVE-2026-41901 / CVE-2026-40478 - server-side template injection.
+			             Boot 3.5.11 manages 3.1.3.RELEASE; Trivy reports the fix as 3.1.5.RELEASE.
+			             Thymeleaf is genuinely used here (the registration/notification email
+			             templates), so this is a reachable code path, not a dormant dependency.
+			  netty      CVE-2026-42587 - netty-codec-http. Trivy reports the fix as
+			             4.1.133.Final on the 4.1.x line, which is the line Boot 3.5.11 is on.
+			-->
+			<thymeleaf.version>3.1.5.RELEASE</thymeleaf.version>
+			<netty.version>4.1.133.Final</netty.version>
 		</properties>
 	
 		<dependencyManagement>
@@ -478,6 +506,9 @@
 				<configuration>
 					<nodeVersion>${node.version}</nodeVersion>
 					<workingDirectory>src/frontend</workingDirectory>
+					<!-- Plugin-level config merges into every execution above; none of the
+					     five overrides <skip>, so -DskipFrontend disables all of them. -->
+					<skip>${skipFrontend}</skip>
 				</configuration>
 			</plugin>
 			<plugin>

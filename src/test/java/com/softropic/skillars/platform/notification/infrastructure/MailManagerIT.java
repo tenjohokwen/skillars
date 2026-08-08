@@ -1,19 +1,16 @@
 package com.softropic.skillars.platform.notification.infrastructure;
 
-import com.softropic.skillars.config.TestConfig;
+import com.softropic.skillars.config.AbstractIntegrationTest;
+
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.contract.Recipient;
 import com.softropic.skillars.platform.notification.service.MailManager;
 import com.softropic.skillars.utils.TestMailManager;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
@@ -24,15 +21,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-                properties = {
-                        "ledger.database.spy=true",
-                        "enable.test.mail=true",
-                        "spring.cloud.compatibility-verifier.enabled=false"
-                })
-@Import(TestConfig.class)
-public class MailManagerIT {
+public class MailManagerIT extends AbstractIntegrationTest {
 
     @Autowired
     private MailManager mailManager;
@@ -43,13 +32,6 @@ public class MailManagerIT {
     @Autowired
     private TransactionTemplate transactionTemplate;
 
-    @AfterEach
-    void tearDown() {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.execute("DELETE FROM main.sec");
-            return null;
-        });
-    }
 
     @Test
     void contextLoads() {

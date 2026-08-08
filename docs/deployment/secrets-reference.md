@@ -79,7 +79,7 @@ additional secrets (Slack webhook, alert routing) will be defined in Epic 2 stor
 
 | Secret name | Format | How to obtain or generate |
 |---|---|---|
-| `GHCR_PAT` | GitHub Personal Access Token | GitHub → Settings → Developer settings → Personal access tokens → New token; grant `write:packages` scope; used by CI to push images to GitHub Container Registry |
+| `GHCR_PAT` | GitHub Personal Access Token | GitHub → Settings → Developer settings → Personal access tokens → New token; grant `read:packages` scope; used **only** by `deploy.yml` for `docker login` on the Node. `ci.yml` no longer needs it — it pushes to GHCR with the built-in `GITHUB_TOKEN`. See [github-build.md](baseline/github-build.md) |
 | `SSH_DEPLOY_KEY` | PEM private key (ed25519 recommended) | Generate: `ssh-keygen -t ed25519 -C deploy@skillars-prod`; add the public key to `/root/.ssh/authorized_keys` on the Node; paste the private key here |
 | `SSH_HOST` | IP address | The Node's public IP address; used by the deploy workflow to SSH to the Node |
 | `SSH_USER` | String, e.g. `root` | SSH username on the Node (default `root`) |
