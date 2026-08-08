@@ -5,7 +5,7 @@
 	<parent>
 		<groupId>org.springframework.boot</groupId>
 		<artifactId>spring-boot-starter-parent</artifactId>
-		<version>3.5.11</version>
+		<version>3.5.16</version>
 		<relativePath/> <!-- lookup parent from repository -->
 	</parent>
 	<groupId>com.softropic</groupId>
@@ -46,19 +46,27 @@
 			<skipFrontend>false</skipFrontend>
 
 			<!--
-			  Security overrides of Spring Boot 3.5.11's managed versions. Trivy fails the
+			  Security overrides of the Boot parent's managed versions. Trivy fails the
 			  pr-build scan on CRITICAL/HIGH findings; these are the ones with a fix available.
 			  Remove an override once the Boot parent's own managed version reaches or exceeds it.
 
+			  Most of what Trivy flagged on 3.5.11 is now carried by the 3.5.16 parent itself
+			  and needs no override here: tomcat 10.1.55, spring-framework 6.2.19,
+			  spring-security 6.5.11, jackson 2.21.4, micrometer 1.15.12, spring-data 2025.0.13.
+
 			  thymeleaf  CVE-2026-41901 / CVE-2026-40478 - server-side template injection.
-			             Boot 3.5.11 manages 3.1.3.RELEASE; Trivy reports the fix as 3.1.5.RELEASE.
-			             Thymeleaf is genuinely used here (the registration/notification email
-			             templates), so this is a reachable code path, not a dormant dependency.
-			  netty      CVE-2026-42587 - netty-codec-http. Trivy reports the fix as
-			             4.1.133.Final on the 4.1.x line, which is the line Boot 3.5.11 is on.
+			             Trivy reports the fix as 3.1.5.RELEASE. Thymeleaf is genuinely used
+			             here (the registration/notification email templates), so this is a
+			             reachable code path, not a dormant dependency.
+			  netty      CVE-2026-59901 (netty-codec), CVE-2026-55831/55833/56745
+			             (netty-codec-http), CVE-2026-56819 (http2), CVE-2026-44249/45416/50010
+			             (netty-handler). Fix on the 4.1.x line is 4.1.136.Final.
+			  postgresql CVE-2026-42198, CVE-2026-54291. The 3.5.16 parent manages 42.7.11,
+			             which fixes only the first; 42.7.12 fixes both.
 			-->
 			<thymeleaf.version>3.1.5.RELEASE</thymeleaf.version>
-			<netty.version>4.1.133.Final</netty.version>
+			<netty.version>4.1.136.Final</netty.version>
+			<postgresql.version>42.7.12</postgresql.version>
 		</properties>
 	
 		<dependencyManagement>
@@ -76,6 +84,28 @@
 					<version>2.28.29</version>
 					<type>pom</type>
 					<scope>import</scope>
+				</dependency>
+
+				<!--
+				  Transitive security pins. Neither of these is exposed as a Boot property, so
+				  they are pinned here rather than in <properties>. Both arrive through a
+				  dependency we do not control the version of; drop the pin once that upstream
+				  ships the fixed version itself.
+
+				  bcprov  CVE-2025-14813 (CRITICAL). Arrives at 1.80 via
+				          spring-cloud-commons 4.3.1 (spring-cloud-starter). Fix: 1.81.1.
+				  beanutils CVE-2025-48734. Arrives at 1.9.4 via commons-validator 1.9.0.
+				          Fix: 1.11.0.
+				-->
+				<dependency>
+					<groupId>org.bouncycastle</groupId>
+					<artifactId>bcprov-jdk18on</artifactId>
+					<version>1.81.1</version>
+				</dependency>
+				<dependency>
+					<groupId>commons-beanutils</groupId>
+					<artifactId>commons-beanutils</artifactId>
+					<version>1.11.0</version>
 				</dependency>
 			</dependencies>
 		</dependencyManagement>

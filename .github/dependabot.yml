@@ -4,3 +4,37 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+
+  # Added 2026-08-08 alongside the CVE remediation in PR #8.
+  #
+  # Nothing was watching the Java dependencies: GitHub's own Dependabot security
+  # updates and vulnerability alerts are both disabled on this repo (private, no
+  # Advanced Security), and the only automated check was the Trivy step in
+  # pr-build.yml -- which scans the built image, runs on PRs only, and therefore
+  # reports the backlog rather than preventing it. Boot sat at 3.5.11 while
+  # 3.5.12 through 3.5.16 shipped, and the debt surfaced as 34 CVEs at once.
+  #
+  # Grouped deliberately. Ungrouped, a Boot patch release opens a dozen PRs for
+  # artifacts that only move because the parent moved. The groups below collapse
+  # those into one reviewable PR each; anything not matching a pattern still gets
+  # its own PR, which is what you want for a genuinely independent bump.
+  - package-ecosystem: "maven"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      spring:
+        patterns:
+          - "org.springframework*:*"
+          - "io.micrometer:*"
+      aws-sdk:
+        patterns:
+          - "software.amazon.awssdk:*"
+      testing:
+        patterns:
+          - "org.testcontainers:*"
+          - "org.junit*:*"
+          - "org.mockito:*"
+          - "com.github.tomakehurst:*"
+          - "org.wiremock*:*"
