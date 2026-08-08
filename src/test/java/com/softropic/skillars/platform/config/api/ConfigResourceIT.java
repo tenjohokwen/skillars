@@ -37,6 +37,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+//TODO this @DirtiesContext may not be needed. Eventually remove it and test the class in isolation as well as run full app tests
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 // AC5.5 triage: this class authenticates but seeded no security key of its own -- it was
 // free-riding on rows another test class happened to leave in main.sec. The deterministic
