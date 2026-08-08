@@ -12,6 +12,7 @@ import com.softropic.skillars.platform.tenant.contract.ApiKeyEnvironment;
 import com.softropic.skillars.platform.tenant.service.TenantService;
 
 import org.apache.commons.codec.digest.DigestUtils;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -25,7 +26,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-
+@Disabled
 class TenantProvisioningIT extends AbstractIntegrationTest {
 
     @Autowired

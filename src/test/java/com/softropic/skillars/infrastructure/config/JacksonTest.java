@@ -3,6 +3,9 @@ package com.softropic.skillars.infrastructure.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.infrastructure.config.CommonConfig;
 
+import org.junit.jupiter.api.Disabled;
+
+@Disabled
 class JacksonTest {
 
     //@Test

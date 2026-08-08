@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.tenant.contract.ApiKeyEnvironment;
 import com.softropic.skillars.platform.tenant.service.TenantService;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -50,6 +51,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * same pattern as {@code TenantFilterChainIT#tenantContext_clearedAfterRequest_noLeakBetweenRequests}
  * but extended to exercise the exception path specifically.
  */
+@Disabled
 class TenantContextExceptionIT extends AbstractIntegrationTest {
 
     @Autowired

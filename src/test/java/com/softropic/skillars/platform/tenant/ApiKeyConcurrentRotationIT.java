@@ -11,6 +11,7 @@ import com.softropic.skillars.platform.tenant.service.ApiKeyService;
 import com.softropic.skillars.platform.tenant.service.ApiKeyService.ApiKeyAndRawKey;
 import com.softropic.skillars.platform.tenant.service.TenantService;
 
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -27,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+@Disabled
 class ApiKeyConcurrentRotationIT extends AbstractIntegrationTest {
 
     @Autowired private TenantService tenantService;

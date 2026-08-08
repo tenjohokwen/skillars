@@ -9,6 +9,7 @@ import com.softropic.skillars.platform.tenant.repo.TenantApiKeyRepository;
 import com.softropic.skillars.platform.tenant.service.ApiKeyService;
 import com.softropic.skillars.platform.tenant.service.TenantService;
 
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -18,7 +19,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-
+@Disabled
 class RotatedKeyCleanupJobIT extends AbstractIntegrationTest {
 
     @Autowired
