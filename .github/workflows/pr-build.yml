@@ -62,7 +62,7 @@ jobs:
           mvn_status=${PIPESTATUS[0]}
 
           echo "::group::Spring context count (AC3)"
-          .github/scripts/assert-context-count.sh build.log 42
+          .github/scripts/assert-context-count.sh build.log 36
           gate_status=$?
           echo "::endgroup::"
           # NB: stay under `set +e` here -- restoring `set -e` before the gate would abort the

@@ -35,13 +35,34 @@ LOG="${1:?usage: assert-context-count.sh <build-log> [ceiling]}"
 # Two further reasons the number here is larger than the offline analysis reports (20):
 #   - ~11 @WebMvcTest slice classes build their own cut-down contexts. They start no container
 #     and are cheap, but they still count towards missCount.
-#   - @DirtiesContext(AFTER_EACH_TEST_METHOD) forces a rebuild per test method
-#     (ConfigResourceIT does this), so one class can contribute several.
+#   - @DirtiesContext forces rebuilds. RateLimitingAspectIT still uses AFTER_CLASS.
+#     ConfigResourceIT used AFTER_EACH_TEST_METHOD and contributed several on its own until
+#     it was removed; that single change took CI from 37 to 34.
 #
-# Observed steady state is 37. 42 leaves room for ordinary variation while still catching a
-# real regression -- one carelessly added @MockitoBean set forks several contexts at once.
-# Lower it if the slice/@DirtiesContext contributors are addressed.
-CEILING="${2:-42}"
+# CEILING = 36, tightened from 42.
+#
+# Measured, all on the same tree (721b3e1):
+#   CI, pr-build   34   (PR #33, run 31263728801)
+#   CI, master     34   (run 31264226119)
+#   local          32   (full mvn verify -DskipFrontend)
+#
+# 36 gives +2 over the reproducible CI figure. 42 was set when the steady state was 37 and is
+# now loose enough to ABSORB a regression rather than catch one, which matters more than it
+# used to: both runs above report the cache at `size = 32, maxSize = 32`, i.e. Spring's default
+# cache is exactly full. At capacity, one new context configuration does not cost +1 -- it also
+# evicts something still in use, which is then rebuilt. That is the thrashing this story
+# existed to remove, so the gate should fire early rather than late.
+#
+# Honest caveat: the local 32 vs CI 34 gap is NOT fully explained. Both run the same 905 tests
+# with the same 53 skipped, so it is most likely execution order interacting with eviction and
+# with RateLimitingAspectIT's AFTER_CLASS dirtying. The gate runs in CI, so it is set from the
+# CI number.
+#
+# If this starts failing intermittently at 35-36, do NOT just raise the number: that variance
+# would mean the cache is thrashing on ordering alone, and the fix is to remove a context
+# configuration (or the remaining @DirtiesContext) so the suite sits below 32 distinct keys
+# with room to spare.
+CEILING="${2:-36}"
 
 if [ ! -f "$LOG" ]; then
   echo "assert-context-count: build log not found: $LOG" >&2
