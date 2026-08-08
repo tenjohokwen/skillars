@@ -1,6 +1,6 @@
 # Story Deferred-19: Integration-Test Context & Container Consolidation
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -501,7 +501,7 @@ Add a `<skipFrontend>false</skipFrontend>` property in `pom.xml` and wire it to 
   - [x] For each remaining mocked type, **verify whether any IT drives the real collaborator** (especially `VideoProviderAdapter` vs the Bunny WireMock stubs, and `FileStorageService` vs the MinIO storage ITs) and record hoist / keep-local / stub-bean per type in `docs/testing/`.
   - [x] Create `AbstractVideoIT` / `AbstractPaymentIT` / `AbstractStorageIT` / `AbstractE2ETest` with their family mock sets, per AC3's target table. **`AbstractE2ETest` takes `E2ESecurityConfig` only** — keep `TestClockConfig` out, or delete the dead `AbstractSkillarsE2ETest` it belongs to. **Satisfied differently:** the four *existing* family bases (`BaseVideoIT`, `BasePaymentIT`, `BaseSessionIT`, `BaseStorageIT`) were converted to extend `AbstractIntegrationTest` and now carry the family mock sets, so no parallel `Abstract*IT` hierarchy was created — adding one would have meant migrating 45 subclasses for no change in cache keys. `AbstractSkillarsE2ETest` was **deleted** (the second option the task offered) along with `TestClockConfig`; the two surviving E2E classes (`ConfigResourceIT`, `StorageResourceIT`) take `E2ESecurityConfig` directly.
   - [x] **Do not add `Mockito.reset(...)` for plain `@MockitoBean` fields** — `MockReset.AFTER` is already the default. Instead audit `@MockitoSpyBean` and the non-Mockito stub beans (`StubPaymentGateway` and friends) for mutable state that now survives the whole run, and add reset hooks only where the audit finds some.
-  - [ ] Full verify + PR. Re-run the analysis script; confirm **≤ 10** contexts. — **NOT MET.** Verify + PR done; the count is **20 distinct configurations / 37 context loads**. AC3's ≤ 10 is unreachable without replacing the system under test in five classes. See *Task 11 → AC3 miss* below and `docs/testing/readme.md`.
+  - [ ] Full verify + PR. Re-run the analysis script; confirm **≤ 10** contexts. — **NOT MET.** Verify + PR done; the final count is **20 `@SpringBootTest` configurations / ~32 cache keys / 34 context loads**. AC3's ≤ 10 is unreachable without replacing the system under test in five classes. See *Task 11 → AC3 miss* below and `docs/testing/readme.md`.
 
 - [x] **Task 6 — AC5: deterministic reset** *(split into two commits)*
   - [x] Commit A: add `DatabaseResetTestExecutionListener` (truncate + Redis flush) with order < 5000, registered via `@TestExecutionListeners(mergeMode = MERGE_WITH_DEFAULTS)` on `AbstractIntegrationTest`. **Empirically verify the ordering against `@Sql`** before going further.
@@ -1056,30 +1056,37 @@ The table below was written mid-story. Tasks 5–11 were all subsequently comple
 
 #### Task 11 — Final verification (complete)
 
-**Authoritative run: CI [`31233411803`](https://github.com/tenjohokwen/skillars/actions/runs/31233411803)**
-(`pr-build.yml`, commit `635f7ff`). Every story gate passes. The run is red **only** on the Trivy
-image scan, which is pre-existing dependency debt unrelated to this story — see *Known red* below.
+**Authoritative run: CI [`31266833983`](https://github.com/tenjohokwen/skillars/actions/runs/31266833983)**
+(`pr-build.yml`, PR #35, master `bf513a1`). Fully green — tests, both story gates, and the Trivy
+image scan.
 
-| Metric | Baseline (`31180425880`, tree `21ef489`) | Final (`31233411803`) |
+*This section was reconciled at close-out. It originally reported run `31233411803` (`635f7ff`),
+which was green on every story gate but red on Trivy, and quoted the pre-pool-fix wall clocks.
+Both the Trivy debt and the pool bug were resolved afterwards, in PRs #8 and #33–#35; the numbers
+below are the final measured state, not the mid-flight one.*
+
+| Metric | Baseline (`31180425880`, tree `21ef489`) | Final (`31266833983`, `bf513a1`) |
 |---|---|---|
-| CI wall clock | 10m10s *(red run — died before Docker + Trivy)* | **14m37s** *(full run incl. image build + scan)* |
+| CI wall clock | 10m10s *(red run — died before Docker + Trivy)* | **10m48s** *(full run incl. image build + scan)* |
 | Unit tests (surefire) | 825 — 0F / 0E / 1 skipped | **828** — 0F / 0E / 6 skipped |
 | Integration tests (failsafe) | 905 — 1F / **16E** / 4 skipped | **905** — **0F / 0E** / 53 skipped |
 | Peak PostgreSQL containers | ~30 | **1** |
 | Peak Redis containers | ~30 | **1** |
 | Peak MinIO containers | per-context | **2** |
-| Context loads (`missCount`) | 37 | **37** *(see reconciliation)* |
+| Context loads (`missCount`) | 37 | **34** *(gate ceiling 36)* |
+| Trivy CRITICAL / HIGH | not reached (run died first) | **0 / 0** |
 
-The two wall-clock figures **are not comparable** and must not be quoted as a regression: the
-baseline run failed at the failsafe step and never reached the Docker build or the Trivy scan.
-The honest comparison is against the last full green-through-Docker run of this branch before the
-pool fix, which was ~21 min — so the measured saving is **~6.5 min on CI**, essentially all of it
-from the Hikari pool correction (below), not from container consolidation.
+The two wall-clock figures **are not comparable**, and the near-parity must not be read as "no
+improvement": the baseline run failed at the failsafe step and never reached the Docker build or
+the Trivy scan, so the final run does **strictly more work in the same time**. Against the last
+full green-through-Docker run before the pool fix (~21 min), the measured saving is **~10 min on
+CI** — most of it from the Hikari pool correction below, not from container consolidation.
 
-**Local (`mvn -o verify`, macOS/Docker Desktop):** 30:45 baseline → ~32 min at the time the pool
-bug was live → not re-measured end-to-end after the fix. The two classes that carried the
-regression are measured individually below. *This is a gap: no clean local full-suite number was
-taken after the fix.*
+**Local (`mvn verify -DskipFrontend`, macOS/Docker Desktop):** 30:45 baseline → **8:05** final.
+**This is not a like-for-like comparison** and must not be quoted as a ~4× speedup: it skips the
+frontend build, runs on warm Maven and Docker caches, and the tenant tests are disabled. It is a
+lower bound for a warm backend-only loop. A clean like-for-like local measurement was never
+taken — that gap is real and is listed below.
 
 **The dominant win was a bug I introduced, then removed.** `maximum-pool-size: 4` (added in
 `4550a70` alongside the necessary `minimum-idle: 0`) starved tests that use concurrency *within* a
@@ -1096,23 +1103,33 @@ justification originally given for `4` ("tests are single-threaded per context")
 non-sequitur: `forkCount > 1` being out of scope constrains test *classes*, not threads inside a
 test method.
 
-**Context count — reconciling 20 with 37.** These measure different things and the docs previously
-printed them side by side without saying so:
+**Context count — reconciling the three numbers.** These measure different things, and an earlier
+revision of both this section and `docs/testing/readme.md` printed two of them side by side without
+saying so:
 
-- **20** = distinct context *configurations* (cache keys), from the analysis script. This is what
-  AC3's ceiling is about.
-- **37** = `missCount`, the number of context *loads* in the failsafe JVM.
+- **20** = distinct `@SpringBootTest` *configurations* from the offline analysis script. The script
+  **skips Boot slices**, which is why it is the smallest number. This is what AC3's ceiling is about.
+- **~32** = actual Spring cache keys. Every run reports `size = 32, maxSize = 32`. The extra ~11 are
+  `@WebMvcTest` and friends — cut-down contexts, no containers, cheap, but real cache entries.
+  **20 + ~11 ≈ 32 is what reconciles the two**, and neither this file nor the docs said so until
+  close-out.
+- **34** = `missCount`, the number of context *loads*, and what the CI gate reads.
 
-The gap is `@DirtiesContext`. `ConfigResourceIT:40` declares
-`@DirtiesContext(classMode = AFTER_EACH_TEST_METHOD)` and rebuilds its context on **every test
-method** — attributable in the CI log as four consecutive misses (#31–#34) before its summary
-line. `RateLimitingAspectIT:32` adds one more with `AFTER_CLASS`. The cache also reports
-`size = 32, maxSize = 32`, i.e. saturated, so late loads additionally evict and reload.
+**The cache is exactly full**, which is the fact that matters going forward: at `maxSize = 32` with
+~32 keys, one new context configuration does not cost +1 load — it also evicts something still in
+use, which is then rebuilt. That is the thrashing this story existed to remove. It is why the gate
+ceiling was tightened from 42 to **36** (PR #34) once the steady state settled at 34.
 
-**`ConfigResourceIT`'s `@DirtiesContext` is now probably redundant** — AC5.1b added `ConfigService`
-and `AlertRuleCache` eviction to the reset listener specifically so per-test config isolation no
-longer needs a context teardown. Removing it is the single highest-value remaining cleanup and is
-left as follow-up work rather than gambled on at landing time.
+`ConfigResourceIT`'s `@DirtiesContext(AFTER_EACH_TEST_METHOD)` was the largest remaining
+contributor — four consecutive misses (#31–#34) attributable to it in the CI log. **It has since
+been removed** (PR #33), taking CI from 37 to 34, verified both in isolation and in the full suite;
+AC5.1b's `ConfigService` / `AlertRuleCache` eviction already provided the isolation it was there
+for. `RateLimitingAspectIT:32` still uses `AFTER_CLASS` and is now the only dirtying source left.
+
+> Unresolved: local runs report `missCount = 32` where CI reports 34, on the same 905 tests with
+> the same 53 skipped. Most likely execution order interacting with eviction and the remaining
+> `AFTER_CLASS` dirtying. Recorded as unexplained rather than rationalised; the gate runs in CI and
+> is set from the CI number.
 
 **AC3 miss — ≤ 10 contexts is unreachable on this hierarchy.** Getting from 20 to 10 requires
 hoisting `QuotaService`, `VideoLifecycleService` and `ModerationOrchestrationService` onto
@@ -1123,28 +1140,44 @@ keep passing while asserting nothing. **20 is the correct floor**; going lower n
 sub-bases, not a bigger shared mock set. The earlier "21, and it is reachable" note above was
 written before that analysis and is wrong.
 
-**Known red — not this story.** Trivy reports 34 findings (3 Alpine OS packages, 31 in `app.jar`;
-29 HIGH / 5 CRITICAL). The 5 CRITICALs are `tomcat-embed-core` 10.1.52→10.1.55,
-`bcprov-jdk18on` 1.80→1.81.1, and `spring-security-web` 6.5.8→6.5.9. Most clear with
-`spring-boot-starter-parent` 3.5.11 → 3.5.16. Deliberately **not** bundled here: a framework bump
-does not belong in a test-infrastructure PR, and it needs its own full-suite verification.
+**Trivy — was red at story landing, now resolved (separately).** At the time this story merged,
+Trivy reported 34 findings (29 HIGH / 5 CRITICAL). That was pre-existing dependency debt, not a
+regression from this work, and it was deliberately **not** bundled in: a framework bump does not
+belong in a test-infrastructure PR and needs its own full-suite verification. It was cleared in
+PR #8 (`spring-boot-starter-parent` 3.5.11 → 3.5.16, plus netty / postgresql / bcprov /
+commons-beanutils pins and an `apk upgrade` for the Alpine base) and PR #35 (bcprov pin dropped
+once upstream shipped a fixed 1.80.2). **The final run reports 0 CRITICAL / 0 HIGH.**
 
-**Gaps I am not papering over:**
-- No clean local `mvn -o verify` wall clock after the pool fix.
-- `-DskipFrontend`'s wall-clock delta (AC9) was never measured; the flag is verified to skip all
-  five executions, but the time saved is unquantified.
-- The context and container gates were verified to *pass* on the refactored tree and the container
-  ceiling was corrected after a real MinIO peak of 2; they were **not** re-run against the
-  pre-refactor tree to prove they fail there. Only the AC7 guardrail test got that treatment.
+The underlying cause was addressed too: nothing had been watching the Java dependencies. Dependabot
+now covers the `maven` ecosystem, grouped and constrained to minor/patch, with three ignores for
+migrations rather than upgrades (PRs #18, #27).
 
-**A deviation to flag:** AC3's ≤ 10 context ceiling is **not met** (21). It is reachable — the
-analysis shows the residual forks collapse once the video-family mocks move to a flavoured base —
-but the `VideoProviderAdapter` root hoist was deliberately **not** applied. AC4.2's trap-check
-could not be fully discharged by static analysis: all 24 classes that reference the type mock it,
-and the three ITs using Bunny WireMock stubs already mock it too, but ~100 classes that never
-reference it could still reach it transitively through a service. AC4.2 says that when this is in
-doubt the hoist belongs on `AbstractVideoIT` rather than the root, and validating a root hoist
-needs a full green run this session did not reach.
+**Gaps — still open at close-out, not papered over:**
+- **No clean like-for-like local wall clock.** The 8:05 figure skips the frontend, uses warm caches
+  and runs with the tenant tests disabled. The 30:45 baseline had none of those. The story's
+  original 8–15 min local projection is therefore **unverified, not achieved**.
+- **`-DskipFrontend`'s delta (AC9) was never measured.** The flag is verified to skip all five
+  executions; the time saved is unquantified.
+- **The two CI gates were never run against the pre-refactor tree.** They were verified to pass on
+  the refactored tree, and the container ceiling was corrected after a real MinIO peak of 2 — but
+  only the AC7 guardrail test was proven to *fail* on the old tree. The context gate has since been
+  proven to fire at its new ceiling (36 passes, 37 fails, missing input fails — PR #34), which is
+  the same class of evidence arriving late.
+- **`missCount` differs between local (32) and CI (34)** and the cause was not established.
+
+**A deviation to flag:** AC3's ≤ 10 context ceiling is **not met**. ~~It is reachable — the
+analysis shows the residual forks collapse once the video-family mocks move to a flavoured base.~~
+**That claim was wrong and is retracted** (see *Task 11 → AC3 miss*). Reaching 10 requires hoisting
+`QuotaService`, `VideoLifecycleService` and `ModerationOrchestrationService` onto `BaseVideoIT` —
+the family that *contains the real integration tests for those exact services*. Those five classes
+would keep passing while asserting nothing, so the ceiling is not reachable without destroying the
+tests it was meant to speed up. **20 is the floor for this hierarchy**; going lower needs
+per-service sub-bases, not a bigger shared mock set.
+
+The related `VideoProviderAdapter` root hoist was also deliberately not applied, and that call
+stands: AC4.2's trap-check could not be discharged by static analysis, and an attempt during the
+story broke `VideoWebhookResourceIT` with 5 failures and was reverted. When in doubt the hoist
+belongs on the family base, not the root.
 
 ### File List
 
