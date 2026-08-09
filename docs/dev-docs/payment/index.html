@@ -23,7 +23,6 @@
         <li><a href="../reviews/index.html">Reviews</a></li>
         <li><a href="../notification/index.html">Notification</a></li>
         <li><a href="../admin/index.html">Admin</a></li>
-        <li><a href="../tenant/index.html">Tenant</a></li>
         <li><a href="../security/index.html">Security</a></li>
         <li><a href="../filestorage/index.html">Filestorage</a></li>
         <li><a href="../config/index.html">Config</a></li>
@@ -32,6 +31,8 @@
       <h4>Cross-Cutting</h4>
       <ul>
         <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+        <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
+        <li><a href="../database/index.html">Database &amp; Migrations</a></li>
       </ul>
     </nav>
   </aside>
@@ -101,7 +102,24 @@
       <p><strong>Session packs expire and can be extended once.</strong> A purchased pack expires 60 days
       after purchase. The coach can extend it by 30 more days, but only once (<code>extendedAt</code> must be
       null) and only within a 14-day window before expiry. Packs nearing expiry with sessions remaining trigger
-      a daily warning notification 14 days out.</p>
+      a daily warning notification 14 days out — stamped with <code>expiryWarnedAt</code> so a 14-day window
+      scanned by a daily cron doesn't email the same parent fourteen mornings in a row.</p>
+    </div>
+    <div class="callout">
+      <p><strong>A pack can be paused exactly once per lifetime.</strong> <code>pausePack</code> refuses if
+      <code>pausedUntil</code> is already set. The pause length is bounded by the <code>pack.pause.maxDays</code>
+      config key, must start today or later, and must start before the pack expires. Pausing pushes
+      <code>expiresAt</code> out by the pause length. If any of the parent's bookings with that coach fall inside
+      the pause window, the first call returns them <em>without applying the pause</em>
+      (<code>PauseConflictResponse.applied = false</code>); the client re-submits with
+      <code>confirmedCancellationIds</code> to cancel them and commit the pause — a deliberate two-step
+      confirm flow, not an error.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Unused sessions are forfeited at expiry, not refunded.</strong>
+      <code>SessionPackForfeitureScheduler</code> runs hourly, stamps <code>expiredNotifiedAt</code>, and fires
+      <code>SessionPackExpiredEvent</code> carrying the remaining count so the parent is told what they lost.
+      No credit is written back to the wallet.</p>
     </div>
     <div class="callout">
       <p><strong>Subscription tier changes are asymmetric.</strong> Upgrades apply immediately with Stripe
@@ -139,7 +157,7 @@
         <tr><td>PaymentPlayerSubscription</td><td>player_subscriptions</td><td>Player's current subscription tier/billing interval/status (player id is a BIGINT TSID, not UUID).</td></tr>
         <tr><td>CoachSubscriptionChange / PlayerSubscriptionChange</td><td>coach_subscription_changes / player_subscription_changes</td><td>Pending scheduled tier downgrades, applied at period end by a cron job.</td></tr>
         <tr><td>SessionPackTier</td><td>session_pack_tiers</td><td>Coach-defined pack offer (label, session count, total price); only one active tier per coach at a time.</td></tr>
-        <tr><td>SessionPackPurchase</td><td>session_pack_purchases</td><td>Parent's purchased pack instance — remaining sessions, expiry, one-time extension, optimistic version for concurrent deduction safety.</td></tr>
+        <tr><td>SessionPackPurchase</td><td>session_pack_purchases</td><td>Parent's purchased pack instance — remaining sessions, expiry, one-time extension, optimistic version for concurrent deduction safety. <strong>Now the platform's only pack table</strong>: <code>V88</code> added <code>player_id</code>, <code>paused_until</code>, and <code>expired_notified_at</code> to reach parity with booking's old table, <code>V90</code> added <code>expiry_warned_at</code>, and <code>V89</code> dropped <code>booking.session_packs_purchased</code>.</td></tr>
         <tr><td>CoachCancellationHistory</td><td>coach_cancellation_history</td><td>Audit trail of every coach-initiated cancellation and its reason, independent of whether a strike was issued.</td></tr>
       </tbody>
     </table>
@@ -156,7 +174,7 @@
         <tr><td>SubscriptionService</td><td>Coach/player tier catalogue, subscribe/upgrade/downgrade/cancel, webhook-driven status sync, scheduled downgrade application and PAST_DUE grace-period expiry.</td></tr>
         <tr><td>CreditWalletService</td><td>Reads ledger balance (SUM) and writes ledger entries; cash-out debit runs at SERIALIZABLE isolation to prevent double-spend races.</td></tr>
         <tr><td>CashOutService</td><td>Converts parent credit balance into a Stripe refund to their saved card, minus processing fee, with compensating ledger reversal if the Stripe refund fails.</td></tr>
-        <tr><td>PackSessionService</td><td>Deducts/restores a session from a purchased pack under a pessimistic row lock; publishes <code>SessionPackExhaustedEvent</code> when a pack hits zero.</td></tr>
+        <tr><td>PackSessionService</td><td>The whole credit engine, absorbed from booking's deleted <code>SessionPackService</code>: deduct/restore a session under a pessimistic row lock (publishing <code>SessionPackExhaustedEvent</code> at zero), resolve a player's live pack for a coach (<code>findActivePackId</code>), and the one-pause-per-lifetime flow with booking-conflict resolution (publishing <code>PackPausedEvent</code>).</td></tr>
         <tr><td>PaymentLifecycleService</td><td>Listens for <code>BookingAcceptedEvent</code>/<code>BatchBookingAcceptedEvent</code> and decides credit-vs-Stripe split per booking (or per batch).</td></tr>
         <tr><td>BookingPaymentPersistenceService</td><td>Atomically persists the <code>BookingPayment</code> row, ledger deduction, and booking state transition, then publishes <code>BookingConfirmedEvent</code>/<code>BookingDeclinedEvent</code>.</td></tr>
         <tr><td>CancellationRefundService</td><td>Listens for cancellation/no-show events, applies the refund matrix, records cancellation history, and issues reliability strikes for unexcused coach cancellations/no-shows.</td></tr>
@@ -164,6 +182,8 @@
         <tr><td>RevenueReportingService</td><td>Read-only reporting: coach revenue summaries/transactions/receipts, parent credit statements, and admin platform-wide finance overview.</td></tr>
         <tr><td>SessionPackPaymentService</td><td>Purchase/extend a pack and coach tier CRUD (create/deactivate), with compensating Stripe refund if local persistence fails after a successful charge.</td></tr>
         <tr><td>SessionPackExpiryNotifier / SubscriptionChangeApplicator / SubscriptionGracePeriodChecker</td><td>Scheduled jobs (daily 08:00, nightly 02:00, nightly 03:00) for pack expiry warnings, applying scheduled downgrades, and downgrading PAST_DUE subscriptions after grace period.</td></tr>
+        <tr><td>SessionPackForfeitureScheduler</td><td>Hourly ShedLock-guarded job that forfeits packs past <code>expiresAt</code>, stamps <code>expiredNotifiedAt</code>, and publishes <code>SessionPackExpiredEvent</code> per pack in its own transaction (one bad row can't abort the run).</td></tr>
+        <tr><td>PaymentPendingSweeper</td><td>Every 15 min (ShedLock), declines bookings stranded in <code>PAYMENT_PENDING</code> past a config grace period — but <strong>only pack-funded ones</strong>. See the gotcha below; the restriction is deliberate.</td></tr>
       </tbody>
     </table>
 
@@ -183,6 +203,8 @@
         <tr><td>GET</td><td>/api/payment/parents/bookings/{bookingId}/receipt</td><td>Parent-facing receipt for a booking</td><td>PARENT</td></tr>
         <tr><td>GET</td><td>/api/payment/credits/statement</td><td>Paged parent credit ledger statement with running balance</td><td>PARENT</td></tr>
         <tr><td>POST</td><td>/api/payment/session-packs/purchase</td><td>Purchase a coach's active session pack tier</td><td>PARENT</td></tr>
+        <tr><td>GET</td><td>/api/payment/session-packs</td><td>List the parent's own purchased packs <em>(moved here from <code>GET /api/bookings/players/{playerId}/packs</code>)</em></td><td>PARENT</td></tr>
+        <tr><td>POST</td><td>/api/payment/session-packs/{purchaseId}/pause</td><td>Pause a pack; returns conflicting bookings first, applies on re-submit with <code>confirmedCancellationIds</code> <em>(moved here from booking)</em></td><td>PARENT</td></tr>
         <tr><td>POST</td><td>/api/payment/session-packs/{purchaseId}/extend</td><td>One-time 30-day extension near expiry</td><td>COACH</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/me/session-pack-tiers</td><td>List own pack tiers (active + inactive)</td><td>COACH</td></tr>
         <tr><td>POST</td><td>/api/payment/coaches/me/session-pack-tiers</td><td>Create a new pack tier (deactivates prior active tier)</td><td>COACH</td></tr>
@@ -216,7 +238,8 @@
         <tr><td>BookingAcceptedEvent / BatchBookingAcceptedEvent</td><td>Consumed (from <code>booking</code>)</td><td>Drives <code>PaymentLifecycleService</code>'s credit/Stripe split, listened at AFTER_COMMIT.</td></tr>
         <tr><td>BookingCancelledByParentEvent / ByCoachEvent / ByAdminEvent, CoachNoShowEvent, PlayerNoShowEvent</td><td>Consumed (from <code>booking</code>)</td><td>Drives <code>CancellationRefundService</code>'s refund/forfeit/strike logic, all at AFTER_COMMIT in a new transaction.</td></tr>
         <tr><td>BookingConfirmedEvent / BookingDeclinedEvent</td><td>Published (booking's own contract)</td><td>Fired after payment capture succeeds/fails so booking/notification flows can react.</td></tr>
-        <tr><td>SessionPackExhaustedEvent / SessionPackExpiryWarningEvent</td><td>Published (booking's own contract, reused)</td><td>Fired when a pack hits zero remaining sessions, or is within 14 days of expiry.</td></tr>
+        <tr><td>SessionPackExhaustedEvent / SessionPackExpiryWarningEvent / SessionPackExpiredEvent / PackPausedEvent</td><td>Published (classes live in <code>booking.contract</code>)</td><td>All four pack lifecycle events are published from <em>this</em> module — zero remaining, 14-days-to-expiry, forfeited at expiry, and paused respectively — even though the event classes still sit in <code>booking.contract</code> after the session-pack move. <code>notification.SessionPackEmailListener</code> consumes them.</td></tr>
+        <tr><td>BookingDeclinedEvent</td><td>Published (booking's own contract)</td><td>Also fired by <code>PaymentPendingSweeper</code> when it declines a stranded pack-funded booking.</td></tr>
         <tr><td>CoachStripeOnboardingCompleteEvent</td><td>Published</td><td>Fired after webhook commit once Stripe reports both charges and payouts enabled.</td></tr>
         <tr><td>StrikeThresholdReachedEvent</td><td>Published</td><td>Consumed by <code>admin.service.AdminAlertEventListener</code> — surfaces coaches suspended pending review.</td></tr>
         <tr><td>CoachVisibilityReducedEvent</td><td>Published</td><td>Fired when a coach crosses the visibility-reduction strike threshold.</td></tr>
@@ -374,6 +397,23 @@ sequenceDiagram
       finder, because concurrent bookings against the same pack (e.g. two devices) would otherwise both read
       the same <code>remainingSessions</code> and both decrement from it, under-counting the deduction.</p>
     </div>
+    <div class="callout warn">
+      <p><strong><code>PaymentPendingSweeper</code> deliberately ignores credit/Stripe-funded stranded bookings.
+      Do not "complete" it by dropping the pack-funded precondition.</strong> Settlement runs as an in-process
+      <code>AFTER_COMMIT</code> listener with no retry and no dead-letter queue, so a JVM death between the
+      <code>PAYMENT_PENDING</code> commit and settlement strands the booking — and because
+      <code>PAYMENT_PENDING</code> is in <code>ACTIVE_SLOT_STATUSES</code> and in V87's exclusion constraint,
+      that row holds the coach's slot forever.</p>
+      <p>The sweeper only recovers <em>pack-funded</em> bookings because those are the only ones it can decide
+      safely. On the Stripe path <code>chargeAndCapture</code> runs <em>before</em> the DB writes that record it,
+      so a crash in between leaves money captured at Stripe with no <code>booking_payments</code> row and no
+      ledger entry — and there is no capture-lookup API, no handled <code>payment_intent.*</code> webhook, and no
+      other durable trace. Nothing distinguishes "never charged" from "charged and lost the record", so
+      auto-declining would risk handing back the slot while the parent stays charged for nothing. Pack-funded
+      settlement never calls Stripe, which is what makes it decidable. The prerequisite fix — a durable
+      pre-capture record plus status-aware idempotency checks in <code>PaymentLifecycleService</code> — is
+      tracked in <code>deferred-work.md</code> under the <code>skillars-deferred-15</code> audit block.</p>
+    </div>
 
     <h3 id="running-stripe-listen-locally">Local development: Stripe webhooks without a public URL</h3>
     <div class="card">
@@ -410,7 +450,7 @@ sequenceDiagram
 
     <h2>Related Modules</h2>
     <ul>
-      <li><a href="../booking/index.html">Booking</a> — payment listens for <code>BookingAcceptedEvent</code>/cancellation/no-show events and calls back into <code>BookingService.transition(...)</code>; booking owns the events, payment owns the money.</li>
+      <li><a href="../booking/index.html">Booking</a> — payment listens for <code>BookingAcceptedEvent</code>/cancellation/no-show events and calls back into <code>BookingService.transition(...)</code>; booking owns the events, payment owns the money. Since the session-pack move, payment also owns the entire credit system that booking used to run in parallel, and publishes the four pack events whose classes still live in <code>booking.contract</code>.</li>
       <li><a href="../marketplace/index.html">Marketplace</a> — coach subscription tier and reliability strikes are surfaced through marketplace's <code>CoachProfile</code>, <code>CoachSubscription</code>, and <code>CoachReliabilityStrike</code> entities, which payment reads/writes directly.</li>
       <li><a href="../security/index.html">Security</a> — <code>SecurityUtil</code> resolves the current user id/role, and <code>ParentPlayerLinkRepository</code> enforces parent-player ownership before subscribing/cancelling a player's plan.</li>
       <li><a href="../config/index.html">Config</a> — <code>ConfigService</code> supplies commission rate, Stripe fee rate/fixed, subscription price ids, tier feature lists, and reliability strike thresholds, all without redeploying.</li>

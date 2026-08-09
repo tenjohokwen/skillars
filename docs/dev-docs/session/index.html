@@ -23,7 +23,6 @@
         <li><a href="../reviews/index.html">Reviews</a></li>
         <li><a href="../notification/index.html">Notification</a></li>
         <li><a href="../admin/index.html">Admin</a></li>
-        <li><a href="../tenant/index.html">Tenant</a></li>
         <li><a href="../security/index.html">Security</a></li>
         <li><a href="../filestorage/index.html">Filestorage</a></li>
         <li><a href="../config/index.html">Config</a></li>
@@ -32,6 +31,8 @@
       <h4>Cross-Cutting</h4>
       <ul>
         <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+        <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
+        <li><a href="../database/index.html">Database &amp; Migrations</a></li>
       </ul>
     </nav>
   </aside>
@@ -86,9 +87,11 @@
         <code>BookingQueryService.getBookingSnapshot()</code> to validate ownership/status before creating or
         deploying a plan, and (2) <code>session</code> reacting to <code>BookingCompletedEvent</code>, published by
         <code>booking</code>, to generate homework assignments. <code>session</code> never writes to booking data and
-        never touches payment/credit logic directly (it only reads pack status via
-        <code>SessionPackService.hasActivePack</code>/<code>getActivePackId</code> to decide whether homework is still
-        visible to a family).</p>
+        never mutates payment/credit state (it only <em>reads</em> pack status via
+        <code>payment.service.PackSessionService.hasActivePack</code>/<code>getActivePackId</code> to decide whether
+        homework is still visible to a family, and to stamp <code>HomeworkAssignment.packId</code> for provenance).
+        Note this dependency points at <code>payment</code>, not <code>booking</code> — the session-pack system moved
+        there.</p>
     </div>
 
     <h2>Technical Overview</h2>
@@ -177,7 +180,8 @@
       <li><strong>infrastructure.security</strong> — <code>SecurityConstants</code> role expressions (<code>HAS_COACH_ROLE</code>, <code>HAS_PARENT_ROLE</code>) on every endpoint.</li>
       <li><strong>infrastructure.video</strong> — <code>VideoProviderAdapter</code>, <code>SignedPlaybackUrl</code>, <code>PlaybackTokenClaims</code> used to generate short-lived signed playback URLs for drill demo videos.</li>
       <li><strong>infrastructure.message</strong> — <code>ErrorDto</code>/<code>ErrorMsg</code> used by <code>SessionApiAdvice</code>.</li>
-      <li><strong>booking</strong> — <code>BookingQueryService.getBookingSnapshot()</code> for ownership/status checks; <code>SessionPackService</code> (read-only) for homework visibility and provenance; consumes <code>BookingCompletedEvent</code>.</li>
+      <li><strong>booking</strong> — <code>BookingQueryService.getBookingSnapshot()</code> for ownership/status checks; consumes <code>BookingCompletedEvent</code>.</li>
+      <li><strong>payment</strong> — <code>PackSessionService</code> (read-only: <code>hasActivePack</code>/<code>getActivePackId</code>) for homework visibility and pack provenance. This used to be a <code>booking</code> dependency before session packs moved to <code>payment</code>.</li>
       <li><strong>video</strong> — <code>VideoService</code>, <code>VideoRepository</code>, <code>VideoTypeConstraints</code>, <code>AdminVideoService</code>; actual video storage/transcoding lives in this module, <code>session</code> only keeps a ref-counted pointer.</li>
       <li><strong>marketplace</strong> — <code>CoachProfileService</code> for coach-id/user-id resolution, subscription tier lookups (feature gating), and coach display names.</li>
       <li><strong>security</strong> — <code>SecurityUtil</code> for the current coach's user id; <code>PlayerProfileRepository</code>/<code>PlayerOwnershipGuard</code> for parent-child ownership checks.</li>

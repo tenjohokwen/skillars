@@ -23,7 +23,6 @@
         <li><a href="../reviews/index.html">Reviews</a></li>
         <li><a href="../notification/index.html">Notification</a></li>
         <li><a href="../admin/index.html">Admin</a></li>
-        <li><a href="../tenant/index.html">Tenant</a></li>
         <li><a href="../security/index.html">Security</a></li>
         <li><a href="../filestorage/index.html">Filestorage</a></li>
         <li><a href="../config/index.html">Config</a></li>
@@ -32,13 +31,15 @@
       <h4>Cross-Cutting</h4>
       <ul>
         <li><a href="../infrastructure/index.html" class="active">Infrastructure</a></li>
+        <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
+        <li><a href="../database/index.html">Database &amp; Migrations</a></li>
       </ul>
     </nav>
   </aside>
   <main class="content">
     <div class="breadcrumb"><a href="../index.html">Home</a> / Infrastructure</div>
     <h1>Infrastructure</h1>
-    <p class="subtitle">The shared, tenant-agnostic technical foundation every <code>platform.*</code> module is built on top of — not a business module itself, but the plumbing all of them share.</p>
+    <p class="subtitle">The shared technical foundation every <code>platform.*</code> module is built on top of — not a business module itself, but the plumbing all of them share.</p>
 
     <h2>Why This Layer Exists</h2>
     <p>
@@ -69,25 +70,24 @@
     <h2>Subpackage Reference</h2>
     <div class="card-grid">
       <div class="card"><h4>blobstore</h4><p>S3 / local-filesystem object storage abstraction. Wrapped exclusively by <code>platform.filestorage</code>.</p></div>
-      <div class="card"><h4>security</h4><p>Cross-cutting auth primitives: cookie helpers, rate limiting, tenant/request context, JWT/role constants, security error events.</p></div>
+      <div class="card"><h4>security</h4><p>Cross-cutting auth primitives: cookie helpers, rate limiting, request context, JWT/role constants, security error events.</p></div>
       <div class="card"><h4>feature</h4><p>Simple properties-backed feature-toggle service (<code>features.*</code> config keys) gating payments, invoicing, arachnid, videointel.</p></div>
       <div class="card"><h4>persistence</h4><p>JPA base classes (<code>BaseEntity</code>, <code>AbstractAuditingEntity</code>), TSID generation, Flyway schema check, audit listeners.</p></div>
       <div class="card"><h4>ses</h4><p>AWS SES email sending, with a <code>NoOpSesEmailService</code> that silently swallows sends when disabled.</p></div>
       <div class="card"><h4>sanitizer</h4><p>Regex-based redaction of emails/phone numbers from free text, used to strip contact info from user-generated content.</p></div>
-      <div class="card"><h4>threadpool</h4><p>Task decorators (MDC, tenant context) and executor wiring so <code>@Async</code>/detached threads keep logging and tenant identity.</p></div>
+      <div class="card"><h4>threadpool</h4><p>MDC task decorator and executor wiring so <code>@Async</code>/detached threads keep the originating request's logging context.</p></div>
       <div class="card"><h4>exception</h4><p><code>ApplicationException</code> — the base runtime exception (support-id, error code, log context) every module's own exceptions extend.</p></div>
       <div class="card"><h4>video</h4><p><code>VideoProviderAdapter</code> contract plus the BunnyCDN implementation used for upload/playback/webhook handling.</p></div>
-      <div class="card"><h4>context</h4><p>Currently an empty placeholder package — no classes committed yet.</p></div>
       <div class="card"><h4>gemini</h4><p>Thin client wrapping Google Gemini for text-content moderation, consumed by <code>messaging</code>'s moderation service.</p></div>
       <div class="card"><h4>util</h4><p>Grab-bag of stateless helpers: <code>Constants</code>, <code>JsonUtil</code>, <code>TimeUtil</code>/<code>TimeGuru</code>, <code>ClockProvider</code>, <code>RandomUtil</code>, <code>PhoneNumberUtil</code>, <code>EnvUtil</code>.</p></div>
-      <div class="card"><h4>config</h4><p>App-wide Spring <code>@Configuration</code> classes: Jackson/ObjectMapper setup, async executor, datasource, JPA auditing, ShedLock, observability.</p></div>
-      <div class="card"><h4>web</h4><p>Servlet filters shared across the app: structured request-lifecycle logging and the tenant API-key authentication filter.</p></div>
+      <div class="card"><h4>config</h4><p>App-wide Spring <code>@Configuration</code> classes: Jackson/ObjectMapper setup, async executor, <code>SchedulingConfig</code>, datasource, JPA auditing, ShedLock, observability.</p></div>
+      <div class="card"><h4>web</h4><p><code>LoggingFilter</code> — the one shared servlet filter, emitting structured <code>request_end</code>/<code>request_error</code> log events.</p></div>
       <div class="card"><h4>videointel</h4><p>Client for Google Cloud Video Intelligence, used to flag explicit content in uploaded videos before publish.</p></div>
       <div class="card"><h4>message</h4><p>Shared REST response/error DTO shapes (<code>Response</code>, <code>ErrorDto</code>, <code>ErrorMsg</code>, <code>Success</code>/<code>Failure</code>) returned by controllers app-wide.</p></div>
       <div class="card"><h4>arachnid</h4><p>Client for a third-party CSAM (child sexual abuse material) hash-matching scanner, gating video publish before public availability.</p></div>
       <div class="card"><h4>client</h4><p><code>AbstractClient</code> — shared RestTemplate wiring (timeouts, interceptors, JSON converters) that provider-specific clients extend.</p></div>
       <div class="card"><h4>logging</h4><p>Small constant holders (<code>LogKeys</code>, <code>InventoryCode</code>) standardising structured-log field names across modules.</p></div>
-      <div class="card"><h4>validation</h4><p>Bean Validation annotations/validators: <code>@Phone</code>, <code>@Name</code>, <code>@LangIso2</code>, <code>@LocalDateWindow</code>, plus ISO language/phone helpers.</p></div>
+      <div class="card"><h4>validation</h4><p>Bean Validation annotations/validators: <code>@Phone</code>, <code>@Name</code>, <code>@LangIso2</code>, <code>@LocalDateWindow</code>, <code>@IanaTimezone</code>, plus ISO language/phone helpers.</p></div>
     </div>
 
     <h3>blobstore</h3>
@@ -123,10 +123,7 @@
       cookie gets consistent <code>Secure</code>/<code>SameSite</code>/<code>HttpOnly</code> handling based on the
       current request's HTTPS status. <code>RateLimitingService</code> is a generic Bucket4j-backed token-bucket keyed
       by <code>limitKey:identifier</code>, used by the <code>@RateLimited</code> annotation/aspect and directly by
-      modules needing ad-hoc throttling (login attempts, OTP resend). <code>TenantContext</code> is a
-      <code>ThreadLocal</code> holding the current tenant id for <code>/v1/**</code> API-key requests — set by
-      <code>web.ApiKeyAuthenticationFilter</code> and always cleared with <code>remove()</code> (never <code>set(null)</code>)
-      to avoid leaking identity across pooled threads. Also here: <code>RequestMetadataProvider</code>/<code>ClientContextProvider</code>
+      modules needing ad-hoc throttling (login attempts, OTP resend). Also here: <code>RequestMetadataProvider</code>/<code>ClientContextProvider</code>
       (current request's IP/HTTPS/locale), <code>RequestIdProvider</code>, and the <code>security.event</code>
       sub-package (<code>BadCredentialsEvent</code>, <code>FraudEvent</code>, <code>PreAuthEvent</code>) that
       <code>platform.security</code>'s audit listeners subscribe to.
@@ -193,17 +190,17 @@
     <h3>threadpool</h3>
     <p>
       Solves one recurring problem: Spring's <code>@Async</code> and manually-submitted executor tasks run on a
-      different thread than the one that submitted them, so thread-local context (logging MDC, tenant identity) does
+      different thread than the one that submitted them, so thread-local context (the logging MDC) does
       not automatically follow. <code>MdcDecorator</code> (a <code>TaskDecorator</code>) captures the caller thread's
       MDC via <code>ClientThreadContext</code>, restores it on the worker thread, and — critically — merges the
       worker's stack trace with the caller's captured stack (via <code>ExecutorExceptionHandler.mergeStacks</code>) on
       exception, so a stack trace from a detached thread still shows where the task was originally submitted.
-      <code>TenantContextTaskDecorator</code> does the analogous thing for <code>infrastructure.security.TenantContext</code>,
-      capturing the tenant id at submission time and setting/clearing it around the task body. Both are composed
-      together in <code>infrastructure.config.AsyncConfig</code>'s <code>taskExecutor</code> bean (distinct from
+      It is wired in <code>infrastructure.config.AsyncConfig</code>'s <code>taskExecutor</code> bean (distinct from
       <code>platform.notification</code>'s own <code>sendMailPool</code> executor). Any module using
-      <code>@Async</code> or submitting work to a shared pool should be aware its task runs through this decorator
-      chain, not with a fresh, empty context.
+      <code>@Async</code> or submitting work to a shared pool should be aware its task runs through this decorator,
+      not with a fresh, empty context. A second <code>TenantContextTaskDecorator</code> used to be composed in here;
+      it was deleted with the tenant module, and <code>AsyncConfig</code>'s bean name changed from
+      <code>"tenantAsyncConfig"</code> to <code>"skillarsAsyncConfig"</code> at the same time.
     </p>
 
     <h3>exception</h3>
@@ -310,10 +307,23 @@ sequenceDiagram
       a key that isn't a known enum constant — there is no free-text/dynamic toggle namespace.</p>
     </div>
     <div class="callout">
-      <p><strong><code>TenantContext</code> and MDC are <code>ThreadLocal</code>s cleared with <code>remove()</code>, never <code>set(null)</code>.</strong>
+      <p><strong>MDC is a <code>ThreadLocal</code> cleared with <code>remove()</code>, never <code>set(null)</code>.</strong>
       Servlet containers and thread pools reuse threads across requests; anything that manually spawns a thread or
-      submits to an executor outside the decorated <code>taskExecutor</code> bean must clear these explicitly or risk
-      leaking one request's tenant/user context into another's logs.</p>
+      submits to an executor outside the decorated <code>taskExecutor</code> bean must clear it explicitly or risk
+      leaking one request's user context into another's logs.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Scheduling is enabled here, and is switched off for tests.</strong>
+      <code>SchedulingConfig</code> carries <code>@EnableScheduling</code> behind
+      <code>@ConditionalOnProperty("app.scheduling.enabled", matchIfMissing = true)</code>, so production and every
+      non-test profile leave it on — only <code>src/test/resources/application-test.yaml</code> sets it to
+      <code>false</code>. This exists because consolidating the integration suite onto a few long-lived Spring
+      contexts removed the accidental protection short-lived contexts used to give (a job with a 5-minute delay never
+      fires in a context that lives 90 seconds). Overriding each job's delay in test config <em>cannot</em> substitute:
+      16 of the 30 <code>@Scheduled</code> methods hard-code their delay or cron with no property placeholder.
+      <code>@EnableSchedulerLock</code> deliberately stays on <code>AsyncConfig</code> and is <em>not</em> gated —
+      tests invoke scheduled methods directly through the Spring proxy, so the lock advisor must still apply.
+      See <a href="../scheduled-jobs/index.html">Scheduled Jobs</a>.</p>
     </div>
     <div class="callout">
       <p><strong><code>BaseEntity</code>/<code>AbstractAuditingEntity</code> already implement <code>equals()</code>/<code>hashCode()</code> by id.</strong>
@@ -323,7 +333,7 @@ sequenceDiagram
 
     <h2>Consumed By</h2>
     <ul>
-      <li><a href="../security/index.html">Security</a> — the heaviest consumer by far; depends on cookie/rate-limiting/tenant-context helpers, <code>SecurityConstants</code>, and its own exception hierarchy extends <code>ApplicationException</code>.</li>
+      <li><a href="../security/index.html">Security</a> — the heaviest consumer by far; depends on cookie/rate-limiting/request-context helpers, <code>SecurityConstants</code>, and its own exception hierarchy extends <code>ApplicationException</code>.</li>
       <li><a href="../video/index.html">Video</a> — consumes the <code>video</code>, <code>arachnid</code>, <code>videointel</code>, and <code>gemini</code> provider adapters for upload/playback and content-moderation scanning.</li>
       <li><a href="../filestorage/index.html">Filestorage</a> — the sole consumer of <code>blobstore</code>; also uses <code>persistence</code> base entities and the exception hierarchy.</li>
       <li><a href="../booking/index.html">Booking</a> and <a href="../session/index.html">Session</a> — heavy users of <code>persistence</code> base entities, <code>threadpool</code>-decorated async work, and <code>ApplicationException</code> subclassing.</li>

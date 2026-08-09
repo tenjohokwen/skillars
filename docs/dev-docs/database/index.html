@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Database &amp; Migrations — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <nav>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+        <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
+        <li><a href="../database/index.html" class="active">Database &amp; Migrations</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Database &amp; Migrations</div>
+    <h1>Database &amp; Migrations</h1>
+    <p class="subtitle">How Postgres is carved up per module, how schema changes are applied, and the handful of rules that will bite you the first time you add a migration.</p>
+
+    <h2>Shape of the Database</h2>
+    <p>
+      One Postgres database, split into <strong>nine schemas</strong> — a <code>main</code> schema for
+      cross-cutting and identity tables, plus one schema per domain module that owns persistent state.
+      Modules do not share tables: a cross-module reference is a plain id column, never a foreign key into
+      another module's schema (with the deliberate exceptions noted below). This is what keeps the module
+      boundaries described elsewhere in these docs real at the data layer and not just in package names.
+    </p>
+    <table>
+      <thead><tr><th>Schema</th><th>Owned by</th><th>Representative tables</th></tr></thead>
+      <tbody>
+        <tr><td><code>main</code></td><td>security + infrastructure</td><td>users, authorities, auth tokens, <code>platform_config</code>, <code>revinfo</code> (Envers), <code>shedlock</code>, storage objects</td></tr>
+        <tr><td><code>marketplace</code></td><td><a href="../marketplace/index.html">marketplace</a></td><td><code>coach_profiles</code>, pricing, specialties, media items, availability windows, reliability strikes</td></tr>
+        <tr><td><code>booking</code></td><td><a href="../booking/index.html">booking</a></td><td><code>bookings</code>, <code>booking_batches</code>, <code>booking_reschedule_requests</code>, <code>coach_availability_blocks</code>, <code>session_completion_data</code></td></tr>
+        <tr><td><code>session</code></td><td><a href="../session/index.html">session</a></td><td>drills, drill tags, session plans, templates, homework assignments/completions</td></tr>
+        <tr><td><code>development</code></td><td><a href="../development/index.html">development</a></td><td>radar assessments, composites, baselines, SLU snapshots/targets, timeline events, performance reports</td></tr>
+        <tr><td><code>payment</code></td><td><a href="../payment/index.html">payment</a></td><td><code>booking_payments</code>, <code>parent_credit_ledger</code>, subscriptions, <code>session_pack_tiers</code>, <code>session_pack_purchases</code>, <code>stripe_webhook_events</code></td></tr>
+        <tr><td><code>messaging</code></td><td><a href="../messaging/index.html">messaging</a></td><td>conversations, messages, message/conversation reports</td></tr>
+        <tr><td><code>reviews</code></td><td><a href="../reviews/index.html">reviews</a></td><td><code>coach_reviews</code>, <code>review_flags</code></td></tr>
+        <tr><td><code>admin</code></td><td><a href="../admin/index.html">admin</a></td><td><code>admin_alerts</code>, <code>admin_action_log</code>, disputes, GDPR requests, review moderation log</td></tr>
+      </tbody>
+    </table>
+    <p>
+      Video state lives in <code>main</code> rather than a schema of its own, despite <code>video</code> being
+      one of the larger modules — a historical artefact of <code>V15__video_schema.sql</code> landing before the
+      per-module schema convention settled. Don't take it as the pattern to copy.
+    </p>
+
+    <h2>Migrations: Flyway</h2>
+    <table>
+      <tr><th>Setting</th><th>Value</th><th>Consequence</th></tr>
+      <tr><td><code>spring.flyway.enabled</code></td><td><code>true</code></td><td>Migrations run automatically at startup.</td></tr>
+      <tr><td><code>spring.flyway.defaultSchema</code></td><td><code>main</code></td><td><code>flyway_schema_history</code> lives in <code>main</code>.</td></tr>
+      <tr><td><code>spring.flyway.validateMigrationNaming</code></td><td><code>true</code></td><td>A misnamed file fails startup rather than being silently skipped.</td></tr>
+      <tr><td><code>spring.flyway.baseline-on-migrate</code></td><td><code>true</code></td><td>An existing non-empty DB without a history table gets baselined instead of erroring.</td></tr>
+      <tr><td><code>spring.jpa.hibernate.ddl-auto</code></td><td><code>none</code></td><td><strong>Hibernate never creates or alters a table.</strong> Every schema change must be a migration — there is no "it'll be created on startup" fallback.</td></tr>
+      <tr><td><code>spring.jpa.properties.hibernate.default_schema</code></td><td><code>main</code></td><td>An entity without an explicit <code>schema</code> in <code>@Table</code> lands in <code>main</code>.</td></tr>
+      <tr><td><code>custom.flyway.check-schema</code></td><td><code>true</code> in dev</td><td>Activates <code>DbSchemaChecker</code>, which fails startup if Flyway reports <em>pending</em> migrations.</td></tr>
+    </table>
+    <p>
+      Migrations live in <code>src/main/resources/db/migration/</code> and are named
+      <code>V&lt;n&gt;__snake_case_description.sql</code>. There are currently <strong>85 files, numbered up to
+      V91</strong> — the numbering is intentionally non-contiguous (see below), and Flyway does not require
+      contiguous versions.
+    </p>
+
+    <div class="callout warn">
+      <p><strong>Version numbers have gaps, and that is fine — but deleting an applied migration is not free.</strong>
+      <code>V01</code>, <code>V03</code>, <code>V05</code>, <code>V06</code>, <code>V08</code>, and
+      <code>V09</code> no longer exist: they were the tenant module's migrations and were deleted outright when
+      that module was removed (91 → 85 files). That was only safe because there is no UAT or production
+      environment yet, so no <code>flyway_schema_history</code> anywhere had to be preserved.</p>
+      <p><strong>If your local dev database predates that change it will now fail Flyway validation</strong>
+      with <em>"detected applied migration not resolved locally"</em>. Drop and recreate it. CI and the
+      integration suite always start from an empty container and are unaffected. Once a real environment
+      exists, this option disappears — supersede with a new drop migration instead of deleting.</p>
+    </div>
+
+    <div class="callout warn">
+      <p><strong>Run <code>mvn clean verify</code>, not <code>mvn verify</code>, after touching migrations.</strong>
+      Deleted migration files linger in <code>target/classes</code>. When the tenant migrations were removed, a
+      plain <code>mvn verify</code> left the six stale files on the classpath and Flyway ran the old
+      <code>V08</code> against tables the deleted <code>V01</code> no longer created — producing 60+ spurious
+      context-load failures in completely unrelated video tests. The failure looks nothing like a migration
+      problem, which is what makes it expensive.</p>
+    </div>
+
+    <h2>Auditing: Hibernate Envers</h2>
+    <p>
+      Six entity classes carry <code>@Audited</code> — <code>User</code>, <code>Authority</code>,
+      <code>SecKey</code>, <code>Secret</code>, <code>PersistentToken</code>, and
+      <code>VideoModerationScan</code>. (<code>AbstractAuditingEntity</code> also carries the annotation, but as
+      a <code>@MappedSuperclass</code> it only governs which of <em>its</em> columns appear in an audit row —
+      extending it does not by itself make an entity audited.) Envers writes a
+      companion <code>*_aud</code> table per audited entity plus a single shared revision table,
+      <code>main.revinfo</code> (with <code>revinfo_seq</code>), created in
+      <code>V07__envers_audit_tables.sql</code>. <code>V11__audit_schema_gap_closure.sql</code> declares foreign
+      keys from every <code>*_aud</code> table it creates onto <code>main.revinfo(rev)</code>.
+    </p>
+    <div class="callout">
+      <p><strong><code>V07</code> is load-bearing for far more than its filename suggests.</strong> It creates
+      the tenant audit tables <em>and</em> the shared Envers <code>revinfo</code>/<code>revinfo_seq</code>. When
+      the tenant module was removed, <code>V07</code> was <strong>edited rather than deleted</strong> —
+      keeping <code>revinfo</code> and dropping only the two <code>tenant_*_aud</code> tables. Deleting it
+      wholesale would have failed at <code>V11</code>, whose foreign keys depend on <code>revinfo</code>
+      existing. If you ever need to prune a migration, check what else it creates first.</p>
+    </div>
+
+    <h2>Entity Conventions</h2>
+    <p>
+      Every entity extends <code>infrastructure.persistence.BaseEntity</code> or
+      <code>AbstractAuditingEntity</code>. See <a href="../infrastructure/index.html">Infrastructure</a> for
+      the full detail; the parts that constrain your migrations:
+    </p>
+    <ul>
+      <li><strong>IDs are TSIDs</strong> (<code>@Tsid</code>-generated <code>Long</code>) — time-sortable and
+        cheaper to index than a random UUID. Column type is <code>BIGINT</code>. Some newer tables
+        (<code>session_pack_purchases</code>, video tables) use <code>UUID</code> primary keys instead; check
+        the entity before assuming.</li>
+      <li><strong>Auditing columns</strong> — <code>created_by</code>/<code>created_date</code>/
+        <code>last_modified_by</code>/<code>last_modified_date</code>, plus <code>status</code>,
+        <code>request_id</code>, and <code>session_id</code> on anything extending
+        <code>AbstractAuditingEntity</code>. Your <code>CREATE TABLE</code> must include them.</li>
+      <li><strong>Timestamps are <code>TIMESTAMPTZ</code></strong>, mapped to <code>Instant</code>. See
+        <a href="../../handling-time.md">docs/handling-time.md</a> for the wider timezone conventions.</li>
+    </ul>
+
+    <h2>Patterns Worth Knowing</h2>
+
+    <h3>Constraints as the last line of defence</h3>
+    <p>
+      Several invariants are enforced in the database rather than only in application code, because more than
+      one code path writes the same table. The worked example is
+      <code>V87__booking_overlap_exclusion_constraint.sql</code>, which adds a Postgres
+      <code>EXCLUDE USING gist</code> constraint so no two committed bookings can hold overlapping time for the
+      same coach — including from <code>BookingBatchService</code> and <code>RescheduleService</code>, which
+      skip the application-layer pre-check. Violations surface as
+      <code>DataIntegrityViolationException</code> and are mapped by <code>ApiAdvice</code>'s
+      <code>CONSTRAINT_MAPPINGS</code>/<code>CONFLICT_CONSTRAINTS</code> to a clean 409 rather than a 500.
+    </p>
+    <div class="callout">
+      <p><strong>Adding a named constraint usually means editing <code>ApiAdvice</code> too.</strong> If you add
+      a unique or check constraint a user can plausibly trip, add its name to the constraint-mapping tables so
+      the client gets a meaningful error code instead of a generic 500.</p>
+    </div>
+
+    <h3>Enum columns carry CHECK constraints</h3>
+    <p>
+      Enums persisted as <code>@Enumerated(EnumType.STRING)</code> are frequently backed by a
+      <code>CHECK (col IN (...))</code>. JPA will happily write a value the CHECK rejects, so adding an enum
+      constant without a migration fails at <em>INSERT</em> time, not at startup —
+      <code>V91</code> is the worked example, recreating <code>admin_alerts_type_check</code> to admit
+      <code>MODERATION_UNRESOLVED</code>. Grep for the constraint name before adding a constant.
+    </p>
+
+    <h3>Seeding runtime config</h3>
+    <p>
+      Tunables live in <code>main.platform_config</code> and are read through
+      <a href="../config/index.html">config</a>'s <code>ConfigService</code>. A migration that introduces a new
+      key seeds it with an explicit id and <code>ON CONFLICT (key) DO NOTHING</code> so re-running against a
+      partially-seeded database is safe — see <code>V90</code> and <code>V91</code>. Remember
+      <code>ConfigService</code> caches for ~300s, so a newly seeded key isn't visible instantly.
+    </p>
+
+    <h3>Partial indexes for "not yet processed" scans</h3>
+    <p>
+      Scheduled jobs that repeatedly scan for unprocessed rows are backed by partial indexes rather than full
+      ones — e.g. <code>idx_session_pack_purchases_expiry_notify ON (expires_at) WHERE expired_notified_at IS
+      NULL</code>. The index shrinks as rows are processed. If you add a "stamp a column once processed"
+      scheduler, add the matching partial index with it.
+    </p>
+
+    <h2>Gotchas</h2>
+    <div class="callout warn">
+      <p><strong>Never edit a migration that has been applied anywhere.</strong> Flyway checksums every applied
+      file; editing one fails validation on the next startup. The tenant-removal edit to <code>V07</code> was
+      only permissible because no persistent environment existed. Add a new migration instead.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Quartz tables exist but nothing uses Quartz.</strong> <code>V02__quartz_schema.sql</code>
+      creates the Quartz tables and <code>spring-boot-starter-quartz</code> is still a dependency, but the only
+      Quartz job in the codebase (<code>RotatedKeyCleanupJob</code>) was deleted with the tenant module. All
+      current background work uses Spring <code>@Scheduled</code> + ShedLock — see
+      <a href="../scheduled-jobs/index.html">Scheduled Jobs</a>. Don't add a Quartz job just because the tables
+      are there.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Cross-module references are plain id columns, not foreign keys.</strong>
+      <code>booking.bookings.session_pack_purchase_id</code> points at
+      <code>payment.session_pack_purchases</code> as a bare <code>UUID</code>, deliberately not a JPA
+      association — booking must never load or mutate a pack row. Expect to write the join yourself when
+      reporting across modules.</p>
+    </div>
+    <div class="callout">
+      <p><strong>GDPR erasure bypasses the usual guards.</strong> Deletion paths used by
+      <code>admin.GdprErasureService</code> (e.g. <code>MessageRepository.deleteAllBySenderId()</code>) ignore
+      the report/retention predicates that normal cleanup respects. If you add a table holding user content,
+      make sure it is covered there — and be aware the delete is unconditional.</p>
+    </div>
+
+    <h2>Related</h2>
+    <ul>
+      <li><a href="../infrastructure/index.html">Infrastructure</a> — <code>BaseEntity</code>, <code>AbstractAuditingEntity</code>, <code>DbSchemaChecker</code>, TSID generation.</li>
+      <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a> — <code>main.shedlock</code> and the jobs that read the config keys seeded by migrations.</li>
+      <li><a href="../config/index.html">Config</a> — <code>main.platform_config</code> and its refresh cache.</li>
+      <li><a href="../../testing/readme.md">docs/testing/</a> — how the integration suite provisions its Postgres container and resets state between tests.</li>
+      <li><a href="../../deployment/backup-restore.md">docs/deployment/backup-restore.md</a> — backup and restore procedure.</li>
+      <li><a href="../index.html">Home</a></li>
+    </ul>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

@@ -23,7 +23,6 @@
         <li><a href="../reviews/index.html" class="active">Reviews</a></li>
         <li><a href="../notification/index.html">Notification</a></li>
         <li><a href="../admin/index.html">Admin</a></li>
-        <li><a href="../tenant/index.html">Tenant</a></li>
         <li><a href="../security/index.html">Security</a></li>
         <li><a href="../filestorage/index.html">Filestorage</a></li>
         <li><a href="../config/index.html">Config</a></li>
@@ -32,6 +31,8 @@
       <h4>Cross-Cutting</h4>
       <ul>
         <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+        <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
+        <li><a href="../database/index.html">Database &amp; Migrations</a></li>
       </ul>
     </nav>
   </aside>
@@ -103,7 +104,7 @@
     <table>
       <tr><th>Service</th><th>Orchestrates</th></tr>
       <tr><td><code>ReviewSubmissionService</code></td><td>Validates coach existence and booking-eligibility, enforces one-review-per-pair and the 365-day edit cooldown, persists <code>PENDING</code> reviews/edits, publishes <code>ReviewSubmittedEvent</code>, and handles the coach's one-time response (locked via <code>findByIdForUpdate</code> pessimistic write).</td></tr>
-      <tr><td><code>ReviewModerationService</code></td><td>Listens for <code>ReviewSubmittedEvent</code> <em>after commit</em>, calls <code>infrastructure.gemini.GeminiClient</code> with the review body wrapped in a delimiter-fenced prompt, maps the verdict to a moderation status in a brand-new <code>REQUIRES_NEW</code> transaction, and triggers <code>CoachRatingService.recompute</code> when a review becomes <code>APPROVED</code> or <code>BLOCKED</code>.</td></tr>
+      <tr><td><code>ReviewModerationService</code></td><td>Listens for <code>ReviewSubmittedEvent</code> <em>after commit</em>, calls <code>infrastructure.gemini.GeminiClient</code> with the review body wrapped in a delimiter-fenced prompt, maps the verdict to a moderation status in a brand-new <code>REQUIRES_NEW</code> transaction, and triggers <code>CoachRatingService.recompute</code> when a review becomes <code>APPROVED</code> or <code>BLOCKED</code>. The write is guarded so a late AI verdict can never overwrite a decision already recorded — see gotchas.</td></tr>
       <tr><td><code>ReviewFlagService</code></td><td>Validates a flag isn't self-directed (by the author or by the reviewed coach), de-dupes per flagger (DB unique index as backstop), auto-escalates an <code>APPROVED</code> review to <code>UNDER_REVIEW</code> once open flags cross a config threshold, and publishes <code>ReviewFlaggedEvent</code>.</td></tr>
       <tr><td><code>ReviewQueryService</code></td><td>Read-only listings: public paginated approved reviews (sortable newest/highest/lowest), a coach's view of <em>all</em> their own reviews regardless of status, and a single author's own review for a given coach.</td></tr>
       <tr><td><code>CoachRatingService</code></td><td>Single source of truth for recomputing a coach's average rating and review count from <code>APPROVED</code> reviews (one atomic count+avg query to avoid a TOCTOU race) and pushing it onto the coach's marketplace profile. Called by this module and directly by <code>admin</code>'s moderation actions.</td></tr>
@@ -283,7 +284,45 @@ sequenceDiagram
       <code>REQUIRES_NEW</code> transaction (see the code comment referencing "Epic 10"): if the status write fails
       after Gemini already returned a verdict, the review is left <code>PENDING</code> forever with no retry. This
       is only resolvable today via the admin queue's manual intervention, or a DB fix &mdash; there's no automated
-      recovery path yet.</p>
+      recovery path yet. Note the swallow also absorbs a lock-acquisition failure on the read described below,
+      which leaves the review <code>PENDING</code> rather than mis-resolved — the safe direction.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>The AI verdict must lose to any decision already recorded.</strong> The Gemini call runs
+      <em>outside</em> any transaction and can take seconds — ample room for an admin to resolve the review
+      meanwhile. So the write-back reads with <code>findByIdForUpdate</code> and then refuses to write unless the
+      row is still <code>PENDING</code>. <code>PENDING</code> is the whole guard:
+      <code>ReviewSubmissionService.submitReview</code>/<code>updateReview</code> are the only publishers of
+      <code>ReviewSubmittedEvent</code> and both set <code>PENDING</code> immediately before publishing, so it is
+      the only status this delivery may claim. Everything else wins — admin approve/block, and
+      <code>ReviewFlagService</code>'s auto-hold at the flag threshold. It also makes a duplicate event delivery
+      idempotent for free.</p>
+      <p>Two subtleties if you touch this: because <code>REQUIRES_NEW</code> suspends the AFTER_COMMIT thread's
+      stale <code>EntityManager</code>, the locked query is the transaction's first read of the row and returns
+      fresh DB state — so it needs no <code>entityManager.refresh()</code> (contrast
+      <code>BookingService.createBookingRequest</code>, where an earlier <code>findById</code> forces one). And
+      <code>recompute</code> now sits <em>inside</em> the guarded branch, so a skipped write no longer recomputes
+      the coach's aggregate.</p>
+    </div>
+    <div class="callout">
+      <p><strong><code>ReviewApiAdvice</code> also handles <code>admin.api.AdminReviewResource</code>.</strong>
+      Its <code>@RestControllerAdvice</code> combines <code>basePackages</code> with
+      <code>assignableTypes</code> (OR semantics), because <code>AdminReviewResource</code> lives in
+      <code>platform.admin.api</code> but raises review-domain errors and needs review-shaped responses. The class
+      is referenced fully-qualified rather than imported, to avoid an import-level
+      <code>reviews.api → admin.api</code> dependency. Consequence worth knowing: this routes <em>every</em>
+      exception from <code>AdminReviewResource</code> here, including bean-validation failures on
+      <code>/block</code>.</p>
+    </div>
+    <div class="callout">
+      <p><strong><code>COACH_PROFILE_MISSING</code> is deliberately a 500, not a 409.</strong> An orphaned
+      <code>coach_profiles</code> reference is a data-integrity failure the caller neither caused nor can fix by
+      retrying — unlike <code>ALREADY_BLOCKED</code>, which is a genuine conflict. Filing it as 4xx would bury it
+      in the "user error" bucket that 5xx-keyed alerting never looks at. It should be unreachable in production
+      (<code>GdprErasureService</code> anonymises coach profiles rather than deleting them), so if it ever fires it
+      should page. Keep the branch explicit: the advice's fallback is <strong>403</strong>, so a newly added
+      <code>ReviewErrorCode</code> that nobody lists silently becomes <code>FORBIDDEN</code> instead of reaching
+      any 5xx.</p>
     </div>
     <div class="callout warn">
       <p><strong>The 365-day edit cooldown reads backwards at first glance.</strong>

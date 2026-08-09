@@ -23,7 +23,6 @@
         <li><a href="../reviews/index.html">Reviews</a></li>
         <li><a href="../notification/index.html">Notification</a></li>
         <li><a href="../admin/index.html">Admin</a></li>
-        <li><a href="../tenant/index.html">Tenant</a></li>
         <li><a href="../security/index.html" class="active">Security</a></li>
         <li><a href="../filestorage/index.html">Filestorage</a></li>
         <li><a href="../config/index.html">Config</a></li>
@@ -32,6 +31,8 @@
       <h4>Cross-Cutting</h4>
       <ul>
         <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+        <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
+        <li><a href="../database/index.html">Database &amp; Migrations</a></li>
       </ul>
     </nav>
   </aside>
@@ -306,6 +307,31 @@ sequenceDiagram
       set and <code>userId</code> null — there is no <code>User</code> row for them. Only adult self-registered players
       get <code>userId</code> set (and no <code>parentId</code>). Code that assumes every <code>PlayerProfile</code> maps
       1:1 to a <code>User</code> will break for the (majority) minor case.</p>
+    </div>
+    <div class="callout">
+      <p><strong><code>ApiAdvice</code> maps DB constraint names to error keys — keep the two tables in sync.</strong>
+      <code>CONSTRAINT_MAPPINGS</code> turns a named constraint violation into a message key, and
+      <code>CONFLICT_CONSTRAINTS</code> lists the ones that should be 409 rather than 400. Booking's
+      <code>excl_bkg_coach_slot_overlap</code> exclusion constraint appears in both, so a double-booking caught at
+      the database surfaces as a clean <code>booking.slotUnavailable</code> 409 instead of a raw 500. If you add a
+      named constraint a user can plausibly trip, add it here too — see
+      <a href="../database/index.html">Database &amp; Migrations</a>.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Lock-wait timeouts fail fast as 409, not 500.</strong> <code>ApiAdvice</code> handles
+      <code>PessimisticLockingFailureException</code> and returns <code>generic.conflict</code>. This pairs with the
+      bounded <code>jakarta.persistence.lock.timeout</code> hint on
+      <code>CoachProfileRepository.findByIdForUpdate</code> (5s), so contention on a popular coach's row fails
+      cleanly rather than blocking the request thread indefinitely.</p>
+    </div>
+    <div class="callout">
+      <p><strong><code>AgePolicyService</code> has two variants and they differ on purpose.</strong>
+      <code>getMessagingPolicy(playerId)</code> throws <code>UserNotFoundException</code> on an unresolvable
+      player — the safe answer on <em>write</em> paths. <code>findMessagingPolicy(playerId)</code> returns an
+      <code>Optional</code> instead, for <em>read</em> paths where an orphaned <code>player_profiles</code> row
+      should cost the one conversation or label that depends on it rather than failing the whole listing. Both
+      delegate to the same private <code>resolvePolicy</code>, so the tier-boundary config lookups can't drift
+      apart.</p>
     </div>
     <div class="callout">
       <p><strong>Verification status gates login, not just registration.</strong> Any <code>User</code> with a non-null

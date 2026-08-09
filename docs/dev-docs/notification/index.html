@@ -23,7 +23,6 @@
         <li><a href="../reviews/index.html">Reviews</a></li>
         <li><a href="../notification/index.html">Notification</a></li>
         <li><a href="../admin/index.html">Admin</a></li>
-        <li><a href="../tenant/index.html">Tenant</a></li>
         <li><a href="../security/index.html">Security</a></li>
         <li><a href="../filestorage/index.html">Filestorage</a></li>
         <li><a href="../config/index.html">Config</a></li>
@@ -32,6 +31,8 @@
       <h4>Cross-Cutting</h4>
       <ul>
         <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+        <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
+        <li><a href="../database/index.html">Database &amp; Migrations</a></li>
       </ul>
     </nav>
   </aside>
@@ -44,18 +45,17 @@
     <p>
       Skillars is a multi-sided marketplace (Players/Parents, Coaches, Admins), and almost every meaningful
       state change — a booking request, a declined reschedule, a session pack about to expire, a flagged
-      video, a tenant's API key being rotated — needs to reach a human by email. Rather than each module
+      video — needs to reach a human by email. Rather than each module
       formatting and sending its own mail, every other module publishes a plain domain event and the
       <code>notification</code> module owns the "last mile": mapping that event to a template, resolving the
       recipient's language, rendering HTML, sending it, and durably retrying if it fails. This keeps email
       formatting, SMTP plumbing, and delivery-retry logic in one place instead of scattered across booking,
-      tenant, video, and security code.
+      payment, video, and security code.
     </p>
     <p>
       <span class="tag">Coach</span> and <span class="tag">Parent</span> are the main end recipients — booking
       lifecycle emails, session pack warnings, reschedule/no-show notices.
-      <span class="tag">Admin</span> is a recipient for tenant-lifecycle emails (API key generated/rotated/revoked,
-      tenant created, webhook secret regenerated) and for CSAM/video-moderation alerts, plus the operator of the
+      <span class="tag">Admin</span> is a recipient for CSAM/video-moderation alerts, plus the operator of the
       <code>/v1/admin/alerts</code> endpoints used to configure operational alerting.
       <span class="tag">System/Ops</span> is the implicit recipient of alert emails when a configured metric
       threshold is breached (e.g. a fraud-spike or callback-anomaly rule).
@@ -73,10 +73,6 @@
         scheduled retry job, up to <code>MAX_RETRY_ATTEMPTS = 6</code> total attempts, after which the envelope
         is marked <code>ATTEMPTS_EXHAUSTED</code>. An envelope past its <code>deadline</code> is marked
         <code>DEADLINE_EXPIRED</code> and abandoned even if retries remain.</li>
-      <li>Tenant lifecycle emails always CC/route to a configured platform notification address
-        (<code>skillars.platform.notification-email</code>) in addition to (or instead of, for email-change
-        events) the tenant's own address — a deliberate security control so tenant admins can't quietly redirect
-        security-relevant notices to themselves alone.</li>
       <li>Video moderation admin alerts are a startup-time safety gate: if the Arachnid (CSAM detection) feature
         flag is enabled but <code>platform.admin_alert_email</code> is blank, the application refuses to start
         rather than silently dropping abuse alerts.</li>
@@ -118,7 +114,7 @@
         <tr><td><code>AlertRuleCache</code></td><td>In-memory <code>AtomicReference</code> cache of enabled <code>AlertRule</code>s, refreshed from the DB every 60s and on startup — lets admins change rules via REST with no redeploy.</td></tr>
         <tr><td><code>AlertNotificationListener</code></td><td>Reacts to <code>AlertFiredEvent</code>: always logs a WARN, and if the rule's channel is <code>EMAIL</code>, sends a plain-text ops alert (via <code>EmailTemplate.NONE</code>) to <code>ops@skillars.internal</code>, swallowing any mail failure so the alerting loop itself never breaks.</td></tr>
         <tr><td><code>ResendEmailService</code></td><td>Looks up a previously-persisted <code>EnvelopeEntity</code> by <code>sendId</code> and republishes it as a fresh <code>Envelope</code> event — a manual "resend" escape hatch (e.g. for support tooling).</td></tr>
-        <tr><td><code>infrastructure.listener.*</code></td><td>Five listener classes (<code>AccountChangeEmailListener</code>, <code>BookingEmailListener</code>, <code>SessionPackEmailListener</code>, <code>TenantLifecycleEmailListener</code>, <code>VideoModerationEmailListener</code>) that each consume one family of cross-module domain events and translate them into <code>Envelope</code> publications — this is where the module's actual "which event maps to which template" logic lives.</td></tr>
+        <tr><td><code>infrastructure.listener.*</code></td><td>Four listener classes (<code>AccountChangeEmailListener</code>, <code>BookingEmailListener</code>, <code>SessionPackEmailListener</code>, <code>VideoModerationEmailListener</code>) that each consume one family of cross-module domain events and translate them into <code>Envelope</code> publications — this is where the module's actual "which event maps to which template" logic lives. (A fifth, <code>TenantLifecycleEmailListener</code>, was deleted with the tenant module, along with its six <code>tenant*.html</code> templates and their <code>EmailTemplate</code> constants.)</td></tr>
       </tbody>
     </table>
 
@@ -131,18 +127,14 @@
         <tr><td>PUT</td><td><code>/v1/admin/alerts/{id}</code></td><td>Update an existing alert rule (implemented as delete-then-save since <code>AlertRule</code> has no setters) and refresh the cache.</td><td>JWT, <code>ROLE_ADMIN</code> or <code>ROLE_LTD_ADMIN</code></td></tr>
       </tbody>
     </table>
-    <p>These endpoints sit under <code>/v1/admin/**</code>, which is excluded from the tenant API-key filter chain
-      (via a <code>NegatedRequestMatcher</code> in <code>TenantSecurityConfig</code>) — they're JWT-only, never
-      reachable via a tenant API key.</p>
+    <p>These endpoints sit under <code>/v1/admin/**</code> and are JWT-only. They used to be described as
+      "excluded from the tenant API-key filter chain"; that chain (<code>TenantSecurityConfig</code>,
+      <code>ApiKeyAuthenticationFilter</code>) no longer exists — there is only the JWT chain now.</p>
 
     <h3>Domain events consumed</h3>
     <p>The notification module is almost entirely event-driven on the <em>consuming</em> side — it listens for
       events published by many other platform modules and turns each into an <code>Envelope</code>:</p>
     <span class="tag">AccountChangeEvent</span> (security)
-    <span class="tag">TenantCreatedEvent</span> (tenant)
-    <span class="tag">TenantApiKeyEvent</span> (tenant)
-    <span class="tag">TenantStatusChangedEvent</span> (tenant)
-    <span class="tag">TenantWebhookSecretRegeneratedEvent</span> (tenant)
     <span class="tag">BookingRequestedEvent</span> (booking)
     <span class="tag">BookingConfirmedEvent</span> (booking)
     <span class="tag">BookingDeclinedEvent</span> (booking)
@@ -160,9 +152,9 @@
     <span class="tag">BookingCancelledByCoachEvent</span> (booking)
     <span class="tag">CoachNoShowEvent</span> (booking)
     <span class="tag">PlayerNoShowEvent</span> (booking)
-    <span class="tag">SessionPackExpiryWarningEvent</span> (booking)
-    <span class="tag">SessionPackExpiredEvent</span> (booking)
-    <span class="tag">PackPausedEvent</span> (booking)
+    <span class="tag">SessionPackExpiryWarningEvent</span> (class in booking, published by payment)
+    <span class="tag">SessionPackExpiredEvent</span> (class in booking, published by payment)
+    <span class="tag">PackPausedEvent</span> (class in booking, published by payment)
     <span class="tag">VideoModerationAdminAlertEvent</span> (video)
     <span class="tag">VideoModerationOwnerNotificationEvent</span> (video)
     <p>Internally, the module also publishes and consumes its own events: an <code>Envelope</code> (published by
@@ -287,7 +279,7 @@ sequenceDiagram
       (the default), logging <code>"NoOp SES: email suppressed"</code> instead of actually sending. This
       frequently confuses new devs testing locally — but note it only affects the security module's
       registration-flow emails (Player/Parent/Coach), not this module. The <code>notification</code> module's
-      own booking/tenant/alert emails go out over real SMTP (gmx/gmail providers configured in
+      own booking/pack/alert emails go out over real SMTP (gmx/gmail providers configured in
       <code>application.yaml</code>) regardless of <code>app.ses.enabled</code>, so don't assume flipping that
       flag controls all outbound mail.</p>
     </div>
@@ -329,8 +321,9 @@ sequenceDiagram
     <ul>
       <li><a href="../booking/index.html">Booking</a> — the largest source of consumed events (booking
         lifecycle, reschedules, no-shows, session-pack expiry/pause) that drive templated emails.</li>
-      <li><a href="../tenant/index.html">Tenant</a> — tenant creation, API key lifecycle, status changes, and
-        webhook secret rotation all trigger admin/tenant-facing emails.</li>
+      <li><a href="../payment/index.html">Payment</a> — publishes the session-pack expiry-warning, expired, and
+        paused events consumed by <code>SessionPackEmailListener</code> (their classes still live in
+        <code>booking.contract</code>).</li>
       <li><a href="../video/index.html">Video</a> — video moderation admin alerts and owner-flagged
         notifications (including the CSAM/Arachnid startup safety gate).</li>
       <li><a href="../security/index.html">Security</a> — publishes <code>AccountChangeEvent</code> consumed

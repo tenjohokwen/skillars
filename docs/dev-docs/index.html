@@ -23,7 +23,6 @@
         <li><a href="reviews/index.html">Reviews</a></li>
         <li><a href="notification/index.html">Notification</a></li>
         <li><a href="admin/index.html">Admin</a></li>
-        <li><a href="tenant/index.html">Tenant</a></li>
         <li><a href="security/index.html">Security</a></li>
         <li><a href="filestorage/index.html">Filestorage</a></li>
         <li><a href="config/index.html">Config</a></li>
@@ -32,6 +31,8 @@
       <h4>Cross-Cutting</h4>
       <ul>
         <li><a href="infrastructure/index.html">Infrastructure</a></li>
+        <li><a href="scheduled-jobs/index.html">Scheduled Jobs</a></li>
+        <li><a href="database/index.html">Database &amp; Migrations</a></li>
       </ul>
     </nav>
   </aside>
@@ -51,7 +52,10 @@
       <div class="card"><h4>5. Track</h4><p><a href="development/index.html">Player development</a> is tracked over time via Skills Radar assessments and training-volume metrics.</p></div>
       <div class="card"><h4>6. Review</h4><p>After the session, families leave a <a href="reviews/index.html">review</a> that feeds back into the coach's marketplace ranking.</p></div>
     </div>
-    <p>Two modules exist purely to keep the lights on: <a href="admin/index.html">admin</a> (moderation, disputes, GDPR, coach enforcement) and <a href="tenant/index.html">tenant</a> — which, despite its name, is <strong>not</strong> per-club multi-tenancy but a B2B integration layer for external partners authenticating via API key.</p>
+    <p>One module exists purely to keep the lights on: <a href="admin/index.html">admin</a> — moderation queue, coach enforcement, dispute resolution, and GDPR export/erasure.</p>
+    <div class="callout">
+      <p><strong>There is no multi-tenancy.</strong> A <code>tenant</code> module used to exist — a B2B API-key integration layer for external partners, not per-club data partitioning — and it was <strong>removed entirely</strong> in commit <code>a170e69</code>. No <code>tenant_id</code> column, <code>TenantContext</code>, <code>/v1/**</code> API-key filter chain, or <code>ROLE_TENANT</code> principal remains anywhere in the codebase. If you find a reference to any of those, it is stale — please delete it.</p>
+    </div>
 
     <h2>Technical Overview</h2>
     <p>The backend is a single Spring Boot application (Java), package root <code>com.softropic.skillars</code>, organized as domain modules under <code>com.softropic.skillars.platform.&lt;module&gt;</code>. A cross-cutting <code>com.softropic.skillars.infrastructure.*</code> layer provides shared technical primitives (object storage, security helpers, persistence utilities, feature flags, thread pools, email, sanitization, external provider clients) that platform modules build on rather than reimplement. The frontend is Vue&nbsp;3 (Quasar). Data lives in Postgres, with Redis for caching/session state.</p>
@@ -72,7 +76,6 @@ flowchart TB
       REV[reviews]
       NOTIF[notification]
       ADM[admin]
-      TEN[tenant]
       SEC[security]
       FS[filestorage]
       CFG[config]
@@ -106,7 +109,6 @@ flowchart LR
     ADM --> REV
     ADM --> MSG
     ADM --> BOOK
-    TEN[tenant] --> NOTIF
     SEC[security] -.underpins.-> MKT
     SEC -.underpins.-> BOOK
     SEC -.underpins.-> PAY
@@ -134,7 +136,6 @@ flowchart LR
         <tr><td><a href="reviews/index.html">reviews</a></td><td>Post-session ratings/reviews with AI + community moderation, feeding marketplace ranking.</td></tr>
         <tr><td><a href="notification/index.html">notification</a></td><td>Event-driven templated email delivery plus an admin-configurable operational alert-rule system.</td></tr>
         <tr><td><a href="admin/index.html">admin</a></td><td>Trust-and-safety moderation queue, coach enforcement, dispute resolution, GDPR requests.</td></tr>
-        <tr><td><a href="tenant/index.html">tenant</a></td><td>B2B external-integration partners authenticated via API key (not per-club multi-tenancy).</td></tr>
         <tr><td><a href="security/index.html">security</a></td><td>Identity/auth, four registration &amp; verification pipelines, profile self-service, age-tiered policy.</td></tr>
         <tr><td><a href="filestorage/index.html">filestorage</a></td><td>The platform's single gateway for file upload/download/delete via presigned S3 URLs.</td></tr>
         <tr><td><a href="config/index.html">config</a></td><td>DB-backed, admin-managed runtime config values (feature gates, quotas, thresholds).</td></tr>
@@ -162,10 +163,13 @@ flowchart LR
       <p><strong>Email is silently suppressed in dev.</strong> When <code>app.ses.enabled=false</code> (the local default), <code>NoOpSesEmailService</code> logs the subject line only and sends nothing — a common source of "I registered but got no email" confusion locally.</p>
     </div>
     <div class="callout">
-      <p><strong>booking vs. session</strong> — <code>booking</code> owns scheduling/calendar/credits; <code>session</code> owns training content (drill library, plans, templates, homework). They meet only at a read-only booking snapshot and a completion event.</p>
+      <p><strong>booking vs. session</strong> — <code>booking</code> owns scheduling/calendar; <code>session</code> owns training content (drill library, plans, templates, homework). They meet only at a read-only booking snapshot and a completion event.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Session-pack credits live in <code>payment</code>, not <code>booking</code>.</strong> Booking used to own a parallel <code>SessionPackService</code>/<code>session_packs_purchased</code> system; it was deleted (migration <code>V89</code>). <code>payment.service.PackSessionService</code> and <code>payment.repo.SessionPackPurchase</code> are now the only credit system. Booking still <em>declares</em> the pack lifecycle events in <code>booking.contract</code> — payment publishes them. See <a href="payment/index.html">Payment</a>.</p>
     </div>
     <div class="callout">
-      <p><strong>tenant is not multi-tenancy</strong> — no domain entity has a <code>tenant_id</code> column. A "tenant" is an external B2B API-key-authenticated partner. See <a href="tenant/index.html">Tenant</a>.</p>
+      <p><strong>Background work is centrally catalogued.</strong> 30 <code>@Scheduled</code> methods run across 9 modules, but only 9 of them are ShedLock-guarded — the rest run concurrently on every instance. Rather than hunting for them per module, start at <a href="scheduled-jobs/index.html">Scheduled Jobs</a>.</p>
     </div>
 
     <footer class="page-footer">Skillars developer documentation — generated for onboarding.</footer>

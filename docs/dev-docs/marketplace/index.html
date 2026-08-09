@@ -23,7 +23,6 @@
         <li><a href="../reviews/index.html">Reviews</a></li>
         <li><a href="../notification/index.html">Notification</a></li>
         <li><a href="../admin/index.html">Admin</a></li>
-        <li><a href="../tenant/index.html">Tenant</a></li>
         <li><a href="../security/index.html">Security</a></li>
         <li><a href="../filestorage/index.html">Filestorage</a></li>
         <li><a href="../config/index.html">Config</a></li>
@@ -32,6 +31,8 @@
       <h4>Cross-Cutting</h4>
       <ul>
         <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+        <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
+        <li><a href="../database/index.html">Database &amp; Migrations</a></li>
       </ul>
     </nav>
   </aside>
@@ -254,6 +255,31 @@ sequenceDiagram
     </p>
 
     <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout">
+      <p><strong>Timezones are validated as real IANA zone ids.</strong> Both
+      <code>ProfileBuilderStep1Request.canonicalTimezone</code> and each
+      <code>ProfileBuilderStep4Request.AvailabilityWindowRequest.canonicalTimezone</code> carry
+      <code>@IanaTimezone</code> (from <code>infrastructure.validation</code>) on top of <code>@NotBlank</code>.
+      This matters downstream: <code>AvailabilityService.hasBookingConflict</code> and the booking overlap checks
+      resolve local times against these strings, so an unparseable zone would fail deep inside booking rather
+      than at the request boundary.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Annotate list <em>elements</em>, not just the list.</strong>
+      <code>ProfileBuilderStep4Request.windows</code> is declared
+      <code>List&lt;@NotNull @Valid AvailabilityWindowRequest&gt;</code>. Bean Validation skips the cascade on a
+      null element, so with only <code>@Valid</code> on the list a payload of
+      <code>{"windows":[null]}</code> passed every constraint and then NPE'd inside
+      <code>CoachProfileService.validateAvailabilityWindows</code> as a 500. Repeat this element-level pattern for
+      any new collection field.</p>
+    </div>
+    <div class="callout">
+      <p><strong><code>CoachProfileRepository.findByIdForUpdate</code> is the platform's booking serialization
+      point.</strong> There is no "coach calendar" row, so booking takes a <code>PESSIMISTIC_WRITE</code> lock on
+      the <code>CoachProfile</code> row (with a 5s <code>jakarta.persistence.lock.timeout</code> hint) to serialize
+      concurrent booking creates/accepts for the same coach. Be aware that a change to this entity's write paths
+      can affect booking throughput — see <a href="../booking/index.html">Booking</a>'s slot-exclusivity section.</p>
+    </div>
     <div class="callout warn">
       <p><strong>Search always needs a city.</strong> There is no cross-city or "search everywhere" mode — every
       specification and the native language-filter query are scoped to <code>city</code>. If you're adding a new
