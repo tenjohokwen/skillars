@@ -18,6 +18,11 @@
         <li><a href="../coach/index.html">Coach</a></li>
         <li><a href="../admin/index.html">Admin / Staff</a></li>
       </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../money/index.html">Money &amp; Commercial Model</a></li>
+        <li><a href="../trust-and-safety/index.html">Trust &amp; Safety</a></li>
+      </ul>
     </nav>
   </aside>
   <main class="content">
@@ -87,7 +92,7 @@ flowchart LR
       <li>Clicking a coach card opens <code>/coaches/:coachId</code> — their public profile: photo, verification badge, availability status, star rating (or "No reviews yet"), bio, specialties, languages, and price.</li>
     </ol>
     <div class="callout warn">
-      <p><strong>As of the current build, a Player cannot actually complete a booking from this screen.</strong> The profile page's call-to-action button only has real behavior for Parent accounts (it routes them to a booking-request or buy-sessions page); for a logged-in Player, clicking it just sends you to <code>/login</code> — a dead end, since you're already logged in. Booking today is a Parent-initiated action even when the person training is an adult self-registered player. If you want to actually get booked with a coach right now, that has to happen outside this screen (e.g. the coach books you directly, or a parent account requests it on your behalf).</p>
+      <p><strong>As of the current build, a Player cannot actually complete a booking from this screen.</strong> The profile page's call-to-action button only has real behavior for Parent accounts (it routes them to a buy-sessions or booking-request page). For anyone who is not a Parent — including a fully logged-in adult Player — the button reads "Sign up to book" and pushes you to <code>/login</code> with a return URL. Since you're already logged in, that's a dead end that loops you back to where you started. Booking today is a Parent-initiated action even when the person training is an adult self-registered player. If you want to actually get booked with a coach right now, that has to happen outside this screen (e.g. the coach books you directly, or a parent account requests it on your behalf).</p>
     </div>
 
     <h3>6. Tracking your development</h3>
@@ -128,6 +133,7 @@ flowchart LR
     <div class="card-grid">
       <div class="card"><h4><a href="../parent/index.html">Parent</a></h4><p>Books sessions and pays on behalf of players under 18 — and is currently the only account type that can actually complete a booking through the UI.</p></div>
       <div class="card"><h4><a href="../coach/index.html">Coach</a></h4><p>The other side of every booking, messaging thread, homework assignment, and development assessment a player sees.</p></div>
+      <div class="card"><h4><a href="../trust-and-safety/index.html">Trust &amp; Safety</a></h4><p>As an adult player you sit in the unrestricted age tier — this explains what changes for the minors you'll see referenced everywhere.</p></div>
     </div>
     <p><a href="../index.html">&larr; Back to Home</a></p>
 

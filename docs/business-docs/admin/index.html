@@ -18,6 +18,11 @@
         <li><a href="../coach/index.html">Coach</a></li>
         <li><a href="../admin/index.html">Admin / Staff</a></li>
       </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../money/index.html">Money &amp; Commercial Model</a></li>
+        <li><a href="../trust-and-safety/index.html">Trust &amp; Safety</a></li>
+      </ul>
     </nav>
   </aside>
   <main class="content">
@@ -26,27 +31,35 @@
     <p class="subtitle">Internal Skillars staff — operations, trust &amp; safety, and platform partnerships. This page is scoped honestly: it covers what's actually clickable in the UI today, separately from what's real backend capability with no UI yet.</p>
 
     <h2>Who this persona is</h2>
-    <p>Admin/staff accounts run the business behind the scenes: keeping the infrastructure healthy, managing external B2B integration partners, and — per the backend capability documented in the technical docs — moderating content, resolving disputes, enforcing coach reliability, and handling GDPR data requests. As of this build, only the first two have a real frontend; the rest are operated directly against the API (e.g. via internal tooling or direct API calls), not through a Skillars admin screen.</p>
+    <p>Admin/staff accounts run the business behind the scenes: keeping the infrastructure healthy and — per the backend capability documented in the technical docs — moderating content, resolving disputes, enforcing coach reliability, and handling GDPR data requests. As of this build, <strong>exactly one of those has a working frontend</strong> (system health); everything else is operated directly against the API, not through a Skillars admin screen.</p>
 
     <h2>What's actually in the UI today</h2>
     <pre class="mermaid">
 flowchart LR
     A["/admin/health-dashboard"] -->|"UP/DOWN + per-component detail"| B[Ops visibility]
-    C["/admin/tenants"] --> D["/admin/tenants/:tenantRef"]
-    D -->|"manage API keys, webhook config"| E[B2B partner integrations]
+    C["/admin/tenants<br/>/admin/tenants/:tenantRef"] -->|"calls deleted endpoints"| D["Broken — backend removed"]
     </pre>
 
-    <h3>1. System health</h3>
+    <h3>1. System health <small>— the only working admin screen</small></h3>
     <ol>
       <li><code>/admin/health-dashboard</code>: an overall UP/DOWN status pill, plus a card per backend component (database, cache, external providers, etc.) with status and detail rows. Non-admin users see only the overall pill with an "Admin access required" notice instead of component details.</li>
     </ol>
 
-    <h3>2. Managing B2B tenants</h3>
-    <p><strong>Why it matters:</strong> a "tenant" here is <em>not</em> a club or organization using Skillars — it's an external business partner integrating with Skillars over API, authenticated by API key. This is a common naming trap; see the callout below.</p>
-    <ol>
-      <li><code>/admin/tenants</code>: a filterable, paginated table of tenants (filter by status: active/suspended/etc.) with a "Create Tenant" button.</li>
-      <li>Clicking a row opens <code>/admin/tenants/:tenantRef</code> — the detail/management screen for that specific partner (API key issuance/rotation, webhook configuration).</li>
-    </ol>
+    <h3>2. The B2B tenant screens — removed from the backend, still present in the UI</h3>
+    <div class="callout warn">
+      <p><strong>These screens no longer work, and this is a real defect rather than an unfinished feature.</strong>
+      The B2B partner ("tenant") capability — external businesses integrating over API with an API key — was
+      <strong>deleted from the backend</strong>. Every endpoint it served
+      (<code>/v1/admin/tenants</code> and its key/webhook sub-routes) is gone.</p>
+      <p>What was <em>not</em> removed: the frontend routes <code>/admin/tenants</code> and
+      <code>/admin/tenants/:tenantRef</code>, their page components (<code>TenantListPage.vue</code>,
+      <code>TenantDetailPage.vue</code>), and all 14 tenant calls in <code>admin.api.js</code> — which is every
+      call in that file except the single health-check one. They are all still shipped and still reachable.
+      Anyone navigating there will hit a screen that fails to load its data, because it is calling endpoints that
+      no longer exist.</p>
+      <p><strong>If you are demoing or onboarding, do not open these screens.</strong> They should be deleted from
+      the frontend; until then, treat them as dead code that happens to be routable.</p>
+    </div>
 
     <h2>What's real but API-only (no admin UI yet)</h2>
     <p>The backend fully supports the following — they're documented in depth in the technical docs — but there is currently no admin-facing screen for any of them:</p>
@@ -55,15 +68,33 @@ flowchart LR
       <div class="card"><h4>Coach enforcement</h4><p>Reliability strikes, visibility reduction, and suspension for repeated late cancellations/no-shows.</p></div>
       <div class="card"><h4>Dispute resolution</h4><p>Handling disputes raised over a booking.</p></div>
       <div class="card"><h4>GDPR requests</h4><p>Data export and erasure requests — legally time-boxed, currently operated without a dedicated screen.</p></div>
-      <div class="card"><h4>Review moderation</h4><p>AI + flag-based moderation of coach reviews before they go public.</p></div>
+      <div class="card"><h4>Review moderation</h4><p>AI + flag-based moderation of coach reviews before they go public. Doubly invisible: there's no admin screen to moderate them, and no UI for anyone to submit one in the first place.</p></div>
+      <div class="card"><h4>Message moderation queue</h4><p>Messages the AI held as uncertain, or that were never moderated at all, are escalated for a human decision — with no screen to make it on.</p></div>
     </div>
+    <p>
+      The gap is worth quantifying honestly when planning: the moderation queue, coach enforcement, disputes and
+      GDPR flows are not stubs — they are complete, tested backend features with alerting, audit logs and state
+      machines behind them. What is missing is purely the admin frontend. That makes this the largest
+      build-vs-usable gap in the product.
+    </p>
 
     <h2>Conventions &amp; Gotchas</h2>
     <div class="callout warn">
       <p><strong>Don't promise a stakeholder a moderation/dispute/GDPR dashboard</strong> — none exists in the frontend today. If someone asks "where do I go to approve a GDPR erasure request," the honest answer is: nowhere in the UI yet — it's handled directly against the backend.</p>
     </div>
     <div class="callout">
-      <p><strong>"Tenant" means external API partner, not club/organization.</strong> There's no per-club multi-tenancy in Skillars — every coach/player/parent shares the same platform regardless of which club or program they belong to.</p>
+      <p><strong>There is no multi-tenancy in Skillars, and there never was.</strong> Every coach/player/parent
+      shares the same platform regardless of which club or program they belong to. The old "tenant" feature was
+      never about clubs — it meant an external API partner — and it has now been removed entirely. If a
+      stakeholder asks about "onboarding a club as a tenant," neither the old feature nor the assumed one exists.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>The moderation backend has grown while the UI has not.</strong> Since this page was last written
+      the backend added a <code>MODERATION_UNRESOLVED</code> alert type — raised when a message's AI moderation
+      verdict never landed and a human must decide — plus an automatic sweeper that escalates such messages after
+      about 30 minutes. These land in the same queue with no screen to read them. The practical consequence: the
+      moderation queue now accumulates items nobody can see in a UI, which is worth stating plainly when
+      discussing launch readiness.</p>
     </div>
 
     <h2>Related Personas</h2>

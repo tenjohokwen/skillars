@@ -75,7 +75,7 @@
       <li><strong>Availability-gated booking:</strong> a request is only accepted if the requested time falls inside one of the coach's declared <code>CoachAvailabilityWindow</code>s and doesn't fall inside a <code>CoachAvailabilityBlock</code> (blackout).</li>
       <li><strong>Coach must be booking-ready:</strong> the coach profile must not be <code>SUSPENDED</code>, and the coach must have a fully configured Stripe destination account (<code>paymentGateway.isCoachPaymentReady</code>) before a request can even be created.</li>
       <li><strong>No two active bookings can hold overlapping time for the same coach:</strong> a coach can have at most one booking in <code>REQUESTED</code>/<code>ACCEPTED</code>/<code>PAYMENT_PENDING</code>/<code>CONFIRMED</code>/<code>UPCOMING</code>/<code>IN_PROGRESS</code>/<code>PAUSED</code> status per overlapping <code>[requestedStartTime, requestedEndTime)</code> range. Enforced both at request creation and again when the coach accepts (closing the race where two overlapping requests are accepted before either commits) — see <a href="#slot-exclusivity">Slot exclusivity</a> below.</li>
-      <li><strong>Cancellation refund windows (parent-initiated):</strong> more than 24h before the session → <code>FULL</code> refund eligibility; 6–24h → <code>PARTIAL</code>; under 6h → <code>NONE</code>. A coach-initiated cancellation is always <code>FULL</code>. A coach no-show reported by the parent is always <code>FULL</code>. A player no-show reported by the coach is always <code>NONE</code>.</li>
+      <li><strong>Cancellation refund windows (parent-initiated):</strong> <code>applyRefundLogic</code> stamps <code>Booking.refundEligibility</code> with <code>FULL</code> (&gt;24h), <code>PARTIAL</code> (6–24h) or <code>NONE</code> (&lt;6h). A coach-initiated cancellation is always <code>FULL</code>, a coach no-show <code>FULL</code>, a player no-show <code>NONE</code>. <strong>But see the gotcha below — that column is dead, and <code>PARTIAL</code> pays out nothing.</strong></li>
       <li><strong>Reschedule limits:</strong> only bookings in <code>CONFIRMED</code> or <code>UPCOMING</code> status can be rescheduled, only one pending reschedule request is allowed per booking at a time, and the proposed time must be in the future.</li>
       <li><strong>Batch bookings:</strong> a parent can request up to a configured maximum number of slots (<code>booking.batch.maxSize</code>) against one coach in a single submission; the coach can accept the whole batch in one action, and the batch's aggregate status (<code>PENDING</code> / <code>PARTIALLY_ACCEPTED</code> / <code>FULLY_ACCEPTED</code> / <code>DECLINED</code>) rolls up automatically as individual bookings change status.</li>
       <li><strong>A pack-funded booking must resolve to a live pack at creation:</strong> if the request carries a <code>sessionPackPurchaseId</code>, <code>BookingService</code> loads that <code>payment.repo.SessionPackPurchase</code> and rejects the request unless the pack belongs to the parent, matches the coach, and still has unexpired credits. The credit itself is not deducted here — <code>payment</code> does that at settlement.</li>
@@ -409,6 +409,17 @@ sequenceDiagram
     </div>
 
     <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout warn">
+      <p><strong><code>Booking.refundEligibility</code> is a dead column, and it disagrees with actual behaviour.</strong>
+      <code>applyRefundLogic</code> writes <code>FULL</code>/<code>PARTIAL</code>/<code>NONE</code> onto the booking,
+      but <em>nothing reads it</em> — grep confirms <code>getRefundEligibility()</code> has no callers, and the
+      string <code>"PARTIAL"</code> appears exactly once in the codebase, on the line that assigns it. What actually
+      decides whether money moves is the separate boolean computed in <code>cancelBookingAsParent</code>:
+      <code>paymentWasCaptured &amp;&amp; requestedStartTime.isAfter(now + 24h)</code>, carried on the event and read
+      by <code>payment.CancellationRefundService</code>. A parent cancelling 8 hours out is therefore stamped
+      <code>PARTIAL</code> and refunded <strong>nothing</strong>. Either wire the tiers up or drop the column —
+      don't trust it as-is.</p>
+    </div>
     <div class="callout warn">
       <p><strong>There is now exactly one session-credit system, and booking doesn't own it.</strong> The two
       parallel systems this page used to warn about are gone: the legacy
