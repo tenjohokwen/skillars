@@ -25,6 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.DateTimeException;
 import java.time.DayOfWeek;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -133,6 +134,49 @@ public class AvailabilityService {
 
                 Instant windowStart = date.atTime(window.getStartTime()).atZone(windowZoneId).toInstant();
                 Instant windowEnd = date.atTime(window.getEndTime()).atZone(windowZoneId).toInstant();
+
+                // A DST gap can invert these two instants even though the LOCAL times are ordered.
+                // LocalDateTime.atZone() silently shifts a nonexistent local time forward by the gap
+                // length, and the DB guard chk_availability_time_order (V26:56) constrains only the
+                // local times, so it cannot see this. Concretely: Europe/Berlin, window 02:30-03:00
+                // on 2026-03-29 — 02:30 falls in the spring-forward gap and resolves to 01:30Z while
+                // 03:00 resolves to 01:00Z. computeAvailableSlots seeds its segment list with
+                // {windowStart, windowEnd} unconditionally, so without this guard the API emits a
+                // slot whose startDatetime is AFTER its endDatetime; the frontend renders it as
+                // clickable and submitting it 400s behind a generic toast.
+                //
+                // Guarded here at the call site, before `occupied` is built, rather than inside
+                // computeAvailableSlots: the two instants exist here, and pushing the check inward
+                // would give that method a new failure mode it has no way to report.
+                if (!windowEnd.isAfter(windowStart)) {
+                    // WARN, not silence: a window whose local range straddles a DST gap is a data
+                    // problem someone should see and fix, not something to swallow.
+                    log.warn("Skipping availability window with non-positive duration — its local "
+                            + "range straddles a DST gap in its own zone. coachId={} windowId={} "
+                            + "day={} local={}-{} zone={} resolved={}/{}",
+                        coachId, window.getId(), date, window.getStartTime(), window.getEndTime(),
+                        windowZoneId, windowStart, windowEnd);
+                    continue;
+                }
+
+                // Inversion is the loud case; SHORTENING is the quiet one. A window whose start
+                // alone falls in the gap still satisfies the guard above but loses time: Berlin
+                // 02:30-04:00 on 2026-03-29 resolves to 01:30Z-02:00Z — 30 minutes offered where
+                // the coach configured 90. That is arguably the correct outcome (02:30 local does
+                // not exist that day, so real availability starts at 03:00), which is exactly why
+                // it must not pass silently: the coach sees fewer bookable minutes than they set up
+                // and has no way to discover why. Log it and carry on — do NOT skip the window,
+                // the shortened remainder is genuinely bookable.
+                Duration localDuration =
+                    Duration.between(window.getStartTime(), window.getEndTime());
+                Duration actualDuration = Duration.between(windowStart, windowEnd);
+                if (!actualDuration.equals(localDuration)) {
+                    log.warn("Availability window duration changed by a DST transition — offering "
+                            + "{} instead of the configured {}. coachId={} windowId={} day={} "
+                            + "local={}-{} zone={}",
+                        actualDuration, localDuration, coachId, window.getId(), date,
+                        window.getStartTime(), window.getEndTime(), windowZoneId);
+                }
 
                 List<CoachAvailabilityBlock> occupied = new ArrayList<>(weekBlocks.stream()
                     .filter(b -> b.getEndDatetime().isAfter(windowStart)

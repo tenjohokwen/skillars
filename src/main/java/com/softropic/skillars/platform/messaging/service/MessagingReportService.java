@@ -141,7 +141,11 @@ public class MessagingReportService {
             case "PLAYER" -> playerProfileRepository.findByUserId(callerUserId)
                 .map(p -> Objects.equals(p.getId(), conv.getPlayerId()))
                 .orElse(false);
-            default -> throw new IllegalArgumentException("Unknown messaging role: " + role);
+            // Mirrors MessagingService.verifyIsParty's arm, which carries the full rationale.
+            // This copy is intentional (see the method comment above) and must stay in step with it.
+            default -> throw new OperationNotAllowedException(
+                "Caller does not hold a recognised messaging role",
+                MessagingErrorCode.NOT_A_PARTY);
         };
         if (!isParty) {
             throw new OperationNotAllowedException(

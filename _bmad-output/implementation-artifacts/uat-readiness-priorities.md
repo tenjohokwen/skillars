@@ -9,6 +9,18 @@ Written 2026-08-09 against commit `a170e69`. Every claim in the P0 section and e
 flagged for seven consecutive rounds that most of its forward-references are unverified, so nothing
 here is taken on the ledger's word.
 
+## Story claims
+
+Items already pulled into a story. A subsequent story-creation pass must skip anything marked
+**CLAIMED** below or inline. Unmarked items are still available.
+
+| Story file | Items claimed |
+|---|---|
+| `skillars-uat-1-admin-bootstrap-and-onboarding-unblock.md` (2026-08-10) | P0-1 (AC1–AC3), P0-3 (AC4), P1 #4 (AC5), P1 #5 (AC6), P1 #6 (AC7), P2 #1 (AC8, re-scoped), all 5 Ledger-hygiene rows (AC9) |
+
+**Still unclaimed:** P0-2, P0-4, P0-5 (all three are product decisions — see the Suggested sequence);
+P1 #1, #2, #3, #7, #8; P2 #2–#5; everything in P3.
+
 ## Ranking rule applied
 
 1. **Does the UAT journey complete without it?** No → P0. Completes but gives a wrong or confusing
@@ -44,6 +56,8 @@ here is taken on the ledger's word.
 
 ### P0-1. No admin account can be created — *not tracked in the ledger at all*
 
+> **CLAIMED 2026-08-10 → `skillars-uat-1-admin-bootstrap-and-onboarding-unblock.md` (AC1–AC3).** Do not pick up again.
+
 `main.authority` is seeded with exactly three rows: `100 ROLE_COACH`, `101 ROLE_PARENT`
 (`V21__skillars_security_extension.sql:35-39`) and `102 ROLE_PLAYER`
 (`V84__player_self_registration.sql:5-8`). **No migration ever seeds `ROLE_ADMIN` or
@@ -76,6 +90,9 @@ as a parent, or build player self-booking. If you build it, the D1 messaging ite
 theoretical and must ship alongside.
 
 ### P0-3. Coach profile builder can hard-lock a coach out — `deferred-18` D5
+
+> **CLAIMED 2026-08-10 → `skillars-uat-1-admin-bootstrap-and-onboarding-unblock.md` (AC4).** Do not pick up again.
+> Fixed by a server-validated zone picker, not by loosening `@IanaTimezone` — `deferred-18` D4 stays open by design.
 
 `ProfileBuilderStep1.vue:90` and `ProfileBuilderStep4.vue:75` send
 `Intl.DateTimeFormat().resolvedOptions().timeZone` verbatim, with no zone picker and no fallback, and
@@ -146,12 +163,12 @@ Ordered by how likely you are to trip over them.
    `booking_payments` row, with no signal that recovery is needed. This is what confines the
    `deferred-15` sweeper to pack-funded bookings. Recovery is manual Stripe-dashboard reconciliation.
    Survivable in test mode; you should know it exists before you trust any payment numbers.
-4. **`deferred-17` D4 — `AvailabilityManagerPage.vue:333` still displays `windows[0]`'s timezone**,
+4. **[CLAIMED → `skillars-uat-1-...unblock.md` AC5]** **`deferred-17` D4 — `AvailabilityManagerPage.vue:333` still displays `windows[0]`'s timezone**,
    the exact column `deferred-17` AC4 stopped displaying from one page over. `bookingStore.coachTimezone`
    is already populated by a call this page makes and is simply unused. Cheap fix, visible inconsistency.
-5. **`deferred-16` D1 — an unknown role string yields 500, not 403.** Latent (the resolver guarantees
+5. **[CLAIMED → `skillars-uat-1-...unblock.md` AC6]** **`deferred-16` D1 — an unknown role string yields 500, not 403.** Latent (the resolver guarantees
    one of three values), but a 500 during UAT costs an investigation.
-6. **`deferred-18` D1 — a DST gap can emit a negative-duration slot** that renders clickable and 400s
+6. **[CLAIMED → `skillars-uat-1-...unblock.md` AC7]** **`deferred-18` D1 — a DST gap can emit a negative-duration slot** that renders clickable and 400s
    behind a generic toast. Needs a ~02:30 Sunday window to trigger; unlikely but free to guard.
 7. **`deferred-17` D3 — `formatSlot` hardcodes `'en'`.** Only matters if UAT is not English-only.
    Systemic across 4+ pages; do it as one sweep or not at all.
@@ -170,7 +187,7 @@ every push to `master`. You can deploy today.
 
 What is genuinely worth doing, in order:
 
-1. **`deferred-17` D7 — `docker compose build` silently no-ops.** Neither compose file has a `build:`
+1. **[CLAIMED → `skillars-uat-1-...unblock.md` AC8, re-scoped]** **`deferred-17` D7 — `docker compose build` silently no-ops.** Neither compose file has a `build:`
    key, so `docker compose build app` does nothing without erroring and you deploy a stale jar. This
    already cost the `deferred-17` dev significant time — it made a shipped fix look broken. Only bites
    local/manual builds (the VPS pulls from GHCR), but it is a ten-minute fix for a failure mode that
@@ -217,6 +234,9 @@ UAT script touches none of this code.
 ---
 
 ## Ledger hygiene — items I verified as stale today
+
+> **CLAIMED 2026-08-10 → `skillars-uat-1-admin-bootstrap-and-onboarding-unblock.md` (AC9).** All five rows
+> below are handled by that story. Do not pick up again.
 
 The ledger's audits have flagged seven times that forward-references go unverified. Four items are
 provably out of date, and one should be re-scoped. Cleaning these costs nothing and stops you

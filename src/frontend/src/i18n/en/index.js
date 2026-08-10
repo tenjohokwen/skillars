@@ -1,5 +1,6 @@
 export default {
   common: {
+    retry: 'Retry',
     cancel: 'Cancel',
     save: 'Save',
     back: 'Back',
@@ -79,6 +80,14 @@ export default {
       step4Short: 'Availability',
       step4AvailabilityWindows: 'Availability Windows',
       step4WindowHelper: 'Add at least one weekly window so parents know when they can book you.',
+      step1SectionTimezone: 'Timezone',
+      step4SectionTimezone: 'Timezone',
+      step4TimezoneHelper: 'Windows above are interpreted in this timezone.',
+      timezoneLabel: 'Timezone',
+      timezoneHint: 'Type to search, e.g. Europe/Berlin',
+      timezoneNoMatch: 'No matching timezone',
+      timezoneBrowserUnknown: 'Your device reports the timezone {zone}, which this server does not recognise. Please pick the closest match above.',
+      timezoneLoadFailed: 'Could not load the timezone list. Check your connection and try again.',
       step4WindowEmpty: 'No availability windows yet — add one below.',
       step4AddWindow: 'Add Window',
       step4Day: 'Day',

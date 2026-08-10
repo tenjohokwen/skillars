@@ -329,9 +329,12 @@ onMounted(async () => {
     return
   }
   await store.loadAvailability(coachId.value, currentWeekStart.value)
-  if (store.windows.length > 0) {
-    coachTimezone.value = store.windows[0].canonicalTimezone ?? 'UTC'
-  }
+  // Sourced from the coach PROFILE's timezone, which loadAvailability already puts on the store,
+  // not from windows[0].canonicalTimezone. The window column is independently writable per window
+  // (a coach can hold windows in two zones), so reading row-zero's value made the label depend on
+  // arbitrary row order — and it is the exact column deferred-17 AC4 stopped displaying from on
+  // BookingRequestPage. This also removes an unguarded windows[0] dereference.
+  coachTimezone.value = store.coachTimezone ?? 'UTC'
 })
 </script>
 

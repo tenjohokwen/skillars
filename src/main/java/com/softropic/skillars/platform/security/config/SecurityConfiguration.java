@@ -59,6 +59,7 @@ import jakarta.servlet.DispatcherType;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.filter.ForwardedHeaderFilter;
 import org.springframework.web.servlet.HandlerExceptionResolver;
+import com.softropic.skillars.platform.security.contract.AdminBootstrapProperties;
 import com.softropic.skillars.platform.security.contract.SecurityProperties;
 
 import java.util.List;
@@ -77,7 +78,7 @@ import static com.softropic.skillars.platform.security.config.AppEndpoints.SECUR
 @EnableWebSecurity
 @EnableMethodSecurity(securedEnabled = true,
                       jsr250Enabled = true)
-@EnableConfigurationProperties(SecurityProperties.class)
+@EnableConfigurationProperties({SecurityProperties.class, AdminBootstrapProperties.class})
 public class SecurityConfiguration {
 
     @Bean

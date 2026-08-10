@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
@@ -124,6 +125,68 @@ class CoachProfileBuilderIT extends AbstractIntegrationTest {
             "SELECT bio FROM marketplace.coach_profiles WHERE user_id = ?", String.class, COACH_ID);
         assertThat(storedBio).doesNotContain("john@example.com");
         assertThat(storedBio).contains("[contact details removed]");
+    }
+
+    @Test
+    void timezones_returnsServerZoneSetUsableByThePicker() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+
+        ResponseEntity<List> response = httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/timezones",
+            HttpMethod.GET, null, authenticatedHeaders(cookies), List.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @SuppressWarnings("unchecked")
+        List<String> zones = (List<String>) response.getBody();
+        assertThat(zones).isNotNull().isNotEmpty();
+
+        // Properties, never hasSize(528): the count moves with the JDK's bundled tzdata, so an exact
+        // figure would turn a routine base-image bump into a red build for no reason.
+        assertThat(zones).isSorted();
+        assertThat(zones).doesNotHaveDuplicates();
+        assertThat(zones)
+            .as("ordinary region zones must be offered")
+            .contains("Europe/Berlin", "America/New_York", "Asia/Tokyo");
+        assertThat(zones)
+            .as("Etc/UTC is added back deliberately — there is no region-form UTC zone, and a coach "
+                + "genuinely operating on UTC needs somewhere to land")
+            .contains("Etc/UTC");
+        assertThat(zones)
+            .as("legacy no-slash aliases are filtered out — obsolete and ambiguous in a searchable list")
+            .doesNotContain("Navajo", "W-SU", "Turkey", "Zulu", "CST6CDT", "GMT0", "UCT");
+        assertThat(zones)
+            .as("the Etc/GMT+-N block is DST-blind: it would give a coach wall-clock times an hour "
+                + "wrong for half the year, which is the very confusion this picker removes")
+            .noneMatch(z -> z.startsWith("Etc/GMT"));
+        assertThat(zones)
+            .as("legacy aliases that CONTAIN a slash must also go — these survive any naive "
+                + "'must contain /' rule, and SystemV/* carries pre-1987 US DST rules")
+            .doesNotContain("US/Eastern", "US/Pacific", "Canada/Atlantic", "Brazil/East",
+                            "Mexico/General", "Chile/Continental", "SystemV/EST5EDT");
+        // The guarantee that keeps this correct as tzdb grows: an allow-list of the ten IANA
+        // continent prefixes, so a family added tomorrow is excluded by default rather than
+        // quietly appearing in the picker. Asserted as a property, not as a list of known-bad names.
+        assertThat(zones)
+            .allSatisfy(z -> assertThat(z.substring(0, z.indexOf('/')))
+                .isIn("Africa", "America", "Antarctica", "Arctic", "Asia",
+                      "Atlantic", "Australia", "Europe", "Indian", "Pacific", "Etc"));
+
+        // The contract that actually matters: every option offered must survive @IanaTimezone.
+        // Without this, the endpoint could drift from the validator and hand a coach a choice that
+        // 400s on submit — recreating the lockout in a new form.
+        assertThatCode(() -> zones.forEach(java.time.ZoneId::of)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void timezones_nonCoachIsRejected() {
+        String cookies = loginAndGetCookies(PARENT_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/timezones",
+            HttpMethod.GET, null, authenticatedHeaders(cookies), List.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
+                .isEqualTo(HttpStatus.FORBIDDEN));
     }
 
     @Test

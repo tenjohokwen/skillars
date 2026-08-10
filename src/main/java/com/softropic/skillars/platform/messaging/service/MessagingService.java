@@ -336,7 +336,15 @@ public class MessagingService {
             case "PLAYER" -> playerProfileRepository.findByUserId(callerUserId)
                 .map(p -> Objects.equals(p.getId(), conv.getPlayerId()))
                 .orElse(false);
-            default -> throw new IllegalArgumentException("Unknown messaging role: " + role);
+            // Was IllegalArgumentException, which no @RestControllerAdvice handles — so an
+            // unrecognised role produced a 500 with a stack trace instead of the 403 the
+            // resolver's own fallback produces (MessagingResource.resolveRole). Latent today,
+            // since resolveRole guarantees one of three values, but the guard and the throw
+            // live in different classes with no shared enum, so the invariant is convention
+            // only. MessagingApiAdvice maps this to 403 messaging.notAParty.
+            default -> throw new OperationNotAllowedException(
+                "Caller does not hold a recognised messaging role",
+                MessagingErrorCode.NOT_A_PARTY);
         };
         if (!isParty) {
             throw new OperationNotAllowedException(
@@ -433,7 +441,11 @@ public class MessagingService {
             case "COACH" -> conv.getCoachLastReadAt();
             case "PARENT" -> conv.getParentLastReadAt();
             case "PLAYER" -> conv.getPlayerLastReadAt();
-            default -> throw new IllegalArgumentException("Unknown messaging role: " + role);
+            // See verifyIsParty for why this is OperationNotAllowedException and not
+            // IllegalArgumentException.
+            default -> throw new OperationNotAllowedException(
+                "Caller does not hold a recognised messaging role",
+                MessagingErrorCode.NOT_A_PARTY);
         };
     }
 
@@ -443,7 +455,11 @@ public class MessagingService {
             case "COACH" -> conv.setCoachLastReadAt(now);
             case "PARENT" -> conv.setParentLastReadAt(now);
             case "PLAYER" -> conv.setPlayerLastReadAt(now);
-            default -> throw new IllegalArgumentException("Unknown messaging role: " + role);
+            // See verifyIsParty for why this is OperationNotAllowedException and not
+            // IllegalArgumentException.
+            default -> throw new OperationNotAllowedException(
+                "Caller does not hold a recognised messaging role",
+                MessagingErrorCode.NOT_A_PARTY);
         }
     }
 

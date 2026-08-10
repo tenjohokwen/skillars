@@ -111,11 +111,16 @@ class StorageResourceIT extends BaseStorageIT {
                 " '$2a$10$Sdo/qTAcMcYaIAV6XXw3dejlsDwL93g6zb.uPUwFohPpC8q3bEg5i', NULL, NULL, false) " +
                 "ON CONFLICT DO NOTHING");
             jdbcTemplate.execute(
-                "INSERT INTO main.user_authority (user_id, authority_id) VALUES (675373350208068096, 5418719445932238328) " +
-                "ON CONFLICT DO NOTHING");
+                // Resolved by NAME, not by the literal id above. V92 seeds ROLE_ADMIN/ROLE_LTD_ADMIN, so the
+                // authority INSERTs above now hit their ON CONFLICT and the migration's id wins —
+                // a literal here would dangle and violate the FK.
+                "INSERT INTO main.user_authority (user_id, authority_id) "
+                + "VALUES (675373350208068096, (SELECT id FROM main.authority WHERE name = 'ROLE_USER')) "
+                + "ON CONFLICT DO NOTHING");
             jdbcTemplate.execute(
-                "INSERT INTO main.user_authority (user_id, authority_id) VALUES (675373350208068096, 6747751741842104908) " +
-                "ON CONFLICT DO NOTHING");
+                "INSERT INTO main.user_authority (user_id, authority_id) "
+                + "VALUES (675373350208068096, (SELECT id FROM main.authority WHERE name = 'ROLE_ADMIN')) "
+                + "ON CONFLICT DO NOTHING");
             return null;
         });
 
