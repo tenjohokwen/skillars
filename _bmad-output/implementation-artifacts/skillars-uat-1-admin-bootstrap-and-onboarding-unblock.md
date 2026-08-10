@@ -480,3 +480,23 @@ My own contribution is exact and independently verified by diffing test-method c
 **One regression was introduced and fixed within this story** (see Completion Note 3): `V92`'s `ROLE_ADMIN` seed collided with `authorityData.sql`'s unguarded insert and failed 8 IT classes on the first full-suite run. Fixed by making the authority fixtures conflict-tolerant *and* resolving `user_authority` foreign keys by name; re-verified those 8 classes green (51/51) before the clean full run above.
 
 ESLint clean. Prettier not clean on pre-existing files, deliberately untouched — recorded as deferred D5.
+
+---
+
+**2026-08-10 (later) — all 11 review findings addressed. `mvn -o verify` BUILD SUCCESS (20:23).**
+
+| Suite | Before review fixes | After | Delta |
+|---|---|---|---|
+| Unit (surefire) | 818 | **823**, 0 failures, 0 errors, 1 skipped | +5 |
+| Integration (failsafe) | 863 | **863**, 0 failures, 0 errors, 4 skipped | unchanged |
+
+The +5 are the new guards on `AdminBootstrapRunner`: `commitTimeFailureOfAnyTypeDoesNotFailStartup`, `invalidEmailFailsFastBeforeAnyDatabaseWork`, `oversizedNameFailsFast`, `missingAdminAuthorityStillFailsStartup` and `toStringDoesNotLeakPassword`. The integration count is unchanged because the AC4 review fix strengthened assertions inside existing tests rather than adding methods.
+
+**Two findings were materially worse than reported, and both required measurement rather than reasoning:**
+
+- **Finding 2** was probed against a real database instead of argued from the type hierarchy. A four-character TLD throws `TransactionSystemException`, **not** `DataIntegrityViolationException` — the catch missed it entirely and the application failed to start. `Customer.email`'s regex caps TLDs at three characters, so `.info`, `.cloud`, `.tech` and `.online` each bricked the first boot. Fixed by a pre-flight check against the entity's own constraints plus a catch widened to `RuntimeException`; mutation-checked by narrowing it back.
+- **Finding 5** was quantified by enumerating the JVM's zone set: **42** legacy aliases survived the slash filter, not only the two examples cited — the whole of `Brazil/*`, `Mexico/*`, `Chile/*` and `SystemV/*` as well. Rewritten as an allow-list of the ten IANA continent prefixes so future tzdb additions are excluded by default.
+
+**One finding was rejected on evidence, not preference.** Finding 8 (Step 4's ref not re-syncing) is unreachable: the host page renders the steps via a `v-if`/`v-else-if` chain of distinct components, so Step 4 unmounts on navigation and re-reads the store on return. Adding a watcher would have introduced a real bug — overwriting a per-window zone the coach chose deliberately. Documented on the ref instead of changed.
+
+Two new i18n keys (`auth.coach.timezoneLoadFailed`, `common.retry`) added to all four bundles. ESLint clean; `TimezoneSelect.vue` remains Prettier-clean; the pre-existing Prettier violations are still untouched and still tracked as deferred D5.
