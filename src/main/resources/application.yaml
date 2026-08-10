@@ -153,6 +153,20 @@ loki:
 app:
   environment: ${ENVIRONMENT:prod}
   version: ${APP_VERSION:unknown}
+  # One-time creation of the platform's first administrator (AdminBootstrapRunner).
+  # BLANK MEANS DISABLED — the runner no-ops unless email AND password are both set, so this is
+  # inert everywhere until an operator deliberately opts in. Never give `password` a literal
+  # default here or anywhere else: a default admin password is a default admin account.
+  # `phone` is required when enabled (user.phone is UNIQUE and PhoneNumber.phone is @NotEmpty, so a
+  # shared placeholder would collide on the second admin). See docs/deployment/uat-deployment.md,
+  # which also documents removing the password variable once the first boot has created the account.
+  bootstrap:
+    admin:
+      email: ${APP_BOOTSTRAP_ADMIN_EMAIL:}
+      password: ${APP_BOOTSTRAP_ADMIN_PASSWORD:}
+      phone: ${APP_BOOTSTRAP_ADMIN_PHONE:}
+      first-name: ${APP_BOOTSTRAP_ADMIN_FIRST_NAME:Platform}
+      last-name: ${APP_BOOTSTRAP_ADMIN_LAST_NAME:Administrator}
   config:
     cache-ttl-seconds: 300
   storage:

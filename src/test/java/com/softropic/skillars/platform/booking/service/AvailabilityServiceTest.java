@@ -276,6 +276,60 @@ class AvailabilityServiceTest {
         assertThat(response.blocks()).isEmpty();
     }
 
+    /**
+     * A window whose local range straddles a spring-forward DST gap must contribute no slot.
+     *
+     * <p>{@code LocalDateTime.atZone()} silently shifts a nonexistent local time forward by the gap
+     * length, so the two instants invert even though the local times are correctly ordered — and the
+     * DB guard {@code chk_availability_time_order} constrains only the local times, so it cannot
+     * catch this. Europe/Berlin loses 02:00-03:00 on 2026-03-29: 02:30 resolves to 01:30Z and 03:00
+     * to 01:00Z. Before the guard, {@code computeAvailableSlots} emitted
+     * {@code {01:30Z, 01:00Z}} — an {@code AvailableSlotResponse} with {@code startDatetime} after
+     * {@code endDatetime}, which the frontend renders as clickable and which 400s on submit behind
+     * a generic toast.
+     *
+     * <p><strong>Mutation-checked:</strong> removing the {@code windowEnd.isAfter(windowStart)}
+     * guard fails this test with one inverted slot present instead of none.
+     */
+    @Test
+    void getAvailabilityCalendar_windowStraddlingDstGap_contributesNoSlot() {
+        UUID coachId = UUID.randomUUID();
+        CoachProfile profile = makeCoachProfile(coachId, COACH_USER_ID);
+        // Sunday 2026-03-29 is the European spring-forward date.
+        LocalDate weekStart = LocalDate.of(2026, 3, 23); // Monday of that week
+        LocalDate dstSunday = LocalDate.of(2026, 3, 29);
+
+        CoachAvailabilityWindow gapWindow = makeWindow(UUID.randomUUID(), coachId);
+        gapWindow.setDayOfWeek((short) 7); // Sunday, ISO
+        gapWindow.setStartTime(LocalTime.of(2, 30));
+        gapWindow.setEndTime(LocalTime.of(3, 0));
+        gapWindow.setCanonicalTimezone("Europe/Berlin");
+
+        when(coachProfileRepository.findById(coachId)).thenReturn(Optional.of(profile));
+        when(windowRepository.findByCoachId(coachId)).thenReturn(List.of(gapWindow));
+        when(blockRepository.findByCoachIdAndEndDatetimeAfterAndStartDatetimeBefore(eq(coachId), any(), any()))
+            .thenReturn(List.of());
+        when(bookingRepository.findOverlappingBookings(
+                eq(coachId), any(), any(), eq(BookingService.ACTIVE_SLOT_STATUSES), isNull()))
+            .thenReturn(List.of());
+
+        // Pin the premise rather than assuming it: if a future tzdata revision moved Germany's
+        // transition, this fixture would stop exercising the inversion and the test below would
+        // pass vacuously.
+        ZoneId berlin = ZoneId.of("Europe/Berlin");
+        Instant resolvedStart = dstSunday.atTime(2, 30).atZone(berlin).toInstant();
+        Instant resolvedEnd = dstSunday.atTime(3, 0).atZone(berlin).toInstant();
+        assertThat(resolvedStart)
+            .as("fixture premise: 02:30 must fall in the DST gap and resolve AFTER 03:00")
+            .isAfter(resolvedEnd);
+
+        CoachAvailabilityResponse response = service.getAvailabilityCalendar(coachId, weekStart);
+
+        assertThat(response.computedSlots())
+            .as("an inverted window must be skipped entirely, not emitted as a negative-duration slot")
+            .isEmpty();
+    }
+
     @Test
     void getAvailabilityCalendar_padsFetchBoundsByOneDayEachSide_toCoverDivergentWindowZones() {
         UUID coachId = UUID.randomUUID();

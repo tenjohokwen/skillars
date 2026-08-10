@@ -20,6 +20,9 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 | `POSTGRES_PASSWORD` | 32+ character random string | `openssl rand -base64 32` |
 | `SPRING_DATASOURCE_URL` | JDBC URL | Fixed derived value: `jdbc:postgresql://postgres:5432/<POSTGRES_DB>?TimeZone=UTC` — substitute `<POSTGRES_DB>` with the literal database name you chose above; Docker Compose does not expand variable references within `.env` file values |
 | `JWT_SECRET` | 64+ character random string | `openssl rand -base64 64` |
+| `APP_BOOTSTRAP_ADMIN_EMAIL` | Email address | **Temporary — see the callout below.** The login for the platform's first administrator. Choose an address that does not already belong to a coach, parent or player account |
+| `APP_BOOTSTRAP_ADMIN_PASSWORD` | 24+ character random string | **Temporary — see the callout below.** `openssl rand -base64 24`. Stored bcrypt-hashed; never logged. Record it in your password manager before the first deploy — it cannot be recovered from the running system |
+| `APP_BOOTSTRAP_ADMIN_PHONE` | E.164 phone number, e.g. `+491700000000` | **Temporary — see the callout below.** Required whenever the two above are set. `main."user".phone` carries a `UNIQUE` constraint, so this cannot be a shared placeholder — a second admin bootstrapped on the same database needs a different number |
 | `SPRING_MAIL_HOST` | SMTP hostname, e.g. `smtp.gmail.com` | From your email provider (e.g. `smtp.gmail.com`, `smtp.sendgrid.net`) |
 | `SPRING_MAIL_PORT` | Integer, e.g. `587` | From your email provider — 587 for STARTTLS, 465 for SSL/TLS |
 | `SPRING_MAIL_USERNAME` | Email address | Your SMTP username or sending address |
@@ -49,6 +52,33 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 | `HOS_BUCKET` | String, e.g. `skillars-backups` | Create a private bucket in Hetzner Cloud Console → Object Storage; use the exact bucket name here |
 | `HOS_ENDPOINT` | HTTPS URL, e.g. `https://s3.fsn1.hetzner.com` | Hetzner Object Storage endpoint for your datacenter region (fsn1 = Falkenstein, nbg1 = Nuremberg, hel1 = Helsinki) — visible in the bucket details page |
 | `HOS_BACKUP_PREFIX` | String ending in `/`, e.g. `pg-backups/` | Choose a key prefix to organize backups within the bucket; default `pg-backups/` |
+
+> **The three `APP_BOOTSTRAP_ADMIN_*` variables are the only entries in this table that are meant to
+> be removed again.** Every other secret here is permanent; these exist to create one account, once.
+>
+> There is no admin registration endpoint and no migration seeds an admin *user*, so
+> `AdminBootstrapRunner` is the only supported way to obtain one. It is **inert unless
+> `APP_BOOTSTRAP_ADMIN_EMAIL` and `APP_BOOTSTRAP_ADMIN_PASSWORD` are both non-blank**, so leaving all
+> three unset (the `.env.example` default) changes nothing on an environment that already has its
+> admin.
+>
+> Lifecycle: set all three → deploy → confirm the account was created → **remove
+> `APP_BOOTSTRAP_ADMIN_PASSWORD` and redeploy**, so a long-running container does not carry a live
+> credential in its environment. Confirm with:
+> ```bash
+> docker compose logs app | grep admin_bootstrap
+> # ... "Admin bootstrap created the first administrator" ... authority=ROLE_ADMIN
+> ```
+> Two behaviours worth knowing before you plan around this:
+> - **Re-running is safe.** If the account already exists the runner logs `skip_existing` and returns
+>   — it will not duplicate or fail. Removing the password is about exposure, not correctness.
+> - **It never elevates an existing user.** If the email is already taken by a coach, parent or
+>   player, the runner skips rather than granting `ROLE_ADMIN` to that row. A typo therefore produces
+>   a silent skip with only an INFO line to explain it — check the log rather than assuming success.
+>
+> Setting email and password but leaving `APP_BOOTSTRAP_ADMIN_PHONE` blank makes the application
+> **refuse to start**, deliberately, so a half-configured bootstrap fails loudly instead of writing a
+> broken row. Full procedure: [`uat-deployment.md`](uat-deployment.md) Step 8.
 
 > **After placing the updated `.env`**, run the backup cron installer:
 > ```bash
@@ -104,8 +134,11 @@ openssl rand -base64 32
 # 64 bytes of entropy (~88 base64 characters) — for JWT_SECRET:
 openssl rand -base64 64
 
-# 24 bytes of entropy (~32 base64 characters) — for GF_SECURITY_ADMIN_PASSWORD:
+# 24 bytes of entropy (~32 base64 characters) — for GF_SECURITY_ADMIN_PASSWORD
+# and APP_BOOTSTRAP_ADMIN_PASSWORD:
 openssl rand -base64 24
+# Record APP_BOOTSTRAP_ADMIN_PASSWORD in your password manager BEFORE deploying — it is stored
+# bcrypt-hashed and never logged, so it cannot be recovered from the running system afterwards.
 
 # ed25519 SSH deploy key pair (GitHub Actions SSH_DEPLOY_KEY):
 ssh-keygen -t ed25519 -C deploy@skillars-prod -f ~/.ssh/skillars_deploy

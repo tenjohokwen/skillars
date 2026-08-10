@@ -30,6 +30,14 @@ from GHCR) — there's no `build:` section, so build the image yourself first:
 docker build -t skillars:local .
 ```
 
+`docker-compose.local.yml` also carries a `build:` block, so once you have
+created your override file (Step 4) you can rebuild with
+`docker compose -f docker-compose.yml -f docker-compose.local.yml build app`
+instead. Note that **`docker compose build app` without the local override
+silently does nothing and exits 0** — the base file has no `build:` key — so
+if a change you just made appears to have no effect, check which command you
+rebuilt with before debugging the code.
+
 ---
 
 ## Step 2: Create your local env file

@@ -6,6 +6,12 @@ export const getProfileBuilderStatus = () =>
 export const saveProfileBuilderStep = (stepNumber, data) =>
   api.put(`/api/marketplace/coaches/me/profile/steps/${stepNumber}`, data)
 
+// The timezone options the profile builder may offer. Sourced from the SERVER's zone set, never
+// from Intl.supportedValuesOf(): the browser's tzdata is exactly what used to lock a coach out of
+// Steps 1 and 4 when it was newer than the deployed JVM's.
+export const getSupportedTimezones = () =>
+  api.get('/api/marketplace/coaches/me/profile/timezones')
+
 export const publishProfile = () =>
   api.post('/api/marketplace/coaches/me/profile/publish')
 

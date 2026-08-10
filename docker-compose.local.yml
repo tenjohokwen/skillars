@@ -1,5 +1,15 @@
 services:
   app:
+    # Without this, `docker compose build app` exits 0 having done NOTHING. The base
+    # docker-compose.yml only carries `image: ${APP_IMAGE}` (it pulls from GHCR in production), and
+    # Compose silently no-ops a build for a service with no `build:` key — so you keep deploying
+    # whatever image was last built by hand. That cost the deferred-17 dev significant time: a
+    # shipped fix looked broken because the running jar predated it.
+    # Only added to the LOCAL override. docker-compose.yml and docker-compose.uat.yml must keep
+    # pulling the published image; building from source on a server is not what either does.
+    build:
+      context: .
+      dockerfile: Dockerfile
     environment:
       - SPRING_PROFILES_ACTIVE=dev
       - APP_VIDEO_BUNNY_LIBRARY_ID=123456

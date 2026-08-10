@@ -60,12 +60,16 @@
       class="q-mb-md"
     />
 
+    <div class="text-label q-mb-sm q-mt-md">{{ t('auth.coach.step1SectionTimezone') }}</div>
+    <TimezoneSelect v-model="canonicalTimezone" />
+
     <div class="q-mt-md">
       <q-btn
         :label="t('common.next')"
         class="btn-accent"
         @click="submit"
         :loading="props.loading"
+        :disable="!canonicalTimezone"
         unelevated
       />
     </div>
@@ -76,8 +80,11 @@
 import { reactive, ref, watch, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { sanitizePreview } from 'src/api/marketplace.api'
+import { useProfileBuilderStore } from 'src/stores/profileBuilder.store'
+import TimezoneSelect from './TimezoneSelect.vue'
 
 const { t } = useI18n()
+const store = useProfileBuilderStore()
 
 const emit = defineEmits(['submit'])
 
@@ -87,7 +94,12 @@ const props = defineProps({
 
 const languageOptions = ['English', 'German', 'French', 'Spanish', 'Arabic', 'Portuguese']
 
-const canonicalTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+// The coach picks a zone from the server's own list rather than having
+// Intl.DateTimeFormat().resolvedOptions().timeZone sent blind. A browser on newer tzdata than the
+// deployed JVM (Europe/Kyiv, America/Ciudad_Juarez) used to make this step permanently
+// uncompletable — and since the profile stays DRAFT until the builder finishes, and search only
+// returns ACTIVE/REDUCED, that also kept the coach out of the marketplace entirely.
+const canonicalTimezone = ref(null)
 
 const form = reactive({
   displayName: '',
@@ -133,14 +145,18 @@ onUnmounted(() => {
 })
 
 function submit() {
-  if (!form.displayName || form.languages.length === 0) return
+  // canonicalTimezone joins the existing guard: submitting without one would 400 on @NotBlank, and
+  // the whole point of the picker is that the coach always has a value the server accepts.
+  if (!form.displayName || form.languages.length === 0 || !canonicalTimezone.value) return
+  // Remembered so Step 4 can default to the same zone instead of re-detecting the browser.
+  store.setSelectedTimezone(canonicalTimezone.value)
   emit('submit', {
     displayName: form.displayName,
     bio: form.bio || null,
     city: form.city || null,
     district: form.district || null,
     languages: form.languages,
-    canonicalTimezone,
+    canonicalTimezone: canonicalTimezone.value,
   })
 }
 </script>

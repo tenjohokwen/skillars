@@ -59,8 +59,6 @@ class ConfigResourceIT extends AbstractIntegrationTest {
     // Stable fixture IDs used only in this test class
     private static final long ADMIN_USER_ID    = 675373350208068096L;
     private static final long NONADMIN_USER_ID = 675373350208068097L;
-    private static final long ROLE_ADMIN_ID    = 6747751741842104908L;
-    private static final long ROLE_USER_ID     = 5418719445932238328L;
 
     private static final String NONADMIN_LOGIN    = "nonadmin@configtest.com";
     private static final String NONADMIN_PASSWORD = "admin*123!";
@@ -92,14 +90,18 @@ class ConfigResourceIT extends AbstractIntegrationTest {
     @BeforeEach
     void setUp() {
         transactionTemplate.execute(status -> {
-            // Authorities (idempotent)
+            // Authorities (idempotent). The ids are inlined rather than held in constants on
+            // purpose: a field named ROLE_ADMIN_ID reads like a usable foreign key, and it is not.
+            // V92 seeds ROLE_ADMIN, so these INSERTs hit their ON CONFLICT and the migration's id
+            // wins — every user_authority insert below therefore resolves the authority BY NAME.
+            // Keeping the literals confined to these two statements removes the temptation.
             jdbcTemplate.execute(
                 "INSERT INTO main.authority (id, name, status, created_by, created_date, last_modified_by, last_modified_date, request_id) " +
-                "VALUES (" + ROLE_ADMIN_ID + ", 'ROLE_ADMIN', 'ACTIVE', 'system', '2016-04-26 20:41:25', 'system', '2016-04-26 20:41:25', '') " +
+                "VALUES (6747751741842104908, 'ROLE_ADMIN', 'ACTIVE', 'system', '2016-04-26 20:41:25', 'system', '2016-04-26 20:41:25', '') " +
                 "ON CONFLICT DO NOTHING");
             jdbcTemplate.execute(
                 "INSERT INTO main.authority (id, name, status, created_by, created_date, last_modified_by, last_modified_date, request_id) " +
-                "VALUES (" + ROLE_USER_ID + ", 'ROLE_USER', 'ACTIVE', 'system', '2016-04-26 20:41:25', 'system', '2016-04-26 20:41:25', '') " +
+                "VALUES (5418719445932238328, 'ROLE_USER', 'ACTIVE', 'system', '2016-04-26 20:41:25', 'system', '2016-04-26 20:41:25', '') " +
                 "ON CONFLICT DO NOTHING");
 
             // Admin user with ROLE_ADMIN + ROLE_USER
@@ -117,10 +119,10 @@ class ConfigResourceIT extends AbstractIntegrationTest {
                 " '$2a$10$Sdo/qTAcMcYaIAV6XXw3dejlsDwL93g6zb.uPUwFohPpC8q3bEg5i', NULL, NULL, false) " +
                 "ON CONFLICT DO NOTHING");
             jdbcTemplate.execute(
-                "INSERT INTO main.user_authority (user_id, authority_id) VALUES (" + ADMIN_USER_ID + ", " + ROLE_USER_ID + ") " +
+                "INSERT INTO main.user_authority (user_id, authority_id) VALUES (" + ADMIN_USER_ID + ", (SELECT id FROM main.authority WHERE name = 'ROLE_USER')) " +
                 "ON CONFLICT DO NOTHING");
             jdbcTemplate.execute(
-                "INSERT INTO main.user_authority (user_id, authority_id) VALUES (" + ADMIN_USER_ID + ", " + ROLE_ADMIN_ID + ") " +
+                "INSERT INTO main.user_authority (user_id, authority_id) VALUES (" + ADMIN_USER_ID + ", (SELECT id FROM main.authority WHERE name = 'ROLE_ADMIN')) " +
                 "ON CONFLICT DO NOTHING");
 
             // Non-admin user with ROLE_USER only
@@ -138,7 +140,7 @@ class ConfigResourceIT extends AbstractIntegrationTest {
                 " '" + NONADMIN_PASSWORD_HASH + "', NULL, NULL, false) " +
                 "ON CONFLICT DO NOTHING");
             jdbcTemplate.execute(
-                "INSERT INTO main.user_authority (user_id, authority_id) VALUES (" + NONADMIN_USER_ID + ", " + ROLE_USER_ID + ") " +
+                "INSERT INTO main.user_authority (user_id, authority_id) VALUES (" + NONADMIN_USER_ID + ", (SELECT id FROM main.authority WHERE name = 'ROLE_USER')) " +
                 "ON CONFLICT DO NOTHING");
 
             return null;

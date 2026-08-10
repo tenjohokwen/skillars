@@ -38,16 +38,28 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Service
 @RequiredArgsConstructor
 public class CoachProfileService {
+
+    /**
+     * The ten IANA continent/ocean prefixes that identify a genuine region zone. Everything else
+     * {@code ZoneId.getAvailableZoneIds()} returns is a backward-compatibility link — see
+     * {@link #getSupportedTimezones()} for why this is an allow-list rather than an exclusion list.
+     */
+    private static final Set<String> IANA_CONTINENT_PREFIXES = Set.of(
+        "Africa", "America", "Antarctica", "Arctic", "Asia",
+        "Atlantic", "Australia", "Europe", "Indian", "Pacific");
+
 
     private final CoachProfileRepository coachProfileRepository;
     private final CoachSpecialtyRepository coachSpecialtyRepository;
@@ -60,6 +72,57 @@ public class CoachProfileService {
     private final CoachMediaItemRepository coachMediaItemRepository;
     private final CoachCapabilityService coachCapabilityService;
     private final CoachReliabilityStrikeRepository coachReliabilityStrikeRepository;
+
+    /**
+     * The timezones the profile builder is allowed to offer a coach.
+     *
+     * <p><strong>Sourced from the JVM, not the browser, and that is the entire point.</strong>
+     * {@code ProfileBuilderStep1/Step4} used to send
+     * {@code Intl.DateTimeFormat().resolvedOptions().timeZone} verbatim with no picker and no
+     * fallback, while {@code @IanaTimezone} validates with {@code ZoneId.of}. A browser on newer
+     * tzdata than the deployed JVM — {@code Europe/Kyiv} (tzdata 2022b),
+     * {@code America/Ciudad_Juarez} (2022g) — therefore made Step 1 and Step 4 permanently
+     * uncompletable, with a validation error naming the coach's own machine and no way to override.
+     * A coach who cannot finish the builder never leaves {@code DRAFT}, and search returns only
+     * {@code ACTIVE}/{@code REDUCED}, so the lockout also erased them from the marketplace.
+     * Offering the server's own set is what guarantees every option will validate.
+     *
+     * <p><strong>Filtered by an allow-list of continent prefixes, not by excluding known-bad forms.</strong>
+     * {@code getAvailableZoneIds()} returns 600 ids on JDK 17 and only 485 of them are real
+     * {@code Continent/City} region zones. The rest are tzdb backward-compatibility links: 38 with no
+     * slash at all ({@code Navajo}, {@code W-SU}, {@code Turkey}, {@code Zulu}, {@code CST6CDT}, …),
+     * 35 under {@code Etc/} — 29 of those the fixed-offset {@code Etc/GMT±N} block — and, crucially,
+     * <strong>42 more that DO contain a slash</strong> and therefore survive any naive
+     * "must contain /" rule: the whole of {@code US/*}, {@code Canada/*}, {@code Brazil/*},
+     * {@code Mexico/*}, {@code Chile/*} and {@code SystemV/*}.
+     *
+     * <p>That last group is why this is an allow-list. An exclusion-based filter has to enumerate
+     * every legacy family, and it silently stops being correct the moment tzdb adds another — the
+     * failure mode being that an obsolete alias quietly appears in the picker. {@code SystemV/*} in
+     * particular carries pre-1987 US DST rules and is as DST-wrong as the {@code Etc/GMT±N} block.
+     * Listing the ten IANA continent prefixes instead means anything unrecognised is excluded by
+     * default, which is the safe direction to fail.
+     *
+     * <p>{@code Etc/UTC} is then added back as the single explicit UTC option: there is no
+     * region-form UTC zone, and a coach genuinely operating on UTC needs somewhere to land.
+     * Result on JDK 17: 486 options, every one of which passes {@code @IanaTimezone}.
+     *
+     * <p>This is a <em>display</em> filter only. {@code IanaTimezoneValidator} stays permissive on
+     * purpose (2026-08-07 decision), so a coach whose zone was stored as {@code Navajo} or
+     * {@code +01:00} before this shipped keeps working everywhere else in the system.
+     */
+    public List<String> getSupportedTimezones() {
+        return Stream.concat(
+                ZoneId.getAvailableZoneIds().stream()
+                    .filter(id -> {
+                        int slash = id.indexOf('/');
+                        return slash > 0 && IANA_CONTINENT_PREFIXES.contains(id.substring(0, slash));
+                    }),
+                Stream.of("Etc/UTC"))
+            .distinct()
+            .sorted()
+            .toList();
+    }
 
     @Transactional
     public CoachProfile getOrCreateDraft(Long userId) {

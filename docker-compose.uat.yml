@@ -43,6 +43,19 @@ services:
       - APP_STORAGE_ENDPOINT_URL=https://${STORAGE_DOMAIN}
       - APP_STORAGE_S3_ACCESS_KEY=${MINIO_ROOT_USER}
       - APP_STORAGE_S3_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      # First-admin bootstrap (AdminBootstrapRunner). No migration seeds an admin USER and there
+      # is no admin registration endpoint, so without this the admin account type simply cannot
+      # exist — see uat-deployment.md Step 8.
+      # BLANK = DISABLED. The runner no-ops unless EMAIL and PASSWORD are both non-blank, so
+      # leaving these unset (the .env.example default) changes nothing. PHONE is required whenever
+      # the other two are set: main."user".phone is UNIQUE, so there is no shareable placeholder.
+      # REMOVE APP_BOOTSTRAP_ADMIN_PASSWORD FROM .env.uat AND REDEPLOY once the first boot has
+      # logged "Admin bootstrap created the first administrator" — a long-running container should
+      # not carry the credential in its environment. Re-deploying with it still set is harmless
+      # (the runner detects the existing account and skips), it is just needless exposure.
+      - APP_BOOTSTRAP_ADMIN_EMAIL=${APP_BOOTSTRAP_ADMIN_EMAIL:-}
+      - APP_BOOTSTRAP_ADMIN_PASSWORD=${APP_BOOTSTRAP_ADMIN_PASSWORD:-}
+      - APP_BOOTSTRAP_ADMIN_PHONE=${APP_BOOTSTRAP_ADMIN_PHONE:-}
       # Same MailHealthIndicator gotcha as local dev (see local-deployment.md Step 3):
       # application-uat.yaml's spring.mail.password defaults to a placeholder, which
       # fails real SMTP auth and drags /manage/health to DOWN. Set real mail creds

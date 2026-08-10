@@ -5,11 +5,17 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.SecurityIT;
+import com.softropic.skillars.platform.messaging.contract.MessagingErrorCode;
+import com.softropic.skillars.platform.messaging.contract.MessageReportReason;
+import com.softropic.skillars.platform.messaging.service.MessagingReportService;
+import com.softropic.skillars.platform.messaging.service.MessagingService;
+import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpHeaders;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -53,6 +59,9 @@ class MessagingAccessControlIT extends AbstractIntegrationTest {
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private HttpTestClient httpTestClient;
     @Autowired private PasswordEncoder passwordEncoder;
+    @Autowired private MessagingService messagingService;
+    @Autowired private MessagingApiAdvice messagingApiAdvice;
+    @Autowired private MessagingReportService messagingReportService;
 
     @LocalServerPort private int randomServerPort;
 
@@ -201,6 +210,64 @@ class MessagingAccessControlIT extends AbstractIntegrationTest {
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
                 .isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    /**
+     * An unrecognised role string must yield 403, not 500.
+     *
+     * <p>Driven through the service rather than HTTP on purpose: {@code MessagingResource.resolveRole}
+     * guarantees one of {@code COACH}/{@code PARENT}/{@code PLAYER} for every controller entry, so
+     * the {@code default} arm is unreachable over the wire. That is exactly why it was left throwing
+     * {@code IllegalArgumentException} — but the guard and the throws live in different classes with
+     * no shared enum, so the invariant is convention, not structure. The first controller, listener
+     * or scheduler that calls these methods with a role from somewhere else gets a 500 and a stack
+     * trace where a 403 belongs.
+     *
+     * <p>Both halves are asserted: the exception the service raises, AND the status the advice maps
+     * it to. Asserting only the exception type would pass against any {@code RuntimeException} with
+     * the right name and prove nothing about the response the caller actually sees.
+     *
+     * <p><strong>Mutation-checked:</strong> reverting any one of the four {@code default} arms to
+     * {@code IllegalArgumentException} fails this test on {@code isInstanceOf}.
+     */
+    @Test
+    void unrecognisedRole_yields403NotFatal() {
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+        Long conversationId = ensureConversation(coachCookies);
+
+        // MessagingService.verifyIsParty's switch.
+        assertThatThrownBy(() -> messagingService.getMessages(
+                conversationId, COACH_USER_ID, "SUPERVISOR", Pageable.ofSize(20)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(MessagingErrorCode.NOT_A_PARTY));
+
+        // MessagingReportService's own copy of verifyIsParty. Covered separately and deliberately:
+        // it is a duplicate that cannot be extracted (injecting MessagingService would be a
+        // circular dependency), so the two can only be kept in step by testing both.
+        assertThatThrownBy(() -> messagingReportService.reportConversation(
+                conversationId, COACH_USER_ID, "SUPERVISOR", MessageReportReason.HARASSMENT, "details"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(MessagingErrorCode.NOT_A_PARTY));
+
+        // The remaining two arms — resolveLastReadAt and updateLastRead — are NOT asserted here,
+        // and that is a statement about the code, not an omission. Both sit behind a verifyIsParty
+        // call that throws first (updateLastRead runs after :219 in getMessages; resolveLastReadAt
+        // is reached only from the summary mapper), so no caller can drive them with an
+        // unrecognised role. They are defence in depth. A test claiming to exercise them would
+        // have to fake a reachability that does not exist — precisely the "test that cannot fail"
+        // pattern the last three stories' reviews had to unpick. Changing them was still correct:
+        // the exception type is now consistent across all four, so whichever one a future caller
+        // reaches first behaves the same.
+
+        // And the half that decides what the caller actually receives.
+        ResponseEntity<?> mapped = messagingApiAdvice.handleOperationNotAllowed(
+            new OperationNotAllowedException(
+                "Caller does not hold a recognised messaging role", MessagingErrorCode.NOT_A_PARTY));
+        assertThat(mapped.getStatusCode())
+            .as("messaging.notAParty must map to 403 — the whole point of changing the exception type")
+            .isEqualTo(HttpStatus.FORBIDDEN);
     }
 
     // ── helpers ──

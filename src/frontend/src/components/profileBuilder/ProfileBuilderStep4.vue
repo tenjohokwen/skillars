@@ -51,12 +51,17 @@
       no-caps
     />
 
+    <div class="text-label q-mb-sm q-mt-lg">{{ t('auth.coach.step4SectionTimezone') }}</div>
+    <div class="text-meta q-mb-sm">{{ t('auth.coach.step4TimezoneHelper') }}</div>
+    <TimezoneSelect v-model="canonicalTimezone" />
+
     <div class="q-mt-lg">
       <q-btn
         :label="t('common.next')"
         class="btn-accent"
         @click="submit"
         :loading="loading"
+        :disable="!canonicalTimezone"
         unelevated
       />
     </div>
@@ -64,15 +69,30 @@
 </template>
 
 <script setup>
-import { reactive } from 'vue'
+import { reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useProfileBuilderStore } from 'src/stores/profileBuilder.store'
+import TimezoneSelect from './TimezoneSelect.vue'
 
 const { t } = useI18n()
+const store = useProfileBuilderStore()
 
 defineProps({ loading: Boolean })
 const emit = defineEmits(['submit'])
 
-const canonicalTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+// Defaults to whatever Step 1 chose, so the two canonical_timezone columns agree for a coach who
+// walks the builder in one sitting. When the store is empty — a coach resuming in a fresh session —
+// TimezoneSelect falls back to preselecting the browser zone if the server recognises it.
+// NOTE: this reduces divergence for NEW coaches; it does not reconcile the two columns or backfill
+// existing rows (deferred-17 D8 remains open, and is deliberately out of scope here).
+//
+// Read ONCE at setup, deliberately — this must not re-sync from the store afterwards. The host page
+// renders the five steps through a v-if/v-else-if chain of distinct components, so navigating away
+// from Step 4 unmounts it and returning re-runs this setup with the current store value; there is no
+// window in which Step 1 can change the zone while Step 4 is mounted. Making this a computed or
+// adding a watcher would therefore fix nothing and break something real: it would silently overwrite
+// a per-window zone the coach had deliberately chosen here.
+const canonicalTimezone = ref(store.selectedTimezone ?? null)
 
 const dayOptions = [
   { label: 'Monday', value: 1 },
@@ -96,13 +116,16 @@ function removeWindow(i) {
 
 function submit() {
   const valid = form.windows.length > 0 && form.windows.every(w => w.dayOfWeek && w.startTime && w.endTime)
-  if (!valid) return
+  // canonicalTimezone joins the guard for the same reason as Step 1: @NotBlank would 400, and the
+  // picker exists so the coach always holds a value the server will accept.
+  if (!valid || !canonicalTimezone.value) return
+  store.setSelectedTimezone(canonicalTimezone.value)
   emit('submit', {
     windows: form.windows.map(w => ({
       dayOfWeek: w.dayOfWeek,
       startTime: w.startTime,
       endTime: w.endTime,
-      canonicalTimezone,
+      canonicalTimezone: canonicalTimezone.value,
     })),
   })
 }

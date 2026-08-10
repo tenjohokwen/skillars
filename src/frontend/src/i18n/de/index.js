@@ -1,5 +1,6 @@
 export default {
   common: {
+    retry: 'Erneut versuchen',
     cancel: 'Abbrechen',
     save: 'Speichern',
     back: 'Zurück',
@@ -80,6 +81,14 @@ export default {
       step4Short: 'Verfügbarkeit',
       step4AvailabilityWindows: 'Verfügbarkeitsfenster',
       step4WindowHelper: 'Füge mindestens ein wöchentliches Zeitfenster hinzu, damit Eltern wissen, wann sie buchen können.',
+      step1SectionTimezone: 'Zeitzone',
+      step4SectionTimezone: 'Zeitzone',
+      step4TimezoneHelper: 'Die Zeitfenster oben werden in dieser Zeitzone interpretiert.',
+      timezoneLabel: 'Zeitzone',
+      timezoneHint: 'Zum Suchen tippen, z. B. Europe/Berlin',
+      timezoneNoMatch: 'Keine passende Zeitzone',
+      timezoneBrowserUnknown: 'Dein Gerät meldet die Zeitzone {zone}, die dieser Server nicht kennt. Bitte wähle oben die nächstgelegene Zeitzone aus.',
+      timezoneLoadFailed: 'Die Zeitzonenliste konnte nicht geladen werden. Prüfe deine Verbindung und versuche es erneut.',
       step4WindowEmpty: 'Noch keine Verfügbarkeitsfenster — füge unten eines hinzu.',
       step4AddWindow: 'Fenster hinzufügen',
       step4Day: 'Tag',

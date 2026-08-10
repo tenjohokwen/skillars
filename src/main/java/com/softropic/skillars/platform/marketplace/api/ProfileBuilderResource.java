@@ -23,6 +23,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+
 @Observed(name = "marketplace.profile_builder")
 @RestController
 @RequestMapping("/api/marketplace/coaches/me/profile")
@@ -37,6 +39,23 @@ public class ProfileBuilderResource {
     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
     public ResponseEntity<ProfileBuilderStatusResponse> getStatus() {
         return ResponseEntity.ok(coachProfileService.getBuilderStatus(currentUserId()));
+    }
+
+    /**
+     * Timezone options for the Step 1 / Step 4 pickers.
+     *
+     * <p>Deliberately the server's own zone set: the browser's list is what caused the lockout this
+     * endpoint exists to close (see {@code CoachProfileService#getSupportedTimezones}). Everything
+     * returned here is guaranteed to pass {@code @IanaTimezone}.
+     *
+     * <p>The path falls under {@code AppEndpoints.PUBLIC_ENDPOINTS}' {@code /api/marketplace/coaches/**}
+     * pattern, so the filter chain lets it through and this {@code @PreAuthorize} is the real guard —
+     * the same arrangement the {@code /api/reviews/coaches/**} entry documents.
+     */
+    @GetMapping("/timezones")
+    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+    public ResponseEntity<List<String>> getSupportedTimezones() {
+        return ResponseEntity.ok(coachProfileService.getSupportedTimezones());
     }
 
     @PutMapping("/steps/1")

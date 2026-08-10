@@ -193,6 +193,7 @@ below, which is specific to UAT / not in `secrets-reference.md` yet:
 | `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET` | **Yes — app refuses to start without it** | `BunnyVideoProviderAdapter`'s constructor throws if blank, and it's built eagerly (non-lazy bean) whenever `app.video.provider=bunny`, the default — so this crashes the *entire* app context on boot even if UAT never touches video. Any non-blank value unblocks startup; only real Bunny webhook verification needs the real Bunny Read-Only API key — generate a placeholder with `openssl rand -base64 24` if video isn't in scope for this UAT round |
 | `APP_VIDEO_PLAYBACK_SIGNING_SECRET` | Yes, before anyone tries to watch a video | Not fail-fast at boot — only fails the first time a playback JWT is signed (`Base64.getDecoder().decode(...)` needs ≥32 raw bytes). Generate: `openssl rand -base64 32` |
 | `BUNNY_LIBRARY_ID` / `BUNNY_API_KEY` / `BUNNY_CDN_HOSTNAME` | No | Reuses the same variables as `.env` (production); omit `BUNNY_LIBRARY_ID` to fall back to the `123456` placeholder that unblocks app startup without real video features |
+| `APP_BOOTSTRAP_ADMIN_EMAIL` / `APP_BOOTSTRAP_ADMIN_PASSWORD` / `APP_BOOTSTRAP_ADMIN_PHONE` | Yes, for the first deploy only | Creates the platform's first admin account — the only supported way to get one. See [Step 8](#step-8-create-the-admin-account) for the full procedure, including removing the password again afterwards |
 
 **Do not put a live (`sk_live_...` or `rk_live_...`) key in `.env.uat`.**
 Even if you did, `PaymentConfig` refuses to start under the `uat` profile —
@@ -289,6 +290,95 @@ And confirm Grafana/observability is live: `https://<MONITORING_DOMAIN>`
 loads and the Prometheus/Tempo datasources return data for the traffic you
 just generated (same as `first-time-setup.md` Step 7 / `local-deployment.md`
 Step 6.1).
+
+---
+
+## Step 8: Create the admin account
+
+**Read this before planning a UAT script that involves an administrator.**
+Coach, parent and player accounts are all self-service — they register
+through the UI. **An admin is not.** There is no admin registration
+endpoint, and no migration seeds an admin *user*. `AdminBootstrapRunner`
+exists precisely to close that gap, and it is the only supported route.
+
+### 8.1 Bootstrap the account
+
+Add three variables to `.env.uat`, deploy, then take the password back out:
+
+```bash
+# 1. On your machine, add to .env.uat:
+#      APP_BOOTSTRAP_ADMIN_EMAIL=admin@yourdomain.com
+#      APP_BOOTSTRAP_ADMIN_PASSWORD=<a real password you generate, e.g. openssl rand -base64 24>
+#      APP_BOOTSTRAP_ADMIN_PHONE=+491700000000
+#
+# 2. Ship it and bring the stack up (same command as Step 6):
+scp .env.uat root@<UAT_NODE_IP>:/opt/skillars/.env.uat
+ssh root@<UAT_NODE_IP> "chmod 600 /opt/skillars/.env.uat"
+ssh root@<UAT_NODE_IP> \
+  "cd /opt/skillars && docker compose -f docker-compose.yml -f docker-compose.uat.yml --env-file .env.uat up -d"
+
+# 3. Confirm the account was created — look for this line, once:
+ssh root@<UAT_NODE_IP> \
+  "cd /opt/skillars && docker compose -f docker-compose.yml -f docker-compose.uat.yml --env-file .env.uat logs app | grep admin_bootstrap"
+#    ... "Admin bootstrap created the first administrator" ... login=admin@yourdomain.com ... authority=ROLE_ADMIN
+
+# 4. Remove APP_BOOTSTRAP_ADMIN_PASSWORD from .env.uat, re-scp, and redeploy.
+```
+
+Notes on the behaviour, so nothing here is surprising:
+
+- **Blank means disabled.** With `EMAIL` or `PASSWORD` unset the runner does
+  nothing at all, silently. Every environment that has not opted in is
+  unaffected.
+- **`PHONE` is mandatory when the other two are set.** `main."user".phone`
+  carries a `UNIQUE` constraint, so there is no safe shared default. If you
+  set email and password but not phone, the app **refuses to start** with an
+  `AppSetupException` naming the missing variable — deliberately, so a
+  half-configured bootstrap fails loudly rather than writing a broken row.
+- **Re-running is safe.** If the account already exists the runner logs
+  `admin_bootstrap ... skip_existing` and returns. Leaving the variables set
+  across redeploys will not duplicate or fail — Step 4 above still asks you
+  to remove the password, because a long-running container should not carry
+  a live credential in its environment, not because a second run is
+  dangerous.
+- **The password is never logged**, in any branch.
+- **The email is stored lower-cased.** You can log in typing it any way you
+  like; it is normalized on both sides.
+- **The runner never elevates an existing user.** If the address is already
+  taken by a coach or parent, it skips — it does not add `ROLE_ADMIN` to
+  that account. Use a fresh address.
+
+### 8.2 The UAT test-account set
+
+| Account | How to create it | Notes |
+|---|---|---|
+| **Coach** | Public registration UI → email verification → phone OTP | The coach must then complete **all five profile-builder steps and publish**. Until publish the profile is `DRAFT`, and coach search only returns `ACTIVE`/`REDUCED` — an unpublished coach is invisible to parents |
+| **Parent** | Public registration UI → email verification → phone OTP | Creates player profiles for their children from the parent portal |
+| **Player** | Player self-registration (adults, 18+) | Can register, log in and browse. **Cannot book** — every booking-creation endpoint is parent-only today. Scope the player leg of your script to register-and-browse |
+| **Admin** | Step 8.1 above | API-only — see 8.3 |
+
+### 8.3 There is no admin UI — this is expected
+
+`src/frontend/src/pages/admin/` contains only a health dashboard and two
+tenant pages, and the tenant module was removed, so those two are dead
+routes. **Every `ROLE_ADMIN` surface is API-only** for this UAT round:
+moderation queue, disputes, coach enforcement, platform config, GDPR tools,
+admin finance.
+
+Drive them with curl or Postman. Log in first and reuse the cookies:
+
+```bash
+curl -s -c /tmp/admin-cookies.txt -X POST https://<DOMAIN>/api/auth/login \
+  -H 'Content-Type: application/json' -H 'X-Client-Id: <a configured client id>' \
+  -d '{"email":"admin@yourdomain.com","password":"<the password from 8.1>"}'
+# {"id":...,"role":"ADMIN","displayName":"..."}
+
+curl -s -b /tmp/admin-cookies.txt https://<DOMAIN>/api/admin/queue
+```
+
+A tester who tries to click their way to the moderation queue will conclude
+the admin account is broken. It is not — there is simply nothing to click
+yet. Say so in the UAT brief.
 
 ---
 
