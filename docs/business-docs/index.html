@@ -18,6 +18,11 @@
         <li><a href="coach/index.html">Coach</a></li>
         <li><a href="admin/index.html">Admin / Staff</a></li>
       </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="money/index.html">Money &amp; Commercial Model</a></li>
+        <li><a href="trust-and-safety/index.html">Trust &amp; Safety</a></li>
+      </ul>
     </nav>
   </aside>
   <main class="content">
@@ -33,12 +38,17 @@
       <div class="card"><h4><a href="player/index.html">Player</a></h4><p>The athlete being coached — self-registers if 18+, otherwise added by a parent with no login of their own.</p></div>
       <div class="card"><h4><a href="parent/index.html">Parent</a></h4><p>The account that books, pays, and consents on behalf of a minor child — Skillars' primary paying customer.</p></div>
       <div class="card"><h4><a href="coach/index.html">Coach</a></h4><p>The paid supplier — publishes a profile, sets availability, delivers sessions, plans training content, gets paid.</p></div>
-      <div class="card"><h4><a href="admin/index.html">Admin / Staff</a></h4><p>Internal operations — infrastructure health and B2B partner management today; moderation/disputes/GDPR are real but not yet in the UI.</p></div>
+      <div class="card"><h4><a href="admin/index.html">Admin / Staff</a></h4><p>Internal operations — only the health dashboard genuinely works today; moderation, disputes, enforcement and GDPR are real backend capability with no UI.</p></div>
+    </div>
+    <h4>Cross-cutting</h4>
+    <div class="card-grid">
+      <div class="card"><h4><a href="money/index.html">Money &amp; Commercial Model</a></h4><p>How a session actually gets paid for, what Skillars takes, and every rule that moves money — packs, wallet, subscriptions, refunds, forfeiture.</p></div>
+      <div class="card"><h4><a href="trust-and-safety/index.html">Trust &amp; Safety</a></h4><p>How the product protects minors: age tiers, consent gates, messaging limits, video approval, and content moderation.</p></div>
     </div>
 
     <h2>How the business makes money</h2>
     <ul>
-      <li><strong>Per-session and session-pack payments</strong> from parents (or players), paid up front as pay-per-session or a discounted multi-session bundle.</li>
+      <li><strong>Session-pack payments</strong> from parents, paid up front. A coach publishes <em>one</em> active pack (a session count at a total price); the parent buys it, then spends those credits on bookings. This is now the only way money enters the platform for coaching — see <a href="money/index.html">Money &amp; Commercial Model</a>.</li>
       <li><strong>Commission on coach earnings</strong> — a coach's revenue dashboard shows gross earnings with commission and Stripe processing fees deducted, meaning Skillars takes a cut of every paid session.</li>
       <li><strong>Coach subscriptions</strong> — coaches sit on tiers (a "Scout" entry tier is visibly feature-gated out of parts of the product, e.g. the session builder), implying paid tier upgrades unlock more capability.</li>
       <li><strong>Player/parent subscriptions</strong> — a separate recurring subscription a parent can buy for a child, distinct from one-off session packs.</li>
@@ -49,7 +59,7 @@
     <pre class="mermaid">
 flowchart TB
     subgraph Coach["Coach"]
-      C1["Register & verify"] --> C2["5-step profile builder"]
+      C1["Register & verify"] --> C2["5-step profile builder<br/>(incl. define a session pack)"]
       C2 --> C3["Set availability"]
     end
     subgraph Marketplace["Marketplace"]
@@ -58,14 +68,15 @@ flowchart TB
     subgraph Parent["Parent"]
       P1["Register & verify"] --> P2["Add a child player"]
       P2 --> M1
-      M2 --> P3["Buy sessions / request booking"]
+      M2 --> P3["Buy the coach's session pack"]
+      P3 --> P4["Request a booking with credits"]
     end
     subgraph Player["Player (18+ self-registered)"]
       PL1["Register & verify"] --> PL2["Profile builder"]
       PL2 --> PL3["Locker Room: homework"]
     end
     C3 --> M2
-    P3 --> C4["Coach accepts in booking-requests inbox"]
+    P4 --> C4["Coach accepts in booking-requests inbox"]
     C4 --> C5["Live session in Command Center"]
     C5 --> C6["Wrap-up & Session DNA"]
     C6 --> D1["Development dashboard: Skills Radar"]
@@ -73,18 +84,25 @@ flowchart TB
     </pre>
     <p>The one deliberate gap in this map: an adult self-registered Player has no working "book a session" button of their own today — see the <a href="player/index.html">Player</a> page. Booking is a Parent-initiated action in the current build, even when the trainee is an adult.</p>
 
+    <div class="callout warn">
+      <p><strong>The commercial path is now pack-first, and that has a hard consequence.</strong> A parent can only request a booking once they hold session credits with that coach, and credits only come from buying that coach's published session pack. <strong>A coach who never defines a pack in step 3 of their profile builder is effectively unbookable</strong> — the marketplace still lists them, but the parent's only call-to-action leads to a purchase page reading "This coach has no session pack available for purchase." Worth checking first whenever someone reports "nobody can book me."</p>
+    </div>
+
     <h2>What's not built yet (read this before promising a flow)</h2>
     <div class="callout warn">
-      <p><strong>Player self-booking</strong> — the marketplace "book" call-to-action only functions for Parent accounts.</p>
+      <p><strong>Player self-booking</strong> — the marketplace "book" call-to-action only functions for Parent accounts. A logged-in adult Player who clicks it is bounced to the login page.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Review submission</strong> — coach ratings display on profiles, but no screen in the current UI lets anyone actually submit one. There is no <code>reviews</code> API client in the frontend at all, so this is a whole-feature gap, not a missing button.</p>
     </div>
     <div class="callout warn">
-      <p><strong>Parent's central dashboard</strong> (<code>/parent/dashboard</code>) is a placeholder stub — the real parent experience lives on separate bookings/wallet/development pages reached by direct navigation.</p>
-    </div>
-    <div class="callout">
-      <p><strong>Review submission</strong> — coach ratings display on profiles, but no screen in the current UI lets anyone actually submit one.</p>
-    </div>
-    <div class="callout">
       <p><strong>Admin moderation, disputes, GDPR requests, and coach enforcement</strong> are real backend capabilities with no admin UI yet — see <a href="admin/index.html">Admin / Staff</a>.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>The <code>/admin/tenants</code> screens are broken, not merely unfinished.</strong> The B2B partner feature was removed from the backend, but its frontend pages, routes, and API calls were left in place. They now call endpoints that no longer exist. See <a href="admin/index.html">Admin / Staff</a>.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Previously listed here and now resolved:</strong> <code>/parent/dashboard</code> is no longer a placeholder stub — it is a real hub with player cards and live quick-link tiles. See <a href="parent/index.html">Parent</a>.</p>
     </div>
 
     <h2>Explore by persona</h2>
@@ -95,7 +113,9 @@ flowchart TB
         <tr><td><a href="player/index.html">Player</a></td><td>Registering as a player, browsing the marketplace, tracking development</td></tr>
         <tr><td><a href="parent/index.html">Parent</a></td><td>Registering, adding a child, booking &amp; paying, monitoring development</td></tr>
         <tr><td><a href="coach/index.html">Coach</a></td><td>Registering, building a profile, running sessions, getting paid</td></tr>
-        <tr><td><a href="admin/index.html">Admin / Staff</a></td><td>System health, B2B tenant management, and what's API-only today</td></tr>
+        <tr><td><a href="admin/index.html">Admin / Staff</a></td><td>System health, and the large gap between backend capability and admin UI</td></tr>
+        <tr><td><a href="money/index.html">Money &amp; Commercial Model</a></td><td>Packs, credit wallet, subscriptions, commission, refunds, forfeiture</td></tr>
+        <tr><td><a href="trust-and-safety/index.html">Trust &amp; Safety</a></td><td>Age tiers, consent gates, messaging limits, video approval, moderation</td></tr>
       </tbody>
     </table>
 

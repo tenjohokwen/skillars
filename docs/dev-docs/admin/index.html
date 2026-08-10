@@ -23,7 +23,6 @@
         <li><a href="../reviews/index.html">Reviews</a></li>
         <li><a href="../notification/index.html">Notification</a></li>
         <li><a href="../admin/index.html">Admin</a></li>
-        <li><a href="../tenant/index.html">Tenant</a></li>
         <li><a href="../security/index.html">Security</a></li>
         <li><a href="../filestorage/index.html">Filestorage</a></li>
         <li><a href="../config/index.html">Config</a></li>
@@ -32,6 +31,8 @@
       <h4>Cross-Cutting</h4>
       <ul>
         <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+        <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
+        <li><a href="../database/index.html">Database &amp; Migrations</a></li>
       </ul>
     </nav>
   </aside>
@@ -120,7 +121,7 @@
     <table>
       <thead><tr><th>Service</th><th>Orchestrates</th></tr></thead>
       <tbody>
-        <tr><td><code>AdminAlertEventListener</code></td><td>Consumes <code>MessageReportedEvent</code>, <code>ConversationReportedEvent</code>, <code>ReviewFlaggedEvent</code>, <code>StrikeThresholdReachedEvent</code>, <code>DisputeRaisedEvent</code> and writes deduplicated <code>AdminAlert</code> rows, tolerating a race on the unique index.</td></tr>
+        <tr><td><code>AdminAlertEventListener</code></td><td>Consumes <code>MessageReportedEvent</code>, <code>ConversationReportedEvent</code>, <code>MessageHeldForReviewEvent</code>, <code>MessagesPurgedEvent</code>, <code>ReviewFlaggedEvent</code>, <code>StrikeThresholdReachedEvent</code>, <code>DisputeRaisedEvent</code> and writes deduplicated <code>AdminAlert</code> rows, tolerating a race on the unique index. Two of those handlers run <code>REQUIRES_NEW</code> — see the gotcha below.</td></tr>
         <tr><td><code>AdminQueueService</code></td><td>Serves the paginated moderation queue and the open-alert-count summary, resolving a human-readable summary line per alert type by looking up the source record.</td></tr>
         <tr><td><code>AdminMessageService</code> / <code>AdminConversationService</code></td><td>Message- and conversation-level moderation: view detail with surrounding context, approve/block a message, unblock a conversation, resolve the related reports/alerts, and push live SSE notifications via <code>MessagingEmitterRegistry</code>.</td></tr>
         <tr><td><code>AdminReviewService</code></td><td>Serves the review moderation queue and approves/blocks flagged reviews, resolving open flags and triggering <code>CoachRatingService.recompute</code> when a rating-relevant transition occurs.</td></tr>
@@ -170,6 +171,8 @@
       <thead><tr><th>Event</th><th>Direction</th><th>Notes</th></tr></thead>
       <tbody>
         <tr><td><code>MessageReportedEvent</code>, <code>ConversationReportedEvent</code></td><td>Consumed (from <code>messaging</code>)</td><td>Create MESSAGE_REPORT / CONVERSATION_REPORT alerts.</td></tr>
+        <tr><td><code>MessageHeldForReviewEvent</code></td><td>Consumed (from <code>messaging</code>)</td><td>Creates a <code>MODERATION_UNRESOLVED</code> alert, carrying the event's <code>reason</code> onto <code>admin_alerts.reason</code> so an admin can tell <code>MODERATION_UNCERTAIN</code> ("the AI was unsure") from <code>MODERATION_ORPHAN_SWEPT</code> ("this was never moderated at all") — two situations warranting different scrutiny.</td></tr>
+        <tr><td><code>MessagesPurgedEvent</code></td><td>Consumed (from <code>messaging</code>)</td><td>Bulk-resolves OPEN alerts pointing at messages the nightly retention job hard-deleted.</td></tr>
         <tr><td><code>ReviewFlaggedEvent</code></td><td>Consumed (from <code>reviews</code>)</td><td>Creates a REVIEW_FLAG alert.</td></tr>
         <tr><td><code>StrikeThresholdReachedEvent</code></td><td>Consumed (from <code>payment</code>)</td><td>Creates a STRIKE_THRESHOLD alert.</td></tr>
         <tr><td><code>DisputeRaisedEvent</code></td><td>Published &amp; consumed (internal)</td><td><code>DisputeService</code> publishes it; <code>AdminAlertEventListener</code> consumes it to raise a DISPUTE_RAISED alert.</td></tr>
@@ -311,6 +314,25 @@ sequenceDiagram
       yet. Alerts are deduplicated per <code>(referenceId, type, OPEN)</code>; re-reporting an already-open message
       does not create a second alert, and a <code>DataIntegrityViolationException</code> from a concurrent insert
       race is swallowed intentionally.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Two alert handlers run <code>REQUIRES_NEW</code>, and that is load-bearing.</strong>
+      <code>onMessageHeldForReview</code> and <code>onMessagesPurged</code> get their own transaction because they
+      are published from inside <code>messaging</code>'s <code>ModerationResultApplier</code>,
+      <code>MessageModerationSweeper</code>, and <code>MessageRetentionScheduler</code>. Sharing the publisher's
+      transaction would let a failed alert insert roll back the moderation verdict itself and return the message to
+      <code>PENDING</code> — exactly the stranding those classes exist to fix. Both publishers catch and log around
+      <code>publishEvent</code>, which is where the separate transaction commits or fails.</p>
+      <p>Note a <code>try/catch</code> inside the handler body would <em>not</em> achieve this:
+      <code>AdminAlert.alertId</code> is <code>GenerationType.UUID</code>, so the INSERT is deferred to flush at
+      commit — after the method body has already returned.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Adding an <code>AdminAlertType</code> needs a migration, not just an enum constant.</strong>
+      <code>admin.admin_alerts.type</code> carries a <code>CHECK</code> constraint listing every valid value. The JPA
+      side is <code>@Enumerated(EnumType.STRING)</code> and will happily write a value the CHECK rejects, so a
+      forgotten migration fails at INSERT time rather than at startup. <code>V91</code> is the worked example — it
+      drops and recreates <code>admin_alerts_type_check</code> to admit <code>MODERATION_UNRESOLVED</code>.</p>
     </div>
     <div class="callout">
       <p><strong>Strike deletion can silently reinstate a coach.</strong> <code>deleteStrike</code> recomputes the

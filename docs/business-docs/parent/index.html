@@ -18,6 +18,11 @@
         <li><a href="../coach/index.html">Coach</a></li>
         <li><a href="../admin/index.html">Admin / Staff</a></li>
       </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../money/index.html">Money &amp; Commercial Model</a></li>
+        <li><a href="../trust-and-safety/index.html">Trust &amp; Safety</a></li>
+      </ul>
     </nav>
   </aside>
   <main class="content">
@@ -35,11 +40,11 @@ flowchart LR
     B --> C["/parent/verify-email"]
     C --> D["/parent/verify-phone"]
     D --> E["/parent/create-player<br/>Add your child"]
-    E --> F["/parent/dashboard<br/>(placeholder landing)"]
+    E --> F["/parent/dashboard<br/>Your hub"]
     F --> G["/marketplace<br/>Find a coach"]
     G --> H["/coaches/:coachId"]
-    H --> I["/parent/coaches/:id/request-booking"]
-    H --> J["/parent/coaches/:id/purchase-sessions"]
+    H --> J["/parent/coaches/:id/purchase-sessions<br/>Buy the coach's pack"]
+    J --> I["/parent/coaches/:id/request-booking<br/>Spend a credit"]
     F --> K["/parent/bookings<br/>Your bookings"]
     F --> L["/parent/players/:id/sessions<br/>Child's schedule"]
     F --> M["/parent/players/:id/development"]
@@ -64,17 +69,31 @@ flowchart LR
       <li>If the computed age is under 18, a fourth scroll-gated consent box appears specifically for that child ("I am the legal parent/guardian and consent to..."), stamped with a policy version — you must scroll and check it before "Create" is enabled.</li>
       <li>Submitting takes you to <code>/parent/dashboard</code>.</li>
     </ol>
-    <div class="callout warn">
-      <p><strong><code>/parent/dashboard</code> is currently a placeholder page</strong> — just a title and a link back to login, not a real dashboard. The actual day-to-day parent experience today happens on the separate pages below (bookings, wallet, development, etc.), reached by direct navigation rather than from a central hub.</p>
-    </div>
-    <p>You can add more than one child by returning to <code>/parent/create-player</code> again later.</p>
+    <p>You can add more than one child by returning to <code>/parent/create-player</code> again later — or from the dashboard's "Add another player" card.</p>
+
+    <h3>2b. Your dashboard</h3>
+    <p><strong>Why it matters:</strong> this is now the parent's actual hub. Earlier versions of this documentation described it as a placeholder stub; that is no longer true.</p>
+    <ol>
+      <li><code>/parent/dashboard</code> opens on "Welcome to Skillars" and a <strong>Your Players</strong> section — one card per child showing their name, age-tier label, and position — plus an "Add another player" card that routes to <code>/parent/create-player</code>.</li>
+      <li>Below that, a <strong>Quick Links</strong> grid of four tiles, each showing live data rather than just a link:
+        <ul>
+          <li><strong>Upcoming Sessions</strong> → <code>/parent/bookings</code>, showing a count of bookings in <code>CONFIRMED</code>/<code>UPCOMING</code> state.</li>
+          <li><strong>Browse Coaches</strong> → <code>/marketplace</code>.</li>
+          <li><strong>Credit Wallet</strong> → <code>/parent/credit-wallet</code>, showing your current balance.</li>
+          <li><strong>Pending Approvals</strong> → <code>/parent/approvals</code>, showing a count awaiting review, or "All caught up".</li>
+        </ul>
+      </li>
+      <li>A tile whose data fails to load degrades to "Unavailable" rather than breaking the page.</li>
+    </ol>
 
     <h3>3. Finding a coach and booking a session</h3>
     <p><strong>Why it matters:</strong> this is the core transaction in the whole business — a paid coaching session.</p>
     <ol>
       <li>Go to <code>/marketplace</code>, enter a city, optionally filter by district/age group/language, and open a coach's profile at <code>/coaches/:coachId</code>.</li>
-      <li>If you don't have any session credits with that coach yet, the call-to-action button reads "Buy sessions" and takes you to <code>/parent/coaches/:coachId/purchase-sessions</code>: choose either pay-per-session or a discounted multi-session bundle (shown as selectable cards with per-session price), then confirm the purchase.</li>
+      <li>If you don't have any session credits with that coach yet, the call-to-action button reads "Buy sessions" and takes you to <code>/parent/coaches/:coachId/purchase-sessions</code>. You'll see <strong>the coach's single active session pack</strong> — a session count, total price, and per-session price — as one selectable card. Select it and press "Confirm purchase". If the coach hasn't published a pack you get "This coach has no session pack available for purchase" and cannot proceed at all.</li>
+      <li><strong>A saved payment card is required.</strong> With no card on file the confirm button stays disabled behind an "Add a payment card to continue" banner; the "Add card" action opens a Payment Method dialog (Stripe Elements) inline, and the purchase becomes available as soon as the card saves. The same card-on-file requirement applies to player subscriptions and appears on the credit wallet page.</li>
       <li>Once you hold credits with that coach, the button instead reads "Book session" and takes you to <code>/parent/coaches/:coachId/request-booking</code>: pick an open time slot from the coach's published availability, optionally add a note, and submit. A "batch mode" toggle lets you select several slots at once and submit them together as a batch of requests instead of one at a time.</li>
+      <li>On a <em>single</em> booking request you can choose which pack to draw from, or pick "Per session" to pay for that one session outside a pack. <strong>Batch requests never carry a pack</strong> — they settle against your credit wallet/card instead.</li>
       <li>Track everything booked so far at <code>/parent/bookings</code> — each entry shows the coach, which child it's for, the time (with a toggle between your local time and the session's own time zone — useful for touring/travel coaches), and how many credits you have left with that coach. Pending reschedule requests from the coach also surface here.</li>
       <li>An empty <code>/parent/bookings</code> list shows a "Find a coach" button straight back to the marketplace.</li>
     </ol>
@@ -83,7 +102,7 @@ flowchart LR
     <ol>
       <li><code>/parent/credit-wallet</code>: shows your cash balance and lets you cash out unused funds back out (amount field, capped at your current balance).</li>
       <li><code>/parent/credit-statement</code>: a transaction-level ledger of credit activity.</li>
-      <li><code>/parent/players/:playerId/packs</code>: a dashboard of session packs you've purchased for that child, including a pause option.</li>
+      <li><code>/parent/players/:playerId/packs</code>: a dashboard of session packs you've purchased for that child, including a pause option. A pack can be paused <strong>once in its lifetime</strong>; pausing pushes its expiry out by the pause length, and if any of your existing bookings fall inside the pause window you are shown them and must confirm their cancellation before the pause applies. Full rules on <a href="../money/index.html">Money &amp; Commercial Model</a>.</li>
       <li><code>/parent/player/:playerId/subscription</code>: manage a recurring subscription plan/tier for that child.</li>
       <li><code>/parent/bookings/:bookingId/receipt</code>: a formatted payment receipt for a specific booking.</li>
     </ol>
@@ -100,7 +119,22 @@ flowchart LR
 
     <h2>Conventions &amp; Gotchas</h2>
     <div class="callout warn">
-      <p><strong><code>/parent/dashboard</code> is a stub, not a real hub.</strong> Don't describe it to a new parent as "your dashboard" — point them directly at bookings/wallet/development instead.</p>
+      <p><strong>You cannot book a coach who hasn't published a session pack.</strong> Booking requires credits,
+      credits come only from that coach's pack, and a coach who skipped the pack step in their profile builder has
+      none to sell. The coach still appears in marketplace search, so this looks like a broken booking button
+      rather than missing coach setup. It is the first thing to check when a parent reports being unable to book.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Booking slot times are shown in the <em>coach's</em> time zone, not yours.</strong> On the
+      booking-request screen every slot is rendered in the coach's canonical zone with the zone abbreviation
+      shown, deliberately — you are booking against their calendar. This differs from
+      <code>/parent/bookings</code>, which offers a toggle between your local time and the session's own zone.
+      Don't assume a time you see on one screen is in the same zone as the other.</p>
+    </div>
+    <div class="callout">
+      <p><strong>A card must be on file before any purchase.</strong> Session-pack purchase and player
+      subscriptions both gate their confirm button on a saved card. This is a change from earlier builds where
+      payment details were collected at the point of charge.</p>
     </div>
     <div class="callout warn">
       <p><strong>Parent registration has four separate scroll-gated consent checkboxes</strong> across two pages (ToS, Privacy, Parental Consent at registration; a second child-specific consent when the added player is a minor) — all deliberately un-checkable until the corresponding policy text has been scrolled to the end.</p>
@@ -112,7 +146,9 @@ flowchart LR
     <h2>Related Personas</h2>
     <div class="card-grid">
       <div class="card"><h4><a href="../player/index.html">Player</a></h4><p>The child whose homework, videos, and development you're overseeing (or, in the adult self-registration case, a player you may book on behalf of).</p></div>
-      <div class="card"><h4><a href="../coach/index.html">Coach</a></h4><p>Publishes the availability you book against, and receives the payment your session packs/subscriptions fund.</p></div>
+      <div class="card"><h4><a href="../coach/index.html">Coach</a></h4><p>Publishes the availability you book against and the session pack you must buy first; receives the payment your packs/subscriptions fund.</p></div>
+      <div class="card"><h4><a href="../money/index.html">Money &amp; Commercial Model</a></h4><p>Refund windows, pack expiry and forfeiture, wallet cash-out, and what Skillars takes from each session.</p></div>
+      <div class="card"><h4><a href="../trust-and-safety/index.html">Trust &amp; Safety</a></h4><p>Why your child's age tier changes messaging, and what the video approval queue is protecting against.</p></div>
     </div>
     <p><a href="../index.html">&larr; Back to Home</a></p>
 

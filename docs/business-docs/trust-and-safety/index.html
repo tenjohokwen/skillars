@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trust &amp; Safety — Skillars Business Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Business Docs<small>Understand the product, persona by persona</small></a>
+    <nav>
+      <h4>Personas</h4>
+      <ul>
+        <li><a href="../player/index.html">Player</a></li>
+        <li><a href="../parent/index.html">Parent</a></li>
+        <li><a href="../coach/index.html">Coach</a></li>
+        <li><a href="../admin/index.html">Admin / Staff</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../money/index.html">Money &amp; Commercial Model</a></li>
+        <li><a href="../trust-and-safety/index.html" class="active">Trust &amp; Safety</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Trust &amp; Safety</div>
+    <h1>Trust &amp; Safety</h1>
+    <p class="subtitle">Most Skillars users are children. This page collects every protection that follows from that — who may talk to whom, what a parent must consent to, and what happens to content before anyone sees it.</p>
+
+    <h2>Why this is a first-class concern</h2>
+    <p>
+      Skillars puts adult coaches in contact with minors, then invites those minors to upload video of themselves.
+      That combination is the single largest risk the business carries, and it shapes product decisions that
+      otherwise look strange: why a child has no login, why messaging is booking-gated, why a parent has an
+      approval queue, why registration has four separate scroll-gated consent boxes. None of those are incidental —
+      each is a control. This page exists so nobody removes one without understanding what it was for.
+    </p>
+
+    <h2>Age tiers: the spine of the whole system</h2>
+    <p>
+      Every player has a date of birth, from which the platform derives an <strong>age tier</strong> on the fly. That
+      tier — not a role, not a setting — determines messaging permissions and parental visibility. The boundaries are
+      configurable at runtime rather than hard-coded, so treat the ages below as current defaults.
+    </p>
+    <table>
+      <thead><tr><th>Tier</th><th>Shown as</th><th>Can message?</th><th>Parent sees the thread?</th><th>Direct coach&harr;player?</th></tr></thead>
+      <tbody>
+        <tr><td><code>U10</code></td><td>U10</td><td><strong>No</strong> — messaging prohibited entirely</td><td>Yes</td><td>No</td></tr>
+        <tr><td><code>AGE_10_12</code></td><td>10–12</td><td>Yes, parent-managed</td><td>Yes</td><td>No</td></tr>
+        <tr><td><code>AGE_13_17</code></td><td>13–17</td><td>Yes, supervised</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td><code>ADULT</code></td><td>18+</td><td>Yes, unrestricted</td><td>No</td><td>Yes</td></tr>
+      </tbody>
+    </table>
+    <p>
+      Read the table as a gradient rather than four modes: as a child gets older they gain the ability to message at
+      all (at 10), then the ability to talk to a coach directly rather than through their parent (at 13), and finally
+      privacy from parental oversight (at 18). A parent is a visible participant in every conversation involving a
+      minor, at every tier.
+    </p>
+    <div class="callout">
+      <p><strong>The tier is computed, never stored as a status.</strong> A player crosses a boundary silently on
+      their birthday and their permissions change with it. There is no migration, no notification, and nothing for
+      an admin to flip — which also means you cannot "grant" a 12-year-old direct messaging as an exception.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Under-10s cannot have an independent account at all</strong>, separately from the messaging rule.
+      Every minor player is a profile under a parent account with no login of their own; the U10 rule additionally
+      removes messaging even through the parent.</p>
+    </div>
+
+    <h2>Consent gates at registration</h2>
+    <p>
+      Parent registration is deliberately heavier than any other flow in the product. There are <strong>four
+      separate scroll-gated consent boxes</strong> across two pages, each with its own checkbox that stays disabled
+      until that specific box has been scrolled to the bottom:
+    </p>
+    <ol>
+      <li><strong>Terms of Service</strong> — at <code>/parent-register</code>.</li>
+      <li><strong>Privacy Policy</strong> — at <code>/parent-register</code>.</li>
+      <li><strong>Parental Consent</strong> — at <code>/parent-register</code>.</li>
+      <li><strong>Child-specific consent</strong> — appears at <code>/parent/create-player</code> only when the
+        entered date of birth computes to under 18 ("I am the legal parent/guardian and consent to…"), and is
+        stamped with a policy version so you can tell which wording a given parent actually agreed to.</li>
+    </ol>
+    <p>
+      Adult self-registering players see a lighter two-checkbox flow (Terms + Privacy). Their registration also
+      refuses any date of birth under 18, redirecting to the parent registration page instead — self-registration is
+      adults-only by design.
+    </p>
+    <div class="callout warn">
+      <p><strong>The scroll gate is the control, not the checkbox.</strong> If someone asks to "simplify onboarding"
+      by enabling the checkboxes immediately, understand that the scroll requirement is what makes the consent
+      defensible. The versioned stamp on the child consent exists for the same reason.</p>
+    </div>
+
+    <h2>Messaging is gated on a real relationship</h2>
+    <p>
+      Nobody can cold-message anyone on Skillars. A conversation can only exist between a coach and a player who
+      have an actual booking relationship — there is no coach-to-parent inbox, no discovery messaging, and no way to
+      contact someone you have never been booked with. Combined with the age tiers above, this means a coach cannot
+      reach a child they have not been booked with, and for under-13s cannot reach them directly at all.
+    </p>
+    <p>
+      On top of that, message content is run through AI moderation before delivery. A message is written as
+      <em>pending</em> and only becomes visible once a verdict comes back. Blocked and under-review messages never
+      have their content returned to either party.
+    </p>
+    <div class="callout warn">
+      <p><strong>Nothing is delivered on an unresolved verdict.</strong> If moderation fails or never returns, the
+      message is escalated for a human decision rather than released — the system fails closed. The business
+      consequence is that a moderation outage delays messages rather than leaking unmoderated ones, and produces a
+      queue of items an admin must clear. <strong>There is currently no admin screen to clear that queue</strong> —
+      see <a href="../admin/index.html">Admin / Staff</a>.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Contact details are stripped automatically.</strong> Free text is scanned for email addresses and
+      phone-number-shaped strings and redacted. The point is to stop a coach and a minor moving the relationship off
+      the platform, where none of these controls apply.</p>
+    </div>
+
+    <h2>Video: the parental approval gate</h2>
+    <p>
+      Video is the highest-risk content type in the product, and it has the most layers between upload and
+      visibility:
+    </p>
+    <pre class="mermaid">
+flowchart LR
+    U["Minor uploads a video"] --> S["Automated content scanning"]
+    S --> P["/parent/approvals<br/>Parent approves or rejects"]
+    P -->|Approved| V["Usable / visible"]
+    P -->|Rejected| X["Not published"]
+    S -->|Flagged| A["Admin moderation queue"]
+    </pre>
+    <ol>
+      <li>Uploaded video is scanned automatically, including a CSAM hash-matching check and explicit-content
+        detection, before it can become publicly available.</li>
+      <li>For a <strong>minor</strong>, the video additionally lands in their parent's approval queue at
+        <code>/parent/approvals</code>, showing the player, video type and date with Approve/Reject actions. This is
+        the minor-safety gate: a child's video does not become usable until their parent has said so.</li>
+      <li>An adult self-registered player is not subject to the parental gate, but is still subject to scanning.</li>
+    </ol>
+    <div class="callout">
+      <p><strong><code>/parent/approvals</code> means <em>video</em> approvals, not booking approvals</strong> —
+      a naming trap worth knowing before you go looking for it, and a common source of confusion when explaining the
+      product.</p>
+    </div>
+
+    <h2>Reporting and enforcement</h2>
+    <table>
+      <thead><tr><th>Signal</th><th>Raised by</th><th>What happens</th></tr></thead>
+      <tbody>
+        <tr><td>Message report</td><td>Either party to a conversation</td><td>Message moves to under-review; an admin alert is raised.</td></tr>
+        <tr><td>Conversation report</td><td>Either party</td><td>The whole conversation is blocked immediately, then reviewed.</td></tr>
+        <tr><td>Review flag</td><td>Community</td><td>Enough flags auto-hold a published review pending moderation.</td></tr>
+        <tr><td>Reliability strikes</td><td>System, from coach behaviour</td><td>Late cancellations and no-shows accumulate; thresholds reduce marketplace visibility, then suspend the coach pending review. See <a href="../money/index.html">Money &amp; Commercial Model</a>.</td></tr>
+        <tr><td>Dispute</td><td>Parent or coach, over a booking</td><td>Enters the dispute queue for admin resolution.</td></tr>
+      </tbody>
+    </table>
+    <div class="callout warn">
+      <p><strong>Every one of these lands in a queue with no admin UI.</strong> Reports, flags, strike thresholds and
+      disputes all raise real, deduplicated admin alerts in the backend — and there is no screen to read or action
+      them. Anyone planning a launch should treat "build the moderation console" as a safety prerequisite rather
+      than a nice-to-have, because the reporting mechanisms users can already reach assume somebody is watching.</p>
+    </div>
+
+    <h2>Data rights (GDPR)</h2>
+    <p>
+      Parents and adult users can request data <strong>export</strong> or <strong>erasure</strong>. Both are real,
+      time-boxed backend flows. Two consequences worth knowing when discussing them:
+    </p>
+    <ul>
+      <li><strong>Erasure is genuinely destructive and overrides retention protections.</strong> It hard-deletes the
+        user's messages even where ordinary retention would have preserved them as evidence of an open report, and
+        deletes non-approved reviews while anonymising approved ones. This is intentional — a right-to-erasure
+        request wins over the moderation hold — but it means an erasure can remove material from an open
+        investigation.</li>
+      <li><strong>Coach profiles are anonymised, not deleted</strong>, so historical bookings and reviews stay
+        coherent.</li>
+    </ul>
+
+    <h2>Where these controls surface, by persona</h2>
+    <div class="card-grid">
+      <div class="card"><h4><a href="../parent/index.html">Parent</a></h4><p>Four consent gates, the video approval queue, visibility into every conversation involving their child.</p></div>
+      <div class="card"><h4><a href="../player/index.html">Player</a></h4><p>Adults-only self-registration; minors have no login at all. Age tier governs what a player can do.</p></div>
+      <div class="card"><h4><a href="../coach/index.html">Coach</a></h4><p>Booking-gated messaging, age-tier limits on contacting minors, and reliability enforcement.</p></div>
+      <div class="card"><h4><a href="../admin/index.html">Admin / Staff</a></h4><p>Owns every queue named on this page — and currently has a UI for none of them.</p></div>
+    </div>
+    <p><a href="../index.html">&larr; Back to Home</a></p>
+
+    <footer class="page-footer">Skillars business documentation — generated for onboarding.</footer>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

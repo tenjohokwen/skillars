@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scheduled Jobs — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <nav>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+        <li><a href="../scheduled-jobs/index.html" class="active">Scheduled Jobs</a></li>
+        <li><a href="../database/index.html">Database &amp; Migrations</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Scheduled Jobs</div>
+    <h1>Scheduled Jobs</h1>
+    <p class="subtitle">Every recurring background job in the application, what it recovers or cleans up, and the multi-instance safety rules you must follow when adding another one.</p>
+
+    <h2>Why This Page Exists</h2>
+    <p>
+      A large amount of Skillars' correctness does not happen in a request thread. Bookings that nobody
+      actions expire on a timer; a booking stranded mid-payment is swept back out; a message whose moderation
+      verdict never landed is escalated to a human; packs forfeit at expiry; outboxes drain; caches refresh.
+      There are <strong>30 <code>@Scheduled</code> methods across 9 modules</strong>, and until now the only
+      way to find them was to grep. Several of them are also the <em>only</em> thing standing between a
+      crashed transaction and a permanently stuck row, so knowing they exist is a prerequisite for debugging
+      "why is this record stuck".
+    </p>
+
+    <h2>How Scheduling Is Wired</h2>
+    <table>
+      <tr><th>Concern</th><th>Where</th><th>Notes</th></tr>
+      <tr><td>Enabling <code>@Scheduled</code></td><td><code>infrastructure.config.SchedulingConfig</code></td><td><code>@EnableScheduling</code> behind <code>@ConditionalOnProperty("app.scheduling.enabled", matchIfMissing = true)</code>. On everywhere except the test profile.</td></tr>
+      <tr><td>Enabling ShedLock</td><td><code>platform.notification.config.AsyncConfig</code></td><td><code>@EnableSchedulerLock(defaultLockAtMostFor = "PT10M", order = LOWEST_PRECEDENCE - 100)</code>. Deliberately <em>not</em> conditional — see below.</td></tr>
+      <tr><td>Lock storage</td><td><code>infrastructure.config.ShedLockConfig</code></td><td>JDBC lock provider over the <code>main.shedlock</code> table, <code>usingDbTime()</code> so lock expiry uses DB clock rather than per-instance wall clock.</td></tr>
+      <tr><td>Skipped-run visibility</td><td><code>ShedLockConfig.lockProvider</code></td><td>Wraps the provider to log and increment a <code>scheduler.lock.skipped</code> counter (tagged by lock name) whenever <code>lock()</code> returns empty.</td></tr>
+    </table>
+
+    <div class="callout warn">
+      <p><strong>Scheduling is off under the test profile; ShedLock is not.</strong>
+      <code>src/test/resources/application-test.yaml</code> sets <code>app.scheduling.enabled=false</code> and
+      is the only place that does. This became necessary when the integration suite consolidated from 37
+      short-lived Spring contexts onto a few long-lived ones: a job with a 5-minute delay never fires in a
+      context that lives 90 seconds, and that accidental protection disappeared. Worse, the per-test reset
+      backdates every ShedLock row, making every guarded job eligible on every one of ~905 test methods.</p>
+      <p>Overriding each job's delay in test config <em>cannot</em> substitute for the switch: 16 of the 30
+      <code>@Scheduled</code> methods hard-code their delay or cron with no property placeholder. Meanwhile
+      <code>@EnableSchedulerLock</code> stays unconditional because tests invoke scheduled methods directly
+      through the Spring proxy, so the lock advisor must still apply — that is the behaviour
+      <code>BasePaymentIT.releaseSchedulerLock</code> is written against.</p>
+    </div>
+
+    <div class="callout">
+      <p><strong>Why the ShedLock advisor is explicitly ordered.</strong> ShedLock's default
+      <code>InterceptMode.PROXY_METHOD</code> puts a real AOP advisor on the same proxy chain as
+      <code>@Transactional</code>, and both default to <code>Ordered.LOWEST_PRECEDENCE</code> — so without an
+      explicit order their relative nesting is unspecified. Setting a higher-precedence order forces the lock
+      advisor <em>outermost</em>, guaranteeing the transaction runs to completion (commit or rollback) before
+      the lock is released. Otherwise a lock could be freed while its DB transaction was still open, and a
+      second instance could start work against uncommitted state.</p>
+    </div>
+
+    <h2>The Job Catalogue</h2>
+    <p>
+      <span class="tag">🔒</span> = ShedLock-guarded (safe to run more than one app instance).
+      Unguarded jobs will run concurrently on every instance — see the gotcha after the table.
+    </p>
+
+    <h3>Recovery sweepers <small>— the ones that unstick data</small></h3>
+    <table>
+      <thead><tr><th>Job</th><th>Schedule</th><th>What it recovers</th></tr></thead>
+      <tbody>
+        <tr><td><code>payment.PaymentPendingSweeper</code> 🔒</td><td>every 15 min</td><td>Bookings stranded in <code>PAYMENT_PENDING</code> when the AFTER_COMMIT settlement listener never completed. <strong>Pack-funded only</strong> — see <a href="../payment/index.html">Payment</a> for why the Stripe path is deliberately excluded.</td></tr>
+        <tr><td><code>messaging.MessageModerationSweeper</code> 🔒</td><td>every 10 min</td><td>Messages stranded in <code>PENDING</code> when a moderation verdict never landed. Fails closed to <code>UNDER_REVIEW</code>; never approves, never retries Gemini. Capped at 500/run.</td></tr>
+        <tr><td><code>booking.QuickCompleteTimeoutService</code></td><td>every 5 min</td><td>Quick-Complete sessions the parent never confirmed; force-completes after the configured timeout.</td></tr>
+        <tr><td><code>booking.BookingExpiryScheduler</code> 🔒</td><td>every 5 min</td><td>Auto-declines <code>REQUESTED</code> bookings the coach never actioned (default 48h).</td></tr>
+        <tr><td><code>video.QuotaReservationTimeoutService</code> 🔒</td><td>every 60s <em>(configurable)</em></td><td>Releases video quota reservations whose upload never completed.</td></tr>
+        <tr><td><code>video.UploadSessionExpiryScheduler</code></td><td>every 30s <em>(configurable)</em></td><td>Expires abandoned upload sessions.</td></tr>
+        <tr><td><code>video.ReconciliationWorkerScheduler</code></td><td>every 60s <em>(configurable)</em></td><td>Reconciles local video state against the provider, recording <code>ReconciliationIncident</code> rows for drift.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Outbox / queue drainers</h3>
+    <table>
+      <thead><tr><th>Job</th><th>Schedule</th><th>Drains</th></tr></thead>
+      <tbody>
+        <tr><td><code>filestorage.OutboxPollerScheduler</code></td><td>every 5s <em>(configurable)</em></td><td>Cross-region blob replication jobs.</td></tr>
+        <tr><td><code>filestorage.DeletionSchedulerService</code></td><td>every 5s <em>(configurable)</em></td><td>Scheduled blob deletions past their retention hold.</td></tr>
+        <tr><td><code>video.VideoDeletionOutboxProcessor</code></td><td>every 60s <em>(configurable)</em></td><td>Physical video deletions. Also resets rows stuck <code>CLAIMED</code> &gt; 10 min (crashed-run recovery).</td></tr>
+        <tr><td><code>video.WebhookEventProcessorScheduler</code></td><td>every 5s <em>(configurable)</em></td><td>Pending provider webhook events; also publishes queue-depth metrics.</td></tr>
+        <tr><td><code>video.VideoSubscriptionLifecycleListener</code></td><td>every 60s</td><td>Subscription-lifecycle outbox gating video features by tier.</td></tr>
+        <tr><td><code>notification.EmailRetryScheduler</code></td><td>every 60s <em>(configurable)</em></td><td>Failed email envelopes, up to 6 attempts, then <code>ATTEMPTS_EXHAUSTED</code>.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Lifecycle &amp; billing</h3>
+    <table>
+      <thead><tr><th>Job</th><th>Schedule</th><th>Does</th></tr></thead>
+      <tbody>
+        <tr><td><code>booking.BookingReminderScheduler</code> 🔒</td><td>every 5 min</td><td>Transitions <code>CONFIRMED → UPCOMING</code> and sends primary/secondary reminder emails.</td></tr>
+        <tr><td><code>payment.SessionPackForfeitureScheduler</code> 🔒</td><td>hourly</td><td>Forfeits packs past <code>expiresAt</code>, stamps <code>expiredNotifiedAt</code>, publishes <code>SessionPackExpiredEvent</code>.</td></tr>
+        <tr><td><code>payment.SessionPackExpiryNotifier</code> 🔒</td><td>daily 08:00</td><td>Warns about packs expiring within 14 days; stamps <code>expiryWarnedAt</code> to dedupe across the window.</td></tr>
+        <tr><td><code>payment.SubscriptionChangeApplicator</code></td><td>daily 02:00</td><td>Applies tier downgrades scheduled for period end.</td></tr>
+        <tr><td><code>payment.SubscriptionGracePeriodChecker</code></td><td>daily 03:00</td><td>Downgrades <code>PAST_DUE</code> subscriptions past their grace period.</td></tr>
+        <tr><td><code>video.VideoLifecycleScheduler</code></td><td>daily 03:00 <em>(configurable)</em></td><td>Video retention/lifecycle transitions.</td></tr>
+        <tr><td><code>video.BandwidthResetService</code> 🔒</td><td>monthly, 1st 00:00 UTC</td><td>Resets per-account monthly bandwidth counters.</td></tr>
+        <tr><td><code>video.ModerationSlaMonitorService</code></td><td>every 5 min <em>(configurable)</em></td><td>Flags moderation scans breaching their SLA.</td></tr>
+        <tr><td><code>development.NeglectedSkillDetectionService</code> 🔒</td><td>Mondays 06:00 <em>(configurable)</em></td><td>Weekly neglected-skill detection per player.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Retention &amp; cleanup</h3>
+    <table>
+      <thead><tr><th>Job</th><th>Schedule</th><th>Deletes</th></tr></thead>
+      <tbody>
+        <tr><td><code>messaging.MessageRetentionScheduler</code></td><td>daily 02:00</td><td>Hard-deletes messages/conversations past the retention window (default 24 months), preserving anything under an open report. Publishes <code>MessagesPurgedEvent</code> so admin can close now-orphaned alerts.</td></tr>
+        <tr><td><code>security.UserAdminService</code></td><td>daily 01:00</td><td>Removes never-activated user registrations.</td></tr>
+        <tr><td><code>security.AuthCleanupService</code></td><td>hourly</td><td>Purges expired refresh tokens.</td></tr>
+        <tr><td><code>security.AuthCleanupService</code></td><td>every 30 min</td><td>Purges old login-attempt rows.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Caches &amp; keep-alives</h3>
+    <table>
+      <thead><tr><th>Job</th><th>Schedule</th><th>Refreshes</th></tr></thead>
+      <tbody>
+        <tr><td><code>config.ConfigService</code></td><td>every 300s <em>(configurable)</em></td><td>Reloads the DB-backed runtime config cache — this is why a config change takes effect without a restart, but not instantly.</td></tr>
+        <tr><td><code>notification.AlertRuleCache</code></td><td>every 60s <em>(configurable)</em></td><td>Hot-reloads admin-configured alert rules.</td></tr>
+        <tr><td><code>notification.AlertEvaluationService</code></td><td>every 30s <em>(configurable)</em></td><td>Evaluates alert rules against current metrics.</td></tr>
+        <tr><td><code>messaging.MessagingEmitterRegistry</code></td><td>every 30s</td><td>SSE heartbeats to connected clients.</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Conventions &amp; Gotchas</h2>
+
+    <div class="callout warn">
+      <p><strong>Only 9 of the 30 jobs are ShedLock-guarded.</strong> Every job without 🔒 above will run
+      concurrently on <em>every</em> application instance. For the cache-refresh and heartbeat jobs that is
+      harmless by design. For anything that writes shared state it is not — so if you deploy more than one
+      instance, audit the unguarded jobs in the "Outbox / queue drainers" and "Lifecycle &amp; billing"
+      tables before assuming they're safe. Several drainers rely on their own atomic claim-a-batch UPDATE
+      rather than ShedLock, which is a valid alternative; the daily billing crons largely do not.</p>
+    </div>
+
+    <div class="callout">
+      <p><strong>Set <code>lockAtMostFor</code> to roughly 2× the delay, not equal to it.</strong> The
+      convention in this codebase (see <code>PaymentPendingSweeper</code> and the comment in
+      <code>MessageModerationSweeper</code>) is that a run which merely reaches its own next tick must not have
+      its lock expire mid-execution, which would let a second instance start an overlapping sweep. So a
+      15-minute delay pairs with <code>PT30M</code>, a 10-minute delay with <code>PT20M</code>.
+      <code>lockAtLeastFor</code> is typically <code>PT2M</code> to stop a very fast run from being immediately
+      re-eligible on another instance.</p>
+    </div>
+
+    <div class="callout">
+      <p><strong>Batch per row, in its own transaction, when the batch is user-visible.</strong>
+      <code>SessionPackForfeitureScheduler</code> and <code>SessionPackExpiryNotifier</code> both wrap each
+      item in its own <code>transactionTemplate.execute</code> and catch per item, specifically so one bad row
+      (e.g. a purchase pointing at a missing coach) cannot abort the whole run. Follow that shape for anything
+      that emails users or raises alerts.</p>
+    </div>
+
+    <div class="callout">
+      <p><strong>Publish events inside the transaction template, not outside it.</strong> A listener registered
+      at <code>AFTER_COMMIT</code> never fires if <code>publishEvent</code> is called outside any transaction —
+      this was a real bug in <code>SessionPackExpiryNotifier</code>, whose fix was to move the publish inside
+      <code>transactionTemplate.execute</code> as <code>SessionPackForfeitureScheduler</code> already did.
+      Stamping a "notified at" column inside that same transaction is what makes a delivered notification
+      always a recorded one.</p>
+    </div>
+
+    <div class="callout">
+      <p><strong>A skipped run is observable.</strong> When another instance holds the lock, the wrapped
+      provider logs <code>"Scheduler lock '{name}' is held by another instance — skipping this run"</code> and
+      increments <code>scheduler.lock.skipped{lock_name=...}</code>. If a job "isn't running", check that
+      counter before assuming it never fired — a stale lock row in <code>main.shedlock</code> looks identical
+      to a dead scheduler from the outside.</p>
+    </div>
+
+    <h2>Adding a New Job</h2>
+    <ol>
+      <li>Put the <code>@Scheduled</code> method on a <code>@Component</code>, not on a service that also
+        serves request threads — it keeps the job's transaction boundaries independent.</li>
+      <li>Prefer <code>fixedDelayString</code>/<code>cron</code> bound to a property so the value is tunable
+        without a rebuild. (16 existing jobs don't do this; don't add a 17th.)</li>
+      <li>Add <code>@SchedulerLock</code> with a unique <code>name</code> and a <code>lockAtMostFor</code> of
+        ~2× the delay unless the job is provably idempotent across instances.</li>
+      <li>Bound the batch size if the backlog can grow without limit, and drain the remainder on the next tick.</li>
+      <li>Wrap per-item work in its own transaction if a single failure shouldn't abort the run.</li>
+      <li>Remember the job will not fire in integration tests — call the method directly through the proxy,
+        as the existing suite does.</li>
+    </ol>
+
+    <h2>Related</h2>
+    <ul>
+      <li><a href="../infrastructure/index.html">Infrastructure</a> — <code>SchedulingConfig</code>, <code>ShedLockConfig</code>, and the async executor wiring.</li>
+      <li><a href="../database/index.html">Database &amp; Migrations</a> — the <code>main.shedlock</code> table and the config keys several jobs read.</li>
+      <li><a href="../payment/index.html">Payment</a> — <code>PaymentPendingSweeper</code>'s deliberate coverage gap.</li>
+      <li><a href="../messaging/index.html">Messaging</a> — <code>MessageModerationSweeper</code>'s fail-closed design.</li>
+      <li><a href="../config/index.html">Config</a> — the runtime keys most of these jobs read, and the 300s cache that gates how fast a change lands.</li>
+      <li><a href="../index.html">Home</a></li>
+    </ul>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

@@ -23,7 +23,6 @@
         <li><a href="../reviews/index.html">Reviews</a></li>
         <li><a href="../notification/index.html">Notification</a></li>
         <li><a href="../admin/index.html">Admin</a></li>
-        <li><a href="../tenant/index.html">Tenant</a></li>
         <li><a href="../security/index.html">Security</a></li>
         <li><a href="../filestorage/index.html">Filestorage</a></li>
         <li><a href="../config/index.html">Config</a></li>
@@ -32,6 +31,8 @@
       <h4>Cross-Cutting</h4>
       <ul>
         <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+        <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
+        <li><a href="../database/index.html">Database &amp; Migrations</a></li>
       </ul>
     </nav>
   </aside>
@@ -88,7 +89,7 @@
         <tr><td><code>messaging.config</code></td><td>Spring <code>@Configuration</code> placeholder — no manual beans currently registered.</td></tr>
         <tr><td><code>messaging.contract</code></td><td>DTOs, enums, error codes, and the <code>ModerationService</code> interface + result/event records shared across the module.</td></tr>
         <tr><td><code>messaging.repo</code></td><td>JPA entities (<code>Conversation</code>, <code>Message</code>, <code>MessageReport</code>, <code>ConversationReport</code>) and their Spring Data repositories.</td></tr>
-        <tr><td><code>messaging.service</code></td><td>Business logic: conversation/message orchestration, age-policy gating, LLM moderation, SSE push, and scheduled retention cleanup.</td></tr>
+        <tr><td><code>messaging.service</code></td><td>Business logic: conversation/message orchestration, age-policy gating, LLM moderation, SSE push, scheduled retention cleanup, and the stranded-moderation sweeper.</td></tr>
       </tbody>
     </table>
 
@@ -114,7 +115,8 @@
         <tr><td><code>PassThroughModerationService</code></td><td>Non-primary, named-bean (<code>"passThrough"</code>) fallback that marks everything SAFE — useful for local/dev profiles where no Gemini key is configured.</td></tr>
         <tr><td><code>ModerationResultApplier</code></td><td>Shared verdict-to-status mapping used by both moderation implementations; also resolves the SSE recipient and fires the <code>NEW_MESSAGE</code> / <code>MESSAGE_BLOCKED</code> push only after the DB transaction commits.</td></tr>
         <tr><td><code>MessagingEmitterRegistry</code></td><td>In-memory map of userId → <code>SseEmitter</code> for live push (new message, blocked message, heartbeat every 30s). Single-instance only — see gotchas.</td></tr>
-        <tr><td><code>MessageRetentionScheduler</code></td><td>Nightly (02:00) job that hard-deletes messages/conversations past the retention window, skipping anything tied to an open report.</td></tr>
+        <tr><td><code>MessageRetentionScheduler</code></td><td>Nightly (02:00) job that hard-deletes messages/conversations past the retention window, skipping anything tied to an open report. Publishes <code>MessagesPurgedEvent</code> afterwards so admin can close alerts now pointing at deleted rows.</td></tr>
+        <tr><td><code>MessageModerationSweeper</code></td><td>Every 10 min (ShedLock), recovers messages stranded in <code>PENDING</code> past a config grace period by forcing them to <code>UNDER_REVIEW</code> and raising an admin alert. <strong>Fail-closed: it never approves and never re-calls Gemini</strong> — see gotchas.</td></tr>
         <tr><td><code>AgeMessagingPolicy</code></td><td>Enum + mapping logic translating the security module's raw <code>MessagingPolicy</code> flags into the four age tiers used throughout this module.</td></tr>
       </tbody>
     </table>
@@ -142,15 +144,23 @@
       <tbody>
         <tr><td><code>MessageReportedEvent</code></td><td><code>MessagingReportService.reportMessage()</code></td><td><code>admin.service.AdminAlertEventListener</code> — surfaces moderation reports to admins</td></tr>
         <tr><td><code>ConversationReportedEvent</code></td><td><code>MessagingReportService.reportConversation()</code></td><td><code>admin.service.AdminAlertEventListener</code></td></tr>
-        <tr><td><code>ModerationFailureEvent</code></td><td><code>GeminiModerationService.moderate()</code> when the Gemini call throws</td><td>Logged; also observed by <code>AdminAlertEventListener</code> for operational alerting</td></tr>
+        <tr><td><code>ModerationFailureEvent</code></td><td><code>GeminiModerationService.moderate()</code> when the Gemini call throws</td><td><strong>Nothing.</strong> This event currently has no listener anywhere in the codebase — it is published and dropped. (An earlier version of this page claimed <code>AdminAlertEventListener</code> consumed it; that was never true.) The admin-visible signal for a failed moderation comes from <code>MessageHeldForReviewEvent</code> instead.</td></tr>
+        <tr><td><code>MessageHeldForReviewEvent</code></td><td><code>ModerationResultApplier</code> (verdict UNCERTAIN) and <code>MessageModerationSweeper</code> (never moderated at all)</td><td><code>admin.AdminAlertEventListener</code> → raises a <code>MODERATION_UNRESOLVED</code> alert. Its <code>reason</code> field distinguishes the two causes.</td></tr>
+        <tr><td><code>MessagesPurgedEvent</code></td><td><code>MessageRetentionScheduler</code> after a successful delete batch</td><td><code>admin.AdminAlertEventListener</code> → resolves OPEN alerts referencing hard-deleted messages.</td></tr>
       </tbody>
     </table>
+    <p>
+      Both <code>MessageHeldForReviewEvent</code> and <code>MessagesPurgedEvent</code> exist specifically so
+      messaging never has to <code>import com.softropic.skillars.platform.admin</code>. The dependency direction is
+      messaging → (event) → admin, never the reverse.
+    </p>
     <p>
       Dependency-wise, messaging leans on <a href="../booking/index.html">booking</a> (to gate conversation creation
       on a real relationship), <a href="../marketplace/index.html">marketplace</a> (<code>CoachProfileRepository</code>
       for identity/display name resolution), <a href="../security/index.html">security</a>
       (<code>PlayerProfileRepository</code>, <code>AgePolicyService</code>, <code>SecurityUtil</code>, <code>Principal</code>),
-      <a href="../config/index.html">config</a> (<code>ConfigService</code> for the retention window), and
+      <a href="../config/index.html">config</a> (<code>ConfigService</code> for the retention window and the
+      moderation-sweep grace period), and
       <code>infrastructure.gemini</code> for LLM moderation. Notably it does <strong>not</strong> use
       <code>infrastructure.sanitizer</code> anywhere — content safety is delegated entirely to the Gemini verdict, not
       to any HTML/XSS-style input sanitization.
@@ -187,7 +197,11 @@ sequenceDiagram
     </pre>
     <p>
       The message row is committed as <code>PENDING</code> before moderation even runs, so a crash mid-moderation
-      never loses the message — it just stays pending. Moderation itself runs synchronously in the request thread
+      never loses the message — it just stays pending, and <code>MessageModerationSweeper</code> promotes it to
+      <code>UNDER_REVIEW</code> for a human once the grace period
+      (<code>platform.messaging.moderation_orphan_grace_minutes</code>, default 30) elapses. Because delivery is
+      gated on a verdict, an un-swept <code>PENDING</code> row would otherwise be invisible to everyone forever.
+      Moderation itself runs synchronously in the request thread
       (not queued), calling out to Gemini with the raw content wrapped between fixed delimiter markers to reduce
       prompt-injection risk. The response DTO always hides <code>content</code> when the status is
       <code>BLOCKED</code> or <code>UNDER_REVIEW</code>, so a blocked message is never leaked back to either party.
@@ -260,6 +274,25 @@ sequenceDiagram
       There is a separate, unconditional <code>MessageRepository.deleteAllBySenderId()</code> used for GDPR Article 17
       erasure requests — that one ignores report status entirely, so a right-to-erasure request will remove a
       user's messages even if they're the subject of an open report.</p>
+      <p>Because those deletes are unconditional at the row level, retention publishes <code>MessagesPurgedEvent</code>
+      so <code>admin</code> can close alerts left pointing at rows that no longer exist. A <code>MESSAGE_REPORT</code>
+      alert is safe on its own (retention preserves reported messages), but a <code>MODERATION_UNRESOLVED</code> alert
+      has no report row protecting its message and would otherwise sit <code>OPEN</code> forever.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong><code>MessageModerationSweeper</code> is fail-closed on purpose. Never make it approve, and never
+      make it retry Gemini.</strong> It exists for messages stranded in <code>PENDING</code> — the verdict write threw,
+      or the JVM died between the PENDING commit and the verdict. The sweeper cannot know <em>why</em> the first
+      verdict never landed, so a retry would re-run a call that already failed once with no diagnosis, and a
+      <code>SAFE</code> result from it would deliver content that no human and no successful moderation pass ever saw
+      to a recipient who may be a minor. Forcing <code>UNDER_REVIEW</code> is the correct terminal state: it is exactly
+      what <code>ModerationResultApplier</code> already writes for an <code>UNCERTAIN</code> verdict, and the only status
+      <code>AdminMessageService.approveMessage</code>/<code>blockMessage</code> will act on, so a swept message becomes
+      a queue item a human resolves.</p>
+      <p>Two details worth knowing before changing it: the batch is capped at 500 per run (a sustained moderation
+      outage is precisely what produces a huge <code>PENDING</code> backlog, and every swept row also raises an admin
+      alert), and soft-deleted <code>PENDING</code> messages are skipped permanently — deletion already removes them
+      from every user-facing and moderation-facing read, so there is nothing to recover.</p>
     </div>
     <div class="callout">
       <p><strong>Conversations are keyed by (coach, player), not by a chat "thread ID" you create client-side.</strong>
