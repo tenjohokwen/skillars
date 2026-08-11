@@ -95,8 +95,12 @@
         <q-card-section>
           <q-input v-model="rescheduleProposedStart" type="datetime-local"
                    :label="t('booking.reschedule.proposedStart')" />
-          <q-input v-model="rescheduleProposedEnd" type="datetime-local"
-                   :label="t('booking.reschedule.proposedEnd')" class="q-mt-sm" />
+          <!-- Read-only and derived: the backend requires a reschedule to keep the session's
+               original length (a move, not a resize). Two freely-editable inputs where the second
+               must exactly equal the first plus that length is a trap the parent cannot see. -->
+          <q-input :model-value="rescheduleProposedEnd" type="datetime-local" readonly
+                   :label="t('booking.reschedule.proposedEnd')" class="q-mt-sm"
+                   :hint="t('booking.reschedule.endDerivedHint')" />
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat :label="t('common.cancel')" v-close-popup />
@@ -130,7 +134,25 @@ const confirmingId = ref(null)
 const rescheduleDialogOpen = ref(false)
 const rescheduleBookingId = ref(null)
 const rescheduleProposedStart = ref('')
-const rescheduleProposedEnd = ref('')
+// Length of the booking being rescheduled, in milliseconds. The proposed end is always derived
+// from it, never typed.
+const rescheduleDurationMs = ref(0)
+
+const rescheduleProposedEnd = computed(() => {
+  if (!rescheduleProposedStart.value || !rescheduleDurationMs.value) return ''
+  const start = new Date(rescheduleProposedStart.value)
+  if (Number.isNaN(start.getTime())) return ''
+  return toDatetimeLocal(new Date(start.getTime() + rescheduleDurationMs.value))
+})
+
+/** datetime-local wants local wall-clock `YYYY-MM-DDTHH:mm`, which toISOString (UTC) is not. */
+function toDatetimeLocal(date) {
+  const pad = n => String(n).padStart(2, '0')
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}`
+  )
+}
 const reschedulingId = ref(null)
 
 async function handleConfirmCompletion(bookingId) {
@@ -146,9 +168,23 @@ async function handleConfirmCompletion(bookingId) {
 }
 
 function openRescheduleDialog(booking) {
+  // Carried from the booking itself, not from the coach's current session length: a booking made
+  // before session lengths existed keeps its own length, and the backend enforces exactly that.
+  const start = new Date(booking.requestedStartTime)
+  const end = new Date(booking.requestedEndTime)
+  const durationMs =
+    Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) ? 0 : end.getTime() - start.getTime()
+
+  // Without a derivable length the end field — now read-only — would sit permanently blank and the
+  // dialog could never be submitted. Fail visibly at open time instead of presenting a dead end.
+  if (durationMs <= 0) {
+    $q.notify({ message: t('booking.reschedule.endDerivedLengthUnavailable'), type: 'negative' })
+    return
+  }
+
   rescheduleBookingId.value = booking.id
   rescheduleProposedStart.value = ''
-  rescheduleProposedEnd.value = ''
+  rescheduleDurationMs.value = durationMs
   rescheduleDialogOpen.value = true
 }
 

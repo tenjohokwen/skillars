@@ -12,6 +12,7 @@ import com.softropic.skillars.platform.booking.repo.BookingBatchRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
+import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.booking.contract.BookingError;
@@ -31,6 +32,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -57,6 +59,8 @@ class BookingBatchServiceTest {
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock ConfigService configService;
     @Mock BookingService bookingService;
+    @Mock SessionDurationResolver sessionDurationResolver;
+    @Mock CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
     @Mock PlatformTransactionManager transactionManager;
     @Mock TransactionStatus transactionStatus;
 
@@ -71,6 +75,12 @@ class BookingBatchServiceTest {
     void initTemplates() {
         lenient().when(transactionManager.getTransaction(any())).thenReturn(transactionStatus);
         service.initTransactionTemplates();
+        // UAT.2 AC4: every buildRequest() slot is exactly one hour and inside the coach's
+        // availability. Lenient because the tests that fail earlier (batch size, ownership,
+        // inactive coach) never reach either check.
+        lenient().when(sessionDurationResolver.resolve(COACH_ID)).thenReturn(Duration.ofHours(1));
+        lenient().when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any()))
+            .thenReturn(true);
     }
 
     private static final long PARENT_ID = 9000001L;
@@ -103,6 +113,130 @@ class BookingBatchServiceTest {
         verify(batchRepository).save(any(BookingBatch.class));
         verify(bookingRepository, times(2)).save(any(Booking.class));
         verify(eventPublisher).publishEvent(any(BatchBookingRequestedEvent.class));
+    }
+
+    // ---- UAT.2 AC4: the three checks the batch path never had ----
+
+    /**
+     * The regression that never had coverage: createBatch never called
+     * isSlotWithinAvailabilityWindow at all, so a batch could book ten slots entirely outside the
+     * coach's availability — something the single-booking path has rejected since day one.
+     */
+    @Test
+    void createBatch_slotOutsideCoachAvailability_isRejected() {
+        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        stubOwnershipAndActiveCoach();
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(false);
+
+        assertThatThrownBy(() -> service.createBatch(PARENT_ID, buildRequest(2)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining("not within coach availability");
+
+        verify(batchRepository, never()).save(any());
+    }
+
+    /**
+     * The stub above returns false for every slot, so on its own it only proves the FIRST slot is
+     * checked. Here the first slot passes and the second does not: the window check must run for
+     * every slot in the batch, which is what the loop position — rather than a pre-loop check —
+     * buys.
+     */
+    @Test
+    void createBatch_laterSlotOutsideCoachAvailability_isRejected() {
+        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        stubOwnershipAndActiveCoach();
+
+        CreateBatchRequest req = buildRequest(2);
+        Instant secondSlotStart = req.slots().get(1).requestedStartTime();
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any()))
+            .thenAnswer(inv -> !secondSlotStart.equals(inv.getArgument(0)));
+
+        assertThatThrownBy(() -> service.createBatch(PARENT_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining("not within coach availability");
+
+        verify(batchRepository, never()).save(any());
+        verify(bookingService, times(2)).isSlotWithinAvailabilityWindow(any(), any(), any());
+    }
+
+    /** The window list is fetched ONCE for the batch, not once per slot. */
+    @Test
+    void createBatch_fetchesTheAvailabilityWindowsOncePerBatchNotPerSlot() {
+        when(configService.getLong("booking.batch.maxSize")).thenReturn(10L);
+        stubOwnershipAndActiveCoach();
+        BookingBatch savedBatch = new BookingBatch();
+        savedBatch.setId(BATCH_ID);
+        when(batchRepository.save(any())).thenReturn(savedBatch);
+        when(bookingRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(userRepository.findById(any())).thenReturn(Optional.empty());
+
+        service.createBatch(PARENT_ID, buildRequest(10));
+
+        verify(coachAvailabilityWindowRepository, times(1)).findByCoachId(COACH_ID);
+        verify(sessionDurationResolver, times(1)).resolve(COACH_ID);
+        verify(bookingRepository, times(10)).save(any(Booking.class));
+    }
+
+    @Test
+    void createBatch_slotOfTheWrongLength_isRejected() {
+        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        stubOwnershipAndActiveCoach();
+
+        Instant base = Instant.now().plus(2, ChronoUnit.DAYS);
+        CreateBatchRequest req = new CreateBatchRequest(COACH_ID, PLAYER_ID, List.of(
+            new BatchSlot(base, base.plus(1, ChronoUnit.HOURS)),
+            new BatchSlot(base.plus(2, ChronoUnit.HOURS), base.plus(5, ChronoUnit.HOURS))
+        ), BigDecimal.ZERO);
+
+        assertThatThrownBy(() -> service.createBatch(PARENT_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining("session length");
+
+        verify(batchRepository, never()).save(any());
+    }
+
+    /**
+     * Distinct start times were the only cross-slot rule, and they do not imply non-overlapping:
+     * 09:00-10:00 and 09:30-10:30 have different starts and both used to pass.
+     */
+    @Test
+    void createBatch_twoOverlappingSlotsWithDistinctStarts_isRejected() {
+        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        stubOwnershipAndActiveCoach();
+        when(sessionDurationResolver.resolve(COACH_ID)).thenReturn(Duration.ofMinutes(60));
+
+        Instant base = Instant.now().plus(2, ChronoUnit.DAYS);
+        CreateBatchRequest req = new CreateBatchRequest(COACH_ID, PLAYER_ID, List.of(
+            new BatchSlot(base, base.plus(60, ChronoUnit.MINUTES)),
+            new BatchSlot(base.plus(30, ChronoUnit.MINUTES), base.plus(90, ChronoUnit.MINUTES))
+        ), BigDecimal.ZERO);
+
+        assertThatThrownBy(() -> service.createBatch(PARENT_ID, req))
+            .isInstanceOf(BatchRuleViolationException.class)
+            .hasMessageContaining("booking.overlappingSlots");
+
+        verify(batchRepository, never()).save(any());
+    }
+
+    /** Slots that merely touch (one ends exactly where the next starts) are not overlapping. */
+    @Test
+    void createBatch_backToBackSlots_areAccepted() {
+        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        stubOwnershipAndActiveCoach();
+        BookingBatch savedBatch = new BookingBatch();
+        savedBatch.setId(BATCH_ID);
+        when(batchRepository.save(any())).thenReturn(savedBatch);
+        when(bookingRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(userRepository.findById(any())).thenReturn(Optional.empty());
+
+        assertThat(service.createBatch(PARENT_ID, buildRequest(3)).bookingCount()).isEqualTo(3);
+    }
+
+    private void stubOwnershipAndActiveCoach() {
+        PlayerProfile player = new PlayerProfile();
+        player.setParentId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(buildActiveCoach()));
     }
 
     @Test

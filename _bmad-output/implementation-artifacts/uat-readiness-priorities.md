@@ -17,9 +17,19 @@ Items already pulled into a story. A subsequent story-creation pass must skip an
 | Story file | Items claimed |
 |---|---|
 | `skillars-uat-1-admin-bootstrap-and-onboarding-unblock.md` (2026-08-10) | P0-1 (AC1–AC3), P0-3 (AC4), P1 #4 (AC5), P1 #5 (AC6), P1 #6 (AC7), P2 #1 (AC8, re-scoped), all 5 Ledger-hygiene rows (AC9) |
+| `skillars-uat-2-session-duration-and-booking-slot-integrity.md` (2026-08-10) | P0-5 (AC1–AC4), P1 #1 (AC5), P2 #2, P2 #3, P2 #5 (AC6) — **IMPLEMENTED 2026-08-10**, scope unchanged from what was claimed. `deferred-17` D1 and `deferred-18` D3 closed in the ledger. |
 
-**Still unclaimed:** P0-2, P0-4, P0-5 (all three are product decisions — see the Suggested sequence);
-P1 #1, #2, #3, #7, #8; P2 #2–#5; everything in P3.
+**Still unclaimed:** P0-2 and P0-4 (both product decisions — see the Suggested sequence);
+P1 #2, #3, #7, #8; P2 #4; everything in P3.
+
+**P0-5's product decision is resolved** (Mbah, 2026-08-10): the default session length is one hour
+system-wide, and a coach can override it. `skillars-uat-2` implements that as a
+`booking.session.defaultDurationMinutes` platform-config key plus a **nullable**
+`marketplace.coach_pricing.session_duration_minutes` column — nullable so the platform value stays the
+live default rather than being frozen into each coach row at migration time. That story also found a
+**third** unenforced write path D1 never recorded: `RescheduleService:63-67` validates only
+future-start and end-after-start, so a reschedule could turn a compliant session into an eight-hour
+one. It is covered.
 
 ## Ranking rule applied
 
@@ -129,6 +139,10 @@ test with a Payment Method ID pasted from the Stripe test dashboard. If it does,
 
 ### P0-5. One click books an 8-hour lesson — `deferred-17` D1
 
+> **CLAIMED 2026-08-10 → `skillars-uat-2-session-duration-and-booking-slot-integrity.md` (AC1–AC4).** Do not pick up again.
+> Product decision resolved: one-hour system-wide default, coach-overridable. A **third** unenforced
+> write path was found during scoping — `RescheduleService:63-67` — and is covered by that story's AC3.
+
 `AvailabilityService.computeAvailableSlots` returns whole window-minus-block **segments**. There is no
 fixed-length slicing anywhere and no duration bound in the booking package. Backend validation is only:
 start in the future, end after start, range inside a window.
@@ -149,7 +163,7 @@ product decision that stands between you and a meaningful booking test.
 
 Ordered by how likely you are to trip over them.
 
-1. **`deferred-18` D3 — a parent's own pending request makes the slot vanish.**
+1. **[CLAIMED → `skillars-uat-2-...slot-integrity.md` AC5]** **`deferred-18` D3 — a parent's own pending request makes the slot vanish.**
    `ACTIVE_SLOT_STATUSES` includes `REQUESTED`, `PAYMENT_PENDING` and `PAUSED`, so after submitting,
    the slot is simply absent on the next visit rather than rendering disabled. Testers will read this
    as "my booking didn't save". Backend behaviour is correct; the UX replacement is missing.
@@ -192,14 +206,19 @@ What is genuinely worth doing, in order:
    already cost the `deferred-17` dev significant time — it made a shipped fix look broken. Only bites
    local/manual builds (the VPS pulls from GHCR), but it is a ten-minute fix for a failure mode that
    wastes hours.
-2. **`deploy-1-5` — `acme.json` lives on the root disk.** A server rebuild loses all TLS certs, and
+2. **[CLAIMED → `skillars-uat-2-...slot-integrity.md` AC6a]** **`deploy-1-5` — `acme.json` lives on the root disk.** A server rebuild loses all TLS certs, and
    Let's Encrypt rate limits make reissuance slow. Worth knowing before you rebuild a UAT box.
-3. **`deploy-1-5` — Redis data on a named Docker volume, not the persistent Volume.** Sessions and
-   cache are lost on rebuild. Acceptable for UAT; note it.
+   Confirmed while scoping: `provision.sh:160` mounts the Hetzner Volume at `/opt/skillars/data` and
+   **only** there, so `/opt/skillars/traefik/acme.json` is indeed root-disk. The trap in fixing it is
+   ordering — `provision.sh` creates the file in §6.5, *before* §7 mounts the volume.
+3. **[CLAIMED → `skillars-uat-2-...slot-integrity.md` AC6b]** **`deploy-1-5` — Redis data on a named Docker volume, not the persistent Volume.** Sessions and
+   cache are lost on rebuild. Acceptable for UAT; note it. Redis is the only stateful service not
+   under `/opt/skillars/data` — postgres, prometheus, loki, tempo and grafana all bind there.
 4. **`deploy-3-1` — no backup retention policy.** S3 dumps and Hetzner snapshots accumulate unbounded.
    Cost, not correctness.
-5. **`deploy-2-1` D2 — no stable/`latest` tag alongside the SHA tag.** Every deploy needs the exact
-   SHA typed in. Minor friction you will feel on every UAT redeploy.
+5. **[CLAIMED → `skillars-uat-2-...slot-integrity.md` AC6c]** **`deploy-2-1` D2 — no stable/`latest` tag alongside the SHA tag.** Every deploy needs the exact
+   SHA typed in. Minor friction you will feel on every UAT redeploy. Two lines: the shared action
+   already documents `tags` as newline-separated.
 
 Everything else under `deploy-*` — the restore-script hardening, alert-rule divide-by-zero guards,
 fail2ban tuning, doc gaps in `rollback.md` — is production-hardening for a system that does not yet
@@ -252,20 +271,29 @@ budgeting work that is already done.
 
 ## Suggested sequence
 
-1. **`uat-bootstrap`** — seed `ROLE_ADMIN`/`ROLE_LTD_ADMIN`, script or document first-admin creation,
-   document the UAT test-account set (P0-1). Nothing else can be tested admin-side until this lands.
-2. **`booking-session-duration`** — slot slicing or a session-duration field, applied to both the
-   single and batch paths, including the missing window check in `BookingBatchService` (P0-5). Needs
-   your product call on fixed-length slots versus a duration picker.
+1. ~~**`uat-bootstrap`** — seed `ROLE_ADMIN`/`ROLE_LTD_ADMIN`, script or document first-admin creation,
+   document the UAT test-account set (P0-1).~~ **DONE** — `skillars-uat-1`, merged `8a76652`. Also
+   absorbed P0-3, P1 #4/#5/#6 and P2 #1.
+2. ~~**`booking-session-duration`** — slot slicing or a session-duration field, applied to both the
+   single and batch paths, including the missing window check in `BookingBatchService` (P0-5).~~
+   **DONE** — `skillars-uat-2`, implemented 2026-08-10. Product call made: one-hour system-wide default,
+   coach-overridable. Also absorbed P1 #1 (which only becomes tractable once slots are fixed-length)
+   and P2 #2/#3/#5.
 3. **Decide P0-2** — scope the player journey to register-and-browse, or commit to player self-booking.
    This is a decision, not a story; it determines whether the messaging `parent_id` item becomes live.
-4. **`coach-onboarding-resilience`** — timezone picker or fallback in the profile builder (P0-3), and
-   the `windows[0]` display fix (P1 #4) since it is the same code area.
+   Note `uat-2` makes self-booking cheaper if you choose it: the three duration/window enforcement
+   points it adds are role-agnostic.
+4. ~~**`coach-onboarding-resilience`** — timezone picker or fallback in the profile builder (P0-3), and
+   the `windows[0]` display fix (P1 #4).~~ **DONE** — folded into `skillars-uat-1` (AC4, AC5).
 5. **Decide P0-4** — is coach subscription in the UAT script? If yes it is a schema story and should
-   start now; if no, paste a test-mode `pm_...` and move on.
-6. **`booking-ux-polish`** — the vanishing-slot affordance (P1 #1) plus the DST guard (P1 #6), once
-   real testers have hit them and you know which matters.
+   start now; if no, paste a test-mode `pm_...` and move on. Fold `deferred-11` D3 into it.
+6. ~~**`booking-ux-polish`** — the vanishing-slot affordance (P1 #1) plus the DST guard (P1 #6).~~
+   **DONE** — the DST guard shipped in `uat-1` AC7; the vanishing-slot affordance shipped as `uat-2`
+   AC5, pulled forward rather than waiting for testers because AC2's slicing is what makes it a
+   two-hour change instead of a design problem.
 7. **Payment integrity** (P1 #2, #3) — schedule after the first round of UAT payment testing, when you
    know whether the races actually fire at your volumes.
-8. Everything in P2, then never P3 (until a post-UAT resilience epic picks up `skillars-10-2` D1 and
-   the outbox question wholesale).
+8. **The i18n pair** (P1 #7, #8) — only if UAT is not English-only. Both `uat-1` and `uat-2` touched
+   files containing #7 call sites and both deliberately left them: one sweep or none.
+9. What remains in P2 is `deploy-3-1` (backup retention) alone. Then never P3 — until a post-UAT
+   resilience epic picks up `skillars-10-2` D1 and the outbox question wholesale.

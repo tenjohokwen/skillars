@@ -284,6 +284,97 @@ class CoachProfileBuilderIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void saveStep3_sessionDurationMinutes_roundTripsAsACoachOverride() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies);
+        saveStep2(cookies);
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/3",
+            HttpMethod.PUT,
+            Map.of("perSessionPrice", 50.0, "sessionDurationMinutes", 90),
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(sessionDurationMinutesOfCoach()).isEqualTo(90);
+    }
+
+    /**
+     * Submitting no value must CLEAR a previously-set override back to "inherit the platform
+     * default", not silently keep the old one. Without the unconditional set in saveStep3 this
+     * leaves 90 in the column and the coach can never get back to the default through the UI.
+     */
+    @Test
+    void saveStep3_sessionDurationMinutesOmitted_clearsAnExistingOverrideBackToInherit() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies);
+        saveStep2(cookies);
+        httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/3",
+            HttpMethod.PUT,
+            Map.of("perSessionPrice", 50.0, "sessionDurationMinutes", 90),
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+        assertThat(sessionDurationMinutesOfCoach()).isEqualTo(90);
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/3",
+            HttpMethod.PUT,
+            Map.of("perSessionPrice", 50.0),
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(sessionDurationMinutesOfCoach()).isNull();
+    }
+
+    @Test
+    void saveStep3_sessionDurationMinutesBelowMinimum_returns400() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies);
+        saveStep2(cookies);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/3",
+            HttpMethod.PUT,
+            Map.of("perSessionPrice", 50.0, "sessionDurationMinutes", 5),
+            authenticatedHeaders(cookies),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    /** The symmetric bound: @Max(240) must reject as hard as @Min(15) does. */
+    @Test
+    void saveStep3_sessionDurationMinutesAboveMaximum_returns400() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies);
+        saveStep2(cookies);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/3",
+            HttpMethod.PUT,
+            Map.of("perSessionPrice", 50.0, "sessionDurationMinutes", 300),
+            authenticatedHeaders(cookies),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    private Integer sessionDurationMinutesOfCoach() {
+        return jdbcTemplate.queryForObject(
+            "SELECT p.session_duration_minutes FROM marketplace.coach_pricing p "
+                + "JOIN marketplace.coach_profiles cp ON cp.id = p.coach_id WHERE cp.user_id = ?",
+            Integer.class, COACH_ID);
+    }
+
+    @Test
     void saveStep3_missingPerSessionPrice_returns400() {
         String cookies = loginAndGetCookies(COACH_EMAIL);
         saveStep1(cookies);

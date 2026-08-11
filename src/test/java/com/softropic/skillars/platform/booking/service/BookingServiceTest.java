@@ -39,6 +39,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import jakarta.persistence.EntityManager;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalTime;
 import java.time.ZoneId;
@@ -54,6 +55,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -72,6 +74,7 @@ class BookingServiceTest {
     @Mock private BookingBatchRepository bookingBatchRepository;
     @Mock private SessionPackPurchaseRepository sessionPackPurchaseRepository;
     @Mock private CoachPricingRepository coachPricingRepository;
+    @Mock private SessionDurationResolver sessionDurationResolver;
     // Deferred-12 AC3: createBookingRequest re-reads the coach row under the pessimistic lock via
     // EntityManager.refresh. A mock makes that a no-op here, which is fine — the real behaviour is
     // proven by BookingServiceConcurrencyIT against a live database, as the AC requires.
@@ -93,8 +96,13 @@ class BookingServiceTest {
             paymentGateway, coachAvailabilityWindowRepository, playerProfileRepository,
             userRepository, eventPublisher,
             rescheduleRequestRepository, bookingBatchRepository,
-            sessionPackPurchaseRepository, coachPricingRepository, entityManager
+            sessionPackPurchaseRepository, coachPricingRepository, sessionDurationResolver,
+            entityManager
         );
+        // UAT.2 AC3: every create-path fixture in this class books exactly one hour, which is the
+        // platform default. Lenient because the tests that fail before reaching the duration check
+        // (unknown player, wrong parent, suspended coach, reversed range) never call it.
+        lenient().when(sessionDurationResolver.resolve(COACH_ID)).thenReturn(Duration.ofHours(1));
     }
 
     // ---- createBookingRequest tests ----
@@ -261,6 +269,99 @@ class BookingServiceTest {
 
         assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
             .isInstanceOf(OperationNotAllowedException.class);
+    }
+
+    // ---- UAT.2 AC3: session-duration enforcement on the single-booking create path ----
+
+    /**
+     * The defect P0-5 describes: a 09:00–17:00 window used to render as ONE clickable row, so one
+     * click booked eight hours for one credit and locked the coach's whole day.
+     */
+    @Test
+    void createBookingRequest_longerThanTheCoachSessionLength_isRejected() {
+        stubUpToDurationCheck();
+
+        ZonedDateTime slotStart = ZonedDateTime.now(ZoneId.of("Europe/Berlin"))
+            .plusDays(1).withHour(9).withMinute(0).withSecond(0).withNano(0);
+        CreateBookingRequest req = new CreateBookingRequest(
+            COACH_ID, PLAYER_ID, slotStart.toInstant(), slotStart.plusHours(8).toInstant(), null, null);
+
+        assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining("session length");
+        // Rejected before the window query and before the pessimistic lock, so a malformed request
+        // costs neither. Both verifications fail if the check is moved after the window lookup.
+        verify(coachAvailabilityWindowRepository, never()).findByCoachId(COACH_ID);
+        verify(coachProfileRepository, never()).findByIdForUpdate(COACH_ID);
+    }
+
+    @Test
+    void createBookingRequest_shorterThanTheCoachSessionLength_isRejected() {
+        stubUpToDurationCheck();
+
+        ZonedDateTime slotStart = ZonedDateTime.now(ZoneId.of("Europe/Berlin"))
+            .plusDays(1).withHour(10).withMinute(0).withSecond(0).withNano(0);
+        CreateBookingRequest req = new CreateBookingRequest(
+            COACH_ID, PLAYER_ID, slotStart.toInstant(), slotStart.plusMinutes(30).toInstant(), null, null);
+
+        assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining("session length");
+    }
+
+    /** A coach who overrode their length to 90 minutes accepts 90 and rejects the platform 60. */
+    @Test
+    void createBookingRequest_coachOverrideOfNinety_acceptsNinety() {
+        PlayerProfile player = makePlayer(PLAYER_ID, PARENT_ID);
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        CoachAvailabilityWindow window = makeCoveringWindow(COACH_ID);
+        Booking savedBooking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+        when(sessionDurationResolver.resolve(COACH_ID)).thenReturn(Duration.ofMinutes(90));
+        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of());
+        when(bookingRepository.save(any(Booking.class))).thenReturn(savedBooking);
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+
+        ZonedDateTime slotStart = ZonedDateTime.now(ZoneId.of("Europe/Berlin"))
+            .plusDays(1).withHour(10).withMinute(0).withSecond(0).withNano(0);
+
+        assertThat(bookingService.createBookingRequest(PARENT_ID, new CreateBookingRequest(
+            COACH_ID, PLAYER_ID, slotStart.toInstant(), slotStart.plusMinutes(90).toInstant(), null, null)))
+            .isNotNull();
+    }
+
+    /**
+     * The other half of the override rule, kept as its own test so a red run names which half
+     * broke: with a 90-minute coach the PLATFORM default of 60 must be rejected, not silently
+     * accepted because 60 is "the normal length".
+     */
+    @Test
+    void createBookingRequest_coachOverrideOfNinety_rejectsSixty() {
+        stubUpToDurationCheck();
+        when(sessionDurationResolver.resolve(COACH_ID)).thenReturn(Duration.ofMinutes(90));
+
+        ZonedDateTime slotStart = ZonedDateTime.now(ZoneId.of("Europe/Berlin"))
+            .plusDays(1).withHour(10).withMinute(0).withSecond(0).withNano(0);
+
+        assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, new CreateBookingRequest(
+            COACH_ID, PLAYER_ID, slotStart.toInstant(), slotStart.plusMinutes(60).toInstant(), null, null)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining("session length");
+    }
+
+    /** Stubs exactly the lookups createBookingRequest performs before the duration check. */
+    private void stubUpToDurationCheck() {
+        when(playerProfileRepository.findById(PLAYER_ID))
+            .thenReturn(Optional.of(makePlayer(PLAYER_ID, PARENT_ID)));
+        when(coachProfileRepository.findById(COACH_ID))
+            .thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
     }
 
     // ---- acceptBooking tests ----

@@ -13,7 +13,7 @@ Traefik v3.3 is configured from two sources:
 |---|---|
 | `deploy/traefik/traefik.yml` | Static config: entry points, ACME resolver, logging, ping |
 | `docker-compose.yml` labels on `app` and `grafana` services | Dynamic routing config: which requests route to which containers |
-| `/opt/skillars/traefik/acme.json` on the Node | ACME certificate storage — not in the repository; auto-created by Traefik on first run |
+| `/opt/skillars/data/traefik/acme.json` on the Node | ACME certificate storage — not in the repository; auto-created by Traefik on first run |
 
 **Dashboard:** The Traefik dashboard is disabled (`api.dashboard: false` in `traefik.yml`). There is no `/dashboard` endpoint. The Traefik API port (8080) is not exposed on the host network.
 
@@ -36,7 +36,7 @@ Traefik uses Let's Encrypt with the **HTTP-01 challenge** to issue certificates 
 
 How it works:
 
-1. On startup, Traefik reads or creates `/opt/skillars/traefik/acme.json`
+1. On startup, Traefik reads or creates `/opt/skillars/data/traefik/acme.json`
 2. For any domain that needs a certificate, Traefik requests one from Let's Encrypt
 3. Let's Encrypt verifies the domain by sending an HTTP request to port 80 — the `web` entry point must be reachable during this challenge
 4. Let's Encrypt issues the certificate; Traefik stores it in `acme.json`
@@ -86,7 +86,7 @@ Alternatively, count the certificates stored in `acme.json` (may be empty if Tra
 ```bash
 sudo python3 -c "
 import json
-d = json.load(open('/opt/skillars/traefik/acme.json'))
+d = json.load(open('/opt/skillars/data/traefik/acme.json'))
 certs = d.get('letsencrypt', {}).get('Certificates', [])
 print(len(certs), 'certificate(s) stored')
 "
@@ -153,13 +153,13 @@ docker compose stop traefik
 2. Optionally back up the existing `acme.json` before deleting it:
 
 ```bash
-sudo cp /opt/skillars/traefik/acme.json /opt/skillars/traefik/acme.json.bak
+sudo cp /opt/skillars/data/traefik/acme.json /opt/skillars/data/traefik/acme.json.bak
 ```
 
 3. Delete the stale `acme.json`:
 
 ```bash
-sudo rm -f /opt/skillars/traefik/acme.json
+sudo rm -f /opt/skillars/data/traefik/acme.json
 ```
 
 4. Start Traefik — it creates a fresh `acme.json` on startup and immediately requests new certificates:

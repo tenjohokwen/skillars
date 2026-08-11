@@ -7,6 +7,7 @@ import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequestRepository;
 import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.platform.booking.service.BookingStateMachine;
+import com.softropic.skillars.platform.booking.service.SessionDurationResolver;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
@@ -29,6 +30,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.DayOfWeek;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -60,6 +62,7 @@ class ExpiredPackBookingValidationTest {
     @Mock BookingBatchRepository batchRepository;
     @Mock SessionPackPurchaseRepository sessionPackPurchaseRepository;
     @Mock CoachPricingRepository coachPricingRepository;
+    @Mock SessionDurationResolver sessionDurationResolver;
     // Deferred-12 AC3: createBookingRequest re-reads the locked coach row via EntityManager.refresh
     // before the overlap check; a mock keeps that a no-op here. The real re-read is proven against a
     // live database in BookingServiceConcurrencyIT.
@@ -78,28 +81,7 @@ class ExpiredPackBookingValidationTest {
         LocalDate tomorrow = LocalDate.now(ZoneOffset.UTC).plusDays(1);
         Instant start = tomorrow.atTime(LocalTime.of(10, 0)).toInstant(ZoneOffset.UTC);
         Instant end = tomorrow.atTime(LocalTime.of(11, 0)).toInstant(ZoneOffset.UTC);
-        DayOfWeek dow = tomorrow.getDayOfWeek();
-
-        PlayerProfile player = new PlayerProfile();
-        player.setParentId(PARENT_ID);
-        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
-
-        CoachProfile coach = new CoachProfile();
-        coach.setId(COACH_ID);
-        coach.setStatus(CoachProfileStatus.ACTIVE);
-        coach.setUserId(9001L);
-        coach.setCanonicalTimezone("UTC");
-        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
-        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
-        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
-
-        // Availability window covers the full day in UTC
-        CoachAvailabilityWindow window = new CoachAvailabilityWindow();
-        window.setCanonicalTimezone("UTC");
-        window.setDayOfWeek((short) dow.getValue());
-        window.setStartTime(LocalTime.of(0, 0));
-        window.setEndTime(LocalTime.of(23, 59));
-        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+        setupCommonMocks(tomorrow.getDayOfWeek());
 
         // Expired pack: expired yesterday
         SessionPackPurchase expiredPack = new SessionPackPurchase();
@@ -120,27 +102,7 @@ class ExpiredPackBookingValidationTest {
         LocalDate tomorrow = LocalDate.now(ZoneOffset.UTC).plusDays(1);
         Instant start = tomorrow.atTime(LocalTime.of(10, 0)).toInstant(ZoneOffset.UTC);
         Instant end = tomorrow.atTime(LocalTime.of(11, 0)).toInstant(ZoneOffset.UTC);
-        DayOfWeek dow = tomorrow.getDayOfWeek();
-
-        PlayerProfile player = new PlayerProfile();
-        player.setParentId(PARENT_ID);
-        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
-
-        CoachProfile coach = new CoachProfile();
-        coach.setId(COACH_ID);
-        coach.setStatus(CoachProfileStatus.ACTIVE);
-        coach.setUserId(9001L);
-        coach.setCanonicalTimezone("UTC");
-        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
-        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
-        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
-
-        CoachAvailabilityWindow window = new CoachAvailabilityWindow();
-        window.setCanonicalTimezone("UTC");
-        window.setDayOfWeek((short) dow.getValue());
-        window.setStartTime(LocalTime.of(0, 0));
-        window.setEndTime(LocalTime.of(23, 59));
-        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+        setupCommonMocks(tomorrow.getDayOfWeek());
 
         UUID validPackId = UUID.randomUUID();
         SessionPackPurchase validPack = new SessionPackPurchase();
@@ -257,5 +219,10 @@ class ExpiredPackBookingValidationTest {
         window.setStartTime(LocalTime.of(0, 0));
         window.setEndTime(LocalTime.of(23, 59));
         when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+
+        // UAT.2 AC3: every fixture in this class books exactly 10:00-11:00, which is the platform
+        // default session length. The check sits before the window lookup, so it must be stubbed
+        // for any test that reaches the pack validation this class is about.
+        when(sessionDurationResolver.resolve(COACH_ID)).thenReturn(Duration.ofHours(1));
     }
 }

@@ -30,6 +30,12 @@ services:
   postgres:
     volumes:
       - skillars-local-postgres:/var/lib/postgresql/data
+  # Required since UAT.2 AC6 moved redis off a Docker named volume and onto the Hetzner Volume
+  # bind mount /opt/skillars/data/redis. Without this override, running the local stack would
+  # create that production path on the developer's own machine.
+  redis:
+    volumes:
+      - skillars-local-redis:/data
   loki:
     volumes:
       - skillars-local-loki:/loki
@@ -98,6 +104,7 @@ services:
 
 volumes:
   skillars-local-postgres:
+  skillars-local-redis:
   skillars-local-loki:
   skillars-local-tempo:
   skillars-local-prometheus:

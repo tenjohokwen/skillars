@@ -230,6 +230,39 @@ forged events.
 
 ## Step 6: Deploy
 
+> ### One-time migration for a box provisioned before UAT.2
+>
+> UAT.2 moved two things onto the Hetzner Volume at `/opt/skillars/data`, which is the only path
+> `provision.sh` mounts. On an existing box, do this **before** `docker compose up -d`:
+>
+> ```bash
+> ssh root@<UAT_NODE_IP> '
+>   cd /opt/skillars && docker compose down
+>   mkdir -p /opt/skillars/data/traefik && chmod 700 /opt/skillars/data/traefik
+>   # Preserve mode 600, or Traefik refuses to start.
+>   mv /opt/skillars/traefik/acme.json /opt/skillars/data/traefik/acme.json
+>   chmod 600 /opt/skillars/data/traefik/acme.json
+>   # Redis bind mount: Docker would otherwise create this path root-owned on first `up` and
+>   # redis (uid 999) would crash-loop on it. Same uid/gid provision.sh uses.
+>   mkdir -p /opt/skillars/data/redis && chown -R 999:1000 /opt/skillars/data/redis
+> '
+> ```
+>
+> Re-running `bash deploy/provision.sh` does all of the above except the `mv`, which is the one
+> step it cannot do for you — the file it would need to move is at the old path it no longer knows
+> about.
+>
+> **Skipping the `mv` is not harmless:** Traefik starts against an empty `acme.json`, reissues
+> every certificate from scratch, and Let's Encrypt rate-limits repeated issuance for the same
+> domain — so a mistake here can leave UAT without TLS for hours.
+>
+> **Redis data is discarded** by this change: its Docker named volume (`redis-data`) is replaced by
+> a bind mount at `/opt/skillars/data/redis`, which starts empty. Redis holds only sessions,
+> cache and distributed locks, so nothing durable is lost — but every logged-in tester is logged
+> out on the next deploy, and should not have to guess why. The `mkdir`/`chown` above (or a re-run of
+> `provision.sh`) creates the directory with the right ownership (uid 999); `docker volume rm
+> skillars_redis-data` afterwards reclaims the old volume's disk.
+
 ```bash
 ssh root@<UAT_NODE_IP> "cd /opt/skillars && git pull"
 scp .env.uat root@<UAT_NODE_IP>:/opt/skillars/.env.uat
@@ -384,6 +417,11 @@ yet. Say so in the UAT brief.
 
 ## Notes
 
+- **Image tags.** CI now pushes `ghcr.io/<repo>:latest` alongside
+  `ghcr.io/<repo>:sha-<short>`, so a routine redeploy can set
+  `APP_IMAGE=ghcr.io/<repo>:latest` instead of copying the exact SHA. A **rollback still requires
+  the explicit SHA tag** — that is what `docs/deployment/rollback.md` pins to, and `latest` by
+  definition does not point at an older build.
 - Seeding bootstrap data (the JWT signing key row, optional sample users)
   works the same as `local-deployment.md` Step 5 — run the same SQL fixture
   against the UAT Postgres container.

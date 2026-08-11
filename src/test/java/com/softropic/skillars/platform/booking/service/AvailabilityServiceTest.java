@@ -21,6 +21,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -56,10 +57,14 @@ class AvailabilityServiceTest {
     @Mock
     BookingRepository bookingRepository;
 
+    @Mock
+    SessionDurationResolver sessionDurationResolver;
+
     @InjectMocks
     AvailabilityService service;
 
     private static final Long COACH_USER_ID = 300L;
+    private static final Duration ONE_HOUR = Duration.ofHours(1);
 
     // ----- updateWindow / hasBookingConflict tests (AC 4) -----
 
@@ -262,6 +267,7 @@ class AvailabilityServiceTest {
         when(bookingRepository.findOverlappingBookings(
                 eq(coachId), any(), any(), eq(BookingService.ACTIVE_SLOT_STATUSES), isNull()))
             .thenReturn(List.of(otherRequestersBooking));
+        when(sessionDurationResolver.resolve(coachId)).thenReturn(ONE_HOUR);
 
         CoachAvailabilityResponse response = service.getAvailabilityCalendar(coachId, weekStart);
 
@@ -269,9 +275,18 @@ class AvailabilityServiceTest {
         Instant windowStart = weekStart.atTime(9, 0).atZone(berlin).toInstant();
         Instant windowEnd = weekStart.atTime(17, 0).atZone(berlin).toInstant();
 
+        // UAT.2 AC2: the carve-out is now expressed as "the slot covering the booked hour is
+        // absent" rather than "the segment is split" — 7 one-hour slots across an 8-hour window.
         assertThat(response.computedSlots()).containsExactlyInAnyOrder(
             new AvailableSlotResponse(windowStart, bookingStart),
-            new AvailableSlotResponse(bookingEnd, windowEnd));
+            new AvailableSlotResponse(bookingEnd, bookingEnd.plus(ONE_HOUR)),
+            new AvailableSlotResponse(bookingEnd.plusSeconds(3600), bookingEnd.plusSeconds(7200)),
+            new AvailableSlotResponse(bookingEnd.plusSeconds(7200), bookingEnd.plusSeconds(10800)),
+            new AvailableSlotResponse(bookingEnd.plusSeconds(10800), bookingEnd.plusSeconds(14400)),
+            new AvailableSlotResponse(bookingEnd.plusSeconds(14400), bookingEnd.plusSeconds(18000)),
+            new AvailableSlotResponse(bookingEnd.plusSeconds(18000), windowEnd));
+        // (No separate "the booked slot is absent" assertion: containsExactlyInAnyOrder above
+        // already pins the whole collection, so one would be tautological.)
         // A booking is not a block — the transient pseudo-block must never leak into the response.
         assertThat(response.blocks()).isEmpty();
     }
@@ -346,6 +361,7 @@ class AvailabilityServiceTest {
             .thenReturn(List.of());
         when(bookingRepository.findOverlappingBookings(eq(coachId), any(), any(), anyList(), isNull()))
             .thenReturn(List.of());
+        when(sessionDurationResolver.resolve(coachId)).thenReturn(ONE_HOUR);
 
         service.getAvailabilityCalendar(coachId, weekStart);
 
@@ -406,16 +422,21 @@ class AvailabilityServiceTest {
         when(windowRepository.findByCoachId(coachId)).thenReturn(List.of(niueWindow, kiritimatiWindow));
         stubBlockFetch(coachId, List.of(beyondOneDayPadBlock));
         stubBookingFetch(coachId, List.of());
+        when(sessionDurationResolver.resolve(coachId)).thenReturn(ONE_HOUR);
 
         CoachAvailabilityResponse response = service.getAvailabilityCalendar(coachId, weekStart);
 
+        // Slot-sliced (UAT.2 AC2), but still discriminating on the pad: without the two-day pad the
+        // block is never fetched, the Kiritimati window comes back undivided as 10:00Z-12:00Z, and
+        // that yields a 10:00-11:00 slot which must NOT be present here.
         assertThat(response.computedSlots()).containsExactlyInAnyOrder(
-            // Niue window, whole: Monday 09:00-11:00 at UTC-11
+            // Niue window, Monday 09:00-11:00 at UTC-11 -> two one-hour slots
             new AvailableSlotResponse(
-                Instant.parse("2026-06-15T20:00:00Z"), Instant.parse("2026-06-15T22:00:00Z")),
-            // Kiritimati window, split by the block that only the two-day pad reaches
+                Instant.parse("2026-06-15T20:00:00Z"), Instant.parse("2026-06-15T21:00:00Z")),
             new AvailableSlotResponse(
-                Instant.parse("2026-06-14T10:00:00Z"), Instant.parse("2026-06-14T10:30:00Z")),
+                Instant.parse("2026-06-15T21:00:00Z"), Instant.parse("2026-06-15T22:00:00Z")),
+            // Kiritimati window: the pre-block 10:00-10:30 segment is too short for a session and
+            // drops out entirely; only the post-block hour survives.
             new AvailableSlotResponse(
                 Instant.parse("2026-06-14T11:00:00Z"), Instant.parse("2026-06-14T12:00:00Z")));
 
@@ -459,16 +480,20 @@ class AvailabilityServiceTest {
         when(windowRepository.findByCoachId(coachId)).thenReturn(List.of(niueWindow, kiritimatiWindow));
         stubBlockFetch(coachId, List.of());
         stubBookingFetch(coachId, List.of(booking));
+        when(sessionDurationResolver.resolve(coachId)).thenReturn(ONE_HOUR);
 
         CoachAvailabilityResponse response = service.getAvailabilityCalendar(coachId, weekStart);
 
+        // Slot-sliced (UAT.2 AC2). Still discriminating on the pad: were the booking not fetched,
+        // the Kiritimati window would slice into 10:00-11:00 and 11:00-12:00; instead the pre-
+        // booking 15-minute sliver drops out and the post-booking run is anchored to 10:45.
         assertThat(response.computedSlots()).containsExactlyInAnyOrder(
             new AvailableSlotResponse(
-                Instant.parse("2026-06-15T20:00:00Z"), Instant.parse("2026-06-15T22:00:00Z")),
+                Instant.parse("2026-06-15T20:00:00Z"), Instant.parse("2026-06-15T21:00:00Z")),
             new AvailableSlotResponse(
-                Instant.parse("2026-06-14T10:00:00Z"), Instant.parse("2026-06-14T10:15:00Z")),
+                Instant.parse("2026-06-15T21:00:00Z"), Instant.parse("2026-06-15T22:00:00Z")),
             new AvailableSlotResponse(
-                Instant.parse("2026-06-14T10:45:00Z"), Instant.parse("2026-06-14T12:00:00Z")));
+                Instant.parse("2026-06-14T10:45:00Z"), Instant.parse("2026-06-14T11:45:00Z")));
 
         assertThat(response.blocks()).isEmpty();
     }
@@ -497,15 +522,22 @@ class AvailabilityServiceTest {
     // ----- computeAvailableSlots tests -----
 
     @Test
-    void computeAvailableSlots_noBlocks_returnsFullWindows() {
+    void computeAvailableSlots_noBlocks_slicesTheWholeWindowIntoSessions() {
+        // Rewritten for UAT.2 AC2: this used to assert one whole-window segment, which is the
+        // defect — a 09:00–13:00 window rendered as ONE clickable row that booked four hours.
         Instant start = Instant.parse("2026-06-16T09:00:00Z");
         Instant end = Instant.parse("2026-06-16T13:00:00Z");
 
-        List<AvailableSlotResponse> result = service.computeAvailableSlots(start, end, List.of());
+        List<AvailableSlotResponse> result =
+            service.computeAvailableSlots(start, end, List.of(), ONE_HOUR);
 
-        assertThat(result).hasSize(1);
-        assertThat(result.get(0).startDatetime()).isEqualTo(start);
-        assertThat(result.get(0).endDatetime()).isEqualTo(end);
+        assertThat(result).hasSize(4);
+        assertThat(result).extracting(AvailableSlotResponse::startDatetime).containsExactly(
+            Instant.parse("2026-06-16T09:00:00Z"), Instant.parse("2026-06-16T10:00:00Z"),
+            Instant.parse("2026-06-16T11:00:00Z"), Instant.parse("2026-06-16T12:00:00Z"));
+        assertThat(result).extracting(AvailableSlotResponse::endDatetime).containsExactly(
+            Instant.parse("2026-06-16T10:00:00Z"), Instant.parse("2026-06-16T11:00:00Z"),
+            Instant.parse("2026-06-16T12:00:00Z"), Instant.parse("2026-06-16T13:00:00Z"));
     }
 
     @Test
@@ -518,35 +550,48 @@ class AvailabilityServiceTest {
             Instant.parse("2026-06-16T14:00:00Z")
         );
 
-        List<AvailableSlotResponse> result = service.computeAvailableSlots(windowStart, windowEnd, List.of(block));
+        List<AvailableSlotResponse> result =
+            service.computeAvailableSlots(windowStart, windowEnd, List.of(block), ONE_HOUR);
 
         assertThat(result).isEmpty();
     }
 
     @Test
-    void computeAvailableSlots_partialOverlap_returnsTwoSegments() {
-        // AC 6: 10:00–12:00 block on 09:00–13:00 window → segments [09:00–10:00] and [12:00–13:00]
+    void computeAvailableSlots_partialOverlap_slicesBothSidesOfTheBlock() {
+        // 10:30–11:00 block on a 09:00–14:00 window → free segments [09:00–10:30] and [11:00–14:00].
+        // Deliberately NOT whole multiples of the session length: the first segment yields ONE slot
+        // and drops its trailing half-hour, the second yields THREE. Under the old whole-segment
+        // behaviour this returned two rows of 90 and 180 minutes, so the fixture discriminates —
+        // a fixture whose segments are each exactly one session long cannot.
         Instant windowStart = Instant.parse("2026-06-16T09:00:00Z");
-        Instant windowEnd = Instant.parse("2026-06-16T13:00:00Z");
+        Instant windowEnd = Instant.parse("2026-06-16T14:00:00Z");
 
         CoachAvailabilityBlock block = blockWith(
-            Instant.parse("2026-06-16T10:00:00Z"),
-            Instant.parse("2026-06-16T12:00:00Z")
+            Instant.parse("2026-06-16T10:30:00Z"),
+            Instant.parse("2026-06-16T11:00:00Z")
         );
 
-        List<AvailableSlotResponse> result = service.computeAvailableSlots(windowStart, windowEnd, List.of(block));
+        List<AvailableSlotResponse> result =
+            service.computeAvailableSlots(windowStart, windowEnd, List.of(block), ONE_HOUR);
 
-        assertThat(result).hasSize(2);
-        assertThat(result.get(0).startDatetime()).isEqualTo(Instant.parse("2026-06-16T09:00:00Z"));
-        assertThat(result.get(0).endDatetime()).isEqualTo(Instant.parse("2026-06-16T10:00:00Z"));
-        assertThat(result.get(1).startDatetime()).isEqualTo(Instant.parse("2026-06-16T12:00:00Z"));
-        assertThat(result.get(1).endDatetime()).isEqualTo(Instant.parse("2026-06-16T13:00:00Z"));
+        assertThat(result).extracting(AvailableSlotResponse::startDatetime).containsExactly(
+            Instant.parse("2026-06-16T09:00:00Z"),
+            Instant.parse("2026-06-16T11:00:00Z"),
+            Instant.parse("2026-06-16T12:00:00Z"),
+            Instant.parse("2026-06-16T13:00:00Z"));
+        assertThat(result).extracting(AvailableSlotResponse::endDatetime).containsExactly(
+            Instant.parse("2026-06-16T10:00:00Z"),
+            Instant.parse("2026-06-16T12:00:00Z"),
+            Instant.parse("2026-06-16T13:00:00Z"),
+            Instant.parse("2026-06-16T14:00:00Z"));
     }
 
     @Test
     void computeAvailableSlots_multipleWindows_multipleBlocks() {
-        // Window: 09:00–11:00, two blocks: 09:30–10:00 and 10:30–11:30
-        // Expected: [09:00–09:30], [10:00–10:30] (11:00 cap applies)
+        // Window: 09:00–11:00, two blocks: 09:30–10:00 and 10:30–11:30 → free segments
+        // [09:00–09:30] and [10:00–10:30], both HALF an hour. At a 60-minute session length each
+        // is too short to hold a session, so the coach offers nothing here — which is the point of
+        // slicing: a 30-minute gap is no longer bookable as if it were a full lesson.
         Instant windowStart = Instant.parse("2026-06-16T09:00:00Z");
         Instant windowEnd = Instant.parse("2026-06-16T11:00:00Z");
 
@@ -559,13 +604,125 @@ class AvailabilityServiceTest {
             Instant.parse("2026-06-16T12:00:00Z")
         );
 
-        List<AvailableSlotResponse> result = service.computeAvailableSlots(windowStart, windowEnd, List.of(block1, block2));
+        assertThat(service.computeAvailableSlots(windowStart, windowEnd, List.of(block1, block2), ONE_HOUR))
+            .isEmpty();
 
-        assertThat(result).hasSize(2);
+        // Same fixture at a 30-minute length yields exactly the two segments the pre-slicing
+        // behaviour returned — the segment computation itself is unchanged.
+        List<AvailableSlotResponse> halfHour = service.computeAvailableSlots(
+            windowStart, windowEnd, List.of(block1, block2), Duration.ofMinutes(30));
+
+        assertThat(halfHour).hasSize(2);
+        assertThat(halfHour.get(0).startDatetime()).isEqualTo(Instant.parse("2026-06-16T09:00:00Z"));
+        assertThat(halfHour.get(0).endDatetime()).isEqualTo(Instant.parse("2026-06-16T09:30:00Z"));
+        assertThat(halfHour.get(1).startDatetime()).isEqualTo(Instant.parse("2026-06-16T10:00:00Z"));
+        assertThat(halfHour.get(1).endDatetime()).isEqualTo(Instant.parse("2026-06-16T10:30:00Z"));
+    }
+
+    /** AC2's worked case: an eight-hour working day is eight bookable hours, not one. */
+    @Test
+    void computeAvailableSlots_fullWorkingDay_yieldsOneSlotPerHour() {
+        List<AvailableSlotResponse> result = service.computeAvailableSlots(
+            Instant.parse("2026-06-16T09:00:00Z"), Instant.parse("2026-06-16T17:00:00Z"),
+            List.of(), ONE_HOUR);
+
+        assertThat(result).hasSize(8);
         assertThat(result.get(0).startDatetime()).isEqualTo(Instant.parse("2026-06-16T09:00:00Z"));
-        assertThat(result.get(0).endDatetime()).isEqualTo(Instant.parse("2026-06-16T09:30:00Z"));
-        assertThat(result.get(1).startDatetime()).isEqualTo(Instant.parse("2026-06-16T10:00:00Z"));
-        assertThat(result.get(1).endDatetime()).isEqualTo(Instant.parse("2026-06-16T10:30:00Z"));
+        assertThat(result.get(7).startDatetime()).isEqualTo(Instant.parse("2026-06-16T16:00:00Z"));
+        assertThat(result.get(7).endDatetime()).isEqualTo(Instant.parse("2026-06-16T17:00:00Z"));
+    }
+
+    /** AC2's worked case: a lunch block splits the day into 3 slots before and 4 after. */
+    @Test
+    void computeAvailableSlots_workingDayWithLunchBlock_yieldsSevenSlots() {
+        CoachAvailabilityBlock lunch = blockWith(
+            Instant.parse("2026-06-16T12:00:00Z"), Instant.parse("2026-06-16T13:00:00Z"));
+
+        List<AvailableSlotResponse> result = service.computeAvailableSlots(
+            Instant.parse("2026-06-16T09:00:00Z"), Instant.parse("2026-06-16T17:00:00Z"),
+            List.of(lunch), ONE_HOUR);
+
+        assertThat(result).hasSize(7);
+        assertThat(result).extracting(AvailableSlotResponse::startDatetime).containsExactly(
+            Instant.parse("2026-06-16T09:00:00Z"), Instant.parse("2026-06-16T10:00:00Z"),
+            Instant.parse("2026-06-16T11:00:00Z"),
+            Instant.parse("2026-06-16T13:00:00Z"), Instant.parse("2026-06-16T14:00:00Z"),
+            Instant.parse("2026-06-16T15:00:00Z"), Instant.parse("2026-06-16T16:00:00Z"));
+    }
+
+    /** AC2's worked case: the trailing remainder shorter than one session is dropped. */
+    @Test
+    void computeAvailableSlots_windowWithTrailingRemainder_dropsTheRemainder() {
+        List<AvailableSlotResponse> result = service.computeAvailableSlots(
+            Instant.parse("2026-06-16T09:00:00Z"), Instant.parse("2026-06-16T10:30:00Z"),
+            List.of(), ONE_HOUR);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).startDatetime()).isEqualTo(Instant.parse("2026-06-16T09:00:00Z"));
+        assertThat(result.get(0).endDatetime()).isEqualTo(Instant.parse("2026-06-16T10:00:00Z"));
+    }
+
+    /** AC2's worked case: a segment shorter than one session yields nothing at all. */
+    @Test
+    void computeAvailableSlots_windowShorterThanOneSession_yieldsNoSlots() {
+        assertThat(service.computeAvailableSlots(
+            Instant.parse("2026-06-16T09:00:00Z"), Instant.parse("2026-06-16T09:45:00Z"),
+            List.of(), ONE_HOUR)).isEmpty();
+    }
+
+    /** AC2's worked case: a coach override of 90 minutes gives 5 slots and drops 16:30–17:00. */
+    @Test
+    void computeAvailableSlots_ninetyMinuteCoach_yieldsFiveSlotsAndDropsTheTail() {
+        List<AvailableSlotResponse> result = service.computeAvailableSlots(
+            Instant.parse("2026-06-16T09:00:00Z"), Instant.parse("2026-06-16T17:00:00Z"),
+            List.of(), Duration.ofMinutes(90));
+
+        assertThat(result).extracting(AvailableSlotResponse::startDatetime).containsExactly(
+            Instant.parse("2026-06-16T09:00:00Z"), Instant.parse("2026-06-16T10:30:00Z"),
+            Instant.parse("2026-06-16T12:00:00Z"), Instant.parse("2026-06-16T13:30:00Z"),
+            Instant.parse("2026-06-16T15:00:00Z"));
+        assertThat(result).extracting(AvailableSlotResponse::endDatetime).containsExactly(
+            Instant.parse("2026-06-16T10:30:00Z"), Instant.parse("2026-06-16T12:00:00Z"),
+            Instant.parse("2026-06-16T13:30:00Z"), Instant.parse("2026-06-16T15:00:00Z"),
+            Instant.parse("2026-06-16T16:30:00Z"));
+    }
+
+    /**
+     * The grid is anchored to each SEGMENT's start, not to the window's — the post-block run
+     * begins when the coach actually becomes free. Pinned so nobody "tidies" it into a
+     * window-anchored grid, which would silently discard the 12:45–13:00 fragment.
+     */
+    @Test
+    void computeAvailableSlots_offGridBlock_anchorsThePostBlockRunToTheBlockEnd() {
+        CoachAvailabilityBlock block = blockWith(
+            Instant.parse("2026-06-16T12:00:00Z"), Instant.parse("2026-06-16T12:45:00Z"));
+
+        List<AvailableSlotResponse> result = service.computeAvailableSlots(
+            Instant.parse("2026-06-16T09:00:00Z"), Instant.parse("2026-06-16T17:00:00Z"),
+            List.of(block), ONE_HOUR);
+
+        assertThat(result).extracting(AvailableSlotResponse::startDatetime).containsExactly(
+            Instant.parse("2026-06-16T09:00:00Z"), Instant.parse("2026-06-16T10:00:00Z"),
+            Instant.parse("2026-06-16T11:00:00Z"),
+            Instant.parse("2026-06-16T12:45:00Z"), Instant.parse("2026-06-16T13:45:00Z"),
+            Instant.parse("2026-06-16T14:45:00Z"), Instant.parse("2026-06-16T15:45:00Z"));
+    }
+
+    /**
+     * A non-positive length would loop forever rather than fail; it must fail loudly instead.
+     * Both branches of the guard are exercised — zero and negative are separate conditions.
+     */
+    @Test
+    void computeAvailableSlots_nonPositiveSlotLength_throwsRatherThanLooping() {
+        assertThatThrownBy(() -> service.computeAvailableSlots(
+            Instant.parse("2026-06-16T09:00:00Z"), Instant.parse("2026-06-16T17:00:00Z"),
+            List.of(), Duration.ZERO))
+            .isInstanceOf(IllegalArgumentException.class);
+
+        assertThatThrownBy(() -> service.computeAvailableSlots(
+            Instant.parse("2026-06-16T09:00:00Z"), Instant.parse("2026-06-16T17:00:00Z"),
+            List.of(), Duration.ofMinutes(-30)))
+            .isInstanceOf(IllegalArgumentException.class);
     }
 
     private CoachAvailabilityBlock blockWith(Instant start, Instant end) {

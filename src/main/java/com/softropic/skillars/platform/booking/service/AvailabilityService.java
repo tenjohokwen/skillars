@@ -45,6 +45,9 @@ public class AvailabilityService {
     private final CoachAvailabilityBlockRepository blockRepository;
     private final CoachProfileRepository coachProfileRepository;
     private final BookingRepository bookingRepository;
+    // Injected instead of ConfigService + CoachPricingRepository: the fallback chain has one
+    // definition, shared with BookingService and BookingBatchService.
+    private final SessionDurationResolver sessionDurationResolver;
 
     @Transactional(readOnly = true)
     public CoachAvailabilityResponse getAvailabilityCalendar(UUID coachId, LocalDate weekStart) {
@@ -105,6 +108,10 @@ public class AvailabilityService {
         // so the two never drift.
         List<Booking> weekBookings = bookingRepository.findOverlappingBookings(
             coachId, weekStartInstant, weekEndInstant, BookingService.ACTIVE_SLOT_STATUSES, null);
+
+        // UAT.2 AC2: resolved ONCE for the whole request, not per window and certainly not per day —
+        // it is a per-coach value and coachId is already in hand here.
+        Duration slotLength = sessionDurationResolver.resolve(coachId);
 
         List<AvailableSlotResponse> computedSlots = new ArrayList<>();
         for (int dayOffset = 0; dayOffset < 7; dayOffset++) {
@@ -197,7 +204,7 @@ public class AvailabilityService {
                     }
                 }
 
-                computedSlots.addAll(computeAvailableSlots(windowStart, windowEnd, occupied));
+                computedSlots.addAll(computeAvailableSlots(windowStart, windowEnd, occupied, slotLength));
             }
         }
 
@@ -272,9 +279,31 @@ public class AvailabilityService {
         blockRepository.delete(block);
     }
 
+    /**
+     * Returns the coach's free time inside {@code [windowStart, windowEnd)} as consecutive
+     * fixed-length slots of {@code slotLength}, not as whole free segments (UAT.2 AC2). A whole
+     * segment was one clickable row that booked the coach's entire working day for one credit.
+     *
+     * <p><strong>The grid is anchored per segment, not per window, and that is intended.</strong> A
+     * 09:00-17:00 window with a 12:00-12:45 block yields slots on the hour to 12:00, then 12:45,
+     * 13:45 ... — the post-block run is anchored to the block's end because that is genuinely when
+     * the coach next becomes free. Anchoring the whole window to 09:00 instead would silently
+     * discard the 12:45-13:00 quarter-hour and every equivalent fragment. Do not "tidy" this into a
+     * window-anchored grid; {@code BookingService} deliberately enforces exact duration only, never
+     * grid alignment, for the same reason.
+     *
+     * <p>Any remainder shorter than one slot is dropped, so a segment shorter than {@code
+     * slotLength} yields nothing at all.
+     */
     List<AvailableSlotResponse> computeAvailableSlots(
             Instant windowStart, Instant windowEnd,
-            List<CoachAvailabilityBlock> blocks) {
+            List<CoachAvailabilityBlock> blocks, Duration slotLength) {
+        // SessionDurationResolver.getBoundedLong already refuses a non-positive length; this makes
+        // the failure loud rather than an infinite loop in the slicing below if that ever changes
+        // or a caller passes one directly.
+        if (slotLength == null || slotLength.isZero() || slotLength.isNegative()) {
+            throw new IllegalArgumentException("Slot length must be positive, was: " + slotLength);
+        }
         List<Instant[]> segments = new ArrayList<>();
         segments.add(new Instant[]{windowStart, windowEnd});
 
@@ -300,9 +329,15 @@ public class AvailabilityService {
             segments = next;
         }
 
-        return segments.stream()
-            .map(s -> new AvailableSlotResponse(s[0], s[1]))
-            .toList();
+        // Slice strictly downstream of the segment computation above, which is left untouched.
+        List<AvailableSlotResponse> slots = new ArrayList<>();
+        for (Instant[] seg : segments) {
+            Instant segEnd = seg[1];
+            for (Instant t = seg[0]; !t.plus(slotLength).isAfter(segEnd); t = t.plus(slotLength)) {
+                slots.add(new AvailableSlotResponse(t, t.plus(slotLength)));
+            }
+        }
+        return List.copyOf(slots);
     }
 
     private CoachProfile requireProfile(Long userId) {

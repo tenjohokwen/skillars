@@ -129,6 +129,11 @@ services:
         limits:
           cpus: "0.10"
           memory: 48m
+    # UAT.2 moved the base file's redis onto a Hetzner-Volume-only bind mount
+    # (/opt/skillars/data/redis), which this box never provisions — this override keeps redis on a
+    # plain named volume instead, matching docker-compose.local.yml's equivalent fix.
+    volumes:
+      - skillars-uat-hostwinds-redis:/data
 
   # Stands in for the real S3 API. Unlike docker-compose.uat.yml, there's no
   # STORAGE_DOMAIN/Traefik here — this box only has the one real hostname (DOMAIN), so
@@ -198,3 +203,4 @@ services:
 
 volumes:
   skillars-uat-hostwinds-minio:
+  skillars-uat-hostwinds-redis:

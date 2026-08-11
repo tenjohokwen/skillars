@@ -89,11 +89,18 @@ What `provision.sh` does (all steps are idempotent — safe to re-run):
 2. Applies SSH hardening: password authentication disabled, root login key-only
 3. Configures fail2ban: sshd jail, maxretry=5, bantime=3600s
 4. Enables `ufw` (host-level firewall): allows SSH (22), HTTP (80), and HTTPS (443), then sets default-deny-incoming / default-allow-outgoing — SSH is allowed *before* `ufw` is enabled so the active provisioning session is not terminated
-5. Creates directory structure: `/opt/skillars/data/postgres`, `/opt/skillars/lgtm`, `/opt/skillars/traefik`
-6. Creates `/opt/skillars/traefik/acme.json` with mode 600 (required by Traefik; no manual step needed)
-7. Mounts the Hetzner Volume (`/dev/sdb`) at `/opt/skillars/data` and creates data subdirectories with correct ownership
+5. Creates the base directory structure: `/opt/skillars/data/postgres`, `/opt/skillars/lgtm`
+6. Mounts the Hetzner Volume (`/dev/sdb`) at `/opt/skillars/data`, then creates the data subdirectories that live on it (`postgres`, `prometheus`, `loki`, `tempo`, `grafana`) with correct ownership
+7. **After** the mount: creates `/opt/skillars/data/redis` (owned by uid 999, the redis image's user) and `/opt/skillars/data/traefik/acme.json` with mode 600 (required by Traefik; no manual step needed)
 
-> If the Volume is not attached yet, section 7 logs a warning and skips the mount. Attach it in the Hetzner Console and re-run `provision.sh` to complete the mount.
+> **The order of 6 and 7 matters and is deliberate.** Both paths live on the Volume, so creating
+> them before the mount would write them to the root disk and the mount would then hide them —
+> Traefik would start against an empty `acme.json` and silently reissue every certificate.
+>
+> If the Volume is not attached yet, section 7 of the script logs a warning and skips the mount, but
+> still creates the redis directory and `acme.json` — on the root disk, where they work but do not
+> survive a rebuild. Attach the Volume in the Hetzner Console and re-run `provision.sh` to complete
+> the mount.
 
 ---
 

@@ -23,6 +23,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -67,8 +68,12 @@ class RescheduleServiceTest {
         confirmedBooking.setParentId(PARENT_ID);
         confirmedBooking.setCoachId(COACH_ID);
         confirmedBooking.setStatus("CONFIRMED");
-        confirmedBooking.setRequestedStartTime(Instant.now().plus(2, ChronoUnit.DAYS));
-        confirmedBooking.setRequestedEndTime(Instant.now().plus(2, ChronoUnit.DAYS).plus(1, ChronoUnit.HOURS));
+        // Both bounds derived from ONE instant. Two separate Instant.now() calls made this booking
+        // 1 hour plus a few microseconds long, which UAT.2 AC3's exact same-duration rule would
+        // reject for every proposal of exactly one hour.
+        Instant bookingStart = Instant.now().plus(2, ChronoUnit.DAYS);
+        confirmedBooking.setRequestedStartTime(bookingStart);
+        confirmedBooking.setRequestedEndTime(bookingStart.plus(1, ChronoUnit.HOURS));
         confirmedBooking.setCanonicalTimezone("Europe/Berlin");
 
         coach = new CoachProfile();
@@ -95,6 +100,73 @@ class RescheduleServiceTest {
         verify(eventPublisher).publishEvent(captor.capture());
         assertThat(captor.getValue().getBookingId()).isEqualTo(BOOKING_ID);
         assertThat(captor.getValue().getProposedStartTime()).isEqualTo(proposedStart);
+    }
+
+    // ---- UAT.2 AC3: a reschedule is a MOVE, not a resize ----
+
+    /**
+     * The regression the same-as-original rule exists to prevent. Duration was unconstrained until
+     * this story, so bookings already in any UAT database have arbitrary lengths — and a parent
+     * moving one at its own length must still succeed. This test FAILS if the check is ever switched
+     * to resolve against the coach's currently-configured session length (which would be 60).
+     */
+    @Test
+    void requestReschedule_legacyThreeHourBooking_movesAtItsOwnLength() {
+        Instant legacyStart = Instant.now().plus(2, ChronoUnit.DAYS);
+        confirmedBooking.setRequestedStartTime(legacyStart);
+        confirmedBooking.setRequestedEndTime(legacyStart.plus(3, ChronoUnit.HOURS));
+
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(BOOKING_ID, "PENDING"))
+            .thenReturn(Optional.empty());
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(rescheduleRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        Instant proposedStart = Instant.now().plus(4, ChronoUnit.DAYS);
+        service.requestReschedule(BOOKING_ID, PARENT_ID,
+            new CreateRescheduleRequest(proposedStart, proposedStart.plus(3, ChronoUnit.HOURS)));
+
+        // Not just "save was called": the 3-hour length must round-trip into what is persisted.
+        // A save(any()) assertion would still pass if the proposal were silently coerced to the
+        // coach's configured length, which is the exact regression this test exists to prevent.
+        ArgumentCaptor<BookingRescheduleRequest> captor =
+            ArgumentCaptor.forClass(BookingRescheduleRequest.class);
+        verify(rescheduleRepo).save(captor.capture());
+        BookingRescheduleRequest saved = captor.getValue();
+        assertThat(saved.getProposedStartTime()).isEqualTo(proposedStart);
+        assertThat(saved.getProposedEndTime()).isEqualTo(proposedStart.plus(3, ChronoUnit.HOURS));
+        assertThat(Duration.between(saved.getProposedStartTime(), saved.getProposedEndTime()))
+            .isEqualTo(Duration.ofHours(3));
+    }
+
+    /** The escalation hole: without this check a 3-hour session is reschedulable into 8 hours. */
+    @Test
+    void requestReschedule_inflatingTheDuration_isRejected() {
+        Instant legacyStart = Instant.now().plus(2, ChronoUnit.DAYS);
+        confirmedBooking.setRequestedStartTime(legacyStart);
+        confirmedBooking.setRequestedEndTime(legacyStart.plus(3, ChronoUnit.HOURS));
+
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+
+        Instant proposedStart = Instant.now().plus(4, ChronoUnit.DAYS);
+        assertThatThrownBy(() -> service.requestReschedule(BOOKING_ID, PARENT_ID,
+            new CreateRescheduleRequest(proposedStart, proposedStart.plus(8, ChronoUnit.HOURS))))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining("original length");
+
+        verify(rescheduleRepo, never()).save(any());
+    }
+
+    /** Shrinking is a resize too, and equally rejected. */
+    @Test
+    void requestReschedule_shrinkingTheDuration_isRejected() {
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+
+        Instant proposedStart = Instant.now().plus(4, ChronoUnit.DAYS);
+        assertThatThrownBy(() -> service.requestReschedule(BOOKING_ID, PARENT_ID,
+            new CreateRescheduleRequest(proposedStart, proposedStart.plus(30, ChronoUnit.MINUTES))))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining("original length");
     }
 
     @Test
@@ -144,11 +216,12 @@ class RescheduleServiceTest {
         when(rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(BOOKING_ID, "PENDING"))
             .thenReturn(Optional.of(existing));
 
+        // Both bounds from ONE instant: two Instant.now() calls made the proposal 1 hour plus a few
+        // microseconds, which UAT.2 AC3's same-duration check now rejects BEFORE the
+        // pending-request check this test is about.
+        Instant proposedStart = Instant.now().plus(3, ChronoUnit.DAYS);
         assertThatThrownBy(() -> service.requestReschedule(BOOKING_ID, PARENT_ID,
-            new CreateRescheduleRequest(
-                Instant.now().plus(3, ChronoUnit.DAYS),
-                Instant.now().plus(3, ChronoUnit.DAYS).plus(1, ChronoUnit.HOURS)
-            )))
+            new CreateRescheduleRequest(proposedStart, proposedStart.plus(1, ChronoUnit.HOURS))))
             .isInstanceOf(OperationNotAllowedException.class)
             .hasMessageContaining("pending reschedule");
     }
