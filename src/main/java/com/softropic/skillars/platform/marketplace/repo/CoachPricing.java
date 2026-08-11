@@ -27,4 +27,13 @@ public class CoachPricing {
 
     @Column(nullable = false)
     private String currency = "EUR";
+
+    /**
+     * Per-coach session length override, in minutes. Boxed {@code Integer}, not {@code int}:
+     * {@code null} must round-trip, because it is what "inherit the platform default
+     * ({@code booking.session.defaultDurationMinutes})" is expressed as. See
+     * {@code SessionDurationResolver}.
+     */
+    @Column(name = "session_duration_minutes")
+    private Integer sessionDurationMinutes;
 }

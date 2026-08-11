@@ -22,6 +22,8 @@ import org.springframework.web.client.HttpClientErrorException;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
@@ -55,6 +57,16 @@ class BookingBatchResourceIT extends AbstractIntegrationTest {
 
     private UUID coachProfileId;
     private UUID coach2ProfileId;
+
+    /**
+     * UAT.2 AC4 gave createBatch two checks it never had — exact session duration and "inside the
+     * coach's availability window". Both need a deterministic wall-clock slot, so the base is
+     * anchored to 09:00 in {@link #WINDOW_TZ} rather than left at whatever time of day
+     * {@code Instant.now()} happens to be. Slots run 09:00-10:00 and 11:00-12:00, comfortably
+     * inside the 08:00-18:00 window seeded below.
+     */
+    private static final String WINDOW_TZ = "Europe/Berlin";
+    private Instant slotBase;
 
     @BeforeEach
     void setUp() {
@@ -127,6 +139,19 @@ class BookingBatchResourceIT extends AbstractIntegrationTest {
                 Timestamp.from(Instant.now())
             );
 
+            // UAT.2 AC4: createBatch now calls isSlotWithinAvailabilityWindow. Without a window
+            // every batch is rejected — which is the defect being fixed, not a fixture problem, so
+            // the fixture gains a real window rather than the check being relaxed.
+            ZonedDateTime baseZdt = ZonedDateTime.now(ZoneId.of(WINDOW_TZ))
+                .plusDays(3).withHour(9).withMinute(0).withSecond(0).withNano(0);
+            slotBase = baseZdt.toInstant();
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_availability_windows " +
+                "(id, coach_id, day_of_week, start_time, end_time, canonical_timezone) " +
+                "VALUES (?, ?, ?, '08:00', '18:00', ?)",
+                UUID.randomUUID(), coachProfileId, baseZdt.getDayOfWeek().getValue(), WINDOW_TZ
+            );
+
             return null;
         });
     }
@@ -135,7 +160,7 @@ class BookingBatchResourceIT extends AbstractIntegrationTest {
     @Test
     void createBatch_asParentWithTwoSlots_returns201AndCreatesRecords() {
         String parentCookies = loginAndGetCookies(PARENT_EMAIL);
-        Instant base = Instant.now().plus(3, ChronoUnit.DAYS);
+        Instant base = slotBase;
         Map<String, Object> req = Map.of(
             "coachId", coachProfileId.toString(),
             "playerId", PLAYER_ID,

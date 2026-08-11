@@ -89,7 +89,9 @@ services:
     image: redis:7-alpine
     command: redis-server --appendonly yes
     volumes:
-      - redis-data:/data
+      # On the Hetzner Volume, like every other stateful service. A Docker named volume lives on
+      # the root disk, so redis was the only one whose data a server rebuild destroyed.
+      - /opt/skillars/data/redis:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -110,7 +112,9 @@ services:
     image: traefik:v3.3
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /opt/skillars/traefik/acme.json:/etc/traefik/acme.json
+      # On the Hetzner Volume (provision.sh mounts it at /opt/skillars/data and ONLY there), so a
+      # server rebuild does not lose every TLS certificate and hit Let's Encrypt rate limits.
+      - /opt/skillars/data/traefik/acme.json:/etc/traefik/acme.json
       - ./deploy/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
     ports:
       - "80:80"
@@ -290,5 +294,6 @@ networks:
     driver: bridge
     # Do NOT set internal: true — app needs outbound internet for OTLP/email/Bunny.net
 
-volumes:
-  redis-data:
+# No top-level `volumes:` key: every stateful service now binds under /opt/skillars/data, which
+# provision.sh mounts from the Hetzner Volume. docker-compose.uat.yml declares its own
+# `volumes:` block (skillars-uat-minio) and still merges correctly against this file.

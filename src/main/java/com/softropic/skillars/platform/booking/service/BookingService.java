@@ -56,6 +56,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.DateTimeException;
 import java.time.DayOfWeek;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -112,6 +113,7 @@ public class BookingService {
     private final BookingBatchRepository batchRepository;
     private final SessionPackPurchaseRepository sessionPackPurchaseRepository;
     private final CoachPricingRepository coachPricingRepository;
+    private final SessionDurationResolver sessionDurationResolver;
     private final EntityManager entityManager;
 
     // Package-private, not private: AvailabilityService reuses this exact status set to exclude
@@ -179,6 +181,23 @@ public class BookingService {
             throw new OperationNotAllowedException("Requested end time must be after start time",
                 Map.of("requested start time", req.requestedStartTime(), "requested end time", req.requestedEndTime()),
                 SecurityError.MISSING_RIGHTS);
+        }
+
+        // UAT.2 AC3. Placed BEFORE the window lookup and the pessimistic lock below, so a malformed
+        // request costs neither a window query nor a row lock — and AFTER the end-after-start check
+        // above, so a reversed range still reports the clearer error.
+        //
+        // Duration.between on Instants is exact and calendar-free, which is what this needs: a
+        // session that crosses a DST transition has a wall-clock length different from its elapsed
+        // length, and the booking's stored bounds are instants. Do not compare LocalTimes.
+        Duration requiredDuration = sessionDurationResolver.resolve(req.coachId());
+        Duration requestedDuration = Duration.between(req.requestedStartTime(), req.requestedEndTime());
+        if (!requestedDuration.equals(requiredDuration)) {
+            throw new OperationNotAllowedException(
+                "Requested session length does not match this coach's session length",
+                Map.of("requested minutes", requestedDuration.toMinutes(),
+                    "required minutes", requiredDuration.toMinutes()),
+                BookingError.INVALID_SESSION_DURATION);
         }
 
         List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachId(req.coachId());
@@ -766,8 +785,13 @@ public class BookingService {
             .orElse("Unknown Parent");
     }
 
-    private boolean isSlotWithinAvailabilityWindow(Instant startTime, Instant endTime,
-                                                    List<CoachAvailabilityWindow> windows) {
+    /**
+     * Package-private, not private: {@code BookingBatchService} calls this exact method rather than
+     * carrying a second copy (UAT.2 AC4) — same rationale as {@code ACTIVE_SLOT_STATUSES}. A copy
+     * would drift from this one's cross-midnight anchoring and invalid-timezone handling.
+     */
+    boolean isSlotWithinAvailabilityWindow(Instant startTime, Instant endTime,
+                                           List<CoachAvailabilityWindow> windows) {
         for (CoachAvailabilityWindow w : windows) {
             ZoneId zoneId;
             try {

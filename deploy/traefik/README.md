@@ -4,12 +4,13 @@ Complete these steps on the Node **before** running `docker compose up -d` for t
 
 ## 1. `acme.json` (automated by `provision.sh`)
 
-`deploy/provision.sh` automatically creates `/opt/skillars/traefik/acme.json` with mode 600
-during provisioning. No manual step required.
+`deploy/provision.sh` automatically creates `/opt/skillars/data/traefik` with mode 700 and
+`acme.json` inside it with mode 600 during provisioning — the same two modes the manual fallback
+below sets. No manual step required.
 
 If you need to recreate it manually:
 ```bash
-mkdir -p /opt/skillars/traefik && chmod 700 /opt/skillars/traefik && touch /opt/skillars/traefik/acme.json && chmod 600 /opt/skillars/traefik/acme.json
+mkdir -p /opt/skillars/data/traefik && chmod 700 /opt/skillars/data/traefik && touch /opt/skillars/data/traefik/acme.json && chmod 600 /opt/skillars/data/traefik/acme.json
 ```
 
 ## 2. Place `.env` on the Node

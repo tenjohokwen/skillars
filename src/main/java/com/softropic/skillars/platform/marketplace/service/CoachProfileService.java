@@ -200,6 +200,9 @@ public class CoachProfileService {
             });
         pricing.setPerSessionPrice(req.perSessionPrice());
         pricing.setCurrency("EUR");
+        // Unconditional, including when null: null is the "inherit the platform default" value, so
+        // submitting it must CLEAR a previously-set override rather than be ignored.
+        pricing.setSessionDurationMinutes(req.sessionDurationMinutes());
         coachPricingRepository.save(pricing);
 
         if (req.sessionPacks() != null) {

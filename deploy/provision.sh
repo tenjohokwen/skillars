@@ -107,36 +107,18 @@ ufw status verbose
 log "Creating deployment directory structure..."
 mkdir -p \
   "${DEPLOY_ROOT}/data/postgres" \
-  "${DEPLOY_ROOT}/lgtm" \
-  "${DEPLOY_ROOT}/traefik"
+  "${DEPLOY_ROOT}/lgtm"
 
 log "Deployment directories created (or already exist)."
 
 # ──────────────────────────────────────────────────
 # 6.5 Security file permissions
 # ──────────────────────────────────────────────────
-
-# acme.json — Traefik refuses to start if this file is missing or has wrong permissions.
-ACME_JSON="${DEPLOY_ROOT}/traefik/acme.json"
-if [ -L "${ACME_JSON}" ]; then
-  err "${ACME_JSON} is a symlink, refusing to chmod."
-  exit 1
-fi
-if [ ! -f "${ACME_JSON}" ]; then
-  log "Creating ${ACME_JSON} with mode 600..."
-  touch "${ACME_JSON}"
-  if ! chmod 600 "${ACME_JSON}"; then
-    err "Failed to set permissions on ${ACME_JSON}"
-    exit 1
-  fi
-  log "${ACME_JSON} created with mode 600."
-else
-  if ! chmod 600 "${ACME_JSON}"; then
-    err "Failed to set permissions on ${ACME_JSON}"
-    exit 1
-  fi
-  log "${ACME_JSON} permissions enforced (mode 600)."
-fi
+#
+# NOTE: the acme.json block used to live here. It now lives AFTER section 7, because acme.json
+# moved onto the Hetzner Volume at ${DEPLOY_ROOT}/data/traefik. Creating it from this position
+# would write it to the ROOT DISK and section 7's mount would then hide it — Traefik would start
+# against an empty file and silently reissue every certificate. Do not move it back.
 
 # .env — enforce mode 600 if present; warn but continue if absent
 ENV_FILE="${DEPLOY_ROOT}/.env"
@@ -199,7 +181,51 @@ if [ -b "${VOLUME_DEVICE}" ]; then
 else
   log "⚠️  Hetzner Volume device ${VOLUME_DEVICE} not found."
   log "    Attach the Volume to this server in the Hetzner Cloud Console, then re-run this script."
-  log "    PostgreSQL data will NOT be on a persistent volume until this is done."
+  log "    Everything under ${MOUNT_POINT} stays on the ROOT DISK until this is done — that is"
+  log "    PostgreSQL, Redis and the LGTM stack's data, and Traefik's acme.json (created below)."
+  log "    A server rebuild therefore loses all of it, including every TLS certificate."
+fi
+
+# ──────────────────────────────────────────────────
+# 7.5 Data directories and permissions that must exist with or without the Volume
+# ──────────────────────────────────────────────────
+#
+# Deliberately AFTER the `fi` above, so it covers BOTH branches: on a host with no Volume attached
+# section 7 only warns and falls through, and these two must still exist rather than be created by
+# Docker as root-owned on first `up`. Relocated here from section 6.5 — see the note there.
+#
+# Redis, unlike the LGTM directories in section 7, is here rather than there because it fails HARD
+# on a wrong owner: the image drops to uid 999 and cannot write an AOF into a root-owned directory,
+# so a no-Volume host would end up with a crash-looping redis instead of degraded durability.
+# uid/gid verified from the image itself: `docker run --rm redis:7-alpine id redis`
+# -> uid=999(redis) gid=1000(redis). Do not guess it.
+mkdir -p "${MOUNT_POINT}/redis"
+chown -R 999:1000 "${MOUNT_POINT}/redis"
+
+# acme.json — Traefik refuses to start if this file is missing or has wrong permissions.
+# 700 on the directory matches the manual fallback documented in deploy/traefik/README.md; the
+# automated and documented paths must not diverge.
+mkdir -p "${MOUNT_POINT}/traefik"
+chmod 700 "${MOUNT_POINT}/traefik"
+ACME_JSON="${MOUNT_POINT}/traefik/acme.json"
+if [ -L "${ACME_JSON}" ]; then
+  err "${ACME_JSON} is a symlink, refusing to chmod."
+  exit 1
+fi
+if [ ! -f "${ACME_JSON}" ]; then
+  log "Creating ${ACME_JSON} with mode 600..."
+  touch "${ACME_JSON}"
+  if ! chmod 600 "${ACME_JSON}"; then
+    err "Failed to set permissions on ${ACME_JSON}"
+    exit 1
+  fi
+  log "${ACME_JSON} created with mode 600."
+else
+  if ! chmod 600 "${ACME_JSON}"; then
+    err "Failed to set permissions on ${ACME_JSON}"
+    exit 1
+  fi
+  log "${ACME_JSON} permissions enforced (mode 600)."
 fi
 
 log ""

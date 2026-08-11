@@ -25,6 +25,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -67,6 +68,28 @@ public class RescheduleService {
         if (!req.proposedEndTime().isAfter(req.proposedStartTime())) {
             throw new OperationNotAllowedException(
                 "Proposed end time must be after start time", SecurityError.MISSING_RIGHTS);
+        }
+        // UAT.2 AC3: a reschedule is a MOVE, not a resize. Without this, a parent reschedules a
+        // compliant 60-minute session into an eight-hour one and the whole session-duration rule is
+        // bypassed on the third write path.
+        //
+        // Deliberately compared against the BOOKING'S OWN duration, never against
+        // SessionDurationResolver — which is why this service does not inject it. Duration was
+        // entirely unconstrained until this story, so bookings already in any UAT database have
+        // arbitrary lengths; resolving against the coach's current length would hard-reject a parent
+        // moving a legacy 3-hour session at its own length, behind a generic "something went wrong"
+        // toast (booking.invalidSessionDuration resolves in no bundle). Same reasoning already
+        // exempts BookingDuplicationService; the two rules must not diverge.
+        Duration originalDuration =
+            Duration.between(booking.getRequestedStartTime(), booking.getRequestedEndTime());
+        Duration proposedDuration =
+            Duration.between(req.proposedStartTime(), req.proposedEndTime());
+        if (!proposedDuration.equals(originalDuration)) {
+            throw new OperationNotAllowedException(
+                "A reschedule must keep the session's original length",
+                Map.of("proposed minutes", proposedDuration.toMinutes(),
+                    "original minutes", originalDuration.toMinutes()),
+                BookingError.INVALID_SESSION_DURATION);
         }
         rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(bookingId, "PENDING")
             .ifPresent(existing -> {

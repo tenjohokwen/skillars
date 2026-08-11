@@ -32,35 +32,52 @@
           <q-spinner size="32px" />
         </div>
 
-        <q-list v-else-if="bookingStore.computedSlots.length > 0" bordered separator>
-          <q-item
-            v-for="slot in bookingStore.computedSlots"
-            :key="slot.startDatetime"
-            clickable
-            :disable="
-              batchMode ? !bookingStore.isSlotInBasket(slot.startDatetime) && batchAtMax : false
-            "
-            :active="
-              batchMode
-                ? bookingStore.isSlotInBasket(slot.startDatetime)
-                : selectedSlot?.startDatetime === slot.startDatetime
-            "
-            active-class="bg-primary text-white"
-            @click="batchMode ? toggleSlotInBasket(slot) : selectSlot(slot)"
-          >
-            <q-item-section>
-              <q-item-label>{{ formatSlot(slot.startDatetime) }}</q-item-label>
-              <q-item-label caption>{{ formatSlot(slot.endDatetime) }}</q-item-label>
-            </q-item-section>
-            <q-item-section
-              v-if="batchMode && bookingStore.isSlotInBasket(slot.startDatetime)"
-              side
+        <q-list v-else-if="slotRows.length > 0" bordered separator>
+          <template v-for="row in slotRows" :key="row.key">
+            <!-- A slot the parent has already requested/booked. Rendered rather than omitted:
+                 the backend correctly carves it out of computedSlots, so before this it simply
+                 vanished from the calendar with no explanation (deferred-18 D3). -->
+            <q-item v-if="row.type === 'own'" disable>
+              <q-item-section>
+                <q-item-label>{{ formatSlot(row.start) }}</q-item-label>
+                <q-item-label caption>{{ formatSlot(row.end) }}</q-item-label>
+                <q-item-label caption>{{ t('booking.requests.ownBookingCaption') }}</q-item-label>
+              </q-item-section>
+              <q-item-section side>
+                <BookingStateChip :status="row.status" />
+              </q-item-section>
+            </q-item>
+
+            <q-item
+              v-else
+              clickable
+              :disable="
+                batchMode
+                  ? !bookingStore.isSlotInBasket(row.slot.startDatetime) && batchAtMax
+                  : false
+              "
+              :active="
+                batchMode
+                  ? bookingStore.isSlotInBasket(row.slot.startDatetime)
+                  : selectedSlot?.startDatetime === row.slot.startDatetime
+              "
+              active-class="bg-primary text-white"
+              @click="batchMode ? toggleSlotInBasket(row.slot) : selectSlot(row.slot)"
             >
-              <q-chip dense color="positive" text-color="white" size="sm">{{
-                t('booking.batch.added')
-              }}</q-chip>
-            </q-item-section>
-          </q-item>
+              <q-item-section>
+                <q-item-label>{{ formatSlot(row.slot.startDatetime) }}</q-item-label>
+                <q-item-label caption>{{ formatSlot(row.slot.endDatetime) }}</q-item-label>
+              </q-item-section>
+              <q-item-section
+                v-if="batchMode && bookingStore.isSlotInBasket(row.slot.startDatetime)"
+                side
+              >
+                <q-chip dense color="positive" text-color="white" size="sm">{{
+                  t('booking.batch.added')
+                }}</q-chip>
+              </q-item-section>
+            </q-item>
+          </template>
         </q-list>
 
         <div v-else class="text-body2 text-secondary q-py-md text-center">
@@ -184,6 +201,7 @@ import { useBookingStore } from 'src/stores/booking.store'
 import { usePlayerStore } from 'src/stores/playerStore'
 import { getBatchConfig } from 'src/api/booking.api'
 import SessionPackTracker from 'src/components/booking/SessionPackTracker.vue'
+import BookingStateChip from 'src/components/booking/BookingStateChip.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -289,6 +307,122 @@ function formatSlot(isoString) {
   return formatInZone(date, bookingStore.coachTimezone || 'UTC')
 }
 
+// ---- AC5: the parent's own pending/booked slots, shown as disabled rows ----
+
+// ACTIVE_SLOT_STATUSES on the backend — the exact set that makes a booking occupy the coach's
+// slot and therefore disappear from computedSlots. Keeping the two in step is the point.
+const OWN_BLOCKING_STATUSES = [
+  'REQUESTED',
+  'ACCEPTED',
+  'PAYMENT_PENDING',
+  'CONFIRMED',
+  'UPCOMING',
+  'IN_PROGRESS',
+  'PAUSED',
+]
+
+/** Milliseconds a zone is offset from UTC at a given instant. */
+function zoneOffsetMs(ts, timeZone) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hour12: false,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+      .formatToParts(new Date(ts))
+      .map((p) => [p.type, p.value]),
+  )
+  return (
+    Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour) % 24,
+      Number(parts.minute),
+      Number(parts.second),
+    ) - ts
+  )
+}
+
+/**
+ * Midnight on a `YYYY-MM-DD` date, in `timeZone`, as an epoch-millisecond instant.
+ *
+ * The week bounds MUST be instants anchored in the coach's zone, not a bare local-date range:
+ * bookingStore.weekStart is built from the BROWSER's date while the backend anchors the week it
+ * computed slots for in the coach's zone. Comparing against browser-local or UTC midnight
+ * misclassifies bookings at the week edges for any tester in a different zone — and a booking
+ * wrongly judged out-of-week is dropped from this list while its slot stays carved out of
+ * computedSlots, reproducing the exact hole AC5 closes, at the boundary.
+ */
+function zonedMidnightMs(dateStr, timeZone, dayOffset = 0) {
+  const naiveUtc = Date.parse(`${dateStr}T00:00:00Z`) + dayOffset * 86400000
+  if (Number.isNaN(naiveUtc)) return NaN
+  try {
+    const first = zoneOffsetMs(naiveUtc, timeZone)
+    const candidate = naiveUtc - first
+    // Second pass: the offset at the naive instant can differ from the offset at the real one
+    // across a DST transition.
+    const second = zoneOffsetMs(candidate, timeZone)
+    return second === first ? candidate : naiveUtc - second
+  } catch {
+    // Intl throws RangeError on an unrecognized zone; UTC is the same fallback formatSlot uses.
+    return naiveUtc
+  }
+}
+
+const ownBlockingBookings = computed(() => {
+  const bookings = bookingStore.parentBookings
+  // Guard on the array, not on the absence of an error: loadParentBookings swallows failures into
+  // bookingsError, and a failed fetch must never blank the slot list.
+  if (!Array.isArray(bookings) || bookings.length === 0) return []
+  const weekStart = bookingStore.weekStart
+  if (!weekStart) return []
+
+  const zone = bookingStore.coachTimezone || 'UTC'
+  const from = zonedMidnightMs(weekStart, zone)
+  const to = zonedMidnightMs(weekStart, zone, 7)
+  if (Number.isNaN(from) || Number.isNaN(to)) return []
+
+  return bookings.filter((b) => {
+    if (String(b.coachId) !== String(coachId)) return false
+    if (!OWN_BLOCKING_STATUSES.includes(b.status)) return false
+    const start = Date.parse(b.requestedStartTime)
+    return !Number.isNaN(start) && start >= from && start < to
+  })
+})
+
+/**
+ * computedSlots and the parent's own bookings, merged into one grid sorted by start time. Only
+ * coherent because of AC2: with fixed-length slots a booking occupies exactly one slot position,
+ * so the merged list reads as a continuous grid with some rows greyed out. Against the old
+ * whole-segment behaviour the same merge produced overlapping rows of different lengths.
+ *
+ * Own rows are deliberately not selectable, never enter the batch basket, and do not count toward
+ * batchAtMax — batchAtMax reads bookingStore.batchBasketSize, which they never join.
+ */
+const slotRows = computed(() => {
+  const available = bookingStore.computedSlots.map((slot) => ({
+    type: 'available',
+    key: `slot-${slot.startDatetime}`,
+    sortKey: Date.parse(slot.startDatetime),
+    slot,
+  }))
+  const own = ownBlockingBookings.value.map((b) => ({
+    type: 'own',
+    key: `own-${b.id ?? b.requestedStartTime}`,
+    sortKey: Date.parse(b.requestedStartTime),
+    start: b.requestedStartTime,
+    end: b.requestedEndTime,
+    status: b.status,
+  }))
+  return [...available, ...own].sort((a, b) => a.sortKey - b.sortKey)
+})
+
 function goToPurchase() {
   router.push(`/parent/coaches/${coachId}/purchase-sessions?playerId=${playerId.value}`)
 }
@@ -332,6 +466,10 @@ async function submitBatchRequest() {
 
 onMounted(async () => {
   await bookingStore.loadAvailability(coachId)
+  // AC5: the data behind the "you already requested this" rows. The store action and its API call
+  // already exist; a failure is swallowed into bookingsError and leaves parentBookings empty,
+  // which degrades to exactly the pre-AC5 rendering rather than blanking the page.
+  await bookingStore.loadParentBookings()
   if (playerId.value) {
     await bookingStore.loadPlayerPacks(playerId.value)
   }

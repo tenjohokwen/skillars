@@ -192,9 +192,17 @@ class AvailabilityResourceIT extends AbstractIntegrationTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat((List<?>) response.getBody().get("windows")).hasSize(1);
-        // Two segments, not one: the booking splits the window. Without AC1's exclusion the window
-        // comes back as a single undivided slot, which is what this assertion discriminates against.
-        assertThat((List<?>) response.getBody().get("computedSlots")).hasSize(2);
+
+        // UAT.2 AC2 reshaped this from "the segment is split" to "the slots covering the booked
+        // hour are absent": the 07:00Z-15:00Z window slices into eight one-hour slots, and the one
+        // starting 10:00Z is carved out, leaving seven. Both halves of the assertion are
+        // load-bearing — without the carve-out there would be eight, including the booked hour.
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> slots = (List<Map<String, Object>>) response.getBody().get("computedSlots");
+        assertThat(slots).hasSize(7);
+        assertThat(slots).extracting(s -> Instant.parse((String) s.get("startDatetime")))
+            .doesNotContain(Instant.parse("2026-06-16T10:00:00Z"))
+            .contains(Instant.parse("2026-06-16T09:00:00Z"), Instant.parse("2026-06-16T11:00:00Z"));
         // A booking is not a block — the transient pseudo-block must not leak into `blocks`.
         assertThat((List<?>) response.getBody().get("blocks")).isEmpty();
     }

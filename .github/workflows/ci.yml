@@ -72,7 +72,11 @@ jobs:
         uses: ./.github/actions/docker-build
         with:
           push: 'true'
-          tags: ghcr.io/${{ github.repository }}:sha-${{ steps.sha.outputs.short }}
+          # The SHA tag stays and stays FIRST — docs/deployment/rollback.md pins to it. `latest`
+          # is an addition for routine redeploys, never a replacement.
+          tags: |
+            ghcr.io/${{ github.repository }}:sha-${{ steps.sha.outputs.short }}
+            ghcr.io/${{ github.repository }}:latest
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}

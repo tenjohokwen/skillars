@@ -41,14 +41,13 @@ docker container prune -f
 # Remove build cache:
 docker builder prune -f
 
-# Remove unused anonymous volumes — explicitly exclude named volumes to protect redis-data:
-# First confirm the redis-data volume exists before pruning:
-docker volume ls | grep redis-data
-# Then prune only anonymous volumes (those with no name):
-docker volume ls -q --filter "dangling=true" | grep -v "^skillars_redis-data$" | xargs -r docker volume rm
+# Remove unused anonymous volumes. Since Redis moved onto the Hetzner Volume bind mount
+# (/opt/skillars/data/redis), the production stack declares NO named volumes at all, so this is
+# now safe as written:
+docker volume ls -q --filter "dangling=true" | xargs -r docker volume rm
 ```
 
-> **CAUTION:** Do NOT run `docker volume prune` without explicit safeguards. The `skillars_redis-data` named volume stores Redis AOF persistence data. Deleting it invalidates all active user sessions and distributed locks. The `--filter "label!=..."` syntax requires Docker Engine 20.10+ and may silently have no effect on older versions. The `docker volume ls | xargs` approach above is safer.
+> **CAUTION:** Redis AOF persistence now lives at `/opt/skillars/data/redis`, a bind mount on the Hetzner Volume, **not** in a Docker volume. Deleting that directory invalidates all active user sessions and distributed locks. `docker volume prune` can no longer touch it — but `rm -rf` on the data volume can.
 
 **For data volume (`/opt/skillars/data`) — usually Loki or Prometheus accumulation:**
 
@@ -168,7 +167,7 @@ docker exec "$APP_CID" wget -qO- http://localhost:8367/manage/health
 - Or: application logs contain `NOAUTH`, `ERR max number of clients reached`, or `Connection refused` to Redis
 - Or: `docker compose logs redis --tail=50` shows `OOM command not allowed` or the container keeps cycling
 
-**Context:** The Redis container has a 256m Docker memory limit. Redis uses `--appendonly yes` with AOF persistence to the `redis-data` named volume. When the Docker memory limit is exceeded, the kernel OOM-kills the Redis process and Docker restarts it automatically (`restart: unless-stopped`).
+**Context:** The Redis container has a 256m Docker memory limit. Redis uses `--appendonly yes` with AOF persistence to `/opt/skillars/data/redis` on the Hetzner Volume. When the Docker memory limit is exceeded, the kernel OOM-kills the Redis process and Docker restarts it automatically (`restart: unless-stopped`).
 
 ```bash
 # Confirm Redis state and recent logs:
@@ -198,10 +197,9 @@ docker compose stop redis
 # WARNING: The following CLEARS all Redis data.
 # All session tokens and distributed locks will be invalidated.
 # All active user sessions will end — users must re-login.
-docker volume inspect redis-data  # confirm this is the correct volume before proceeding
+ls -la /opt/skillars/data/redis   # confirm this is the correct directory before proceeding
 
-docker run --rm -v skillars_redis-data:/data alpine \
-  sh -c "ls -la /data && rm -f /data/appendonly.aof /data/dump.rdb"
+rm -f /opt/skillars/data/redis/appendonly.aof /opt/skillars/data/redis/dump.rdb
 
 docker compose start redis
 ```

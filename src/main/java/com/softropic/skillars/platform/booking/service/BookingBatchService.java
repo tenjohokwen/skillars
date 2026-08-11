@@ -17,6 +17,8 @@ import com.softropic.skillars.platform.booking.repo.BookingBatchRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
+import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
+import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
@@ -35,8 +37,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -56,6 +60,8 @@ public class BookingBatchService {
     private final ApplicationEventPublisher eventPublisher;
     private final ConfigService configService;
     private final BookingService bookingService;
+    private final SessionDurationResolver sessionDurationResolver;
+    private final CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
     private final PlatformTransactionManager transactionManager;
 
     /**
@@ -104,12 +110,38 @@ public class BookingBatchService {
             throw new OperationNotAllowedException("Coach profile is not active", SecurityError.MISSING_RIGHTS);
         }
 
+        // UAT.2 AC4: both resolved ONCE for the whole batch, not per slot — @Size(max = 10) on
+        // CreateBatchRequest would otherwise multiply a per-slot lookup by ten.
+        Duration requiredDuration = sessionDurationResolver.resolve(req.coachId());
+        List<CoachAvailabilityWindow> windows =
+            coachAvailabilityWindowRepository.findByCoachId(req.coachId());
+
         for (BatchSlot slot : req.slots()) {
             if (!slot.requestedStartTime().isAfter(Instant.now())) {
                 throw new OperationNotAllowedException("Requested start time must be in the future", SecurityError.MISSING_RIGHTS);
             }
             if (!slot.requestedEndTime().isAfter(slot.requestedStartTime())) {
                 throw new OperationNotAllowedException("Requested end time must be after start time", SecurityError.MISSING_RIGHTS);
+            }
+            Duration slotDuration =
+                Duration.between(slot.requestedStartTime(), slot.requestedEndTime());
+            if (!slotDuration.equals(requiredDuration)) {
+                throw new OperationNotAllowedException(
+                    "Requested session length does not match this coach's session length",
+                    Map.of("requested minutes", slotDuration.toMinutes(),
+                        "required minutes", requiredDuration.toMinutes()),
+                    BookingError.INVALID_SESSION_DURATION);
+            }
+            // The availability-window check this path has never had. BookingService's method is
+            // called directly rather than copied — a second copy would drift from its cross-midnight
+            // anchoring and invalid-timezone handling.
+            if (!bookingService.isSlotWithinAvailabilityWindow(
+                    slot.requestedStartTime(), slot.requestedEndTime(), windows)) {
+                throw new OperationNotAllowedException(
+                    "Requested slot is not within coach availability",
+                    Map.of("requested start time", slot.requestedStartTime(),
+                        "requested end time", slot.requestedEndTime()),
+                    SecurityError.MISSING_RIGHTS);
             }
         }
 
@@ -119,6 +151,27 @@ public class BookingBatchService {
             .count();
         if (distinctStartTimes != req.slots().size()) {
             throw new BatchRuleViolationException("booking.duplicateSlotStartTime");
+        }
+
+        // Distinct start times do not imply non-overlapping: 09:00-10:00 and 09:30-10:30 both pass
+        // the check above. Kept alongside it rather than replacing it — the duplicate-start message
+        // is clearer for the common double-click case, which is exactly what
+        // booking.duplicateSlotStartTime already means.
+        //
+        // Comparing each slot only against its IMMEDIATE predecessor is sufficient for arbitrary
+        // durations, not just for the equal ones the duration check above happens to guarantee:
+        // the loop above has already rejected any slot whose end is not after its start, so once
+        // every adjacent pair satisfies start[i] >= end[i-1] the ends are strictly increasing, and
+        // a slot cannot overlap anything earlier than its predecessor. Do not "fix" this into a
+        // running-maximum-end comparison — it would be equivalent, just harder to read.
+        List<BatchSlot> sortedSlots = req.slots().stream()
+            .sorted(Comparator.comparing(BatchSlot::requestedStartTime))
+            .toList();
+        for (int i = 1; i < sortedSlots.size(); i++) {
+            if (sortedSlots.get(i).requestedStartTime()
+                    .isBefore(sortedSlots.get(i - 1).requestedEndTime())) {
+                throw new BatchRuleViolationException("booking.overlappingSlots");
+            }
         }
 
         BookingBatch batch = new BookingBatch();

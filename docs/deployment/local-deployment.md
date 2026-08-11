@@ -118,12 +118,13 @@ Create `docker-compose.local.yml` next to it:
 
 It also mounts data directories from fixed host paths that `provision.sh`
 creates on the production Node — `postgres` (`/opt/skillars/data/postgres`),
+`redis` (`/opt/skillars/data/redis`, since UAT.2 moved it off a named volume),
 `loki` and `tempo` (`/opt/skillars/data/{loki,tempo}`, pulled in as
 dependencies of `app` — see [Notes](#notes)), and `prometheus`/`grafana`
 (`/opt/skillars/data/{prometheus,grafana}`, pulled in as a dependency of
 `grafana`). None of those paths exist on your machine, and Docker Desktop
 refuses to bind-mount a host directory it hasn't been granted access to.
-Replace all five with plain named volumes, and publish Grafana's port so you
+Replace all six with plain named volumes, and publish Grafana's port so you
 can reach its UI from the host:
 
 ```yaml
@@ -139,6 +140,9 @@ services:
   postgres:
     volumes:
       - skillars-local-postgres:/var/lib/postgresql/data
+  redis:
+    volumes:
+      - skillars-local-redis:/data
   loki:
     volumes:
       - skillars-local-loki:/loki
@@ -156,6 +160,7 @@ services:
 
 volumes:
   skillars-local-postgres:
+  skillars-local-redis:
   skillars-local-loki:
   skillars-local-tempo:
   skillars-local-prometheus:
@@ -166,9 +171,11 @@ Compose merges `volumes:` entries by matching container target path, so each
 of these overrides only replaces the matching production bind mount — the
 other mounts on `loki`/`tempo`/`prometheus`/`grafana` (their read-only
 `./deploy/lgtm/*.yml` config files, relative paths, not a problem) are
-untouched. The top-level `volumes:` block adds the five new named volumes
-alongside `redis-data` (already declared in `docker-compose.yml`) rather than
-replacing it. `traefik` has the same kind of fixed host-path/config
+untouched. The top-level `volumes:` block declares all the named volumes this
+stack needs; `docker-compose.yml` itself declares none since UAT.2 moved redis
+onto the Hetzner Volume bind mount, which is why `redis` needs an override here
+too — without one, the local stack would create `/opt/skillars/data/redis` on
+the developer's own machine. `traefik` has the same kind of fixed host-path/config
 dependency, but since it never starts in this trimmed stack, it's never
 evaluated and doesn't need an override.
 
