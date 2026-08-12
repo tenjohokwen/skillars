@@ -1,6 +1,6 @@
 # Story UAT.2: Session Duration & Booking Slot Integrity
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 

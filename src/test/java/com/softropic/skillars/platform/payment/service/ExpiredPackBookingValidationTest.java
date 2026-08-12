@@ -16,6 +16,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
+import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchase;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
@@ -63,6 +64,10 @@ class ExpiredPackBookingValidationTest {
     @Mock SessionPackPurchaseRepository sessionPackPurchaseRepository;
     @Mock CoachPricingRepository coachPricingRepository;
     @Mock SessionDurationResolver sessionDurationResolver;
+    // UAT.3 AC2 added this dependency to BookingService. This class only exercises
+    // createBookingRequest, which never reaches it — but @InjectMocks would otherwise inject null
+    // silently, which is exactly the twelfth-file class of miss UAT.2 recorded.
+    @Mock BookingPaymentRepository bookingPaymentRepository;
     // Deferred-12 AC3: createBookingRequest re-reads the locked coach row via EntityManager.refresh
     // before the overlap check; a mock keeps that a no-op here. The real re-read is proven against a
     // live database in BookingServiceConcurrencyIT.

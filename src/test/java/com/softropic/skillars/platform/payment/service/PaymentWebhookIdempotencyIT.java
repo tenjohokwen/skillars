@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.math.BigDecimal;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -34,6 +35,12 @@ class PaymentWebhookIdempotencyIT extends BasePaymentIT {
     @Test
     void duplicateBookingAcceptedEvent_secondEventIsNoOp() {
         UUID bookingId = UUID.randomUUID();
+        // UAT.3 AC1/AC3: this is the only case here that reaches Stripe, so it is the only one that
+        // reserves — and reserveCapture takes a locked read of the booking row and requires it to be
+        // PAYMENT_PENDING. This class previously seeded no booking at all (BookingService is mocked
+        // so transitions never needed one), which made the reservation abort and left zero payment
+        // rows. Seeding the real row is the fix; loosening the reservation would not be.
+        seedPaymentPendingBooking(bookingId, 3600);
         BookingAcceptedEvent event = bookingAcceptedEvent(bookingId, new BigDecimal("50.00"), null);
 
         // First event: Case C (zero credit, full Stripe charge via StubPaymentGateway)
@@ -140,6 +147,20 @@ class PaymentWebhookIdempotencyIT extends BasePaymentIT {
         assertThat(remaining)
             .as("Session must be deducted only once for duplicate event")
             .isEqualTo(4);
+    }
+
+    /** Seeds a booking resting in PAYMENT_PENDING, which is what reserveCapture locks and checks. */
+    private void seedPaymentPendingBooking(UUID bookingId, long startsInSeconds) {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO booking.bookings (id, parent_id, player_id, coach_id, requested_start_time, "
+                + "requested_end_time, status, canonical_timezone, version, created_at, updated_at) "
+                + "VALUES (?, ?, ?, ?, ?, ?, 'PAYMENT_PENDING', 'UTC', 0, now(), now())",
+                bookingId, PARENT_ID, PLAYER_ID, COACH_ID,
+                Timestamp.from(Instant.now().plusSeconds(startsInSeconds)),
+                Timestamp.from(Instant.now().plusSeconds(startsInSeconds + 3600)));
+            return null;
+        });
     }
 
     private BookingAcceptedEvent bookingAcceptedEvent(UUID bookingId, BigDecimal price, UUID packPurchaseId) {

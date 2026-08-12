@@ -38,6 +38,8 @@ import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
+import com.softropic.skillars.platform.payment.contract.BookingPaymentStatus;
+import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchase;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
@@ -49,9 +51,11 @@ import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.time.DateTimeException;
@@ -114,6 +118,11 @@ public class BookingService {
     private final SessionPackPurchaseRepository sessionPackPurchaseRepository;
     private final CoachPricingRepository coachPricingRepository;
     private final SessionDurationResolver sessionDurationResolver;
+    // UAT.3 AC2: crossing into platform.payment.repo is the established shape in this class — it
+    // already injects SessionPackPurchaseRepository from the same package. Whether a capture is in
+    // flight is a database question, not a gateway one, so it deliberately does not go through
+    // PaymentGateway.
+    private final BookingPaymentRepository bookingPaymentRepository;
     private final EntityManager entityManager;
 
     // Package-private, not private: AvailabilityService reuses this exact status set to exclude
@@ -594,10 +603,17 @@ public class BookingService {
 
     @Transactional
     public void cancelBookingAsParent(UUID bookingId, Long parentUserId) {
-        Booking booking = getBookingOrThrow(bookingId);
-        if (!Objects.equals(booking.getParentId(), parentUserId)) {
+        // Unlocked read + ownership check FIRST, locked re-read second. Deliberately in this order:
+        // taking a row lock before authorising the caller lets any authenticated user pin an
+        // arbitrary booking row for the duration of the transaction before receiving their 403 —
+        // the exact finding Deferred-16 D2 raised against MessagingService.softDeleteMessage. One
+        // extra SELECT is cheap.
+        Booking unlocked = getBookingOrThrow(bookingId);
+        if (!Objects.equals(unlocked.getParentId(), parentUserId)) {
             throw new OperationNotAllowedException("Parent does not own this booking", SecurityError.MISSING_RIGHTS);
         }
+        Booking booking = bookingRepository.findByIdForUpdate(bookingId)
+            .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking"));
         long hoursBeforeSession = ChronoUnit.HOURS.between(Instant.now(), booking.getRequestedStartTime());
         // Deferred-12 AC4: money only ever leaves the parent (credit debit / pack unit deduction)
         // once payment has been captured, i.e. from CONFIRMED onwards. Everything else — notably
@@ -607,6 +623,19 @@ public class BookingService {
         // Mirrors applyRefundLogic's existing CONFIRMED/UPCOMING condition rather than adding a
         // third refund rule.
         BookingStatus statusBeforeCancel = readStatusOrThrow(booking);
+
+        // UAT.3 AC2. A CAPTURE_PENDING row means a Stripe charge for this booking is in flight, or
+        // has completed without its record committing. Cancelling on top of it is what produced
+        // "money captured, booking cancelled, no refund" (Deferred-12 D2). Refuse and let the
+        // parent retry: within seconds the booking is CONFIRMED and the ordinary refund rules
+        // apply. statusBeforeCancel is read under the row lock above, so it cannot be stale by the
+        // time transition(...) writes.
+        if (statusBeforeCancel == BookingStatus.PAYMENT_PENDING
+                && bookingPaymentRepository.findById(bookingId)
+                       .filter(bp -> BookingPaymentStatus.CAPTURE_PENDING.equals(bp.getStatus())).isPresent()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "booking.paymentInProgress");
+        }
+
         boolean paymentWasCaptured = statusBeforeCancel == BookingStatus.CONFIRMED
             || statusBeforeCancel == BookingStatus.UPCOMING;
         boolean refundEligible = paymentWasCaptured

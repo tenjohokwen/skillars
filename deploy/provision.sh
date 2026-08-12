@@ -19,7 +19,7 @@ err() { echo "[provision][error] $*" >&2; }
 # ──────────────────────────────────────────────────
 log "Installing system packages..."
 apt-get update -qq
-apt-get install -y curl git unzip fail2ban ufw ca-certificates gnupg lsb-release awscli
+apt-get install -y curl git unzip jq fail2ban ufw ca-certificates gnupg lsb-release awscli
 
 # ──────────────────────────────────────────────────
 # 2. Docker Engine (official Docker APT repo)

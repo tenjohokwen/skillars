@@ -18,9 +18,11 @@ Items already pulled into a story. A subsequent story-creation pass must skip an
 |---|---|
 | `skillars-uat-1-admin-bootstrap-and-onboarding-unblock.md` (2026-08-10) | P0-1 (AC1–AC3), P0-3 (AC4), P1 #4 (AC5), P1 #5 (AC6), P1 #6 (AC7), P2 #1 (AC8, re-scoped), all 5 Ledger-hygiene rows (AC9) |
 | `skillars-uat-2-session-duration-and-booking-slot-integrity.md` (2026-08-10) | P0-5 (AC1–AC4), P1 #1 (AC5), P2 #2, P2 #3, P2 #5 (AC6) — **IMPLEMENTED 2026-08-10**, scope unchanged from what was claimed. `deferred-17` D1 and `deferred-18` D3 closed in the ledger. |
+| `skillars-uat-3-payment-capture-integrity-and-backup-retention.md` (2026-08-11) | P1 #3 (AC1, AC3, AC5), P1 #2 (AC2), P2 #4 (AC6). Grouped because P1 #2 and #3 share one mechanism: the durable pre-capture `booking_payments` row that #3 asks for **is** the interlock #2 needs, and widening the `PaymentPendingSweeper` (currently pack-funded only) is only safe once that row exists. P2 #4 rides along as the last unclaimed P2 row — ops-only, no overlap with the Java tree. — **IMPLEMENTED 2026-08-11**, scope unchanged from what was claimed. `deferred-12` D2, `deferred-15` story-creation D1 and the `deploy-3-1` retention row all closed in the ledger. **AC6 surfaced a new, larger ops finding — see P1 #9 below.** |
 
 **Still unclaimed:** P0-2 and P0-4 (both product decisions — see the Suggested sequence);
-P1 #2, #3, #7, #8; P2 #4; everything in P3.
+**P1 #9 (new 2026-08-11 — the data volume has no working backup)**; P1 #7, #8 (the i18n pair);
+everything in P3. **P2 is now empty.**
 
 **P0-5's product decision is resolved** (Mbah, 2026-08-10): the default session length is one hour
 system-wide, and a coach can override it. `skillars-uat-2` implements that as a
@@ -167,16 +169,23 @@ Ordered by how likely you are to trip over them.
    `ACTIVE_SLOT_STATUSES` includes `REQUESTED`, `PAYMENT_PENDING` and `PAUSED`, so after submitting,
    the slot is simply absent on the next visit rather than rendering disabled. Testers will read this
    as "my booking didn't save". Backend behaviour is correct; the UX replacement is missing.
-2. **`deferred-12` D2 — parent-cancel races the payment settle.** `cancelBookingAsParent` can commit
+2. **[CLAIMED → `skillars-uat-3-...backup-retention.md` AC2]** **`deferred-12` D2 — parent-cancel races the payment settle.** `cancelBookingAsParent` can commit
    `CANCELLED_PARENT` while `PaymentLifecycleService` is mid-capture; the listener's subsequent
    `PAYMENT_CAPTURED` is then an illegal transition, thrown and swallowed. Net: **money captured,
-   booking cancelled, no refund, no compensation.** Narrow window, but you will be exercising cancel
-   flows with test cards.
-3. **`deferred-15` story creation D1 — no durable pre-capture record.** A crash between the Stripe
+   booking cancelled, no refund, no compensation.** ~~Narrow window, but you will be exercising cancel
+   flows with test cards.~~ **SEVERITY CORRECTED 2026-08-11 while scoping `uat-3`: you will NOT be
+   exercising this from the UI.** `POST /api/bookings/{id}/cancel` has no frontend caller at all —
+   `booking.api.js:64` exports `cancelBooking` and grepping the name across `src/frontend/src` returns
+   that one line and nothing else. The race is reachable only by a direct API call. It is still fixed
+   by `uat-3`, because the same row lock is what makes AC5's sweeper widening sound; and the missing
+   cancel UI is recorded as a new deferred item in its own right.
+3. **[CLAIMED → `skillars-uat-3-...backup-retention.md` AC1/AC3/AC5]** **`deferred-15` story creation D1 — no durable pre-capture record.** A crash between the Stripe
    capture and the DB write leaves money captured, booking in `PAYMENT_PENDING`, and no
    `booking_payments` row, with no signal that recovery is needed. This is what confines the
    `deferred-15` sweeper to pack-funded bookings. Recovery is manual Stripe-dashboard reconciliation.
    Survivable in test mode; you should know it exists before you trust any payment numbers.
+   **This is the item with money genuinely at risk during UAT** — unlike #2 it needs no cancel, only a
+   JVM death, container restart or rolling deploy inside the capture window.
 4. **[CLAIMED → `skillars-uat-1-...unblock.md` AC5]** **`deferred-17` D4 — `AvailabilityManagerPage.vue:333` still displays `windows[0]`'s timezone**,
    the exact column `deferred-17` AC4 stopped displaying from one page over. `bookingStore.coachTimezone`
    is already populated by a call this page makes and is simply unused. Cheap fix, visible inconsistency.
@@ -190,6 +199,24 @@ Ordered by how likely you are to trip over them.
    `SecurityAdviceFilter:59` stores `locale.getDisplayLanguage()` ("German"), and
    `Locale.forLanguageTag("German")` yields `"german"` — so `messages_de.properties` is never selected
    and every custom validator's translations are dead. Same condition as #7: English-only UAT, defer.
+9. **NEW 2026-08-11 — the Hetzner Volume at `/opt/skillars/data` has no working backup at all.**
+   Found while implementing `uat-3` AC6, which required verifying the Hetzner list/delete endpoints
+   against the live API docs before writing the pruner. **The Hetzner Cloud API has no volume
+   snapshot** — volumes support only attach / detach / resize / change_protection, and a Hetzner
+   *server* snapshot explicitly excludes attached volumes. `volume-snapshot.sh` POSTs to
+   `/v1/volumes/{id}/actions/create_snapshot`, which does not exist, so it has failed on every cron
+   run since `deploy-3-1` and **no snapshot has ever been created**. `restore-from-snapshot.sh` and
+   Section B of `backup-restore.md` therefore have nothing to restore from. The `pg_dump` stream to
+   Object Storage is unaffected and is the only working backup — of the database only; redis AOF,
+   prometheus, loki, grafana, tempo and `acme.json` have none.
+   **Ranked P1, not P2**, despite being an ops item: the ranking rule puts deployment below
+   functional blockers, but this is not a deployment inconvenience — it is a silent, already-live
+   data-loss exposure, and the reason it went unnoticed for two months is exactly that
+   `drill-log.md` has never recorded a restore drill. Choosing the replacement (file-level backup of
+   the volume to Object Storage, a Storage Box, or a documented decision to accept dumps-only) is an
+   operational decision, which is why `uat-3` recorded and warned rather than picking one. Loud
+   warnings are now in `volume-snapshot.sh`, `backup-restore.md` and `runbook.md`.
+   Tracked as `skillars-uat-3` D1.
 
 ## P2 — Deployment and ops (below every functional blocker, per your instruction)
 
@@ -214,8 +241,13 @@ What is genuinely worth doing, in order:
 3. **[CLAIMED → `skillars-uat-2-...slot-integrity.md` AC6b]** **`deploy-1-5` — Redis data on a named Docker volume, not the persistent Volume.** Sessions and
    cache are lost on rebuild. Acceptable for UAT; note it. Redis is the only stateful service not
    under `/opt/skillars/data` — postgres, prometheus, loki, tempo and grafana all bind there.
-4. **`deploy-3-1` — no backup retention policy.** S3 dumps and Hetzner snapshots accumulate unbounded.
-   Cost, not correctness.
+4. **[IMPLEMENTED 2026-08-11 → `skillars-uat-3-...backup-retention.md` AC6]** **`deploy-3-1` — no backup retention policy.** S3 dumps and Hetzner snapshots accumulate unbounded.
+   Cost, not correctness. Confirmed while scoping: `install-crons.sh:9` runs `pg-backup.sh` every six
+   hours — **1,460 dumps a year, none ever deleted** — and `volume-snapshot.sh` adds one snapshot a day
+   with no pruning. Neither script has a delete path, and no lifecycle rule is documented anywhere.
+   Closed by `prune-backups.sh` (both streams, min-keep floor, dry-run, daily 03:30 UTC).
+   **One clause of the above was wrong and is corrected here:** `volume-snapshot.sh` does **not** add
+   one snapshot a day — it adds none, because the endpoint it calls does not exist. See P1 #9.
 5. **[CLAIMED → `skillars-uat-2-...slot-integrity.md` AC6c]** **`deploy-2-1` D2 — no stable/`latest` tag alongside the SHA tag.** Every deploy needs the exact
    SHA typed in. Minor friction you will feel on every UAT redeploy. Two lines: the shared action
    already documents `tags` as newline-separated.
@@ -291,9 +323,22 @@ budgeting work that is already done.
    **DONE** — the DST guard shipped in `uat-1` AC7; the vanishing-slot affordance shipped as `uat-2`
    AC5, pulled forward rather than waiting for testers because AC2's slicing is what makes it a
    two-hour change instead of a design problem.
-7. **Payment integrity** (P1 #2, #3) — schedule after the first round of UAT payment testing, when you
-   know whether the races actually fire at your volumes.
-8. **The i18n pair** (P1 #7, #8) — only if UAT is not English-only. Both `uat-1` and `uat-2` touched
-   files containing #7 call sites and both deliberately left them: one sweep or none.
-9. What remains in P2 is `deploy-3-1` (backup retention) alone. Then never P3 — until a post-UAT
-   resilience epic picks up `skillars-10-2` D1 and the outbox question wholesale.
+7. ~~**Payment integrity** (P1 #2, #3) — schedule after the first round of UAT payment testing, when you
+   know whether the races actually fire at your volumes.~~ **CLAIMED** — `skillars-uat-3`, written
+   2026-08-11. Pulled *before* the first payment round rather than after, on one finding: #3 needs no
+   race to fire, only a process death inside the capture window, and until the pre-capture row exists
+   there is no signal anywhere that it happened — so a first payment round run without it produces
+   numbers nobody can audit afterwards. #2 comes along because the row it needs is the same row.
+   `deploy-3-1`'s retention item (P2 #4) is folded in as ops-only work.
+8. **Decide the volume backup replacement** (P1 #9) — new, and it jumped the queue on discovery:
+   `/opt/skillars/data` has had no backup since `deploy-3-1`, because Hetzner Cloud cannot snapshot a
+   volume at all. Pick one of: file-level backup of the volume to Object Storage beside the dumps, a
+   Hetzner Storage Box, or an explicit written decision that dumps-only is acceptable and Section B
+   of `backup-restore.md` gets deleted. Whichever you pick, run a restore drill and finally write a
+   row in `drill-log.md` — a drill is what would have caught this two months ago.
+9. **The i18n pair** (P1 #7, #8) — only if UAT is not English-only. `uat-1`, `uat-2` and `uat-3` have
+   now all touched files near #7/#8 call sites and all three deliberately left them: one sweep or none.
+   These are the last non-decision *code* items on the list.
+10. ~~What remains in P2 is `deploy-3-1` (backup retention) alone.~~ **P2 is empty after `uat-3`.** Then
+    never P3 — until a post-UAT resilience epic picks up `skillars-10-2` D1 and the outbox question
+    wholesale.

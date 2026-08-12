@@ -95,16 +95,22 @@ class PaymentPendingSweeperTest {
         return b;
     }
 
+    /**
+     * UAT.3 review patch: sweepOne re-reads the booking under a PESSIMISTIC_WRITE lock, not the
+     * plain findById it used before — otherwise a reserveCapture committing between its read and
+     * its write would be silently overwritten with CHARGE_FAILED. Stub the locked read, or these
+     * tests assert against a code path the sweeper no longer takes.
+     */
     private void stage(Booking b) {
         when(bookingRepository.findPaymentPendingOlderThan(any())).thenReturn(List.of(b));
-        when(bookingRepository.findById(b.getId())).thenReturn(Optional.of(b));
+        when(bookingRepository.findByIdForUpdate(b.getId())).thenReturn(Optional.of(b));
     }
 
     @Test
     void packFundedStrandedBooking_isDeclinedWithChargeFailedPaymentRow() {
         Booking b = booking(UUID.randomUUID());
         stage(b);
-        when(bookingPaymentRepository.existsById(b.getId())).thenReturn(false);
+        when(bookingPaymentRepository.findById(b.getId())).thenReturn(Optional.empty());
         when(coachProfileRepository.findById(b.getCoachId())).thenReturn(Optional.empty());
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
 
@@ -120,14 +126,39 @@ class PaymentPendingSweeperTest {
     }
 
     /**
-     * The case that protects real money. A credit-funded booking may have been charged at Stripe
-     * with the recording write lost, and nothing durable distinguishes that from "never charged" —
-     * so it must survive the sweep untouched. Do not fold this into the pack-funded test.
+     * UAT.3 AC5, inverting Deferred-15's behaviour. A credit-funded booking used to be reported and
+     * left alone because nothing distinguished "never charged" from "charged and lost the record".
+     * reserveCapture now writes a CAPTURE_PENDING row before either Stripe call, so no row at all
+     * proves no charge was attempted — and the booking is decidable exactly like a pack-funded one.
      */
     @Test
-    void creditFundedStrandedBooking_isReportedNotDeclined() {
+    void creditFundedStrandedBookingWithNoPaymentRow_isNowDeclined() {
         Booking b = booking(null);
         stage(b);
+        when(bookingPaymentRepository.findById(b.getId())).thenReturn(Optional.empty());
+        when(coachProfileRepository.findById(b.getCoachId())).thenReturn(Optional.empty());
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
+
+        sweeper.sweepStrandedPayments();
+
+        ArgumentCaptor<BookingPayment> payment = ArgumentCaptor.forClass(BookingPayment.class);
+        verify(bookingPaymentRepository).save(payment.capture());
+        assertThat(payment.getValue().getStatus()).isEqualTo("CHARGE_FAILED");
+        verify(bookingService).transition(eq(b.getId()), eq(BookingEvent.PAYMENT_FAILED), any(TransitionContext.class));
+        verify(eventPublisher).publishEvent(any(BookingDeclinedEvent.class));
+    }
+
+    /**
+     * The case that now protects real money, and the reason the funding-type test could be dropped:
+     * a standing CAPTURE_PENDING row means an attempt reserved and never finished, so money may
+     * already be at Stripe. It must survive the sweep untouched and escalate to an operator.
+     */
+    @Test
+    void bookingWithOutstandingCaptureReservation_isReportedNotDeclined() {
+        Booking b = booking(null);
+        stage(b);
+        when(bookingPaymentRepository.findById(b.getId()))
+            .thenReturn(Optional.of(paymentRow("CAPTURE_PENDING")));
 
         sweeper.sweepStrandedPayments();
 
@@ -140,13 +171,19 @@ class PaymentPendingSweeperTest {
     void packFundedBookingWithExistingPaymentRow_isReportedNotDeclined() {
         Booking b = booking(UUID.randomUUID());
         stage(b);
-        when(bookingPaymentRepository.existsById(b.getId())).thenReturn(true);
+        when(bookingPaymentRepository.findById(b.getId())).thenReturn(Optional.of(paymentRow("CAPTURED")));
 
         sweeper.sweepStrandedPayments();
 
         verify(bookingPaymentRepository, never()).save(any());
         verify(bookingService, never()).transition(any(), any(), any());
         verify(eventPublisher, never()).publishEvent(any(BookingDeclinedEvent.class));
+    }
+
+    private BookingPayment paymentRow(String status) {
+        BookingPayment bp = new BookingPayment();
+        bp.setStatus(status);
+        return bp;
     }
 
     @Test
@@ -156,7 +193,7 @@ class PaymentPendingSweeperTest {
         Booking settled = booking(b.getSessionPackPurchaseId());
         settled.setId(b.getId());
         settled.setStatus("CONFIRMED");
-        when(bookingRepository.findById(b.getId())).thenReturn(Optional.of(settled));
+        when(bookingRepository.findByIdForUpdate(b.getId())).thenReturn(Optional.of(settled));
 
         sweeper.sweepStrandedPayments();
 
@@ -181,9 +218,9 @@ class PaymentPendingSweeperTest {
         Booking bad = booking(UUID.randomUUID());
         Booking good = booking(UUID.randomUUID());
         when(bookingRepository.findPaymentPendingOlderThan(any())).thenReturn(List.of(bad, good));
-        when(bookingRepository.findById(bad.getId())).thenThrow(new IllegalStateException("boom"));
-        when(bookingRepository.findById(good.getId())).thenReturn(Optional.of(good));
-        when(bookingPaymentRepository.existsById(good.getId())).thenReturn(false);
+        when(bookingRepository.findByIdForUpdate(bad.getId())).thenThrow(new IllegalStateException("boom"));
+        when(bookingRepository.findByIdForUpdate(good.getId())).thenReturn(Optional.of(good));
+        when(bookingPaymentRepository.findById(good.getId())).thenReturn(Optional.empty());
         when(coachProfileRepository.findById(good.getCoachId())).thenReturn(Optional.empty());
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
 

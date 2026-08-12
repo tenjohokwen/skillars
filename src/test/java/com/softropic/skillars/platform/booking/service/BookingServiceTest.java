@@ -21,7 +21,11 @@ import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
+import com.softropic.skillars.platform.payment.repo.BookingPayment;
+import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.User;
@@ -75,6 +79,8 @@ class BookingServiceTest {
     @Mock private SessionPackPurchaseRepository sessionPackPurchaseRepository;
     @Mock private CoachPricingRepository coachPricingRepository;
     @Mock private SessionDurationResolver sessionDurationResolver;
+    // UAT.3 AC2: cancelBookingAsParent refuses while a CAPTURE_PENDING row stands.
+    @Mock private BookingPaymentRepository bookingPaymentRepository;
     // Deferred-12 AC3: createBookingRequest re-reads the coach row under the pessimistic lock via
     // EntityManager.refresh. A mock makes that a no-op here, which is fine — the real behaviour is
     // proven by BookingServiceConcurrencyIT against a live database, as the AC requires.
@@ -97,7 +103,7 @@ class BookingServiceTest {
             userRepository, eventPublisher,
             rescheduleRequestRepository, bookingBatchRepository,
             sessionPackPurchaseRepository, coachPricingRepository, sessionDurationResolver,
-            entityManager
+            bookingPaymentRepository, entityManager
         );
         // UAT.2 AC3: every create-path fixture in this class books exactly one hour, which is the
         // platform default. Lenient because the tests that fail before reaching the duration check
@@ -482,6 +488,12 @@ class BookingServiceTest {
         booking.setRequestedEndTime(Instant.now().plus(73, java.time.temporal.ChronoUnit.HOURS));
 
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        // UAT.3 AC2: the status is now read under a row lock, so both reads are exercised.
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        // The ONLY one of the three cancel tests that reaches this lookup: it sits behind
+        // `statusBeforeCancel == PAYMENT_PENDING &&`, and Java && short-circuits. Stubbing it in
+        // the ACCEPTED/CONFIRMED tests would fail them with UnnecessaryStubbingException.
+        when(bookingPaymentRepository.findById(booking.getId())).thenReturn(Optional.empty());
         when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
@@ -496,6 +508,102 @@ class BookingServiceTest {
             .isFalse();
     }
 
+    /**
+     * UAT.3 AC2 — the interlock, and the mutation check Task 6 requires. A CAPTURE_PENDING row
+     * means a Stripe charge for this booking is in flight or has completed without its record
+     * committing; cancelling on top of it is what produced "money captured, booking cancelled, no
+     * refund" (Deferred-12 D2).
+     *
+     * <p>The assertions discriminate against the specific wrong behaviour rather than against
+     * "something threw": a 409 status AND the booking still resting in PAYMENT_PENDING AND no
+     * cancellation event published. Delete the CAPTURE_PENDING branch and this fails because the
+     * cancel SUCCEEDS — no exception at all — not because a different exception surfaced.
+     */
+    @Test
+    void cancelBookingAsParent_captureInFlight_refuses409AndLeavesBookingPending() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "PAYMENT_PENDING");
+        booking.setRequestedStartTime(Instant.now().plus(72, java.time.temporal.ChronoUnit.HOURS));
+        booking.setRequestedEndTime(Instant.now().plus(73, java.time.temporal.ChronoUnit.HOURS));
+
+        BookingPayment reserved = new BookingPayment();
+        reserved.setBookingId(booking.getId());
+        reserved.setStatus("CAPTURE_PENDING");
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingPaymentRepository.findById(booking.getId())).thenReturn(Optional.of(reserved));
+        // The rest of the cancel path is stubbed lenient ON PURPOSE, so that removing the interlock
+        // makes this cancel SUCCEED rather than trip over an unstubbed collaborator. Without these,
+        // the mutation would fail the test with a ResourceNotFoundException from coach pricing —
+        // i.e. it would only prove "something threw", which is not the bar. With them, the mutation
+        // fails it with "Expecting code to raise a throwable" plus a CANCELLED_PARENT status: the
+        // specific wrong behaviour this test exists to catch.
+        lenient().when(coachPricingRepository.findByCoachId(COACH_ID))
+            .thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
+        lenient().when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        lenient().when(coachProfileRepository.findById(COACH_ID))
+            .thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
+        lenient().when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+        lenient().when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        assertThatThrownBy(() -> bookingService.cancelBookingAsParent(booking.getId(), PARENT_ID))
+            .isInstanceOf(ResponseStatusException.class)
+            .satisfies(t -> {
+                assertThat(((ResponseStatusException) t).getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(((ResponseStatusException) t).getReason()).isEqualTo("booking.paymentInProgress");
+            });
+
+        assertThat(booking.getStatus())
+            .as("the cancel must not commit while a capture may already have reached Stripe")
+            .isEqualTo("PAYMENT_PENDING");
+        verify(bookingRepository, never()).save(any(Booking.class));
+        verify(eventPublisher, never()).publishEvent(any(BookingCancelledByParentEvent.class));
+    }
+
+    /**
+     * UAT.3 AC2 regression guard: the interlock keys on CAPTURE_PENDING specifically. A terminal
+     * row must not block the cancel, or a settled booking would become permanently uncancellable.
+     */
+    @Test
+    void cancelBookingAsParent_terminalPaymentRow_doesNotBlockTheCancel() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "PAYMENT_PENDING");
+        booking.setRequestedStartTime(Instant.now().plus(72, java.time.temporal.ChronoUnit.HOURS));
+        booking.setRequestedEndTime(Instant.now().plus(73, java.time.temporal.ChronoUnit.HOURS));
+
+        BookingPayment failed = new BookingPayment();
+        failed.setBookingId(booking.getId());
+        failed.setStatus("CHARGE_FAILED");
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingPaymentRepository.findById(booking.getId())).thenReturn(Optional.of(failed));
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        bookingService.cancelBookingAsParent(booking.getId(), PARENT_ID);
+
+        assertThat(booking.getStatus()).isEqualTo("CANCELLED_PARENT");
+    }
+
+    /**
+     * UAT.3 AC2: the ownership check must still run BEFORE the row lock is taken, so a stranger
+     * cannot pin an arbitrary booking row for the length of the transaction on their way to a 403
+     * (the Deferred-16 D2 finding). Proven by the locked read never being reached.
+     */
+    @Test
+    void cancelBookingAsParent_wrongParent_isRejectedBeforeTakingTheRowLock() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "PAYMENT_PENDING");
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.cancelBookingAsParent(booking.getId(), 999_999L))
+            .isInstanceOf(OperationNotAllowedException.class);
+
+        verify(bookingRepository, never()).findByIdForUpdate(any());
+    }
+
     @Test
     void cancelBookingAsParent_acceptedBatchBooking_cancelsWithoutRefundEligibility() {
         // ACCEPTED is transiently reachable inside the accept transaction and carries the identical
@@ -505,6 +613,9 @@ class BookingServiceTest {
         booking.setRequestedEndTime(Instant.now().plus(73, java.time.temporal.ChronoUnit.HOURS));
 
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        // UAT.3 AC2: locked re-read. No bookingPaymentRepository stub — the payment lookup sits
+        // behind `statusBeforeCancel == PAYMENT_PENDING &&` and is never reached from this status.
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
         when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
@@ -525,6 +636,9 @@ class BookingServiceTest {
         booking.setRequestedEndTime(Instant.now().plus(73, java.time.temporal.ChronoUnit.HOURS));
 
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        // UAT.3 AC2: locked re-read. No bookingPaymentRepository stub — the payment lookup sits
+        // behind `statusBeforeCancel == PAYMENT_PENDING &&` and is never reached from this status.
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
         when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));

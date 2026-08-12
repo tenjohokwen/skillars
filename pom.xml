@@ -579,7 +579,34 @@
 				<artifactId>maven-failsafe-plugin</artifactId>
 				<configuration>
 					<trimStackTrace>false</trimStackTrace>
-					<argLine>-Duser.timezone=UTC</argLine>
+					<!--
+					  All ~135 IT classes share ONE forked JVM (no forkCount/reuseForks here), and the
+					  Spring TestContext cache holds every context open for the whole run: ~26 contexts
+					  against the default cache.maxSize of 32 means nothing is ever evicted, so nothing
+					  is ever closed. A thread dump taken mid-run measured 427 live threads — 12
+					  Tomcats, 6 Quartz schedulers, 7 Hikari pools, 10+ WireMock Jetty servers, all
+					  alive simultaneously.
+
+					  That fork has intermittently died mid-suite, surfacing as
+					  "SurefireBooterForkException: There was an error in the forked process / Unable to
+					  create test class '<whichever class was loading at the time>'" — a severed pipe
+					  naming an innocent class, with no indication of the cause. The flags below exist
+					  to make the NEXT occurrence legible; they are not meant to change how the suite
+					  runs.
+
+					  -Xmx4g pins what the JVM already chooses ergonomically on a 16 GB host (1/4 of
+					  RAM), so the limit stops varying with the machine. Deliberately NOT lower: the
+					  suite passes at 4g today.
+
+					  ExitOnOutOfMemoryError turns a silent fork death into an unambiguous exit;
+					  HeapDumpOnOutOfMemoryError names whatever is being retained.
+
+					  The GC log is pure observation with no limit attached, and records actual heap and
+					  metaspace across the run. Metaspace is deliberately left UNCAPPED — capping it
+					  could only invent a new failure mode on a build that is currently green. Cap it
+					  once this log shows what it genuinely uses.
+					-->
+					<argLine>-Duser.timezone=UTC -Xmx4g -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=${project.build.directory}/failsafe-heapdump.hprof -Xlog:gc+heap=info,gc+metaspace=info:file=${project.build.directory}/failsafe-gc.log:time,uptime:filecount=3,filesize=20M</argLine>
 				</configuration>
 				<executions>
 					<execution>

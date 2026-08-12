@@ -5,23 +5,31 @@ import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
+import com.softropic.skillars.platform.payment.repo.BookingPayment;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Optional;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -40,6 +48,10 @@ class CreditRoutingTest {
     // from PaymentLifecycleService to fix Spring AOP proxy bypass (Group 2 adversarial patch).
     // Without this mock, PaymentLifecycleService.persistenceService is null → NPE on every path.
     @Mock BookingPaymentPersistenceService persistenceService;
+    // UAT.3 AC3: abortSettle builds a Counter against this. A plain @Mock MeterRegistry returns
+    // null from Counter.builder(...).register(...), so a real registry is used and @Spy is what
+    // makes @InjectMocks pass it to the constructor.
+    @Spy MeterRegistry meterRegistry = new SimpleMeterRegistry();
 
     @InjectMocks PaymentLifecycleService service;
 
@@ -56,7 +68,16 @@ class CreditRoutingTest {
 
     @BeforeEach
     void setUp() {
-        when(bookingPaymentRepository.existsById(BOOKING_ID)).thenReturn(false);
+        // UAT.3 AC3: "a row exists" no longer means "settled", so the guards read the row and its
+        // status rather than existsById. No row at all is the ordinary first-delivery case; the
+        // two tests that need a row override this, hence lenient.
+        lenient().when(bookingPaymentRepository.findById(BOOKING_ID)).thenReturn(Optional.empty());
+    }
+
+    /** Stubs the pre-capture reservation as granted — required on every path that reaches Stripe. */
+    private void reservationGranted() {
+        when(persistenceService.reserveCapture(eq(BOOKING_ID), any(), any(), isNull()))
+            .thenReturn(CaptureReservation.RESERVED);
     }
 
     @Test
@@ -76,6 +97,7 @@ class CreditRoutingTest {
     @Test
     void caseB_partialCredit_stripeChargedForDeficit() {
         when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("20.00"));
+        reservationGranted();
         when(paymentGateway.chargeAndCapture(BOOKING_ID, PARENT_ID, COACH_ID, new BigDecimal("30.00")))
             .thenReturn("pi_test_123");
 
@@ -93,6 +115,7 @@ class CreditRoutingTest {
     @Test
     void caseC_zeroCredit_fullStripeCharge() {
         when(creditWalletService.getBalance(PARENT_ID)).thenReturn(BigDecimal.ZERO);
+        reservationGranted();
         when(paymentGateway.chargeAndCapture(BOOKING_ID, PARENT_ID, COACH_ID, SESSION_PRICE))
             .thenReturn("pi_full_123");
 
@@ -127,6 +150,7 @@ class CreditRoutingTest {
     void stripeDecline_chargesCaptureFails_callsPersistFailureWithZeroReversal() {
         // Case B: balance 20, price 50 → Stripe for 30 → Stripe fails
         when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("20.00"));
+        reservationGranted();
         when(paymentGateway.chargeAndCapture(any(), any(), any(), any()))
             .thenThrow(new PaymentGatewayException("payment.lifecycleFailure"));
 
@@ -144,7 +168,7 @@ class CreditRoutingTest {
 
     @Test
     void duplicateEvent_idempotencyNoOp() {
-        when(bookingPaymentRepository.existsById(BOOKING_ID)).thenReturn(true);
+        when(bookingPaymentRepository.findById(BOOKING_ID)).thenReturn(Optional.of(payment("CAPTURED")));
 
         service.onBookingAccepted(event(null));
 
@@ -154,5 +178,55 @@ class CreditRoutingTest {
             any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(persistenceService, never()).persistPaymentFailure(
             any(), any(), any(), any(), any(), any(), any());
+    }
+
+    /**
+     * UAT.3 AC3. A CAPTURE_PENDING row is NOT a duplicate delivery to be skipped silently — a prior
+     * attempt reserved and never finished, so money may already be at Stripe. The settle must abort
+     * without charging again (double-charging the parent) and must raise the alertable counter,
+     * which is the only signal an operator gets before the sweeper escalates it.
+     */
+    @Test
+    void outstandingReservation_isNotTreatedAsDuplicate_neverRechargesAndCountsCaptureUnconfirmed() {
+        when(bookingPaymentRepository.findById(BOOKING_ID))
+            .thenReturn(Optional.of(payment("CAPTURE_PENDING")));
+
+        service.onBookingAccepted(event(null));
+
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any());
+        verify(persistenceService, never()).reserveCapture(any(), any(), any(), any());
+        verify(persistenceService, never()).persistPaymentSuccess(
+            any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+
+        Counter counter = meterRegistry.find("booking.payment.settle_aborted")
+            .tag("reason", "capture_unconfirmed").counter();
+        assertThat(counter).as("an outstanding reservation must be alertable, not silent").isNotNull();
+        assertThat(counter.count()).isEqualTo(1.0);
+    }
+
+    /**
+     * UAT.3 AC3. The reservation is the interlock: when it is refused — a parent cancellation won
+     * the race, so the booking is no longer PAYMENT_PENDING — the gateway must never be reached.
+     */
+    @Test
+    void reservationRefused_bookingNoLongerPending_stripeIsNeverCalled() {
+        when(creditWalletService.getBalance(PARENT_ID)).thenReturn(BigDecimal.ZERO);
+        when(persistenceService.reserveCapture(eq(BOOKING_ID), any(), any(), isNull()))
+            .thenReturn(CaptureReservation.BOOKING_NOT_PENDING);
+
+        service.onBookingAccepted(event(null));
+
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any());
+        verify(persistenceService, never()).persistPaymentSuccess(
+            any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        verify(persistenceService, never()).persistPaymentFailure(
+            any(), any(), any(), any(), any(), any(), any());
+    }
+
+    private BookingPayment payment(String status) {
+        BookingPayment bp = new BookingPayment();
+        bp.setBookingId(BOOKING_ID);
+        bp.setStatus(status);
+        return bp;
     }
 }
