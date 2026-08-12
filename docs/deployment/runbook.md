@@ -1,8 +1,9 @@
 # Operational Runbook
 
-This guide covers step-by-step remediation for three production failure scenarios: disk exhaustion,
-PostgreSQL service down, and Redis OOM or container restart loop. Each scenario includes detection,
-remediation, and verification. A developer can resolve each scenario by following this runbook alone.
+This guide covers step-by-step remediation for four production failure scenarios: disk exhaustion,
+PostgreSQL service down, Redis OOM or container restart loop, and a booking stuck in
+`CAPTURE_PENDING`. Each scenario includes detection, remediation, and verification. A developer can
+resolve each scenario by following this runbook alone.
 
 ---
 
@@ -67,6 +68,28 @@ docker compose restart loki
 # Prometheus self-prunes on schedule. Restart to trigger immediate compaction:
 docker compose restart prometheus
 ```
+
+**All four retention windows, in one place:**
+
+| Data | Window | Enforced by |
+|---|---|---|
+| Loki logs | 30 days | `loki.yml`, self-pruning |
+| Prometheus metrics | 15 days | Prometheus, self-pruning |
+| PostgreSQL dumps (Object Storage) | `BACKUP_RETENTION_DAYS`, default 14 days | `prune-backups.sh`, daily 03:30 UTC |
+| Hetzner Cloud snapshots | `SNAPSHOT_RETENTION_DAYS`, default 7 days | `prune-backups.sh`, daily 03:30 UTC |
+
+Backup retention keeps the newest `BACKUP_RETENTION_MIN_KEEP` (default 8) dumps regardless of age.
+See [`backup-restore.md`](backup-restore.md#retention) for the safety rails and the dry-run first
+run.
+
+> **⚠️ The Hetzner Volume at `/opt/skillars/data` has no working backup.** Verified against the
+> Hetzner Cloud API on 2026-08-11: that API has **no volume snapshot** — volumes support only
+> attach / detach / resize / change_protection, and a Hetzner *server* snapshot explicitly excludes
+> attached volumes. `volume-snapshot.sh` POSTs to a non-existent endpoint and has failed on every
+> cron run since it was written, which is consistent with `drill-log.md` never having recorded a
+> drill. The PostgreSQL dumps in Object Storage are unaffected and are the only working backup.
+> Choosing a replacement (file-level backup of the volume, a Storage Box, or accepting dumps-only)
+> is an open operational decision.
 
 ### Verification
 
@@ -244,3 +267,119 @@ docker exec "$APP_CID" wget -qO- http://localhost:8367/manage/health
 ```
 
 > **Note:** If the app container stopped during the Redis outage, restart it first: `docker compose restart app`. Wait ~30 seconds before checking health.
+
+---
+
+## Scenario 4: A Booking Stuck in `CAPTURE_PENDING`
+
+**A `payment.booking_payments` row with `status = 'CAPTURE_PENDING'` has no automated exit.** It is
+deliberately the one case the platform will not resolve on its own, because only a human can read
+the Stripe side and decide whether money actually moved.
+
+### Symptoms
+
+- ERROR log: `Stranded PAYMENT_PENDING booking cannot be swept automatically (CAPTURE_UNCONFIRMED)`
+- Metric: `booking_payment_pending_unrecoverable_total{reason="CAPTURE_UNCONFIRMED"}` increments on
+  every sweep (every 15 minutes) and keeps incrementing until resolved — the repetition **is** the
+  alert and is deliberately not deduplicated.
+- Possibly also `booking_payment_settle_aborted_total{reason="capture_unconfirmed"}` if a duplicate
+  settlement event arrived, or `{reason="reservation_failed"}` if the reservation itself threw (lock
+  timeout or constraint violation) — in that last case no charge was attempted and the sweeper can
+  resolve it on its own, so no manual work is needed.
+- `booking_payment_settle_conflict_total{event="PAYMENT_CAPTURED"|"PAYMENT_FAILED"}` and
+  `booking_payment_settle_error_total` cover the settle-side transition failing after a reservation
+  stands. **These two are the "routes nobody has found yet" alarms.** If either fires, the row below
+  is genuinely stuck and this scenario applies; capture the surrounding ERROR log, because the cause
+  is by definition not one of the paths analysed in UAT.3.
+- The parent cannot cancel the booking: `POST /api/bookings/{id}/cancel` returns **409**
+  `booking.paymentInProgress` for as long as the row stands.
+- The booking holds the coach's slot (`PAYMENT_PENDING` is in `ACTIVE_SLOT_STATUSES` and in V87's
+  exclusion constraint), so nobody else can book that time.
+
+### What it means
+
+`BookingPaymentPersistenceService.reserveCapture` writes a `CAPTURE_PENDING` row in its own
+transaction immediately **before** either Stripe call. A row still in that state means the process
+died — JVM crash, container restart, rolling deploy — between the reservation and the record of the
+outcome. **Money may or may not have been captured at Stripe.** The platform will never re-charge on
+this state; doing so risks double-charging the parent.
+
+### Diagnosis
+
+```bash
+# 1. List every outstanding reservation:
+docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" \
+  "$(docker compose -f /opt/skillars/docker-compose.yml ps -q postgres)" \
+  psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-skillars}" -c \
+  "SELECT bp.booking_id, bp.batch_payment_intent_id, bp.credit_debited, bp.stripe_charged,
+          b.parent_id, b.coach_id, b.status, b.updated_at
+     FROM payment.booking_payments bp
+     JOIN booking.bookings b ON b.id = bp.booking_id
+    WHERE bp.status = 'CAPTURE_PENDING';"
+```
+
+> **The `credit_debited` / `stripe_charged` columns on a CAPTURE_PENDING row are a reconciliation
+> hint, not an accounting record — do not reconcile against them as if they were.** For a **single**
+> booking they hold the intended split and are reliable. For a **batch** booking (`batch_payment_intent_id`
+> is non-null) the per-booking credit/Stripe split is not known at reservation time, so the row
+> carries `credit_debited = 0` and the whole price under `stripe_charged`; the real split is written
+> only when the settle completes. Treat the batch figure as an **upper bound on the Stripe leg**, and
+> take the actual amount from the Stripe dashboard, not from this table. Only `CAPTURED` rows are
+> ever summed by the revenue reports, so a stuck row is not distorting any coach's earnings while you
+> work.
+
+2. In the **Stripe dashboard**, search PaymentIntents by metadata `referenceId`:
+   - single booking → the **booking id**
+   - batch booking → the **batch id** (the `batch_payment_intent_id` column above)
+
+   `StripePaymentGateway` writes both as `referenceId` metadata, which is why this search works.
+
+### Resolution — charge FOUND at Stripe
+
+The parent paid. Record it and confirm the booking:
+
+```sql
+UPDATE payment.booking_payments
+   SET status = 'CAPTURED',
+       captured_at = now(),
+       stripe_payment_intent_id = '<pi_... from the Stripe dashboard>'
+ WHERE booking_id = '<booking-id>' AND status = 'CAPTURE_PENDING';
+
+UPDATE booking.bookings
+   SET status = 'CONFIRMED', updated_at = now(), version = version + 1
+ WHERE id = '<booking-id>' AND status = 'PAYMENT_PENDING';
+```
+
+### Resolution — NO charge at Stripe
+
+Nothing was taken. Decline the booking and hand the coach's slot back:
+
+```sql
+UPDATE payment.booking_payments
+   SET status = 'CHARGE_FAILED'
+ WHERE booking_id = '<booking-id>' AND status = 'CAPTURE_PENDING';
+
+UPDATE booking.bookings
+   SET status = 'DECLINED', updated_at = now(), version = version + 1
+ WHERE id = '<booking-id>' AND status = 'PAYMENT_PENDING';
+```
+
+Both statements are guarded on the current status, so re-running one is a no-op rather than a
+second overwrite.
+
+### Verification
+
+```bash
+# No CAPTURE_PENDING rows should remain, and the counter stops incrementing on the next sweep
+# (within 15 minutes):
+docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" \
+  "$(docker compose -f /opt/skillars/docker-compose.yml ps -q postgres)" \
+  psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-skillars}" -c \
+  "SELECT count(*) FROM payment.booking_payments WHERE status = 'CAPTURE_PENDING';"
+# Expected: 0
+```
+
+> **Why this is manual.** Every automatic option is worse. Declining could charge a parent for
+> nothing; confirming could give away a session that was never paid for; re-charging could take the
+> money twice. The `booking_payments` row exists precisely so that a human has something durable to
+> reconcile against — before UAT.3 there was no record at all, and this situation was undetectable.

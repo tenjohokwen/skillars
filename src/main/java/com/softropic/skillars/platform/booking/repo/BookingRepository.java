@@ -1,7 +1,11 @@
 package com.softropic.skillars.platform.booking.repo;
 
+import jakarta.persistence.LockModeType;
+import jakarta.persistence.QueryHint;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
@@ -176,4 +180,15 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
         @Param("coachId") UUID coachId,
         @Param("playerId") Long playerId,
         @Param("statuses") List<String> statuses);
+
+    // UAT.3 AC1/AC2: the capture reservation and the parent's cancel both read this row and write
+    // much later, in separate transactions, so @Version cannot serialise them — a cancel could
+    // commit inside the window between a Stripe capture and the row that records it. Both now take
+    // this lock and re-read under it. Annotation stack copied from
+    // BookingRescheduleRequestRepository.findByIdForUpdate, including the bounded lock wait —
+    // without it, contention blocks the caller indefinitely instead of surfacing as ApiAdvice's 409.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "5000"))
+    @Query("SELECT b FROM Booking b WHERE b.id = :id")
+    Optional<Booking> findByIdForUpdate(@Param("id") UUID id);
 }

@@ -16,6 +16,47 @@ data loss, corruption, or hardware failure requires recovery. For reverting a ba
 
 Both restore scripts require SSH access to the Node as root and must be run from `/opt/skillars`.
 
+> **⚠️ Section B does not currently work.** Verified against the Hetzner Cloud API on 2026-08-11:
+> the Hetzner Cloud API has **no volume snapshot**. `volume-snapshot.sh` POSTs to
+> `/v1/volumes/{id}/actions/create_snapshot`, which does not exist, so **no snapshot has ever been
+> created** and `restore-from-snapshot.sh` has nothing to restore from. Until a replacement backup
+> for `/opt/skillars/data` is chosen, **Section A (pg_dump) is the only working restore path**, and
+> everything on the volume that is not in the database — Loki, Prometheus, Grafana, Tempo, Redis
+> AOF, `acme.json` — has no backup at all. See [Retention](#retention) and `runbook.md`.
+
+---
+
+## Retention
+
+Both backup streams are pruned daily at **03:30 UTC** by `deploy/backup/prune-backups.sh`, installed
+by `install-crons.sh`. The schedule is clear of both producers (`pg-backup.sh` at `0 */6`,
+`volume-snapshot.sh` at `0 2`), so retention never races an upload.
+
+| Stream | Variable | Default | Effect |
+|---|---|---|---|
+| PostgreSQL dumps in Object Storage | `BACKUP_RETENTION_DAYS` | `14` | At the 6-hourly cadence this keeps ~56 dumps |
+| — minimum kept regardless of age | `BACKUP_RETENTION_MIN_KEEP` | `8` | Safety floor — see below |
+| Hetzner Cloud snapshots | `SNAPSHOT_RETENTION_DAYS` | `7` | Currently matches nothing; see the warning above |
+
+**Safety rails.** The failure mode of a pruner that mis-parses a listing is an emptied backup
+bucket, so:
+
+- The newest `BACKUP_RETENTION_MIN_KEEP` dumps are retained **unconditionally**, whatever the age
+  computation decides. A clock skew or a bad cutoff cannot get past that floor.
+- An **empty listing is a fatal error**, not "nothing to prune" — a changed prefix and an empty
+  bucket look identical from the pruner's side, and only one of them is benign.
+- A key whose `%Y%m%dT%H%M%SZ` stamp cannot be parsed is skipped and reported, never deleted. Age
+  comes from that stamp, not from the object's mtime.
+- An unparseable Hetzner API response exits non-zero with the body in the message.
+- A failure in one half does not skip the other; the exit code reflects both.
+
+**Run the first production prune as a dry run.** It prints exactly what it would delete and exits 0
+without deleting anything:
+
+```bash
+sudo /opt/skillars/deploy/backup/prune-backups.sh --dry-run
+```
+
 ---
 
 ## Section A: Restore from pg_dump

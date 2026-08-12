@@ -12,6 +12,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
+import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -39,6 +40,7 @@ class PaymentPendingSweeperIT extends BasePaymentIT {
     @Autowired PaymentPendingSweeper sweeper;
     @Autowired BookingExpiryScheduler bookingExpiryScheduler;
     @Autowired BookingService bookingService;
+    @Autowired BookingPaymentPersistenceService persistenceService;
 
     private UUID coachId;
     private Instant slotStart;
@@ -214,22 +216,83 @@ class PaymentPendingSweeperIT extends BasePaymentIT {
     // ── AC2 (d) ──
 
     /**
-     * The case that protects real money. On the credit path chargeAndCapture runs BEFORE the writes
-     * recording it, so this booking may already have been charged at Stripe with the record lost —
-     * and nothing durable tells that apart from "never charged". It must survive the sweep.
-     * This is not a redundant variant of the pack-funded case; do not delete it.
+     * UAT.3 AC5, INVERTING what Deferred-15 asserted here. This booking used to survive the sweep
+     * because nothing distinguished "never charged" from "charged and lost the record" on the
+     * credit path. reserveCapture now writes a CAPTURE_PENDING row before either Stripe call, so
+     * the absence of a row proves no charge was attempted — and the coach's slot can be handed back
+     * safely, whatever the booking's funding type.
      */
     @Test
-    void creditFundedStrandedBooking_isReportedNotDeclined() {
+    void creditFundedStrandedBookingWithNoPaymentRow_isNowSweptToDeclined() {
         UUID bookingId = seedStrandedBooking(null, 24 * 60);
 
         sweep();
 
-        assertThat(statusOf(bookingId)).isEqualTo("PAYMENT_PENDING");
-        assertThat(paymentRowCount(bookingId))
-            .as("no booking_payments write at all — a CHARGE_FAILED row here would falsely record "
-                + "that no money moved")
-            .isZero();
+        assertThat(statusOf(bookingId)).isEqualTo("DECLINED");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM payment.booking_payments WHERE booking_id = ?", String.class, bookingId))
+            .isEqualTo("CHARGE_FAILED");
+    }
+
+    /**
+     * The case that now protects real money, and the reason the funding-type precondition could be
+     * dropped. A standing CAPTURE_PENDING row means an attempt reserved and never finished, so the
+     * charge may already have landed at Stripe with nothing recording it. Declining here would hand
+     * the slot back at the cost of charging a parent for nothing — exactly the harm Deferred-15
+     * refused to risk. It must survive the sweep untouched and escalate to an operator instead.
+     */
+    @Test
+    void bookingWithOutstandingCaptureReservation_isReportedNotDeclined() {
+        UUID bookingId = seedStrandedBooking(null, 24 * 60);
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO payment.booking_payments (booking_id, credit_debited, stripe_charged, status) "
+                + "VALUES (?, 0, 50.00, 'CAPTURE_PENDING')", bookingId);
+            return null;
+        });
+
+        sweep();
+
+        assertThat(statusOf(bookingId))
+            .as("money may already be at Stripe — this is an operator's reconciliation, not a decline")
+            .isEqualTo("PAYMENT_PENDING");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM payment.booking_payments WHERE booking_id = ?", String.class, bookingId))
+            .as("the reservation must not be overwritten with CHARGE_FAILED")
+            .isEqualTo("CAPTURE_PENDING");
+        assertThat(paymentRowCount(bookingId)).isEqualTo(1);
+    }
+
+    /**
+     * UAT.3 review patch. Once the sweeper has declined a stranded booking, a settlement arriving
+     * afterwards must refuse to reserve rather than charge a booking that no longer exists as a
+     * live session — the sweeper hands the coach's slot back, so a later charge would take money
+     * for a session nobody holds.
+     *
+     * <p>Deterministic on purpose. An earlier version of this test raced the sweeper against a
+     * concurrent reservation to prove {@code sweepOne}'s row lock; it was <strong>deleted because
+     * it passed unchanged with the lock removed</strong> — both threads start together but the
+     * sweeper first reads config and queries for stranded bookings, so the reservation always
+     * committed first by a wide margin and the correct outcome came from the payment-row check,
+     * not the lock. It cost 280s and proved nothing. The lock's own read-then-write window is
+     * microseconds wide and is not reachable from a test at this level; see the deferred item.
+     */
+    @Test
+    void afterTheSweepDeclinesABooking_aLateSettlementRefusesToReserve() {
+        UUID bookingId = seedStrandedBooking(null, 24 * 60);
+
+        sweep();
+        assertThat(statusOf(bookingId)).isEqualTo("DECLINED");
+
+        assertThat(persistenceService.reserveCapture(bookingId, BigDecimal.ZERO, new BigDecimal("50.00"), null))
+            .as("a declined booking must never be reserved — the coach's slot has already been released")
+            .isEqualTo(CaptureReservation.BOOKING_NOT_PENDING);
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM payment.booking_payments WHERE booking_id = ?", String.class, bookingId))
+            .as("the refused reservation must not have touched the sweeper's CHARGE_FAILED record")
+            .isEqualTo("CHARGE_FAILED");
+        assertThat(paymentRowCount(bookingId)).isEqualTo(1);
     }
 
     // ── Task 1 reproduction, kept as a regression pin ──

@@ -143,7 +143,11 @@ public class RevenueReportingService {
         Booking booking = bookingRepository.findByIdAndCoachId(bookingId, coachId)
             .orElseThrow(() -> new AccessDeniedException("Access denied to booking receipt"));
 
+        // UAT.3 AC1: a booking_payments row may now exist BEFORE the money moves. Rendering a
+        // receipt from a CAPTURE_PENDING row would show a coach income that may never be taken.
+        // Anything non-CAPTURED keeps today's 404.
         BookingPayment payment = bookingPaymentRepository.findById(bookingId)
+            .filter(bp -> "CAPTURED".equals(bp.getStatus()))
             .orElseThrow(() -> new ResourceNotFoundException("Booking payment not found", "booking_payment"));
 
         PlayerProfile player = playerProfileRepository.findById(booking.getPlayerId()).orElse(null);
@@ -173,7 +177,9 @@ public class RevenueReportingService {
         Booking booking = bookingRepository.findByIdAndParentId(bookingId, parentId)
             .orElseThrow(() -> new AccessDeniedException("Access denied to booking receipt"));
 
+        // UAT.3 AC1: see getCoachReceipt — a pre-capture row must not render as a paid receipt.
         BookingPayment payment = bookingPaymentRepository.findById(bookingId)
+            .filter(bp -> "CAPTURED".equals(bp.getStatus()))
             .orElseThrow(() -> new ResourceNotFoundException("Booking payment not found", "booking_payment"));
 
         PlayerProfile player = playerProfileRepository.findById(booking.getPlayerId()).orElse(null);

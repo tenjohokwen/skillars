@@ -1,6 +1,23 @@
 #!/usr/bin/env bash
 # Creates a Hetzner Volume snapshot via the Hetzner Cloud API.
 # Cron runs this daily at 02:00 UTC via install-crons.sh.
+#
+# !!! BROKEN — DOES NOT WORK AND CANNOT BE MADE TO WORK AS WRITTEN !!!
+# Verified against the Hetzner Cloud API on 2026-08-11 (UAT.3 AC6): there is NO volume snapshot in
+# that API. Volumes support attach / detach / resize / change_protection and nothing else; the only
+# image-creating action is POST /v1/servers/{id}/actions/create_image, and a Hetzner server snapshot
+# explicitly EXCLUDES attached volumes. The POST below therefore hits an endpoint that does not
+# exist, fails, and has failed on every cron run since deploy-3-1 — consistent with drill-log.md
+# never having recorded a restore drill.
+#
+# CONSEQUENCE: the Hetzner Volume mounted at /opt/skillars/data has NO working backup. That volume
+# holds postgres data, redis, prometheus, loki and acme.json. The Postgres dumps in Object Storage
+# (pg-backup.sh) are unaffected and remain the only working backup of the database.
+#
+# Deliberately NOT rewritten here: choosing the replacement (file-level backup of the volume to
+# Object Storage, a Storage Box, or accepting dumps-only) is an operational decision, and
+# restore-from-snapshot.sh rests on the same non-existent snapshots. Tracked in deferred-work.md
+# under skillars-uat-3 and in docs/deployment/runbook.md.
 set -euo pipefail
 
 # shellcheck source=/dev/null

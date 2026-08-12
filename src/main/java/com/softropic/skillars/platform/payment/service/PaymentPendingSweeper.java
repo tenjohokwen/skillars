@@ -10,6 +10,7 @@ import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.payment.contract.BookingPaymentStatus;
 import com.softropic.skillars.platform.payment.repo.BookingPayment;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
@@ -28,6 +29,7 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -42,20 +44,29 @@ import java.util.concurrent.TimeUnit;
  * constraint, so the row holds the coach's slot against every other booking, and the only exit the
  * state machine offers outside the payment listener is the parent's own CANCEL_PARENT.
  *
- * <p><strong>Credit-funded stranded bookings are knowingly left alone. Do not "complete" this
- * sweeper by dropping the pack-funded precondition.</strong> On the credit path
- * {@code chargeAndCapture} / {@code chargeAndCaptureForBatch} run BEFORE the DB writes that record
- * them, so a crash in between leaves money captured at Stripe with no {@code booking_payments} row,
- * no ledger entry and no other durable trace — the gateway exposes no capture lookup, no
- * {@code payment_intent.*}/{@code charge.*} webhook is handled, and the gateway's only durable
- * write ({@code stripeCustomer.lastPaymentIntentId}) is transactional and per-parent. There is no
- * signal this class could read to tell "never charged" from "charged and lost the record", so
- * declining such a booking would hand the coach's slot back at the cost of charging a parent for
- * nothing. Pack-funded settlement never calls Stripe at all, which is what makes it decidable.
+ * <p><strong>The decision is made on the payment row, not on the funding type.</strong> UAT.3 AC1
+ * added {@code BookingPaymentPersistenceService.reserveCapture}, which writes a CAPTURE_PENDING
+ * {@code booking_payments} row in its own transaction BEFORE either Stripe call
+ * ({@code chargeAndCapture} / {@code chargeAndCaptureForBatch}), and those are the only two
+ * Stripe-charging call sites for bookings. That establishes the invariant this class now rests on:
  *
- * <p>The change that would make full coverage safe — a durable pre-capture record, plus making the
- * four {@code existsById} idempotency checks in PaymentLifecycleService status-aware — is tracked
- * in {@code deferred-work.md} under the skillars-deferred-15 audit block.
+ * <p><strong>For a booking still in PAYMENT_PENDING, the absence of a {@code booking_payments} row
+ * proves no Stripe call was ever attempted for it — whatever its funding type.</strong>
+ *
+ * <p>Such a booking is safe to decline: nothing was charged, so handing the coach's slot back costs
+ * the parent nothing. Credit-funded bookings were previously reported and left alone precisely
+ * because that proof did not exist; it does now, and the funding-type test is gone.
+ *
+ * <p>A row that IS present means the opposite, and the status says which kind:
+ * <ul>
+ *   <li><strong>CAPTURE_PENDING</strong> ({@code reason=CAPTURE_UNCONFIRMED}) — an attempt reserved
+ *       and never finished. Money may already be at Stripe with nothing recording it. There is no
+ *       automated exit: an operator must search Stripe by the booking or batch id and settle or
+ *       decline the row by hand. See {@code docs/deployment/runbook.md}.</li>
+ *   <li><strong>Any terminal status</strong> ({@code reason=PAYMENT_ROW_PRESENT}) — a settled
+ *       payment paired with a PAYMENT_PENDING booking is a data-integrity failure, not a stranded
+ *       booking.</li>
+ * </ul>
  */
 @Component
 @RequiredArgsConstructor
@@ -118,21 +129,28 @@ public class PaymentPendingSweeper {
     }
 
     private void sweepOne(UUID bookingId) {
-        Booking booking = bookingRepository.findById(bookingId).orElse(null);
+        // Locked read, and it must stay locked: this method decides on the ABSENCE of a payment row
+        // and then writes one, while reserveCapture is concurrently deciding on the absence of the
+        // same row and inserting CAPTURE_PENDING. With an unlocked read a reservation committing in
+        // between would be silently overwritten by the CHARGE_FAILED write below — recording "no
+        // money moved" over a booking whose charge may already have reached Stripe, which is the
+        // exact harm this class refuses to risk. Taking the same booking-row lock reserveCapture
+        // takes serialises the two: whichever wins, the loser observes the winner's committed state.
+        Booking booking = bookingRepository.findByIdForUpdate(bookingId).orElse(null);
         if (booking == null) return;
         // The row may have settled between the select above and this transaction opening.
         if (!"PAYMENT_PENDING".equals(booking.getStatus())) return;
 
-        if (booking.getSessionPackPurchaseId() == null) {
-            reportUnrecoverable(booking, "CREDIT_FUNDED");
+        // UAT.3 AC5. The payment row decides, not the funding type — see the class Javadoc. Read
+        // under the booking-row lock above, exactly as reserveCapture reads it.
+        Optional<BookingPayment> existing = bookingPaymentRepository.findById(bookingId);
+        if (existing.isPresent()) {
+            reportUnrecoverable(booking, BookingPaymentStatus.CAPTURE_PENDING.equals(existing.get().getStatus())
+                ? "CAPTURE_UNCONFIRMED" : "PAYMENT_ROW_PRESENT");
             return;
         }
-        if (bookingPaymentRepository.existsById(bookingId)) {
-            // Every writer of booking_payments writes the row and the status transition in one
-            // transaction, so this pairing is a data-integrity failure, not a stranded booking.
-            reportUnrecoverable(booking, "PAYMENT_ROW_PRESENT");
-            return;
-        }
+        // No row at all ⇒ UAT.3 AC1's invariant says no Stripe call was ever attempted for this
+        // booking, whatever its funding type. Safe to decline and hand the coach's slot back.
 
         // Same triple BookingPaymentPersistenceService.persistPaymentFailure performs, in the same
         // order: payment row, then the transition, then the event.
@@ -140,7 +158,7 @@ public class PaymentPendingSweeper {
         bp.setBookingId(bookingId);
         bp.setCreditDebited(BigDecimal.ZERO);
         bp.setStripeCharged(BigDecimal.ZERO);
-        bp.setStatus("CHARGE_FAILED");
+        bp.setStatus(BookingPaymentStatus.CHARGE_FAILED);
         bookingPaymentRepository.save(bp);
 
         bookingService.transition(bookingId, BookingEvent.PAYMENT_FAILED,
@@ -153,7 +171,7 @@ public class PaymentPendingSweeper {
             booking.getRequestedStartTime(), booking.getCanonicalTimezone()));
 
         Counter.builder(SWEPT_COUNTER).register(meterRegistry).increment();
-        log.warn("Swept stranded pack-funded booking to DECLINED: bookingId={} batchId={} parentId={} "
+        log.warn("Swept stranded booking to DECLINED: bookingId={} batchId={} parentId={} "
                 + "sessionPackPurchaseId={} updatedAt={}",
             bookingId, booking.getBatchId(), booking.getParentId(),
             booking.getSessionPackPurchaseId(), booking.getUpdatedAt());
@@ -161,8 +179,8 @@ public class PaymentPendingSweeper {
 
     /**
      * ERROR, not WARN: these are the bookings an operator has to reconcile against Stripe by hand.
-     * The counter is tagged so the credit-funded case — the one where money may already have left
-     * the parent — is alertable on its own.
+     * The counter is tagged so CAPTURE_UNCONFIRMED — the one where money may already have left the
+     * parent — is alertable on its own.
      */
     private void reportUnrecoverable(Booking booking, String reason) {
         Counter.builder(UNRECOVERABLE_COUNTER).tag("reason", reason).register(meterRegistry).increment();
