@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-08-11 # skillars-uat-3 → done (code review complete, 13 patches applied)
+# last_updated: 2026-08-12 # skillars-uat-4 → review (dev-story complete, mvn -o verify green)
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-08-11 # skillars-uat-3 → done (code review complete, 13 patches applied)
+last_updated: 2026-08-12 # skillars-uat-4 → review (dev-story complete, mvn -o verify green)
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -614,3 +614,33 @@ development_status:
   # SessionPackPurchaseRepository:17-20 — that third findByIdForUpdate carries no @QueryHints lock.timeout
   # at all (recorded as a new deferred item under AC7, not fixed here).
   skillars-uat-3-payment-capture-integrity-and-backup-retention: done  # 2026-08-11: all 7 ACs implemented, full mvn -o verify BUILD SUCCESS (24:01) — 860 unit + 874 IT, 0F/0E. Contribution derived by diffing @Test counts against HEAD, never by subtracting totals: 762->774 unit (+12), 885->892 IT (+7), each confirmed against this build's per-class reports. DO NOT reconcile 860/874 against uat-2's recorded 823+863 — the two are counted on different bases (774 @Test annotations run as 860 tests; 5 files use @ParameterizedTest); the delta is the measured quantity. No IT class silently stopped running: 139 *IT.java - 4 abstract bases = 135 concrete vs 136 failsafe reports, the extra being the stale ProbeIT report timestamped Aug 10 15:15 (a day before this run's 13:03, no source file); per-class sum 875 = console 874 + that one file. CORRECTION to the story's Dev Notes: it listed FIVE abstract IT bases including AbstractIntegrationTest, but that file ends in Test.java not IT.java and was never in the count — the real figure is four. HEADLINE, and bigger than the AC that found it: AC6 required verifying the Hetzner list/delete endpoints against live API docs, and doing so established that the Hetzner Cloud API HAS NO VOLUME SNAPSHOT AT ALL (verified against four independent sources — the generated Python SDK exposes only attach/detach/resize/change_protection/create/delete/update on VolumesClient; the API changelog never mentions volume snapshots; Pulumi's hcloud.Snapshot requires a ServerId; Hetzner's own guidance says server snapshots exclude attached volumes). volume-snapshot.sh POSTs to /v1/volumes/{id}/actions/create_snapshot, which 404s, so it has failed on every cron run since deploy-3-1 and NO SNAPSHOT HAS EVER EXISTED — meaning the Hetzner Volume at /opt/skillars/data (postgres data, redis AOF, prometheus, loki, grafana, tempo, acme.json) HAS NO BACKUP, and restore-from-snapshot.sh plus Section B of backup-restore.md have nothing to restore from. The Object Storage pg_dump stream is unaffected and is the only working backup, of the database only. Nothing in the repo contradicted this because drill-log.md holds only its placeholder row — no restore drill has ever been run, which is exactly what would have caught it. DELIBERATELY NOT FIXED: choosing the replacement (file-level volume backup to Object Storage, a Storage Box, or an explicit dumps-only decision that deletes Section B) is an operational decision and a deployment story, not a payment one — recorded as uat-3 D1, ranked P1 #9 (above P2 deliberately: a live data-loss exposure, not a deployment inconvenience), warned loudly in volume-snapshot.sh, backup-restore.md and runbook.md. MBAH MUST DECIDE THIS. BOTH mutation checks performed and discriminating: (1) deleting AC2's CAPTURE_PENDING branch fails cancelBookingAsParent_captureInFlight_refuses409AndLeavesBookingPending — but the FIRST version of that test did NOT meet the bar and was rewritten, it initially failed with "expected ResponseStatusException but was ResourceNotFoundException: Coach pricing not found", i.e. only proving "something threw", the exact weakness uat-2 recorded; the downstream path is now stubbed lenient() so the mutation lets the cancel COMPLETE and the failure is "Expecting code to raise a throwable"; (2) restoring the pre-fix !existsById condition at :198-202 fails batchChargeFails_everyReservedBookingIsDeclined with "expected DECLINED but was PAYMENT_PENDING" — the whole batch strands, exactly as the story predicted. A TWELFTH-FILE MISS THE STORY UNDER-PREDICTED: PaymentWebhookIdempotencyIT seeds NO booking.bookings rows at all (it declares @MockitoBean BookingService precisely so transitions never need one), so reserveCapture's locked read found nothing, returned BOOKING_NOT_PENDING and left zero payment rows — the story only asked whether it asserts "exactly N rows". Fixed the fixture, not the check. Generalises as D7: any test driving a settlement path now needs a real booking row, which was not true before this story. Deadlock precondition CONFIRMED BY READING as the story required, not assumed, and written as a comment at both call sites. STILL OPEN: prune-backups.sh passes shellcheck but NEITHER HALF HAS BEEN EXECUTED (needs live Hetzner Object Storage credentials and a live HCLOUD_TOKEN) — first production run must be --dry-run; it also newly requires jq, added to provision.sh but ABSENT ON AN ALREADY-PROVISIONED NODE, so run apt-get install -y jq before installing the cron. DEFERRED: 10 items (D1-D10). This story touches no .vue file, so unlike uat-1/uat-2 nothing rests on code reading alone. | CODE REVIEW 2026-08-11 (bmad-code-review, 3-layer: Blind Hunter + Edge Case Hunter + Acceptance Auditor): 23 unified findings, 13 patches applied and independently re-verified against source (headline: PaymentPendingSweeper.sweepOne() switched to a locked findByIdForUpdate read, closing a silent merge-overwrite race with reserveCapture that could have destroyed a live CAPTURE_PENDING row instead of erroring — exactly the "hide a possibly-real Stripe charge" failure AC1 exists to prevent), 1 decision-needed resolved by Mbah (AC6's HETZNER_VOLUME_ID safety rail deferred pending the D1 backup-strategy decision), 6 further items deferred (see deferred-work.md), 3 dismissed as working-as-intended. Full findings in the story's Review Findings section.
+
+  # Fourth story drawn from uat-readiness-priorities.md. Takes the i18n pair (P1 #7, #8) that uat-1,
+  # uat-2 and uat-3 each deliberately left, plus the deferred-9 D2 ledger-hygiene residue uat-1 AC9
+  # re-scoped but did not fix. The last non-decision code item left in the priorities doc — everything
+  # else still open (P0-2, P0-4, P1 #9) is a product/ops decision for Mbah, not a dev pass.
+  #   AC1  P1#7  formatSlot hardcodes 'en' (deferred-17 D3). Re-verified against the current tree, not
+  #              the 2026-08-06 citation: 10 call sites across 8 files (useTimezone.js,
+  #              WeeklyCalendar.vue, CoachBookingRequestsPage.vue, CoachCommandCenterPage.vue,
+  #              AvailabilityManagerPage.vue, ParentPlayerPortalPage.vue, ParentBookingsPage.vue,
+  #              BookingRequestPage.vue) — SessionPackDashboardPage.vue, the deferred item's own
+  #              example, was already fixed (uses toLocaleString(undefined, ...)). Explicit "Do NOT
+  #              touch" table for locale-invariant computational Intl calls (en-CA offset math, numeric
+  #              hour/minute extraction, English-weekday-array matching) that look identical but would
+  #              break if localized.
+  #   AC2  P1#8  ApiAdvice/VideoApiAdvice can never resolve a non-English bundle (deferred-18 D6).
+  #              Root cause verified end to end: frontend already sends the right Accept-Language
+  #              header; the bug is one line, SecurityAdviceFilter.java:59 storing
+  #              locale.getDisplayLanguage() ("German") instead of locale.toLanguageTag() ("de"),
+  #              which Locale.forLanguageTag() at all 4 read sites then fails to parse. No message-
+  #              bundle or ApiAdvice read-site change needed.
+  #   AC3        deferred-9 D2 residue (re-scoped by uat-1 AC9, not fixed there): de bundle fully
+  #              translated but unreachable (MainLayout.vue languages array offers only en-US/fr-FR),
+  #              de not renamed de-DE, redundant en bundle (zero importers, confirmed) never deleted.
+  #   AC4        close deferred-17 D3, deferred-18 D6, deferred-9 D2; record 3 new deferred items
+  #              (unused useTimezone.js, hardcoded English day-name arrays as a distinct missing-
+  #              translation-keys problem, CoachCommandCenterPage.vue's fragile English-weekday-array
+  #              day-index matching).
+  # DELIBERATELY EXCLUDED: P0-2, P0-4, P1 #9 (all still product/ops decisions for Mbah); all P3.
+  # No backend migration, no schema change, no API contract change — pure bug-fix pass.
+  skillars-uat-4-i18n-locale-and-message-resolution-integrity: review

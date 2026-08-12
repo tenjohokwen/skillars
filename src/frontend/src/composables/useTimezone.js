@@ -1,8 +1,11 @@
+import { useI18n } from 'vue-i18n'
+
 export function useTimezone(canonicalTimezone) {
+  const { locale } = useI18n()
   const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
 
   function formatInPitchTimezone(isoString) {
-    return new Intl.DateTimeFormat('en', {
+    return new Intl.DateTimeFormat(locale.value, {
       timeZone: canonicalTimezone,
       dateStyle: 'medium',
       timeStyle: 'short',
@@ -10,7 +13,7 @@ export function useTimezone(canonicalTimezone) {
   }
 
   function formatInBrowserTimezone(isoString) {
-    return new Intl.DateTimeFormat('en', {
+    return new Intl.DateTimeFormat(locale.value, {
       timeZone: browserTimezone,
       dateStyle: 'medium',
       timeStyle: 'short',

@@ -66,6 +66,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const props = defineProps({
   weekStart: { type: String, required: true },
@@ -73,6 +74,8 @@ const props = defineProps({
   blocks: { type: Array, default: () => [] },
   coachTimezone: { type: String, default: 'UTC' },
 })
+
+const { locale } = useI18n()
 
 const emit = defineEmits(['edit-window', 'delete-window', 'delete-block', 'add-window'])
 
@@ -95,7 +98,7 @@ const weekDays = computed(() => {
   for (let i = 0; i < 7; i++) {
     const d = new Date(props.weekStart + 'T00:00:00')
     d.setDate(d.getDate() + i)
-    const date = new Intl.DateTimeFormat('en', {
+    const date = new Intl.DateTimeFormat(locale.value, {
       month: 'short', day: 'numeric',
       timeZone: props.coachTimezone,
     }).format(d)

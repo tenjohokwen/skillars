@@ -122,7 +122,7 @@ import { useAuthStore } from 'src/stores/auth.store'
 import BookingStateChip from 'src/components/booking/BookingStateChip.vue'
 import TimezoneNotice from 'src/components/booking/TimezoneNotice.vue'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const $q = useQuasar()
 const bookingStore = useBookingStore()
 const authStore = useAuthStore()
@@ -218,7 +218,7 @@ function toggleTimezone(bookingId) {
 }
 
 function formatDateTime(isoString, timezone) {
-  return new Intl.DateTimeFormat('en', {
+  return new Intl.DateTimeFormat(locale.value, {
     timeZone: timezone,
     dateStyle: 'medium',
     timeStyle: 'short',

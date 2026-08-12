@@ -1,11 +1,9 @@
 import enUS from './en-US'
 import frFR from './fr-FR'
-import en from './en'
-import de from './de'
+import deDE from './de-DE'
 
 export default {
   'en-US': enUS,
   'fr-FR': frFR,
-  en,
-  de,
+  'de-DE': deDE,
 }

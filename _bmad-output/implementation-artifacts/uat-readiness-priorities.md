@@ -19,10 +19,10 @@ Items already pulled into a story. A subsequent story-creation pass must skip an
 | `skillars-uat-1-admin-bootstrap-and-onboarding-unblock.md` (2026-08-10) | P0-1 (AC1–AC3), P0-3 (AC4), P1 #4 (AC5), P1 #5 (AC6), P1 #6 (AC7), P2 #1 (AC8, re-scoped), all 5 Ledger-hygiene rows (AC9) |
 | `skillars-uat-2-session-duration-and-booking-slot-integrity.md` (2026-08-10) | P0-5 (AC1–AC4), P1 #1 (AC5), P2 #2, P2 #3, P2 #5 (AC6) — **IMPLEMENTED 2026-08-10**, scope unchanged from what was claimed. `deferred-17` D1 and `deferred-18` D3 closed in the ledger. |
 | `skillars-uat-3-payment-capture-integrity-and-backup-retention.md` (2026-08-11) | P1 #3 (AC1, AC3, AC5), P1 #2 (AC2), P2 #4 (AC6). Grouped because P1 #2 and #3 share one mechanism: the durable pre-capture `booking_payments` row that #3 asks for **is** the interlock #2 needs, and widening the `PaymentPendingSweeper` (currently pack-funded only) is only safe once that row exists. P2 #4 rides along as the last unclaimed P2 row — ops-only, no overlap with the Java tree. — **IMPLEMENTED 2026-08-11**, scope unchanged from what was claimed. `deferred-12` D2, `deferred-15` story-creation D1 and the `deploy-3-1` retention row all closed in the ledger. **AC6 surfaced a new, larger ops finding — see P1 #9 below.** |
+| `skillars-uat-4-i18n-locale-and-message-resolution-integrity.md` (2026-08-12) | P1 #7 (AC1), P1 #8 (AC2), the `deferred-9` D2 ledger-hygiene residue (AC3). The last non-decision *code* item left in this doc — everything else still open (P0-2, P0-4, P1 #9) is a product/ops decision, not a dev pass. AC1's file list is corrected against the current tree (the `deferred-17` D3 citation of `SessionPackDashboardPage.vue` is stale — that file was never actually broken); AC2's fix is a single line (`SecurityAdviceFilter.java` was storing an English display name instead of a language tag). |
 
 **Still unclaimed:** P0-2 and P0-4 (both product decisions — see the Suggested sequence);
-**P1 #9 (new 2026-08-11 — the data volume has no working backup)**; P1 #7, #8 (the i18n pair);
-everything in P3. **P2 is now empty.**
+**P1 #9 (new 2026-08-11 — the data volume has no working backup)**; everything in P3. **P2 is now empty.**
 
 **P0-5's product decision is resolved** (Mbah, 2026-08-10): the default session length is one hour
 system-wide, and a coach can override it. `skillars-uat-2` implements that as a
@@ -193,9 +193,9 @@ Ordered by how likely you are to trip over them.
    one of three values), but a 500 during UAT costs an investigation.
 6. **[CLAIMED → `skillars-uat-1-...unblock.md` AC7]** **`deferred-18` D1 — a DST gap can emit a negative-duration slot** that renders clickable and 400s
    behind a generic toast. Needs a ~02:30 Sunday window to trigger; unlikely but free to guard.
-7. **`deferred-17` D3 — `formatSlot` hardcodes `'en'`.** Only matters if UAT is not English-only.
+7. **[CLAIMED → `skillars-uat-4-...integrity.md` AC1]** **`deferred-17` D3 — `formatSlot` hardcodes `'en'`.** Only matters if UAT is not English-only.
    Systemic across 4+ pages; do it as one sweep or not at all.
-8. **`deferred-18` D6 — `ApiAdvice` can never resolve a non-English message bundle.**
+8. **[CLAIMED → `skillars-uat-4-...integrity.md` AC2]** **`deferred-18` D6 — `ApiAdvice` can never resolve a non-English message bundle.**
    `SecurityAdviceFilter:59` stores `locale.getDisplayLanguage()` ("German"), and
    `Locale.forLanguageTag("German")` yields `"german"` — so `messages_de.properties` is never selected
    and every custom validator's translations are dead. Same condition as #7: English-only UAT, defer.
@@ -336,9 +336,11 @@ budgeting work that is already done.
    Hetzner Storage Box, or an explicit written decision that dumps-only is acceptable and Section B
    of `backup-restore.md` gets deleted. Whichever you pick, run a restore drill and finally write a
    row in `drill-log.md` — a drill is what would have caught this two months ago.
-9. **The i18n pair** (P1 #7, #8) — only if UAT is not English-only. `uat-1`, `uat-2` and `uat-3` have
+9. ~~**The i18n pair** (P1 #7, #8) — only if UAT is not English-only. `uat-1`, `uat-2` and `uat-3` have
    now all touched files near #7/#8 call sites and all three deliberately left them: one sweep or none.
-   These are the last non-decision *code* items on the list.
+   These are the last non-decision *code* items on the list.~~ **CLAIMED** — `skillars-uat-4`, written
+   2026-08-12. Also absorbed the `deferred-9` D2 ledger-hygiene residue (`de` bundle unreachable/not
+   renamed, redundant `en` bundle) that `uat-1` AC9 re-scoped but did not fix.
 10. ~~What remains in P2 is `deploy-3-1` (backup retention) alone.~~ **P2 is empty after `uat-3`.** Then
     never P3 — until a post-UAT resilience epic picks up `skillars-10-2` D1 and the outbox question
     wholesale.

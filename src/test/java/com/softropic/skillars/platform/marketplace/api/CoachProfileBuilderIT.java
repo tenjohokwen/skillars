@@ -218,6 +218,32 @@ class CoachProfileBuilderIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void saveStep1_invalidTimezone_germanAcceptLanguage_returns400WithGermanResolvedMessage() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        HttpHeaders headers = authenticatedHeaders(cookies);
+        headers.add(HttpHeaders.ACCEPT_LANGUAGE, "de");
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/1",
+            HttpMethod.PUT,
+            step1Payload("John Coach", "Bio", "Berlin", "Mitte", List.of("English"), "Not/AZone"),
+            headers,
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                // Proves the full Accept-Language -> chosenLang -> Locale.forLanguageTag chain resolves
+                // to the German bundle, not just the isolated ApiAdvice unit — this exact request shape
+                // was unreachable before SecurityAdviceFilter's getDisplayLanguage() -> toLanguageTag() fix.
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("Die Zeitzone muss eine bekannte Zeitzonenkennung sein")
+                    .doesNotContain("Timezone must be a recognized timezone identifier");
+            });
+    }
+
+    @Test
     void saveStep1_missingDisplayName_returns400() {
         String cookies = loginAndGetCookies(COACH_EMAIL);
 

@@ -35,8 +35,8 @@ public class RequestMetadata {
     //"Accept-Language")
     private String acceptLanguage;
 
-    //Language set in the UI by user
-    private String chosenLang = "English";
+    //Resolved server-side from the request's Accept-Language header (see SecurityAdviceFilter)
+    private String chosenLang = "en-US";
 
     //apiKey
     private String apiKey;

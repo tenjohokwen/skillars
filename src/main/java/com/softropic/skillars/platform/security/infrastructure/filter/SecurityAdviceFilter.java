@@ -56,7 +56,7 @@ public class SecurityAdviceFilter extends OncePerRequestFilter {
             RequestMetadataProvider.initRequestMetadata(request);
             jwtSecretService.addSecretToThread();
             final Locale locale = localeResolver.resolveLocale(request);
-            RequestMetadataProvider.setChosenLang(locale.getDisplayLanguage());
+            RequestMetadataProvider.setChosenLang(locale.toLanguageTag());
             filterChain.doFilter(request, response);
         } catch (Exception exception) {
             //let declared exception handler handle. In this case a class annotated with @ControllerAdvice

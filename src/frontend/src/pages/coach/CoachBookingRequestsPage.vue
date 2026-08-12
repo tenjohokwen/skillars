@@ -136,7 +136,7 @@ import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { useBookingStore } from 'src/stores/booking.store'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const $q = useQuasar()
 const bookingStore = useBookingStore()
 
@@ -145,7 +145,7 @@ const declining = ref({})
 const acceptingAll = ref({})
 
 function formatDateTime(isoString, timezone) {
-  return new Date(isoString).toLocaleString('en', { timeZone: timezone })
+  return new Date(isoString).toLocaleString(locale.value, { timeZone: timezone })
 }
 
 async function handleAccept(id) {

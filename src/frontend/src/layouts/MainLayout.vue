@@ -236,6 +236,7 @@ const darkMode = ref(isDarkMode());
 const languages = [
   { label: 'English', value: 'en-US' },
   { label: 'Français', value: 'fr-FR' },
+  { label: 'Deutsch', value: 'de-DE' },
 ];
 
 const currentLanguageLabel = computed(() => {
