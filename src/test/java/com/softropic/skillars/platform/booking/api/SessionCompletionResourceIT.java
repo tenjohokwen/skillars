@@ -250,6 +250,39 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
         assertThat(status).isEqualTo("COMPLETED");
     }
 
+    /**
+     * UAT.5 review finding: no regression test proved a self-registered PLAYER stays rejected on
+     * {@code /confirm-completion} even though it is a live, unconditionally-rendered "Confirm
+     * Completion" button on the exact page ({@code ParentBookingsPage.vue}) UAT.5's AC4 exposed to
+     * players. Reuses this class's existing context rather than a new WebMvcTest slice, which
+     * would add a distinct Spring context and risk tripping the CI context-count ceiling
+     * (deferred-19 AC3).
+     */
+    @Test
+    void confirmCompletion_selfRegisteredPlayer_returns403() {
+        setBookingStatus("COMPLETED_PENDING_CONFIRMATION");
+        insertCompletionData("QUICK");
+        long selfPlayerUserId = 9600000004L;
+        String selfPlayerEmail = "self.player.completion@skillars-test.com";
+        transactionTemplate.execute(s -> {
+            insertUser(selfPlayerUserId, selfPlayerEmail, passwordEncoder.encode(TEST_PASSWORD), "PLAYER");
+            jdbcTemplate.update(
+                "INSERT INTO main.user_authority (user_id, authority_id) " +
+                "VALUES (?, (SELECT id FROM main.authority WHERE name = 'ROLE_PLAYER')) ON CONFLICT DO NOTHING",
+                selfPlayerUserId
+            );
+            return null;
+        });
+        String playerCookies = loginAndGetCookies(selfPlayerEmail);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/confirm-completion",
+            HttpMethod.PUT, null, authenticatedHeaders(playerCookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
     @Test
     void pauseSession_fromInProgress_returns204AndStatusIsPaused() {
         setBookingStatus("IN_PROGRESS");

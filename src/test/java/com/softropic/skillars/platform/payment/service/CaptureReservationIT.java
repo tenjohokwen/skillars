@@ -7,6 +7,8 @@ import com.softropic.skillars.platform.payment.BasePaymentIT;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
+import com.softropic.skillars.platform.payment.repo.StripeCustomer;
+import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,6 +34,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -62,6 +66,7 @@ class CaptureReservationIT extends BasePaymentIT {
     @Autowired BookingPaymentPersistenceService persistenceService;
     @Autowired BookingPaymentRepository bookingPaymentRepository;
     @Autowired BookingService bookingService;
+    @Autowired StripeCustomerRepository stripeCustomerRepository;
 
     // A spy, not a mock: the stub's return values must survive so the settle can complete. What is
     // being asserted is whether Stripe was reached at all.
@@ -371,5 +376,67 @@ class CaptureReservationIT extends BasePaymentIT {
         assertThat(bookingPaymentRepository.countCapturedForPeriod(from, to)).isEqualTo(platformCountBefore);
         assertThat(bookingPaymentRepository.findBookingIdsByCoachAndPeriod(coachId, from, to))
             .doesNotContain(bookingId);
+    }
+
+    // ── UAT.5 AC2: the opaque-id design pays off unchanged at the capture layer ──
+
+    /**
+     * UAT.5 AC2 step 3. Once AC1 writes a self-registered player's own userId into
+     * {@code booking.parent_id}, the capture path must resolve the {@link StripeCustomer} row
+     * AC2's widened {@code /setup-intent}/{@code /save-payment-method} endpoints let that same
+     * player create — under the same key — with NO code change to {@link PaymentLifecycleService}
+     * or {@code StripePaymentGateway}. Verified here against a real database rather than assumed.
+     *
+     * <p>Added to this class, not a new file: it is the only class in this module already wired
+     * with {@code @MockitoSpyBean PaymentGateway}, so a new test method here costs zero additional
+     * Spring contexts — a second class making the same choice would add one and risk tripping the
+     * CI context-count ceiling (deferred-19 AC3), which is exactly what happened on first attempt.
+     * {@code doReturn(...).when(spy)...}, not {@code when(spy...).thenReturn(...)}: the latter
+     * invokes the real method first as a side effect of stubbing a spy.
+     */
+    @Test
+    void bookingAcceptedForSelfBookingPlayer_capturesAgainstThePlayersOwnStripeCustomerRow() {
+        long selfPlayerUserId = 97004L;
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.\"user\" (id, login, login_id_type, password_hash, activated, "
+                + "first_name, last_name, gender, dob, email) "
+                + "VALUES (?, ?, 'EMAIL', '{noop}test', true, 'Self', 'Player', 'MALE', '2000-01-01', ?) "
+                + "ON CONFLICT (id) DO NOTHING",
+                selfPlayerUserId, "self.player.capture@test.com", "self.player.capture@test.com"
+            );
+            return null;
+        });
+        StripeCustomer customer = new StripeCustomer();
+        customer.setParentId(selfPlayerUserId);
+        customer.setStripeCustomerId("cus_self_player_test");
+        customer.setStripePaymentMethodId("pm_self_player_test");
+        stripeCustomerRepository.save(customer);
+
+        UUID bookingId = UUID.randomUUID();
+        Instant start = Instant.now().plus(72, ChronoUnit.HOURS);
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO booking.bookings (id, parent_id, player_id, coach_id, requested_start_time, "
+                + "requested_end_time, status, canonical_timezone, version, created_at, updated_at) "
+                + "VALUES (?, ?, ?, ?, ?, ?, 'PAYMENT_PENDING', 'UTC', 0, now(), now())",
+                bookingId, selfPlayerUserId, PLAYER_ID, coachId,
+                Timestamp.from(start), Timestamp.from(start.plus(1, ChronoUnit.HOURS)));
+            return null;
+        });
+
+        doReturn("pi_self_player_test").when(paymentGateway)
+            .chargeAndCapture(eq(bookingId), eq(selfPlayerUserId), eq(coachId), any(BigDecimal.class));
+
+        paymentLifecycleService.onBookingAccepted(new BookingAcceptedEvent(
+            this, bookingId, selfPlayerUserId, coachId, SESSION_PRICE, null,
+            "self.player.capture@test.com", "Capture Coach",
+            Instant.now().plus(72, ChronoUnit.HOURS), "UTC"));
+
+        // No code change was made anywhere in the capture path: the existing
+        // event.getParentId()-keyed lookup finds the row this test seeded under the player's own
+        // userId, exactly as it already does for a real parent — proving the opaque-id shortcut.
+        assertThat(statusOf(bookingId)).isEqualTo("CONFIRMED");
+        assertThat(paymentStatusOf(bookingId)).isEqualTo("CAPTURED");
     }
 }
