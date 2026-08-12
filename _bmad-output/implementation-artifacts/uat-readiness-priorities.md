@@ -20,8 +20,9 @@ Items already pulled into a story. A subsequent story-creation pass must skip an
 | `skillars-uat-2-session-duration-and-booking-slot-integrity.md` (2026-08-10) | P0-5 (AC1–AC4), P1 #1 (AC5), P2 #2, P2 #3, P2 #5 (AC6) — **IMPLEMENTED 2026-08-10**, scope unchanged from what was claimed. `deferred-17` D1 and `deferred-18` D3 closed in the ledger. |
 | `skillars-uat-3-payment-capture-integrity-and-backup-retention.md` (2026-08-11) | P1 #3 (AC1, AC3, AC5), P1 #2 (AC2), P2 #4 (AC6). Grouped because P1 #2 and #3 share one mechanism: the durable pre-capture `booking_payments` row that #3 asks for **is** the interlock #2 needs, and widening the `PaymentPendingSweeper` (currently pack-funded only) is only safe once that row exists. P2 #4 rides along as the last unclaimed P2 row — ops-only, no overlap with the Java tree. — **IMPLEMENTED 2026-08-11**, scope unchanged from what was claimed. `deferred-12` D2, `deferred-15` story-creation D1 and the `deploy-3-1` retention row all closed in the ledger. **AC6 surfaced a new, larger ops finding — see P1 #9 below.** |
 | `skillars-uat-4-i18n-locale-and-message-resolution-integrity.md` (2026-08-12) | P1 #7 (AC1), P1 #8 (AC2), the `deferred-9` D2 ledger-hygiene residue (AC3). The last non-decision *code* item left in this doc — everything else still open (P0-2, P0-4, P1 #9) is a product/ops decision, not a dev pass. AC1's file list is corrected against the current tree (the `deferred-17` D3 citation of `SessionPackDashboardPage.vue` is stale — that file was never actually broken); AC2's fix is a single line (`SecurityAdviceFilter.java` was storing an English display name instead of a language tag). |
+| `skillars-uat-5-player-self-booking.md` (2026-08-12) | P0-2 (AC1 booking, AC4 frontend) — Mbah decided **build self-booking**, not register-and-browse-only. AC2 opens direct per-session card payment for a self-booking player via the existing `payment.stripe_customers` table (no FK, no schema change needed) — session-pack purchase, the credit wallet, and player self-cancel/reschedule/no-show/dispute all stay explicitly out of scope, recorded as follow-ons rather than built speculatively. AC3 closes the `skillars-deferred-16 story creation` D1 messaging item, deliberately left blocked pending exactly this decision. AC5 is ledger hygiene. |
 
-**Still unclaimed:** P0-2 and P0-4 (both product decisions — see the Suggested sequence);
+**Still unclaimed:** P0-4 (product decision — see the Suggested sequence);
 **P1 #9 (new 2026-08-11 — the data volume has no working backup)**; everything in P3. **P2 is now empty.**
 
 **P0-5's product decision is resolved** (Mbah, 2026-08-10): the default session length is one hour
@@ -86,6 +87,13 @@ for the first admin user. This is the single hardest blocker on your list — on
 types simply cannot exist.
 
 ### P0-2. A player account cannot book anything — product gap, not a bug
+
+> **CLAIMED 2026-08-12 → `skillars-uat-5-player-self-booking.md` (AC1, AC4). Do not pick up again.**
+> Product decision resolved (Mbah, 2026-08-12): build self-booking, not register-and-browse-only. AC2
+> opens direct per-session card payment for players — session-pack purchase, the credit wallet, and
+> player self-cancel/reschedule/no-show/dispute all stay explicitly out of scope, recorded as follow-ons.
+> The `deferred-16 story creation` D1 messaging item this section names below is closed alongside it
+> (`skillars-uat-5` AC3).
 
 Player self-registration works (`PlayerRegistrationResource`, `V84`). But every booking-creation
 endpoint is parent-only: `BookingResource:36` and `BookingBatchResource:40` are both
@@ -311,10 +319,14 @@ budgeting work that is already done.
    **DONE** — `skillars-uat-2`, implemented 2026-08-10. Product call made: one-hour system-wide default,
    coach-overridable. Also absorbed P1 #1 (which only becomes tractable once slots are fixed-length)
    and P2 #2/#3/#5.
-3. **Decide P0-2** — scope the player journey to register-and-browse, or commit to player self-booking.
-   This is a decision, not a story; it determines whether the messaging `parent_id` item becomes live.
-   Note `uat-2` makes self-booking cheaper if you choose it: the three duration/window enforcement
-   points it adds are role-agnostic.
+3. ~~**Decide P0-2** — scope the player journey to register-and-browse, or commit to player self-booking.~~
+   **DECIDED AND CLAIMED** — Mbah chose self-booking (2026-08-12); `skillars-uat-5`, written 2026-08-12.
+   Confirmed the note this item used to carry: `uat-2`'s duration/window enforcement was already
+   role-agnostic, so booking creation needed no rework there. Also closes the `deferred-16 story
+   creation` D1 messaging item this decision unblocked (AC3), and opens direct per-session card
+   payment for players (AC2) — session-pack purchase, the credit wallet, and player
+   self-cancel/reschedule/no-show/dispute all stay explicitly out of scope, recorded as follow-ons
+   rather than built speculatively.
 4. ~~**`coach-onboarding-resilience`** — timezone picker or fallback in the profile builder (P0-3), and
    the `windows[0]` display fix (P1 #4).~~ **DONE** — folded into `skillars-uat-1` (AC4, AC5).
 5. **Decide P0-4** — is coach subscription in the UAT script? If yes it is a schema story and should

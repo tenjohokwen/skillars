@@ -31,13 +31,13 @@ public class BookingBatchResource {
     private final SecurityUtil securityUtil;
 
     @GetMapping("/config")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<BatchConfigResponse> getConfig() {
         return ResponseEntity.ok(new BatchConfigResponse(batchService.getMaxBatchSize()));
     }
 
     @PostMapping
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<BatchBookingCreatedResponse> createBatch(@Valid @RequestBody CreateBatchRequest req) {
         BatchBookingCreatedResponse response = batchService.createBatch(currentUserId(), req);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);

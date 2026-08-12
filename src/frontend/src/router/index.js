@@ -55,6 +55,11 @@ export default defineRouter(function (/* { store, ssrContext } */) {
     const requiresCoach = to.matched.some((r) => r.meta.requiresCoach)
     const requiresParent = to.matched.some((r) => r.meta.role === 'PARENT')
     const requiresPlayer = to.matched.some((r) => r.meta.role === 'PLAYER')
+    // Dual-role routes (UAT.5 AC4): meta.roles is additive to the single-value meta.role gates
+    // above, scoped to the handful of routes that need it, rather than migrating every existing
+    // route's meta.role/requiresParent/requiresCoach in the same diff.
+    const rolesMeta = to.matched.flatMap((r) => r.meta.roles || [])
+    const requiresOneOfRoles = rolesMeta.length > 0
     const isAuthenticated = authStore.isAuthenticated
 
     if (requiresAuth && !isAuthenticated) {
@@ -78,6 +83,11 @@ export default defineRouter(function (/* { store, ssrContext } */) {
     }
 
     if (requiresPlayer && isAuthenticated && !authStore.isPlayer) {
+      next(ROLE_ROUTES[authStore.role] || '/dashboard')
+      return
+    }
+
+    if (requiresOneOfRoles && isAuthenticated && !rolesMeta.includes(authStore.role)) {
       next(ROLE_ROUTES[authStore.role] || '/dashboard')
       return
     }

@@ -194,6 +194,76 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
             .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED));
     }
 
+    /**
+     * UAT.5 review finding: no regression test proved a self-registered PLAYER stays rejected on
+     * {@code /reschedule} even though it is a live, unconditionally-rendered "Request Change"
+     * button on the exact page ({@code ParentBookingsPage.vue}) UAT.5's AC4 exposed to players.
+     * Reuses this class's existing context (plain {@code AbstractIntegrationTest}, no extra
+     * {@code @MockitoBean}/{@code @TestPropertySource}) rather than a new WebMvcTest slice, which
+     * would add a distinct Spring context and risk tripping the CI context-count ceiling
+     * (deferred-19 AC3) — the whole point of that story.
+     */
+    @Test
+    void requestReschedule_selfRegisteredPlayer_returns403() {
+        long selfPlayerUserId = 9700000004L;
+        String selfPlayerEmail = "self.player.reschedule@skillars-test.com";
+        transactionTemplate.execute(s -> {
+            insertUser(selfPlayerUserId, selfPlayerEmail, passwordEncoder.encode(TEST_PASSWORD), "PLAYER");
+            jdbcTemplate.update(
+                "INSERT INTO main.user_authority (user_id, authority_id) " +
+                "VALUES (?, (SELECT id FROM main.authority WHERE name = 'ROLE_PLAYER')) ON CONFLICT DO NOTHING",
+                selfPlayerUserId
+            );
+            return null;
+        });
+
+        String playerCookies = loginAndGetCookies(selfPlayerEmail);
+        Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        Instant proposedEnd   = proposedStart.plus(1, ChronoUnit.HOURS);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/reschedule",
+            HttpMethod.POST,
+            Map.of("proposedStartTime", proposedStart.toString(), "proposedEndTime", proposedEnd.toString()),
+            authenticatedHeaders(playerCookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    /**
+     * UAT.5 review finding, other half: {@code /cancel} (CancellationResource) had ZERO test
+     * coverage of any kind before this — confirmed by an empty grep for "CancellationResource"
+     * across src/test. Placed in this file rather than a new one for the same context-reuse
+     * reason as the reschedule test above; the running app under a full {@code @SpringBootTest}
+     * wires every controller, not just this class's own {@code RescheduleResource}.
+     */
+    @Test
+    void cancelBooking_selfRegisteredPlayer_returns403() {
+        long selfPlayerUserId = 9700000005L;
+        String selfPlayerEmail = "self.player.cancel@skillars-test.com";
+        transactionTemplate.execute(s -> {
+            insertUser(selfPlayerUserId, selfPlayerEmail, passwordEncoder.encode(TEST_PASSWORD), "PLAYER");
+            jdbcTemplate.update(
+                "INSERT INTO main.user_authority (user_id, authority_id) " +
+                "VALUES (?, (SELECT id FROM main.authority WHERE name = 'ROLE_PLAYER')) ON CONFLICT DO NOTHING",
+                selfPlayerUserId
+            );
+            return null;
+        });
+
+        String playerCookies = loginAndGetCookies(selfPlayerEmail);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/cancel",
+            HttpMethod.POST,
+            null,
+            authenticatedHeaders(playerCookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
     @Test
     void requestReschedule_asCoach_returns403() {
         String coachCookies = loginAndGetCookies(COACH_EMAIL);

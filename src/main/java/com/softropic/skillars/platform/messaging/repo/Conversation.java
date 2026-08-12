@@ -27,7 +27,8 @@ public class Conversation extends BaseEntity {
     @Column(name = "player_id", nullable = false)
     private Long playerId;
 
-    @Column(name = "parent_id", nullable = false)
+    /** Nullable since V95 (UAT.5 AC3): a self-registered adult PLAYER has no real parent. */
+    @Column(name = "parent_id")
     private Long parentId;
 
     @Enumerated(EnumType.STRING)

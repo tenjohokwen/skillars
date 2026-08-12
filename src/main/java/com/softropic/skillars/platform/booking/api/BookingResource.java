@@ -33,14 +33,14 @@ public class BookingResource {
     private final SecurityUtil securityUtil;
 
     @PostMapping
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<BookingResponse> createBookingRequest(@RequestBody @Valid CreateBookingRequest req) {
         BookingResponse response = bookingService.createBookingRequest(currentParentId(), req);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
     @GetMapping
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<List<BookingResponse>> getParentBookings() {
         return ResponseEntity.ok(bookingService.getParentBookings(currentParentId()));
     }

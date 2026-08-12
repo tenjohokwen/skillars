@@ -171,6 +171,38 @@
           </q-item>
         </template>
 
+        <!-- Player section (UAT.5: self-registered adult player) -->
+        <template v-if="authStore.isPlayer">
+          <div class="text-label q-px-md q-mt-lg q-mb-sm">{{ t('player.nav') }}</div>
+
+          <q-item clickable to="/marketplace" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="search" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('marketplace.title') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item clickable to="/parent/bookings" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="event" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('booking.requests.listTitle') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item clickable to="/messaging" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="chat" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('messaging.pageTitle') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+        </template>
+
         <!-- Admin section -->
         <template v-if="authStore.isAdmin">
           <div class="text-label q-px-md q-mt-lg q-mb-sm">Admin</div>

@@ -9,6 +9,7 @@ export default {
     commandCenterSchedule: 'Planning',
   },
   player: {
+    nav: 'Joueur',
     lockerRoomTitle: 'Vestiaire du joueur',
     lockerRoomBody: "Votre contenu d'entraînement et vos devoirs apparaîtront ici.",
     homeworkEmptyTitle: 'Pas encore de devoirs',
@@ -1178,6 +1179,7 @@ export default {
       reviewTitle: 'Vérifier les demandes de séance',
       creditPreview:
         '{credits} crédit(s) disponible(s) pour {count} séance(s) — tout déficit sera facturé au paiement',
+      sessionCountPreview: '{count} séance(s) — le paiement sera prélevé sur votre carte enregistrée',
       confirmRequests: 'Confirmer les demandes',
       submitted: 'Demandes de séance soumises — le coach va les examiner',
       submitError: 'Impossible de soumettre les demandes de séance. Veuillez réessayer.',

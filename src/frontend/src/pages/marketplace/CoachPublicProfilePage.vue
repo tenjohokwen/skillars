@@ -233,7 +233,9 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { useQuasar } from 'quasar'
 import { getCoachProfile } from 'src/api/marketplace.api'
+import { playerRegistrationApi } from 'src/api/playerRegistration.api'
 import { useAuthStore } from 'src/stores/auth.store'
 import { useBookingStore } from 'src/stores/booking.store'
 import { usePlayerStore } from 'src/stores/playerStore'
@@ -246,6 +248,7 @@ import SessionPackTracker from 'src/components/booking/SessionPackTracker.vue'
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
+const $q = useQuasar()
 const authStore = useAuthStore()
 const bookingStore = useBookingStore()
 const playerStore = usePlayerStore()
@@ -257,6 +260,10 @@ const lightboxOpen = ref(false)
 const lightboxItem = ref(null)
 
 const coachId = route.params.coachId
+// UAT.5 AC4: resolved once for a self-registered player caller — the player's own player-profile
+// id, via the same GET /api/security/players/me call PlayerHomeRedirectPage.vue already uses.
+// Not sourced from playerStore, which is a parent's linked-children store and meaningless here.
+const selfPlayerId = ref(null)
 
 const creditsForThisCoach = computed(() => bookingStore.creditsForCoach(coachId))
 const activePackSessionCount = computed(() => {
@@ -272,6 +279,7 @@ const hasCreditsForCoach = computed(() =>
 )
 
 const ctaLabel = computed(() => {
+  if (authStore.isPlayer) return t('marketplace.bookSession')
   if (!authStore.isParent) return t('marketplace.signUpToBook')
   return hasCreditsForCoach.value ? t('marketplace.bookSession') : t('booking.packs.buySessions')
 })
@@ -294,6 +302,22 @@ onMounted(async () => {
       if (playerStore.activePlayerId) {
         await bookingStore.loadPlayerPacks(playerStore.activePlayerId)
       }
+    } else if (authStore.isPlayer) {
+      // Packs are out of scope for a self-booking player (session-pack purchase requires both
+      // parent_id and player_id — a self-registered player has no ownable pack), so no pack
+      // loading here. The page still renders coach pricing above for a per-session quote.
+      try {
+        const profile = await playerRegistrationApi.getMyProfile()
+        selfPlayerId.value = profile.id
+      } catch (profileErr) {
+        // A 404 is the expected, silent case: verified but never finished the profile-builder
+        // step (same precedent as PlayerHomeRedirectPage.vue). Anything else (network/500) is
+        // surfaced — CTA still works if it self-heals, but the player should know why booking
+        // may not resolve their id yet.
+        if (profileErr.response?.status !== 404) {
+          $q.notify({ type: 'negative', message: t('common.errorGeneric') })
+        }
+      }
     }
   } catch (err) {
     if (err.response?.status === 404) {
@@ -306,7 +330,16 @@ onMounted(async () => {
 
 function handleCta() {
   if (!profile.value) return
-  if (authStore.isParent) {
+  if (authStore.isPlayer) {
+    // Packs are out of scope for a self-booking player — always go straight to the
+    // booking-request flow, using the player's own id rather than a playerId query param
+    // sourced from playerStore (a parent's linked-children store, meaningless here).
+    const params = new URLSearchParams()
+    if (selfPlayerId.value) params.set('playerId', selfPlayerId.value)
+    if (profile.value?.displayName) params.set('coachName', profile.value.displayName)
+    const qs = params.toString()
+    router.push(`/parent/coaches/${coachId}/request-booking${qs ? `?${qs}` : ''}`)
+  } else if (authStore.isParent) {
     if (hasCreditsForCoach.value) {
       const playerId = playerStore.activePlayerId
       const params = new URLSearchParams()

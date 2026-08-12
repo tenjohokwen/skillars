@@ -186,6 +186,7 @@ export default {
     commandCenterSchedule: 'Schedule',
   },
   player: {
+    nav: 'Player',
     lockerRoomTitle: 'Player Locker Room',
     lockerRoomBody: 'Your training content and homework will appear here.',
     homeworkEmptyTitle: 'No homework yet',
@@ -900,6 +901,7 @@ export default {
       reviewTitle: 'Review session requests',
       creditPreview:
         '{credits} credit(s) available across {count} session(s) — any deficit will be charged at payment',
+      sessionCountPreview: '{count} session(s) — payment will be charged to your saved card',
       confirmRequests: 'Confirm requests',
       submitted: 'Session requests submitted — coach will review',
       submitError: 'Could not submit session requests. Please try again.',

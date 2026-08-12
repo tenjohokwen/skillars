@@ -140,7 +140,7 @@ public class SessionPackPaymentResource {
     // ─── Card setup (AC 11) ───────────────────────────────────────────────────
 
     @PostMapping("/setup-intent")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<SetupIntentResponse> createSetupIntent() {
         Long parentId = securityUtil.getCurrentCoachUserId();
         StripeCustomer customer = stripeCustomerRepository.findById(parentId)
@@ -160,7 +160,7 @@ public class SessionPackPaymentResource {
     }
 
     @PostMapping("/save-payment-method")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<Void> savePaymentMethod(@Valid @RequestBody SavedPaymentMethodRequest request) {
         Long parentId = securityUtil.getCurrentCoachUserId();
         StripeCustomer customer = stripeCustomerRepository.findById(parentId)
@@ -193,7 +193,7 @@ public class SessionPackPaymentResource {
     // ─── Parent: saved payment method ──────────────────────────────────────────
 
     @GetMapping("/payment-method")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<SavedPaymentMethodResponse> getSavedPaymentMethod() {
         Long parentId = securityUtil.getCurrentCoachUserId();
         return ResponseEntity.ok(sessionPackPaymentService.getSavedPaymentMethod(parentId));
