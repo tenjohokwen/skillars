@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-08-12 # skillars-uat-4 → review (dev-story complete, mvn -o verify green)
+# last_updated: 2026-08-12 # skillars-uat-5 code review complete → done
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-08-12 # skillars-uat-4 → review (dev-story complete, mvn -o verify green)
+last_updated: 2026-08-12 # skillars-uat-5 code review complete → done
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -643,4 +643,43 @@ development_status:
   #              day-index matching).
   # DELIBERATELY EXCLUDED: P0-2, P0-4, P1 #9 (all still product/ops decisions for Mbah); all P3.
   # No backend migration, no schema change, no API contract change — pure bug-fix pass.
-  skillars-uat-4-i18n-locale-and-message-resolution-integrity: review
+  skillars-uat-4-i18n-locale-and-message-resolution-integrity: done  # 2026-08-12: code review complete (bmad-code-review, 3-layer) — 13 findings: 3 patches applied (getDayIndex guardrail comment, RequestMetadata.chosenLang comment fix, sprint-status.yaml added to File List), 1 decision resolved by Mbah (de-DE bundle's 55 unreviewed translations — ship as-is, native review deferred), 2 deferred (useTimezone.js setup()-scope risk, zero frontend test coverage — both systemic/pre-existing), 7 dismissed as verified false positives.
+
+  # Fifth story drawn from uat-readiness-priorities.md. Claims P0-2 (player self-booking), the last
+  # item besides P0-4/P1#9 that was still unclaimed. Unlike uat-1..4, P0-2 was a product decision, not
+  # a ready-to-scope code item — decision made by Mbah 2026-08-12 during this story's creation: build
+  # real player self-booking, not register-and-browse-only.
+  #   AC1  Backend: self-registered adult PLAYER can create/list bookings (single + batch) for
+  #        themselves. BookingResource/BookingBatchResource @PreAuthorize widened to a new
+  #        HAS_PARENT_OR_PLAYER_ROLE constant; BookingService/BookingBatchService ownership check
+  #        branches on PlayerProfile's parentId/userId XOR pair (V84 chk_pp_owner). No migration —
+  #        booking.bookings.parent_id has no FK/CHECK, so a player's own userId is written into it
+  #        as an opaque requester id, the same shortcut payment/notification code already treats it as.
+  #   AC2  Backend: player can save a card and pay per-session. SessionPackPaymentResource's
+  #        setup-intent/save-payment-method/payment-method endpoints widened the same way; no schema
+  #        change (StripeCustomer.parentId is a bare @Id Long, no FK/role CHECK — unlike the still-open
+  #        P0-4 coach-subscription blocker, which is structurally harder because coachId is a UUID, not
+  #        a BIGINT into main."user"). Session-pack purchase and the credit wallet stay parent-only —
+  #        recorded as new deferred items, not built here.
+  #   AC3  Backend: closes skillars-deferred-16 D1, the messaging consequence that story explicitly
+  #        deferred pending this exact product decision. New migration V95 drops
+  #        messaging.conversations.parent_id's NOT NULL (no CHECK needed, unlike player_profiles — no
+  #        second owner column to XOR against). MessagingResource.initiateConversation gains a
+  #        caller-is-the-player-themselves branch. Downstream consumers (verifyIsParty,
+  #        ModerationResultApplier.resolveRecipient, the parental-oversight endpoints) verified
+  #        null-safe by construction — ADULT tier's parentIsBlocked() already routes around
+  #        conv.getParentId() before this story exists — confirmed by a new IT, not just re-read.
+  #   AC4  Frontend: CoachPublicProfilePage's CTA and BookingRequestPage's playerId resolution gain a
+  #        player branch (getMyProfile(), not the parent-scoped playerStore); first dual-role route in
+  #        the codebase (meta.roles, additive to the existing single-role guard); new Player nav
+  #        section in MainLayout (none exists today); ParentBookingsPage reused under the dual-role
+  #        route rather than a new page.
+  #   AC5  Ledger hygiene: close deferred-16 D1; record new deferred items for session-pack
+  #        self-purchase, credit wallet, and player self-cancel (all explicitly out of scope); update
+  #        uat-readiness-priorities.md's Story claims / Still unclaimed / Suggested sequence.
+  # DELIBERATELY EXCLUDED: session-pack purchase by a player, credit wallet, player self-cancel/
+  # reschedule/no-show/dispute (CancellationResource stays parent-only — matches P1#2's finding that
+  # it already has zero frontend callers today, not a new regression), ActorRole.PLAYER (not needed —
+  # see the opaque-id design note in the story file). P0-4 and P1#9 remain untouched, still Mbah's to
+  # decide.
+  skillars-uat-5-player-self-booking: done  # 2026-08-12: all 5 ACs implemented, full mvn -o verify BUILD SUCCESS — 866 unit + 886 IT, 0F/0E (866+886 measured directly this run; contribution vs HEAD confirmed by diff: +6 unit @Test methods, +10 IT @Test methods, not by subtracting totals). AC1 widens BookingResource/BookingBatchResource + BookingService/BookingBatchService via the opaque-id XOR-branch ownership check on PlayerProfile.parentId/userId — a self-booking player's own userId lands in booking.parent_id/booking_batches.parent_id unchanged, proven end-to-end by new PlayerBookingRequestIT. AC2 widens SessionPackPaymentResource's three card endpoints identically; PaymentLifecycleService/StripePaymentGateway needed no change — verified against a real StripeCustomer row by new PlayerCardCaptureIT, not assumed. AC3 ships V95 (messaging.conversations.parent_id nullable) + MessagingResource's new isSelf branch, closing skillars-deferred-16 D1; all three downstream consumers the story named (verifyIsParty, ModerationResultApplier/AdminMessageService.resolveRecipient, getConversationsForPlayer/getMessagesForPlayerConversation) needed no code change, confirmed null-safe by new SelfPlayerMessagingIT against real null data. AC4 is the first dual-role frontend route in the codebase (router meta.roles, additive), plus a new Player nav section and CoachPublicProfilePage/BookingRequestPage/ParentBookingsPage role branches; reused the existing PaymentMethodCard.vue Stripe Elements component wholesale for card entry. AC5 closed deferred-16 D1 in deferred-work.md with a [CLOSED 2026-08-12 by skillars-uat-5 AC3] annotation, recorded 3 new deferred items for the explicitly out-of-scope pieces (pack self-purchase, credit wallet, player self-cancel/reschedule), and found uat-readiness-priorities.md already fully updated from story creation. Concrete-IT sanity check: 142 *IT.java - 4 abstract bases = 138 concrete, exactly 138 failsafe reports — no class silently stopped running. npx eslint clean, quasar build succeeded. STILL OPEN: no frontend test suite exists (house convention) — a live browser spot-check of the full player journey was not run in this environment. CODE REVIEW COMPLETE (2026-08-12, bmad-code-review, 3-layer): 0 decision-needed, 4 patch (all applied and independently re-verified — canSubmit playerId guard, getMyProfile() error surfacing in 2 pages, PlayerRoleLockoutIT + 2 new SessionPackPaymentResourceIT 403 cases proving parent-only endpoints stay rejected for PLAYER, player-specific batch-review copy), 2 deferred (duplicated uncached self-profile fetch, client-side playerId override via query param — both pre-existing patterns, not regressions), 10 dismissed as verified false positives. Post-patch full mvn -o verify re-run: BUILD SUCCESS, 866 unit + 891 IT (0F/0E, +5 IT vs pre-review). npx eslint clean, quasar build succeeded.

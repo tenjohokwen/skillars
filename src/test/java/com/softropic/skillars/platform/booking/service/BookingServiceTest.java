@@ -227,6 +227,75 @@ class BookingServiceTest {
             .isInstanceOf(OperationNotAllowedException.class);
     }
 
+    // ---- UAT.5 AC1: self-registered adult PLAYER can book for themselves ----
+
+    /**
+     * The XOR "else" branch: a self-registered player's own userId lands in booking.parent_id, the
+     * opaque-id shortcut this story is built around.
+     */
+    @Test
+    void createBookingRequest_selfRegisteredPlayerBooksForThemselves_succeedsAndWritesOwnUserIdAsParentId() {
+        Long selfPlayerUserId = 500L;
+        PlayerProfile selfPlayer = makeSelfPlayer(PLAYER_ID, selfPlayerUserId);
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        CoachAvailabilityWindow window = makeCoveringWindow(COACH_ID);
+        Booking savedBooking = makeBooking(selfPlayerUserId, PLAYER_ID, COACH_ID, "REQUESTED");
+
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(selfPlayer));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of());
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+        ArgumentCaptor<Booking> bookingCaptor = ArgumentCaptor.forClass(Booking.class);
+        when(bookingRepository.save(bookingCaptor.capture())).thenReturn(savedBooking);
+
+        CreateBookingRequest req = makeValidRequest(COACH_ID, PLAYER_ID, window);
+        BookingResponse response = bookingService.createBookingRequest(selfPlayerUserId, req);
+
+        assertThat(response).isNotNull();
+        assertThat(bookingCaptor.getValue().getParentId())
+            .as("a self-booking player's own userId is written into the opaque parent_id column")
+            .isEqualTo(selfPlayerUserId);
+    }
+
+    /** Self-registered player must not be able to book using someone else's playerId. */
+    @Test
+    void createBookingRequest_selfRegisteredPlayerUsesSomeoneElsesPlayerId_isRejected() {
+        Long selfPlayerUserId = 500L;
+        // A different player's profile, self-owned by a different user
+        PlayerProfile someoneElsesPlayer = makeSelfPlayer(PLAYER_ID, 999L);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(someoneElsesPlayer));
+
+        CreateBookingRequest req = makeValidRequest(COACH_ID, PLAYER_ID, makeCoveringWindow(COACH_ID));
+
+        assertThatThrownBy(() -> bookingService.createBookingRequest(selfPlayerUserId, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining("does not own this profile");
+        verify(bookingRepository, never()).save(any(Booking.class));
+    }
+
+    /**
+     * Exercises the "if" branch from a parent caller against a self-owned player: the parent's id
+     * can never satisfy player.getUserId(), so this must be rejected too. Mutation check: deleting
+     * the else branch entirely collapses both this test and the one above onto the same (wrong)
+     * "if" comparison, so at least one must fail — this test pins the specific rejection reason.
+     */
+    @Test
+    void createBookingRequest_parentAttemptsToBookASelfOwnedPlayer_isRejected() {
+        PlayerProfile selfOwnedPlayer = makeSelfPlayer(PLAYER_ID, 500L);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(selfOwnedPlayer));
+
+        CreateBookingRequest req = makeValidRequest(COACH_ID, PLAYER_ID, makeCoveringWindow(COACH_ID));
+
+        assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining("does not own this profile");
+        verify(bookingRepository, never()).save(any(Booking.class));
+    }
+
     @Test
     void createBookingRequest_coachInDraftStatus_throwsOperationNotAllowedException() {
         PlayerProfile player = makePlayer(PLAYER_ID, PARENT_ID);
@@ -717,6 +786,19 @@ class BookingServiceTest {
             f.set(p, id);
         } catch (Exception ignored) {}
         p.setParentId(parentId);
+        return p;
+    }
+
+    /** UAT.5: a self-registered adult player — parentId null, userId set (the chk_pp_owner XOR). */
+    private PlayerProfile makeSelfPlayer(Long id, Long userId) {
+        PlayerProfile p = new PlayerProfile();
+        p.setName("Self Player");
+        try {
+            var f = com.softropic.skillars.infrastructure.persistence.BaseEntity.class.getDeclaredField("id");
+            f.setAccessible(true);
+            f.set(p, id);
+        } catch (Exception ignored) {}
+        p.setUserId(userId);
         return p;
     }
 

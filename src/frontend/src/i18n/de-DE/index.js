@@ -223,6 +223,7 @@ export default {
     commandCenterSchedule: 'Zeitplan',
   },
   player: {
+    nav: 'Spieler',
     lockerRoomTitle: 'Umkleideraum des Spielers',
     lockerRoomBody: 'Ihr Trainingsinhalt und Ihre Hausaufgaben erscheinen hier.',
     homeworkEmptyTitle: 'Noch keine Hausaufgaben',
@@ -441,6 +442,7 @@ export default {
       reviewTitle: 'Sitzungsanfragen überprüfen',
       creditPreview:
         '{credits} Guthaben verfügbar für {count} Sitzung(en) — ein Fehlbetrag wird bei der Zahlung berechnet',
+      sessionCountPreview: '{count} Sitzung(en) — die Zahlung wird von Ihrer gespeicherten Karte abgebucht',
       confirmRequests: 'Anfragen bestätigen',
       submitted: 'Sitzungsanfragen eingereicht — der Trainer wird sie überprüfen',
       submitError: 'Sitzungsanfragen konnten nicht eingereicht werden. Bitte erneut versuchen.',

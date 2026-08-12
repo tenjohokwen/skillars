@@ -133,15 +133,21 @@ const routes = [
         meta: { requiresAuth: true, role: 'PARENT' },
       },
       {
+        // Dual-role (UAT.5 AC4): a self-registered PLAYER can also request a booking, for
+        // themselves. The FIRST dual-role route in this codebase — see router/index.js's
+        // meta.roles guard.
         path: 'parent/coaches/:coachId/request-booking',
         component: () => import('pages/parent/BookingRequestPage.vue'),
-        meta: { requiresAuth: true, role: 'PARENT' },
+        meta: { requiresAuth: true, roles: ['PARENT', 'PLAYER'] },
       },
       {
+        // Dual-role (UAT.5 AC4): reused by a self-registered PLAYER's own bookings list rather
+        // than building a parallel page — see ParentBookingsPage.vue's authStore.isParent button
+        // guards.
         path: 'parent/bookings',
         name: 'parent-bookings',
         component: () => import('pages/parent/ParentBookingsPage.vue'),
-        meta: { requiresAuth: true, role: 'PARENT' },
+        meta: { requiresAuth: true, roles: ['PARENT', 'PLAYER'] },
       },
       {
         path: 'coach/booking-requests',

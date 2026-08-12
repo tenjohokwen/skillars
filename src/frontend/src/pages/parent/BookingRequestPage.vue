@@ -15,9 +15,17 @@
       />
     </div>
 
-    <SessionPackTracker :credits-remaining="creditsForCoach" :session-count="0" class="q-mb-md" />
+    <!-- Packs are out of scope for a self-booking player (UAT.5): pay-per-session only, and
+         purchase-sessions stays a parent-only route — hide both credit UI elements rather than
+         show a dead-end "buy sessions" action. -->
+    <SessionPackTracker
+      v-if="!authStore.isPlayer"
+      :credits-remaining="creditsForCoach"
+      :session-count="0"
+      class="q-mb-md"
+    />
 
-    <q-banner v-if="!hasCredits" class="bg-warning text-white q-mb-md">
+    <q-banner v-if="!authStore.isPlayer && !hasCredits" class="bg-warning text-white q-mb-md">
       {{ t('booking.requests.noCreditsWarning') }}
       <template #action>
         <q-btn flat :label="t('booking.packs.buySessions')" @click="goToPurchase" />
@@ -118,6 +126,18 @@
         </q-card-section>
       </q-card>
 
+      <!-- UAT.5 AC2/AC4: a self-booking player pays per-session by card only (packs out of
+           scope) — the same reusable card-entry component parent pages already use for
+           setup-intent/save-payment-method, wholesale, no pack-purchase logic inside it. -->
+      <q-card v-if="authStore.isPlayer" flat bordered class="q-mb-md">
+        <q-card-section>
+          <div class="text-subtitle1 q-mb-sm">{{ t('payment.card.title') }}</div>
+        </q-card-section>
+        <q-card-section class="q-pt-none">
+          <PaymentMethodCard />
+        </q-card-section>
+      </q-card>
+
       <q-input
         v-model="notes"
         type="textarea"
@@ -167,12 +187,17 @@
               </q-item-section>
             </q-item>
           </q-list>
+          <!-- UAT.5: a self-booking player has no credit concept (packs out of scope) — the
+               credit-oriented preview text would read as confusing/wrong ("0 credits available")
+               for a per-session-by-card payer. -->
           <div class="q-mt-md text-caption" style="color: var(--text-secondary)">
             {{
-              t('booking.batch.creditPreview', {
-                credits: creditsForCoach,
-                count: bookingStore.batchBasketSize,
-              })
+              authStore.isPlayer
+                ? t('booking.batch.sessionCountPreview', { count: bookingStore.batchBasketSize })
+                : t('booking.batch.creditPreview', {
+                    credits: creditsForCoach,
+                    count: bookingStore.batchBasketSize,
+                  })
             }}
           </div>
         </q-card-section>
@@ -197,23 +222,32 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
+import { useAuthStore } from 'src/stores/auth.store'
 import { useBookingStore } from 'src/stores/booking.store'
 import { usePlayerStore } from 'src/stores/playerStore'
 import { getBatchConfig } from 'src/api/booking.api'
+import { playerRegistrationApi } from 'src/api/playerRegistration.api'
 import SessionPackTracker from 'src/components/booking/SessionPackTracker.vue'
 import BookingStateChip from 'src/components/booking/BookingStateChip.vue'
+import PaymentMethodCard from 'src/components/payment/PaymentMethodCard.vue'
 
 const route = useRoute()
 const router = useRouter()
 const { t, locale } = useI18n()
 const $q = useQuasar()
+const authStore = useAuthStore()
 const bookingStore = useBookingStore()
 const playerStore = usePlayerStore()
 
 const coachId = route.params.coachId
-const playerId = computed(() =>
-  route.query.playerId ? Number(route.query.playerId) : playerStore.activePlayerId,
-)
+// UAT.5 AC4: a self-registered player resolves playerId via their own player profile, not via
+// playerStore (a parent's linked-children store, meaningless for a self-registered player).
+const selfPlayerId = ref(null)
+const playerId = computed(() => {
+  if (route.query.playerId) return Number(route.query.playerId)
+  if (authStore.isPlayer) return selfPlayerId.value
+  return playerStore.activePlayerId
+})
 const coachName = ref(route.query.coachName ?? '')
 const selectedSlot = ref(null)
 const notes = ref('')
@@ -250,7 +284,10 @@ const packOptions = computed(() => [
 const canSubmit = computed(
   // Do NOT gate on hasCredits: AC 3 allows booking via platform credit (Cases A/B) or full
   // Stripe charge (Case C). The backend handles payment failure gracefully (→ DECLINED).
-  () => selectedSlot.value !== null && !submitting.value,
+  // playerId IS gated: without it, single-booking submit had no safety net, unlike
+  // submitBatchRequest's explicit guard — a self-booking player whose profile hasn't resolved
+  // yet (or a malformed query string) must not be able to submit with an undefined playerId.
+  () => selectedSlot.value !== null && !!playerId.value && !submitting.value,
 )
 
 function selectSlot(slot) {
@@ -465,12 +502,28 @@ async function submitBatchRequest() {
 }
 
 onMounted(async () => {
+  if (authStore.isPlayer && !route.query.playerId) {
+    try {
+      const profile = await playerRegistrationApi.getMyProfile()
+      selfPlayerId.value = profile.id
+    } catch (profileErr) {
+      // A 404 is the expected, silent case: no player profile yet. Anything else (network/500)
+      // is surfaced — canSubmit's playerId guard still blocks a broken submit either way, but
+      // the player should know why rather than stare at a permanently-disabled button.
+      if (profileErr.response?.status !== 404) {
+        $q.notify({ type: 'negative', message: t('common.errorGeneric') })
+      }
+    }
+  }
   await bookingStore.loadAvailability(coachId)
   // AC5: the data behind the "you already requested this" rows. The store action and its API call
   // already exist; a failure is swallowed into bookingsError and leaves parentBookings empty,
   // which degrades to exactly the pre-AC5 rendering rather than blanking the page.
   await bookingStore.loadParentBookings()
-  if (playerId.value) {
+  // Packs are out of scope for a self-booking player (GET /api/payment/session-packs stays
+  // @PreAuthorize(HAS_PARENT_ROLE)) — skip the guaranteed-403 request entirely rather than rely
+  // on it degrading internally to 0 credits.
+  if (playerId.value && !authStore.isPlayer) {
     await bookingStore.loadPlayerPacks(playerId.value)
   }
   try {

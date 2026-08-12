@@ -262,6 +262,66 @@ class BookingBatchServiceTest {
             .isInstanceOf(OperationNotAllowedException.class);
     }
 
+    // ---- UAT.5 AC1: self-registered adult PLAYER can create a batch for themselves ----
+
+    @Test
+    void createBatch_selfRegisteredPlayerBooksForThemselves_succeedsAndWritesOwnUserIdAsParentId() {
+        long selfPlayerUserId = 9000005L;
+        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+
+        PlayerProfile selfPlayer = new PlayerProfile();
+        selfPlayer.setUserId(selfPlayerUserId);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(selfPlayer));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(buildActiveCoach()));
+
+        BookingBatch savedBatch = new BookingBatch();
+        savedBatch.setId(BATCH_ID);
+        when(batchRepository.save(any())).thenAnswer(inv -> {
+            BookingBatch b = inv.getArgument(0);
+            assertThat(b.getParentId())
+                .as("a self-booking player's own userId is written into the opaque parent_id column")
+                .isEqualTo(selfPlayerUserId);
+            return savedBatch;
+        });
+        when(bookingRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(userRepository.findById(any())).thenReturn(Optional.empty());
+
+        BatchBookingCreatedResponse result = service.createBatch(selfPlayerUserId, buildRequest(2));
+
+        assertThat(result.bookingCount()).isEqualTo(2);
+        verify(batchRepository).save(any(BookingBatch.class));
+    }
+
+    /** Self-registered player must not be able to book using someone else's playerId. */
+    @Test
+    void createBatch_selfRegisteredPlayerUsesSomeoneElsesPlayerId_isRejected() {
+        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+
+        PlayerProfile someoneElsesPlayer = new PlayerProfile();
+        someoneElsesPlayer.setUserId(999L);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(someoneElsesPlayer));
+
+        assertThatThrownBy(() -> service.createBatch(9000005L, buildRequest(1)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining("does not own this profile");
+        verify(batchRepository, never()).save(any());
+    }
+
+    /** Exercises the "if" branch from a parent caller against a self-owned player. */
+    @Test
+    void createBatch_parentAttemptsToBookASelfOwnedPlayer_isRejected() {
+        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+
+        PlayerProfile selfOwnedPlayer = new PlayerProfile();
+        selfOwnedPlayer.setUserId(9000005L);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(selfOwnedPlayer));
+
+        assertThatThrownBy(() -> service.createBatch(PARENT_ID, buildRequest(1)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining("does not own this profile");
+        verify(batchRepository, never()).save(any());
+    }
+
     @Test
     void createBatch_noLegacyPackPreflightCheck_batchIsCreatedRegardless() {
         // Story 11.2 Task 4 (decision a): batch bookings stay credit-wallet/Stripe-only —

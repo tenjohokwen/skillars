@@ -60,9 +60,11 @@
             → {{ formatDateTime(booking.pendingReschedule.proposedStartTime, booking.canonicalTimezone) }}
           </div>
 
-          <!-- Request Change button -->
+          <!-- Request Change button — parent-only (UAT.5): reschedule stays @PreAuthorize
+               HAS_PARENT_ROLE, not widened by this story, so a player caller must not see a
+               button that 403s on click. -->
           <q-btn
-            v-if="['CONFIRMED', 'UPCOMING'].includes(booking.status) && !booking.pendingReschedule"
+            v-if="authStore.isParent && ['CONFIRMED', 'UPCOMING'].includes(booking.status) && !booking.pendingReschedule"
             flat dense size="sm"
             :label="t('booking.reschedule.requestChange')"
             :loading="reschedulingId === booking.id"
@@ -72,8 +74,10 @@
         </q-item-section>
         <q-item-section side>
           <BookingStateChip :status="booking.status" />
+          <!-- Confirm Completion button — parent-only (UAT.5): session-completion confirm stays
+               @PreAuthorize HAS_PARENT_ROLE, not widened by this story. -->
           <q-btn
-            v-if="booking.status === 'COMPLETED_PENDING_CONFIRMATION'"
+            v-if="authStore.isParent && booking.status === 'COMPLETED_PENDING_CONFIRMATION'"
             unelevated
             color="primary"
             size="sm"

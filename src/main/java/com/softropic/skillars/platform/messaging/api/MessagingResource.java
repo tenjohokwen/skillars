@@ -60,13 +60,18 @@ public class MessagingResource {
             @RequestParam(name = "role", required = false) String roleHint,
             Authentication auth) {
         Long userId = resolveUserId();
-        // Verify caller is the coach or the parent who owns the player
+        // Verify caller is the coach, the parent who owns the player, or the self-registered
+        // player being messaged (UAT.5 AC3).
         boolean isCoach = coachProfileRepository.findByUserId(userId)
             .map(c -> Objects.equals(c.getId(), request.coachId()))
             .orElse(false);
         boolean isParent = !isCoach &&
             playerProfileRepository.findByIdAndParentId(request.playerId(), userId).isPresent();
-        if (!isCoach && !isParent) {
+        boolean isSelf = !isCoach && !isParent &&
+            playerProfileRepository.findByUserId(userId)
+                .map(p -> Objects.equals(p.getId(), request.playerId()))
+                .orElse(false);
+        if (!isCoach && !isParent && !isSelf) {
             throw new OperationNotAllowedException(
                 "Caller is not the coach or the parent of the player",
                 MessagingErrorCode.NOT_A_PARTY);

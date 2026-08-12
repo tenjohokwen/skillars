@@ -100,8 +100,14 @@ public class BookingBatchService {
 
         PlayerProfile player = playerProfileRepository.findById(req.playerId())
             .orElseThrow(() -> new ResourceNotFoundException("Player not found", "player_profile"));
-        if (!Objects.equals(player.getParentId(), parentId)) {
-            throw new OperationNotAllowedException("Parent does not own this player", SecurityError.MISSING_RIGHTS);
+        if (player.getParentId() != null) {
+            if (!Objects.equals(player.getParentId(), parentId)) {
+                throw new OperationNotAllowedException("Parent does not own this player", SecurityError.MISSING_RIGHTS);
+            }
+        } else {
+            if (!Objects.equals(player.getUserId(), parentId)) {
+                throw new OperationNotAllowedException("Player does not own this profile", SecurityError.MISSING_RIGHTS);
+            }
         }
 
         CoachProfile coach = coachProfileRepository.findById(req.coachId())
