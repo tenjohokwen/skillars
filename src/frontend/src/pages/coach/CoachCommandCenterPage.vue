@@ -179,7 +179,7 @@ import ActiveSessionScreen from 'src/components/booking/ActiveSessionScreen.vue'
 import WrapUpSequence from 'src/components/booking/WrapUpSequence.vue'
 import SessionDNAChart from 'src/components/booking/SessionDNAChart.vue'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const $q = useQuasar()
 const bookingStore = useBookingStore()
 const authStore = useAuthStore()
@@ -263,6 +263,9 @@ const activeClients = computed(() => {
     .map((b) => ({ id: b.playerId, name: b.playerName }))
 })
 
+// Deliberately hardcoded 'en': the result is matched against the hardcoded English weekday
+// array below via .indexOf. Localizing the formatter alone without also rewriting that array
+// would make every non-English user's schedule silently misbucket into the wrong day column.
 function getDayIndex(instant, timezone) {
   const parts = new Intl.DateTimeFormat('en', { timeZone: timezone, weekday: 'long' }).formatToParts(
     new Date(instant),
@@ -307,7 +310,7 @@ const commissionRatePercent = computed(() => {
 })
 
 function slotLabel(instant, timezone) {
-  return new Intl.DateTimeFormat('en', {
+  return new Intl.DateTimeFormat(locale.value, {
     timeZone: timezone,
     weekday: 'short',
     hour: '2-digit',

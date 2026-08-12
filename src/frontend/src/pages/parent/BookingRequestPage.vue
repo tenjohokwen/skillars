@@ -205,7 +205,7 @@ import BookingStateChip from 'src/components/booking/BookingStateChip.vue'
 
 const route = useRoute()
 const router = useRouter()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const $q = useQuasar()
 const bookingStore = useBookingStore()
 const playerStore = usePlayerStore()
@@ -280,7 +280,7 @@ function toggleBatchMode() {
 // so an unlabelled "3:00 PM" would read as local time to a parent in another zone.
 function formatInZone(date, timeZone) {
   try {
-    return new Intl.DateTimeFormat('en', {
+    return new Intl.DateTimeFormat(locale.value, {
       timeZone,
       dateStyle: 'medium',
       timeStyle: 'short',
@@ -290,7 +290,7 @@ function formatInZone(date, timeZone) {
     // Intl.DateTimeFormat throws RangeError on an unrecognized zone. Nothing validates
     // coach_profiles.canonical_timezone as a real IANA zone, so fall back rather than let a
     // throw inside a v-for label abort the render of the entire slot list.
-    return new Intl.DateTimeFormat('en', {
+    return new Intl.DateTimeFormat(locale.value, {
       timeZone: 'UTC',
       dateStyle: 'medium',
       timeStyle: 'short',

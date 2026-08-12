@@ -145,7 +145,7 @@ import { useBookingStore } from 'src/stores/booking.store'
 import { getProfileBuilderStatus } from 'src/api/marketplace.api'
 import WeeklyCalendar from 'src/components/availability/WeeklyCalendar.vue'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const store = useBookingStore()
 
 const coachId = ref(null)
@@ -179,7 +179,7 @@ const weekLabel = computed(() => {
   const start = new Date(currentWeekStart.value + 'T00:00:00')
   const end = new Date(start)
   end.setDate(start.getDate() + 6)
-  const fmt = (d) => new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric' }).format(d)
+  const fmt = (d) => new Intl.DateTimeFormat(locale.value, { month: 'short', day: 'numeric' }).format(d)
   return `${fmt(start)} – ${fmt(end)}`
 })
 

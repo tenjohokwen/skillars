@@ -63,7 +63,7 @@ import BookingStateChip from 'src/components/booking/BookingStateChip.vue'
 import SessionPackTracker from 'src/components/booking/SessionPackTracker.vue'
 import TimezoneNotice from 'src/components/booking/TimezoneNotice.vue'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const route = useRoute()
 const bookingStore = useBookingStore()
 const authStore = useAuthStore()
@@ -89,7 +89,7 @@ const firstBookingTimezone = computed(() => {
 })
 
 function formatInTz(isoString, timezone) {
-  return new Intl.DateTimeFormat('en', {
+  return new Intl.DateTimeFormat(locale.value, {
     timeZone: timezone,
     dateStyle: 'medium',
     timeStyle: 'short',

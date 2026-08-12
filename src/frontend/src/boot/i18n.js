@@ -9,8 +9,7 @@ const i18n = createI18n({
   globalInjection: true,
   messages,
   fallbackLocale: {
-    'de': ['en', 'en-US'],
-    'en': ['en-US'],
+    'de-DE': ['en-US'],
     default: ['en-US'],
   },
 })
