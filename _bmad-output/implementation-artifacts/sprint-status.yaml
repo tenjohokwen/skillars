@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-08-12 # skillars-uat-5 code review complete → done
+# last_updated: 2026-08-13 # skillars-uat-6 created → ready-for-dev
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-08-12 # skillars-uat-5 code review complete → done
+last_updated: 2026-08-13 # skillars-uat-6 created → ready-for-dev
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -683,3 +683,61 @@ development_status:
   # see the opaque-id design note in the story file). P0-4 and P1#9 remain untouched, still Mbah's to
   # decide.
   skillars-uat-5-player-self-booking: done  # 2026-08-12: all 5 ACs implemented, full mvn -o verify BUILD SUCCESS — 866 unit + 886 IT, 0F/0E (866+886 measured directly this run; contribution vs HEAD confirmed by diff: +6 unit @Test methods, +10 IT @Test methods, not by subtracting totals). AC1 widens BookingResource/BookingBatchResource + BookingService/BookingBatchService via the opaque-id XOR-branch ownership check on PlayerProfile.parentId/userId — a self-booking player's own userId lands in booking.parent_id/booking_batches.parent_id unchanged, proven end-to-end by new PlayerBookingRequestIT. AC2 widens SessionPackPaymentResource's three card endpoints identically; PaymentLifecycleService/StripePaymentGateway needed no change — verified against a real StripeCustomer row by new PlayerCardCaptureIT, not assumed. AC3 ships V95 (messaging.conversations.parent_id nullable) + MessagingResource's new isSelf branch, closing skillars-deferred-16 D1; all three downstream consumers the story named (verifyIsParty, ModerationResultApplier/AdminMessageService.resolveRecipient, getConversationsForPlayer/getMessagesForPlayerConversation) needed no code change, confirmed null-safe by new SelfPlayerMessagingIT against real null data. AC4 is the first dual-role frontend route in the codebase (router meta.roles, additive), plus a new Player nav section and CoachPublicProfilePage/BookingRequestPage/ParentBookingsPage role branches; reused the existing PaymentMethodCard.vue Stripe Elements component wholesale for card entry. AC5 closed deferred-16 D1 in deferred-work.md with a [CLOSED 2026-08-12 by skillars-uat-5 AC3] annotation, recorded 3 new deferred items for the explicitly out-of-scope pieces (pack self-purchase, credit wallet, player self-cancel/reschedule), and found uat-readiness-priorities.md already fully updated from story creation. Concrete-IT sanity check: 142 *IT.java - 4 abstract bases = 138 concrete, exactly 138 failsafe reports — no class silently stopped running. npx eslint clean, quasar build succeeded. STILL OPEN: no frontend test suite exists (house convention) — a live browser spot-check of the full player journey was not run in this environment. CODE REVIEW COMPLETE (2026-08-12, bmad-code-review, 3-layer): 0 decision-needed, 4 patch (all applied and independently re-verified — canSubmit playerId guard, getMyProfile() error surfacing in 2 pages, PlayerRoleLockoutIT + 2 new SessionPackPaymentResourceIT 403 cases proving parent-only endpoints stay rejected for PLAYER, player-specific batch-review copy), 2 deferred (duplicated uncached self-profile fetch, client-side playerId override via query param — both pre-existing patterns, not regressions), 10 dismissed as verified false positives. Post-patch full mvn -o verify re-run: BUILD SUCCESS, 866 unit + 891 IT (0F/0E, +5 IT vs pre-review). npx eslint clean, quasar build succeeded.
+
+  # Sixth story drawn from uat-readiness-priorities.md. Claims the last two unclaimed rows besides
+  # P3 (chronically re-deferred, out of scope for UAT): P0-4 (coach subscription card collection)
+  # and P1 #9 (volume backup replacement). Both were product/ops decisions for Mbah, resolved
+  # 2026-08-13 during this story's creation: build coach self-serve subscription card collection;
+  # replace the broken Hetzner volume snapshot with file-level backup to Object Storage. The two
+  # halves are structurally unrelated (payment backend/frontend vs. deploy/ops scripting) and
+  # grouped only to close out the remaining backlog — no shared mechanism, per the user's own
+  # grouping instruction for small/unrelated remaining items.
+  #   AC1  Backend: widens SessionPackPaymentResource's three card-collection endpoints
+  #        (setup-intent/save-payment-method/payment-method) to a new HAS_PARENT_PLAYER_OR_COACH_ROLE
+  #        constant. NO SCHEMA CHANGE — corrects a stale claim in deferred-work.md's
+  #        skillars-deferred-11 D1 (and skillars-uat-5's own Dev Notes) that a coach's UUID id is a
+  #        structural blocker requiring a second customer table: CoachProfile already carries a
+  #        BIGINT userId column in the same id space StripeCustomer.parentId already uses (the exact
+  #        opaque-id shortcut uat-5 used for players), confirmed live by SubscriptionLifecycleIT's own
+  #        test fixture already keying a stripe_customers row on a coach's userId via raw SQL.
+  #   AC2  Backend: SubscriptionService.subscribeCoach mirrors subscribePlayer's already-working
+  #        pattern — resolves the Stripe customer/payment-method from the caller's own saved
+  #        StripeCustomer row instead of a stale, never-written PaymentCoachSubscription.stripeCustomerId
+  #        column and a raw request-body string. Drops the redundant attachPaymentMethod call
+  #        subscribePlayer already proved unnecessary.
+  #   AC3  Frontend: CoachSubscriptionPage.vue drops the raw Stripe Payment Method ID text input for
+  #        the same PaymentMethodCard.vue + hasCard-gated dialog pattern PlayerSubscriptionPage.vue
+  #        already ships for players. Closes the deferred-11 D3 i18n-key cleanup uat-1 explicitly
+  #        deferred pending this exact story.
+  #   AC4  Ledger hygiene: closes deferred-11 D1/D3 with corrected annotations (endpoints were already
+  #        widened by uat-5, not still HAS_PARENT_ROLE; no schema change was ever required).
+  #   AC5  Ops: new deploy/backup/volume-backup.sh (file-level tar of /opt/skillars/data EXCLUDING
+  #        postgres/, which pg-backup.sh's pg_dump already covers and a live directory copy cannot
+  #        validly back up) to Hetzner Object Storage, replacing deploy/backup/volume-snapshot.sh —
+  #        confirmed by skillars-uat-3 against 4 independent sources to call a Hetzner Cloud API
+  #        endpoint that does not exist, meaning NO volume backup of any kind has ever existed.
+  #   AC6  Ops: prune-backups.sh grows a third retention branch (prune_volume_backups, mirroring
+  #        prune_s3_dumps) and drops the permanently-zero-match snapshot-pruning branch entirely.
+  #   AC7  Ops: new restore-from-volume-backup.sh (download+extract from Object Storage instead of
+  #        a manual Hetzner-Console volume swap), fixing a real pre-existing gap in the script it
+  #        replaces — restore-from-snapshot.sh never restored redis/traefik ownership after a
+  #        restore, only postgres/prometheus/loki/tempo/grafana. backup-restore.md Section B and
+  #        runbook.md's warning block rewritten to match.
+  #   AC8  Ledger hygiene + env cleanup: closes skillars-uat-3 D1 and everything explicitly gated on
+  #        it (2 duplicate safety-rail findings, D16, D10 — all moot once prune_snapshots() and
+  #        HETZNER_VOLUME_ID-based pruning are removed); removes HCLOUD_TOKEN/HETZNER_VOLUME_ID from
+  #        the server's .env.example/secrets-reference.md (both now server-side-unused; local-only
+  #        apply-firewall.sh's own use of HCLOUD_TOKEN is untouched); updates
+  #        uat-readiness-priorities.md's Story claims / Still unclaimed (P3-only from here on) /
+  #        Suggested sequence items 5 and 8.
+  # DELIBERATELY EXCLUDED: dropping the now-dead payment.coach_subscriptions.stripe_customer_id
+  # column (no migration for a harmless dead column); Stripe customer metadata still saying
+  # "parentId" for a coach caller (cosmetic, Stripe-dashboard-only); a dedicated SubscriptionResourceIT
+  # (none exists today for any role, out of scope to build from scratch here); Redis AOF
+  # consistency during a live file-level backup (flagged as a Dev Notes caveat, not solved); live
+  # execution of the new backup/restore scripts against real Hetzner Object Storage credentials
+  # (STILL OPEN posture, matching skillars-uat-3's AC6/D10 precedent — first real run must be
+  # --dry-run, first real restore must be a logged drill). This is the last story drawn from
+  # uat-readiness-priorities.md — after this ships, only P3 (chronically re-deferred, explicitly
+  # out of scope for UAT) remains in that document.
+  skillars-uat-6-coach-subscription-and-volume-backup: review  # 2026-08-13: all 8 ACs implemented, full mvn -o verify BUILD SUCCESS (11:25 min) — 866 unit + 894 IT, 0F/0E. No migration required for AC1-4, confirmed (corrects a stale schema-blocker claim carried since skillars-deferred-11 — CoachProfile.userId already bridges the id space, same opaque-id shortcut skillars-uat-5 used for players). AC5-8 replaced the permanently-broken volume-snapshot.sh/restore-from-snapshot.sh with file-level volume-backup.sh/restore-from-volume-backup.sh to Object Storage, fixing a real pre-existing gap (no redis/traefik ownership restoration) while rewriting the restore script. shellcheck clean on all 4 touched backup scripts; npx eslint clean; quasar build succeeded. One test-infrastructure bug found and fixed: a new IT's in-test DELETE silently rolled back because this app runs Hikari with auto-commit:false and the statement wasn't wrapped in transactionTemplate.execute() — fixed, mutation-verified both directions. STILL OPEN: no live browser spot-check of AC3's add-card flow; no live execution of the new backup/restore scripts against real Hetzner Object Storage credentials (same posture skillars-uat-3 AC6/D10 already established). REVIEW FINDINGS ADDRESSED 2026-08-13: 10 patches applied (restore-from-volume-backup.sh pre-restore safety net + auto-restart-on-failure trap + restored 120s health check + filename-timestamp latest-backup selection; volume-backup.sh tar-exit-1 tolerance + EXIT-trap temp-file cleanup; install-crons.sh purges stale volume-snapshot.sh cron entry; CoachSubscriptionPage.vue catch + new loadError i18n key; new SubscriptionLifecycleIT test for null-payment-method-id case; deferred-work.md section-splice fix), 8 pre-existing decisions/dismissals confirmed as-is. Post-patch full mvn -o verify: BUILD SUCCESS, 866 unit + 895 IT, 0F/0E (+1 IT matching the new test).

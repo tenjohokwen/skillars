@@ -52,15 +52,17 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
         coachId = insertTestCoach(COACH_USER_ID, "sub.coach@test.com", "Sub Coach");
 
         transactionTemplate.execute(status -> {
-            // Stripe customer for the coach user
+            // Stripe customer for the coach user — subscribeCoach() now resolves the payment
+            // method from this row directly (mirrors subscribePlayer's pattern), not from
+            // PaymentCoachSubscription.getStripeCustomerId().
             jdbcTemplate.update(
-                "INSERT INTO payment.stripe_customers (parent_id, stripe_customer_id) " +
-                "VALUES (?, ?) ON CONFLICT (parent_id) DO NOTHING",
-                COACH_USER_ID, STRIPE_CUSTOMER_ID
+                "INSERT INTO payment.stripe_customers (parent_id, stripe_customer_id, stripe_payment_method_id) " +
+                "VALUES (?, ?, ?) ON CONFLICT (parent_id) DO NOTHING",
+                COACH_USER_ID, STRIPE_CUSTOMER_ID, PAYMENT_METHOD
             );
 
-            // Bootstrap coach subscription row with stripe_customer_id so subscribeCoach()
-            // can find it via PaymentCoachSubscription.getStripeCustomerId()
+            // Bootstrap coach subscription row with stripe_customer_id — this column is now
+            // unused by the subscribeCoach() code path under test; left as harmless dead data.
             jdbcTemplate.update(
                 "INSERT INTO payment.coach_subscriptions (coach_id, stripe_customer_id) " +
                 "VALUES (?, ?) ON CONFLICT (coach_id) DO UPDATE SET stripe_customer_id = EXCLUDED.stripe_customer_id",
@@ -130,7 +132,7 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
 
     @Test
     void coachSubscribe_createsActiveSubscription() throws StripeException {
-        CoachSubscriptionResponse resp = subscriptionService.subscribeCoach(coachId, "INSTRUCTOR", PAYMENT_METHOD);
+        CoachSubscriptionResponse resp = subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR");
 
         assertThat(resp.tier()).isEqualTo("INSTRUCTOR");
         assertThat(resp.status()).isEqualTo("ACTIVE");
@@ -139,6 +141,9 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
         // Verify Stripe SDK was called
         verify(stripeClient, times(1))
             .createSubscription(STRIPE_CUSTOMER_ID, "price_instructor_monthly", PAYMENT_METHOD);
+        // The saved card was already attached to this customer when it was saved via
+        // /setup-intent + /save-payment-method — re-attaching here would throw on Stripe's side.
+        verify(stripeClient, never()).attachPaymentMethod(anyString(), anyString());
 
         // Verify DB row
         PaymentCoachSubscription sub = paymentCoachSubscriptionRepository
@@ -148,11 +153,45 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
     }
 
     @Test
-    void coachSubscribe_alreadyActive_throws409() throws StripeException {
-        subscriptionService.subscribeCoach(coachId, "INSTRUCTOR", PAYMENT_METHOD);
+    void coachSubscribe_noSavedCard_throwsNoPaymentMethod() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "DELETE FROM payment.stripe_customers WHERE parent_id = ?", COACH_USER_ID
+            );
+            return null;
+        });
 
         assertThatThrownBy(() ->
-            subscriptionService.subscribeCoach(coachId, "INSTRUCTOR", PAYMENT_METHOD)
+            subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR")
+        ).isInstanceOf(PaymentGatewayException.class)
+            .hasMessageContaining("payment.noPaymentMethod");
+    }
+
+    @Test
+    void coachSubscribe_cardSetupIncomplete_throwsNoPaymentMethod() {
+        // The StripeCustomer row exists (POST /setup-intent was called) but stripe_payment_method_id
+        // is still null — the coach opened the "add card" dialog and abandoned it before
+        // POST /save-payment-method completed. Distinct from the no-row-at-all case above.
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "UPDATE payment.stripe_customers SET stripe_payment_method_id = NULL WHERE parent_id = ?",
+                COACH_USER_ID
+            );
+            return null;
+        });
+
+        assertThatThrownBy(() ->
+            subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR")
+        ).isInstanceOf(PaymentGatewayException.class)
+            .hasMessageContaining("payment.noPaymentMethod");
+    }
+
+    @Test
+    void coachSubscribe_alreadyActive_throws409() throws StripeException {
+        subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR");
+
+        assertThatThrownBy(() ->
+            subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR")
         ).isInstanceOf(PaymentGatewayException.class);
     }
 
@@ -160,7 +199,7 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
 
     @Test
     void coachUpgrade_immediatelyApplied() throws StripeException {
-        subscriptionService.subscribeCoach(coachId, "INSTRUCTOR", PAYMENT_METHOD);
+        subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR");
 
         subscriptionService.changeCoachTier(coachId, "ACADEMY");
 
@@ -176,7 +215,7 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
 
     @Test
     void coachDowngrade_scheduledPendingChange() throws StripeException {
-        subscriptionService.subscribeCoach(coachId, "ACADEMY", PAYMENT_METHOD);
+        subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "ACADEMY");
 
         subscriptionService.changeCoachTier(coachId, "INSTRUCTOR");
 
@@ -196,7 +235,7 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
 
     @Test
     void applyPendingChanges_applicator_appliesExpiredDowngrade() throws StripeException {
-        subscriptionService.subscribeCoach(coachId, "ACADEMY", PAYMENT_METHOD);
+        subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "ACADEMY");
         subscriptionService.changeCoachTier(coachId, "INSTRUCTOR");
 
         // Force the effective_at to be in the past
@@ -225,7 +264,7 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
 
     @Test
     void coachCancel_setsCancelAtPeriodEnd() throws StripeException {
-        subscriptionService.subscribeCoach(coachId, "INSTRUCTOR", PAYMENT_METHOD);
+        subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR");
 
         subscriptionService.cancelCoachSubscription(coachId);
 
@@ -240,7 +279,7 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
 
     @Test
     void webhookSubscriptionUpdated_syncsStatusAndPeriodEnd() throws StripeException {
-        subscriptionService.subscribeCoach(coachId, "INSTRUCTOR", PAYMENT_METHOD);
+        subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR");
         Instant newPeriodEnd = Instant.now().plus(60, ChronoUnit.DAYS);
 
         subscriptionService.handleSubscriptionWebhook(
@@ -263,7 +302,7 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
 
     @Test
     void webhookInvoicePaymentFailed_setsPastDue_onlyOnFirstFailure() throws StripeException {
-        subscriptionService.subscribeCoach(coachId, "INSTRUCTOR", PAYMENT_METHOD);
+        subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR");
 
         subscriptionService.handleSubscriptionWebhook(
             "invoice.payment_failed", STRIPE_SUB_ID, Map.of()
@@ -289,7 +328,7 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
 
     @Test
     void duplicateWebhookEvent_processedOnlyOnce() throws StripeException {
-        subscriptionService.subscribeCoach(coachId, "INSTRUCTOR", PAYMENT_METHOD);
+        subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR");
 
         Instant periodEnd = Instant.now().plus(30, ChronoUnit.DAYS);
         Map<String, Object> data = Map.of(
@@ -312,7 +351,7 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
 
     @Test
     void webhookSubscriptionDeleted_coachDowngradedToScout() throws StripeException {
-        subscriptionService.subscribeCoach(coachId, "INSTRUCTOR", PAYMENT_METHOD);
+        subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR");
 
         subscriptionService.handleSubscriptionWebhook(
             "customer.subscription.deleted", STRIPE_SUB_ID, Map.of()
