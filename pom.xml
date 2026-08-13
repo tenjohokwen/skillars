@@ -63,10 +63,17 @@
 			             (netty-handler). Fix on the 4.1.x line is 4.1.136.Final.
 			  postgresql CVE-2026-42198, CVE-2026-54291. The 3.5.16 parent manages 42.7.11,
 			             which fixes only the first; 42.7.12 fixes both.
+			  httpcore5  CVE-2026-54399 - denial of service via excessive HTTP headers. The
+			             3.5.16 parent manages 5.3.6; fix is 5.4.3 (or 5.5-beta2). Pulled in by
+			             the direct test-scope httpclient5 dependency below (WireMock stub
+			             assertions); Trivy scans app.jar and flags it regardless of test scope
+			             because Spring Boot's repackage step does not exclude it from the
+			             resolved runtime classpath.
 			-->
 			<thymeleaf.version>3.1.5.RELEASE</thymeleaf.version>
 			<netty.version>4.1.136.Final</netty.version>
 			<postgresql.version>42.7.12</postgresql.version>
+			<httpcore5.version>5.4.3</httpcore5.version>
 		</properties>
 	
 		<dependencyManagement>
