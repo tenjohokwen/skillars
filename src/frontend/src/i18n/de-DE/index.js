@@ -1047,12 +1047,11 @@ export default {
     upgradeCTA: 'Upgrade',
     subscribeTo: '{tier} abonnieren',
     confirm: 'Bestätigen',
-    paymentMethodId: 'Zahlungsmethoden-ID',
-    paymentMethodHint: 'Stripe Zahlungsmethoden-ID eingeben (pm_...)',
     perMonth: '{price} / Monat',
     perYear: '{price} / Jahr',
     coach: {
       pageTitle: 'Coach-Abonnement',
+      loadError: 'Ihre Abonnementdetails konnten nicht geladen werden. Bitte versuchen Sie es erneut.',
       subscribeSuccess: 'Willkommen bei {tier}! Ihre neuen Funktionen sind jetzt aktiv.',
       subscribeError: 'Abonnement fehlgeschlagen. Bitte versuchen Sie es erneut.',
       tierChangeSuccess: 'Ihr Plan wechselt zu {tier}.',
@@ -1060,7 +1059,6 @@ export default {
       cancelSuccess: 'Ihr Plan endet am {date}. Sie behalten bis dahin Zugriff.',
       cancelError: 'Kündigung fehlgeschlagen.',
       cancelPending: 'Ihr Abonnement endet am {date}.',
-      paymentMethodRequired: 'Bitte geben Sie eine Zahlungsmethoden-ID ein.',
     },
     player: {
       pageTitle: 'Spieler-Abonnement',

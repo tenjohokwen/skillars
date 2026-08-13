@@ -21,9 +21,9 @@ Items already pulled into a story. A subsequent story-creation pass must skip an
 | `skillars-uat-3-payment-capture-integrity-and-backup-retention.md` (2026-08-11) | P1 #3 (AC1, AC3, AC5), P1 #2 (AC2), P2 #4 (AC6). Grouped because P1 #2 and #3 share one mechanism: the durable pre-capture `booking_payments` row that #3 asks for **is** the interlock #2 needs, and widening the `PaymentPendingSweeper` (currently pack-funded only) is only safe once that row exists. P2 #4 rides along as the last unclaimed P2 row — ops-only, no overlap with the Java tree. — **IMPLEMENTED 2026-08-11**, scope unchanged from what was claimed. `deferred-12` D2, `deferred-15` story-creation D1 and the `deploy-3-1` retention row all closed in the ledger. **AC6 surfaced a new, larger ops finding — see P1 #9 below.** |
 | `skillars-uat-4-i18n-locale-and-message-resolution-integrity.md` (2026-08-12) | P1 #7 (AC1), P1 #8 (AC2), the `deferred-9` D2 ledger-hygiene residue (AC3). The last non-decision *code* item left in this doc — everything else still open (P0-2, P0-4, P1 #9) is a product/ops decision, not a dev pass. AC1's file list is corrected against the current tree (the `deferred-17` D3 citation of `SessionPackDashboardPage.vue` is stale — that file was never actually broken); AC2's fix is a single line (`SecurityAdviceFilter.java` was storing an English display name instead of a language tag). |
 | `skillars-uat-5-player-self-booking.md` (2026-08-12) | P0-2 (AC1 booking, AC4 frontend) — Mbah decided **build self-booking**, not register-and-browse-only. AC2 opens direct per-session card payment for a self-booking player via the existing `payment.stripe_customers` table (no FK, no schema change needed) — session-pack purchase, the credit wallet, and player self-cancel/reschedule/no-show/dispute all stay explicitly out of scope, recorded as follow-ons rather than built speculatively. AC3 closes the `skillars-deferred-16 story creation` D1 messaging item, deliberately left blocked pending exactly this decision. AC5 is ledger hygiene. |
+| `skillars-uat-6-coach-subscription-and-volume-backup.md` (2026-08-13) | P0-4 (AC1-AC4) — Mbah decided **build coach self-serve subscription card collection**. Corrects a stale claim carried since `skillars-deferred-11` D1 (and repeated in `skillars-uat-5`'s own Dev Notes) that a coach's UUID id structurally requires a second Stripe-customer table or a re-keying migration: `CoachProfile` already carries a `BIGINT userId` column in the same id space `payment.stripe_customers.parent_id` already uses — **no migration**, same opaque-id shortcut `uat-5` used for players. AC2 mirrors `subscribePlayer`'s already-working saved-card resolution instead of inventing a new pattern. P1 #9 (AC5-AC8) — Mbah decided **file-level backup of the Hetzner Volume to Object Storage**, replacing `volume-snapshot.sh` (confirmed by `uat-3` to call a nonexistent Hetzner Cloud API endpoint — no volume backup of any kind has ever existed). New `volume-backup.sh`/`restore-from-volume-backup.sh` exclude `postgres/` (already covered by `pg-backup.sh`'s pg_dump) and fix a real gap the replaced restore script had (no redis/traefik ownership restoration). Grouped in one story only because they are the last two unclaimed rows besides P3 — the two halves share no mechanism. |
 
-**Still unclaimed:** P0-4 (product decision — see the Suggested sequence);
-**P1 #9 (new 2026-08-11 — the data volume has no working backup)**; everything in P3. **P2 is now empty.**
+**Still unclaimed:** everything in P3 (chronically re-deferred, explicitly out of scope for UAT — see the ranking rule). **P0, P1 and P2 are now fully claimed.**
 
 **P0-5's product decision is resolved** (Mbah, 2026-08-10): the default session length is one hour
 system-wide, and a coach can override it. `skillars-uat-2` implements that as a
@@ -133,6 +133,10 @@ is a zone picker or an alias fallback.
 
 ### P0-4. A coach cannot subscribe through the UI — `deferred-11` D1
 
+> **CLAIMED 2026-08-13 → `skillars-uat-6-coach-subscription-and-volume-backup.md` (AC1-AC4).** Do not pick up again.
+> Decided: coach subscription **is** in the UAT script. The "second customer table or re-keying migration"
+> framing below is stale — no schema change was needed, see that story's opening callout.
+
 `CoachSubscriptionPage.vue:118` still renders a raw text input asking the coach to type a Stripe
 Payment Method ID (`pm_...`), which `deferred-11` removed from the parent path but could not remove
 here. Verified still present today.
@@ -207,7 +211,7 @@ Ordered by how likely you are to trip over them.
    `SecurityAdviceFilter:59` stores `locale.getDisplayLanguage()` ("German"), and
    `Locale.forLanguageTag("German")` yields `"german"` — so `messages_de.properties` is never selected
    and every custom validator's translations are dead. Same condition as #7: English-only UAT, defer.
-9. **NEW 2026-08-11 — the Hetzner Volume at `/opt/skillars/data` has no working backup at all.**
+9. **[CLAIMED → `skillars-uat-6-coach-subscription-and-volume-backup.md` AC5-AC8]** **the Hetzner Volume at `/opt/skillars/data` has no working backup at all.**
    Found while implementing `uat-3` AC6, which required verifying the Hetzner list/delete endpoints
    against the live API docs before writing the pruner. **The Hetzner Cloud API has no volume
    snapshot** — volumes support only attach / detach / resize / change_protection, and a Hetzner
@@ -329,8 +333,12 @@ budgeting work that is already done.
    rather than built speculatively.
 4. ~~**`coach-onboarding-resilience`** — timezone picker or fallback in the profile builder (P0-3), and
    the `windows[0]` display fix (P1 #4).~~ **DONE** — folded into `skillars-uat-1` (AC4, AC5).
-5. **Decide P0-4** — is coach subscription in the UAT script? If yes it is a schema story and should
-   start now; if no, paste a test-mode `pm_...` and move on. Fold `deferred-11` D3 into it.
+5. ~~**Decide P0-4** — is coach subscription in the UAT script? If yes it is a schema story and should
+   start now; if no, paste a test-mode `pm_...` and move on. Fold `deferred-11` D3 into it.~~
+   **DECIDED AND CLAIMED** — Mbah chose to build it (2026-08-13); `skillars-uat-6`, written 2026-08-13.
+   Turned out **not** to be a schema story — the "second customer table or re-keying migration" framing
+   was stale; `CoachProfile`'s existing `userId` column made this the same opaque-id shortcut `uat-5`
+   used for players. Folds in `deferred-11` D3 as originally suggested here.
 6. ~~**`booking-ux-polish`** — the vanishing-slot affordance (P1 #1) plus the DST guard (P1 #6).~~
    **DONE** — the DST guard shipped in `uat-1` AC7; the vanishing-slot affordance shipped as `uat-2`
    AC5, pulled forward rather than waiting for testers because AC2's slicing is what makes it a
@@ -342,12 +350,18 @@ budgeting work that is already done.
    there is no signal anywhere that it happened — so a first payment round run without it produces
    numbers nobody can audit afterwards. #2 comes along because the row it needs is the same row.
    `deploy-3-1`'s retention item (P2 #4) is folded in as ops-only work.
-8. **Decide the volume backup replacement** (P1 #9) — new, and it jumped the queue on discovery:
+8. ~~**Decide the volume backup replacement** (P1 #9) — new, and it jumped the queue on discovery:
    `/opt/skillars/data` has had no backup since `deploy-3-1`, because Hetzner Cloud cannot snapshot a
    volume at all. Pick one of: file-level backup of the volume to Object Storage beside the dumps, a
    Hetzner Storage Box, or an explicit written decision that dumps-only is acceptable and Section B
    of `backup-restore.md` gets deleted. Whichever you pick, run a restore drill and finally write a
-   row in `drill-log.md` — a drill is what would have caught this two months ago.
+   row in `drill-log.md` — a drill is what would have caught this two months ago.~~
+   **DECIDED AND CLAIMED** — Mbah chose file-level backup to Object Storage (2026-08-13);
+   `skillars-uat-6`, written 2026-08-13. Replaces `volume-snapshot.sh`/`restore-from-snapshot.sh`
+   outright rather than layering alongside them, and fixes a real pre-existing gap in the restore
+   script (no redis/traefik ownership restoration) while rewriting it. The restore drill itself is
+   recorded as STILL OPEN pending live Hetzner Object Storage credentials — not run in this
+   environment, matching `uat-3` AC6/D10's own precedent.
 9. ~~**The i18n pair** (P1 #7, #8) — only if UAT is not English-only. `uat-1`, `uat-2` and `uat-3` have
    now all touched files near #7/#8 call sites and all three deliberately left them: one sweep or none.
    These are the last non-decision *code* items on the list.~~ **CLAIMED** — `skillars-uat-4`, written

@@ -1148,12 +1148,11 @@ export default {
     upgradeCTA: 'Upgrade',
     subscribeTo: 'Subscribe to {tier}',
     confirm: 'Confirm',
-    paymentMethodId: 'Payment Method ID',
-    paymentMethodHint: 'Enter your Stripe payment method ID (pm_...)',
     perMonth: '{price} / month',
     perYear: '{price} / year',
     coach: {
       pageTitle: 'Coach Subscription',
+      loadError: 'Failed to load your subscription details. Please try again.',
       subscribeSuccess: 'Welcome to {tier}! Your new features are now active.',
       subscribeError: 'Subscription failed. Please try again.',
       tierChangeSuccess: 'Your plan will change to {tier}.',
@@ -1161,7 +1160,6 @@ export default {
       cancelSuccess: 'Your plan will end on {date}. You retain access until then.',
       cancelError: 'Cancellation failed. Please try again.',
       cancelPending: 'Your subscription will end on {date}.',
-      paymentMethodRequired: 'Please enter a payment method ID.',
     },
     player: {
       pageTitle: 'Player Subscription',

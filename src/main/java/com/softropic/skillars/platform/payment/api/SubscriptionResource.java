@@ -59,8 +59,8 @@ public class SubscriptionResource {
     public ResponseEntity<CoachSubscriptionResponse> subscribeCoach(
             @Valid @RequestBody CoachSubscribeRequest request) {
         UUID coachId = resolveCoachId();
-        CoachSubscriptionResponse response = subscriptionService.subscribeCoach(
-            coachId, request.tier(), request.paymentMethodId());
+        Long coachUserId = securityUtil.getCurrentCoachUserId();
+        CoachSubscriptionResponse response = subscriptionService.subscribeCoach(coachId, coachUserId, request.tier());
         return ResponseEntity.ok(response);
     }
 

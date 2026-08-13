@@ -124,13 +124,6 @@ class SessionPackPaymentResourceIT {
     }
 
     @Test
-    @WithMockUser(roles = "COACH")
-    void getSavedPaymentMethod_coachRole_returns403() throws Exception {
-        mockMvc.perform(get("/api/payment/payment-method"))
-            .andExpect(status().isForbidden());
-    }
-
-    @Test
     @WithAnonymousUser
     void getSavedPaymentMethod_unauthenticated_returns401() throws Exception {
         mockMvc.perform(get("/api/payment/payment-method"))
@@ -175,6 +168,53 @@ class SessionPackPaymentResourceIT {
     @Test
     @WithMockUser(roles = "PLAYER")
     void getSavedPaymentMethod_playerRole_returns200() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        when(sessionPackPaymentService.getSavedPaymentMethod(PARENT_USER_ID))
+            .thenReturn(new SavedPaymentMethodResponse(false, null, null, null, null));
+
+        mockMvc.perform(get("/api/payment/payment-method"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.hasCard").value(false));
+    }
+
+    // ─── UAT.6 AC1: a coach can save a card via the same generic endpoints ──────────────────────
+    //
+    // Mutation check: reverting the @PreAuthorize widening on any one of these three endpoints
+    // back to HAS_PARENT_OR_PLAYER_ROLE turns each of these into a 403, failing the test.
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void createSetupIntent_coachRole_returns200() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        StripeCustomer customer = new StripeCustomer();
+        customer.setParentId(PARENT_USER_ID);
+        customer.setStripeCustomerId("cus_coach_test");
+        when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.of(customer));
+        when(paymentGateway.createSetupIntent("cus_coach_test")).thenReturn("seti_coach_secret");
+
+        mockMvc.perform(post("/api/payment/setup-intent").contentType(MediaType.APPLICATION_JSON))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.clientSecret").value("seti_coach_secret"));
+    }
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void savePaymentMethod_coachRole_returns204() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        StripeCustomer customer = new StripeCustomer();
+        customer.setParentId(PARENT_USER_ID);
+        customer.setStripeCustomerId("cus_coach_test");
+        when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.of(customer));
+
+        mockMvc.perform(post("/api/payment/save-payment-method")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"paymentMethodId\":\"pm_coach_test\"}"))
+            .andExpect(status().isNoContent());
+    }
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void getSavedPaymentMethod_coachRole_returns200() throws Exception {
         when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
         when(sessionPackPaymentService.getSavedPaymentMethod(PARENT_USER_ID))
             .thenReturn(new SavedPaymentMethodResponse(false, null, null, null, null));

@@ -908,12 +908,11 @@ export default {
     upgradeCTA: 'Mettre à niveau',
     subscribeTo: "S'abonner à {tier}",
     confirm: 'Confirmer',
-    paymentMethodId: 'ID du moyen de paiement',
-    paymentMethodHint: 'Entrez votre ID de moyen de paiement Stripe (pm_...)',
     perMonth: '{price} / mois',
     perYear: '{price} / an',
     coach: {
       pageTitle: 'Abonnement Coach',
+      loadError: "Échec du chargement de vos informations d'abonnement. Veuillez réessayer.",
       subscribeSuccess:
         'Bienvenue dans {tier} ! Vos nouvelles fonctionnalités sont maintenant actives.',
       subscribeError: "Échec de l'abonnement. Veuillez réessayer.",
@@ -922,7 +921,6 @@ export default {
       cancelSuccess: "Votre plan se terminera le {date}. Vous conservez l'accès jusque-là.",
       cancelError: "Échec de l'annulation. Veuillez réessayer.",
       cancelPending: 'Votre abonnement se terminera le {date}.',
-      paymentMethodRequired: 'Veuillez entrer un ID de moyen de paiement.',
     },
     player: {
       pageTitle: 'Abonnement Joueur',

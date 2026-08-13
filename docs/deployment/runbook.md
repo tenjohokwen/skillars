@@ -76,20 +76,20 @@ docker compose restart prometheus
 | Loki logs | 30 days | `loki.yml`, self-pruning |
 | Prometheus metrics | 15 days | Prometheus, self-pruning |
 | PostgreSQL dumps (Object Storage) | `BACKUP_RETENTION_DAYS`, default 14 days | `prune-backups.sh`, daily 03:30 UTC |
-| Hetzner Cloud snapshots | `SNAPSHOT_RETENTION_DAYS`, default 7 days | `prune-backups.sh`, daily 03:30 UTC |
+| Volume backups (Object Storage) | `VOLUME_BACKUP_RETENTION_DAYS`, default 14 days | `prune-backups.sh`, daily 03:30 UTC |
 
-Backup retention keeps the newest `BACKUP_RETENTION_MIN_KEEP` (default 8) dumps regardless of age.
+Backup retention keeps the newest `BACKUP_RETENTION_MIN_KEEP` (default 8) dumps and the newest
+`VOLUME_BACKUP_RETENTION_MIN_KEEP` (default 4) volume backups regardless of age.
 See [`backup-restore.md`](backup-restore.md#retention) for the safety rails and the dry-run first
 run.
 
-> **⚠️ The Hetzner Volume at `/opt/skillars/data` has no working backup.** Verified against the
-> Hetzner Cloud API on 2026-08-11: that API has **no volume snapshot** — volumes support only
-> attach / detach / resize / change_protection, and a Hetzner *server* snapshot explicitly excludes
-> attached volumes. `volume-snapshot.sh` POSTs to a non-existent endpoint and has failed on every
-> cron run since it was written, which is consistent with `drill-log.md` never having recorded a
-> drill. The PostgreSQL dumps in Object Storage are unaffected and are the only working backup.
-> Choosing a replacement (file-level backup of the volume, a Storage Box, or accepting dumps-only)
-> is an open operational decision.
+> **File-level volume backup runs daily.** `deploy/backup/volume-backup.sh` archives everything
+> under `/opt/skillars/data` — Loki, Prometheus, Grafana, Tempo, Redis AOF, `acme.json` — to Hetzner
+> Object Storage every day at 02:00 UTC, excluding `postgres/` (already covered by the pg_dump
+> stream above). It replaces the earlier `volume-snapshot.sh` mechanism, which called a Hetzner
+> Cloud API endpoint that does not exist and never produced a working backup — see
+> `deferred-work.md`, `skillars-uat-3` D1. Restore via `deploy/backup/restore-from-volume-backup.sh`
+> — see [`backup-restore.md`](backup-restore.md) Section B.
 
 ### Verification
 

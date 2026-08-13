@@ -45,16 +45,16 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 | `LOKI_URL` | Internal URL | Fixed value: `http://loki:3100` — do not change (Docker service name on `skillars-internal` network) |
 | `LOKI_ENABLED` | Boolean | Fixed value: `true` — do not change |
 | `MANAGEMENT_OTLP_TRACING_ENDPOINT` | Internal URL | Fixed value: `http://tempo:4318/v1/traces` — do not change (Docker service name on `skillars-internal` network) |
-| `HCLOUD_TOKEN` | Hetzner Cloud API token (64-char hex) | Hetzner Cloud Console → Security → API Tokens → Generate API Token (Read/Write); used by `volume-snapshot.sh` and `prune-backups.sh` on the Node. Read/Write is required — `prune-backups.sh` deletes expired snapshot images |
-| `HETZNER_VOLUME_ID` | Integer, e.g. `12345678` | Hetzner Cloud Console → Volumes → click the volume → the numeric ID appears in the URL (`/volumes/<id>`) |
 | `HOS_ACCESS_KEY` | String | Hetzner Cloud Console → Object Storage → your bucket → Access Keys → Create access key; copy Access Key ID |
 | `HOS_SECRET_KEY` | String | Same creation flow as `HOS_ACCESS_KEY`; copy Secret Access Key (shown once) |
 | `HOS_BUCKET` | String, e.g. `skillars-backups` | Create a private bucket in Hetzner Cloud Console → Object Storage; use the exact bucket name here |
 | `HOS_ENDPOINT` | HTTPS URL, e.g. `https://s3.fsn1.hetzner.com` | Hetzner Object Storage endpoint for your datacenter region (fsn1 = Falkenstein, nbg1 = Nuremberg, hel1 = Helsinki) — visible in the bucket details page |
 | `HOS_BACKUP_PREFIX` | String ending in `/`, e.g. `pg-backups/` | Choose a key prefix to organize backups within the bucket; default `pg-backups/` |
+| `HOS_VOLUME_BACKUP_PREFIX` | String ending in `/`, e.g. `volume-backups/` | Choose a key prefix to organize file-level volume backups within the bucket; default `volume-backups/` |
 | `BACKUP_RETENTION_DAYS` | Integer, e.g. `14` | **Tuning knob, not a secret.** How many days of PostgreSQL dumps `prune-backups.sh` keeps; default `14` (~56 dumps at the 6-hourly cadence) |
 | `BACKUP_RETENTION_MIN_KEEP` | Integer, e.g. `8` | **Tuning knob, not a secret.** Newest dumps retained unconditionally regardless of age — the floor that stops a bad cutoff emptying the bucket; default `8` |
-| `SNAPSHOT_RETENTION_DAYS` | Integer, e.g. `7` | **Tuning knob, not a secret.** Days of Hetzner Cloud snapshots kept; default `7`. Currently matches nothing — see the volume-snapshot warning in `backup-restore.md` |
+| `VOLUME_BACKUP_RETENTION_DAYS` | Integer, e.g. `14` | **Tuning knob, not a secret.** How many days of file-level volume backups `prune-backups.sh` keeps; default `14` (~14 backups at the daily cadence) |
+| `VOLUME_BACKUP_RETENTION_MIN_KEEP` | Integer, e.g. `4` | **Tuning knob, not a secret.** Newest volume backups retained unconditionally regardless of age — the floor that stops a bad cutoff emptying the bucket; default `4` |
 
 > **The three `APP_BOOTSTRAP_ADMIN_*` variables are the only entries in this table that are meant to
 > be removed again.** Every other secret here is permanent; these exist to create one account, once.

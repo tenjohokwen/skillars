@@ -10,19 +10,18 @@ data loss, corruption, or hardware failure requires recovery. For reverting a ba
 
 | Situation | Use |
 |---|---|
-| Node hardware failure, volume corruption, or catastrophic data loss | Volume snapshot restore (Section B) |
+| Node hardware failure, volume corruption, or catastrophic data loss | Volume backup restore (Section B) |
 | Database corruption, accidental data deletion, application bug | pg_dump restore (Section A) |
 | Quarterly restore drill | Either path — record result in `deploy/backup/drill-log.md` |
 
 Both restore scripts require SSH access to the Node as root and must be run from `/opt/skillars`.
 
-> **⚠️ Section B does not currently work.** Verified against the Hetzner Cloud API on 2026-08-11:
-> the Hetzner Cloud API has **no volume snapshot**. `volume-snapshot.sh` POSTs to
-> `/v1/volumes/{id}/actions/create_snapshot`, which does not exist, so **no snapshot has ever been
-> created** and `restore-from-snapshot.sh` has nothing to restore from. Until a replacement backup
-> for `/opt/skillars/data` is chosen, **Section A (pg_dump) is the only working restore path**, and
-> everything on the volume that is not in the database — Loki, Prometheus, Grafana, Tempo, Redis
-> AOF, `acme.json` — has no backup at all. See [Retention](#retention) and `runbook.md`.
+> **File-level volume backup runs daily.** `deploy/backup/volume-backup.sh` archives everything
+> under `/opt/skillars/data` — Loki, Prometheus, Grafana, Tempo, Redis AOF, `acme.json` — to Hetzner
+> Object Storage every day at 02:00 UTC, excluding `postgres/` (already covered by `pg-backup.sh`'s
+> pg_dump stream, Section A). It replaces the earlier `volume-snapshot.sh` mechanism, which called a
+> Hetzner Cloud API endpoint that does not exist and never produced a working backup — see
+> `deferred-work.md`, `skillars-uat-3` D1.
 
 ---
 
@@ -30,24 +29,25 @@ Both restore scripts require SSH access to the Node as root and must be run from
 
 Both backup streams are pruned daily at **03:30 UTC** by `deploy/backup/prune-backups.sh`, installed
 by `install-crons.sh`. The schedule is clear of both producers (`pg-backup.sh` at `0 */6`,
-`volume-snapshot.sh` at `0 2`), so retention never races an upload.
+`volume-backup.sh` at `0 2`), so retention never races an upload.
 
 | Stream | Variable | Default | Effect |
 |---|---|---|---|
 | PostgreSQL dumps in Object Storage | `BACKUP_RETENTION_DAYS` | `14` | At the 6-hourly cadence this keeps ~56 dumps |
 | — minimum kept regardless of age | `BACKUP_RETENTION_MIN_KEEP` | `8` | Safety floor — see below |
-| Hetzner Cloud snapshots | `SNAPSHOT_RETENTION_DAYS` | `7` | Currently matches nothing; see the warning above |
+| Volume backups in Object Storage | `VOLUME_BACKUP_RETENTION_DAYS` | `14` | At the daily cadence this keeps ~14 backups |
+| — minimum kept regardless of age | `VOLUME_BACKUP_RETENTION_MIN_KEEP` | `4` | Safety floor — see below |
 
 **Safety rails.** The failure mode of a pruner that mis-parses a listing is an emptied backup
 bucket, so:
 
-- The newest `BACKUP_RETENTION_MIN_KEEP` dumps are retained **unconditionally**, whatever the age
-  computation decides. A clock skew or a bad cutoff cannot get past that floor.
+- The newest `BACKUP_RETENTION_MIN_KEEP` / `VOLUME_BACKUP_RETENTION_MIN_KEEP` objects are retained
+  **unconditionally**, whatever the age computation decides. A clock skew or a bad cutoff cannot
+  get past that floor.
 - An **empty listing is a fatal error**, not "nothing to prune" — a changed prefix and an empty
   bucket look identical from the pruner's side, and only one of them is benign.
 - A key whose `%Y%m%dT%H%M%SZ` stamp cannot be parsed is skipped and reported, never deleted. Age
   comes from that stamp, not from the object's mtime.
-- An unparseable Hetzner API response exits non-zero with the body in the message.
 - A failure in one half does not skip the other; the exit code reflects both.
 
 **Run the first production prune as a dry run.** It prints exactly what it would delete and exits 0
@@ -115,56 +115,44 @@ curl -s https://${DOMAIN}/actuator/health | python3 -c "import sys,json; d=json.
 
 ---
 
-## Section B: Restore from Volume Snapshot
+## Section B: Restore from Volume Backup
 
-Script: `deploy/backup/restore-from-snapshot.sh`
+Script: `deploy/backup/restore-from-volume-backup.sh`
 
-> **CRITICAL:** This path restores ALL data on the Hetzner Volume — PostgreSQL, Loki, Prometheus, Grafana, and Tempo — to the state at the time the snapshot was taken. Any data written between the snapshot and the failure is permanently lost. The recovery point objective (RPO) for snapshots is 24 hours.
-
-This restore path requires a manual Hetzner Cloud Console step while the script waits. Ensure you have access to the Hetzner Console before starting.
+> **CRITICAL:** This path restores everything on the volume backup — Loki, Prometheus, Grafana, Tempo, Redis AOF, and `acme.json` — to the state at the time the backup archive was created. It does **not** restore PostgreSQL (excluded from the archive on purpose; use Section A for that). Any data written between the backup and the failure is permanently lost. The recovery point objective (RPO) for volume backups is 24 hours.
 
 Run as root on the Node:
 
 ```bash
-sudo bash /opt/skillars/deploy/backup/restore-from-snapshot.sh
+cd /opt/skillars
+
+# Restore the latest volume backup:
+sudo bash deploy/backup/restore-from-volume-backup.sh
+
+# Or restore a specific backup by S3 object key:
+sudo bash deploy/backup/restore-from-volume-backup.sh volume-backups/skillars-volume-20260813T020000Z.tar.gz
 ```
 
-The script will:
+The script performs these steps automatically:
 
-1. Stop all Docker services (`docker compose down`)
-2. Unmount the current data volume (`/opt/skillars/data` at `/dev/sdb`)
-3. **Pause** and display manual instructions for Hetzner Console
-
-At the pause, complete these steps in the Hetzner Cloud Console:
-
-> **Before proceeding:** Verify the target snapshot's creation timestamp in the Hetzner Cloud Console to confirm it is the correct restore point. Creating a Volume from the wrong snapshot permanently replaces all data with no recovery path.
-
-```
-1. Go to Hetzner Cloud Console → Volumes
-2. Detach the current volume from the server (if still attached)
-3. Go to the target snapshot (Cloud Console → Volumes → Snapshots)
-4. Confirm the snapshot timestamp matches the intended recovery point
-5. Create a new Volume from that snapshot
-6. Attach the new Volume to the server as /dev/sdb
-7. Wait for Hetzner to confirm the attachment is complete
-8. Press ENTER in the terminal to continue the script
-```
-
-After you press ENTER, the script continues automatically:
-
-4. Mounts `/dev/sdb` at `/opt/skillars/data`
-5. Restores subdirectory ownership for container users:
+1. Loads `/opt/skillars/.env` for `HOS_*` environment variables
+2. Prompts for confirmation before overwriting non-postgres data under `/opt/skillars/data`
+3. Lists objects in the Hetzner Object Storage bucket to find the latest backup (when no key is given)
+4. Stops all Docker services (`docker compose down`)
+5. Downloads the archive to `/tmp` and extracts it over `/opt/skillars/data`
+6. Restores subdirectory ownership for container users:
+   - `redis/`: `999:1000`
    - `prometheus/`: `65534:65534`
    - `loki/`, `tempo/`: `10001:10001`
    - `grafana/`: `472:472`
-6. Starts all services (`docker compose up -d`)
-7. Waits up to 120 seconds for the app container health check to reach `healthy`
+   - `traefik/`: `700` (directory), `traefik/acme.json`: `600`
+7. Starts all services (`docker compose up -d`)
 
 ---
 
 ## Section C: Data Integrity Verification
 
-The pg_dump restore script (Section A) performs an automatic integrity check and reports the table count. For the volume snapshot restore (Section B), verify manually after the script completes:
+The pg_dump restore script (Section A) performs an automatic integrity check and reports the table count. For the volume backup restore (Section B), verify manually after the script completes:
 
 ```bash
 # Load environment variables:
@@ -191,7 +179,7 @@ docker exec "$APP_CID" wget -qO- http://localhost:8367/manage/health
 
 ## Section D: Bringing the Application Back Online Post-Restore
 
-After a volume snapshot restore, all services start automatically when the script completes. If any service failed to start or you need to restart manually:
+After a volume backup restore, all services start automatically when the script completes. If any service failed to start or you need to restart manually:
 
 ```bash
 cd /opt/skillars
@@ -219,6 +207,6 @@ Run a restore drill each quarter against a non-production environment. After eve
 | Date | Environment | Method | Result | RTO Achieved | Notes |
 |---|---|---|---|---|---|
 
-Include: date, path used (dump or snapshot), environment (must be non-production), outcome (pass/fail), and RTO achieved.
+Include: date, path used (dump or volume backup), environment (must be non-production), outcome (pass/fail), and RTO achieved.
 
 If `deploy/backup/drill-log.md` does not exist yet, create it with the header row above before recording your first drill.

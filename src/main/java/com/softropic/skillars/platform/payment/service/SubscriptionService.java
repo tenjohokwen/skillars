@@ -99,7 +99,7 @@ public class SubscriptionService {
 
     // ─── Coach Subscribe ────────────────────────────────────────────────────────
 
-    public CoachSubscriptionResponse subscribeCoach(UUID coachId, String tier, String paymentMethodId) {
+    public CoachSubscriptionResponse subscribeCoach(UUID coachId, Long coachUserId, String tier) {
         if ("SCOUT".equalsIgnoreCase(tier)) {
             throw new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException(
                 "payment.subscription.cannotSubscribeToFreeTier");
@@ -118,16 +118,24 @@ public class SubscriptionService {
                 "payment.subscription.priceNotConfigured");
         }
 
-        String stripeCustomerId = sub.getStripeCustomerId();
-        if (stripeCustomerId == null || stripeCustomerId.isBlank()) {
+        com.softropic.skillars.platform.payment.repo.StripeCustomer stripeCustomer =
+            stripeCustomerRepository.findById(coachUserId)
+                .orElseThrow(() -> new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException(
+                    "payment.noPaymentMethod"));
+        String paymentMethodId = stripeCustomer.getStripePaymentMethodId();
+        if (paymentMethodId == null || paymentMethodId.isBlank()) {
             throw new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException(
-                "payment.subscription.noStripeAccount");
+                "payment.noPaymentMethod");
         }
+        String stripeCustomerId = stripeCustomer.getStripeCustomerId();
 
         // Stripe call outside @Transactional
         Subscription stripeSub;
         try {
-            stripeClient.attachPaymentMethod(stripeCustomerId, paymentMethodId);
+            // No attachPaymentMethod call here: the payment method was already attached to this
+            // exact customer when it was saved (POST /setup-intent creates a customer-scoped
+            // SetupIntent; confirmCardSetup + POST /save-payment-method complete it). Calling
+            // attach again on an already-attached payment method throws on Stripe's side.
             stripeSub = stripeClient.createSubscription(stripeCustomerId, priceId, paymentMethodId);
         } catch (com.stripe.exception.StripeException e) {
             log.error("[COACH_SUBSCRIBE_STRIPE_FAILED coachId={}]", coachId, e);
