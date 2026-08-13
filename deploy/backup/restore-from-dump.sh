@@ -11,6 +11,10 @@ if [ -z "$DUMP_KEY" ]; then
   exit 1
 fi
 
+if [ ! -r /opt/skillars/.env ]; then
+  echo "[restore-dump][error] cannot read /opt/skillars/.env — restore cannot run without credentials" >&2
+  exit 1
+fi
 # shellcheck source=/dev/null
 . /opt/skillars/.env
 
