@@ -5,6 +5,14 @@
 # restored from Hetzner Cloud volume snapshots that were never actually created — see
 # deferred-work.md, skillars-uat-3 D1.
 set -euo pipefail
+
+log() { echo "[restore-from-volume-backup] $*"; }
+err() { echo "[restore-from-volume-backup][error] $*" >&2; }
+
+if [ ! -r /opt/skillars/.env ]; then
+  err "cannot read /opt/skillars/.env — restore cannot run without credentials"
+  exit 1
+fi
 # shellcheck source=/dev/null
 . /opt/skillars/.env
 
@@ -18,9 +26,6 @@ TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
 # The non-postgres top-level directories volume-backup.sh archives — same set the ownership
 # restoration below applies to. postgres/ is never touched by this script.
 VOLUME_SUBDIRS="redis prometheus loki tempo grafana traefik"
-
-log() { echo "[restore-from-volume-backup] $*"; }
-err() { echo "[restore-from-volume-backup][error] $*" >&2; }
 
 echo "This will OVERWRITE non-postgres data under ${DATA_DIR}. Press ENTER to continue, Ctrl+C to abort."
 read -r _
@@ -72,13 +77,33 @@ rm -f "${ARCHIVE_FILE}"
 
 # Ownership restoration — same values provision.sh sections 7/7.5 set on first provisioning.
 # restore-from-snapshot.sh (the script this replaces) omitted redis/traefik; do not repeat that.
-chown -R 999:1000 "${DATA_DIR}/redis"
-chown -R 65534:65534 "${DATA_DIR}/prometheus"
-chown -R 10001:10001 "${DATA_DIR}/loki"
-chown -R 10001:10001 "${DATA_DIR}/tempo"
-chown -R 472:472 "${DATA_DIR}/grafana"
-chmod 700 "${DATA_DIR}/traefik"
-chmod 600 "${DATA_DIR}/traefik/acme.json"
+# Only directories that actually extracted from this archive are fixed up — an archive taken
+# before a service was added to VOLUME_SUBDIRS, or a service that was never provisioned, is a
+# legitimate absence, not a failure.
+for d in $VOLUME_SUBDIRS; do
+  if [ ! -d "${DATA_DIR}/${d}" ]; then
+    log "skipping ownership fix for ${d} — not present in this archive"
+    continue
+  fi
+  case "$d" in
+    redis)      chown -R 999:1000 "${DATA_DIR}/${d}" ;;
+    prometheus) chown -R 65534:65534 "${DATA_DIR}/${d}" ;;
+    loki)       chown -R 10001:10001 "${DATA_DIR}/${d}" ;;
+    tempo)      chown -R 10001:10001 "${DATA_DIR}/${d}" ;;
+    grafana)    chown -R 472:472 "${DATA_DIR}/${d}" ;;
+    traefik)
+      chmod 700 "${DATA_DIR}/${d}"
+      if [ -f "${DATA_DIR}/${d}/acme.json" ]; then
+        chmod 600 "${DATA_DIR}/${d}/acme.json"
+      else
+        log "skipping ownership fix for ${d}/acme.json — not present in this archive"
+      fi
+      ;;
+    *)
+      log "no ownership fix defined for ${d} — skipping (VOLUME_SUBDIRS added a subdir with no matching case arm)"
+      ;;
+  esac
+done
 
 docker compose -f "${COMPOSE_FILE}" up -d
 trap - ERR

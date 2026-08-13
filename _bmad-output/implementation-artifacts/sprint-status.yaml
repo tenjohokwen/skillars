@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-08-13 # skillars-uat-6 created → ready-for-dev
+# last_updated: 2026-08-13 # skillars-deferred-20 review findings resolved → done
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-08-13 # skillars-uat-6 created → ready-for-dev
+last_updated: 2026-08-13 # skillars-deferred-20 review findings resolved → done
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -448,6 +448,21 @@ development_status:
   # evidence for AC3s global enable.test.mail, and a credential-exposure issue in its own right.
   skillars-deferred-19-test-context-container-consolidation: done  # CI 31266833983 (bf513a1): 828 unit + 905 IT 0F/0E, Trivy 0/0, 1 postgres/1 redis, missCount 34 (ceiling 36). AC3 <=10 contexts NOT met - 20 is the floor, see story.
 
+  # Deferred 20: Backup & Restore Script Defensive Guards
+  # Source: deferred-work.md, "Deferred from: code review of skillars-uat-6-..." (2026-08-13), 8 items.
+  # uat-readiness-priorities.md is fully claimed (P0/P1/P2 all closed by skillars-uat-1..6; only P3 -
+  # explicitly out of scope for UAT - remains), so this story is drawn from deferred-work.md directly
+  # per Mbah's direction. Of the 8 ledger items, 3 are genuine defensive gaps with an established
+  # in-repo pattern to mirror (AC1 env-readability guard on pg-backup.sh/volume-backup.sh/
+  # restore-from-volume-backup.sh, extended to restore-from-dump.sh - found unguarded during story
+  # creation, same gap; AC2 chown-assumes-all-subdirs guard in restore-from-volume-backup.sh); the
+  # remaining 5 are deliberate design decisions or exact mirrors of a pre-existing, non-incident gap
+  # elsewhere (shared stripe_customers row, attachPaymentMethod removal, HCLOUD_TOKEN local-only,
+  # no disk-space precheck in volume-backup.sh, aws s3api output validation in prune-backups.sh) and
+  # are explicitly NOT fixed here - AC3 closes the ledger hygiene on all 8 with closed/dismissed
+  # annotations so none are re-opened as ambiguous later.
+  skillars-deferred-20-backup-restore-script-hardening: done
+
   # First story drawn from uat-readiness-priorities.md (2026-08-09 ranking, verified against bf9c828).
   # Groups the UAT-blocking items that need NO product decision into one dev pass:
   #   AC1-AC3  P0-1  no admin account can be created at all - NOT tracked in deferred-work.md.
@@ -740,4 +755,4 @@ development_status:
   # --dry-run, first real restore must be a logged drill). This is the last story drawn from
   # uat-readiness-priorities.md — after this ships, only P3 (chronically re-deferred, explicitly
   # out of scope for UAT) remains in that document.
-  skillars-uat-6-coach-subscription-and-volume-backup: review  # 2026-08-13: all 8 ACs implemented, full mvn -o verify BUILD SUCCESS (11:25 min) — 866 unit + 894 IT, 0F/0E. No migration required for AC1-4, confirmed (corrects a stale schema-blocker claim carried since skillars-deferred-11 — CoachProfile.userId already bridges the id space, same opaque-id shortcut skillars-uat-5 used for players). AC5-8 replaced the permanently-broken volume-snapshot.sh/restore-from-snapshot.sh with file-level volume-backup.sh/restore-from-volume-backup.sh to Object Storage, fixing a real pre-existing gap (no redis/traefik ownership restoration) while rewriting the restore script. shellcheck clean on all 4 touched backup scripts; npx eslint clean; quasar build succeeded. One test-infrastructure bug found and fixed: a new IT's in-test DELETE silently rolled back because this app runs Hikari with auto-commit:false and the statement wasn't wrapped in transactionTemplate.execute() — fixed, mutation-verified both directions. STILL OPEN: no live browser spot-check of AC3's add-card flow; no live execution of the new backup/restore scripts against real Hetzner Object Storage credentials (same posture skillars-uat-3 AC6/D10 already established). REVIEW FINDINGS ADDRESSED 2026-08-13: 10 patches applied (restore-from-volume-backup.sh pre-restore safety net + auto-restart-on-failure trap + restored 120s health check + filename-timestamp latest-backup selection; volume-backup.sh tar-exit-1 tolerance + EXIT-trap temp-file cleanup; install-crons.sh purges stale volume-snapshot.sh cron entry; CoachSubscriptionPage.vue catch + new loadError i18n key; new SubscriptionLifecycleIT test for null-payment-method-id case; deferred-work.md section-splice fix), 8 pre-existing decisions/dismissals confirmed as-is. Post-patch full mvn -o verify: BUILD SUCCESS, 866 unit + 895 IT, 0F/0E (+1 IT matching the new test).
+  skillars-uat-6-coach-subscription-and-volume-backup: done  # 2026-08-13: all 8 ACs implemented, full mvn -o verify BUILD SUCCESS (11:25 min) — 866 unit + 894 IT, 0F/0E. No migration required for AC1-4, confirmed (corrects a stale schema-blocker claim carried since skillars-deferred-11 — CoachProfile.userId already bridges the id space, same opaque-id shortcut skillars-uat-5 used for players). AC5-8 replaced the permanently-broken volume-snapshot.sh/restore-from-snapshot.sh with file-level volume-backup.sh/restore-from-volume-backup.sh to Object Storage, fixing a real pre-existing gap (no redis/traefik ownership restoration) while rewriting the restore script. shellcheck clean on all 4 touched backup scripts; npx eslint clean; quasar build succeeded. One test-infrastructure bug found and fixed: a new IT's in-test DELETE silently rolled back because this app runs Hikari with auto-commit:false and the statement wasn't wrapped in transactionTemplate.execute() — fixed, mutation-verified both directions. STILL OPEN: no live browser spot-check of AC3's add-card flow; no live execution of the new backup/restore scripts against real Hetzner Object Storage credentials (same posture skillars-uat-3 AC6/D10 already established). REVIEW FINDINGS ADDRESSED 2026-08-13: 10 patches applied (restore-from-volume-backup.sh pre-restore safety net + auto-restart-on-failure trap + restored 120s health check + filename-timestamp latest-backup selection; volume-backup.sh tar-exit-1 tolerance + EXIT-trap temp-file cleanup; install-crons.sh purges stale volume-snapshot.sh cron entry; CoachSubscriptionPage.vue catch + new loadError i18n key; new SubscriptionLifecycleIT test for null-payment-method-id case; deferred-work.md section-splice fix), 8 pre-existing decisions/dismissals confirmed as-is. Post-patch full mvn -o verify: BUILD SUCCESS, 866 unit + 895 IT, 0F/0E (+1 IT matching the new test).
