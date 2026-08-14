@@ -3,12 +3,9 @@
 # Cron runs this every 6 hours via install-crons.sh.
 set -euo pipefail
 
-if [ ! -r /opt/skillars/.env ]; then
-  echo "[pg-backup][error] cannot read /opt/skillars/.env — backup cannot run without credentials" >&2
-  exit 1
-fi
-# shellcheck source=/dev/null
-. /opt/skillars/.env
+# shellcheck source=env-guard.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env-guard.sh"
+require_env_vars "pg-backup" "backup" HOS_ACCESS_KEY HOS_SECRET_KEY HOS_BUCKET HOS_ENDPOINT POSTGRES_PASSWORD
 
 umask 077
 TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)

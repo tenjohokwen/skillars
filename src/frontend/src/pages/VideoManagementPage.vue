@@ -121,6 +121,9 @@ async function fetchQuota() {
 }
 
 function onStatusChanged(videoId, newState) {
+  // PURGED is translated to DELETED server-side (VideoSseService.onVideoPurged for SSE,
+  // VideoEventResource.computeDisplayState for the polling fallback) — this branch is a
+  // defensive backstop in case a raw PURGED ever reaches the client anyway.
   if (newState === 'DELETED' || newState === 'PURGED') {
     videos.value = videos.value.filter((v) => v.id !== videoId)
     fetchQuota()

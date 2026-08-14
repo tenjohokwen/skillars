@@ -11,12 +11,9 @@ if [ -z "$DUMP_KEY" ]; then
   exit 1
 fi
 
-if [ ! -r /opt/skillars/.env ]; then
-  echo "[restore-dump][error] cannot read /opt/skillars/.env — restore cannot run without credentials" >&2
-  exit 1
-fi
-# shellcheck source=/dev/null
-. /opt/skillars/.env
+# shellcheck source=env-guard.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env-guard.sh"
+require_env_vars "restore-dump" "restore" HOS_ACCESS_KEY HOS_SECRET_KEY HOS_BUCKET HOS_ENDPOINT POSTGRES_PASSWORD
 
 PREFIX="${HOS_BACKUP_PREFIX:-pg-backups/}"
 PREFIX="${PREFIX%/}/"

@@ -10,7 +10,10 @@ const SSE_BACKOFF_DELAYS = [1000, 2000, 4000, 8000]
 // HIDDEN is NOT terminal: a video awaiting parental approval will transition to TRANSCODING or REJECTED;
 //   the SSE connection must stay open so the VideoStatusCard receives the follow-up state push.
 // REJECTED is terminal: parental approval is final.
-const TERMINAL_SSE_STATES = new Set(['READY', 'LOCKED', 'REJECTED', 'FAILED', 'DELETED', 'ARCHIVED'])
+// PURGED: defensive backstop — the server translates PURGED to DELETED before it ever reaches the
+//   client (VideoSseService.onVideoPurged for SSE, VideoEventResource.computeDisplayState for this
+//   polling fallback), but if that translation is ever bypassed, PURGED must still stop polling.
+const TERMINAL_SSE_STATES = new Set(['READY', 'LOCKED', 'REJECTED', 'FAILED', 'DELETED', 'ARCHIVED', 'PURGED'])
 const POLLING_INTERVAL_MS = 2000
 
 export function useVideoStatusSse(videoId, { onStatusChange, onTerminal } = {}) {

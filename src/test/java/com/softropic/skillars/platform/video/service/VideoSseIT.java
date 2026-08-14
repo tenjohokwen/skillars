@@ -147,6 +147,24 @@ class VideoSseIT {
             .andExpect(status().isNotFound());
     }
 
+    // skillars-deferred-21 review finding: the polling fallback (this endpoint) must translate
+    // PURGED the same way VideoSseService.onVideoPurged translates it for the SSE push channel,
+    // or a client that falls back to polling (e.g. after an SSE reconnect) receives a raw
+    // 'PURGED' state that VideoManagementPage.onStatusChanged no longer recognises.
+    @Test
+    @WithMockUser(username = OWNER)
+    void getStatus_purgedVideo_displayStateIsDeleted() throws Exception {
+        Video video = videoWithOwner(OWNER);
+        video.setOperationalState(OperationalState.PURGED);
+        when(videoService.findById(VIDEO_ID)).thenReturn(video);
+        when(securityUtil.getCurrentUserName()).thenReturn(OWNER);
+
+        mockMvc.perform(get("/api/video/{id}/status", VIDEO_ID))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.operationalState").value("PURGED"))
+            .andExpect(jsonPath("$.displayState").value("DELETED"));
+    }
+
     private Video videoWithOwner(String ownerId) {
         Video v = new Video();
         v.setOwnerId(ownerId);

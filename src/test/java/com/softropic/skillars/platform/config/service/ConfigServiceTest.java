@@ -142,6 +142,28 @@ class ConfigServiceTest {
     }
 
     @Test
+    void getBoolean_singleArg_returnsFalseForInvalidPresentValue() {
+        when(configRepository.findAll()).thenReturn(List.of(
+                entry("feature.gate", "yes", ConfigValueType.STRING)));
+        configService.init();
+
+        boolean result = configService.getBoolean("feature.gate");
+
+        assertThat(result).isFalse();
+    }
+
+    @Test
+    void getBoolean_withDefault_returnsFalseNotDefaultForInvalidPresentValue() {
+        when(configRepository.findAll()).thenReturn(List.of(
+                entry("feature.gate", "yes", ConfigValueType.STRING)));
+        configService.init();
+
+        boolean result = configService.getBoolean("feature.gate", true);
+
+        assertThat(result).isFalse();
+    }
+
+    @Test
     void invalidate_forcesRefreshOnNextGet() {
         when(configRepository.findAll())
                 .thenReturn(List.of(entry("k", "old", ConfigValueType.STRING)))
