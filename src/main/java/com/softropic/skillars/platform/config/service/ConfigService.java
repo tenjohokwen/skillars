@@ -105,7 +105,7 @@ public class ConfigService {
 
     public boolean getBoolean(String key) {
         return find(key)
-            .map(v -> "true".equalsIgnoreCase(v))
+            .map(v -> parseBoolean(key, v, ""))
             .orElseGet(() -> {
                 log.warn("Feature gate config key '{}' not found in platform config; defaulting to false", key);
                 return false;
@@ -114,8 +114,21 @@ public class ConfigService {
 
     public boolean getBoolean(String key, boolean defaultValue) {
         return find(key)
-            .map(v -> "true".equalsIgnoreCase(v))
+            .map(v -> parseBoolean(key, v, " (requested default " + defaultValue + " not used)"))
             .orElse(defaultValue);
+    }
+
+    /**
+     * Shared by both {@code getBoolean} overloads: warns once when a present value is not
+     * (case-insensitively) {@code "true"} or {@code "false"}, then returns the same {@code false}
+     * result either overload already returned for such a value. {@code logSuffix} lets the
+     * 2-arg overload additionally name the ignored default in its warning.
+     */
+    private boolean parseBoolean(String key, String value, String logSuffix) {
+        if (!"true".equalsIgnoreCase(value) && !"false".equalsIgnoreCase(value)) {
+            log.warn("Config key '{}' has non-boolean value '{}' — treating as false{}", key, value, logSuffix);
+        }
+        return "true".equalsIgnoreCase(value);
     }
 
     public Optional<String> find(String key) {

@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-08-13 # skillars-deferred-20 review findings resolved → done
+# last_updated: 2026-08-13 # skillars-deferred-21 review findings addressed → done
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-08-13 # skillars-deferred-20 review findings resolved → done
+last_updated: 2026-08-13 # skillars-deferred-21 review findings addressed → done
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -756,3 +756,34 @@ development_status:
   # uat-readiness-priorities.md — after this ships, only P3 (chronically re-deferred, explicitly
   # out of scope for UAT) remains in that document.
   skillars-uat-6-coach-subscription-and-volume-backup: done  # 2026-08-13: all 8 ACs implemented, full mvn -o verify BUILD SUCCESS (11:25 min) — 866 unit + 894 IT, 0F/0E. No migration required for AC1-4, confirmed (corrects a stale schema-blocker claim carried since skillars-deferred-11 — CoachProfile.userId already bridges the id space, same opaque-id shortcut skillars-uat-5 used for players). AC5-8 replaced the permanently-broken volume-snapshot.sh/restore-from-snapshot.sh with file-level volume-backup.sh/restore-from-volume-backup.sh to Object Storage, fixing a real pre-existing gap (no redis/traefik ownership restoration) while rewriting the restore script. shellcheck clean on all 4 touched backup scripts; npx eslint clean; quasar build succeeded. One test-infrastructure bug found and fixed: a new IT's in-test DELETE silently rolled back because this app runs Hikari with auto-commit:false and the statement wasn't wrapped in transactionTemplate.execute() — fixed, mutation-verified both directions. STILL OPEN: no live browser spot-check of AC3's add-card flow; no live execution of the new backup/restore scripts against real Hetzner Object Storage credentials (same posture skillars-uat-3 AC6/D10 already established). REVIEW FINDINGS ADDRESSED 2026-08-13: 10 patches applied (restore-from-volume-backup.sh pre-restore safety net + auto-restart-on-failure trap + restored 120s health check + filename-timestamp latest-backup selection; volume-backup.sh tar-exit-1 tolerance + EXIT-trap temp-file cleanup; install-crons.sh purges stale volume-snapshot.sh cron entry; CoachSubscriptionPage.vue catch + new loadError i18n key; new SubscriptionLifecycleIT test for null-payment-method-id case; deferred-work.md section-splice fix), 8 pre-existing decisions/dismissals confirmed as-is. Post-patch full mvn -o verify: BUILD SUCCESS, 866 unit + 895 IT, 0F/0E (+1 IT matching the new test).
+
+  # Deferred 21: Silent-Failure Logging, Dead Code Removal & Backup Script Guard Consolidation
+  # Source: deferred-work.md directly, per Mbah's direction to group small unrelated already-deferred
+  # items into one story (same spirit as deferred-11/deferred-20). All 5 closed items were re-verified
+  # against current source during story creation, not trusted from ledger text:
+  #   AC1  5-2 D3   — dead getNeglectedSkills export in development.api.js (zero callers)
+  #   AC2  6-6 W6   — dead PURGED branch in VideoManagementPage.onStatusChanged (SSE never sends it)
+  #   AC3  4-1 D9   — ConfigService.getBoolean logs nothing for a present-but-invalid value. Ledger
+  #        item didn't disambiguate overloads; both getBoolean(key) and getBoolean(key,defaultValue)
+  #        have the identical bug (found during story creation) — the 2-arg overload has MORE
+  #        production call sites, including AuthService.java:99's phone-otp-required security gate.
+  #        AC3 covers both.
+  #   AC4  4-6 W3   — HomeworkAssignmentService.handleBookingCompleted logs nothing on null sessionId
+  #   AC5  deferred-20's own 3 review-deferred items — .env guard duplicated across 4 scripts, no
+  #        directory-vs-missing distinction, no post-source var validation — consolidated into one
+  #        shared deploy/backup/env-guard.sh sourced by all 5 backup/restore scripts (prune-backups.sh
+  #        included too, beyond the original ledger scope, to avoid leaving it inconsistent).
+  #        STORY-DRAFT REVIEW caught and fixed two implementation traps before dev started: (1)
+  #        prune-backups.sh's ENV_FILE var becomes dead code (SC2034) unless its line-17 declaration
+  #        is deleted along with the old guard block, not just lines 35-40; (2) the new
+  #        `# shellcheck source=env-guard.sh` directive only resolves without -x when env-guard.sh is
+  #        checked in the same shellcheck invocation as its caller — checking one caller script alone
+  #        reproduces a false SC1091 without -x. Task 5 now calls out both explicitly.
+  #   AC6  Ledger hygiene: closes all 5 above + annotates 2 rejected items found already-fixed/
+  #        unreproducible during story creation (5-2 D5 SluTargetEditor race already fixed;
+  #        3-3 Group E authority-9502 leak not reproducible — UNIQUE constraint makes the INSERT no-op)
+  # DELIBERATELY EXCLUDED: the broad body of 2026-06-era "pre-existing pattern"/"accepted trade-off"
+  # items; deploy-1/2/3 infra items (never re-verified against current scripts by any audit);
+  # 11-2 D2 and 7-5 D1 (each needs a product decision or dedicated financial-correctness test, not a
+  # grab-bag slot). See the story file's "Explicitly NOT in this story" section for full reasoning.
+  skillars-deferred-21-silent-failure-logging-dead-code-backup-guard-hardening: done  # 2026-08-13: all 6 ACs implemented, full mvn -o test (unit) BUILD SUCCESS (868 tests, 0F/0E), npx eslint clean, shellcheck -x clean on all 6 deploy/backup/*.sh (env-guard.sh + 5 callers, invoked with CWD=deploy/backup — this shellcheck version resolves the source=env-guard.sh directive against invocation CWD not the script's own directory, so the literal command from repo root reproduces a spurious SC1091; not a script defect), all 4 guard branches manually verified via SKILLARS_ENV_FILE overrides. Ledger annotations for AC6 were already applied during story creation. REVIEW FINDINGS ADDRESSED 2026-08-14: 2 action items — (1) Decision: AC2's PURGED removal exposed a real gap in the polling fallback (GET /api/video/{id}/status echoed raw operationalState with no PURGED->DELETED translation, unlike the SSE path's VideoSseService.onVideoPurged); Mbah chose "fix both" — VideoEventResource.computeDisplayState now translates PURGED->DELETED server-side, and VideoManagementPage.vue/video.store.js regained PURGED handling as a defensive backstop; new VideoSseIT test added (7/7 green). (2) Patch: ConfigService.getBoolean's duplicated invalid-value warning logic extracted into a shared parseBoolean helper, behavior unchanged, ConfigServiceTest re-run green (11/11). 3 further findings were pre-existing/deferred, no action needed. Full mvn -o test + eslint re-run green post-fix.

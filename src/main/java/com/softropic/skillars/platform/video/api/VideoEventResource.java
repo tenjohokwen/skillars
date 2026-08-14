@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.platform.video.contract.AccessState;
+import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.service.VideoService;
 import com.softropic.skillars.platform.video.service.VideoSseService;
@@ -53,6 +54,10 @@ public class VideoEventResource {
     private String computeDisplayState(Video video) {
         if (video.getAccessState() == AccessState.BLOCKED)  return "SUBSCRIPTION_LOCKED";
         if (video.getAccessState() == AccessState.ARCHIVED) return "ARCHIVED";
+        // PURGED is an internal pre-physical-deletion state (see VideoDeletionService); the SSE
+        // stream never surfaces it as-is (VideoSseService.onVideoPurged translates it to DELETED
+        // before pushing), so the polling fallback must apply the same translation for parity.
+        if (video.getOperationalState() == OperationalState.PURGED) return OperationalState.DELETED.name();
         return video.getOperationalState().name();
     }
 

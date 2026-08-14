@@ -58,6 +58,9 @@ public class HomeworkAssignmentService {
         }
         UUID sessionId = sessionRepository.findByBookingId(event.getBookingId())
             .map(s -> s.getId()).orElse(null);
+        if (sessionId == null) {
+            log.debug("No session found for booking {} — assigning homework with null sessionId (expected for QUICK-mode bookings)", event.getBookingId());
+        }
         UUID packId = resolvePackId(event.getPlayerId(), event.getCoachId());
         for (UUID drillId : event.getHomeworkDrillIds()) {
             // Idempotency: skip if assignment already exists for this booking+drill.

@@ -8,9 +8,6 @@ export const getSkillExposure = (playerId, weeks = 8) =>
 export const getNarrativeSummary = (playerId) =>
   api.get(`/api/development/players/${playerId}/narrative`)
 
-export const getNeglectedSkills = (playerId) =>
-  api.get(`/api/development/players/${playerId}/neglected-skills`)
-
 export const getMyTargets = (playerId) => api.get(`/api/development/players/${playerId}/targets`)
 
 export const setMyTargets = (playerId, targets) =>

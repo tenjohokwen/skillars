@@ -9,12 +9,9 @@ set -euo pipefail
 log() { echo "[restore-from-volume-backup] $*"; }
 err() { echo "[restore-from-volume-backup][error] $*" >&2; }
 
-if [ ! -r /opt/skillars/.env ]; then
-  err "cannot read /opt/skillars/.env — restore cannot run without credentials"
-  exit 1
-fi
-# shellcheck source=/dev/null
-. /opt/skillars/.env
+# shellcheck source=env-guard.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env-guard.sh"
+require_env_vars "restore-from-volume-backup" "restore" HOS_ACCESS_KEY HOS_SECRET_KEY HOS_BUCKET HOS_ENDPOINT
 
 COMPOSE_FILE="/opt/skillars/docker-compose.yml"
 DATA_DIR="/opt/skillars/data"

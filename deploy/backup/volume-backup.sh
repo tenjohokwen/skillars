@@ -6,12 +6,9 @@
 # daily at 02:00 UTC via install-crons.sh, the same slot volume-snapshot.sh held.
 set -euo pipefail
 
-if [ ! -r /opt/skillars/.env ]; then
-  echo "[volume-backup][error] cannot read /opt/skillars/.env — backup cannot run without credentials" >&2
-  exit 1
-fi
-# shellcheck source=/dev/null
-. /opt/skillars/.env
+# shellcheck source=env-guard.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env-guard.sh"
+require_env_vars "volume-backup" "backup" HOS_ACCESS_KEY HOS_SECRET_KEY HOS_BUCKET HOS_ENDPOINT
 
 DATA_DIR="/opt/skillars/data"
 TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)

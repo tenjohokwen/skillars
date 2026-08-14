@@ -14,8 +14,6 @@
 # Requires GNU date (-d) — the deploy target is Ubuntu; this will not run on macOS/BSD.
 set -euo pipefail
 
-ENV_FILE="/opt/skillars/.env"
-
 # Arguments are parsed BEFORE anything can fail, and an unrecognised one is fatal. Silently
 # ignoring it would turn a typo'd guard flag (--dry_run, -dry-run, --dryrun) into a live deletion
 # run by an operator who believes they asked for a rehearsal.
@@ -30,14 +28,9 @@ case "${1:-}" in
     ;;
 esac
 
-# Checked explicitly: sourcing a missing or unreadable .env under `set -e` aborts with a bare shell
-# message and no [prune-backups][error] prefix, which is invisible in the shared backup log.
-if [ ! -r "$ENV_FILE" ]; then
-  echo "[prune-backups][error] cannot read ${ENV_FILE} — retention cannot run without credentials" >&2
-  exit 1
-fi
-# shellcheck source=/dev/null
-. "$ENV_FILE"
+# shellcheck source=env-guard.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env-guard.sh"
+require_env_vars "prune-backups" "retention" HOS_ACCESS_KEY HOS_SECRET_KEY HOS_BUCKET HOS_ENDPOINT
 
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-14}"
 BACKUP_RETENTION_MIN_KEEP="${BACKUP_RETENTION_MIN_KEEP:-8}"
