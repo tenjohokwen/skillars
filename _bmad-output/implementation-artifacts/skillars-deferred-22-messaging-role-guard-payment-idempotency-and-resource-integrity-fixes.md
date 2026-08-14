@@ -1,6 +1,6 @@
 # Story Deferred-22: Messaging Role Guard, Payment Idempotency, Feature-Gate Messaging & Resource-Leak Fixes
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 

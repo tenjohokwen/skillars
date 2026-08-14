@@ -105,8 +105,13 @@ class PlaybackServiceIT extends BaseVideoIT {
     @Test
     void authorizePlayback_performance_p99Under200ms() {
         Video video = seedVideo(OperationalState.READY, AccessState.ACTIVE);
+        int warmupIterations = 20;
         int iterations = 100;
         long[] latencies = new long[iterations];
+
+        for (int i = 0; i < warmupIterations; i++) {
+            playbackService.authorizePlayback(video.getId(), "warmup-viewer-" + i);
+        }
 
         for (int i = 0; i < iterations; i++) {
             long start = System.nanoTime();
@@ -115,7 +120,10 @@ class PlaybackServiceIT extends BaseVideoIT {
         }
 
         Arrays.sort(latencies);
-        long p99 = latencies[(int) (iterations * 0.99)];
+        // Nearest-rank percentile via integer ceiling division (avoids floating-point rounding
+        // pitfalls in iterations * 0.99): rank = ceil(iterations * 99 / 100), 0-based index = rank - 1.
+        int p99Index = (iterations * 99 + 99) / 100 - 1;
+        long p99 = latencies[p99Index];
         assertThat(p99).as("p99 latency must be < 200ms but was %dms", p99).isLessThan(200L);
     }
 

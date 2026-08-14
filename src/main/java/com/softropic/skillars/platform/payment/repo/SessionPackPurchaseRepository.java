@@ -1,11 +1,12 @@
 package com.softropic.skillars.platform.payment.repo;
 
 import jakarta.persistence.LockModeType;
+import jakarta.persistence.QueryHint;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
@@ -14,8 +15,8 @@ import java.util.UUID;
 
 public interface SessionPackPurchaseRepository extends JpaRepository<SessionPackPurchase, UUID> {
 
-    @Transactional
     @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "5000"))
     @Query("SELECT p FROM SessionPackPurchase p WHERE p.purchaseId = :id")
     Optional<SessionPackPurchase> findByIdForUpdate(@Param("id") UUID id);
 

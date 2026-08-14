@@ -325,16 +325,6 @@ const routes = [
             component: () => import('pages/admin/HealthDashboardPage.vue'),
             meta: { requiresAuth: true },
           },
-          {
-            path: 'tenants',
-            component: () => import('pages/admin/TenantListPage.vue'),
-            meta: { requiresAuth: true },
-          },
-          {
-            path: 'tenants/:tenantRef',
-            component: () => import('pages/admin/TenantDetailPage.vue'),
-            meta: { requiresAuth: true },
-          },
         ],
       },
     ],

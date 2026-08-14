@@ -49,6 +49,9 @@ jobs:
   build-and-push:
     needs: test
     runs-on: ubuntu-latest
+    concurrency:
+      group: build-and-push-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
