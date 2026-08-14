@@ -76,7 +76,8 @@ public class SessionPlanService {
         }
 
         List<SessionBlockData> blocks = mapBlocksFromRequest(req.blocks());
-        Map<UUID, DrillMetadata> metaMap = resolveMetaMap(blocks);
+        List<Drill> drills = fetchDrills(blocks);
+        Map<UUID, DrillMetadata> metaMap = toMetaMap(drills);
         List<DrillMetadata> allMeta = expandMetaForDna(blocks, metaMap);
         SessionDnaScore dna = dnaCalculator.calculate(allMeta);
         List<String> equipment = equipmentListService.generate(allMeta);
@@ -99,7 +100,7 @@ public class SessionPlanService {
                 "Session plan already exists for this booking",
                 SessionErrorCode.SESSION_ALREADY_EXISTS);
         }
-        return buildResponse(saved, metaMap);
+        return buildResponse(saved, metaMap, toResponseMap(drills));
     }
 
     public SessionPlanResponse updateSession(UUID sessionId, UpdateSessionPlanRequest req, Long coachUserId) {
@@ -122,7 +123,8 @@ public class SessionPlanService {
         }
 
         List<SessionBlockData> blocks = mapBlocksFromRequest(req.blocks());
-        Map<UUID, DrillMetadata> metaMap = resolveMetaMap(blocks);
+        List<Drill> drills = fetchDrills(blocks);
+        Map<UUID, DrillMetadata> metaMap = toMetaMap(drills);
         List<DrillMetadata> allMeta = expandMetaForDna(blocks, metaMap);
         SessionDnaScore dna = dnaCalculator.calculate(allMeta);
         List<String> equipment = equipmentListService.generate(allMeta);
@@ -134,7 +136,7 @@ public class SessionPlanService {
         session.setStatus(req.status() != null ? req.status() : session.getStatus());
 
         Session saved = sessionRepository.save(session);
-        return buildResponse(saved, metaMap);
+        return buildResponse(saved, metaMap, toResponseMap(drills));
     }
 
     @Transactional(readOnly = true)
@@ -149,8 +151,8 @@ public class SessionPlanService {
             throw new ResourceNotFoundException("Session not found", "session");
         }
 
-        Map<UUID, DrillMetadata> metaMap = resolveMetaMap(session.getBlocks());
-        return buildResponse(session, metaMap);
+        List<Drill> drills = fetchDrills(session.getBlocks());
+        return buildResponse(session, toMetaMap(drills), toResponseMap(drills));
     }
 
     @Transactional(readOnly = true)
@@ -159,8 +161,8 @@ public class SessionPlanService {
         UUID coachId = resolveCoachId(coachUserId);
         return sessionRepository.findByBookingIdAndCoachId(bookingId, coachId)
             .map(s -> {
-                Map<UUID, DrillMetadata> metaMap = resolveMetaMap(s.getBlocks());
-                return buildResponse(s, metaMap);
+                List<Drill> drills = fetchDrills(s.getBlocks());
+                return buildResponse(s, toMetaMap(drills), toResponseMap(drills));
             });
     }
 
@@ -183,16 +185,26 @@ public class SessionPlanService {
         }).collect(Collectors.toList());
     }
 
-    private Map<UUID, DrillMetadata> resolveMetaMap(List<SessionBlockData> blocks) {
-        if (blocks == null || blocks.isEmpty()) return Map.of();
+    // Single fetch point for a block list's referenced drills — resolveMetaMap and buildResponse
+    // previously each queried drillRepository.findAllById independently for the same id set.
+    private List<Drill> fetchDrills(List<SessionBlockData> blocks) {
+        if (blocks == null || blocks.isEmpty()) return List.of();
         List<UUID> uniqueIds = blocks.stream()
             .flatMap(b -> b.drills() != null ? b.drills().stream() : Stream.empty())
             .map(SessionDrillRef::drillId)
             .distinct()
             .collect(Collectors.toList());
-        if (uniqueIds.isEmpty()) return Map.of();
-        return drillRepository.findAllById(uniqueIds).stream()
-            .collect(Collectors.toMap(Drill::getId, Drill::getMetadata));
+        if (uniqueIds.isEmpty()) return List.of();
+        return drillRepository.findAllById(uniqueIds);
+    }
+
+    private Map<UUID, DrillMetadata> toMetaMap(List<Drill> drills) {
+        return drills.stream().collect(Collectors.toMap(Drill::getId, Drill::getMetadata));
+    }
+
+    private Map<UUID, DrillResponse> toResponseMap(List<Drill> drills) {
+        return drills.stream().collect(Collectors.toMap(Drill::getId, d ->
+            drillLibraryService.toResponse(d, false, List.of(), null, null, null)));
     }
 
     private List<DrillMetadata> expandMetaForDna(List<SessionBlockData> blocks,
@@ -219,19 +231,8 @@ public class SessionPlanService {
             .sum();
     }
 
-    private SessionPlanResponse buildResponse(Session session, Map<UUID, DrillMetadata> metaMap) {
-        List<UUID> drillIds = session.getBlocks() == null ? List.of() :
-            session.getBlocks().stream()
-                .flatMap(b -> b.drills() != null ? b.drills().stream() : Stream.empty())
-                .map(SessionDrillRef::drillId)
-                .distinct()
-                .collect(Collectors.toList());
-
-        Map<UUID, DrillResponse> drillResponseMap = drillIds.isEmpty() ? Map.of()
-            : drillRepository.findAllById(drillIds).stream()
-                .collect(Collectors.toMap(Drill::getId, d ->
-                    drillLibraryService.toResponse(d, false, List.of(), null, null, null)));
-
+    private SessionPlanResponse buildResponse(Session session, Map<UUID, DrillMetadata> metaMap,
+                                               Map<UUID, DrillResponse> drillResponseMap) {
         List<SessionBlockResponse> blockResponses = (session.getBlocks() == null
             ? List.<SessionBlockData>of() : session.getBlocks()).stream()
             .map(block -> {

@@ -69,17 +69,15 @@ public class DrillUploadService {
         }
 
         Optional<DrillVideoRef> existing = drillVideoRefRepository.findByDrillId(drillId);
-        if (existing.isPresent()) {
-            UUID existingVideoId = existing.get().getVideoId();
-            if (existingVideoId != null) {
-                videoRepository.findById(existingVideoId).ifPresent(video -> {
-                    if (video.getOperationalState() == OperationalState.READY) {
-                        throw new OperationNotAllowedException(
-                            "A video is already linked to this drill. Remove it before uploading a new one.",
-                            SessionErrorCode.DRILL_UPLOAD_NOT_ALLOWED);
-                    }
-                });
-            }
+        UUID existingVideoId = existing.map(DrillVideoRef::getVideoId).orElse(null);
+        if (existingVideoId != null) {
+            videoRepository.findById(existingVideoId).ifPresent(video -> {
+                if (video.getOperationalState() == OperationalState.READY) {
+                    throw new OperationNotAllowedException(
+                        "A video is already linked to this drill. Remove it before uploading a new one.",
+                        SessionErrorCode.DRILL_UPLOAD_NOT_ALLOWED);
+                }
+            });
         }
 
         InitializeUploadResponse resp = videoService.initializeUpload(
@@ -88,6 +86,12 @@ public class DrillUploadService {
 
         if (existing.isPresent()) {
             drillVideoRefRepository.setVideoId(drillId, resp.videoId());
+            // Replacing a non-READY video's ref (PROCESSING/FAILED — a READY one already threw
+            // above): the old reservation is otherwise orphaned until the reaper's timeout.
+            // Mirrors deleteVideo's own check-and-publish ordering.
+            if (existingVideoId != null && !drillVideoRefRepository.existsByVideoId(existingVideoId)) {
+                eventPublisher.publishEvent(new VideoPhysicalDeletionEvent(existingVideoId, drillId));
+            }
         } else {
             drillVideoRefRepository.upsertVideoId(drillId, resp.videoId());
         }
@@ -143,7 +147,9 @@ public class DrillUploadService {
                 return t.name();
             }
         }
-        return "NONE";
+        log.warn("No CoachSubscriptionTier has feature.drillVideoUpload.enabled.* set to true — "
+                + "drill_video_upload is unreachable for every coach regardless of subscription");
+        return null;
     }
 
     private UUID resolveCoachId(Long userId) {

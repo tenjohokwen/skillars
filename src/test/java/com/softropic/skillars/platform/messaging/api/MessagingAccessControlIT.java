@@ -242,6 +242,13 @@ class MessagingAccessControlIT extends AbstractIntegrationTest {
             .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
                 .isEqualTo(MessagingErrorCode.NOT_A_PARTY));
 
+        // MessagingService.getConversations' own dispatch (skillars-deferred-22 AC1) — previously an
+        // unrecognised role silently fell through to PLAYER handling instead of rejecting the call.
+        assertThatThrownBy(() -> messagingService.getConversations(COACH_USER_ID, "SUPERVISOR"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(MessagingErrorCode.NOT_A_PARTY));
+
         // MessagingReportService's own copy of verifyIsParty. Covered separately and deliberately:
         // it is a duplicate that cannot be extracted (injecting MessagingService would be a
         // circular dependency), so the two can only be kept in step by testing both.

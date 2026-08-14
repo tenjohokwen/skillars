@@ -6,6 +6,7 @@ import com.stripe.param.CustomerCreateParams;
 import com.stripe.param.PaymentIntentCreateParams;
 import com.stripe.param.RefundCreateParams;
 import com.stripe.param.SetupIntentCreateParams;
+import com.softropic.skillars.infrastructure.util.ClockProvider;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
@@ -19,12 +20,16 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.UUID;
 
 @Service
 @Slf4j
 @RequiredArgsConstructor
 public class StripePaymentGateway implements PaymentGateway {
+
+    private static final Duration IDEMPOTENCY_KEY_WINDOW = Duration.ofMinutes(1);
 
     private final CoachStripeAccountRepository coachStripeAccountRepository;
     private final StripeCustomerRepository stripeCustomerRepository;
@@ -62,8 +67,28 @@ public class StripePaymentGateway implements PaymentGateway {
                    .setOffSession(true);
         }
 
+        // Key incorporates parentId, not just referenceId: SessionPackPaymentService.purchasePack
+        // passes a shared session-pack tier id as referenceId, which repeats across every parent
+        // who buys that tier — referenceId alone would let two different parents' purchases
+        // collide on the same Stripe idempotency key.
+        //
+        // The time bucket exists for the same purchasePack path: referenceId there is stable
+        // per tier, not per purchase attempt, so a parent legitimately buying the same tier
+        // twice would otherwise collide on the same key as their first purchase and Stripe
+        // would silently replay the first PaymentIntent instead of charging again. A short
+        // window still dedupes true retries (e.g. a duplicate event/network resend of the same
+        // attempt) without blocking a second, later, genuinely separate purchase. The two
+        // PaymentLifecycleService callers pass a booking/batch id that is already unique per
+        // charge attempt, so the bucket is a no-op there — those are fired once per booking
+        // acceptance with no scheduled retry of the charge itself.
+        long bucket = Instant.now(ClockProvider.getClock()).getEpochSecond() / IDEMPOTENCY_KEY_WINDOW.toSeconds();
+        // parentId is null only via the deprecated capturePayment() overload (no current caller).
+        // Fall back to coachId — always non-null — rather than the literal "null", so two
+        // distinct null-parentId charges sharing a referenceId don't collide on one key.
+        Object keyOwner = parentId != null ? parentId : coachId;
+        String idempotencyKey = "pi-" + referenceId + "-" + keyOwner + "-" + bucket;
         try {
-            PaymentIntent intent = stripeClient.createPaymentIntent(builder.build());
+            PaymentIntent intent = stripeClient.createPaymentIntent(builder.build(), idempotencyKey);
             if (stripeCustomer != null) {
                 stripeCustomer.setLastPaymentIntentId(intent.getId());
                 stripeCustomerRepository.save(stripeCustomer);

@@ -118,6 +118,65 @@ class DrillUploadServiceTest {
     }
 
     @Test
+    void initiateUpload_replacesProcessingVideo_releasesOrphanedReservation() {
+        // skillars-deferred-22 AC5: replacing a non-READY video's ref must release the old
+        // reservation, mirroring deleteVideo's own check-and-publish pattern.
+        Drill drill = coachDrill(DRILL_ID, COACH_ID);
+        UUID existingVideoId = UUID.randomUUID();
+        when(drillRepository.findById(DRILL_ID)).thenReturn(Optional.of(drill));
+        when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.INSTRUCTOR);
+        when(configService.getBoolean("feature.drillVideoUpload.enabled.INSTRUCTOR")).thenReturn(true);
+        when(drillVideoRefRepository.findByDrillId(DRILL_ID))
+            .thenReturn(Optional.of(buildRef(DRILL_ID, existingVideoId)));
+
+        Video processingVideo = new Video();
+        processingVideo.setOperationalState(OperationalState.PROCESSING);
+        when(videoRepository.findById(existingVideoId)).thenReturn(Optional.of(processingVideo));
+        when(drillVideoRefRepository.existsByVideoId(existingVideoId)).thenReturn(false);
+
+        UUID newVideoId = UUID.randomUUID();
+        when(videoService.initializeUpload(any())).thenReturn(
+            new InitializeUploadResponse(newVideoId, UUID.randomUUID(), "p", "https://tus.example.com/upload",
+                Instant.now(), "test-sig", 9_999_999_999L, 12345L)
+        );
+
+        service.initiateUpload(DRILL_ID, COACH_USER_ID, new DrillUploadInitiateRequest("v.mp4", 1024L, "video/mp4", 10));
+
+        verify(drillVideoRefRepository).setVideoId(DRILL_ID, newVideoId);
+        ArgumentCaptor<VideoPhysicalDeletionEvent> eventCaptor = ArgumentCaptor.forClass(VideoPhysicalDeletionEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().videoId()).isEqualTo(existingVideoId);
+        assertThat(eventCaptor.getValue().drillId()).isEqualTo(DRILL_ID);
+    }
+
+    @Test
+    void initiateUpload_replacesProcessingVideo_otherRefStillPointsAtIt_doesNotPublishEvent() {
+        Drill drill = coachDrill(DRILL_ID, COACH_ID);
+        UUID existingVideoId = UUID.randomUUID();
+        when(drillRepository.findById(DRILL_ID)).thenReturn(Optional.of(drill));
+        when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.INSTRUCTOR);
+        when(configService.getBoolean("feature.drillVideoUpload.enabled.INSTRUCTOR")).thenReturn(true);
+        when(drillVideoRefRepository.findByDrillId(DRILL_ID))
+            .thenReturn(Optional.of(buildRef(DRILL_ID, existingVideoId)));
+
+        Video processingVideo = new Video();
+        processingVideo.setOperationalState(OperationalState.PROCESSING);
+        when(videoRepository.findById(existingVideoId)).thenReturn(Optional.of(processingVideo));
+        when(drillVideoRefRepository.existsByVideoId(existingVideoId)).thenReturn(true);
+
+        UUID newVideoId = UUID.randomUUID();
+        when(videoService.initializeUpload(any())).thenReturn(
+            new InitializeUploadResponse(newVideoId, UUID.randomUUID(), "p", "https://tus.example.com/upload",
+                Instant.now(), "test-sig", 9_999_999_999L, 12345L)
+        );
+
+        service.initiateUpload(DRILL_ID, COACH_USER_ID, new DrillUploadInitiateRequest("v.mp4", 1024L, "video/mp4", 10));
+
+        verify(drillVideoRefRepository).setVideoId(DRILL_ID, newVideoId);
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
     void initiateUpload_existingRefWithReadyVideo_throwsOperationNotAllowed() {
         Drill drill = coachDrill(DRILL_ID, COACH_ID);
         when(drillRepository.findById(DRILL_ID)).thenReturn(Optional.of(drill));
@@ -154,6 +213,28 @@ class DrillUploadServiceTest {
         assertThatThrownBy(() -> service.initiateUpload(DRILL_ID, COACH_USER_ID,
                 new DrillUploadInitiateRequest("v.mp4", 1024L, "video/mp4", 10)))
             .isInstanceOf(FeatureGatedException.class);
+    }
+
+    @Test
+    void initiateUpload_allTiersDisabled_messageStatesUnavailableAtAnyTier() {
+        // skillars-deferred-22 AC3: a fully-misconfigured gate (every tier disabled) must not
+        // surface as the misleading "requires tier: NONE".
+        Drill drill = coachDrill(DRILL_ID, COACH_ID);
+        when(drillRepository.findById(DRILL_ID)).thenReturn(Optional.of(drill));
+        when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.SCOUT);
+        when(configService.getBoolean("feature.drillVideoUpload.enabled.SCOUT")).thenReturn(false);
+        // Every tier explicitly disabled — not a wildcard any() stub — so the test proves
+        // resolveMinUploadTier's loop actually finds no enabled tier, rather than passing
+        // vacuously off a blanket default.
+        when(configService.find("feature.drillVideoUpload.enabled.SCOUT")).thenReturn(Optional.empty());
+        when(configService.find("feature.drillVideoUpload.enabled.INSTRUCTOR")).thenReturn(Optional.empty());
+        when(configService.find("feature.drillVideoUpload.enabled.ACADEMY")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.initiateUpload(DRILL_ID, COACH_USER_ID,
+                new DrillUploadInitiateRequest("v.mp4", 1024L, "video/mp4", 10)))
+            .isInstanceOf(FeatureGatedException.class)
+            .hasMessage("Feature 'drill_video_upload' is not currently available at any subscription tier")
+            .satisfies(e -> assertThat(((FeatureGatedException) e).getRequiredTier()).isNull());
     }
 
     @Test

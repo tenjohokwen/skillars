@@ -24,8 +24,17 @@ import java.time.Instant;
 @Component
 public class StripeClient {
 
-    public PaymentIntent createPaymentIntent(PaymentIntentCreateParams params) throws StripeException {
-        return PaymentIntent.create(params);
+    /**
+     * Creates a Stripe PaymentIntent. The idempotency key must be caller-supplied — unlike
+     * {@link #createSubscription}, this method only receives a pre-built params object, so it
+     * cannot derive a key from plain-value parameters itself.
+     */
+    public PaymentIntent createPaymentIntent(PaymentIntentCreateParams params, String idempotencyKey)
+            throws StripeException {
+        RequestOptions options = RequestOptions.builder()
+            .setIdempotencyKey(idempotencyKey)
+            .build();
+        return PaymentIntent.create(params, options);
     }
 
     public PaymentIntent retrievePaymentIntent(String id) throws StripeException {
