@@ -207,15 +207,6 @@
         <template v-if="authStore.isAdmin">
           <div class="text-label q-px-md q-mt-lg q-mb-sm">Admin</div>
 
-          <q-item clickable to="/admin/tenants" class="nav-item">
-            <q-item-section avatar>
-              <q-icon name="group" class="nav-icon" />
-            </q-item-section>
-            <q-item-section>
-              <q-item-label class="nav-label">Tenants</q-item-label>
-            </q-item-section>
-          </q-item>
-
           <q-item clickable to="/admin/health-dashboard" class="nav-item">
             <q-item-section avatar>
               <q-icon name="monitor_heart" class="nav-icon" />

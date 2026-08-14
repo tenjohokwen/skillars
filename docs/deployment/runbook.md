@@ -222,7 +222,7 @@ docker compose stop redis
 # All active user sessions will end — users must re-login.
 ls -la /opt/skillars/data/redis   # confirm this is the correct directory before proceeding
 
-rm -f /opt/skillars/data/redis/appendonly.aof /opt/skillars/data/redis/dump.rdb
+rm -rf /opt/skillars/data/redis/appendonlydir /opt/skillars/data/redis/dump.rdb
 
 docker compose start redis
 ```

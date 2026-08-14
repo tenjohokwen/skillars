@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-08-14 # skillars-deferred-22 → review (all 6 ACs implemented, mvn -o test green)
+# last_updated: 2026-08-14 # skillars-deferred-23 → done (code review: 4 patches applied, 2 defers, 8 dismissed; mvn -o verify green, 882 unit + 897 IT)
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-08-14 # skillars-deferred-22 → review (all 6 ACs implemented, mvn -o test green)
+last_updated: 2026-08-14 # skillars-deferred-23 → done (code review: 4 patches applied, 2 defers, 8 dismissed; mvn -o verify green, 882 unit + 897 IT)
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -820,4 +820,37 @@ development_status:
   # needs a UX/design decision or is by-design), 6-1 Run2's other Def items (P3, intentional design, or
   # a different bug in the same file), and the broad body of 2026-06-era "pre-existing pattern" items.
   # See the story file's "Explicitly NOT in this story" section for full reasoning.
-  skillars-deferred-22-messaging-role-guard-payment-idempotency-and-resource-integrity-fixes: review
+  skillars-deferred-22-messaging-role-guard-payment-idempotency-and-resource-integrity-fixes: done  # 2026-08-14: code review found 1 decision (Stripe idempotency key collision across same-parent repeat purchases — resolved with a 1-minute time-bucket component) + 6 patches (ledger self-contradiction, sprint-status stale comment, null-guard on key inputs, misleading test names, weak all-tiers-disabled test stub, missing empty-drills test), all applied; 5 defer items (pre-existing patterns/out-of-scope, mirrors deleteVideo's existing shape and Def14's already-accepted TOCTOU race) accepted with no action. Full mvn -o test green: 882 tests, 0F/0E, 1 pre-existing skip.
+
+  # Deferred 23: Flaky Perf Test, Dead Frontend Code, Lock-Timeout Gap & Ops-Doc Fixes
+  # Source: deferred-work.md directly, per Mbah's direction to group small unrelated already-deferred
+  # items into one story (same spirit as deferred-11/20/21/22). All 6 items were independently
+  # re-verified against current source during story creation, not trusted from ledger text:
+  #   AC1  deferred-16 review D8, downgraded by uat-1 — PlaybackServiceIT's p99 assertion reads
+  #        latencies[99] (the max of 100 samples), not p99, and has no warmup; fix corrects the index
+  #        to latencies[98] and adds a warmup phase
+  #   AC2  uat-1 story-creation D4 — TenantListPage.vue/TenantDetailPage.vue + their routes, nav entry
+  #        and admin.api.js's 13-function Tenant Management block all call /v1/admin/tenants/** endpoints
+  #        removed by commit a170e69 ("Remove the tenant module"); deleted outright
+  #   AC3  uat-4 story-creation D1 + its own code review D1 — useTimezone.js has zero callers anywhere
+  #        in the frontend and carries a latent useI18n()-outside-setup() trap; deleted outright rather
+  #        than fixing the calling convention, since nothing depends on it
+  #   AC4  uat-2 code review Group D — runbook.md's AOF-corruption recovery command targets pre-Redis-7
+  #        filenames (appendonly.aof); Redis 7's --appendonly yes default creates appendonlydir/ instead
+  #   AC5  uat-2 code review Group D — ci.yml's build-and-push job has no concurrency group, so two
+  #        master pushes completing out of order could theoretically leave :latest on an older commit
+  #   AC6  uat-3 code review D6 — SessionPackPurchaseRepository.findByIdForUpdate is missing the
+  #        jakarta.persistence.lock.timeout hint its three siblings (CoachProfileRepository,
+  #        BookingRescheduleRequestRepository, BookingRepository) all carry; contention blocks
+  #        indefinitely instead of surfacing ApiAdvice's existing 409
+  #   AC7  Ledger hygiene: closes all 6 above with [CLOSED by skillars-deferred-23 ACn], plus corrects
+  #        3 stale ledger entries found already-fixed-but-unmarked during story creation (deferred-17
+  #        review D4, deferred-18 review D1, deferred-16 review D1 — none affected the 6 items chosen)
+  # DELIBERATELY EXCLUDED: 10-2 D1 and 7-2 Group2 D6/D7 (uat-readiness-priorities.md P3 list, 3+ audits
+  # already declined); deferred-16 review D2 (softDeleteMessage lock-before-authz — deliberate AC5
+  # design choice, needs its own regression pass); uat-3 D5/D18 (DisputeService unguarded findById —
+  # tripwire, not a live defect); uat-3 D12 (cancelBookingAsParent lock-timeout gap — architectural,
+  # spans two paths); V94 migration lock + reserveCapture pool sizing (acceptable at current scale);
+  # BookingServiceTest positional constructor (D17 — its own pass, touches ~26 tests).
+  # See the story file's "Explicitly NOT in this story" section for full reasoning.
+  skillars-deferred-23-flaky-perf-test-dead-code-and-ops-hygiene-fixes: done
