@@ -164,6 +164,25 @@ class DrillLibraryServiceTest {
         service.checkSessionBuilderGate(COACH_USER_ID);
     }
 
+    @Test
+    void checkSessionBuilderGate_allTiersDisabled_messageStatesUnavailableAtAnyTier() {
+        // skillars-deferred-22 AC3: a fully-misconfigured gate (every tier disabled) must not
+        // surface as the misleading "requires tier: NONE".
+        when(coachProfileService.getCoachSubscriptionTier(COACH_PROFILE_ID)).thenReturn(CoachSubscriptionTier.SCOUT);
+        when(configService.getBoolean("feature.sessionBuilder.enabled.SCOUT")).thenReturn(false);
+        // Every tier explicitly disabled — not a wildcard any() stub — so the test proves
+        // resolveMinEnabledTier's loop actually finds no enabled tier, rather than passing
+        // vacuously off a blanket default.
+        when(configService.find("feature.sessionBuilder.enabled.SCOUT")).thenReturn(Optional.empty());
+        when(configService.find("feature.sessionBuilder.enabled.INSTRUCTOR")).thenReturn(Optional.empty());
+        when(configService.find("feature.sessionBuilder.enabled.ACADEMY")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.checkSessionBuilderGate(COACH_USER_ID))
+            .isInstanceOf(FeatureGatedException.class)
+            .hasMessage("Feature 'session_builder' is not currently available at any subscription tier")
+            .satisfies(e -> assertThat(((FeatureGatedException) e).getRequiredTier()).isNull());
+    }
+
     // ── batchVideoLookup (via listDrills PLATFORM path) ──────────────────────
 
     @Test

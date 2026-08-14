@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-08-13 # skillars-deferred-21 review findings addressed → done
+# last_updated: 2026-08-14 # skillars-deferred-22 → review (all 6 ACs implemented, mvn -o test green)
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-08-13 # skillars-deferred-21 review findings addressed → done
+last_updated: 2026-08-14 # skillars-deferred-22 → review (all 6 ACs implemented, mvn -o test green)
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -787,3 +787,37 @@ development_status:
   # 11-2 D2 and 7-5 D1 (each needs a product decision or dedicated financial-correctness test, not a
   # grab-bag slot). See the story file's "Explicitly NOT in this story" section for full reasoning.
   skillars-deferred-21-silent-failure-logging-dead-code-backup-guard-hardening: done  # 2026-08-13: all 6 ACs implemented, full mvn -o test (unit) BUILD SUCCESS (868 tests, 0F/0E), npx eslint clean, shellcheck -x clean on all 6 deploy/backup/*.sh (env-guard.sh + 5 callers, invoked with CWD=deploy/backup — this shellcheck version resolves the source=env-guard.sh directive against invocation CWD not the script's own directory, so the literal command from repo root reproduces a spurious SC1091; not a script defect), all 4 guard branches manually verified via SKILLARS_ENV_FILE overrides. Ledger annotations for AC6 were already applied during story creation. REVIEW FINDINGS ADDRESSED 2026-08-14: 2 action items — (1) Decision: AC2's PURGED removal exposed a real gap in the polling fallback (GET /api/video/{id}/status echoed raw operationalState with no PURGED->DELETED translation, unlike the SSE path's VideoSseService.onVideoPurged); Mbah chose "fix both" — VideoEventResource.computeDisplayState now translates PURGED->DELETED server-side, and VideoManagementPage.vue/video.store.js regained PURGED handling as a defensive backstop; new VideoSseIT test added (7/7 green). (2) Patch: ConfigService.getBoolean's duplicated invalid-value warning logic extracted into a shared parseBoolean helper, behavior unchanged, ConfigServiceTest re-run green (11/11). 3 further findings were pre-existing/deferred, no action needed. Full mvn -o test + eslint re-run green post-fix.
+
+  # Deferred 22: Messaging Role Guard, Payment Idempotency, Feature-Gate Messaging & Resource-Leak Fixes
+  # Source: deferred-work.md directly, per Mbah's direction to group small unrelated already-deferred
+  # items into one story (same spirit as deferred-11/deferred-20/deferred-21). All 5 items were
+  # independently re-verified against current source during story creation, not trusted from ledger text:
+  #   AC1  uat-1 story-creation D1 — MessagingService.getConversations silently treats an unrecognised
+  #        role as PLAYER instead of rejecting it (if/else-if/else dispatch, not exhaustive); completes
+  #        the deferred-16 AC6 sweep that fixed the class's other 3 exhaustive role-dispatch sites (not
+  #        4 as first drafted — ModerationResultApplier/AdminMessageService's resolveRecipient copies
+  #        are a separate pair of methods that deliberately return null instead of throwing; untouched)
+  #   AC2  uat-3 story-creation D2 — StripeClient.createPaymentIntent has no idempotency key, unlike
+  #        createSubscription's existing pattern. Review pass found the naive fix (key from referenceId
+  #        alone) would collide across parents: SessionPackPaymentService passes packTierId (shared by
+  #        every buyer of that tier) as referenceId, so the key must also fold in parentId
+  #   AC3  4-1 external-review D1 — DrillLibraryService.resolveMinEnabledTier returns "NONE" when every
+  #        tier is disabled, surfacing as the misleading "requires tier: NONE" in FeatureGatedException;
+  #        fix adds a WARN log for the misconfiguration case and a clearer message, not a control-flow
+  #        change. Review pass found DrillUploadService.resolveMinUploadTier is a structural duplicate
+  #        of the identical bug (not in the original ledger item) — AC3 now fixes both
+  #   AC4  4-4 review W6 — SessionPlanService.buildResponse re-fetches the same drills resolveMetaMap
+  #        already fetched, a redundant DB round-trip on every session-plan read/write. Review pass
+  #        found no test file for SessionPlanService exists at all — this AC requires writing a new
+  #        SessionPlanServiceTest from scratch, not extending existing coverage
+  #   AC5  6-1 Run2 review Def13 — DrillUploadService.initiateUpload orphans the old video's quota
+  #        reservation when replacing a non-READY video (deleteVideo already has the correct release
+  #        pattern; Def14's separate TOCTOU concern in the same file is explicitly NOT touched)
+  #   AC6  Ledger hygiene: closes all 5 above with [CLOSED by skillars-deferred-22 ACn] once implemented
+  # DELIBERATELY EXCLUDED: 7-5 D1 (running-balance pagination edge case) — deferred-21 already decided
+  # this needs its own scoped story with a dedicated regression test, not a bundled slot; that decision
+  # stands and was not revisited. Also excluded: the rest of uat-1/uat-3's own deferred sections (each
+  # needs a UX/design decision or is by-design), 6-1 Run2's other Def items (P3, intentional design, or
+  # a different bug in the same file), and the broad body of 2026-06-era "pre-existing pattern" items.
+  # See the story file's "Explicitly NOT in this story" section for full reasoning.
+  skillars-deferred-22-messaging-role-guard-payment-idempotency-and-resource-integrity-fixes: review

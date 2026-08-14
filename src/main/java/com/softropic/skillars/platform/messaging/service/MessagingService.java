@@ -114,7 +114,7 @@ public class MessagingService {
                         return false;
                     }))
                 .toList();
-        } else {
+        } else if ("PLAYER".equals(role)) {
             // PLAYER: resolve the caller's own player-profile id once — Conversation.playerId and
             // the age-policy lookup both key on the player-profile id, not the caller's user id.
             // A caller with no player profile (or an unresolvable policy) gets an empty list, not
@@ -136,6 +136,12 @@ public class MessagingService {
                         : List.of();
                 }
             }
+        } else {
+            // See verifyIsParty for why this is OperationNotAllowedException and not
+            // IllegalArgumentException.
+            throw new OperationNotAllowedException(
+                "Caller does not hold a recognised messaging role",
+                MessagingErrorCode.NOT_A_PARTY);
         }
 
         return conversations.stream()

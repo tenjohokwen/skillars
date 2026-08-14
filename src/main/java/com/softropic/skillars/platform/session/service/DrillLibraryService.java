@@ -250,7 +250,9 @@ public class DrillLibraryService {
                 return t.name();
             }
         }
-        return "NONE";
+        log.warn("No CoachSubscriptionTier has feature.sessionBuilder.enabled.* set to true — "
+                + "session_builder is unreachable for every coach regardless of subscription");
+        return null;
     }
 
     private record DrillVideoInfo(boolean hasVideo, String videoUrl) {}
