@@ -151,7 +151,7 @@ public class StripePaymentGateway implements PaymentGateway {
     @Override
     public String createStripeCustomer(Long parentId) {
         CustomerCreateParams params = CustomerCreateParams.builder()
-            .putMetadata("parentId", parentId.toString())
+            .putMetadata("userId", parentId.toString())
             .build();
         try {
             return stripeClient.createCustomer(params).getId();

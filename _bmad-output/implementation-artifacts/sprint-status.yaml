@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-08-14 # skillars-deferred-23 → done (code review: 4 patches applied, 2 defers, 8 dismissed; mvn -o verify green, 882 unit + 897 IT)
+# last_updated: 2026-08-15 # skillars-deferred-24 → done (code review: 2 patches applied, 3 deferred; full verify green)
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-08-14 # skillars-deferred-23 → done (code review: 4 patches applied, 2 defers, 8 dismissed; mvn -o verify green, 882 unit + 897 IT)
+last_updated: 2026-08-15 # skillars-deferred-24 → done (code review: 2 patches applied, 3 deferred; full verify green)
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -854,3 +854,36 @@ development_status:
   # BookingServiceTest positional constructor (D17 — its own pass, touches ~26 tests).
   # See the story file's "Explicitly NOT in this story" section for full reasoning.
   skillars-deferred-23-flaky-perf-test-dead-code-and-ops-hygiene-fixes: done
+
+  # Deferred 24: Dead Subscription Column, Stripe Metadata Mislabel, Backup Guard Gaps & Quota-Release Test Coverage
+  # Source: deferred-work.md directly, per Mbah's direction to group small unrelated already-deferred
+  # items into one story (same spirit as deferred-11/20/21/22/23). All 5 items were independently
+  # re-verified against current source during story creation, not trusted from ledger text:
+  #   AC1  uat-6 story-creation D1 — payment.coach_subscriptions.stripe_customer_id has zero readers;
+  #        subscribeCoach resolves the Stripe customer id from the separate payment.stripe_customers
+  #        table instead. New migration V96 drops the column; SubscriptionLifecycleIT's seed insert
+  #        (which its own comment already calls "harmless dead data") updated to match
+  #   AC2  uat-6 story-creation D2 — StripePaymentGateway.createStripeCustomer hardcodes
+  #        metadata.parentId even when the caller is a coach (createSetupIntent/savePaymentMethod are
+  #        both HAS_PARENT_PLAYER_OR_COACH_ROLE); renamed to the role-neutral "userId", consistent with
+  #        the deliberate opaque-id design uat-6 already established (no payer_type column)
+  #   AC3  code review of deferred-21 — env-guard.sh's require_env_vars has no file-mode/ownership check
+  #        on the .env it sources; adds a WARN (not a hard fail) for group/other read-or-write bits
+  #   AC4  code review of deferred-21 — the ". env-guard.sh" sourcing line in all 5 backup/restore
+  #        callers has no existence/readability guard of its own, so a missing file fails via a raw
+  #        untagged shell error instead of the family's [<tag>][error] convention
+  #   AC5  code review of deferred-22 — DrillUploadServiceTest's AC5 tests only assert
+  #        VideoPhysicalDeletionEvent publication, never that the old video's quota reservation is
+  #        actually released; new DrillUploadResourceIT test proves the full async chain
+  #        (initiateUpload -> event -> VideoPhysicalDeletionListener -> AdminVideoService.deleteVideo ->
+  #        quotaProvider.release) end-to-end
+  #   AC6  Ledger hygiene: closes all 5 above with [CLOSED by skillars-deferred-24 ACn]
+  # DELIBERATELY EXCLUDED: uat-6 D3 (no dedicated SubscriptionResourceIT — its own text calls this a
+  # separate, larger testing initiative); uat-6's ops note (stale HCLOUD_TOKEN/HETZNER_VOLUME_ID on an
+  # already-provisioned server .env — nothing to change in this repo); ConfigService.getBoolean fail-open
+  # (needs alerting infra, not a script fix); the rest of deferred-22's review items (pre-existing/
+  # accepted-risk, explicitly recorded as such by that review); deferred-23's own two review-deferred
+  # items (already-documented residual limitations); the systemic Hibernate/Postgres lock.timeout no-op
+  # finding deferred-23 filed (needs its own design decision across 4 repositories, not a bundled slot).
+  # See the story file's "Explicitly NOT in this story" section for full reasoning.
+  skillars-deferred-24-dead-subscription-column-stripe-metadata-and-backup-guard-fixes: done  # 2026-08-15: all 6 ACs implemented; code review 2 patches applied (env-guard.sh stat-failure handling, GUARD_PATH directory guard in all 5 callers), 3 deferred; 5 deferred-work.md items annotated [CLOSED by skillars-deferred-24 ACn]; full mvn -o verify green (898 tests, 0 failures, 4 skipped)

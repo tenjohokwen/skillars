@@ -52,21 +52,18 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
         coachId = insertTestCoach(COACH_USER_ID, "sub.coach@test.com", "Sub Coach");
 
         transactionTemplate.execute(status -> {
-            // Stripe customer for the coach user — subscribeCoach() now resolves the payment
-            // method from this row directly (mirrors subscribePlayer's pattern), not from
-            // PaymentCoachSubscription.getStripeCustomerId().
+            // Stripe customer for the coach user — subscribeCoach() resolves the payment
+            // method from this row directly (mirrors subscribePlayer's pattern).
             jdbcTemplate.update(
                 "INSERT INTO payment.stripe_customers (parent_id, stripe_customer_id, stripe_payment_method_id) " +
                 "VALUES (?, ?, ?) ON CONFLICT (parent_id) DO NOTHING",
                 COACH_USER_ID, STRIPE_CUSTOMER_ID, PAYMENT_METHOD
             );
 
-            // Bootstrap coach subscription row with stripe_customer_id — this column is now
-            // unused by the subscribeCoach() code path under test; left as harmless dead data.
             jdbcTemplate.update(
-                "INSERT INTO payment.coach_subscriptions (coach_id, stripe_customer_id) " +
-                "VALUES (?, ?) ON CONFLICT (coach_id) DO UPDATE SET stripe_customer_id = EXCLUDED.stripe_customer_id",
-                coachId, STRIPE_CUSTOMER_ID
+                "INSERT INTO payment.coach_subscriptions (coach_id) " +
+                "VALUES (?) ON CONFLICT (coach_id) DO NOTHING",
+                coachId
             );
 
             // V64 seeds these keys with empty-string placeholders; override with test priceIds.

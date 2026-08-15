@@ -38,9 +38,6 @@ public class PaymentCoachSubscription {
     @Column(name = "stripe_subscription_id")
     private String stripeSubscriptionId;
 
-    @Column(name = "stripe_customer_id")
-    private String stripeCustomerId;
-
     @Column(nullable = false)
     private String status = "ACTIVE";
 

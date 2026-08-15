@@ -9,8 +9,17 @@ set -euo pipefail
 log() { echo "[restore-from-volume-backup] $*"; }
 err() { echo "[restore-from-volume-backup][error] $*" >&2; }
 
+GUARD_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env-guard.sh"
+if [ -d "$GUARD_PATH" ]; then
+  echo "[restore-from-volume-backup][error] ${GUARD_PATH} is a directory, not a file — cannot load credential guard" >&2
+  exit 1
+fi
+if [ ! -r "$GUARD_PATH" ]; then
+  echo "[restore-from-volume-backup][error] cannot read ${GUARD_PATH} — required for credential loading" >&2
+  exit 1
+fi
 # shellcheck source=env-guard.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env-guard.sh"
+. "$GUARD_PATH"
 require_env_vars "restore-from-volume-backup" "restore" HOS_ACCESS_KEY HOS_SECRET_KEY HOS_BUCKET HOS_ENDPOINT
 
 COMPOSE_FILE="/opt/skillars/docker-compose.yml"
