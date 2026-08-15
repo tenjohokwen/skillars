@@ -9,6 +9,7 @@ public record DrillResponse(
     String name,
     String description,
     String libraryType,
+    // Always null for PLATFORM-library drills; populated only for COACH-owned (private) drills.
     UUID ownerCoachId,
     String status,
     DrillMetadata metadata,

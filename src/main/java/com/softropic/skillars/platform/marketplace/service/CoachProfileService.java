@@ -320,8 +320,8 @@ public class CoachProfileService {
         boolean available = !coachAvailabilityWindowRepository.findByCoachId(profile.getId()).isEmpty();
 
         OffsetDateTime since = OffsetDateTime.now().minusDays(STRIKE_WINDOW_DAYS);
-        int strikeCount = (int) coachReliabilityStrikeRepository
-            .countByCoachIdAndCreatedAtAfter(profile.getId(), since);
+        int strikeCount = Math.toIntExact(coachReliabilityStrikeRepository
+            .countByCoachIdAndCreatedAtAfter(profile.getId(), since));
 
         List<CoachMediaItemDto> mediaGallery = coachMediaItemRepository
             .findByCoachIdOrderByDisplayOrderAsc(profile.getId())

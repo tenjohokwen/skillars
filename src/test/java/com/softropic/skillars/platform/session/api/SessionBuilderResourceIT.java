@@ -199,6 +199,32 @@ class SessionBuilderResourceIT extends BaseSessionIT {
     }
 
     @Test
+    void createSession_31DrillBlock_returns400() {
+        String cookies = loginAndGetCookies(INSTR_EMAIL);
+        List<Map<String, Object>> tooManyDrills = java.util.stream.IntStream.range(0, 31)
+            .<Map<String, Object>>mapToObj(i -> Map.of("drillId", drillId.toString(), "order", i))
+            .toList();
+        Map<String, Object> body = Map.of(
+            "bookingId", confirmedBookingId.toString(),
+            "blocks", List.of(Map.of(
+                "blockType", "WARM_UP",
+                "blockName", "Warm-Up",
+                "durationMinutes", 10,
+                "drills", tooManyDrills
+            )),
+            "developmentFocus", List.of("technical")
+        );
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + SESSIONS_BASE,
+            HttpMethod.POST,
+            body,
+            authenticatedHeaders(cookies),
+            Map.class
+        )).isInstanceOf(HttpClientErrorException.BadRequest.class);
+    }
+
+    @Test
     void updateSession_instructorCoach_returnsUpdatedPlan() {
         String cookies = loginAndGetCookies(INSTR_EMAIL);
         Map<String, Object> createBody = buildCreateRequest(confirmedBookingId, drillId);

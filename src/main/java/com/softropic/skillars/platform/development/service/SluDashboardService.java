@@ -46,7 +46,7 @@ public class SluDashboardService {
         short currentWeek = (short) now.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
 
         List<PlayerSluWeeklySnapshot> snapshots =
-            snapshotRepository.findByPlayerIdFromWeek(playerId, fromYear, fromWeek);
+            snapshotRepository.findByPlayerIdFromWeek(playerId, fromYear, fromWeek, currentYear, currentWeek);
 
         // Group by week key for trend
         Map<String, Map<String, BigDecimal>> weekMap = new TreeMap<>();

@@ -29,10 +29,13 @@ public interface SluWeeklySnapshotRepository
 
     @Query("SELECT s FROM PlayerSluWeeklySnapshot s WHERE s.id.playerId = :playerId " +
            "AND (s.id.isoYear > :fromYear OR (s.id.isoYear = :fromYear AND s.id.isoWeek >= :fromWeek)) " +
+           "AND (s.id.isoYear < :toYear OR (s.id.isoYear = :toYear AND s.id.isoWeek <= :toWeek)) " +
            "ORDER BY s.id.isoYear ASC, s.id.isoWeek ASC")
     List<PlayerSluWeeklySnapshot> findByPlayerIdFromWeek(@Param("playerId") Long playerId,
                                                           @Param("fromYear") short fromYear,
-                                                          @Param("fromWeek") short fromWeek);
+                                                          @Param("fromWeek") short fromWeek,
+                                                          @Param("toYear") short toYear,
+                                                          @Param("toWeek") short toWeek);
 
     @Query("SELECT s FROM PlayerSluWeeklySnapshot s WHERE s.id.playerId = :playerId " +
            "AND s.id.isoYear = :isoYear AND s.id.isoWeek = :isoWeek")
