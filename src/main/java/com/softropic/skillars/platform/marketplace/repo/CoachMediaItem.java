@@ -5,6 +5,7 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -28,5 +29,10 @@ public class CoachMediaItem {
     @Column(name = "display_order", nullable = false)
     private int displayOrder;
     @Column(name = "uploaded_at", nullable = false, updatable = false)
-    private OffsetDateTime uploadedAt = OffsetDateTime.now();
+    private OffsetDateTime uploadedAt;
+
+    @PrePersist
+    void onCreate() {
+        if (uploadedAt == null) uploadedAt = OffsetDateTime.now();
+    }
 }

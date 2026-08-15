@@ -28,13 +28,13 @@ public class Booking {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    @Column(name = "parent_id", nullable = false)
+    @Column(name = "parent_id", nullable = false, updatable = false)
     private Long parentId;
 
-    @Column(name = "player_id", nullable = false)
+    @Column(name = "player_id", nullable = false, updatable = false)
     private Long playerId;
 
-    @Column(name = "coach_id", nullable = false)
+    @Column(name = "coach_id", nullable = false, updatable = false)
     private UUID coachId;
 
     @Column(name = "requested_start_time", nullable = false)
