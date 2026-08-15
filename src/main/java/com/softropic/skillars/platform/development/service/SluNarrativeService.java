@@ -34,15 +34,15 @@ public class SluNarrativeService {
         short fromYear = (short) from.get(IsoFields.WEEK_BASED_YEAR);
         short fromWeek = (short) from.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
 
-        List<PlayerSluWeeklySnapshot> snapshots =
-            snapshotRepository.findByPlayerIdFromWeek(playerId, fromYear, fromWeek);
-
         // Current 4-week block = weeks N-3 to N; prior block = weeks N-7 to N-4
         short currentYear = (short) now.get(IsoFields.WEEK_BASED_YEAR);
         short currentWeek = (short) now.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
         ZonedDateTime boundaryDt = now.minusWeeks(3).with(DayOfWeek.MONDAY);
         short boundaryYear = (short) boundaryDt.get(IsoFields.WEEK_BASED_YEAR);
         short boundaryWeek = (short) boundaryDt.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
+
+        List<PlayerSluWeeklySnapshot> snapshots =
+            snapshotRepository.findByPlayerIdFromWeek(playerId, fromYear, fromWeek, currentYear, currentWeek);
 
         Map<String, BigDecimal> currentBlock = new HashMap<>();
         Map<String, BigDecimal> priorBlock = new HashMap<>();

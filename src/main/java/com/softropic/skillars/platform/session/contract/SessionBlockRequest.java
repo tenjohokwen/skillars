@@ -13,5 +13,5 @@ public record SessionBlockRequest(
     @NotBlank @Size(max = 50) String blockType,
     @NotBlank @Size(max = 100) String blockName,
     @Min(1) @Max(240) int durationMinutes,
-    @NotNull List<@Valid SessionDrillRefRequest> drills
+    @NotNull @Size(max = 30) List<@Valid SessionDrillRefRequest> drills
 ) {}

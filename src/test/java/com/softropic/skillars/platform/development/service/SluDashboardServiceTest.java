@@ -57,7 +57,7 @@ class SluDashboardServiceTest {
             makeSnapshot(curYear, curWeek, "SHO", new BigDecimal("5.00")),
             makeSnapshot(curYear, curWeek, "DRI", new BigDecimal("7.50"))
         );
-        when(snapshotRepository.findByPlayerIdFromWeek(anyLong(), anyShort(), anyShort()))
+        when(snapshotRepository.findByPlayerIdFromWeek(anyLong(), anyShort(), anyShort(), anyShort(), anyShort()))
             .thenReturn(snapshots);
         when(flagRepository.findByPlayerIdAndResolvedAtIsNull(PLAYER_ID)).thenReturn(List.of());
 
@@ -88,7 +88,7 @@ class SluDashboardServiceTest {
             makeSnapshot(prevYear, prevWeek, "PAC", new BigDecimal("8.00")),
             makeSnapshot(prevPrevYear, prevPrevWeek, "PAC", new BigDecimal("6.00"))
         );
-        when(snapshotRepository.findByPlayerIdFromWeek(anyLong(), anyShort(), anyShort()))
+        when(snapshotRepository.findByPlayerIdFromWeek(anyLong(), anyShort(), anyShort(), anyShort(), anyShort()))
             .thenReturn(snapshots);
         when(flagRepository.findByPlayerIdAndResolvedAtIsNull(PLAYER_ID)).thenReturn(List.of());
 
@@ -99,7 +99,7 @@ class SluDashboardServiceTest {
 
     @Test
     void getWeeklyExposure_withNoData_returnsEmptyCurrentWeekAndEmptyTrend() {
-        when(snapshotRepository.findByPlayerIdFromWeek(anyLong(), anyShort(), anyShort()))
+        when(snapshotRepository.findByPlayerIdFromWeek(anyLong(), anyShort(), anyShort(), anyShort(), anyShort()))
             .thenReturn(List.of());
         when(flagRepository.findByPlayerIdAndResolvedAtIsNull(PLAYER_ID)).thenReturn(List.of());
 

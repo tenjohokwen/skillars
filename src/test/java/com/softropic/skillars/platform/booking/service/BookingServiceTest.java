@@ -748,7 +748,19 @@ class BookingServiceTest {
         bookingService.declineBooking(booking.getId(), COACH_USER_ID);
 
         assertThat(booking.getStatus()).isEqualTo("DECLINED");
-        verify(eventPublisher).publishEvent(any(BookingDeclinedEvent.class));
+
+        // Must be an ApplicationEvent captor, not BookingDeclinedEvent: declineBooking also
+        // publishes a BookingStatusChangedEvent via transition(), and both types bind to the same
+        // publishEvent(ApplicationEvent) overload — a narrow-type captor's implicit times(1) would
+        // throw TooManyActualInvocations. Same pattern as capturedParentCancellation() above.
+        ArgumentCaptor<ApplicationEvent> captor = ArgumentCaptor.forClass(ApplicationEvent.class);
+        verify(eventPublisher, org.mockito.Mockito.atLeastOnce()).publishEvent(captor.capture());
+        BookingDeclinedEvent declinedEvent = captor.getAllValues().stream()
+            .filter(BookingDeclinedEvent.class::isInstance)
+            .map(BookingDeclinedEvent.class::cast)
+            .reduce((first, second) -> second)
+            .orElseThrow(() -> new AssertionError("No BookingDeclinedEvent published"));
+        assertThat(declinedEvent.getCanonicalTimezone()).isEqualTo(booking.getCanonicalTimezone());
     }
 
     @Test

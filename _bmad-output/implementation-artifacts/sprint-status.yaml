@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-08-15 # skillars-deferred-25 → done (code review: 0 violations, 2 deferred; full verify green)
+# last_updated: 2026-08-15 # skillars-deferred-26 → done (code review complete, 1 patch applied)
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-08-15 # skillars-deferred-25 → done (code review: 0 violations, 2 deferred; full verify green)
+last_updated: 2026-08-15 # skillars-deferred-26 → done (code review complete, 1 patch applied)
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -914,3 +914,34 @@ development_status:
   # (spec-directed, needs sign-off). See the story file's "Explicitly NOT in this story" section for full
   # reasoning.
   skillars-deferred-25-jpa-annotation-hygiene-and-stripe-metadata-test-coverage: done  # 2026-08-15: all 5 ACs implemented; code review found 0 AC violations and 0 unhandled edge cases; 2 test-coverage items deferred (CoachMediaItem @PrePersist has no reachable constructor to test yet; Booking updatable=false has no dedicated ignore-behavior assertion); 4 deferred-work.md items annotated [CLOSED by skillars-deferred-25 ACn], 2 new items logged; full mvn -o verify green
+
+  # Deferred 26: Defensive Guards, Input Hardening & Test-Coverage Fixes
+  # Source: deferred-work.md directly, per Mbah's direction to group small unrelated already-deferred
+  # items into one story (same spirit as deferred-11/20/21/22/23/24/25). All 6 items were independently
+  # re-verified against current source during story creation (2026-08-15) — several ledger candidates
+  # inspected were already fixed, already closed by a prior story, or had their target file deleted
+  # entirely (see the story's "Why this story exists" section for the full rejected-item list).
+  #   AC1  code review of 4-1 (external) D8 — DrillResponse.ownerCoachId's always-null-for-PLATFORM
+  #        contract is undocumented; add a Javadoc comment (doc-only)
+  #   AC2  code review of 2-3 — CoachProfileService.getPublicProfile's strikeCount uses a silent
+  #        (int) narrowing cast instead of Math.toIntExact(); defence-in-depth, no reachable bug
+  #   AC3  code review of 4-4 W4 — SessionBlockRequest.drills has no @Size upper bound; add
+  #        @Size(max=30), informed by CreateSessionPlanRequest.blocks' own max=4
+  #   AC4  code review of 4-2 W2 — DrillDetailPanel.vue's sluBreakdown silently shows "0 SLU" instead
+  #        of "—" for a drill with null repDensity; null-guard the computed + template per the
+  #        codebase's existing ?? '—' convention (SkillsRadarChart.vue)
+  #   AC5  code review of 3-3 Group E — declineBooking unit test never captures/asserts
+  #        canonicalTimezone on the published BookingDeclinedEvent; add an ArgumentCaptor assertion
+  #   AC6  code review of 5-2 Round 2 Group A D5 — SluWeeklySnapshotRepository.findByPlayerIdFromWeek
+  #        has no upper bound, so a future-dated snapshot row inflates trend data; add toYear/toWeek
+  #        params, wire both callers' already-computed currentYear/currentWeek through
+  #   AC7  Ledger hygiene: closes all 6 above with [CLOSED by skillars-deferred-26 ACn]
+  # DELIBERATELY EXCLUDED: 5-2 Round 2 Group C's dead-code and SluTargetEditor-race items (already
+  # closed by deferred-21); 3-3 Group E's authority-leak test item (already audited not-reproducible
+  # by deferred-21); 4-1/4-2's other items (already closed by deferred-22/deferred-25); 2-3's
+  # duplicate-i18n-key item (its target `en` bundle directory no longer exists, deleted by uat-4);
+  # 2-3's unknownId_returns404 assertion item (already fixed in code, unannotated); 5-3/5-4's
+  # distinct_coach_count semantic-mismatch item (needs a migration + product decision, too large);
+  # 5-5's GDPR performance-report deletion item (a compliance feature addition, not a bundled fix).
+  # See the story file's "Explicitly NOT in this story" section for full reasoning.
+  skillars-deferred-26-defensive-guards-input-hardening-and-test-coverage-fixes: done  # 2026-08-15: all 7 ACs done. Two spec corrections applied before implementation (from a prior senior-dev review of the story's own AC text): AC4's repDensity != null guard could never fire (backend field is a primitive int, not Integer) — rescoped to a defensive undefined/null-only guard, real gap filed as new deferred-work.md item D1; AC5's plain ArgumentCaptor<BookingDeclinedEvent> would have thrown TooManyActualInvocations (declineBooking publishes 2 ApplicationEvent-typed events) — rewritten using the existing capturedParentCancellation() ArgumentCaptor<ApplicationEvent>+filter/reduce pattern. Full mvn -o verify green: 883 unit (0 failures, 1 skipped) + 899 IT (0 failures, 4 skipped), 8:07 min. Full eslint clean. All 6 ledger items annotated [CLOSED by skillars-deferred-26 ACn] in deferred-work.md. Code review: 1 patch applied (sluBreakdown NaN guard gap — weight not null-checked alongside repDensity), 2 deferred (loose anyShort() test matchers, missing 30-drill boundary test).

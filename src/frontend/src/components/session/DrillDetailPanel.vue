@@ -45,7 +45,7 @@
           <q-list dense>
             <q-item v-for="item in sluBreakdown" :key="item.skill">
               <q-item-section>{{ item.skill }}</q-item-section>
-              <q-item-section side>{{ item.slu }} SLU</q-item-section>
+              <q-item-section side>{{ item.slu ?? '—' }} SLU</q-item-section>
             </q-item>
           </q-list>
         </div>
@@ -192,7 +192,7 @@
               <q-list dense>
                 <q-item v-for="item in sluBreakdown" :key="item.skill">
                   <q-item-section>{{ item.skill }}</q-item-section>
-                  <q-item-section side>{{ item.slu }} SLU</q-item-section>
+                  <q-item-section side>{{ item.slu ?? '—' }} SLU</q-item-section>
                 </q-item>
               </q-list>
             </div>
@@ -316,9 +316,12 @@ watch(() => props.isOpen, (val) => { open.value = val })
 const sluBreakdown = computed(() => {
   if (!props.drill?.metadata) return []
   const { repDensity, skillWeighting } = props.drill.metadata
+  // repDensity is a non-null primitive int on the backend today, so this guard currently only
+  // protects against undefined/null arriving from stale caches or dev fixtures — it cannot yet
+  // distinguish "coach never set this" from a legitimate zero at the API layer.
   return Object.entries(skillWeighting ?? {}).map(([skill, weight]) => ({
     skill,
-    slu: Math.round((repDensity * weight) / 100),
+    slu: repDensity != null && weight != null ? Math.round((repDensity * weight) / 100) : null,
   }))
 })
 
