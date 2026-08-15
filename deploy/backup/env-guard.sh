@@ -15,6 +15,14 @@ require_env_vars() {
     echo "[${tag}][error] cannot read ${env_file} — ${action} cannot run without credentials" >&2
     exit 1
   fi
+  local perm
+  if ! perm="$(stat -c '%a' "$env_file" 2>/dev/null)"; then
+    echo "[${tag}][error] cannot stat ${env_file} — ${action} cannot run without credentials" >&2
+    exit 1
+  fi
+  if (( 8#$perm & 0077 )); then
+    echo "[${tag}][warn] ${env_file} is readable/writable by group or others (mode ${perm}) — credentials should be 600, owned by the deploying user" >&2
+  fi
   # shellcheck source=/dev/null
   . "$env_file"
 

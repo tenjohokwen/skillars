@@ -3,8 +3,17 @@
 # Cron runs this every 6 hours via install-crons.sh.
 set -euo pipefail
 
+GUARD_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env-guard.sh"
+if [ -d "$GUARD_PATH" ]; then
+  echo "[pg-backup][error] ${GUARD_PATH} is a directory, not a file — cannot load credential guard" >&2
+  exit 1
+fi
+if [ ! -r "$GUARD_PATH" ]; then
+  echo "[pg-backup][error] cannot read ${GUARD_PATH} — required for credential loading" >&2
+  exit 1
+fi
 # shellcheck source=env-guard.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env-guard.sh"
+. "$GUARD_PATH"
 require_env_vars "pg-backup" "backup" HOS_ACCESS_KEY HOS_SECRET_KEY HOS_BUCKET HOS_ENDPOINT POSTGRES_PASSWORD
 
 umask 077

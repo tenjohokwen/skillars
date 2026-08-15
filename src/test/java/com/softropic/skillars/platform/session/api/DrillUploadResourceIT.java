@@ -16,12 +16,14 @@ import org.springframework.test.context.jdbc.Sql;
 import org.springframework.web.client.HttpClientErrorException;
 
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -243,6 +245,64 @@ class DrillUploadResourceIT extends BaseSessionIT {
             authenticatedHeaders(cookies),
             Map.class
         )).isInstanceOf(HttpClientErrorException.UnprocessableEntity.class);
+    }
+
+    @Test
+    void initiateUpload_replacesProcessingVideo_releasesOldReservationEndToEnd() {
+        // Old PROCESSING video with a PENDING upload session holding a real (UUID) reservation
+        // handle — QuotaService.release() calls UUID.fromString() on it and a non-UUID label
+        // would throw, silently rolling back AdminVideoService.deleteVideo's transaction and
+        // getting swallowed by VideoPhysicalDeletionListener's catch-all.
+        UUID oldVideoId = UUID.randomUUID();
+        String reservationHandle = UUID.randomUUID().toString();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.videos (id, owner_id, provider, provider_asset_id, operational_state, access_state, title, visibility, created_at, updated_at) " +
+                "VALUES (?, ?, 'bunny', ?, 'PROCESSING', 'ACTIVE', 'Old Drill Video', 'PRIVATE', ?, ?)",
+                oldVideoId, instrCoachId.toString(), "asset-" + oldVideoId,
+                Timestamp.from(Instant.now()), Timestamp.from(Instant.now())
+            );
+            jdbcTemplate.update(
+                "INSERT INTO main.upload_sessions (id, video_id, provider_upload_id, status, reserved_bytes, reservation_handle, expires_at, created_at) " +
+                "VALUES (?, ?, ?, 'PENDING', ?, ?, ?, ?)",
+                UUID.randomUUID(), oldVideoId, "provider-upload-" + oldVideoId, 1024L * 1024,
+                reservationHandle, Timestamp.from(Instant.now().plusSeconds(3600)), Timestamp.from(Instant.now())
+            );
+            jdbcTemplate.update(
+                "INSERT INTO session.drill_video_refs (drill_id, video_id, ref_count) VALUES (?, ?, 1)",
+                coachDrillId, oldVideoId
+            );
+            return null;
+        });
+
+        String cookies = loginAndGetCookies(INSTR_EMAIL);
+        Map<String, Object> payload = Map.of(
+            "fileName", "replacement.mp4",
+            "fileSizeBytes", 1024 * 1024,
+            "mimeType", "video/mp4",
+            "durationSeconds", 30
+        );
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE + "/" + coachDrillId + "/video/initiate",
+            HttpMethod.POST,
+            payload,
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
+        // Release happens on an @Async AFTER_COMMIT listener — bounded wait for the chain to land.
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+            String oldState = jdbcTemplate.queryForObject(
+                "SELECT operational_state FROM main.videos WHERE id = ?", String.class, oldVideoId);
+            assertThat(oldState).isEqualTo("DELETED");
+
+            String sessionStatus = jdbcTemplate.queryForObject(
+                "SELECT status FROM main.upload_sessions WHERE video_id = ? AND reservation_handle = ?",
+                String.class, oldVideoId, reservationHandle);
+            assertThat(sessionStatus).isEqualTo("EXPIRED");
+        });
     }
 
     // ── DELETE /{drillId}/video ───────────────────────────────────────────────
