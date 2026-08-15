@@ -7,7 +7,9 @@ import com.softropic.skillars.platform.payment.repo.CoachStripeAccountRepository
 import com.softropic.skillars.platform.payment.repo.StripeCustomer;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.stripe.exception.StripeException;
+import com.stripe.model.Customer;
 import com.stripe.model.PaymentIntent;
+import com.stripe.param.CustomerCreateParams;
 import com.stripe.param.PaymentIntentCreateParams;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -22,6 +24,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -146,6 +149,21 @@ class StripePaymentGatewayTest {
         org.mockito.Mockito.verify(stripeClient, org.mockito.Mockito.times(2))
             .createPaymentIntent(any(PaymentIntentCreateParams.class), keyCaptor.capture());
         assertThat(keyCaptor.getAllValues()).doesNotHaveDuplicates();
+    }
+
+    @Test
+    void createStripeCustomer_tagsMetadataWithUserId() throws StripeException {
+        Customer customer = new Customer();
+        customer.setId("cus_new");
+        when(stripeClient.createCustomer(any(CustomerCreateParams.class))).thenReturn(customer);
+
+        stripePaymentGateway.createStripeCustomer(1001L);
+
+        ArgumentCaptor<CustomerCreateParams> paramsCaptor = ArgumentCaptor.forClass(CustomerCreateParams.class);
+        org.mockito.Mockito.verify(stripeClient).createCustomer(paramsCaptor.capture());
+        @SuppressWarnings("unchecked")
+        Map<String, String> metadata = (Map<String, String>) paramsCaptor.getValue().getMetadata();
+        assertThat(metadata).containsExactly(org.assertj.core.api.Assertions.entry("userId", "1001"));
     }
 
     private PaymentIntent mockIntent(String id) {

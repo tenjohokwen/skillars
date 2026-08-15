@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-08-15 # skillars-deferred-24 → done (code review: 2 patches applied, 3 deferred; full verify green)
+# last_updated: 2026-08-15 # skillars-deferred-25 → done (code review: 0 violations, 2 deferred; full verify green)
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-08-15 # skillars-deferred-24 → done (code review: 2 patches applied, 3 deferred; full verify green)
+last_updated: 2026-08-15 # skillars-deferred-25 → done (code review: 0 violations, 2 deferred; full verify green)
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -887,3 +887,30 @@ development_status:
   # finding deferred-23 filed (needs its own design decision across 4 repositories, not a bundled slot).
   # See the story file's "Explicitly NOT in this story" section for full reasoning.
   skillars-deferred-24-dead-subscription-column-stripe-metadata-and-backup-guard-fixes: done  # 2026-08-15: all 6 ACs implemented; code review 2 patches applied (env-guard.sh stat-failure handling, GUARD_PATH directory guard in all 5 callers), 3 deferred; 5 deferred-work.md items annotated [CLOSED by skillars-deferred-24 ACn]; full mvn -o verify green (898 tests, 0 failures, 4 skipped)
+
+  # Deferred 25: JPA Annotation Hygiene & Stripe Metadata Test Coverage
+  # Source: deferred-work.md directly, per Mbah's direction to group small unrelated already-deferred
+  # items into one story (same spirit as deferred-11/20/21/22/23/24). All 4 items were independently
+  # re-verified against current source during story creation, not trusted from ledger text — more than
+  # half of the ~dozen candidates inspected turned out already-fixed or no-longer-applicable and were
+  # rejected (see the story's "Why this story exists" section for the full stale-item list):
+  #   AC1  code review of deferred-24 — StripePaymentGateway.createStripeCustomer's parentId->userId
+  #        metadata rename has no test asserting the metadata map content; new
+  #        StripePaymentGatewayTest case captures CustomerCreateParams and asserts the "userId" key
+  #   AC2  code review of 7-2 Group 4 D16 — Booking.parentId/playerId/coachId lack updatable=false;
+  #        confirmed defence-in-depth only (no current mutation path on a persisted Booking)
+  #   AC3  code review of 2-3 — CoachMediaItem.uploadedAt uses a field initializer instead of a
+  #        @PrePersist callback, this codebase's actual convention (36 entities; @CreationTimestamp is
+  #        used nowhere). Defence-in-depth only: nothing currently constructs/persists a CoachMediaItem.
+  #   AC4  code review of 4-2 W4 — DrillTagId.tag's @Column has no length=50, silently disagreeing
+  #        with the DB's actual VARCHAR(50) (V40__drill_tags.sql:3)
+  #   AC5  Ledger hygiene: closes all 4 above with [CLOSED by skillars-deferred-25 ACn]
+  # DELIBERATELY EXCLUDED: 6 stale/superseded ledger items found during re-verification (V25 PK-collision
+  # guard already present; BookingStateChip CANCELLED entry not actually dead; resolveParentName "null
+  # null" unreachable due to NOT NULL columns; effectiveCredits no longer exists post-Story-11 rewrite;
+  # minimum booking duration now enforced by uat-2's exact-duration-match check; SessionPackPurchaseRepository's
+  # "duplicate" query already settled by deferred-15's own comment); deferred-24 review's V96-comment item
+  # (matches repo's no-comment convention, already explicitly deferred) and GUARD_PATH-duplication item
+  # (spec-directed, needs sign-off). See the story file's "Explicitly NOT in this story" section for full
+  # reasoning.
+  skillars-deferred-25-jpa-annotation-hygiene-and-stripe-metadata-test-coverage: done  # 2026-08-15: all 5 ACs implemented; code review found 0 AC violations and 0 unhandled edge cases; 2 test-coverage items deferred (CoachMediaItem @PrePersist has no reachable constructor to test yet; Booking updatable=false has no dedicated ignore-behavior assertion); 4 deferred-work.md items annotated [CLOSED by skillars-deferred-25 ACn], 2 new items logged; full mvn -o verify green

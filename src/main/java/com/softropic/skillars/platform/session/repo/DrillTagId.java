@@ -13,7 +13,7 @@ public class DrillTagId implements Serializable {
     @Column(name = "drill_id")
     private UUID drillId;
 
-    @Column(name = "tag")
+    @Column(name = "tag", length = 50)
     private String tag;
 
     @Column(name = "coach_id")
