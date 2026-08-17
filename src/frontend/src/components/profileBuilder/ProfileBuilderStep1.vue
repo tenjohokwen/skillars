@@ -6,7 +6,10 @@
       :label="t('auth.coach.step1DisplayName')"
       outlined
       lazy-rules
-      :rules="[v => !!v || t('validation.required'), v => v.length <= 120 || t('validation.maxLength', { max: 120 })]"
+      :rules="[
+        (v) => !!v || t('validation.required'),
+        (v) => v.length <= 120 || t('validation.maxLength', { max: 120 }),
+      ]"
       class="q-mb-sm"
     />
     <q-input
@@ -15,15 +18,10 @@
       type="textarea"
       outlined
       autogrow
-      :rules="[v => !v || v.length <= 2000 || t('validation.maxLength', { max: 2000 })]"
+      :rules="[(v) => !v || v.length <= 2000 || t('validation.maxLength', { max: 2000 })]"
       class="q-mb-sm"
     />
-    <q-banner
-      v-if="showContactWarning"
-      class="contact-warning q-mb-md"
-      rounded
-      dense
-    >
+    <q-banner v-if="showContactWarning" class="contact-warning q-mb-md" rounded dense>
       <template #avatar>
         <q-icon name="warning" />
       </template>
@@ -33,18 +31,10 @@
     <div class="text-label q-mb-sm q-mt-md">{{ t('auth.coach.step1SectionLocation') }}</div>
     <div class="row q-col-gutter-md q-mb-sm">
       <div class="col-12 col-sm-6">
-        <q-input
-          v-model="form.city"
-          :label="t('auth.coach.step1City')"
-          outlined
-        />
+        <q-input v-model="form.city" :label="t('auth.coach.step1City')" outlined />
       </div>
       <div class="col-12 col-sm-6">
-        <q-input
-          v-model="form.district"
-          :label="t('auth.coach.step1District')"
-          outlined
-        />
+        <q-input v-model="form.district" :label="t('auth.coach.step1District')" outlined />
       </div>
     </div>
 
@@ -56,7 +46,7 @@
       outlined
       multiple
       use-chips
-      :rules="[v => (v && v.length > 0) || t('validation.required')]"
+      :rules="[(v) => (v && v.length > 0) || t('validation.required')]"
       class="q-mb-md"
     />
 

@@ -193,7 +193,8 @@ export default {
       step3SessionDurationHelper:
         'Chaque créneau réservable de votre calendrier aura cette durée. Laissez la valeur par défaut si vous hésitez.',
       step3SessionPacks: 'Packs de séances (optionnel)',
-      step3PackHelper: "Proposez des forfaits multi-séances à prix réduit. Laissez vide si vous ne souhaitez que le tarif à la séance.",
+      step3PackHelper:
+        'Proposez des forfaits multi-séances à prix réduit. Laissez vide si vous ne souhaitez que le tarif à la séance.',
       step3PackEmpty: 'Aucun pack ajouté pour le moment.',
       step3AddPack: 'Ajouter un pack',
       step3PackSessions: 'Séances',
@@ -203,15 +204,18 @@ export default {
       step4Title: 'Disponibilité',
       step4Short: 'Disponibilité',
       step4AvailabilityWindows: 'Créneaux de disponibilité',
-      step4WindowHelper: 'Ajoutez au moins un créneau hebdomadaire pour que les parents sachent quand vous réserver.',
+      step4WindowHelper:
+        'Ajoutez au moins un créneau hebdomadaire pour que les parents sachent quand vous réserver.',
       step1SectionTimezone: 'Fuseau horaire',
       step4SectionTimezone: 'Fuseau horaire',
       step4TimezoneHelper: 'Les créneaux ci-dessus sont interprétés dans ce fuseau horaire.',
       timezoneLabel: 'Fuseau horaire',
       timezoneHint: 'Tapez pour rechercher, par ex. Europe/Berlin',
       timezoneNoMatch: 'Aucun fuseau horaire correspondant',
-      timezoneBrowserUnknown: 'Votre appareil indique le fuseau horaire {zone}, que ce serveur ne reconnaît pas. Veuillez choisir le plus proche ci-dessus.',
-      timezoneLoadFailed: 'Impossible de charger la liste des fuseaux horaires. Vérifiez votre connexion et réessayez.',
+      timezoneBrowserUnknown:
+        'Votre appareil indique le fuseau horaire {zone}, que ce serveur ne reconnaît pas. Veuillez choisir le plus proche ci-dessus.',
+      timezoneLoadFailed:
+        'Impossible de charger la liste des fuseaux horaires. Vérifiez votre connexion et réessayez.',
       step4WindowEmpty: 'Aucun créneau pour le moment — ajoutez-en un ci-dessous.',
       step4AddWindow: 'Ajouter un créneau',
       step4Day: 'Jour',
@@ -221,7 +225,7 @@ export default {
       step5Title: 'Photo de profil',
       step5Short: 'Photo',
       step5PhotoLabel: 'Photo de profil',
-      step5Helper: 'Une photo claire inspire confiance aux parents. JPG ou PNG, jusqu\'à 5 Mo.',
+      step5Helper: "Une photo claire inspire confiance aux parents. JPG ou PNG, jusqu'à 5 Mo.",
       step5Upload: 'Télécharger & Continuer',
       step5SkipLabel: "Ignorer pour l'instant",
       publishSuccess: 'Votre profil est en ligne ! Bienvenue sur Skillars.',
@@ -615,7 +619,8 @@ export default {
       noEntriesYet: 'Aucune évaluation enregistrée pour le moment',
       otherCoachCount: '{count} autre(s) coach(s) ont évalué {skill}',
       submitSuccess: 'Évaluation soumise avec succès',
-      submitErrorFeatureGated: 'Le radar de compétences nécessite le niveau Instructor ou supérieur',
+      submitErrorFeatureGated:
+        'Le radar de compétences nécessite le niveau Instructor ou supérieur',
       submitError: "Échec de la soumission de l'évaluation. Veuillez réessayer.",
       displayTitle: 'Radar de compétences',
       compareBaselineLabel: 'Comparer à la référence',
@@ -635,11 +640,11 @@ export default {
       },
       correlation: {
         insufficientData:
-          "Pas encore assez de données — continuez à enregistrer des séances. Minimum {count} séances requises.",
+          'Pas encore assez de données — continuez à enregistrer des séances. Minimum {count} séances requises.',
         academyFeatureTeaser: 'Fonctionnalité Academy — mettez à niveau pour débloquer',
         upgradeButton: 'Passer à Academy',
         noInsightsYet:
-          "Aucune information de corrélation pour le moment — enregistrez plus de séances avec différentes compétences.",
+          'Aucune information de corrélation pour le moment — enregistrez plus de séances avec différentes compétences.',
         excludedSkills:
           "{count} compétence | {count} compétences non affichées — aucune donnée d'entraînement enregistrée pour le moment.",
         insight: {
@@ -1177,7 +1182,8 @@ export default {
       reviewTitle: 'Vérifier les demandes de séance',
       creditPreview:
         '{credits} crédit(s) disponible(s) pour {count} séance(s) — tout déficit sera facturé au paiement',
-      sessionCountPreview: '{count} séance(s) — le paiement sera prélevé sur votre carte enregistrée',
+      sessionCountPreview:
+        '{count} séance(s) — le paiement sera prélevé sur votre carte enregistrée',
       confirmRequests: 'Confirmer les demandes',
       submitted: 'Demandes de séance soumises — le coach va les examiner',
       submitError: 'Impossible de soumettre les demandes de séance. Veuillez réessayer.',

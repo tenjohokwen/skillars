@@ -31,23 +31,30 @@
         <!-- Inline add/edit panel — always visible so coach never loses calendar context -->
         <div class="glass-card--static availability-page__panel q-mt-lg">
           <div class="text-subtitle2 q-mb-md">
-            {{ editingWindow ? t('booking.availability.editWindow') : t('booking.availability.addWindow') }}
+            {{
+              editingWindow
+                ? t('booking.availability.editWindow')
+                : t('booking.availability.addWindow')
+            }}
           </div>
 
           <div class="row q-col-gutter-sm">
             <div class="col-12 col-sm-3">
               <q-select
                 v-model="form.dayOfWeek"
-                outlined dense
+                outlined
+                dense
                 :label="t('common.day')"
                 :options="dayOptions"
-                emit-value map-options
+                emit-value
+                map-options
               />
             </div>
             <div class="col-12 col-sm-3">
               <q-input
                 v-model="form.startTime"
-                outlined dense
+                outlined
+                dense
                 type="time"
                 :label="t('common.startTime')"
               />
@@ -55,16 +62,21 @@
             <div class="col-12 col-sm-3">
               <q-input
                 v-model="form.endTime"
-                outlined dense
+                outlined
+                dense
                 type="time"
                 :label="t('common.endTime')"
               />
             </div>
             <div class="col-12 col-sm-3 flex items-end q-gutter-xs">
-              <q-btn unelevated color="primary" :label="t('common.save')"
-                     :loading="saving" @click="onSaveWindow" />
-              <q-btn v-if="editingWindow" flat :label="t('common.cancel')"
-                     @click="cancelEdit" />
+              <q-btn
+                unelevated
+                color="primary"
+                :label="t('common.save')"
+                :loading="saving"
+                @click="onSaveWindow"
+              />
+              <q-btn v-if="editingWindow" flat :label="t('common.cancel')" @click="cancelEdit" />
             </div>
           </div>
 
@@ -84,7 +96,8 @@
             <div class="col-12 col-sm-3">
               <q-input
                 v-model="blockForm.startDate"
-                outlined dense
+                outlined
+                dense
                 type="date"
                 :label="t('common.startDate')"
               />
@@ -92,7 +105,8 @@
             <div class="col-12 col-sm-3">
               <q-input
                 v-model="blockForm.startTime"
-                outlined dense
+                outlined
+                dense
                 type="time"
                 :label="t('common.startTime')"
               />
@@ -100,7 +114,8 @@
             <div class="col-12 col-sm-3">
               <q-input
                 v-model="blockForm.endDate"
-                outlined dense
+                outlined
+                dense
                 type="date"
                 :label="t('common.endDate')"
               />
@@ -108,7 +123,8 @@
             <div class="col-12 col-sm-3">
               <q-input
                 v-model="blockForm.endTime"
-                outlined dense
+                outlined
+                dense
                 type="time"
                 :label="t('common.endTime')"
               />
@@ -116,13 +132,19 @@
             <div class="col-12">
               <q-input
                 v-model="blockForm.reason"
-                outlined dense
+                outlined
+                dense
                 :label="t('common.reason') + ' (' + t('common.optional') + ')'"
               />
             </div>
             <div class="col-12">
-              <q-btn unelevated color="secondary" :label="t('booking.availability.addBlock')"
-                     :loading="savingBlock" @click="onSaveBlock" />
+              <q-btn
+                unelevated
+                color="secondary"
+                :label="t('booking.availability.addBlock')"
+                :loading="savingBlock"
+                @click="onSaveBlock"
+              />
             </div>
           </div>
 
@@ -159,8 +181,10 @@ const blockSaved = ref(false)
 
 const form = ref({ dayOfWeek: 1, startTime: '09:00', endTime: '11:00' })
 const blockForm = ref({
-  startDate: '', startTime: '00:00',
-  endDate: '', endTime: '23:59',
+  startDate: '',
+  startTime: '00:00',
+  endDate: '',
+  endTime: '23:59',
   reason: '',
 })
 
@@ -179,7 +203,8 @@ const weekLabel = computed(() => {
   const start = new Date(currentWeekStart.value + 'T00:00:00')
   const end = new Date(start)
   end.setDate(start.getDate() + 6)
-  const fmt = (d) => new Intl.DateTimeFormat(locale.value, { month: 'short', day: 'numeric' }).format(d)
+  const fmt = (d) =>
+    new Intl.DateTimeFormat(locale.value, { month: 'short', day: 'numeric' }).format(d)
   return `${fmt(start)} – ${fmt(end)}`
 })
 
@@ -245,7 +270,9 @@ async function onSaveWindow() {
     }
     cancelEdit()
     windowSaved.value = true
-    setTimeout(() => { windowSaved.value = false }, 3000)
+    setTimeout(() => {
+      windowSaved.value = false
+    }, 3000)
   } catch (e) {
     saveError.value = e?.response?.data?.message ?? e?.message ?? 'Failed to save window'
   } finally {
@@ -271,15 +298,21 @@ function localDateTimeToUtc(dateStr, timeStr, tz) {
   // Find the UTC offset for this wall-clock time in the target timezone
   const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone: tz,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
     hour12: false,
   })
   // Determine offset by comparing UTC date parts to localized date parts
   const nowUtc = new Date(naiveIso + 'Z')
   const localParts = formatter.formatToParts(nowUtc)
-  const get = (type) => Number(localParts.find(p => p.type === type)?.value ?? 0)
-  const localDate = new Date(Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second')))
+  const get = (type) => Number(localParts.find((p) => p.type === type)?.value ?? 0)
+  const localDate = new Date(
+    Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second')),
+  )
   const offsetMs = nowUtc - localDate
   return new Date(new Date(naiveIso + 'Z').getTime() + offsetMs).toISOString()
 }
@@ -306,9 +339,17 @@ async function onSaveBlock() {
       endDatetime,
       reason: blockForm.value.reason || null,
     })
-    blockForm.value = { startDate: '', startTime: '00:00', endDate: '', endTime: '23:59', reason: '' }
+    blockForm.value = {
+      startDate: '',
+      startTime: '00:00',
+      endDate: '',
+      endTime: '23:59',
+      reason: '',
+    }
     blockSaved.value = true
-    setTimeout(() => { blockSaved.value = false }, 3000)
+    setTimeout(() => {
+      blockSaved.value = false
+    }, 3000)
   } catch (e) {
     blockSaveError.value = e?.response?.data?.message ?? e?.message ?? 'Failed to save block'
   } finally {
@@ -345,7 +386,9 @@ onMounted(async () => {
   margin: 0 auto;
 }
 
-.availability-page__container { width: 100%; }
+.availability-page__container {
+  width: 100%;
+}
 
 .availability-page__header {
   margin-bottom: 24px;

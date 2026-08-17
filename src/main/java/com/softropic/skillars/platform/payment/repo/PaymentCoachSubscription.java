@@ -16,6 +16,15 @@ import lombok.extern.slf4j.Slf4j;
 import java.time.Instant;
 import java.util.UUID;
 
+// No stripe_customer_id column here (dropped by V96, field removed by skillars-deferred-24): the
+// coach's Stripe customer is looked up via StripeCustomer, whose @Id is StripeCustomer.parentId
+// (payment.stripe_customers.parent_id, a bare BIGINT with no FK). Despite that field's name, the value
+// passed for a coach is the coach's own user id (main.user.id) — NOT this entity's coachId
+// (marketplace.coach_profiles.id). See SubscriptionService.subscribeCoach(UUID coachId, Long
+// coachUserId, String tier), which keeps the two deliberately separate and whose lookup is
+// stripeCustomerRepository.findById(coachUserId). A dedicated column here would be redundant with
+// that lookup. It was only ever hand-seeded by test SQL, never written by production code, and
+// payment.player_subscriptions — the equivalent table for the pattern this one mirrors — never had it.
 @Entity
 @Table(schema = "payment", name = "coach_subscriptions")
 @Getter

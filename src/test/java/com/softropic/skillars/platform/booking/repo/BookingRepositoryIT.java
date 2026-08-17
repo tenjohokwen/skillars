@@ -2,13 +2,13 @@ package com.softropic.skillars.platform.booking.repo;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
-
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -108,6 +108,35 @@ class BookingRepositoryIT extends AbstractIntegrationTest {
             coachId, existingStart, existingEnd, List.of("DECLINED"), null);
 
         assertThat(result).isEmpty();
+    }
+
+    // AC2 (skillars-deferred-27): Booking.parentId/playerId/coachId are annotated updatable = false
+    // (Booking.java:31-38) but no test proved Hibernate actually excludes them from the generated
+    // UPDATE statement, only that no current code path mutates them. updatable = false is silently
+    // ignored, not exception-throwing, so the assertion is "value unchanged after mutate+flush+reload".
+    @Test
+    void updatableFalseColumns_mutationIsIgnoredAfterFlushAndReload() {
+        Booking existing = seedExisting();
+        UUID bookingId = existing.getId();
+        Long originalParentId = existing.getParentId();
+        Long originalPlayerId = existing.getPlayerId();
+        UUID originalCoachId = existing.getCoachId();
+
+        Booking managed = bookingRepository.findById(bookingId).orElseThrow();
+        managed.setParentId(originalParentId + 1);
+        managed.setPlayerId(originalPlayerId + 1);
+        managed.setCoachId(UUID.randomUUID());
+        bookingRepository.saveAndFlush(managed);
+
+        // This second findById is a genuine DB round-trip, not a persistence-context hit: this class has
+        // no @Transactional (nor does AbstractIntegrationTest), so each repository call opens and closes
+        // its own transaction and its own persistence context. OSIV is disabled (application.yaml) and no
+        // Hibernate L2 cache is configured, so nothing can serve a stale read.
+        Optional<Booking> reloaded = bookingRepository.findById(bookingId);
+        assertThat(reloaded).isPresent();
+        assertThat(reloaded.get().getParentId()).isEqualTo(originalParentId);
+        assertThat(reloaded.get().getPlayerId()).isEqualTo(originalPlayerId);
+        assertThat(reloaded.get().getCoachId()).isEqualTo(originalCoachId);
     }
 
     private Booking seedExisting() {

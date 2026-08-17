@@ -23,10 +23,22 @@
           />
         </div>
         <div class="col-5 col-sm-3">
-          <q-input v-model="win.startTime" :label="t('auth.coach.step4Start')" outlined dense type="time" />
+          <q-input
+            v-model="win.startTime"
+            :label="t('auth.coach.step4Start')"
+            outlined
+            dense
+            type="time"
+          />
         </div>
         <div class="col-5 col-sm-3">
-          <q-input v-model="win.endTime" :label="t('auth.coach.step4End')" outlined dense type="time" />
+          <q-input
+            v-model="win.endTime"
+            :label="t('auth.coach.step4End')"
+            outlined
+            dense
+            type="time"
+          />
         </div>
         <div class="col-2 flex items-center justify-end">
           <q-btn
@@ -115,13 +127,14 @@ function removeWindow(i) {
 }
 
 function submit() {
-  const valid = form.windows.length > 0 && form.windows.every(w => w.dayOfWeek && w.startTime && w.endTime)
+  const valid =
+    form.windows.length > 0 && form.windows.every((w) => w.dayOfWeek && w.startTime && w.endTime)
   // canonicalTimezone joins the guard for the same reason as Step 1: @NotBlank would 400, and the
   // picker exists so the coach always holds a value the server will accept.
   if (!valid || !canonicalTimezone.value) return
   store.setSelectedTimezone(canonicalTimezone.value)
   emit('submit', {
-    windows: form.windows.map(w => ({
+    windows: form.windows.map((w) => ({
       dayOfWeek: w.dayOfWeek,
       startTime: w.startTime,
       endTime: w.endTime,
