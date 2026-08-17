@@ -206,8 +206,13 @@ async function submitReschedule() {
     await bookingStore.handleRequestReschedule(rescheduleBookingId.value, data)
     rescheduleDialogOpen.value = false
     $q.notify({ message: t('booking.reschedule.requestSent'), type: 'positive' })
-  } catch {
-    $q.notify({ message: t('booking.reschedule.requestFailed'), type: 'negative' })
+  } catch (err) {
+    const errorKey = err?.response?.data?.errorMsg?.errorKey
+    if (errorKey === 'booking.invalidSessionDuration') {
+      $q.notify({ message: t('booking.errors.invalidSessionDuration'), type: 'negative' })
+    } else {
+      $q.notify({ message: t('booking.reschedule.requestFailed'), type: 'negative' })
+    }
   } finally {
     reschedulingId.value = null
   }

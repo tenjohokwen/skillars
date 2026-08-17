@@ -1,249 +1,395 @@
-# Senior-Dev Review — Story Deferred-19: Integration-Test Context & Container Consolidation
+# Senior-Dev Review — Story `skillars-deferred-28-booking-error-messaging-subscription-coverage-and-media-timestamp-test`
 
-**Story reviewed:** `_bmad-output/implementation-artifacts/skillars-deferred-19-test-context-container-consolidation.md`
-**Tree at:** `21ef489`
-**Date:** 2026-08-07
-**Scope:** missed corner cases, false assumptions, missed flows, and whether the proposed solutions are enforceable by GitHub CI.
+Reviewer: senior dev (adversarial audit for missed corner cases, false assumptions, missed flows)
+Date: 2026-08-17
+Story reviewed: `_bmad-output/implementation-artifacts/skillars-deferred-28-booking-error-messaging-subscription-coverage-and-media-timestamp-test.md` (status `ready-for-dev`)
+Verified against: working tree at branch `repo-ordering-test-coverage`, HEAD `efafd54`
 
-Findings are evidence-cited. A "Checked and found sound" section at the end records what was verified and cleared, so the absence of a finding is deliberate rather than an omission.
+> **Supersedes** the previous contents of this file, which reviewed the earlier draft
+> (`skillars-deferred-27-test-coverage-and-booking-error-messaging-fixes.md`, now deleted). The story's
+> References entry "[Source: story-review.md] — senior-dev review of this story's draft" now resolves to
+> *this* document, not the draft review it means. Fix that citation or drop it.
 
-**Verdict:** AC1, AC2, AC7 and AC9 are sound and shippable. **AC5 cannot be implemented as written** — Blocker 1 breaks the suite, and Major 2/3 are consequences of AC2 that AC5 amplifies rather than mitigates. Blockers 2 and 3 mean the problem statement and the success criteria both need re-baselining on CI before work starts.
+Every finding below was confirmed by reading current source. Line numbers were re-derived at review time,
+not taken from the story's own citations.
 
 ---
 
-## BLOCKER 1 — AC5's truncate permanently destroys Flyway-seeded reference data
+## Verdict
 
-AC5 excludes exactly three things (`flyway_schema_history`, `main.shedlock`, `qrtz_*`) and directs the implementer to enumerate everything else from `information_schema`. It misses an entire *category*: tables that Flyway seeds with reference data.
+**Rework AC2, AC3 and AC4 before handoff. AC1 and AC5 ship as written.**
 
-**33 of the 91 migrations contain `INSERT INTO`.** The ones that matter:
+The rework did its job on everything the previous review raised: the ID collision is resolved, the two
+already-closed items are gone, `helpCode` → `errorMsg.errorKey` is corrected and correctly explained,
+the reschedule branch is narrowed to one code, the `SessionPackPaymentResourceIT`/`BasePaymentIT`
+contradiction is resolved, and the `permitAll()`-still-401s reasoning is now right. No item is
+pre-closed this time — all five carry live `[OWNED BY skillars-deferred-28 ACn]` markers in the ledger
+and `sprint-status.yaml:1007` exists at `ready-for-dev`.
 
-| Migration | Seeds |
+What remains:
+
+- **AC2 reintroduces, for the batch flow, the exact defect the last review caught for reschedule** — two
+  of its six branches are wired to a flow that structurally cannot throw them (B1).
+- **AC2's prescribed English copy states the wrong batch limit** — it says 10, the configured limit is 5
+  (B3).
+- **AC3's mock list is two beans short of what the slice needs**; as specified the test class will not
+  start (B2).
+- **AC4 tells the dev to write a comment whose stated reason is false** (M1).
+
+---
+
+## Blockers
+
+### B1 — AC2 wires two impossible codes into `submitBatchRequest()`; the "shared coach-suspension check" claim is false
+
+AC2 states:
+
+> `booking.coachUnavailable` — `BookingError.COACH_UNAVAILABLE` — single booking create, **batch create**
+> (both go through the shared coach-suspension check)
+> `booking.slotUnavailable` — `BookingError.SLOT_UNAVAILABLE` … — single booking create, **batch create**
+
+and Task 2 accordingly says `submitBatchRequest()` should "branch on the same field for **all 6 codes**".
+
+`createBatch` (`BookingBatchService.java:95-219`) — the only backend method behind
+`submitBatchRequest()` — throws exactly **four** of the six:
+
+| Code | Line |
 |---|---|
-| V20, V25, V57, V64, V85, V90 | `main.platform_config` — age policy, moderation config, subscription tiers, phone-OTP toggle, payment-sweep config |
-| V39 | `session.drills` — 20 `PLATFORM` foundation drills |
-| V21 | `main.authority` |
+| `booking.batchSizeExceeded` | `:98` |
+| `booking.invalidSessionDuration` | `:139` |
+| `booking.duplicateSlotStartTime` | `:159` |
+| `booking.overlappingSlots` | `:179` |
 
-Flyway will **not** re-insert them: the history row is intact, so the second and subsequent context runs are the no-op validation passes the story itself describes (AC1.5). The first truncated test method destroys this data for the remainder of the JVM.
+It never throws `COACH_UNAVAILABLE` and never throws `SLOT_UNAVAILABLE`:
 
-Concrete breakage, not speculation:
+- **There is no shared coach-suspension check.** `createBatch:115-117` is its own inline check —
+  `if (coach.getStatus() != CoachProfileStatus.ACTIVE) throw new OperationNotAllowedException("Coach
+  profile is not active", SecurityError.MISSING_RIGHTS)`. It collapses *every* non-ACTIVE status,
+  SUSPENDED included, into `MISSING_RIGHTS`. `BookingService.createBookingRequest` by contrast has two
+  separate suspension checks (`:179` unlocked, `:239` under the pessimistic lock) that *do* emit
+  `COACH_UNAVAILABLE`, then a separate non-active check emitting `MISSING_RIGHTS` (`:184`, `:244`).
+  Three independent checks, two different codes, nothing shared.
+- **`createBatch` has no cross-booking overlap check at all.** Its only overlap logic
+  (`:173-181`) compares batch slots against *each other* and raises `booking.overlappingSlots`. There is
+  no `findOverlappingBookings` call anywhere in the method — that check exists only in
+  `createBookingRequest:247-255`.
 
-- `DrillLibraryResourceIT.java:96` — `SELECT id FROM session.drills WHERE library_type = 'PLATFORM' AND status = 'ACTIVE' LIMIT 1`. That row exists only because of V39.
-- `ConfigResourceIT`, `ConfigGuardIT`, `SubscriptionLifecycleIT`, `VideoSubscriptionLifecycleListenerIT` all read `main.platform_config`.
+**The DB-constraint fallback does not rescue it either.** AC2 claims `booking.slotUnavailable` is "also
+raised directly by `ApiAdvice`'s `excl_bkg_coach_slot_overlap` constraint mapping … — single booking
+create, batch create". The constraint's partial predicate
+(`V87__booking_overlap_exclusion_constraint.sql:20-22`) is
+`WHERE status IN ('ACCEPTED','PAYMENT_PENDING','CONFIRMED','UPCOMING','IN_PROGRESS','PAUSED')` — REQUESTED
+is *deliberately* excluded, with a five-line comment in the migration saying so. Both parent create paths
+insert REQUESTED: `createBatch:195` sets it explicitly, and `createBookingRequest:279-288` sets no status
+at all so `Booking.java:90`'s `if (status == null) status = "REQUESTED"` applies. **So the constraint
+cannot fire on either parent-side create — it fires only on the coach-side accept**, which this AC puts
+out of scope.
 
-This works **today** precisely because no cleaner touches those tables. Every existing delete is targeted:
+This is the same class of error as the previous review's M1 (reschedule branching on codes it cannot
+receive), corrected there and reintroduced here for batch.
 
-- `SimultaneousExpiryIT.java:74` — `DELETE FROM main.platform_config WHERE id IN (8201, 8202)`
-- `YearlyExemptionRenewalIT.java:69` — `DELETE FROM main.platform_config WHERE id IN (8101, 8102)`
-- `BookingBatchResourceIT.java:164` — `DELETE FROM main.platform_config WHERE id = 50`
-- `DrillTagResourceIT.java:87` — deletes only drills owned by the test's own coach ids
+**Action:**
+- `submitBatchRequest()` branches on **four** codes: `batchSizeExceeded`, `invalidSessionDuration`,
+  `duplicateSlotStartTime`, `overlappingSlots`.
+- Delete "batch create" from the `coachUnavailable` and `slotUnavailable` rows, and delete the
+  "(both go through the shared coach-suspension check)" parenthetical — it is false.
+- Rewrite the `excl_bkg_coach_slot_overlap` sentence: that mapping is reachable from the coach accept
+  path only, not from either flow in this AC's scope.
+- `submit()` (single create) is unaffected — all three of its codes are genuinely reachable
+  (`:179`/`:239` COACH_UNAVAILABLE, `:215` INVALID_SESSION_DURATION, `:254` SLOT_UNAVAILABLE). Keep it as
+  specified.
 
-`DbCleaner.cleanDb()` and `TestDataCleaner.wipeAll()` never mention `platform_config` or `drills`.
+### B2 — AC3's mock list is incomplete; the test class will not start
 
-AC5.5's prescription — *"Fix them by adding the missing seed to the class, not by weakening the reset"* — is the wrong instruction for this case. Re-seeding migration reference data into ~130 classes is not a latent defect being surfaced; it is the reset being wrong.
+AC3 says:
 
-**Required change.** AC5 needs a fourth rule: restore reference data, not merely exclude infrastructure tables. Cheapest correct shape is to capture the reference rows once after the first context's Flyway run (or keep a `reference-seed.sql` that the listener replays after truncation). Add an explicit AC enumerating the reference tables, plus a check that keeps the list in sync when a new seeding migration lands.
+> `@MockitoBean` the resource's **three** dependencies — `SubscriptionService`, `CoachProfileRepository`,
+> `SecurityUtil` — the same way `PlayerSubscriptionOwnershipIT` mocks its own controller-adjacent beans.
+
+`PlayerSubscriptionOwnershipIT` mocks **six** (`:71-76`), and two of the extra three are not about
+`PlayerOwnershipGuard` — they are what makes the MVC slice bootable at all:
+
+- `JwtSecretService` — `SecurityAdviceFilter` is a `@Component` extending `OncePerRequestFilter`
+  (`SecurityAdviceFilter.java:34-46`), so `@WebMvcTest` includes it, and its constructor requires
+  `JwtSecretService`.
+- `VideoMetrics` — `VideoApiAdvice` is `@RestControllerAdvice` (`VideoApiAdvice.java:39-42`), so
+  `@WebMvcTest` includes it, and it requires `VideoMetrics`.
+
+`SessionPackPaymentResourceIT` — the other `@WebMvcTest` in this same package — mocks both for the same
+reason (`:72-73`). Two independent precedents, same two beans.
+
+Following AC3 literally produces a context-load failure, and the dev spends the session debugging Spring
+wiring instead of writing the nine tests.
+
+`PlayerProfileRepository` is genuinely *not* needed — it exists in the precedent only to feed the real
+`PlayerOwnershipGuard`, which the new class does not `@Import`.
+
+**Action:** AC3 should say "mock the same set `PlayerSubscriptionOwnershipIT` mocks, minus
+`PlayerProfileRepository`: `SubscriptionService`, `CoachProfileRepository`, `SecurityUtil`,
+`JwtSecretService`, `VideoMetrics`" — and say *why* the last two are there, so a future reader doesn't
+prune them again.
+
+### B3 — AC2's prescribed English copy for `batchSizeExceeded` states the wrong limit
+
+AC2 prescribes: `booking.batchSizeExceeded=You can request up to 10 sessions in one batch.`
+
+The limit is `configService.getLong("booking.batch.maxSize")` (`BookingBatchService.java:96`), seeded to
+**`'5'`** by `V36__booking_batches.sql:19` and changed by no later migration
+(`grep -rn "booking.batch.maxSize" src/main/resources/db/migration/` returns that one line).
+
+The 10 comes from `CreateBatchRequest`'s `@Size(min = 1, max = 10)` — a **different** rejection producing
+a **different** key: `MethodArgumentNotValidException` → `ApiAdvice.methodArgumentNotValidExceptionHandler`,
+never `booking.batchSizeExceeded`. So as specified this AC ships a user-facing number that is wrong for
+the error it is attached to, translated into German and French as well.
+
+It is also unnecessary. The page already holds the real value: `maxBatchSize` (`BookingRequestPage.vue:258`,
+populated from `getBatchConfig()` at `:530`), used by `batchAtMax` (`:262`) and `toggleSlotInBasket`
+(`:300`), and the neighbouring i18n key already parameterizes it —
+`booking.batch.selectedCount: '{n} of {max} slots selected'` (`en-US/index.js:901`).
+
+**Action:** `'You can request up to {max} sessions in one batch.'`, passed
+`t('booking.errors.batchSizeExceeded', { max: maxBatchSize.value })`, mirrored in de-DE/fr-FR. The
+backend `messages*.properties` entry cannot be parameterized (the throw site passes no args —
+`BatchRuleViolationException("booking.batchSizeExceeded")`), so word that one without a number.
 
 ---
 
-## BLOCKER 2 — the 30:45 baseline is a local-machine artifact; CI already runs the whole build in ~10 minutes
+## Material spec errors
 
-The story's ROI framing rests on `mvn -o verify` taking 30:45 with ~74 containers saturating the Docker daemon. On GitHub Actions that is not what happens.
+### M1 — AC4 prescribes a comment whose stated reason is false
 
-PR run `28624816025` (`pr-build.yml`, `ubuntu-latest`, 4 vCPU):
+AC4 requires the comment to state that a negative `hoursUntilSession`
 
-- job start `22:11:23`
-- Testcontainers active by `22:14:22` (MinIO health wait)
-- failsafe summary at `22:21:21`: `Tests run: 823, Failures: 0, Errors: 1, Skipped: 4`
-- **total job: 10m05s**, including checkout, JDK setup, the full frontend build, the integration suite at the unrefactored 37 contexts, a Docker image build, and a Trivy scan.
+> reflects a caller using the wrong event rather than a refund-logic bug … a booking whose session start
+> has already passed should have been settled via a `NO_SHOW_COACH`/`NO_SHOW_PLAYER` event, not a late
+> parent cancellation
 
-The un-refactored suite, with ~74 containers, already lands inside the story's projected post-refactor "8–15 min range" on CI. The 30:45 and the Docker saturation are a macOS / Docker-Desktop-VM phenomenon.
+`cancelBookingAsParent` (`BookingService.java:610-662`) is the ordinary parent-facing cancel path and it
+fires exactly `BookingEvent.CANCEL_PARENT` (`:653`). It has **no start-time guard**: it checks ownership,
+reads the locked row, refuses only on `PAYMENT_PENDING` + `CAPTURE_PENDING` (`:639-643`), and transitions.
+A booking still sitting in UPCOMING past its start time — the coach never started the session — is
+cancellable by the parent through the normal UI, and lands squarely in the negative branch.
+`CANCEL_PARENT` is the *correct* event there; nothing in the code routes that parent to a `NO_SHOW_*`
+event, and nothing else can fire one on their behalf.
 
-This does **not** invalidate the refactor — 37 contexts arising from 7 genuinely distinct configurations is a real defect, and AC7 is worth having regardless. It does invalidate:
+So the prescribed comment documents a reachable product behaviour as caller error. That is worse than no
+comment: it tells the next reader the branch is unreachable-by-design and closes off the question. And the
+question is live — the most likely real-world instance is a coach no-show, which is precisely where
+`"NONE"` is the harshest of the three outcomes.
 
-- the "Why this story exists" framing and the Dev Notes projection;
-- Task 1 and Task 11, which measure only locally and will therefore produce numbers nobody else can reproduce.
+**Action:** either
+- document what is actually true — no guard prevents a post-start parent cancellation, the value goes
+  negative, and it falls through to `"NONE"`; whether that case should instead settle as a coach no-show
+  is an open product question — and file that question as a ledger item; or
+- drop AC4 from this story and file it as the product question it is.
 
-Note also that CI reports **823** integration tests against the story's baseline of **905**. The two baselines are not measuring the same thing. Task 11 already flags that the last three stories miscounted; this is another instance. Both counts must be pinned on CI.
+Do not have the dev assert an intent the code does not have.
 
----
+**Adjacent, pre-existing, do not fix here (worth a ledger item):** `cancelBookingAsParent:647-649`
+computes a *second, independent* refund rule —
+`refundEligible = paymentWasCaptured && requestedStartTime.isAfter(now.plus(24, HOURS))` — and puts it on
+`BookingCancelledByParentEvent`, while `applyRefundLogic` writes the three-tier FULL/PARTIAL/NONE onto the
+row. For a cancellation 6–24 h out the row says `"PARTIAL"` and the event says not-eligible. AC4's
+one-line comment sits directly on top of that divergence.
 
-## BLOCKER 3 — CI is red and has been for five consecutive runs
+### M2 — AC3's stated gap includes request validation, but its prescribed coverage never exercises it
 
-Every recent `pr-build` run failed. The failure:
+AC3 justifies itself with:
+
+> only the service-layer `SubscriptionLifecycleIT.java` exists … (auth annotations, **request validation**,
+> response serialization are all untested for these nine)
+
+Its "Minimum coverage" list is happy-path plus role/401 only. No case sends an invalid body, so after the
+AC is complete request validation is still untested — the rationale and the deliverable disagree.
+
+This is one cheap case away from being true: every request record carries `@NotNull` on every field —
+`CoachSubscribeRequest(@NotNull String tier)`, `CoachChangeTierRequest(@NotNull String newTier)`,
+`PlayerSubscribeRequest(@NotNull Long playerId, @NotNull String tier, @NotNull String billingInterval)`,
+`PlayerChangeTierRequest(@NotNull Long playerId, @NotNull String newTier)`.
+
+**Action:** add one 400 case (e.g. `POST /player/subscribe` with `{}`), or strike "request validation"
+from the rationale. Prefer the former — it is three lines.
+
+**Also worth stating explicitly in AC3:** because `SubscriptionService` is `@MockitoBean`-mocked, the
+ownership enforcement protecting the three `playerId`-taking mutations is invisible to these tests. It
+lives entirely inside the service — `assertPlayerOwnership` at `SubscriptionService.java:276`
+(`subscribePlayer`), `:339` (`changePlayerTier`), `:414` (`cancelPlayerSubscription`). **There is no
+IDOR** — those endpoints are properly guarded, unlike what their bare `@PreAuthorize(HAS_PARENT_ROLE)`
+suggests at a glance. But a reader of "9 endpoints now have HTTP-level coverage" would reasonably assume
+the check was tested, and it is not. One sentence in the AC prevents a false sense of coverage.
+
+### M3 — AC2's verification plan will regress Prettier on four currently-clean files
+
+AC2 requires only `npx eslint` clean. Checked at review time from `src/frontend`:
 
 ```
-SecurityFilterChainIT.test2FAFilterBlocksAccessUntilVerified » ScriptStatementFailed
-  Failed to execute SQL script statement #1 of class path resource [sql/userData.sql]:
-  INSERT INTO main."user" (id, ...) VALUES (586920556720583008, ...)
+npx prettier --check src/i18n/{en-US,de-DE,fr-FR}/index.js \
+  src/pages/parent/BookingRequestPage.vue src/pages/parent/ParentBookingsPage.vue
+→ [warn] src/pages/parent/ParentBookingsPage.vue   ← only this one
 ```
 
-That is the non-idempotent fixed-PK insert AC5 describes — failing **on CI but not locally**, i.e. an ordering/timing-dependent failure the local run hides.
+The three i18n bundles and `BookingRequestPage.vue` are **currently Prettier-clean** — and the bundles are
+clean precisely because merged deferred-27 AC6 just cleaned them (`deferred-work.md:1245` records the
+`prettier --write` on exactly those three files). Hand-adding six keys per bundle is very likely to
+re-break them, silently undoing that work.
 
-Consequences the story does not account for:
+**Action:** add `npx prettier --check` on the touched files to Task 2, and `--write` on the four that are
+clean today. Leave `ParentBookingsPage.vue`'s pre-existing violation alone (in scope creep terms it is the
+same call deferred-27 made about the wider ~124-file debt).
 
-- "Keep the suite green at each step" (the Acceptance Criteria preamble) and every "Full verify" checkpoint are unverifiable on CI right now.
-- Regressions introduced by this refactor will be indistinguishable from the pre-existing failure.
+### M4 — AC6 under-specifies the ledger convention it claims to follow, and ignores the `[OWNED BY]` markers already present
 
-**Add a Task 0:** get `pr-build` green — or record the exact known failure set as the baseline — before AC1 lands, and push a PR at each task boundary. Otherwise the CI-only failure class stays invisible until Task 11.
+All five target items already carry an ownership marker placed during story creation:
+`deferred-work.md:809` (AC4), `:1120` (AC5), `:1253` (AC2), `:1387` (AC3), `:1439` (AC1) — each
+`[OWNED BY skillars-deferred-28 ACn — see …]`.
 
-Separately, the same log shows the suite making **real outbound SMTP calls**: `MailService.sendEmailFromTemplate` → `mail.gmx.net` → `jakarta.mail.AuthenticationFailedException: 535 Authentication credentials invalid`. This is independent evidence *for* AC3's global `enable.test.mail: true`, which the story currently justifies only on context-count grounds. It also means the flip may change behaviour in any test that today silently tolerates the send failure.
+AC6 says to "append the closure note the same way `skillars-deferred-24/-25/-26/-27` did". What those
+stories actually did (`:569`, `:700`, `:748`, `:768`, `:784`, `:818`, `:852`, `:1245`, `:1435`, `:1440`,
+`:1448`, `:1449`) is **replace** the ownership marker with `[CLOSED by … ACn]` **followed by a substantive
+prose summary of what was done** — often several sentences, including corrections found in review. AC6 as
+written yields a bare marker sitting next to a now-stale `[OWNED BY]` on the same line, matching none of
+the twelve precedents.
 
----
-
-## MAJOR 1 — AC4.3 is built on a false premise
-
-The story states:
-
-> *"Once a mock is shared across ~90 classes in one context, a `when(...)` from one class survives into the next… This is a new requirement introduced by this story."*
-
-It is not. In spring-test 6.2.16 (Boot 3.5.11), `MockitoBean.java:199`:
-
-```java
-MockReset reset() default MockReset.AFTER;
-```
-
-with the javadoc *"mocks are automatically reset after each test method is invoked"*, enforced by `MockitoResetTestExecutionListener` (a default listener). Cross-class stub leakage is already prevented today and remains prevented after the hoist.
-
-The explicit `Mockito.reset(...)` is harmless, but stating it as *the* risk **displaces the real one**: hoisting a `@MockitoBean` to a base class replaces the real bean for all ~90 subclasses. AC4.2 catches this for `VideoProviderAdapter` and `FileStorageService` — but AC4.1 hoists `GeminiClient` to the root with no equivalent check, even though `application-test.yaml:52` points Gemini at `${wiremock.server.baseUrl:http://localhost:9999}`, i.e. a WireMock path exists for it.
-
-**Required change.** Apply AC4.2's own trap-check to `GeminiClient` before hoisting. Reword AC4.3 to: *verify Spring's automatic `MockReset.AFTER` covers the shared mocks; add explicit resets only for `@MockitoSpyBean` and stateful stubs.*
+**Action:** AC6 should say: replace each `[OWNED BY skillars-deferred-28 ACn …]` with
+`[CLOSED by skillars-deferred-28 ACn]` plus a short description of the actual change, per the existing
+entries at `:1440`/`:1448`/`:1449`.
 
 ---
 
-## MAJOR 2 — consolidation unleashes 31 schedulers across the whole run; AC3 disables four
+## Minor
 
-`AsyncConfig.java:25` declares `@EnableScheduling` unconditionally. `src/main` contains **31 `@Scheduled` methods and 11 `@SchedulerLock` jobs**. Several have very short delays and are *not* neutralized in `application-test.yaml`:
-
-| Job | Delay |
-|---|---|
-| `OutboxPollerScheduler`, `DeletionSchedulerService` | `${app.storage.poller.fixed-delay-ms:5000}` — **5 s** |
-| `MessagingEmitterRegistry`, `AlertEvaluationService` | 30 s |
-| `EmailRetryScheduler`, `AlertRuleCache`, `QuotaReservationTimeoutService`, `VideoSubscriptionLifecycleListener` | 60 s |
-| `QuickCompleteTimeoutService`, `BookingReminderScheduler`, `BookingExpiryScheduler` | 5 min |
-| `PaymentPendingSweeper` | 15 min |
-| `SessionPackForfeitureScheduler` | 60 min |
-
-Today, context fragmentation caps each scheduler's blast radius at one context group's lifetime. After AC2/AC3, **one** context lives for the entire failsafe run with all 31 threads writing to the same database the tests assert on. AC3 moves only four *video* delays to global scope.
-
-Worse, AC5.1 prescribes backdating **all** shedlock rows on **every** test method. That is correct as a replacement for the delete — the deferred-15 reasoning is sound — but universalizing it makes all 11 locked jobs eligible on all ~905 methods. The story's own AC5 fix amplifies the AC2 hazard.
-
-Two further mechanical risks in the same area, unaddressed:
-
-- `TRUNCATE` takes `ACCESS EXCLUSIVE`. Issuing it ~905 times against a database with live scheduler connections is a lock-contention and deadlock exposure, not just a cost question. AC5.5 asks only for a timing measurement.
-- The story excludes `qrtz_*` because a clustered check-in thread writes concurrently (correct — `org.quartz.jobStore.isClustered: true`, 20 s check-in interval). The same argument applies to every table the 31 schedulers touch, and is not made.
-
-**Required change.** Add an AC that globally neutralizes scheduling under the `test` profile — a conditional on `AsyncConfig`'s `@EnableScheduling`, or a systematic delay sweep in `application-test.yaml` — with the tests that need a sweeper invoking it directly.
-
----
-
-## MAJOR 3 — truncate vs. in-application caches
-
-`ConfigService` caches `main.platform_config` in-process on a `@Scheduled(fixedDelayString = "${app.config.cache-ttl-seconds:300}")` refresh; `AlertRuleCache` does the same for alert rules. Truncating the database under a **long-lived** context leaves those caches holding rows that no longer exist, and leaves a test that seeds config racing a 300-second refresh. Context churn made this self-healing today.
-
-**Required change.** The reset listener must evict application-level caches, or the caches need a test-visible reset hook.
-
----
-
-## MODERATE
-
-### M1 — `SharedContainers` as one static initializer starts MinIO for every JVM
-
-`MinioTestConfig`'s own javadoc states it is *"deliberately kept out of `TestConfig` so tests that never touch blob storage don't pay for a MinIO container and bucket-creation on every context startup."* A single class holding three `static final` fields discards that intent. Use separate lazy holder classes so MinIO starts only when the storage family runs — this matters for `-Dit.test=X` single-class iteration, which is the workflow the story is trying to make fast.
-
-### M2 — the static Postgres container loses its database name
-
-Today `postgresContainer(@Value("${spring.application.name}") String dbName)` reads the name from the Spring context. A static container cannot. Pick a fixed name explicitly and confirm nothing binds to it. AC1's task list omits this.
-
-### M3 — AC6's verification command can never pass
-
-AC6 says: *"Confirm with `grep -rn "ledger" src/` returning nothing."* `ledger` is a live domain concept in this codebase: `V79__credit_ledger_append_only.sql`, `V62__session_payment_credit_wallet.sql`, `CreditWalletService`, `ParentCreditLedger`, `PaymentPendingSweeper`, and `application.yaml`'s access log (`directory: /usr/local/var/ledger`, `suffix: .ledger`). The correct check is `grep -rn "ledger.database.spy" src/`.
-
-H1's underlying claim is correct — all 13 hits for `ledger.database.spy` are in `src/test`.
-
-### M4 — `docs/testing/` is not empty
-
-AC8 and the Project Structure Notes both state it is empty; Task 10 says "write". It already contains `readme.md`, `container-architecture.md`, `why-inheritance-over-import.md` and `test-data-isolation.md` (untracked, written 2026-08-07, carrying a *"design documented, migration not yet applied"* banner with TODAY/TARGET markers). As written, Task 10 risks overwriting existing drafts.
-
-**Reframe as:** update in place, replace projections with measurements, remove the banner and the TODAY/TARGET markers.
-
-### M5 — AC3's `AbstractE2ETest` row conflates two unrelated configs
-
-`E2ESecurityConfig` is imported by exactly two concrete ITs (`ConfigResourceIT`, `StorageResourceIT`). `TestClockConfig` is used **only** by `AbstractSkillarsE2ETest`, which has **zero subclasses** — it is dead code. Bundling both into one base would give those two ITs a fixed clock they do not have today, a behaviour change landing directly on top of deferred-17/18's timezone work.
-
-**Required change.** Either delete the dead `AbstractSkillarsE2ETest` or keep `TestClockConfig` out of the shared base.
-
-### M6 — AC9 side effect on the packaged artifact
-
-`maven-resources-plugin` copies `src/frontend/dist/spa` → `target/classes/static` at `process-resources`. With `-DskipFrontend` on a clean tree that directory does not exist and the resulting jar ships with no UI. Acceptable for backend iteration, but AC9 should say so, and should state that CI must never set the flag — `pr-build` builds a Docker image from the same artifact.
-
-### M7 — internal inconsistency in line references
-
-The no-default Bunny property is cited as `application-test.yaml:35` in AC2 and `:31` in "What must not break". `:35` is correct (`api-base-url: ${wiremock.server.bunny-service.baseUrl}`). The surrounding claim is otherwise accurate: `:34`, `:48` and `:52` do carry defaults.
+- **Task 3 count mismatch.** "Implement the minimum-coverage cases listed in AC3 (**8 endpoints**: coach
+  tiers/me/subscribe/change-tier/cancel, player tiers/subscribe/change-tier/cancel)" — that list is nine,
+  and AC3 correctly says nine throughout. Same class of arithmetic slip as the "four catch blocks" the
+  last review caught; the story even warns "get this count right".
+- **Wrong task number, three times.** AC2's scope note ("logged as a new `deferred-work.md` item by
+  **Task 4**"), AC6's own bullet, and the `DrillDetailPanel.vue` reference all point at Task 4. Task 4 is
+  the AC4 comment task; ledger logging is **Task 6**.
+- **`ApiAdvice` path is wrong in References.** Cited as
+  `src/main/java/com/softropic/skillars/infrastructure/security/api/ApiAdvice.java`; the real path is
+  `src/main/java/com/softropic/skillars/platform/security/api/ApiAdvice.java`. The line numbers inside it
+  are mostly right — `toErrorDTO` at `:619-630` ✓, `logError` at `:636-651` ✓ — but `:142` is
+  `defaultErrorHandler`; the `excl_bkg_coach_slot_overlap → booking.slotUnavailable` mapping is at `:153`
+  (inside `CONSTRAINT_MAPPINGS`, `:150-154`), and it is in `CONFLICT_CONSTRAINTS` at `:163`, hence 409.
+- **AC4 line drift.** AC4 says "`BookingService.java:762-763` computes `hoursUntilSession` and maps it";
+  `hoursUntilSession` is at `:761` and the eligibility ternary at `:762`. "Add a short comment directly
+  above line 762" would land between the two.
+- **AC5's mirror target contains dead code.** `CashOutServiceTest.processCashOut_feeCalculatedCorrectly_…`
+  declares `ArgumentCaptor<BigDecimal> amountCaptor` and `ArgumentCaptor<String> typeCaptor` and never
+  uses either. "Mirroring its structure **exactly**" would clone them. Tell the dev to drop them.
+- **Reachability of the surviving batch branches** — expectation-setting, not a defect. Of the four codes
+  batch can actually throw, `duplicateSlotStartTime` cannot be produced by the UI (the basket is keyed by
+  `startDatetime` — `isSlotInBasket`/`removeSlotFromBasket`), and `batchSizeExceeded` cannot either
+  (`toggleSlotInBasket:297-303` caps the basket at `maxBatchSize`) except under config drift or a failed
+  `getBatchConfig()`. `overlappingSlots` **is** genuinely reachable — the slot list can present
+  overlapping rows of different lengths, per `BookingRequestPage.vue`'s own `slotRows` comment. Keep all
+  four branches (they are cheap and defensive), but do not describe them all as user-visible wins.
+- **AC2's headline oversells the reschedule flow.** "shows a specific message instead of one generic
+  toast" — `requestReschedule` has five distinct rejections and this AC improves one. The other four all
+  emit `SecurityError.MISSING_RIGHTS`: not-owner (`:57-59`), wrong status (`:60-63`), start not in future
+  (`:64-67`), end not after start (`:68-71`), and — the most likely one in practice — "A pending
+  reschedule request already exists" (`:94-98`), i.e. the double-submit case. Correctly out of scope per
+  the AC's own note; just don't claim more than 1-of-5.
+- **Two catch blocks cover more than their submit call.** `submit()`'s catch also wraps
+  `submitBookingRequest`'s trailing `loadParentBookings()` (`booking.store.js:343-346`), and
+  `submitReschedule()`'s wraps `handleRequestReschedule`'s trailing `loadParentBookings()` (`:452-464`).
+  A reload failure *after* a successful write shows the submit-failed toast. Pre-existing, and the new
+  branches degrade correctly (no `errorKey` match → generic message), so no action — noted so it isn't
+  mistaken for a regression during hand-tracing.
+- **Cross-class `@Import` is legal but not this package's convention.** `@Import(PlayerSubscriptionOwnershipIT.TestSecurityConfig.class)`
+  works — same package, and a `@TestConfiguration` is a plain `@Configuration` when explicitly imported.
+  But `SessionPackPaymentResourceIT` keeps its own copy rather than importing, so reuse here couples two
+  ITs: a future edit to `PlayerSubscriptionOwnershipIT`'s filter chain silently changes
+  `SubscriptionResourceIT`'s expectations. Defensible either way; worth one sentence in the AC.
 
 ---
 
-## CI SUPPORT — the story specifies almost nothing CI can enforce
+## What is actually clean
 
-`pr-build.yml` currently runs `mvn -B verify -q` with `timeout-minutes: 15`, then builds and scans a Docker image. Nothing else. Gaps, in priority order:
+**AC1 — ship unchanged.** Re-verified: `CoachMediaItem` is `@Getter @Setter @NoArgsConstructor`,
+`onCreate()` is package-private at `CoachMediaItem.java:34-37` with the
+`if (uploadedAt == null)` guard, `grep -rln CoachMediaItem src/test/java` is empty, and nothing in
+`src/main` constructs the entity. The inline snippet compiles as written. The scope boundary it draws
+(callback logic, not the "nothing constructs this yet" gap) is right.
 
-### C1 — AC3's "≤ 10 contexts" has no enforcement, by explicit design
+**AC2's mechanism — verified end to end.** The `helpCode` → `errorMsg.errorKey` correction is right, and
+the whole chain holds:
 
-Dev Notes directs the implementer to build the analysis script *"in the scratchpad (not in the repo)"*. An unversioned script cannot gate anything; the first `@TestPropertySource` someone adds silently regresses AC3 and nothing fails.
+- `OperationNotAllowedException` → `operationDeniedHandler` (`ApiAdvice:267-277`) →
+  `handleSecErrorAndReturnDTO(exception, defaultMsg, msgKey = exception.getErrorCode().getErrorCode())` →
+  `logErrorAndReturnDTO` → `toErrorDTO` (`:619-630`) → `new ErrorDto(helpCode, new ErrorMsg(msgKey, message))`.
+  403.
+- `BatchRuleViolationException` → `batchRuleViolationHandler` (`:259-265`), passing
+  `exception.getErrorCode()` as `msgKey` verbatim. 400.
+- `BookingError.getErrorCode()` yields exactly the three camelCase strings AC2 lists.
+- Frontend path is a clean pass-through: `booking.api.js:21,56,61` are bare `api.post` one-liners; the
+  stores re-throw the original error object (`booking.store.js:458-460` reschedule, `:532-534` batch;
+  `submitBookingRequest:343-346` doesn't catch at all); and `boot/axios.js` only `console.warn`s on 403
+  (`:154-158`) and ends with `return Promise.reject(error)` (`:175`), so `error.response.data` is intact.
+  `err?.response?.data?.errorMsg?.errorKey` is genuinely readable in all three catch blocks.
 
-A CI-native alternative measures the real thing rather than statically approximating it. `DefaultContextCache.java:275-276` (spring-test 6.2.16) logs, under category `org.springframework.test.context.cache` at DEBUG:
+**AC2's i18n groundwork is accurate.** None of the six codes exists anywhere under
+`src/main/resources/` (grep returns zero). The `booking.` hits in the properties files are all
+`email.booking.*`, as the story says. The frontend block structure checks out exactly — `booking` at
+en-US `:743`, de-DE `:268`, fr-FR `:1021`, with `requests`/`completion`/`reschedule`/`batch` siblings at
+en-US `744/861/877/897`, de-DE `269/405/421/442`, fr-FR `1022/1140/1156/1176` — and no `errors` block
+exists in any bundle. `messages_fr.properties` really does mix both escaping styles
+(`:53` `Référence` vs. literal UTF-8 elsewhere), and `MvcConfig:30`'s
+`setDefaultEncoding("UTF-8")` makes the literal style safe. The story's decision to leave
+`error-messages.properties` alone is correct — it has no locale variants and `MvcConfig:29` lists
+`messages` as a basename, so the new keys resolve.
 
-```
-Spring test ApplicationContext cache statistics: [DefaultContextCache@... size = N, maxSize = 32, ... hitCount = X, missCount = N]
-```
+**AC3's premise and inventory — accurate.** 10 endpoints; the `@PreAuthorize` guards, the two 200-returning
+`subscribe` endpoints and the three `204 No Content` endpoints are all as described.
+`grep -rln "payment/subscriptions" src/test/java` returns `PlayerSubscriptionOwnershipIT` and nothing
+else, and `SubscriptionLifecycleIT extends BasePaymentIT` calling `subscriptionService.*` directly
+confirms it is service-level. `HAS_COACH_ROLE`/`HAS_PARENT_ROLE` are the plain `hasRole('ROLE_COACH')`/
+`hasRole('ROLE_PARENT')` the AC assumes (`SecurityConstants.java:35-36`). The `permitAll()`-still-401s
+reasoning is right on both halves: the reused `TestSecurityConfig` declares
+`anyRequest().authenticated()` with no carve-out, and in production
+`/api/payment/subscriptions/**` is absent from `AppEndpoints.PUBLIC_ENDPOINTS` (`:24-42`, whose only
+payment entry is `/api/payment/webhooks/stripe`). Dropping the duplicated ownership-guard case is right.
 
-`missCount` is exactly the number of contexts actually built. Enable that category in `logback-test.xml` and add a `pr-build` step that greps the final occurrence and fails if `missCount > 10`.
+**AC5 — ship unchanged** (bar the dead-captor nit above). Both boundary assertions are correct as
+specified, which is worth stating because both are the kind that silently pass for the wrong reason:
 
-**Recommendation:** fold this into AC3 as its verification mechanism, replacing the offline script.
+- `CreditRoutingTest`: with `getBalance` stubbed to `SESSION_PRICE`, `balance.min(price)` returns `this`
+  on equality, so `creditToUse` keeps scale 2 and `eq(SESSION_PRICE)` matches under `BigDecimal.equals`
+  (which compares scale). `stripeAmount` is `ZERO`, so `reserveCapture` is never reached and **no**
+  `reservationGranted()` stub is needed — which also keeps Mockito strict-stubs quiet. The boundary under
+  test (`PaymentLifecycleService:180`, `creditToUse.compareTo(sessionPrice) >= 0`) is exactly what the
+  assertion pins.
+- `CashOutServiceTest`: `balance.compareTo(requestedAmount)` is `0`, so `CashOutService:26`'s `< 0` guard
+  passes; fee math is unchanged from the mirrored test (`100 × 0.025 + 0.25 = 2.75`, net `97.25`), so the
+  `verify(paymentGateway).refund(…, 97.25)` assertion holds.
 
-### C2 — AC1's container ceiling is verified by a human running `docker ps`
-
-Encode the Given/When/Then instead: background a sampler (`docker ps --format '{{.Image}}'` on a loop writing to a file) alongside `mvn verify`, then assert the peak concurrent count is ≤ 1 per image. Cheap, and it is the acceptance criterion verbatim.
-
-### C3 — `-q` makes Task 1 and Task 11 impossible from CI
-
-In the run inspected, `-q` suppressed every phase marker: no per-phase wall clock, no surefire summary, no per-class times. Drop `-q`, and upload `target/surefire-reports` and `target/failsafe-reports` as build artifacts so AC8's before/after numbers are reproducible by someone other than the author.
-
-### C4 — `timeout-minutes: 15` is the only duration guard and is not a regression detector
-
-The current run is ~10 min. AC5 adds ~905 truncates plus ~905 Redis flushes. Tighten the timeout post-refactor to a value that actually detects regression, and record the chosen value in AC8.
-
-### C5 — AC7 is the one AC that CI enforces for free
-
-Provided the guardrail class is named `*Test` (surefire, `test` phase, ahead of failsafe) and not `*IT`. The story says "fast, container-free test" but never pins the name. State it explicitly.
-
-### C6 — every task specifies `mvn -o verify`
-
-Offline mode is a local convenience and will not work on a fresh runner. Each task checkpoint should also be validated by a pushed PR, or Blocker 3's CI-only failure class stays hidden until Task 11.
+**No item is pre-closed — the failure mode that killed the last draft is absent.** All five ledger items
+carry live `[OWNED BY skillars-deferred-28 ACn]` markers and none carries a `[CLOSED by …]` annotation.
+`sprint-status.yaml:1007` exists at `ready-for-dev` with the full AC summary in the comment block above
+it. The renumbering is complete and consistent.
 
 ---
 
-## Checked and found sound — not findings
+## Recommended rework before handoff
 
-Recorded so the absence of a finding is visible as a deliberate result.
+1. **AC2 / Task 2 — B1:** `submitBatchRequest()` branches on four codes, not six. Delete the
+   "shared coach-suspension check" claim and the "batch create" attributions for `coachUnavailable`/
+   `slotUnavailable`. Correct the `excl_bkg_coach_slot_overlap` sentence (coach-accept path only —
+   REQUESTED is excluded from the constraint).
+2. **AC2 — B3:** `batchSizeExceeded` copy uses `{max}` fed from `maxBatchSize`, not a literal 10
+   (configured limit is 5). Word the backend properties entry without a number.
+3. **AC2 / Task 2 — M3:** add `prettier --check` on touched files, `--write` on the four clean ones.
+4. **AC3 — B2:** mock five beans (`SubscriptionService`, `CoachProfileRepository`, `SecurityUtil`,
+   `JwtSecretService`, `VideoMetrics`), with a note on why the last two are required.
+5. **AC3 — M2:** add one invalid-body 400 case, or strike "request validation" from the rationale. Add a
+   sentence noting the mocked service means `assertPlayerOwnership` is out of this AC's reach.
+6. **AC4 — M1:** rewrite the comment to state what is true (no post-start guard exists on the parent
+   cancel path) and file the "should a post-start parent cancellation settle as a coach no-show?" product
+   question as a ledger item — or drop AC4 and file only the question.
+7. **AC6 — M4:** replace the `[OWNED BY]` markers rather than appending beside them, and require the
+   prose summary the twelve existing closures all carry.
+8. **Minor sweep:** Task 3's "8 endpoints" → 9; three "Task 4" ledger references → Task 6; `ApiAdvice`
+   path and `:142` → `:153`; AC4's `:762-763` → `:761-762`; tell the dev to drop the mirrored test's
+   unused `ArgumentCaptor`s; fix this file's own citation in References.
 
-- **H3 / `allowed.clients` superset is safe.** Searched for tests asserting a client-id *rejection* (`hisClientId`, `herClientId`, `ourClientId`, invalid/unknown client) — none exist. Widening the list cannot break an assertion.
-- **Global `rate.limiting.enabled: false` will not neuter `RateLimitingAspectIT`.** It declares no `@ActiveProfiles`, so the `test`-profile document `application-test.yaml` never loads for it; its `@Value("${rate.limiting.enabled:true}")` default stands.
-- **AC7's allowlist will not trip the 51 `*IT` files that lack `@SpringBootTest` in the file itself.** They inherit it from the payment / video / session / storage `Base*IT` classes and will be assignable to `AbstractIntegrationTest` after AC2.
-- **No container leak into the surefire JVM.** The only `*Test`-named class carrying `@SpringBootTest` is `AbstractSkillarsE2ETest`, which is abstract with zero subclasses. AC1's "one container set per test JVM" framing holds.
-- **AC1.2's rationale is correct.** `ConnectionDetails` beans are not `Startable`, so `TestcontainersLifecycleBeanPostProcessor` will not destroy them, and `TestConfig.hikariConfig(JdbcConnectionDetails)` continues to have its parameter satisfied. `DataSourceConfig.java:25` is indeed gated `havingValue = "false"`, so H6's expectation that `hikariConfig` and `spyDataSource` are orphaned under `datasource.container=true` is well-founded.
-- **AC5.2's listener-ordering argument is correct.** `SqlScriptsTestExecutionListener` (order 5000) runs in `beforeTestMethod`, ahead of JUnit `@BeforeEach`, and `@TestExecutionListeners` does not contribute to `MergedContextConfiguration`.
-- **The shedlock backdate-vs-delete reasoning is correct** (setting aside Major 2's amplification concern), as is the `qrtz_*` exclusion — Quartz runs `job-store-type: jdbc` with `isClustered: true` and a 20 s check-in interval, live during the run.
-- **`frontend-maven-plugin` plugin-level `<skip>` does cover all five executions** — each mojo declares the same `skip` parameter name, so AC9's single-block approach works; the story's instruction to confirm per-execution in the log is still worth keeping.
-
----
-
-## Recommended story amendments, in order
-
-1. **Task 0 (new):** establish a green — or explicitly baselined — CI run before any refactor commit (Blocker 3).
-2. **Rewrite AC5.1** to restore Flyway-seeded reference data rather than only excluding infrastructure tables; enumerate the reference tables; drop or qualify AC5.5's "add the seed to the class" instruction (Blocker 1).
-3. **Add a scheduler-neutralization AC** covering all 31 `@Scheduled` jobs under the `test` profile, before AC2 consolidates everything into one long-lived context (Major 2).
-4. **Add cache-eviction** to the reset listener, or a test-visible reset for `ConfigService` and `AlertRuleCache` (Major 3).
-5. **Rewrite AC4.3** around `MockReset.AFTER`, and apply AC4.2's trap-check to `GeminiClient` (Major 1).
-6. **Re-baseline the story's numbers on CI** — replace the 30:45 / ~74-container framing with the measured CI figures, and reconcile 823 vs 905 (Blocker 2).
-7. **Move AC3's verification into CI** via the `org.springframework.test.context.cache` DEBUG line; add the `docker ps` sampler for AC1; drop `-q`; upload test reports (C1–C4).
-8. **Fix the small ones:** AC6's grep command (M3), the `docs/testing/` framing (M4), the `AbstractE2ETest` / `TestClockConfig` split (M5), the static container's database name (M2), lazy MinIO (M1), AC9's artifact note (M6), the `:31` / `:35` reference (M7).
+**AC1 and AC5 need no changes.** Both can be implemented as written (AC5 minus the dead captors).

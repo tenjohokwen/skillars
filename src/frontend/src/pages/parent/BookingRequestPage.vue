@@ -477,8 +477,17 @@ async function submit() {
       sessionPackPurchaseId: selectedPackId.value,
     })
     router.push('/parent/bookings')
-  } catch {
-    $q.notify({ type: 'negative', message: t('booking.requests.submitError') })
+  } catch (err) {
+    const errorKey = err?.response?.data?.errorMsg?.errorKey
+    if (errorKey === 'booking.coachUnavailable') {
+      $q.notify({ type: 'negative', message: t('booking.errors.coachUnavailable') })
+    } else if (errorKey === 'booking.slotUnavailable') {
+      $q.notify({ type: 'negative', message: t('booking.errors.slotUnavailable') })
+    } else if (errorKey === 'booking.invalidSessionDuration') {
+      $q.notify({ type: 'negative', message: t('booking.errors.invalidSessionDuration') })
+    } else {
+      $q.notify({ type: 'negative', message: t('booking.requests.submitError') })
+    }
   } finally {
     submitting.value = false
   }
@@ -496,8 +505,22 @@ async function submitBatchRequest() {
     batchReviewOpen.value = false
     $q.notify({ message: t('booking.batch.submitted'), type: 'positive' })
     router.push('/parent/bookings')
-  } catch {
-    $q.notify({ message: t('booking.batch.submitError'), type: 'negative' })
+  } catch (err) {
+    const errorKey = err?.response?.data?.errorMsg?.errorKey
+    if (errorKey === 'booking.batchSizeExceeded') {
+      $q.notify({
+        message: t('booking.errors.batchSizeExceeded', { max: maxBatchSize.value }),
+        type: 'negative',
+      })
+    } else if (errorKey === 'booking.invalidSessionDuration') {
+      $q.notify({ message: t('booking.errors.invalidSessionDuration'), type: 'negative' })
+    } else if (errorKey === 'booking.duplicateSlotStartTime') {
+      $q.notify({ message: t('booking.errors.duplicateSlotStartTime'), type: 'negative' })
+    } else if (errorKey === 'booking.overlappingSlots') {
+      $q.notify({ message: t('booking.errors.overlappingSlots'), type: 'negative' })
+    } else {
+      $q.notify({ message: t('booking.batch.submitError'), type: 'negative' })
+    }
   }
 }
 

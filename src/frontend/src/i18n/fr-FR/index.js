@@ -1192,6 +1192,15 @@ export default {
       acceptedAll: 'Toutes les séances ont été acceptées',
       acceptError: "Impossible d'accepter toutes les séances. Veuillez réessayer.",
     },
+    errors: {
+      coachUnavailable: "Ce coach n'est actuellement pas disponible.",
+      slotUnavailable: "Ce créneau horaire n'est plus disponible.",
+      invalidSessionDuration:
+        'La durée de séance demandée ne correspond pas à la durée de séance de ce coach.',
+      batchSizeExceeded: 'Vous pouvez demander jusqu’à {max} séances dans un même lot.',
+      duplicateSlotStartTime: 'Deux demandes ou plus dans ce lot ont la même heure de début.',
+      overlappingSlots: 'Deux demandes ou plus dans ce lot se chevauchent.',
+    },
     wrapUp: {
       step1Title: 'Présence',
       step1Label: 'Le joueur était présent',
