@@ -224,6 +224,36 @@ class SessionBuilderResourceIT extends BaseSessionIT {
         )).isInstanceOf(HttpClientErrorException.BadRequest.class);
     }
 
+    // AC3 (skillars-deferred-27): the 31-drill test above only proves the rejected boundary of
+    // @Size(max = 30) — this proves the accepted boundary (exactly 30) is still accepted.
+    @Test
+    void createSession_30DrillBlock_returnsCreated() {
+        String cookies = loginAndGetCookies(INSTR_EMAIL);
+        List<Map<String, Object>> maxDrills = java.util.stream.IntStream.range(0, 30)
+            .<Map<String, Object>>mapToObj(i -> Map.of("drillId", drillId.toString(), "order", i))
+            .toList();
+        Map<String, Object> body = Map.of(
+            "bookingId", confirmedBookingId.toString(),
+            "blocks", List.of(Map.of(
+                "blockType", "WARM_UP",
+                "blockName", "Warm-Up",
+                "durationMinutes", 10,
+                "drills", maxDrills
+            )),
+            "developmentFocus", List.of("technical")
+        );
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + SESSIONS_BASE,
+            HttpMethod.POST,
+            body,
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+    }
+
     @Test
     void updateSession_instructorCoach_returnsUpdatedPlan() {
         String cookies = loginAndGetCookies(INSTR_EMAIL);

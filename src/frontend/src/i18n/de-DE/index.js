@@ -75,7 +75,8 @@ export default {
       step3SessionDurationHelper:
         'Jeder buchbare Termin in deinem Kalender ist so lang. Lass den Plattform-Standard stehen, wenn du unsicher bist.',
       step3SessionPacks: 'Einheitenpakete (optional)',
-      step3PackHelper: 'Biete vergünstigte Mehrfachpakete an. Leer lassen, wenn du nur Einzelpreise möchtest.',
+      step3PackHelper:
+        'Biete vergünstigte Mehrfachpakete an. Leer lassen, wenn du nur Einzelpreise möchtest.',
       step3PackEmpty: 'Noch keine Pakete hinzugefügt.',
       step3AddPack: 'Paket hinzufügen',
       step3PackSessions: 'Einheiten',
@@ -85,15 +86,18 @@ export default {
       step4Title: 'Verfügbarkeit',
       step4Short: 'Verfügbarkeit',
       step4AvailabilityWindows: 'Verfügbarkeitsfenster',
-      step4WindowHelper: 'Füge mindestens ein wöchentliches Zeitfenster hinzu, damit Eltern wissen, wann sie buchen können.',
+      step4WindowHelper:
+        'Füge mindestens ein wöchentliches Zeitfenster hinzu, damit Eltern wissen, wann sie buchen können.',
       step1SectionTimezone: 'Zeitzone',
       step4SectionTimezone: 'Zeitzone',
       step4TimezoneHelper: 'Die Zeitfenster oben werden in dieser Zeitzone interpretiert.',
       timezoneLabel: 'Zeitzone',
       timezoneHint: 'Zum Suchen tippen, z. B. Europe/Berlin',
       timezoneNoMatch: 'Keine passende Zeitzone',
-      timezoneBrowserUnknown: 'Dein Gerät meldet die Zeitzone {zone}, die dieser Server nicht kennt. Bitte wähle oben die nächstgelegene Zeitzone aus.',
-      timezoneLoadFailed: 'Die Zeitzonenliste konnte nicht geladen werden. Prüfe deine Verbindung und versuche es erneut.',
+      timezoneBrowserUnknown:
+        'Dein Gerät meldet die Zeitzone {zone}, die dieser Server nicht kennt. Bitte wähle oben die nächstgelegene Zeitzone aus.',
+      timezoneLoadFailed:
+        'Die Zeitzonenliste konnte nicht geladen werden. Prüfe deine Verbindung und versuche es erneut.',
       step4WindowEmpty: 'Noch keine Verfügbarkeitsfenster — füge unten eines hinzu.',
       step4AddWindow: 'Fenster hinzufügen',
       step4Day: 'Tag',
@@ -103,7 +107,8 @@ export default {
       step5Title: 'Profilfoto',
       step5Short: 'Foto',
       step5PhotoLabel: 'Profilfoto',
-      step5Helper: 'Ein klares Porträtfoto schafft Vertrauen bei Eltern. JPG oder PNG, bis zu 5 MB.',
+      step5Helper:
+        'Ein klares Porträtfoto schafft Vertrauen bei Eltern. JPG oder PNG, bis zu 5 MB.',
       step5Upload: 'Hochladen & Weiter',
       step5SkipLabel: 'Vorerst überspringen',
       publishSuccess: 'Dein Profil ist live! Willkommen bei Skillars.',
@@ -418,7 +423,8 @@ export default {
       dialogTitle: 'Neue Zeit vorschlagen',
       proposedStart: 'Neuer Sitzungsbeginn',
       proposedEnd: 'Neues Sitzungsende',
-      endDerivedHint: 'Wird automatisch gesetzt — eine Verlegung behält die ursprüngliche Dauer bei.',
+      endDerivedHint:
+        'Wird automatisch gesetzt — eine Verlegung behält die ursprüngliche Dauer bei.',
       endDerivedLengthUnavailable:
         'Die Zeiten dieser Buchung konnten nicht gelesen werden, daher kann keine neue Zeit vorgeschlagen werden. Bitte kontaktiere den Support.',
       submit: 'Anfrage senden',
@@ -442,7 +448,8 @@ export default {
       reviewTitle: 'Sitzungsanfragen überprüfen',
       creditPreview:
         '{credits} Guthaben verfügbar für {count} Sitzung(en) — ein Fehlbetrag wird bei der Zahlung berechnet',
-      sessionCountPreview: '{count} Sitzung(en) — die Zahlung wird von Ihrer gespeicherten Karte abgebucht',
+      sessionCountPreview:
+        '{count} Sitzung(en) — die Zahlung wird von Ihrer gespeicherten Karte abgebucht',
       confirmRequests: 'Anfragen bestätigen',
       submitted: 'Sitzungsanfragen eingereicht — der Trainer wird sie überprüfen',
       submitError: 'Sitzungsanfragen konnten nicht eingereicht werden. Bitte erneut versuchen.',
@@ -1051,7 +1058,8 @@ export default {
     perYear: '{price} / Jahr',
     coach: {
       pageTitle: 'Coach-Abonnement',
-      loadError: 'Ihre Abonnementdetails konnten nicht geladen werden. Bitte versuchen Sie es erneut.',
+      loadError:
+        'Ihre Abonnementdetails konnten nicht geladen werden. Bitte versuchen Sie es erneut.',
       subscribeSuccess: 'Willkommen bei {tier}! Ihre neuen Funktionen sind jetzt aktiv.',
       subscribeError: 'Abonnement fehlgeschlagen. Bitte versuchen Sie es erneut.',
       tierChangeSuccess: 'Ihr Plan wechselt zu {tier}.',

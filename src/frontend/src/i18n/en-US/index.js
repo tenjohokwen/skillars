@@ -85,7 +85,8 @@ export default {
       step3SessionDurationHelper:
         'Every bookable slot in your calendar will be this long. Leave it on the platform default if you are not sure.',
       step3SessionPacks: 'Session Packs (optional)',
-      step3PackHelper: 'Offer discounted multi-session packages. Leave empty if you only want per-session pricing.',
+      step3PackHelper:
+        'Offer discounted multi-session packages. Leave empty if you only want per-session pricing.',
       step3PackEmpty: 'No packs added yet.',
       step3AddPack: 'Add Pack',
       step3PackSessions: 'Sessions',
@@ -102,7 +103,8 @@ export default {
       timezoneLabel: 'Timezone',
       timezoneHint: 'Type to search, e.g. Europe/Berlin',
       timezoneNoMatch: 'No matching timezone',
-      timezoneBrowserUnknown: 'Your device reports the timezone {zone}, which this server does not recognize. Please pick the closest match above.',
+      timezoneBrowserUnknown:
+        'Your device reports the timezone {zone}, which this server does not recognize. Please pick the closest match above.',
       timezoneLoadFailed: 'Could not load the timezone list. Check your connection and try again.',
       step4WindowEmpty: 'No availability windows yet — add one below.',
       step4AddWindow: 'Add Window',

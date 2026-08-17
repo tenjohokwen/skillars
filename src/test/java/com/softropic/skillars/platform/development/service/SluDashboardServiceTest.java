@@ -15,14 +15,14 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
+import java.time.DayOfWeek;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.temporal.IsoFields;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyShort;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -51,13 +51,16 @@ class SluDashboardServiceTest {
         ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
         short curYear = (short) now.get(IsoFields.WEEK_BASED_YEAR);
         short curWeek = (short) now.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
+        ZonedDateTime from = now.minusWeeks(8 - 1).with(DayOfWeek.MONDAY);
+        short fromYear = (short) from.get(IsoFields.WEEK_BASED_YEAR);
+        short fromWeek = (short) from.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
 
         List<PlayerSluWeeklySnapshot> snapshots = List.of(
             makeSnapshot(curYear, curWeek, "PAC", new BigDecimal("10.00")),
             makeSnapshot(curYear, curWeek, "SHO", new BigDecimal("5.00")),
             makeSnapshot(curYear, curWeek, "DRI", new BigDecimal("7.50"))
         );
-        when(snapshotRepository.findByPlayerIdFromWeek(anyLong(), anyShort(), anyShort(), anyShort(), anyShort()))
+        when(snapshotRepository.findByPlayerIdFromWeek(eq(PLAYER_ID), eq(fromYear), eq(fromWeek), eq(curYear), eq(curWeek)))
             .thenReturn(snapshots);
         when(flagRepository.findByPlayerIdAndResolvedAtIsNull(PLAYER_ID)).thenReturn(List.of());
 
@@ -82,13 +85,16 @@ class SluDashboardServiceTest {
         short prevWeek = (short) prevWeekDt.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
         short prevPrevYear = (short) prevPrevWeekDt.get(IsoFields.WEEK_BASED_YEAR);
         short prevPrevWeek = (short) prevPrevWeekDt.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
+        ZonedDateTime from = now.minusWeeks(8 - 1).with(DayOfWeek.MONDAY);
+        short fromYear = (short) from.get(IsoFields.WEEK_BASED_YEAR);
+        short fromWeek = (short) from.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
 
         List<PlayerSluWeeklySnapshot> snapshots = List.of(
             makeSnapshot(curYear, curWeek, "PAC", new BigDecimal("10.00")),
             makeSnapshot(prevYear, prevWeek, "PAC", new BigDecimal("8.00")),
             makeSnapshot(prevPrevYear, prevPrevWeek, "PAC", new BigDecimal("6.00"))
         );
-        when(snapshotRepository.findByPlayerIdFromWeek(anyLong(), anyShort(), anyShort(), anyShort(), anyShort()))
+        when(snapshotRepository.findByPlayerIdFromWeek(eq(PLAYER_ID), eq(fromYear), eq(fromWeek), eq(curYear), eq(curWeek)))
             .thenReturn(snapshots);
         when(flagRepository.findByPlayerIdAndResolvedAtIsNull(PLAYER_ID)).thenReturn(List.of());
 
@@ -99,7 +105,14 @@ class SluDashboardServiceTest {
 
     @Test
     void getWeeklyExposure_withNoData_returnsEmptyCurrentWeekAndEmptyTrend() {
-        when(snapshotRepository.findByPlayerIdFromWeek(anyLong(), anyShort(), anyShort(), anyShort(), anyShort()))
+        ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
+        short curYear = (short) now.get(IsoFields.WEEK_BASED_YEAR);
+        short curWeek = (short) now.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
+        ZonedDateTime from = now.minusWeeks(8 - 1).with(DayOfWeek.MONDAY);
+        short fromYear = (short) from.get(IsoFields.WEEK_BASED_YEAR);
+        short fromWeek = (short) from.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
+
+        when(snapshotRepository.findByPlayerIdFromWeek(eq(PLAYER_ID), eq(fromYear), eq(fromWeek), eq(curYear), eq(curWeek)))
             .thenReturn(List.of());
         when(flagRepository.findByPlayerIdAndResolvedAtIsNull(PLAYER_ID)).thenReturn(List.of());
 

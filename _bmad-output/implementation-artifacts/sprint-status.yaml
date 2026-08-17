@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-08-15 # skillars-deferred-26 → done (code review complete, 1 patch applied)
+# last_updated: 2026-08-17 # skillars-deferred-27 → done (code review complete: 7 patches applied, 1 decision deferred, 5 items deferred to ledger)
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-08-15 # skillars-deferred-26 → done (code review complete, 1 patch applied)
+last_updated: 2026-08-17 # skillars-deferred-27 → done (code review complete: 7 patches applied, 1 decision deferred, 5 items deferred to ledger)
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -945,3 +945,31 @@ development_status:
   # 5-5's GDPR performance-report deletion item (a compliance feature addition, not a bundled fix).
   # See the story file's "Explicitly NOT in this story" section for full reasoning.
   skillars-deferred-26-defensive-guards-input-hardening-and-test-coverage-fixes: done  # 2026-08-15: all 7 ACs done. Two spec corrections applied before implementation (from a prior senior-dev review of the story's own AC text): AC4's repDensity != null guard could never fire (backend field is a primitive int, not Integer) — rescoped to a defensive undefined/null-only guard, real gap filed as new deferred-work.md item D1; AC5's plain ArgumentCaptor<BookingDeclinedEvent> would have thrown TooManyActualInvocations (declineBooking publishes 2 ApplicationEvent-typed events) — rewritten using the existing capturedParentCancellation() ArgumentCaptor<ApplicationEvent>+filter/reduce pattern. Full mvn -o verify green: 883 unit (0 failures, 1 skipped) + 899 IT (0 failures, 4 skipped), 8:07 min. Full eslint clean. All 6 ledger items annotated [CLOSED by skillars-deferred-26 ACn] in deferred-work.md. Code review: 1 patch applied (sluBreakdown NaN guard gap — weight not null-checked alongside repDensity), 2 deferred (loose anyShort() test matchers, missing 30-drill boundary test).
+
+  # Deferred 27: Repository Ordering, Updatable-Guard & Boundary Test Coverage, Formatting Hygiene
+  # Source: deferred-work.md directly, per Mbah's direction to group small unrelated already-deferred
+  # items into one story (same spirit as deferred-11/20/21/22/23/24/25/26). All 6 items were
+  # independently re-verified against current source during story creation (2026-08-17), not trusted
+  # from the ledger's text:
+  #   AC1  code review of deferred-11 — PackSessionServiceParityTest mocks findActivePacks
+  #        pre-ordered, never exercises the real repository ORDER BY; new
+  #        SessionPackPurchaseRepositoryIT proves it against a real DB
+  #   AC2  code review of deferred-25 — no test proves Booking.parentId/playerId/coachId's
+  #        updatable=false actually causes Hibernate to ignore a post-persist mutation
+  #   AC3  code review of deferred-26 — createSession_31DrillBlock_returns400 covers only the
+  #        rejected boundary; add the companion 30-drill accepted-boundary test
+  #   AC4  code review of deferred-26 — SluDashboardServiceTest's 3 findByPlayerIdFromWeek stubs use
+  #        anyLong()/anyShort() for all 5 params; tighten to precise eq() matchers
+  #   AC5  code review of deferred-24 — no comment explaining why
+  #        PaymentCoachSubscription.stripe_customer_id (V96) was safe to drop; Java-only comment,
+  #        does not touch the already-applied V96 migration file (checksum risk)
+  #   AC6  skillars-uat-3 story creation D5 — 7 pre-existing frontend/i18n files fail this repo's
+  #        mandatory prettier --check; fix exactly those 7, not a repo-wide sweep
+  #   AC7  Ledger hygiene: closes all 6 above with [CLOSED by skillars-deferred-27 ACn]
+  # DELIBERATELY EXCLUDED: DisputeService's status-unguarded findById (needs a BookingStateMachine
+  # reachability analysis, not a mechanical fix); the lock.timeout dead-code gap and @SchedulerLock
+  # skip-logging gap (both need a design decision or new infrastructure); every other open ledger item
+  # inspected, which either needed a product/design decision, targeted an unreachable code path, or was
+  # already closed by a prior story. See the story file's "Why this story exists" section for full
+  # reasoning.
+  skillars-deferred-27-repository-ordering-updatable-guard-and-test-coverage-fixes: done  # 7 review patches applied 2026-08-17; AC1's ordering IT was decorative (seeded older-first) — fixed and mutation-verified
