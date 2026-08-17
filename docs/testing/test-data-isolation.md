@@ -203,7 +203,7 @@ registry exists for **readability and debuggability**, not correctness. It is st
 | `9600000001`–`9600000099` | `PlayerTimelineResourceIT`, `ScheduleResourceIT`, `SessionCompletionResourceIT`, `BookingSseIT` ⚠ |
 | `9610000001`–`9610000021` | `ParentDevelopmentPortalResourceIT` |
 | `9611000001`–`9611000021` | `BatchAcceptPaymentIT` |
-| `9620000001`–`9620000002` | `SessionPackPurchaseRepositoryIT` |
+| `9620000001`–`9620000003` | `SessionPackPurchaseRepositoryIT` |
 | `9700000001`–`9700000011` | `RescheduleResourceIT` **and** `ConversationResourceIT` ⚠ |
 | `9800000001`–`9800000020` | `BookingBatchResourceIT` **and** `MessagingAccessControlIT` ⚠ |
 | `9810000001`–`9810000200` | `ParentalOversightResourceIT` |

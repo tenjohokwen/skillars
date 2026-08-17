@@ -380,10 +380,10 @@ async function startUpload() {
     $q.notify({ type: 'positive', message: t('session.drillLibrary.upload.uploadStarted') })
     sessionStore.updateDrillVideoState(props.drill.id, { hasVideo: true, videoUrl: null })
   } catch (e) {
-    const helpCode = e?.response?.data?.helpCode
-    if (helpCode === 'video.quotaExceeded') {
+    const errorKey = e?.response?.data?.errorMsg?.errorKey
+    if (errorKey === 'QUOTA_EXCEEDED') {
       $q.notify({ type: 'negative', message: t('session.drillLibrary.upload.quotaExceeded') })
-    } else if (helpCode === 'video.constraintViolated') {
+    } else if (errorKey === 'video.constraintViolated') {
       $q.notify({ type: 'negative', message: t('session.drillLibrary.upload.constraintViolated') })
     } else {
       $q.notify({ type: 'negative', message: t('session.drillLibrary.upload.uploadFailed') })

@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.development.service;
 
+import com.softropic.skillars.infrastructure.util.TestClockProvider;
 import com.softropic.skillars.platform.development.contract.NarrativeKeyDto;
 import com.softropic.skillars.platform.development.contract.SkillExposureResponse;
 import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagRepository;
@@ -8,6 +9,7 @@ import com.softropic.skillars.platform.development.repo.SluWeeklySnapshotReposit
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -15,7 +17,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
-import java.time.DayOfWeek;
+import java.time.Clock;
+import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.temporal.IsoFields;
@@ -46,12 +49,18 @@ class SluDashboardServiceTest {
             coachPlayerAuthorizationService, playerProfileRepository);
     }
 
+    @AfterEach
+    void tearDown() {
+        TestClockProvider.unsetClock();
+    }
+
     @Test
     void getWeeklyExposure_returnsCurrentWeekSluPerSkill() {
-        ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
+        TestClockProvider.setClock(Clock.fixed(Instant.parse("2026-08-19T10:00:00Z"), ZoneOffset.UTC));
+        ZonedDateTime now = ZonedDateTime.now(TestClockProvider.getClock()).withZoneSameInstant(ZoneOffset.UTC);
         short curYear = (short) now.get(IsoFields.WEEK_BASED_YEAR);
         short curWeek = (short) now.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
-        ZonedDateTime from = now.minusWeeks(8 - 1).with(DayOfWeek.MONDAY);
+        ZonedDateTime from = now.minusWeeks(8 - 1);
         short fromYear = (short) from.get(IsoFields.WEEK_BASED_YEAR);
         short fromWeek = (short) from.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
 
@@ -72,7 +81,8 @@ class SluDashboardServiceTest {
 
     @Test
     void getWeeklyExposure_withFewerThanRequestedWeeks_returnsAvailableWeeks() {
-        ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
+        TestClockProvider.setClock(Clock.fixed(Instant.parse("2026-08-19T10:00:00Z"), ZoneOffset.UTC));
+        ZonedDateTime now = ZonedDateTime.now(TestClockProvider.getClock()).withZoneSameInstant(ZoneOffset.UTC);
         ZonedDateTime prevWeekDt = now.minusWeeks(1);
         ZonedDateTime prevPrevWeekDt = now.minusWeeks(2);
 
@@ -85,7 +95,7 @@ class SluDashboardServiceTest {
         short prevWeek = (short) prevWeekDt.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
         short prevPrevYear = (short) prevPrevWeekDt.get(IsoFields.WEEK_BASED_YEAR);
         short prevPrevWeek = (short) prevPrevWeekDt.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
-        ZonedDateTime from = now.minusWeeks(8 - 1).with(DayOfWeek.MONDAY);
+        ZonedDateTime from = now.minusWeeks(8 - 1);
         short fromYear = (short) from.get(IsoFields.WEEK_BASED_YEAR);
         short fromWeek = (short) from.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
 
@@ -105,10 +115,11 @@ class SluDashboardServiceTest {
 
     @Test
     void getWeeklyExposure_withNoData_returnsEmptyCurrentWeekAndEmptyTrend() {
-        ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
+        TestClockProvider.setClock(Clock.fixed(Instant.parse("2026-08-19T10:00:00Z"), ZoneOffset.UTC));
+        ZonedDateTime now = ZonedDateTime.now(TestClockProvider.getClock()).withZoneSameInstant(ZoneOffset.UTC);
         short curYear = (short) now.get(IsoFields.WEEK_BASED_YEAR);
         short curWeek = (short) now.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
-        ZonedDateTime from = now.minusWeeks(8 - 1).with(DayOfWeek.MONDAY);
+        ZonedDateTime from = now.minusWeeks(8 - 1);
         short fromYear = (short) from.get(IsoFields.WEEK_BASED_YEAR);
         short fromWeek = (short) from.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
 

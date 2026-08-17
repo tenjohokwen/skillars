@@ -636,7 +636,7 @@ export default {
         uploadStarted: 'Video-Upload gestartet – die Verarbeitung kann einige Minuten dauern',
         videoRemoved: 'Video entfernt',
         quotaExceeded:
-          'Speicherkontingent erschöpft. Upgrade dein Paket, um weitere Videos hochzuladen.',
+          'Upload-Limit erreicht. Versuche es gleich noch einmal, oder upgrade dein Paket für mehr Speicherplatz.',
         constraintViolated:
           'Das Video überschreitet das 120-Sekunden- oder 500-MB-Limit für Demo-Übungen.',
         uploadFailed: 'Upload fehlgeschlagen. Bitte erneut versuchen.',
