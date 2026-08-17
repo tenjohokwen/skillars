@@ -95,6 +95,20 @@ class CreditRoutingTest {
     }
 
     @Test
+    void caseAB_boundary_balanceExactlyEqualsSessionPrice_zeroStripeCharge() {
+        when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("50.00"));
+
+        service.onBookingAccepted(event(null));
+
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any());
+        // creditToUse = min(50, 50) = 50; stripeAmount = 0
+        verify(persistenceService).persistPaymentSuccess(
+            eq(BOOKING_ID), eq(SESSION_PRICE), eq(BigDecimal.ZERO),
+            isNull(), isNull(),
+            eq(PARENT_ID), anyString(), anyString(), any(Instant.class), anyString());
+    }
+
+    @Test
     void caseB_partialCredit_stripeChargedForDeficit() {
         when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("20.00"));
         reservationGranted();

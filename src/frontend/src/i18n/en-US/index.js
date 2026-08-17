@@ -912,6 +912,15 @@ export default {
       acceptedAll: 'All sessions accepted',
       acceptError: 'Could not accept all sessions. Please try again.',
     },
+    errors: {
+      coachUnavailable: 'This coach is currently unavailable.',
+      slotUnavailable: 'This time slot is no longer available.',
+      invalidSessionDuration:
+        "The requested session length does not match this coach's session duration.",
+      batchSizeExceeded: 'You can request up to {max} sessions in one batch.',
+      duplicateSlotStartTime: 'Two or more requests in this batch have the same start time.',
+      overlappingSlots: 'Two or more requests in this batch overlap.',
+    },
     wrapUp: {
       step1Title: 'Attendance',
       step1Label: 'Player attended',

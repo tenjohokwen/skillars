@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-08-17 # skillars-deferred-27 → done (code review complete: 7 patches applied, 1 decision deferred, 5 items deferred to ledger)
+# last_updated: 2026-08-17 # skillars-deferred-28 → review (all 6 tasks complete, full mvn -o verify green)
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-08-17 # skillars-deferred-27 → done (code review complete: 7 patches applied, 1 decision deferred, 5 items deferred to ledger)
+last_updated: 2026-08-17 # skillars-deferred-28 → review (all 6 tasks complete, full mvn -o verify green)
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -973,3 +973,36 @@ development_status:
   # already closed by a prior story. See the story file's "Why this story exists" section for full
   # reasoning.
   skillars-deferred-27-repository-ordering-updatable-guard-and-test-coverage-fixes: done  # 7 review patches applied 2026-08-17; AC1's ordering IT was decorative (seeded older-first) — fixed and mutation-verified
+  # 2026-08-17: story creation grouped 5 small unrelated deferred-work.md items into one story (same
+  # spirit as deferred-11/20/21/22/23/24/25/26/27). Originally numbered deferred-27 with 5 items; a
+  # senior-dev review of the draft found 2 of those 5 (SluDashboardServiceTest tightening,
+  # SessionBuilderResourceIT 30-drill boundary test) already closed by the concurrently-merged
+  # deferred-27 above (a same-ledger item collision between two parallel story-creation passes), and
+  # found the remaining 3 items' ACs contained real spec defects, all corrected before handoff. Renamed
+  # to deferred-28 to stop colliding with the merged deferred-27 story number, then re-expanded back to
+  # 5 items (2 more added on request, re-verified against current code independently of the original 3).
+  # Items:
+  #   AC1  code review of deferred-25 — CoachMediaItem's @PrePersist onCreate() has zero test coverage;
+  #        closed by unit-testing the package-private callback directly, no persisted entity needed
+  #   AC2  skillars-uat-2 story creation D2 — 6 booking error codes resolve to no message in any locale
+  #        bundle on the 3 parent-initiating booking/reschedule flows. Review caught a wrong field name
+  #        in the draft (helpCode, a random support ID) — corrected to errorMsg.errorKey, the field the
+  #        codebase's own axios interceptor already reads. Scoped to parent-side only; matching coach-side
+  #        accept flows logged as a new ledger item instead.
+  #   AC3  code review of skillars-uat-6 D3 — 9 of SubscriptionResource's 10 endpoints have no REST-layer
+  #        IT. Review caught a false premise (GET /player/me already has coverage via
+  #        PlayerSubscriptionOwnershipIT), a contradictory reference pattern, and a broken fixture plan in
+  #        the draft — corrected to reuse PlayerSubscriptionOwnershipIT's @WebMvcTest shape directly.
+  #   AC4  code review of 3-4 — negative hoursUntilSession silently maps to NONE, undocumented
+  #   AC5  adversarial review of 7-2 Group 6 D22 — credit-routing/cash-out balance==amount boundary
+  #        (correct today) has no test pinning it
+  #   AC6  Ledger hygiene: closes all 5 above with [CLOSED by skillars-deferred-28 ACn], plus logs 4 new
+  #        items (coach-side accept-flow error messaging; DrillDetailPanel.vue's identical helpCode bug;
+  #        post-start-time parent-cancellation product question; two-refund-rules divergence)
+  # DELIBERATELY EXCLUDED (see the story file's "Why this story exists" for full reasoning):
+  # DrillMetadata.repDensity int-vs-Integer (needs a backend contract change + product decision);
+  # de-DE translation-review TODOs (content review, not engineering); RescheduleService's missing
+  # availability-window check (needs a product decision on semantics); pack-selection FIFO-vs-soonest-
+  # expiring display mismatch (needs product input); all deploy-* items and anything needing a
+  # migration/product decision/platform-wide resilience pass.
+  skillars-deferred-28-booking-error-messaging-subscription-coverage-and-media-timestamp-test: review

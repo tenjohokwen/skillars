@@ -759,6 +759,24 @@ public class BookingService {
             case CANCEL_PARENT -> {
                 // Only compute refund eligibility when payment has actually been captured
                 if (currentStatus == BookingStatus.CONFIRMED || currentStatus == BookingStatus.UPCOMING) {
+                    // hoursUntilSession goes negative when the parent cancels after the session's start
+                    // time has already passed. cancelBookingAsParent — the only caller that reaches this
+                    // branch with CANCEL_PARENT — has no guard against that: it only checks ownership and
+                    // refuses a PAYMENT_PENDING+CAPTURE_PENDING booking, otherwise it transitions
+                    // unconditionally. So this is a normal, reachable path (a parent cancelling a booking
+                    // the coach never started), not caller error, and it correctly falls through to "NONE"
+                    // below. Whether a post-start-time parent cancellation should instead be settled as a
+                    // coach no-show (a different BookingEvent, different refund semantics) is an open
+                    // product question this comment does not resolve.
+                    //
+                    // ChronoUnit.HOURS.between truncates toward zero, so the "> 24" check below is
+                    // actually ">= 25 hours", not ">= 24 hours" as the user-facing "24 hours" copy implies:
+                    // a cancellation at 24h59m computes hoursUntilSession=24, fails "> 24", and is recorded
+                    // PARTIAL instead of FULL. cancelBookingAsParent's own refundEligible boolean
+                    // (line ~648) uses an exact Instant comparison instead and does not have this quirk, so
+                    // the two already-diverging refund rules (see the deferred-work.md item filed above)
+                    // diverge across the entire 24-25 hour window too, not only 6-24 hours. Not changed
+                    // here — doc-only, per the boundary intent being an open decision.
                     long hoursUntilSession = ChronoUnit.HOURS.between(Instant.now(), booking.getRequestedStartTime());
                     String eligibility = hoursUntilSession > 24 ? "FULL" : hoursUntilSession >= 6 ? "PARTIAL" : "NONE";
                     booking.setRefundEligibility(eligibility);

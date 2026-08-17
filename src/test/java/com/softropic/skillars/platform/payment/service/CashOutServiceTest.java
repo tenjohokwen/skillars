@@ -67,6 +67,28 @@ class CashOutServiceTest {
     }
 
     @Test
+    void processCashOut_amountEqualsBalance_succeeds() {
+        stubFeeConfig();
+        // Boundary is balance == requested amount — stub with AMOUNT itself, not an equal-valued
+        // literal, so the equality is visible at the call site rather than hidden behind two
+        // independently-written numbers that happen to match.
+        when(creditWalletService.getBalance(PARENT_ID)).thenReturn(AMOUNT);
+        StripeCustomer customer = new StripeCustomer();
+        customer.setParentId(PARENT_ID);
+        customer.setLastPaymentIntentId(PAYMENT_INTENT_ID);
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(customer));
+
+        cashOutService.processCashOut(PARENT_ID, AMOUNT);
+
+        // feeAmount = 100 * 0.025 + 0.25 = 2.75; net = 100 - 2.75 = 97.25
+        verify(paymentGateway).refund(eq(PAYMENT_INTENT_ID), eq(new BigDecimal("97.25")));
+        verify(creditWalletService).writeLedgerEntry(eq(PARENT_ID), eq(new BigDecimal("-100.00")),
+            eq("CASH_OUT_DEBIT"), isNull(), any());
+        verify(creditWalletService).writeLedgerEntry(eq(PARENT_ID), eq(new BigDecimal("-2.75")),
+            eq("STRIPE_FEE_DEBIT"), isNull(), any());
+    }
+
+    @Test
     void processCashOut_insufficientBalance_throwsException() {
         when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("50.00"));
 

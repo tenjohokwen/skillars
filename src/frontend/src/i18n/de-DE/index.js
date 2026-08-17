@@ -458,6 +458,16 @@ export default {
       acceptedAll: 'Alle Sitzungen angenommen',
       acceptError: 'Nicht alle Sitzungen konnten angenommen werden. Bitte erneut versuchen.',
     },
+    errors: {
+      coachUnavailable: 'Dieser Coach ist derzeit nicht verfügbar.',
+      slotUnavailable: 'Dieses Zeitfenster ist nicht mehr verfügbar.',
+      invalidSessionDuration:
+        'Die angeforderte Sitzungsdauer entspricht nicht der Sitzungsdauer dieses Coaches.',
+      batchSizeExceeded: 'Sie können bis zu {max} Sitzungen in einer Sammelanfrage anfragen.',
+      duplicateSlotStartTime:
+        'Zwei oder mehr Anfragen in dieser Sammelanfrage haben dieselbe Startzeit.',
+      overlappingSlots: 'Zwei oder mehr Anfragen in dieser Sammelanfrage überschneiden sich.',
+    },
   },
   video: {
     status: {
