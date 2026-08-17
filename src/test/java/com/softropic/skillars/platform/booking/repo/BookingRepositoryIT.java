@@ -126,6 +126,12 @@ class BookingRepositoryIT extends AbstractIntegrationTest {
         managed.setParentId(originalParentId + 1);
         managed.setPlayerId(originalPlayerId + 1);
         managed.setCoachId(UUID.randomUUID());
+        // status carries no updatable = false guard — mutating it alongside the three immutable
+        // columns, in the same flush, characterizes that only those three are guarded rather than
+        // the whole entity happening to be immutable. "DECLINED", not "ACCEPTED": ACCEPTED would move
+        // this row into excl_bkg_coach_slot_overlap's scope (V87), which this class's header comment
+        // states REQUESTED status deliberately stays outside of.
+        managed.setStatus("DECLINED");
         bookingRepository.saveAndFlush(managed);
 
         // This second findById is a genuine DB round-trip, not a persistence-context hit: this class has
@@ -137,6 +143,7 @@ class BookingRepositoryIT extends AbstractIntegrationTest {
         assertThat(reloaded.get().getParentId()).isEqualTo(originalParentId);
         assertThat(reloaded.get().getPlayerId()).isEqualTo(originalPlayerId);
         assertThat(reloaded.get().getCoachId()).isEqualTo(originalCoachId);
+        assertThat(reloaded.get().getStatus()).isEqualTo("DECLINED");
     }
 
     private Booking seedExisting() {

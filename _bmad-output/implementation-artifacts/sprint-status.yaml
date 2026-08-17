@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-08-17 # skillars-deferred-28 → review (all 6 tasks complete, full mvn -o verify green)
+# last_updated: 2026-08-17 # skillars-deferred-29 done (code review response complete: 6 patches applied, 2 decisions resolved with Mbah, 7 items deferred to ledger; full mvn -o verify green: 887 unit + 916 IT; AC2 manual browser check confirmed by Mbah)
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-25
-last_updated: 2026-08-17 # skillars-deferred-28 → review (all 6 tasks complete, full mvn -o verify green)
+last_updated: 2026-08-17 # skillars-deferred-29 done (code review response complete: 6 patches applied, 2 decisions resolved with Mbah, 7 items deferred to ledger; full mvn -o verify green: 887 unit + 916 IT; AC2 manual browser check confirmed by Mbah)
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -1006,3 +1006,50 @@ development_status:
   # expiring display mismatch (needs product input); all deploy-* items and anything needing a
   # migration/product decision/platform-wide resilience pass.
   skillars-deferred-28-booking-error-messaging-subscription-coverage-and-media-timestamp-test: review
+  # 2026-08-17: story creation grouped 6 small unrelated deferred-work.md items into one story (same
+  # spirit as deferred-11/20/21/22/23/24/25/26/27/28). All items independently re-verified against
+  # current code during story creation, not trusted from the ledger's text.
+  # 2026-08-17: senior-dev review of the story (pre-implementation) found AC2's and AC3's own analysis,
+  # not just their ledger citations, needed correction — see AC2/AC3 below and the story's "Why this
+  # story exists" section. Also folded the open, uncited deferred-work.md:1456 duplication item into AC5.
+  # Items:
+  #   AC1  code review of deferred-27 — SluDashboardService reads the wall clock directly instead of
+  #        ClockProvider, which is also what makes deferred-27 AC4's eq() matchers flaky once a week;
+  #        fixed by adopting ClockProvider and pinning SluDashboardServiceTest to a fixed clock. Also
+  #        removes the same review's separately-noted inert .with(DayOfWeek.MONDAY) call, from both the
+  #        service and the test.
+  #   AC2  skillars-deferred-28 story creation — DrillDetailPanel.vue's video-upload catch block branches
+  #        on helpCode instead of errorMsg.errorKey. Review correction: only the quota branch was
+  #        actually dead (helpCode there is a random support id); the constraint-violation branch already
+  #        fired because SessionApiAdvice happens to put the same string in helpCode. Fix reads
+  #        errorMsg.errorKey for both, but the quota branch's correct value is the enum name
+  #        'QUOTA_EXCEEDED', not 'video.quotaExceeded' (which is only the fallback message text).
+  #   AC3  code review of deferred-28 — BookingRequestPage.vue's submit()/submitBatchRequest() call
+  #        router.push inside the try block. Story creation found the ledger's ParentBookingsPage.vue:208
+  #        citation stale (submitReschedule() has no router.push at all) — scope corrected to
+  #        BookingRequestPage.vue only. Review correction: the described failure mode is unreachable
+  #        today (router.push isn't awaited, and vue-router 4.6.4 resolves rather than rejects on the
+  #        cited guard-redirect trigger) — implemented as defensive hardening against a future `await`
+  #        addition, not as a live bug fix.
+  #   AC4  code review of deferred-28 — all 3 booking error-toast catch blocks silently swallow an
+  #        unmapped booking.* code with no log line; added console.warn(errorKey, err) to each else
+  #        branch (err included so transport-level failures, which also land here with errorKey
+  #        undefined, are distinguishable from a genuinely unmapped code).
+  #   AC5  code review of deferred-27 — SessionPackPurchaseRepositoryIT's one test never exercises
+  #        findActivePacks' other 4 WHERE predicates (exhausted/expired/paused/other-player) at their
+  #        boundaries; added a negative-row test for each (coachId-mismatch deliberately left uncovered,
+  #        see AC5's text). Also extracts the class's duplicated raw-SQL main."user" seed into a
+  #        seedCoachUser() helper, closing the open deferred-work.md:1456 item as a bundled side-fix.
+  #   AC6  code review of deferred-27 — BookingRepositoryIT's updatable=false test can't distinguish
+  #        "these 3 columns are immutable" from "the whole entity is immutable"; added a status mutation
+  #        (to DECLINED, not ACCEPTED — ACCEPTED would fall inside V87's exclusion-constraint scope and
+  #        silently invalidate the class's REQUESTED-only invariant comment) asserting it DOES change,
+  #        alongside the 3 that don't.
+  #   AC7  Ledger hygiene: closes all 6 items above plus :1456 (via AC5) with
+  #        [CLOSED by skillars-deferred-29 ACn]
+  # DELIBERATELY EXCLUDED (see the story file's "Why this story exists" for full reasoning):
+  # the lock.timeout dead-code gap; ConfigService.getBoolean's fail-open/no-alert gap; coach-side
+  # accept-flow error mapping (would double AC2/AC4's file count); DrillMetadata.repDensity int-vs-Integer;
+  # the two refund/no-show product questions; booking.errors.batchSizeExceeded's wrong {max} figure (needs
+  # a backend contract change); all deploy-* items and anything needing a product/design decision.
+  skillars-deferred-29-clockprovider-error-mapping-and-repository-boundary-test-coverage-fixes: done

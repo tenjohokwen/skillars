@@ -349,7 +349,7 @@ export default {
           'Téléversement de la vidéo démarré — le traitement peut prendre quelques minutes',
         videoRemoved: 'Vidéo supprimée',
         quotaExceeded:
-          'Quota de stockage dépassé. Mettez à niveau votre plan pour téléverser plus de vidéos.',
+          'Limite de téléversement atteinte. Réessayez dans un instant, ou mettez à niveau votre plan pour plus de stockage.',
         constraintViolated:
           "La vidéo dépasse la limite de 120 secondes ou 500 Mo pour les démonstrations d'exercices.",
         uploadFailed: 'Échec du téléversement. Veuillez réessayer.',

@@ -338,7 +338,7 @@ export default {
         removeConfirm: 'Remove',
         uploadStarted: 'Video upload started — processing may take a few minutes',
         videoRemoved: 'Video removed',
-        quotaExceeded: 'Storage quota exceeded. Upgrade your plan to upload more videos.',
+        quotaExceeded: 'Upload limit reached. Try again in a moment, or upgrade your plan for more storage.',
         constraintViolated: 'Video exceeds the 120-second or 500 MB limit for drill demos.',
         uploadFailed: 'Upload failed. Please try again.',
         removeFailed: 'Could not remove video. Please try again.',

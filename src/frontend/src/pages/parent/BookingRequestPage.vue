@@ -467,6 +467,7 @@ function goToPurchase() {
 async function submit() {
   if (!canSubmit.value) return
   submitting.value = true
+  let succeeded = false
   try {
     await bookingStore.submitBookingRequest({
       coachId,
@@ -476,7 +477,7 @@ async function submit() {
       notes: notes.value || null,
       sessionPackPurchaseId: selectedPackId.value,
     })
-    router.push('/parent/bookings')
+    succeeded = true
   } catch (err) {
     const errorKey = err?.response?.data?.errorMsg?.errorKey
     if (errorKey === 'booking.coachUnavailable') {
@@ -486,11 +487,13 @@ async function submit() {
     } else if (errorKey === 'booking.invalidSessionDuration') {
       $q.notify({ type: 'negative', message: t('booking.errors.invalidSessionDuration') })
     } else {
+      console.warn('[booking] unmapped errorKey:', errorKey, err)
       $q.notify({ type: 'negative', message: t('booking.requests.submitError') })
     }
   } finally {
     submitting.value = false
   }
+  if (succeeded) router.push('/parent/bookings')
 }
 
 async function submitBatchRequest() {
@@ -498,13 +501,14 @@ async function submitBatchRequest() {
     $q.notify({ message: t('booking.batch.submitError'), type: 'negative' })
     return
   }
+  let succeeded = false
   try {
     // totalAmount is currently a display-only stub for the acceptance email preview, not used
     // for settlement (see BookingBatchService.java:233,255) — do not compute a real total here.
     await bookingStore.submitBatch(coachId, playerId.value, 0)
     batchReviewOpen.value = false
     $q.notify({ message: t('booking.batch.submitted'), type: 'positive' })
-    router.push('/parent/bookings')
+    succeeded = true
   } catch (err) {
     const errorKey = err?.response?.data?.errorMsg?.errorKey
     if (errorKey === 'booking.batchSizeExceeded') {
@@ -519,9 +523,11 @@ async function submitBatchRequest() {
     } else if (errorKey === 'booking.overlappingSlots') {
       $q.notify({ message: t('booking.errors.overlappingSlots'), type: 'negative' })
     } else {
+      console.warn('[booking] unmapped errorKey:', errorKey, err)
       $q.notify({ message: t('booking.batch.submitError'), type: 'negative' })
     }
   }
+  if (succeeded) router.push('/parent/bookings')
 }
 
 onMounted(async () => {

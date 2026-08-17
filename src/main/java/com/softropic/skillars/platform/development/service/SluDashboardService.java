@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.development.service;
 
+import com.softropic.skillars.infrastructure.util.ClockProvider;
 import com.softropic.skillars.platform.development.contract.NarrativeKeyDto;
 import com.softropic.skillars.platform.development.contract.SkillExposureResponse;
 import com.softropic.skillars.platform.development.contract.WeeklySkillTotals;
@@ -14,7 +15,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
-import java.time.DayOfWeek;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.temporal.IsoFields;
@@ -38,8 +38,8 @@ public class SluDashboardService {
 
     public SkillExposureResponse getWeeklyExposure(Long playerId, int weeksBack) {
         requireCoachPlayerRelationshipIfCoach(playerId);
-        ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
-        ZonedDateTime from = now.minusWeeks(weeksBack - 1).with(DayOfWeek.MONDAY);
+        ZonedDateTime now = ZonedDateTime.now(ClockProvider.getClock()).withZoneSameInstant(ZoneOffset.UTC);
+        ZonedDateTime from = now.minusWeeks(weeksBack - 1);
         short fromYear = (short) from.get(IsoFields.WEEK_BASED_YEAR);
         short fromWeek = (short) from.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
         short currentYear = (short) now.get(IsoFields.WEEK_BASED_YEAR);

@@ -211,6 +211,7 @@ async function submitReschedule() {
     if (errorKey === 'booking.invalidSessionDuration') {
       $q.notify({ message: t('booking.errors.invalidSessionDuration'), type: 'negative' })
     } else {
+      console.warn('[booking] unmapped errorKey:', errorKey, err)
       $q.notify({ message: t('booking.reschedule.requestFailed'), type: 'negative' })
     }
   } finally {
