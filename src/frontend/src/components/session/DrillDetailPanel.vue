@@ -385,6 +385,10 @@ async function startUpload() {
       $q.notify({ type: 'negative', message: t('session.drillLibrary.upload.quotaExceeded') })
     } else if (errorKey === 'video.constraintViolated') {
       $q.notify({ type: 'negative', message: t('session.drillLibrary.upload.constraintViolated') })
+    } else if (errorKey === 'DRILL_UPLOAD_NOT_ALLOWED') {
+      $q.notify({ type: 'negative', message: t('session.drillLibrary.upload.videoAlreadyLinked') })
+    } else if (errorKey === 'security.featureGated') {
+      $q.notify({ type: 'negative', message: t('security.featureGated') })
     } else {
       $q.notify({ type: 'negative', message: t('session.drillLibrary.upload.uploadFailed') })
     }

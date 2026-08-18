@@ -56,13 +56,22 @@ class SluDashboardServiceTest {
 
     @Test
     void getWeeklyExposure_returnsCurrentWeekSluPerSkill() {
-        TestClockProvider.setClock(Clock.fixed(Instant.parse("2026-08-19T10:00:00Z"), ZoneOffset.UTC));
-        ZonedDateTime now = ZonedDateTime.now(TestClockProvider.getClock()).withZoneSameInstant(ZoneOffset.UTC);
-        short curYear = (short) now.get(IsoFields.WEEK_BASED_YEAR);
-        short curWeek = (short) now.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
-        ZonedDateTime from = now.minusWeeks(8 - 1);
-        short fromYear = (short) from.get(IsoFields.WEEK_BASED_YEAR);
-        short fromWeek = (short) from.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
+        // Literal expectations rather than a test-side re-implementation of the production formula.
+        // NOT because the old form could not detect a date-math regression — it could: the removed
+        // `now.minusWeeks(8 - 1)` was computed from a test-local literal, so mutating production to
+        // `minusWeeks(weeksBack)` desynced the eq() matchers and MockitoExtension's default
+        // STRICT_STUBS failed the test with PotentialStubbingProblem. (The skillars-deferred-30 AC5
+        // premise that the old test "would stay green" was wrong; its code review corrected it.)
+        // What the literals actually buy is that the expected values are readable and independently
+        // checkable at a glance, and that the clock is pinned to a rollover-spanning date instead of
+        // an arbitrary mid-year one: 2027-01-06 is a Wednesday in ISO week 1 of 2027, and
+        // minusWeeks(7) lands on 2026-11-18, ISO week 47 of 2026 — so the from/cur pair straddles a
+        // week-based-year boundary the old 2026-08-19 pin never exercised. Verified by hand.
+        TestClockProvider.setClock(Clock.fixed(Instant.parse("2027-01-06T10:00:00Z"), ZoneOffset.UTC));
+        short curYear = (short) 2027;
+        short curWeek = (short) 1;
+        short fromYear = (short) 2026;
+        short fromWeek = (short) 47;
 
         List<PlayerSluWeeklySnapshot> snapshots = List.of(
             makeSnapshot(curYear, curWeek, "PAC", new BigDecimal("10.00")),
@@ -81,13 +90,21 @@ class SluDashboardServiceTest {
 
     @Test
     void getWeeklyExposure_withFewerThanRequestedWeeks_returnsAvailableWeeks() {
-        TestClockProvider.setClock(Clock.fixed(Instant.parse("2026-08-19T10:00:00Z"), ZoneOffset.UTC));
+        // Literal expectations for the mocked findByPlayerIdFromWeek call, per the same rationale as
+        // getWeeklyExposure_returnsCurrentWeekSluPerSkill above. fromYear/fromWeek/curYear/curWeek
+        // are that call's arguments; curYear/curWeek additionally build fixture snapshots, as do the
+        // prev* pairs. prevYear/prevWeek/prevPrevYear/prevPrevWeek are NOT call arguments, so they
+        // stay derived from real calendar arithmetic off the pinned clock rather than hardcoded —
+        // which is what makes them roll back correctly across the year boundary, per the note below.
+        // At this clock they land on ISO weeks 53 and 52 of 2026; 2026 is a 53-week ISO year, so
+        // this fixture exercises the long-year case as well as the rollover.
+        TestClockProvider.setClock(Clock.fixed(Instant.parse("2027-01-06T10:00:00Z"), ZoneOffset.UTC));
         ZonedDateTime now = ZonedDateTime.now(TestClockProvider.getClock()).withZoneSameInstant(ZoneOffset.UTC);
         ZonedDateTime prevWeekDt = now.minusWeeks(1);
         ZonedDateTime prevPrevWeekDt = now.minusWeeks(2);
 
-        short curYear = (short) now.get(IsoFields.WEEK_BASED_YEAR);
-        short curWeek = (short) now.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
+        short curYear = (short) 2027;
+        short curWeek = (short) 1;
         // Derive prev/prevPrev year+week from actual calendar arithmetic (not curWeek-1/-2) so
         // ISO week 1 (early January) correctly rolls back into the prior ISO week-based year
         // instead of wrapping to a hardcoded week 52 of the CURRENT year.
@@ -95,9 +112,8 @@ class SluDashboardServiceTest {
         short prevWeek = (short) prevWeekDt.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
         short prevPrevYear = (short) prevPrevWeekDt.get(IsoFields.WEEK_BASED_YEAR);
         short prevPrevWeek = (short) prevPrevWeekDt.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
-        ZonedDateTime from = now.minusWeeks(8 - 1);
-        short fromYear = (short) from.get(IsoFields.WEEK_BASED_YEAR);
-        short fromWeek = (short) from.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
+        short fromYear = (short) 2026;
+        short fromWeek = (short) 47;
 
         List<PlayerSluWeeklySnapshot> snapshots = List.of(
             makeSnapshot(curYear, curWeek, "PAC", new BigDecimal("10.00")),
@@ -115,13 +131,12 @@ class SluDashboardServiceTest {
 
     @Test
     void getWeeklyExposure_withNoData_returnsEmptyCurrentWeekAndEmptyTrend() {
-        TestClockProvider.setClock(Clock.fixed(Instant.parse("2026-08-19T10:00:00Z"), ZoneOffset.UTC));
-        ZonedDateTime now = ZonedDateTime.now(TestClockProvider.getClock()).withZoneSameInstant(ZoneOffset.UTC);
-        short curYear = (short) now.get(IsoFields.WEEK_BASED_YEAR);
-        short curWeek = (short) now.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
-        ZonedDateTime from = now.minusWeeks(8 - 1);
-        short fromYear = (short) from.get(IsoFields.WEEK_BASED_YEAR);
-        short fromWeek = (short) from.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
+        // Literal expectations — see getWeeklyExposure_returnsCurrentWeekSluPerSkill above.
+        TestClockProvider.setClock(Clock.fixed(Instant.parse("2027-01-06T10:00:00Z"), ZoneOffset.UTC));
+        short curYear = (short) 2027;
+        short curWeek = (short) 1;
+        short fromYear = (short) 2026;
+        short fromWeek = (short) 47;
 
         when(snapshotRepository.findByPlayerIdFromWeek(eq(PLAYER_ID), eq(fromYear), eq(fromWeek), eq(curYear), eq(curWeek)))
             .thenReturn(List.of());

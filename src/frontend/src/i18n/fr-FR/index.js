@@ -352,6 +352,8 @@ export default {
           'Limite de téléversement atteinte. Réessayez dans un instant, ou mettez à niveau votre plan pour plus de stockage.',
         constraintViolated:
           "La vidéo dépasse la limite de 120 secondes ou 500 Mo pour les démonstrations d'exercices.",
+        videoAlreadyLinked:
+          'Une vidéo est déjà associée à cet exercice. Supprimez-la avant d’en téléverser une nouvelle.',
         uploadFailed: 'Échec du téléversement. Veuillez réessayer.',
         removeFailed: 'Impossible de supprimer la vidéo. Veuillez réessayer.',
       },
@@ -1056,6 +1058,7 @@ export default {
       decline: 'Refuser',
       acceptError: "Échec de l'acceptation de la réservation. Veuillez réessayer.",
       declineError: 'Échec du refus de la réservation. Veuillez réessayer.',
+      submitError: 'Impossible d’envoyer votre demande. Veuillez réessayer.',
       creditsRemaining: '{count} crédits restants avec ce coach',
       bookingsLoadError: 'Impossible de charger vos réservations. Veuillez actualiser la page.',
       selectPack: 'Utiliser un pack de séances',
@@ -1195,6 +1198,13 @@ export default {
     errors: {
       coachUnavailable: "Ce coach n'est actuellement pas disponible.",
       slotUnavailable: "Ce créneau horaire n'est plus disponible.",
+      startTimeInPast: 'Cet horaire est déjà passé. Veuillez choisir un créneau ultérieur.',
+      invalidTimeRange: 'La fin de la séance doit être postérieure à son début.',
+      slotOutsideAvailability: 'Cet horaire est en dehors des disponibilités de ce coach.',
+      batchAlreadyProcessed: 'Ces demandes ont déjà été traitées.',
+      packExpired: 'Ce forfait de séances a expiré.',
+      requestNotAllowed:
+        "Vous n’avez pas accès au joueur ou au forfait de séances de cette demande.",
       invalidSessionDuration:
         'La durée de séance demandée ne correspond pas à la durée de séance de ce coach.',
       batchSizeExceeded: 'Vous pouvez demander jusqu’à {max} séances dans un même lot.',

@@ -152,8 +152,15 @@ async function handleAccept(id) {
   accepting.value[id] = true
   try {
     await bookingStore.approveBooking(id)
-  } catch {
-    $q.notify({ type: 'negative', message: t('booking.requests.acceptError') })
+  } catch (err) {
+    const errorKey = err?.response?.data?.errorMsg?.errorKey
+    if (errorKey === 'booking.coachUnavailable') {
+      $q.notify({ type: 'negative', message: t('booking.errors.coachUnavailable') })
+    } else if (errorKey === 'booking.slotUnavailable') {
+      $q.notify({ type: 'negative', message: t('booking.errors.slotUnavailable') })
+    } else {
+      $q.notify({ type: 'negative', message: t('booking.requests.acceptError') })
+    }
     await bookingStore.loadCoachBookingRequests()
   } finally {
     accepting.value[id] = false
@@ -177,8 +184,22 @@ async function handleAcceptAll(batchId) {
   try {
     await bookingStore.handleAcceptAllBatch(batchId)
     $q.notify({ message: t('booking.batch.acceptedAll'), type: 'positive' })
-  } catch {
-    $q.notify({ message: t('booking.batch.acceptError'), type: 'negative' })
+  } catch (err) {
+    const errorKey = err?.response?.data?.errorMsg?.errorKey
+    // Only the three PRE-FLIGHT checks in BookingBatchService.acceptAll can reach the client: the
+    // per-booking throws inside the loop are swallowed by its own catch. Those three are batch
+    // ownership (MISSING_RIGHTS), the already-processed batch (split out of MISSING_RIGHTS by the
+    // skillars-deferred-30 review — the ordinary double-click case, not retryable) and the suspended
+    // coach. An earlier version of this comment counted two and omitted the ownership check.
+    if (errorKey === 'booking.coachUnavailable') {
+      $q.notify({ type: 'negative', message: t('booking.errors.coachUnavailable') })
+    } else if (errorKey === 'booking.batchAlreadyProcessed') {
+      $q.notify({ type: 'negative', message: t('booking.errors.batchAlreadyProcessed') })
+    } else if (errorKey === 'MISSING_RIGHTS') {
+      $q.notify({ type: 'negative', message: t('booking.errors.requestNotAllowed') })
+    } else {
+      $q.notify({ type: 'negative', message: t('booking.batch.acceptError') })
+    }
   } finally {
     acceptingAll.value[batchId] = false
   }

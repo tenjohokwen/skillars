@@ -88,8 +88,13 @@ class ExpiredPackBookingValidationTest {
         Instant end = tomorrow.atTime(LocalTime.of(11, 0)).toInstant(ZoneOffset.UTC);
         setupCommonMocks(tomorrow.getDayOfWeek());
 
-        // Expired pack: expired yesterday
+        // Expired pack: expired yesterday. parentId must be set: the skillars-deferred-30 code review
+        // moved the pack-ownership check AHEAD of the expiry check (an expired pack belonging to
+        // someone else used to answer "packExpired", which distinguished it from an unowned unexpired
+        // one and leaked another parent's pack state). Without an owner this fixture now fails on
+        // ownership and never reaches the branch under test.
         SessionPackPurchase expiredPack = new SessionPackPurchase();
+        expiredPack.setParentId(PARENT_ID);
         expiredPack.setExpiresAt(Instant.now().minus(1, ChronoUnit.DAYS));
         when(sessionPackPurchaseRepository.findById(EXPIRED_PACK_ID)).thenReturn(Optional.of(expiredPack));
 
@@ -99,6 +104,34 @@ class ExpiredPackBookingValidationTest {
         assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
             .isInstanceOf(PaymentGatewayException.class)
             .hasMessageContaining("payment.packExpired");
+    }
+
+    @Test
+    void createBookingRequest_expiredPackOwnedByAnotherParent_reportsMissingRightsNotExpiry() {
+        // skillars-deferred-30 code review, Decision 2. Ownership must be decided BEFORE any state
+        // check on the pack, so that a pack id the caller does not own yields exactly one answer
+        // regardless of that pack's state. Before the reorder this returned payment.packExpired,
+        // which — combined with MISSING_RIGHTS for an unowned unexpired pack and 404 for an unknown
+        // id — let a caller probe other parents' pack state. Reverting the reorder fails this test.
+        LocalDate tomorrow = LocalDate.now(ZoneOffset.UTC).plusDays(1);
+        Instant start = tomorrow.atTime(LocalTime.of(10, 0)).toInstant(ZoneOffset.UTC);
+        Instant end = tomorrow.atTime(LocalTime.of(11, 0)).toInstant(ZoneOffset.UTC);
+        setupCommonMocks(tomorrow.getDayOfWeek());
+
+        // Expired AND owned by somebody else: the two rejections the old ordering let a caller tell
+        // apart. Coach and remaining-session fields are deliberately left unset — neither check may
+        // be reached, so a change that reordered them forward would fail here too.
+        SessionPackPurchase foreignExpiredPack = new SessionPackPurchase();
+        foreignExpiredPack.setParentId(PARENT_ID + 1);
+        foreignExpiredPack.setExpiresAt(Instant.now().minus(1, ChronoUnit.DAYS));
+        when(sessionPackPurchaseRepository.findById(EXPIRED_PACK_ID)).thenReturn(Optional.of(foreignExpiredPack));
+
+        CreateBookingRequest req = new CreateBookingRequest(
+            COACH_ID, PLAYER_ID, start, end, null, EXPIRED_PACK_ID);
+
+        assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining("Pack does not belong to this parent");
     }
 
     @Test
