@@ -486,6 +486,25 @@ async function submit() {
       $q.notify({ type: 'negative', message: t('booking.errors.slotUnavailable') })
     } else if (errorKey === 'booking.invalidSessionDuration') {
       $q.notify({ type: 'negative', message: t('booking.errors.invalidSessionDuration') })
+    } else if (errorKey === 'payment.coachStripeNotConfigured') {
+      $q.notify({ type: 'negative', message: t('payment.error.coachStripeNotConfigured') })
+    } else if (errorKey === 'payment.packExpired') {
+      $q.notify({ type: 'negative', message: t('booking.errors.packExpired') })
+    } else if (errorKey === 'payment.packCoachMismatch') {
+      $q.notify({ type: 'negative', message: t('payment.sessionPack.packCoachMismatch') })
+    } else if (errorKey === 'payment.packExhausted') {
+      $q.notify({ type: 'negative', message: t('payment.sessionPack.packExhausted') })
+    } else if (errorKey === 'booking.startTimeInPast') {
+      $q.notify({ type: 'negative', message: t('booking.errors.startTimeInPast') })
+    } else if (errorKey === 'booking.invalidTimeRange') {
+      $q.notify({ type: 'negative', message: t('booking.errors.invalidTimeRange') })
+    } else if (errorKey === 'booking.slotOutsideAvailability') {
+      $q.notify({ type: 'negative', message: t('booking.errors.slotOutsideAvailability') })
+    } else if (errorKey === 'MISSING_RIGHTS') {
+      // Post-split, MISSING_RIGHTS carries exactly one user-facing meaning on this path: the caller
+      // does not own the player profile or the session pack they submitted. The four validation
+      // causes that used to share this code now have their own branches above.
+      $q.notify({ type: 'negative', message: t('booking.errors.requestNotAllowed') })
     } else {
       console.warn('[booking] unmapped errorKey:', errorKey, err)
       $q.notify({ type: 'negative', message: t('booking.requests.submitError') })
@@ -522,6 +541,16 @@ async function submitBatchRequest() {
       $q.notify({ message: t('booking.errors.duplicateSlotStartTime'), type: 'negative' })
     } else if (errorKey === 'booking.overlappingSlots') {
       $q.notify({ message: t('booking.errors.overlappingSlots'), type: 'negative' })
+    } else if (errorKey === 'booking.coachUnavailable') {
+      $q.notify({ message: t('booking.errors.coachUnavailable'), type: 'negative' })
+    } else if (errorKey === 'booking.startTimeInPast') {
+      $q.notify({ message: t('booking.errors.startTimeInPast'), type: 'negative' })
+    } else if (errorKey === 'booking.invalidTimeRange') {
+      $q.notify({ message: t('booking.errors.invalidTimeRange'), type: 'negative' })
+    } else if (errorKey === 'booking.slotOutsideAvailability') {
+      $q.notify({ message: t('booking.errors.slotOutsideAvailability'), type: 'negative' })
+    } else if (errorKey === 'MISSING_RIGHTS') {
+      $q.notify({ message: t('booking.errors.requestNotAllowed'), type: 'negative' })
     } else {
       console.warn('[booking] unmapped errorKey:', errorKey, err)
       $q.notify({ message: t('booking.batch.submitError'), type: 'negative' })

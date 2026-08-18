@@ -113,7 +113,7 @@ public class BookingBatchService {
         CoachProfile coach = coachProfileRepository.findById(req.coachId())
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
         if (coach.getStatus() != CoachProfileStatus.ACTIVE) {
-            throw new OperationNotAllowedException("Coach profile is not active", SecurityError.MISSING_RIGHTS);
+            throw new OperationNotAllowedException("Coach profile is not active", BookingError.COACH_UNAVAILABLE);
         }
 
         // UAT.2 AC4: both resolved ONCE for the whole batch, not per slot — @Size(max = 10) on
@@ -124,10 +124,10 @@ public class BookingBatchService {
 
         for (BatchSlot slot : req.slots()) {
             if (!slot.requestedStartTime().isAfter(Instant.now())) {
-                throw new OperationNotAllowedException("Requested start time must be in the future", SecurityError.MISSING_RIGHTS);
+                throw new OperationNotAllowedException("Requested start time must be in the future", BookingError.START_TIME_IN_PAST);
             }
             if (!slot.requestedEndTime().isAfter(slot.requestedStartTime())) {
-                throw new OperationNotAllowedException("Requested end time must be after start time", SecurityError.MISSING_RIGHTS);
+                throw new OperationNotAllowedException("Requested end time must be after start time", BookingError.INVALID_TIME_RANGE);
             }
             Duration slotDuration =
                 Duration.between(slot.requestedStartTime(), slot.requestedEndTime());
@@ -147,7 +147,7 @@ public class BookingBatchService {
                     "Requested slot is not within coach availability",
                     Map.of("requested start time", slot.requestedStartTime(),
                         "requested end time", slot.requestedEndTime()),
-                    SecurityError.MISSING_RIGHTS);
+                    BookingError.SLOT_OUTSIDE_AVAILABILITY);
             }
         }
 
@@ -243,7 +243,7 @@ public class BookingBatchService {
         }
 
         if (!"PENDING".equals(batch.getStatus())) {
-            throw new OperationNotAllowedException("Batch has already been processed", SecurityError.MISSING_RIGHTS);
+            throw new OperationNotAllowedException("Batch has already been processed", BookingError.BATCH_ALREADY_PROCESSED);
         }
 
         // Deferred-15 AC4. Deliberately an UNLOCKED check here, with the authoritative locked one in

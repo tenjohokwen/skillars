@@ -22,10 +22,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 // (SessionPackPurchaseRepository.java:37-46) against a real database. This IT proves that ordering.
 class SessionPackPurchaseRepositoryIT extends AbstractIntegrationTest {
 
-    // Fixture id range 9620000001-9620000003, claimed in docs/testing/test-data-isolation.md.
+    // Fixture id range 9620000001-9620000004, claimed in docs/testing/test-data-isolation.md.
     private static final long COACH_USER_ID = 9_620_000_001L;
     private static final long PLAYER_ID = 9_620_000_002L;
     private static final long OTHER_PLAYER_ID = 9_620_000_003L;
+    private static final long OTHER_COACH_USER_ID = 9_620_000_004L;
 
     @Autowired private SessionPackPurchaseRepository sessionPackPurchaseRepository;
     @Autowired private CoachProfileRepository coachProfileRepository;
@@ -112,7 +113,7 @@ class SessionPackPurchaseRepositoryIT extends AbstractIntegrationTest {
     // all be deleted from the JPQL without failing it. This test seeds one negative row per predicate
     // (plus a control row) and proves each one is actually excluded.
     @Test
-    void findActivePacks_excludesExhaustedExpiredPausedAndOtherPlayerPacks() {
+    void findActivePacks_excludesExhaustedExpiredPausedOtherPlayerAndOtherCoachPacks() {
         long coachUserId = COACH_USER_ID;
         seedCoachUser(coachUserId);
 
@@ -179,6 +180,24 @@ class SessionPackPurchaseRepositoryIT extends AbstractIntegrationTest {
         exactlyExpiredPack.setExpiresAt(now);
         exactlyExpiredPack.setPausedUntil(null);
         sessionPackPurchaseRepository.save(exactlyExpiredPack);
+
+        // AC4 (skillars-deferred-30): every row above shares the SAME coach, so `p.coachId = :coachId`
+        // is unproven — deleting it from the JPQL would still leave both existing tests in this class
+        // green. This row is otherwise identical to controlPack (same player, active/unpaused/unexpired)
+        // but belongs to a SECOND, unrelated coach. Reuses coach A's tier fixture deliberately — the
+        // assertion only depends on the pack row's own coach_id column, not its tier's coach.
+        seedCoachUser(OTHER_COACH_USER_ID);
+        CoachProfile otherCoach = new CoachProfile();
+        otherCoach.setUserId(OTHER_COACH_USER_ID);
+        otherCoach.setDisplayName("Coach Boundary Test — Other Coach");
+        otherCoach.setCanonicalTimezone("Europe/Berlin");
+        otherCoach = coachProfileRepository.save(otherCoach);
+
+        SessionPackPurchase otherCoachPack = newPack(playerId, otherCoach.getId(), tier.getPackTierId());
+        otherCoachPack.setRemainingSessions(5);
+        otherCoachPack.setExpiresAt(now.plusSeconds(86_400));
+        otherCoachPack.setPausedUntil(null);
+        sessionPackPurchaseRepository.save(otherCoachPack);
 
         // Pass the seeded `now`, not a fresh Instant.now(), so the query's `:now` boundary is fixed
         // relative to the seeded expiresAt/pausedUntil values rather than drifting later by however long

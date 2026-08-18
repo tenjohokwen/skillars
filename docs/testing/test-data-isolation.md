@@ -203,7 +203,7 @@ registry exists for **readability and debuggability**, not correctness. It is st
 | `9600000001`–`9600000099` | `PlayerTimelineResourceIT`, `ScheduleResourceIT`, `SessionCompletionResourceIT`, `BookingSseIT` ⚠ |
 | `9610000001`–`9610000021` | `ParentDevelopmentPortalResourceIT` |
 | `9611000001`–`9611000021` | `BatchAcceptPaymentIT` |
-| `9620000001`–`9620000003` | `SessionPackPurchaseRepositoryIT` |
+| `9620000001`–`9620000004` | `SessionPackPurchaseRepositoryIT` |
 | `9700000001`–`9700000011` | `RescheduleResourceIT` **and** `ConversationResourceIT` ⚠ |
 | `9800000001`–`9800000020` | `BookingBatchResourceIT` **and** `MessagingAccessControlIT` ⚠ |
 | `9810000001`–`9810000200` | `ParentalOversightResourceIT` |
@@ -212,12 +212,12 @@ registry exists for **readability and debuggability**, not correctness. It is st
 | `9900000001` | `SluCalculationServiceIT` |
 | `555000000000000001`–`…002` | `ShadowAccountServiceIT` |
 
-The claimed four-digit prefixes at `21ef489` are: `9000`, `9070`, `9100`, `9200`, `9300`, `9360`, `9399`,
-`9500`, `9511`, `9540`, `9550`, `9560`, `9570`, `9580`, `9590`, `9600`, `9610`, `9611`, `9700`, `9800`,
-`9810`, `9820`, `9830`, `9900`.
+The claimed four-digit prefixes are: `9000`, `9070`, `9100`, `9200`, `9300`, `9360`, `9399`,
+`9500`, `9511`, `9540`, `9550`, `9560`, `9570`, `9580`, `9590`, `9600`, `9610`, `9611`, `9620`, `9700`,
+`9800`, `9810`, `9820`, `9830`, `9900`.
 
 **Free blocks** for new classes: `9310`–`9350`, `9370`–`9390`, `9400`–`9490`, `9520`–`9530`,
-`9620`–`9690`, `9710`–`9790`, `9840`–`9890`, `9910`–`9990`.
+`9630`–`9690`, `9710`–`9790`, `9840`–`9890`, `9910`–`9990`.
 
 *(This registry covers ten-digit ids beginning with `9`, which is the convention for per-class fixtures.
 The `5550…`, `5869…`, `6747…` and `6592…` families are the shared fixture scripts above and are not

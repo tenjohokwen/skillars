@@ -340,6 +340,7 @@ export default {
         videoRemoved: 'Video removed',
         quotaExceeded: 'Upload limit reached. Try again in a moment, or upgrade your plan for more storage.',
         constraintViolated: 'Video exceeds the 120-second or 500 MB limit for drill demos.',
+        videoAlreadyLinked: 'A video is already linked to this drill. Remove it before uploading a new one.',
         uploadFailed: 'Upload failed. Please try again.',
         removeFailed: 'Could not remove video. Please try again.',
       },
@@ -777,6 +778,7 @@ export default {
       decline: 'Decline',
       acceptError: 'Failed to accept booking. Please try again.',
       declineError: 'Failed to decline booking. Please try again.',
+      submitError: 'Could not submit your request. Please try again.',
       creditsRemaining: '{count} credits remaining with this coach',
       bookingsLoadError: 'Unable to load your bookings. Please refresh the page.',
       selectPack: 'Use a session pack',
@@ -915,6 +917,12 @@ export default {
     errors: {
       coachUnavailable: 'This coach is currently unavailable.',
       slotUnavailable: 'This time slot is no longer available.',
+      startTimeInPast: 'That time has already passed. Pick a later slot.',
+      invalidTimeRange: 'The session end time must be after its start time.',
+      slotOutsideAvailability: "That time is outside this coach's available hours.",
+      batchAlreadyProcessed: 'These requests have already been handled.',
+      packExpired: 'This session pack has expired.',
+      requestNotAllowed: 'You do not have access to the player or session pack in this request.',
       invalidSessionDuration:
         "The requested session length does not match this coach's session duration.",
       batchSizeExceeded: 'You can request up to {max} sessions in one batch.',

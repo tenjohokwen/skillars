@@ -269,6 +269,7 @@ export default {
     requests: {
       acceptError: 'Buchung konnte nicht angenommen werden. Bitte erneut versuchen.', // TODO: native review
       declineError: 'Buchung konnte nicht abgelehnt werden. Bitte erneut versuchen.', // TODO: native review
+      submitError: 'Ihre Anfrage konnte nicht gesendet werden. Bitte erneut versuchen.',
       bookingsLoadError: 'Deine Buchungen konnten nicht geladen werden. Bitte die Seite neu laden.', // TODO: native review
       statusRequested: 'Warten auf Trainerantwort',
       statusAccepted: 'Angenommen',
@@ -461,6 +462,13 @@ export default {
     errors: {
       coachUnavailable: 'Dieser Coach ist derzeit nicht verfügbar.',
       slotUnavailable: 'Dieses Zeitfenster ist nicht mehr verfügbar.',
+      startTimeInPast: 'Dieser Zeitpunkt liegt bereits in der Vergangenheit. Bitte wählen Sie einen späteren Termin.',
+      invalidTimeRange: 'Das Ende der Sitzung muss nach ihrem Beginn liegen.',
+      slotOutsideAvailability: 'Dieser Zeitpunkt liegt außerhalb der verfügbaren Zeiten dieses Coaches.',
+      batchAlreadyProcessed: 'Diese Anfragen wurden bereits bearbeitet.',
+      packExpired: 'Dieses Sitzungspaket ist abgelaufen.',
+      requestNotAllowed:
+        'Sie haben keinen Zugriff auf den Spieler oder das Sitzungspaket in dieser Anfrage.',
       invalidSessionDuration:
         'Die angeforderte Sitzungsdauer entspricht nicht der Sitzungsdauer dieses Coaches.',
       batchSizeExceeded: 'Sie können bis zu {max} Sitzungen in einer Sammelanfrage anfragen.',
@@ -639,6 +647,8 @@ export default {
           'Upload-Limit erreicht. Versuche es gleich noch einmal, oder upgrade dein Paket für mehr Speicherplatz.',
         constraintViolated:
           'Das Video überschreitet das 120-Sekunden- oder 500-MB-Limit für Demo-Übungen.',
+        videoAlreadyLinked:
+          'Diesem Drill ist bereits ein Video zugeordnet. Entferne es, bevor du ein neues hochlädst.',
         uploadFailed: 'Upload fehlgeschlagen. Bitte erneut versuchen.',
         removeFailed: 'Video konnte nicht entfernt werden. Bitte erneut versuchen.',
       },

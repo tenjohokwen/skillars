@@ -181,7 +181,7 @@ public class BookingService {
         if (coach.getStatus() != CoachProfileStatus.ACTIVE
                 && coach.getStatus() != CoachProfileStatus.REDUCED
                 && coach.getStatus() != CoachProfileStatus.PENDING_REVIEW) {
-            throw new OperationNotAllowedException("Coach profile is not active", metaData, SecurityError.MISSING_RIGHTS);
+            throw new OperationNotAllowedException("Coach profile is not active", metaData, BookingError.COACH_UNAVAILABLE);
         }
 
         if (!paymentGateway.isCoachPaymentReady(coach.getId())) {
@@ -190,12 +190,12 @@ public class BookingService {
 
         if (!req.requestedStartTime().isAfter(Instant.now())) {
             throw new OperationNotAllowedException("Requested start time must be in the future",
-                Map.of("requested start time", req.requestedStartTime()), SecurityError.MISSING_RIGHTS);
+                Map.of("requested start time", req.requestedStartTime()), BookingError.START_TIME_IN_PAST);
         }
         if (!req.requestedEndTime().isAfter(req.requestedStartTime())) {
             throw new OperationNotAllowedException("Requested end time must be after start time",
                 Map.of("requested start time", req.requestedStartTime(), "requested end time", req.requestedEndTime()),
-                SecurityError.MISSING_RIGHTS);
+                BookingError.INVALID_TIME_RANGE);
         }
 
         // UAT.2 AC3. Placed BEFORE the window lookup and the pessimistic lock below, so a malformed
@@ -219,7 +219,7 @@ public class BookingService {
         if (!isSlotWithinAvailabilityWindow(req.requestedStartTime(), req.requestedEndTime(), windows)) {
             throw new OperationNotAllowedException("Requested slot is not within coach availability",
                 Map.of("requested start time", req.requestedStartTime(), "requested end time", req.requestedEndTime()),
-                SecurityError.MISSING_RIGHTS);
+                BookingError.SLOT_OUTSIDE_AVAILABILITY);
         }
 
         // AC 1/2: acquire a per-coach lock before the authoritative overlap check so two
@@ -241,7 +241,7 @@ public class BookingService {
         if (lockedCoach.getStatus() != CoachProfileStatus.ACTIVE
                 && lockedCoach.getStatus() != CoachProfileStatus.REDUCED
                 && lockedCoach.getStatus() != CoachProfileStatus.PENDING_REVIEW) {
-            throw new OperationNotAllowedException("Coach profile is not active", metaData, SecurityError.MISSING_RIGHTS);
+            throw new OperationNotAllowedException("Coach profile is not active", metaData, BookingError.COACH_UNAVAILABLE);
         }
 
         List<Booking> overlapping = bookingRepository.findOverlappingBookings(
@@ -258,13 +258,21 @@ public class BookingService {
         if (req.sessionPackPurchaseId() != null) {
             SessionPackPurchase pack = sessionPackPurchaseRepository.findById(req.sessionPackPurchaseId())
                 .orElseThrow(() -> new ResourceNotFoundException("Session pack purchase not found", "session_pack_purchase"));
-            if (pack.getExpiresAt().isBefore(Instant.now())) {
-                throw new PaymentGatewayException("payment.packExpired");
-            }
-            if (!pack.getParentId().equals(parentId)) {
+            // Ownership is checked BEFORE any state check on the pack. Reversed (the original
+            // order), an expired pack belonging to someone else reported "payment.packExpired"
+            // while an unexpired one reported MISSING_RIGHTS and a nonexistent id reported 404 —
+            // three distinguishable answers, i.e. an oracle over other parents' pack state. That
+            // was invisible while every pack rejection collapsed into one generic toast; the
+            // skillars-deferred-30 AC2 mapping is what made the three cases tellable apart, so the
+            // ordering is fixed here rather than left to the frontend, which cannot fix it.
+            // packCoachMismatch and packExhausted below were already correctly ordered.
+            if (!Objects.equals(pack.getParentId(), parentId)) {
                 throw new OperationNotAllowedException("Pack does not belong to this parent",
                     Map.of("submitted parent id", parentId, "submitted pack id", req.sessionPackPurchaseId()),
                     SecurityError.MISSING_RIGHTS);
+            }
+            if (pack.getExpiresAt().isBefore(Instant.now())) {
+                throw new PaymentGatewayException("payment.packExpired");
             }
             if (!pack.getCoachId().equals(req.coachId())) {
                 throw new PaymentGatewayException("payment.packCoachMismatch");

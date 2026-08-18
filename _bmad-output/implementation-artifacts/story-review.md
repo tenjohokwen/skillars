@@ -1,354 +1,486 @@
-# Senior-Dev Review — Story `skillars-deferred-29-clockprovider-error-mapping-and-repository-boundary-test-coverage-fixes`
+# Senior-Dev Story Audit — `skillars-deferred-30`
 
-Reviewer: senior dev (adversarial audit for missed corner cases, false assumptions, missed flows)
-Date: 2026-08-17
-Story reviewed: `_bmad-output/implementation-artifacts/skillars-deferred-29-clockprovider-error-mapping-and-repository-boundary-test-coverage-fixes.md` (status `ready-for-dev`)
-Verified against: working tree at branch `master`, HEAD `5ea940f`
+**Story reviewed:** `_bmad-output/implementation-artifacts/skillars-deferred-30-error-toast-mapping-and-repository-boundary-test-coverage-fixes.md`
+**Status at review:** `ready-for-dev`
+**Reviewed:** 2026-08-18
+**Verdict:** **Changes required before dev.** Two ACs rest on a factually wrong premise about the
+backend (AC1's error-code uniqueness, AC3's batch-accept throw path), one AC misses a fifth
+unmapped error code that already has translations shipped, and two ACs prescribe i18n/fixture-id
+work that duplicates or miscounts what is already in the tree. The remaining ACs are sound.
 
-> **Supersedes** the previous contents of this file (the senior-dev review of
-> `skillars-deferred-28`, now merged). Nothing in this document refers to that story.
-
-Every finding below was confirmed by reading current source. Line numbers were re-derived at review
-time, not taken from the story's own citations. A "Verified correct" section at the end lists the
-claims I checked and found sound, so the blocker list can be read as complete rather than partial.
-
----
-
-## Verdict
-
-**Rework AC2 and AC3 before handoff. AC1, AC4, AC5, AC6 and AC7 ship with the edits noted below.**
-
-The story is unusually well-researched — the ledger citations all resolve, the AC3 correction of the
-ledger's stale `ParentBookingsPage.vue:208` citation is right, the fixture-id claim is right, and the
-AC1 clock analysis is right down to the Monday-00:00-UTC mechanism. Three things do not survive
-verification:
-
-- **AC2's prescribed fix does not fix the quota branch.** The real `errorMsg.errorKey` is
-  `"QUOTA_EXCEEDED"`, not `"video.quotaExceeded"`. The AC converts a never-firing branch into a
-  still-never-firing branch (B1).
-- **AC2's second premise is backwards.** The `constraintViolated` branch *does* fire today, because
-  `SessionApiAdvice` puts the literal string in `helpCode`. "Its two specific error branches have
-  never fired in production" is false for one of the two (B2).
-- **AC3 fixes a defect that cannot occur.** `router.push` is not awaited, so a rejection never
-  reaches the enclosing `catch` at all; and in vue-router 4.6.4 the AC's own example (a guard
-  redirect) *resolves*, it does not reject (B3).
+Every finding below was verified by reading the current working tree — file and line references are
+what a `git checkout` at `08f3a61` actually contains. A "Verified correct" section at the end lists
+the story claims I checked and could **not** fault, so the finding list is not padded.
 
 ---
 
-## Blockers
+## Severity key
 
-### B1 — AC2's replacement value is wrong; the quota toast still never fires
+| Grade | Meaning |
+|---|---|
+| **BLOCKER** | The AC as written will produce wrong behaviour, dead code, or a demonstrably false completion note. Fix the AC before dev starts. |
+| **SHOULD-FIX** | The AC will produce working code, but its stated rationale, scope, or verification step is wrong and will mislead the dev or the reviewer. |
+| **MINOR** | Accuracy/hygiene drift. Fix while in the file; not worth blocking on. |
 
-AC2 says:
+---
 
-> Both throw sites exist and are reachable: `VideoApiAdvice.java:75`'s `QuotaExceededException`
-> handler sets `errorKey = "video.quotaExceeded"`
+## BLOCKER findings
 
-It does not. Trace the actual value:
+### B1 — AC3: `handleAcceptAll`'s `booking.slotUnavailable` branch is dead code, and the real defect in that flow is a **false success toast**, not a vague error toast
 
-| Step | Code | Result |
-|---|---|---|
-| `VideoApiAdvice.java:75` | `logErrorAndReturnDTO(ex, "video.quotaExceeded", VideoErrorCode.QUOTA_EXCEEDED.getErrorCode())` | — |
-| `VideoApiAdvice.java:149` | `private ErrorDto logErrorAndReturnDTO(Throwable throwable, String defaultMsg, String msgKey)` | `defaultMsg = "video.quotaExceeded"`, `msgKey = QUOTA_EXCEEDED.getErrorCode()` |
-| `VideoErrorCode.java:18` | `public String getErrorCode() { return this.name(); }` | `msgKey = "QUOTA_EXCEEDED"` |
-| `VideoApiAdvice.java:160` | `return new ErrorDto(helpCode, new ErrorMsg(msgKey, message))` | `errorMsg.errorKey = "QUOTA_EXCEEDED"` |
+AC3 states:
 
-The third argument is the **message key**, not the default message — the parameter order reads
-`(throwable, defaultMsg, msgKey)` but the call site's readable string is in the *middle* slot. So
-`"video.quotaExceeded"` is only ever the `messageSource` fallback text; it is never the wire
-`errorKey`.
+> `BookingBatchService.acceptOneBooking` (called by `handleAcceptAll` via `bookingStore.handleAcceptAllBatch`)
+> throws the identical two codes (`BookingBatchService.java:256-257,353-357`)
 
-The path is confirmed reachable and confirmed to be this handler: `DrillUploadService.initiateUpload`
-(`DrillUploadService.java:50-100`) calls `videoService.initializeUpload(...)`, which throws
-`platform.video.contract.exception.QuotaExceededException` at `VideoService.java:231` (rate limit) and
-`:249` (storage quota). `VideoApiAdvice` is `@Order(HIGHEST_PRECEDENCE)` and is the only advice
-handling that type — `ApiAdvice.java:514`'s same-named handler imports the *filestorage*
-`QuotaExceededException` (`ApiAdvice.java:13`), a different class, and `ApiAdvice` carries no
-`@Order` anyway (lowest precedence).
+`acceptOneBooking` does throw both codes — but **neither its `SLOT_UNAVAILABLE` nor its
+`COACH_UNAVAILABLE` ever reaches the client.** `BookingBatchService.acceptAll` wraps each
+per-booking call in `try { … } catch (Exception e) { log.warn(…) }`
+(`BookingBatchService.java:263-278`), and the method's own comment says so explicitly:
 
-**Consequence:** implementing AC2 exactly as written leaves the quota toast dead, the ledger item at
-`deferred-work.md:1462` gets annotated `[CLOSED by skillars-deferred-29 AC2]`, and the bug is now
-harder to find because the obvious wrong thing (`helpCode`) has been corrected.
+> `// … without it the per-booking throws are swallowed by the loop's catch and the caller sees a`
+> `// silent no-op.`
 
-**Required change:** AC2 must specify `errorKey === 'QUOTA_EXCEEDED'` for that branch, and state
-explicitly that the value is the enum name because `VideoApiAdvice` passes
-`VideoErrorCode.*.getErrorCode()` as `msgKey`. Alternatively, decide to namespace the backend's
-`msgKey` — but that is a contract change affecting all ten `VideoApiAdvice` handlers and is out of
-this story's bundled-fix bar, so it should be a new ledger item, not a silent widening of AC2.
+The only code that can surface to `handleAcceptAll` is the **pre-flight** `COACH_UNAVAILABLE` at
+`BookingBatchService.java:255-257`, which is thrown before the loop. Consequences:
 
-### B2 — AC2's "never fired in production" claim is false for `video.constraintViolated`
+1. **The `booking.slotUnavailable` branch AC3 prescribes for `handleAcceptAll` is unreachable
+   dead code.** Nothing in the batch-accept path can produce that errorKey at the HTTP boundary.
+2. **The genuinely user-visible defect in this exact flow is untouched by AC3.** When every booking
+   in the batch fails, `acceptAll` hits `if (acceptedIds.isEmpty()) { … return; }`
+   (`BookingBatchService.java:280-283`) and returns **HTTP 200**. `handleAcceptAll` then fires
+   `$q.notify({ message: t('booking.batch.acceptedAll'), type: 'positive' })`
+   (`CoachBookingRequestsPage.vue:179`) — the coach is told "All sessions accepted" when **zero**
+   were accepted. A partial success (3 of 5) is reported the same way.
 
-AC2 (and the ledger item at `deferred-work.md:1462`) asserts:
+AC3's stated goal is "coach-side accept flows show accurate errors." Shipping AC3 as written and
+writing a completion note to that effect would be false for `handleAcceptAll`: it adds one
+never-firing branch to a flow whose worst error-reporting bug is a green toast on total failure.
 
-> `helpCode` is `ApiAdvice`/`VideoApiAdvice`'s per-request SQIDS-encoded support id … never a value
-> like `'video.quotaExceeded'`
+**Required AC edit.** Either:
+- **(a)** Scope `handleAcceptAll` to the **`booking.coachUnavailable` branch only**, and state
+  in the AC that `booking.slotUnavailable` is deliberately excluded because `acceptAll` swallows
+  per-booking throws — plus file the silent-success case as a new `deferred-work.md` item
+  (it needs a contract change: `acceptAll` must return per-booking outcomes or a 4xx on
+  zero-accepted, which is outside a bundled-fix story); **or**
+- **(b)** explicitly widen the AC to close the silent-success bug too — but that is a backend
+  contract change and contradicts this story's own "Scope discipline" note.
 
-That is true of `VideoApiAdvice` (`ApplicationException.getSupportId()` is a per-instance
-`SQIDS.encode(UUID.randomUUID().hashCode())` — `ApplicationException.java:22,43`). It is **not** true
-of the other advice on this path. `SessionApiAdvice.java:21`:
+**(a) is the right call** for a bundled small-fix story. Do not ship (a) without the new ledger item.
+
+---
+
+### B2 — AC2: a **fifth** unmapped errorKey is missed — `payment.coachStripeNotConfigured` — and its translation already exists in all three bundles
+
+AC2's title and body assert the `else` branch is "the live landing zone for **four** rejection
+codes `BookingService.createBookingRequest` throws today." A direct re-read of the method finds a
+fifth `PaymentGatewayException`:
 
 ```java
-ErrorDto dto = new ErrorDto("video.constraintViolated", new ErrorMsg("video.constraintViolated", ex.getMessage()));
+// BookingService.java:187-189
+if (!paymentGateway.isCoachPaymentReady(coach.getId())) {
+    throw new PaymentGatewayException("payment.coachStripeNotConfigured");
+}
 ```
 
-`ErrorDto`'s constructor is `(helpCode, errorMsg)`. So for `DrillConstraintViolationException` —
-thrown at `DrillUploadService.java:68` when `videoTypeConstraints.validate(...)` rejects the file —
-`helpCode` **is** literally `"video.constraintViolated"`, and the existing
-`helpCode === 'video.constraintViolated'` branch fires correctly today.
+Same `BookingApiAdvice` mechanism AC2 already relies on (`BookingApiAdvice.java:19-23`), so the
+wire `errorMsg.errorKey` is the literal `payment.coachStripeNotConfigured`, and it lands in
+`submit()`'s generic `else` today.
 
-**Consequence:** two ways this misleads the dev. First, the story's framing ("its two specific error
-branches have never fired in production", "the exact bug class `skillars-deferred-28` AC2 fixed") is
-half-wrong and will be carried verbatim into the ledger closure note. Second, and more practically,
-AC2's Task 2 verification step — "manually verify … that `video.quotaExceeded`/`video.constraintViolated`
-toasts render for their respective errorKeys" — will *pass* on the constraint case whether or not the
-fix is correct, and a dev who verifies only the easy one (upload an oversized file: no rate limiter to
-trip, no quota to fill) will sign off on B1 unnoticed.
+Three reasons this one matters **more** than the four AC2 does list:
 
-**Required change:** correct AC2's rationale to "one branch (`quotaExceeded`) never fires because
-`VideoApiAdvice`'s `helpCode` is a support id; the other (`constraintViolated`) happens to work
-because `SessionApiAdvice` puts the key in `helpCode` — the change to `errorMsg.errorKey` unifies both
-onto the documented field." And state that manual verification **must** exercise the quota/rate-limit
-path, not just the constraint path.
+1. **It is the only one of the five reachable with no stale client state.** Nothing gates the
+   parent's route to `BookingRequestPage` on coach payment readiness — `grep` for
+   `isCoachPaymentReady|paymentReady|stripeReady` under `src/frontend/src` returns **zero hits**.
+   A parent who reaches a coach whose Stripe onboarding is incomplete gets a 422 and a generic
+   "Could not submit request", with no path to understanding why. (Contrast the three `pack*`
+   codes — see S2.)
+2. **The message is already written, in all three locales**, under `payment.error`:
+   `en-US/index.js:1038` `'This coach has not completed their payment setup yet'`;
+   `de-DE/index.js:948`; `fr-FR/index.js:861`. Zero new i18n work.
+3. It is *precisely* actionable — unlike `MISSING_RIGHTS`, which AC2's own Dev Notes correctly
+   concede is only a category hint.
 
-### B3 — AC3's failure mode is unreachable; the AC as written verifies nothing
+**Required AC edit.** Add a fifth branch `errorKey === 'payment.coachStripeNotConfigured'` →
+`t('payment.error.coachStripeNotConfigured')`, and correct AC2's "four" to "five" throughout
+(title, body, Task 2). No new i18n key.
 
-AC3 states that a rejected `router.push` "lands in the `catch` at line 480" and produces a false
-`booking.requests.submitError` toast, and that `submitBatchRequest()` "can show both the success toast
-and a failure toast for the same submission."
-
-Neither can happen, for two independent reasons.
-
-**1. The call is not awaited.** `BookingRequestPage.vue:479` and `:507` are bare
-`router.push('/parent/bookings')` — no `await`. A `try`/`catch` only intercepts synchronous throws and
-awaited rejections. An un-awaited rejected promise escapes the block entirely and surfaces as an
-unhandled rejection; it never reaches `catch (err)`. (Both enclosing functions *are* `async`, which is
-what makes this easy to misread — but the `await` is on the `bookingStore` call, not on the push.)
-
-**2. The cited trigger does not reject anyway.** `vue-router` is `4.6.4` (`package-lock.json`). In
-Vue Router 4, `router.push()` returns `Promise<NavigationFailure | void>`; aborted, cancelled,
-duplicated and **redirected** navigations *resolve* with a `NavigationFailure` object. Only an error
-thrown inside a guard rejects. The app's only global guard (`router/index.js:46-104`) redirects via
-`next({...})` / `next('/path')` — the resolving case — and throws nothing.
-
-I looked for a synchronous throw path as well: `router.push` can throw synchronously only on a
-resolution failure (e.g. an unknown named route). Both call sites pass the static string literal
-`'/parent/bookings'`, which resolves.
-
-**Consequence:** AC3's hard requirement ("a navigation failure must never produce a
-`booking.requests.submitError`/`booking.batch.submitError` toast") is already satisfied by the current
-code. Implementing it is harmless, but the story asserts a user-visible defect that does not exist,
-and AC7 will annotate `deferred-work.md:1471` as closed — cementing the same wrong mechanism in the
-ledger. There is also a live risk that a dev writes a regression test asserting the pre-fix behaviour
-and cannot make it fail.
-
-**Required change:** either (a) drop AC3 and rewrite the ledger item at `:1471` to record that the
-`try`-scoped `router.push` is *not* a defect because it is un-awaited and Vue Router 4 resolves on
-redirect; or (b) keep the restructure explicitly as defensive hardening ("no known reachable failure
-today; the shape is fragile if someone later adds `await`"), with the ledger note phrased accordingly.
-Option (b) is defensible and cheap — but it must not be described as a bug fix.
+> Note this is not a ledger transcription error the story inherited — the story's own "Why this
+> story exists" claims "every throw site … was read directly from the working tree." A full read of
+> `createBookingRequest`'s throw sites would have surfaced `:188`.
 
 ---
 
-## Should fix before handoff
+### B3 — AC1: `DRILL_UPLOAD_NOT_ALLOWED` is **not** unique to "a video is already linked", so the prescribed message asserts a cause the wire code does not carry
 
-### M1 — AC1 orphans the `java.time.DayOfWeek` import and doesn't say to remove it
+AC1 instructs: on `errorKey === 'DRILL_UPLOAD_NOT_ALLOWED'`, show
+`"A video is already linked to this drill. Remove it before uploading a new one."`
 
-`SluDashboardService.java:42` is the file's only use of `DayOfWeek`; deleting `.with(DayOfWeek.MONDAY)`
-leaves the `import java.time.DayOfWeek;` at line 17 unused. AC1 remembers to add the `ClockProvider`
-import but says nothing about removing this one, and Task 1's two bullets don't either.
+`SessionErrorCode.DRILL_UPLOAD_NOT_ALLOWED` is thrown at **three** sites, two of them in the very
+method the panel calls:
 
-Not build-breaking — `pom.xml` configures no checkstyle, PMD or spotbugs, and no `-Werror` — so this
-is hygiene, not a failure. But `skillars-deferred-27` was partly a *formatting hygiene* story, and
-leaving a dead import behind in its follow-up is the kind of thing its next code review will file as a
-new ledger item. Add the bullet.
+| Site | Condition |
+|---|---|
+| `DrillUploadService.java:57` | `!"COACH".equals(drill.getLibraryType()) \|\| !coachId.equals(drill.getOwnerCoachId())` — **inside `initiateUpload`**, before the gate check |
+| `DrillUploadService.java:78` | READY video already linked — the case AC1 describes |
+| `DrillUploadService.java:109` | same ownership check inside `deleteVideo` (different catch block; not AC1's concern) |
 
-### M2 — AC1 leaves the test's `.with(DayOfWeek.MONDAY)` unaddressed, breaking the mirror it was built for
+The frontend cannot tell `:57` from `:78`. AC1's story text ("the video-already-linked check …
+so the wire `errorKey` is the literal string `DRILL_UPLOAD_NOT_ALLOWED`") treats the code as though
+`:78` were its only source, which is false.
 
-`SluDashboardServiceTest.java:54, 88, 111` each compute
-`from = now.minusWeeks(8 - 1).with(DayOfWeek.MONDAY)` — deliberately mirroring the production formula,
-which is the stated point of `skillars-deferred-27` AC4's `eq()` tightening. AC1 removes the adjuster
-from production and is silent about the test.
+**Honest reachability assessment** (so this is not overstated): the `:57` path is *not* reachable
+from the panel today. `DrillLibraryService.list` scopes non-PLATFORM results to
+`findByOwnerCoachIdAndStatus(coachId, "ACTIVE")` (`DrillLibraryService.java:70`), so a coach never
+sees another coach's `COACH` drill; and the template gates the upload block on
+`props.drill.libraryType === 'COACH'` (`DrillDetailPanel.vue:94`, `:241`), covering the
+library-type half. So today the message will be right by accident.
 
-The adjuster is inert either way, so *both* choices are correct; the problem is that the story doesn't
-make one, so the dev will pick arbitrarily and the "test mirrors the service formula" property either
-quietly breaks or quietly survives with no record of the decision. Say explicitly: remove it from the
-test too (recommended — it keeps the mirror exact), or keep it and note why.
+That is exactly the fragility this story exists to remove. A shared library, a team-drill feature,
+or any future caller that passes a drill id the panel did not source from the scoped listing makes
+the toast confidently wrong — and, per the story's own Dev Notes, there is no frontend test to
+catch it.
 
-### M3 — AC4's `console.warn` will mostly log `undefined`, not an unmapped booking code
+**Required AC edit.** Pick one and state the reasoning in the AC:
+- **(a)** Use a message that is true for *both* causes and still non-retryable, e.g.
+  `"This drill can't accept a new video right now. If it already has one, remove it first."`; or
+- **(b)** Keep the specific wording, but **add an explicit note in AC1** that the code is shared
+  with `DrillUploadService.java:57`, that `:57` is currently unreachable via
+  `DrillLibraryService.list`'s owner-scoped query, and that splitting the code
+  (`DRILL_VIDEO_ALREADY_LINKED`) is the real fix — filed as a new `deferred-work.md` item.
 
-AC4's stated purpose is "an unrecognised `booking.*` error code becomes visible instead of silently
-falling through." But the `else` branches at `BookingRequestPage.vue:488`, `:521` and
-`ParentBookingsPage.vue:213` are also the landing zone for every failure that has no
-`response.data.errorMsg` at all: network failures, 401/403 redirects, 500s, and aborted requests. The
-axios interceptor (`boot/axios.js:112-181`) rejects with the original error in all of those cases and
-does not synthesise an `errorMsg`.
-
-So `console.warn('[booking] unmapped errorKey:', errorKey)` will print `undefined` on every transport
-failure, which is both noise and — worse — reads exactly like the signal it was added to produce. A
-future engineer grepping for "unmapped errorKey" will find mostly non-events.
-
-Recommend `console.warn('[booking] unmapped errorKey:', errorKey, err)` so the two cases are
-distinguishable at a glance, and one sentence in AC4 noting `undefined` is the expected value for
-transport-level failures. No `no-console` rule exists in `eslint.config.js:55-60`, so the call itself
-is fine, and `console.warn` is an established convention (`boot/axios.js:159`).
-
-### M4 — AC5 doubles a duplication that is an *open, uncited* ledger item
-
-`deferred-work.md:1456` is an open item in the same review block AC5's own item comes from:
-
-> `SessionPackPurchaseRepositoryIT` re-implements `BasePaymentIT.insertTestCoach`'s raw-SQL
-> `main."user"` seed inline, dropping that helper's `ON CONFLICT (id) DO NOTHING` idempotency guard.
-
-AC5 instructs the dev to add a second test method "reusing … the same `main."user"`/`CoachProfile`/
-`SessionPackTier` seeding pattern the existing test already uses" — i.e. a second verbatim copy of the
-21-line raw-SQL seed inside the same class.
-
-The story's exclusion list claims "every [other ledger item] inspected during this story's creation
-either needed a product/design decision, targeted an unreachable/already-closed code path, or
-duplicated a fix a prior story already made." `:1456` fits none of those three and appears neither in
-the **Deferred Items Closed** table nor in the **Explicitly NOT in this story** list. It is the only
-open item I found that the story neither closes nor consciously rejects.
-
-Cheapest resolution, fully in scope and zero risk: have AC5 extract the seed into a private
-`seedCoachUser()` / `seedCoach()` helper in `SessionPackPurchaseRepositoryIT` as part of adding the
-second method, and close `:1456` under AC5 too. Otherwise, add `:1456` to the explicit exclusions with
-a reason.
+**(b) is acceptable** for a bundled-fix story; **(a) with no note is not**, and silently shipping the
+current AC text is not.
 
 ---
 
-## Minor
+## SHOULD-FIX findings
 
-**m1 — AC6's choice of `'ACCEPTED'` silently invalidates a documented class invariant.**
-`BookingRepositoryIT.java:16-21`'s class comment states: *"All seeded rows use REQUESTED status, which
-is outside the DB-level `excl_bkg_coach_slot_overlap` exclusion constraint's scope (see V87), so
-overlapping rows here don't trip that constraint."* `V87__booking_overlap_exclusion_constraint.sql:20-22`
-scopes that constraint to `status IN ('ACCEPTED','PAYMENT_PENDING','CONFIRMED','UPCOMING','IN_PROGRESS','PAUSED')`.
-AC6 moves the row into that scope. It is harmless *today* — the method holds exactly one booking (DB is
-truncated before every test method, see below) and an `EXCLUDE` constraint never conflicts a row with
-itself — but the comment becomes false, and the next author who adds an overlapping row while trusting
-it gets a confusing constraint violation. Use `'DECLINED'` instead (valid per
-`V37__session_pack_expiry_pause.sql:26-32`'s `chk_bkg_status`, outside the exclusion scope, and equally
-proves `status` is updatable), or update the comment in the same commit.
+### S1 — AC2 creates duplicate i18n keys: `packCoachMismatch` and `packExhausted` already exist in all three bundles
 
-**m2 — Dev Notes cite a precedent that isn't one.** AC1's Dev Note says the
-`withZoneSameInstant(ZoneOffset.UTC)` conversion "mirrors how other `ClockProvider` call sites in this
-codebase (e.g. `StripePaymentGateway.java:84`) already handle zone conversion." `StripePaymentGateway.java:84`
-is `Instant.now(ClockProvider.getClock()).getEpochSecond()` — `Instant` is zone-independent, so that
-line demonstrates no zone handling at all. AC1 is *introducing* the pattern, not following it. The
-substitution is still correct (see Verified correct, below); only the cited evidence is wrong. Delete
-or replace the citation so a dev doesn't go looking for a pattern to copy.
+AC2 says "Add **four new** i18n keys under the existing `booking.errors` block." Two of the four
+already exist verbatim-in-meaning under `payment.sessionPack`:
 
-**m3 — Task 1's spot-check command isn't runnable as written.** `mvn -o verify -Dit.test=none -Dtest=*`
-would attempt the whole suite, not a spot-check. The bullet's parenthetical (`grep SluDashboardService`
-under `src/test`) is the actual check and is sufficient — I ran it: `SluDashboardServiceTest` is the
-only test class referencing the service. Drop the command.
+| Key | Existing | Existing English | AC2's proposed English |
+|---|---|---|---|
+| `packCoachMismatch` | `en-US:1060`, `de-DE:972`, `fr-FR:884` | `This session pack is for a different coach.` | `This session pack is not valid for this coach.` |
+| `packExhausted` | `en-US:1061`, `de-DE:973`, `fr-FR:885` | `This session pack has no remaining sessions.` | `This session pack has no sessions remaining.` |
 
-**m4 — AC3's suggested `try/finally`-with-flag shape assumes a `finally` both functions have.**
-`submit()` has one (`:491-493`, resetting `submitting`); `submitBatchRequest()` (`:496-524`) has none.
-If AC3 survives B3, say so, or the dev will add a `finally` to one function purely to host a
-`router.push`.
+Neither existing key is referenced from any `.vue`/`.js` outside the bundles — they were added
+speculatively. Shipping AC2 as written leaves **two near-identical strings per locale, six total**,
+diverging in wording. The next translator or copy pass will not know which is live.
 
-**m5 — Line-number drift (cosmetic).** `submitBatchRequest()` is `:496-524`, not `:496-525`.
-`deferred-work.md` is 1472 lines, not 1473. `Booking.status` is `Booking.java:45-46` ✓.
-
-**m6 — There is no frontend test infrastructure, so AC2/AC3/AC4 ship with zero automated coverage.**
-No `vitest.config.*`, no `*.spec.js` and no `*.test.js` exist anywhere under `src/frontend` (excluding
-`node_modules`). AC2's Task-2 bullet — "add a component test if this file already has one" — is dead
-text. This is worth stating plainly in Dev Notes rather than leaving implied, because it is precisely
-why the `helpCode` bug (B1/B2) survived from the original write to now, and because B1 means the one
-thing that *would* have caught it is a manual test against a real 429.
+**Recommended AC edit.** Either reuse `payment.sessionPack.packCoachMismatch` /
+`payment.sessionPack.packExhausted` from `submit()` (so AC2 adds only `packExpired` and
+`requestNotAllowed` under `booking.errors`), **or** keep the `booking.errors.*` additions and
+delete the unused `payment.sessionPack.*` pair in the same edit. Reuse is the smaller diff and the
+better fit for this story's "match the existing idiom" discipline. Do not leave both.
 
 ---
 
-## Verified correct — no action needed
+### S2 — AC2's "live landing zone" framing is wrong for the three `payment.pack*` codes; Task 2's verification recipe will not reproduce them
 
-Listed so the blocker set above can be read as exhaustive rather than sampled.
+AC2 calls all four codes "thrown today" and frames them as live parent-facing paths. For the three
+pack codes that is only true via **stale client state or direct API calls**, because the page
+filters the selector to packs that already satisfy the backend's checks:
 
-**AC1 (production change).** Behaviour-preserving, confirmed empirically rather than assumed. No
-production code anywhere calls `ClockProvider.setClock` or `setClockWithZoneId` — the only match in
-`src/main/java` is `ClockProvider`'s own declaration — so `getClock()` always returns
-`Clock.systemDefaultZone()` in production, and `withZoneSameInstant(ZoneOffset.UTC)` preserves the
-instant, making the result identical to today's `ZonedDateTime.now(ZoneOffset.UTC)`. `ZoneOffset` stays
-in use, so only the `DayOfWeek` import is orphaned (M1). The "17 production files" figure is right (18
-files match `ClockProvider`, one of which is the class itself).
+```js
+// BookingRequestPage.vue:268-272
+const activePacksForCoach = computed(() =>
+  bookingStore.sessionPacks.filter(
+    (p) => String(p.coachId) === String(coachId) && p.status === 'ACTIVE',
+  ),
+)
+```
 
-**AC1 (`.with(DayOfWeek.MONDAY)` is inert).** Correct. `DayOfWeek.adjustInto` sets `DAY_OF_WEEK` within
-the same ISO week, and `IsoFields.WEEK_BASED_YEAR` / `WEEK_OF_WEEK_BASED_YEAR` are constant across a
-week. `from` (`SluDashboardService.java:42`) feeds nothing but those two reads at `:43-44`. Under a
-fixed `ZoneOffset.UTC` there is no DST edge to worry about either.
+and `status` is **derived server-side** at response time —
+`SessionPackPaymentService.computeStatus` (`:248+`) returns `EXHAUSTED` when
+`remainingSessions == 0`, `PAUSED` when `pausedUntil` is in the future, etc. So on a freshly
+loaded page:
 
-**AC1 (the flake diagnosis).** Correct and correctly bounded to Monday 00:00:00 UTC: all four `eq()`
-matchers derive only from ISO week fields, which change only at that boundary. `MockitoExtension`'s
-default strictness is `STRICT_STUBS`, which does throw `PotentialStubbingProblem` on an argument
-mismatch against an existing stub. The three affected tests are exactly the three named
-(`SluDashboardServiceTest.java:51, 75, 108`); the three `getNarrativeSummary_*` tests never reach
-`getWeeklyExposure`.
+- **`payment.packCoachMismatch` is unreachable through the UI at all** — the `coachId` filter is
+  identical to the backend check at `BookingService.java:269-271`.
+- **`payment.packExpired` / `payment.packExhausted`** fire only if the pack changes state between
+  page load and submit (another tab, another device, expiry crossing).
 
-**AC1 (the test-side API).** `TestClockProvider` exists at
-`src/test/java/com/softropic/skillars/infrastructure/util/TestClockProvider.java`, in the same package
-as `ClockProvider`, which is what lets it reach the package-private `setClock`. It exposes
-`setClock`/`getClock`/`unsetClock` as public statics. `StripePaymentGatewayTest.java:49-51,91` is the
-pattern claimed. `2026-08-19` is a Wednesday. Pinning with `ZoneOffset.UTC` matters and the AC says so
-— a non-UTC fixed clock would put the test's `now` in a different zone from the service's converted
-`now` and could straddle a date boundary.
+This does not make the branches wrong — mapping them is correct defensive work, and the
+`packExhausted` race is real. But two things in the story must change:
 
-**AC3's ledger correction.** Right, and worth keeping even if AC3 is dropped.
-`ParentBookingsPage.vue`'s `submitReschedule()` (`:195-219`) has no `router.push`; the only
-`router.push` calls in `src/frontend/src/pages/parent/` are `BookingRequestPage.vue:464,479,507` and
-`ParentDevelopmentPortalPage.vue:189`.
-
-**AC4's targets and convention.** The three `else` branches are at `BookingRequestPage.vue:488`,
-`:521` and `ParentBookingsPage.vue:213`, each immediately preceding the generic `$q.notify`. All three
-already read `err?.response?.data?.errorMsg?.errorKey`, so the variable AC4 wants to log is in scope.
-The axios response interceptor unwraps success bodies but rejects errors with the original axios error
-(`boot/axios.js:180`), so `err.response.data` is intact at these call sites.
-
-**AC5's premise.** Verified by inspection of `SessionPackPurchaseRepository.java:36-46` against
-`SessionPackPurchaseRepositoryIT.java:34-99`: deleting any one of `remainingSessions > 0`,
-`expiresAt > :now`, the `pausedUntil` clause, `playerId = :playerId` or `coachId = :coachId` leaves
-`assertThat(activePacks).hasSize(2)` passing, because the database holds only those two rows and both
-sit mid-range on every predicate.
-
-**AC5's fixture-id claim, and the reuse hazard I went looking for.**
-`docs/testing/test-data-isolation.md:206` claims `9620000001`–`9620000002` for this class and lists
-`9620`–`9690` as a free block, so extending to `9620000003` is correct. I specifically checked whether
-a *second* test method re-inserting `main."user"` id `9_620_000_001` would collide with the first
-method's row: it will not. `DatabaseResetTestExecutionListener.beforeTestMethod` (registered on
-`AbstractIntegrationTest`) deletes from every application table **before every test method**, so each
-method starts clean. AC5's "reuse the existing constants" instruction is safe.
-
-**AC5's row list is complete enough.** `SessionPackPurchase.@PrePersist onCreate()` defaults
-`createdAt` when null, and `version` is a real `@Version` field, so the five seeded rows need only the
-fields the AC enumerates plus the `parentId`/`packTierId`/`pricePerSession` the existing test's pattern
-already supplies. Ordering does not matter to the AC's `containsExactly(control)` assertion.
-
-**AC5's deliberate `coachId` gap.** Reasonable and correctly labelled as accepted scope rather than
-oversight.
-
-**AC6.** `'ACCEPTED'` satisfies `chk_bkg_status` (`V37__session_pack_expiry_pause.sql:26-32`).
-`Booking.status` (`Booking.java:45-46`) is a plain `@Column(nullable = false, length = 30)` with no
-`updatable = false`, so the new assertion passes without production change, as the AC predicts. The
-existing test's reasoning about the reload being a genuine round-trip (no ambient transaction, OSIV
-off, no L2 cache) holds. The `@AfterEach` cleanup keys off the test's own `coachId` field, which the
-`setCoachId(UUID.randomUUID())` mutation cannot corrupt precisely because the column is
-`updatable = false`. Only the status *choice* is worth changing (m1). The AC's mutation-verify
-instruction in Dev Notes is the right discipline and should be kept.
-
-**AC7.** Every ledger citation resolves at the stated line: `:1453` (AC5), `:1454` (AC1 Monday),
-`:1455` (AC6), `:1457` (AC1 clock), `:1462` (AC2), `:1471` (AC3), `:1472` (AC4). The exclusions the
-story lists are all real, still-open, and genuinely blocked on a decision or a contract change — I
-spot-checked `:1410`, `:1424`, `:1434`, `:1444`, `:1461`, `:1463`, `:1464`, `:1470`.
-`sprint-status.yaml:1039` exists at `ready-for-dev` with the AC summary block above it.
-Caveat: the closure notes for AC2 and AC3 must be reworded per B1/B2/B3 before they are written, or
-the ledger will preserve two false mechanisms.
+1. Drop or qualify "live landing zone"/"user-actionable" for the three pack codes; the only
+   consistently live one is B2's `payment.coachStripeNotConfigured`.
+2. **Task 2's manual-verification step is not performable as written.** It says
+   `payment.packExhausted` is "easiest to reproduce by exhausting a real pack's
+   `remainingSessions`" — a fresh page load after exhausting it will simply not offer the pack.
+   The step must spell out the stale-state procedure: load `BookingRequestPage` with the pack
+   selected, exhaust the pack in a second tab/session, then submit from the first tab **without
+   reloading**. Without that, this step will be silently skipped or falsely ticked.
 
 ---
 
-## Adjacent observation (not a story defect — file as a new ledger item, do not fix here)
+### S3 — AC5's rationale is wrong about what the new pin buys; the rollover it names is exercised by nothing
 
-`DrillUploadService.initiateUpload` wraps only `videoTypeConstraints.validate(...)` in its
-`VideoValidationException` → `DrillConstraintViolationException` translation
-(`DrillUploadService.java:65-69`). `videoService.initializeUpload(...)`, called nine lines later, can
-throw `VideoValidationException` on its own; that one reaches `VideoApiAdvice.java:67` and arrives as
-`errorKey = "VALIDATION_FAILED"`, landing on the generic `uploadFailed` toast. Consistent with the
-story's scope discipline — mention it in `deferred-work.md`, don't widen AC2.
+AC5 asserts the current pin "never crosses an ISO week-based-year boundary, **the one case a fixed
+clock exists to reach cheaply**", and the inherited ledger item calls the compound `(year, week)`
+range predicate "never exercised across an ISO week-based-year rollover."
+
+`SluDashboardServiceTest` is a **pure Mockito unit test** — `@Mock private SluWeeklySnapshotRepository
+snapshotRepository` — and every one of the three tests stubs the repository call
+(`SluDashboardServiceTest.java:72`, `:107`, `:126`). The compound predicate lives in JPQL:
+
+```java
+// SluWeeklySnapshotRepository.java:30-33
+"AND (s.id.isoYear > :fromYear OR (s.id.isoYear = :fromYear AND s.id.isoWeek >= :fromWeek)) " +
+"AND (s.id.isoYear < :toYear   OR (s.id.isoYear = :toYear   AND s.id.isoWeek <= :toWeek)) "
+```
+
+Moving the clock to a rollover date therefore exercises **zero** rollover behaviour. It only
+changes which literal `short`s the test passes to `eq(...)`. The thing that actually breaks the
+self-mirroring is the **hardcoded literals**, and that works at *any* pinned date.
+
+Two corrections needed:
+
+1. **Rewrite AC5's justification.** The change of substance is "replace mirrored `IsoFields`
+   computations with hand-computed literals"; the rollover date is a *nice-to-have* that makes the
+   literals span two ISO years so an author cannot accidentally reintroduce a same-year shortcut.
+   Say that. Do not claim the pin gives rollover coverage.
+2. **Record the real gap.** `grep -rn "findByPlayerIdFromWeek" src/test/` returns **only** the three
+   mocked stubs in this file — the query has no repository-level test at any date, rollover or not.
+   That is a genuine coverage hole and belongs in `deferred-work.md` as a new item (a
+   `SluWeeklySnapshotRepositoryIT` seeding weeks 47/2026 → 01/2027), explicitly out of scope here.
+
+*(AC5's arithmetic itself is correct — see "Verified correct" V4. This finding is about the stated
+rationale and the coverage claim, not the numbers.)*
+
+---
+
+### S4 — AC1's manual verification (Task 1) cannot be performed as written; **both** new branches are defensive-only
+
+Task 1 says: "trip `DrillUploadService.java:75-79`'s video-already-linked guard and `:135-140`'s
+feature-gate guard against a real running instance." Neither is reachable through the rendered UI,
+because the template pre-empts both backend checks:
+
+```html
+<!-- DrillDetailPanel.vue:94-96 (and the desktop twin at :241-243) -->
+<div v-if="props.drill.libraryType === 'COACH' && sessionStore.canUploadVideo === true" …>
+  <template v-if="!props.drill.hasVideo">
+```
+
+- **Feature gate.** `canUploadVideo` comes from `GET …/upload-eligible` →
+  `DrillUploadService.isVideoUploadEligible`, which reads the **same**
+  `feature.drillVideoUpload.enabled.<tier>` config key as `checkDrillUploadGate`. It is also cached
+  for the session (`session.store.js:113` — `if (canUploadVideo.value !== null) return`). A gated
+  coach never sees the button.
+- **Already-linked.** `hasVideo` is `ref.getVideoId() != null` (`DrillLibraryService.java:290`) —
+  true for *any* linked video ref, including `PROCESSING`/`FAILED`. The backend throws only for
+  `OperationalState.READY` (`DrillUploadService.java:76-79`). The UI guard is therefore **strictly
+  broader** than the backend's.
+
+Both branches are reachable only from a **stale panel**: toggle the config (or let the video reach
+READY elsewhere) *after* the panel and store cache are populated, then click upload without
+reloading.
+
+**Recommended AC edit.** Keep both branches — defensive mapping of a code the API genuinely returns
+is correct — but (i) stop describing them as live coach-facing defects, and (ii) rewrite Task 1's
+verification step with the actual stale-state procedure:
+
+- feature gate: load the drill library as an eligible coach, flip
+  `feature.drillVideoUpload.enabled.<tier>` to `false` in `config`, then upload **without
+  reloading**;
+- already-linked: load the panel while the drill's video is `PROCESSING`, let it reach `READY`,
+  then upload **without reloading**.
+
+Given the story's own Dev Notes ("Do them for real, not as a formality"), leaving an unperformable
+step in the task list is the failure mode most likely to repeat.
+
+---
+
+### S5 — AC4's fixture-id arithmetic is wrong, and the widened range re-creates the very contradiction AC6 exists to remove
+
+Two separate problems.
+
+**(a) The count is wrong.** AC4 says to claim "two new fixture ids for the new coach's `userId` and
+**the new pack's implicit rows**", widening `9620000001`–`9620000003` → `…0005`.
+`SessionPackPurchase.purchaseId` is a **UUID**, generated by the DB — packs consume no id from the
+`962…` long range (see the existing test: every pack is created via `newPack(...)` and identified by
+`getPurchaseId()`, a `UUID`). Only the second coach's `userId` needs an id. The correct range is
+`9620000001`–**`9620000004`**. As written, AC4 claims an id nobody uses and bakes the wrong
+rationale into a doc whose entire purpose is being accurate.
+
+**(b) The test's own header comment is left contradicting the doc.**
+`SessionPackPurchaseRepositoryIT.java:26` reads:
+
+```java
+// Fixture id range 9620000001-9620000003, claimed in docs/testing/test-data-isolation.md.
+```
+
+AC4 and AC6 update `docs/testing/test-data-isolation.md` but neither mentions this line, and it is
+not in the story's "File paths this story touches" for AC4 beyond the test file itself. Shipping as
+written closes one doc/code contradiction (AC6) while opening another in the same commit.
+
+**Required AC edit.** Change the range to `9620000001`–`9620000004` in AC4, AC6 and Task 6, drop the
+"new pack's implicit rows" rationale, and add an explicit subtask: update the comment at
+`SessionPackPurchaseRepositoryIT.java:26` to match.
+
+---
+
+### S6 — AC6 doesn't address the commit-anchored wording of the sentence it edits
+
+The line AC6 amends is not an open-ended list — it is a snapshot pinned to a commit:
+
+> `The claimed four-digit prefixes at ` `` `21ef489` `` ` are: `9000`, `9070`, … `9900`.
+> — `docs/testing/test-data-isolation.md:217-219`
+
+Inserting `9620` makes the sentence assert something about commit `21ef489` that is not true of
+that commit. AC6 instructs the insertion but says nothing about the anchor.
+
+**Recommended AC edit.** In the same edit, either re-anchor to the current commit or reword to
+"The claimed four-digit prefixes are:" (dropping the pin). Re-wording is preferable — this list has
+now drifted from its anchor twice.
+
+---
+
+## MINOR findings
+
+### m1 — AC4 doesn't say whether the second coach needs its own `SessionPackTier`
+
+`newPack(playerId, coachId, packTierId)` takes an explicit `packTierId`. AC4 says "seed one
+additional pack for the same player but the new coach" without saying whether to reuse coach A's
+tier (satisfies the `pack_tier_id` FK, but leaves a pack whose coach and whose tier's coach
+disagree — the exact inconsistency the test is proving the query rejects) or seed a second tier.
+Reusing coach A's tier is fine for the assertion and is the smaller diff, but the AC should say so
+explicitly, or the dev will guess.
+
+### m2 — AC3's target catch blocks also cover post-success reload failures
+
+All three flows `await` a refresh **inside** the same `try` as the mutating call:
+`booking.store.js:348-351` (`approveBooking` → `acceptBooking` then `loadCoachBookingRequests`),
+`:543-555` (`handleAcceptAllBatch`, same shape), and `CoachCommandCenterPage.vue:373-376`
+(`handleAcceptReschedule` then `loadCoachSchedule`). A failed refresh after a **successful** accept
+already reports the accept as failed.
+
+This is pre-existing and **AC3 does not make it worse** — a failed `GET` carries no `booking.*`
+errorKey, so it lands in the unchanged generic fallback. But AC3 is the moment someone is reading
+these blocks. File it as a new `deferred-work.md` item; do not fix it here (scope).
+
+### m3 — Line-reference drift throughout the story
+
+Not behaviour-affecting, but a story that leans this hard on "re-verified against current code"
+should be exact:
+
+| Story says | Actual |
+|---|---|
+| `DrillDetailPanel.vue:388-390` / `382-391` | catch is `382-391`; generic `else` body is `389-390` — the `382-391` form is right, `388-390` is off by one |
+| `en-US/index.js:341-343` (`quotaExceeded`/`constraintViolated`/`uploadFailed`) | `342-344` |
+| `CoachBookingRequestsPage.vue:151-181` | `handleAccept` `152-162`; `handleAcceptAll` `174-186` (catch `180-182`) |
+| `CoachCommandCenterPage.vue:372-379` | `372-383` |
+| `SluDashboardServiceTest.java:56-60,84-88,117-121` (§AC5 heading) vs `59-65, 84-100, 118-124` (§AC5 body) | **self-inconsistent**; `setClock` is at `59`, `84`, `118` |
+| `BookingService.java:220,262,265,270,273` | correct, but the `MISSING_RIGHTS` sites are `167,171,184,193,198,222,244,267` — **eight**, not the "six unrelated rejection reasons" AC2 states |
+
+`en-US/index.js:916-917` (`booking.errors.coachUnavailable`/`slotUnavailable`),
+`en-US/index.js:491` (`security.featureGated`), `SessionPackPurchaseRepository.java:37-46`,
+`docs/testing/test-data-isolation.md:206,217-220`, `ApiAdvice.java:326-330` and
+`BookingApiAdvice.java:18-23` all check out exactly.
+
+---
+
+## Verified correct — claims I tried to break and could not
+
+Listed so the findings above are not read as a general indictment of the story. Each was
+independently checked against the tree.
+
+- **V1 — AC4's core premise holds.** Deleting `AND p.coachId = :coachId` from
+  `SessionPackPurchaseRepository.findActivePacks` really would leave both existing tests green.
+  I specifically checked for cross-test row leakage (both methods seed the same `PLAYER_ID`, so a
+  shared DB would make the mutation fail for the wrong reason): `AbstractIntegrationTest` registers
+  `DatabaseResetTestExecutionListener`, which resets in **`beforeTestMethod`** (`:102`), not
+  per class. No leakage. The AC's diagnosis and its mutation-verification step are both sound.
+- **V2 — AC3's error idiom works for the two flows where it applies.** Every store method rethrows
+  the original `AxiosError` (`booking.store.js:348-351`, `:466-477`, `:543-555`), and the response
+  interceptor's 403 handler only `console.warn`s before
+  `return Promise.reject(error)` (`boot/axios.js:154-176`) — it does not swallow or redirect. So
+  `err?.response?.data?.errorMsg?.errorKey` is genuinely available in
+  `handleAccept` and `handleAcceptReschedule`. Both of those flows do propagate
+  `booking.coachUnavailable` and `booking.slotUnavailable` (`BookingService.java:324-325,333-337`;
+  `RescheduleService.java:186-188,193-199`), including the `acceptReschedule` `SLOT_UNAVAILABLE`
+  the AC calls out as coach-only. AC3 is correct for two of its three flows — see **B1** for the third.
+- **V3 — AC1's wire values are right.** `FeatureGatedException` → `security.featureGated`
+  (`ApiAdvice.java:326-331`, a literal string, not an enum name — as the AC states);
+  `OperationNotAllowedException` → `exception.getErrorCode().getErrorCode()`
+  (`ApiAdvice.java:267-277`), and `SessionErrorCode.getErrorCode()` returns `name()`, so
+  `DRILL_UPLOAD_NOT_ALLOWED` is the literal wire value. `security.featureGated` exists in all three
+  bundles (`en-US:491`, `de-DE:998`, `fr-FR:506`), so reusing it is correct.
+- **V4 — AC5's ISO arithmetic is correct.** Recomputed by hand: 2027-01-01 is a Friday → ISO week 1
+  of 2027 begins Mon 2027-01-04, so **2027-01-06 is a Wednesday in week 1 of 2027** (`curYear=2027`,
+  `curWeek=1`). `minusWeeks(8-1)` → 2026-11-18, ordinal day 322, weekday Wed(3) →
+  `(322-3+10)/7 = 47` → **week 47 of 2026** (`fromYear=2026`, `fromWeek=47`). All four literals in
+  the AC are right. (The AC's own instruction to re-verify on a real JVM before hardcoding is still
+  good practice — keep it.)
+- **V5 — AC5's mutation-verification step will genuinely go red.** `MockitoExtension` defaults to
+  `Strictness.STRICT_STUBS`, so an argument mismatch raises `PotentialStubbingProblem` at call
+  time. This matters most for `getWeeklyExposure_withNoData_returnsEmptyCurrentWeekAndEmptyTrend`,
+  whose `isEmpty()` assertions would otherwise still pass on Mockito's default empty-list return.
+  All three tests fail on a formula regression once the literals are in.
+- **V6 — `findByPlayerIdFromWeek`'s JPQL is correct across a year boundary.** The OR-form
+  (`SluWeeklySnapshotRepository.java:30-33`) handles `(2026,47) → (2027,01)` properly; there is no
+  latent bug behind S3, only absent coverage.
+- **V7 — AC6's three contradictions are exactly as described.** Registry row at `:206` reads
+  `9620000001`–`9620000003`; the claimed-prefix list at `:217-219` omits `9620`; the free-blocks
+  line at `:220` still advertises `9620`–`9690`.
+- **V8 — "no frontend test infrastructure" is accurate.** No `vitest.config.*`; the only
+  `*.test.js` under `src/frontend` is inside a vendored `lib/node_modules` copy of a Quasar CLI
+  dependency. AC1/AC2/AC3 will genuinely ship with zero automated coverage.
+- **V9 — the exclusion list is honest.** I spot-checked the four excluded items with available
+  evidence (`batchSizeExceeded`'s `{max}`, `submitReschedule`'s `MISSING_RIGHTS`, the
+  `QUOTA_EXCEEDED` conflation, the `console.warn` PII note) against `deferred-work.md:1470-1492`.
+  Each exclusion is correctly characterised; none is a small mechanical fix being dodged.
+
+---
+
+## Recommended pre-dev edit list
+
+Ordered by cost of getting it wrong.
+
+1. **AC3 / Task 3** — drop the `booking.slotUnavailable` branch for `handleAcceptAll`; keep
+   `booking.coachUnavailable` only; state why. File the `acceptAll`-returns-200-on-zero-accepted
+   silent-success bug as a new `deferred-work.md` item. *(B1)*
+2. **AC2 / Task 2 / AC2 title** — add the fifth branch `payment.coachStripeNotConfigured` →
+   existing `t('payment.error.coachStripeNotConfigured')`; change "four" → "five". *(B2)*
+3. **AC1 / Task 1** — resolve the shared `DRILL_UPLOAD_NOT_ALLOWED` code: either neutral wording, or
+   keep the specific wording plus an explicit note on the `:57` co-tenant and a new ledger item for
+   splitting the code. *(B3)*
+4. **AC2 / Task 2** — reuse `payment.sessionPack.packCoachMismatch` / `packExhausted` instead of
+   adding duplicates (or delete the unused pair in the same edit). *(S1)*
+5. **AC4 / AC6 / Task 6** — range `9620000001`–**`9620000004`**, drop the "new pack's implicit rows"
+   rationale, add a subtask to update `SessionPackPurchaseRepositoryIT.java:26`. *(S5)*
+6. **AC5** — rewrite the justification (literals break the mirror, the date is a bonus); add a new
+   ledger item for the entirely-absent `findByPlayerIdFromWeek` repository coverage. *(S3)*
+7. **Task 1 / Task 2** — replace both manual-verification recipes with the actual stale-state
+   procedures; neither branch is reachable from a freshly-loaded page. *(S4, S2)*
+8. **AC2** — soften the "live landing zone / user-actionable" framing for the three `pack*` codes;
+   note `packCoachMismatch` is UI-unreachable. *(S2)*
+9. **AC6** — re-anchor or reword the `at 21ef489` sentence. *(S6)*
+10. **AC4** — state whether the second coach reuses coach A's `SessionPackTier`. *(m1)*
+11. **Housekeeping** — fix the line references in m3, including AC5's self-inconsistent citation and
+    AC2's "six" `MISSING_RIGHTS` reasons (there are eight sites).
+12. **New ledger item** — post-success reload failure reported as accept failure across all three
+    coach accept flows. *(m2)*
+
+---
+
+## Overall assessment
+
+The story's **structure** is right for a bundled small-fix story, its exclusion reasoning is
+genuinely honest (V9), and four of its six items (AC4, AC5's mechanism, AC6, and two-thirds of AC3)
+are correctly diagnosed and safely scoped. AC5's Dev Note insisting on real mutation verification,
+and AC2's Dev Note refusing to overclaim on `MISSING_RIGHTS`, are both the right instincts.
+
+What it did not survive is the claim in its own preamble that "every throw site, every wire
+`errorKey`, every i18n key … was read directly from the working tree." Three of the four
+BLOCKER/SHOULD-FIX findings on the frontend ACs (B1, B2, S1) are things a full re-read of the throw
+sites and the locale bundles would have caught: a swallowing loop, a fifth `PaymentGatewayException`,
+and two keys already shipped. The verification appears to have re-confirmed the ledger's own claims
+rather than independently re-enumerating the code.
+
+With the twelve edits above, this is a sound, low-risk story. Without edits 1–3 it will ship one
+piece of dead code, one confidently-wrong toast, and a completion note that overstates what the
+coach-side accept flows now do.

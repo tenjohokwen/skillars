@@ -375,8 +375,15 @@ async function handleAcceptReschedule(booking) {
     await bookingStore.handleAcceptReschedule(booking.bookingId, booking.pendingReschedule.id)
     await bookingStore.loadCoachSchedule(selectedWeek.value)
     $q.notify({ message: t('booking.reschedule.accepted'), type: 'positive' })
-  } catch {
-    $q.notify({ message: t('booking.reschedule.acceptFailed'), type: 'negative' })
+  } catch (err) {
+    const errorKey = err?.response?.data?.errorMsg?.errorKey
+    if (errorKey === 'booking.coachUnavailable') {
+      $q.notify({ type: 'negative', message: t('booking.errors.coachUnavailable') })
+    } else if (errorKey === 'booking.slotUnavailable') {
+      $q.notify({ type: 'negative', message: t('booking.errors.slotUnavailable') })
+    } else {
+      $q.notify({ type: 'negative', message: t('booking.reschedule.acceptFailed') })
+    }
   } finally {
     rescheduleActionId.value = null
   }
