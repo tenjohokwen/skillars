@@ -19,6 +19,8 @@ import com.softropic.skillars.platform.security.contract.exception.OperationNotA
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.service.AgePolicyService;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -59,6 +61,7 @@ public class MessagingService {
     private final ConversationCreationHelper conversationCreationHelper;
     private final AgePolicyService agePolicyService;
     private final TransactionTemplate transactionTemplate;
+    private final EntityManager entityManager;
 
     public ConversationSummaryDto initiateConversation(UUID coachId, Long playerId, Long callerUserId, String role) {
         boolean hasBooking = bookingRepository.existsByCoachIdAndPlayerIdAndStatusIn(coachId, playerId, CONFIRMED_STATES);
@@ -291,6 +294,22 @@ public class MessagingService {
 
     @Transactional
     public void softDeleteMessage(Long conversationId, Long messageId, Long callerUserId) {
+        // Unlocked read + authorization checks FIRST, locked re-read second. Deliberately in this
+        // order: taking a row lock before authorising the caller lets any authenticated user pin an
+        // arbitrary message row for the duration of the transaction before receiving their 403 —
+        // Deferred-16 D2. Mirrors BookingService.cancelBookingAsParent, which was fixed for the
+        // identical reason (its own code comment names this exact finding). One extra SELECT is cheap.
+        Message unlocked = messageRepository.findById(messageId)
+            .orElseThrow(() -> new ResourceNotFoundException("Message not found", "message"));
+        if (!unlocked.getConversationId().equals(conversationId)) {
+            throw new OperationNotAllowedException(
+                "Message does not belong to this conversation", MessagingErrorCode.NOT_A_PARTY);
+        }
+        if (!unlocked.getSenderId().equals(callerUserId)) {
+            throw new OperationNotAllowedException(
+                "Only the original sender may delete this message", MessagingErrorCode.NOT_A_PARTY);
+        }
+
         // Locked read: the deletedAt check below must run under the row lock so a concurrent
         // double-delete loses cleanly (409) instead of both callers observing null and both
         // committing a 204. Do not add @Version to Message — see Dev Notes: ModerationResultApplier,
@@ -298,14 +317,13 @@ public class MessagingService {
         // locking would turn their benign interleavings into OptimisticLockingFailureExceptions.
         Message message = messageRepository.findByIdForUpdate(messageId)
             .orElseThrow(() -> new ResourceNotFoundException("Message not found", "message"));
-        if (!message.getConversationId().equals(conversationId)) {
-            throw new OperationNotAllowedException(
-                "Message does not belong to this conversation", MessagingErrorCode.NOT_A_PARTY);
-        }
-        if (!message.getSenderId().equals(callerUserId)) {
-            throw new OperationNotAllowedException(
-                "Only the original sender may delete this message", MessagingErrorCode.NOT_A_PARTY);
-        }
+        // The explicit refresh is required, not defensive: findByIdForUpdate is a JPQL query and the
+        // same row is already managed from the unlocked findById above, so Hibernate takes the DB
+        // lock but returns the existing instance without overwriting its in-memory state. Reading
+        // getDeletedAt() off message without this would re-check the same stale (pre-lock) value and
+        // a concurrent double-delete could never be caught. Mirrors BookingService.createBookingRequest's
+        // identical entityManager.refresh use for the same Hibernate identity-map gotcha.
+        entityManager.refresh(message, LockModeType.PESSIMISTIC_WRITE);
         if (message.getModerationStatus() == MessageModerationStatus.UNDER_REVIEW
                 || message.getModerationStatus() == MessageModerationStatus.BLOCKED) {
             throw new OperationNotAllowedException(

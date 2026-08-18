@@ -149,10 +149,9 @@ class PaymentPendingSweeperIT extends BasePaymentIT {
         assertThat(jdbcTemplate.queryForObject(
             "SELECT status FROM payment.booking_payments WHERE booking_id = ?", String.class, bookingId))
             .isEqualTo("CHARGE_FAILED");
-        assertThat(jdbcTemplate.queryForObject(
-            "SELECT refund_eligibility FROM booking.bookings WHERE id = ?", String.class, bookingId))
-            .as("PAYMENT_FAILED has no applyRefundLogic branch — a swept booking must not imply a refund")
-            .isNull();
+        // This test used to also assert booking.bookings.refund_eligibility IS NULL here — the column
+        // was dropped entirely by Deferred-33 AC7 (dead, write-only field; see V97 migration), so the
+        // assertion was removed rather than pointed at a nonexistent column.
     }
 
     /**
