@@ -9,6 +9,7 @@ import com.softropic.skillars.platform.video.repo.VideoQuotaRepository;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
 import com.softropic.skillars.platform.video.service.QuotaConfigService;
 import com.softropic.skillars.platform.video.contract.InitializeUploadResponse;
+import com.softropic.skillars.platform.video.contract.exception.RateLimitExceededException;
 import com.softropic.skillars.platform.video.contract.exception.VideoValidationException;
 import com.softropic.skillars.platform.video.service.VideoDeletionService;
 import com.softropic.skillars.platform.video.service.VideoMetrics;
@@ -263,5 +264,27 @@ class VideoUploadResourceIT {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body))
             .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void initiateUpload_rateLimited_returns429WithRateLimitedKey() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(1001L);
+        when(coachProfileService.getCoachIdByUserId(1001L)).thenReturn(COACH_ID);
+        when(videoService.initializeUpload(any()))
+            .thenThrow(new RateLimitExceededException(COACH_ID.toString(), "rate limit exceeded"));
+
+        String body = objectMapper.writeValueAsString(Map.of(
+            "fileName", "clip.mp4",
+            "fileSizeBytes", 10_485_760,
+            "mimeType", "video/mp4",
+            "videoType", "COACH_REVIEW"
+        ));
+
+        mockMvc.perform(post(INITIATE_URL)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+            .andExpect(status().isTooManyRequests())
+            .andExpect(jsonPath("$.errorMsg.errorKey").value("UPLOAD_RATE_LIMITED"));
     }
 }

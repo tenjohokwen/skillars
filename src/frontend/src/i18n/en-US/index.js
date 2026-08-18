@@ -338,9 +338,11 @@ export default {
         removeConfirm: 'Remove',
         uploadStarted: 'Video upload started — processing may take a few minutes',
         videoRemoved: 'Video removed',
-        quotaExceeded: 'Upload limit reached. Try again in a moment, or upgrade your plan for more storage.',
+        quotaExceeded: 'Upload would exceed your video storage quota. Upgrade your plan to upload more.',
+        rateLimited: 'Too many uploads. Wait a moment and try again.',
         constraintViolated: 'Video exceeds the 120-second or 500 MB limit for drill demos.',
         videoAlreadyLinked: 'A video is already linked to this drill. Remove it before uploading a new one.',
+        notOwned: 'You do not have permission to upload video to this drill.',
         uploadFailed: 'Upload failed. Please try again.',
         removeFailed: 'Could not remove video. Please try again.',
       },
@@ -927,10 +929,17 @@ export default {
         'A reschedule request for this session is already awaiting a response.',
       rescheduleNotPending: 'This reschedule request has already been handled.',
       listMayBeStale: 'This list may be out of date. Reload the page to see the latest.',
-      requestNotAllowed: 'You do not have access to the player or session pack in this request.',
+      // Deliberately object-agnostic: shared by 5 call sites across 4 pages (BookingRequestPage's
+      // submit()/submitBatchRequest(), CoachBookingRequestsPage's handleAcceptAll,
+      // CoachCommandCenterPage's handleAcceptReschedule, ParentBookingsPage's submitReschedule),
+      // each a genuine authorization failure over a different object (player/pack, batch, booking).
+      // Not split per object type — see skillars-deferred-32 AC3.
+      requestNotAllowed: 'You do not have permission to perform this action.',
       invalidSessionDuration:
         "The requested session length does not match this coach's session duration.",
       batchSizeExceeded: 'You can request up to {max} sessions in one batch.',
+      batchSizeExceededUnknownMax:
+        'You have reached the maximum number of sessions allowed in one batch.',
       duplicateSlotStartTime: 'Two or more requests in this batch have the same start time.',
       overlappingSlots: 'Two or more requests in this batch overlap.',
     },

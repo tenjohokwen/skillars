@@ -207,8 +207,8 @@
             unelevated
             color="primary"
             :label="t('booking.batch.confirmRequests')"
-            :loading="bookingStore.batchSubmitting"
-            :disable="bookingStore.batchBasketSize === 0"
+            :loading="bookingStore.batchSubmitting || refetchingBatchMaxSize"
+            :disable="bookingStore.batchBasketSize === 0 || refetchingBatchMaxSize"
             @click="submitBatchRequest"
           />
         </q-card-actions>
@@ -256,6 +256,11 @@ const submitting = ref(false)
 const batchMode = ref(false)
 const batchReviewOpen = ref(false)
 const maxBatchSize = ref(5) // populated from backend on mount
+// Guards the batchSizeExceeded re-fetch window: batchSubmitting has already reset to false by
+// the time this branch runs (submitBatch's own finally clears it), so without this the dialog's
+// submit button is re-clickable while getBatchConfig() is still in flight, letting a second
+// overlapping re-fetch's out-of-order response clobber maxBatchSize.value with a stale number.
+const refetchingBatchMaxSize = ref(false)
 
 const creditsForCoach = computed(() => bookingStore.creditsForCoach(coachId))
 const hasCredits = computed(() => creditsForCoach.value > 0)
@@ -539,10 +544,29 @@ async function submitBatchRequest() {
   } catch (err) {
     const errorKey = err?.response?.data?.errorMsg?.errorKey
     if (errorKey === 'booking.batchSizeExceeded') {
-      $q.notify({
-        message: t('booking.errors.batchSizeExceeded', { max: maxBatchSize.value }),
-        type: 'negative',
-      })
+      // Re-fetch before toasting: the client's cached maxBatchSize can have drifted below the
+      // server's live booking.batch.maxSize by the time this rejection arrives, which is the only
+      // way this branch is even reachable (toggleSlotInBasket already caps the basket at the
+      // cached value) — quoting the stale number would confidently state the wrong figure. This
+      // also re-syncs maxBatchSize.value, which gates batchAtMax and the basket cap for the rest
+      // of the session, so do not make the re-fetch conditional on the toast succeeding.
+      refetchingBatchMaxSize.value = true
+      try {
+        const res = await getBatchConfig()
+        maxBatchSize.value = res.maxSize
+        $q.notify({
+          message: t('booking.errors.batchSizeExceeded', { max: maxBatchSize.value }),
+          type: 'negative',
+        })
+      } catch {
+        console.warn('Could not re-fetch batch config, using previous max size')
+        $q.notify({
+          message: t('booking.errors.batchSizeExceededUnknownMax'),
+          type: 'negative',
+        })
+      } finally {
+        refetchingBatchMaxSize.value = false
+      }
     } else if (errorKey === 'booking.invalidSessionDuration') {
       $q.notify({ message: t('booking.errors.invalidSessionDuration'), type: 'negative' })
     } else if (errorKey === 'booking.duplicateSlotStartTime') {

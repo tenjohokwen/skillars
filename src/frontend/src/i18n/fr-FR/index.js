@@ -349,11 +349,13 @@ export default {
           'Téléversement de la vidéo démarré — le traitement peut prendre quelques minutes',
         videoRemoved: 'Vidéo supprimée',
         quotaExceeded:
-          'Limite de téléversement atteinte. Réessayez dans un instant, ou mettez à niveau votre plan pour plus de stockage.',
+          'Ce téléversement dépasserait votre quota de stockage vidéo. Mettez à niveau votre plan pour en téléverser davantage.',
+        rateLimited: 'Trop de téléversements. Attendez un instant puis réessayez.',
         constraintViolated:
           "La vidéo dépasse la limite de 120 secondes ou 500 Mo pour les démonstrations d'exercices.",
         videoAlreadyLinked:
           'Une vidéo est déjà associée à cet exercice. Supprimez-la avant d’en téléverser une nouvelle.',
+        notOwned: "Vous n'avez pas la permission de téléverser une vidéo pour cet exercice.",
         uploadFailed: 'Échec du téléversement. Veuillez réessayer.',
         removeFailed: 'Impossible de supprimer la vidéo. Veuillez réessayer.',
       },
@@ -1211,11 +1213,12 @@ export default {
       rescheduleNotPending: 'Cette demande de report a déjà été traitée.',
       listMayBeStale:
         "Cette liste n’est peut-être plus à jour. Rechargez la page pour voir les dernières données.",
-      requestNotAllowed:
-        "Vous n’avez pas accès au joueur ou au forfait de séances de cette demande.",
+      requestNotAllowed: "Vous n’avez pas la permission d’effectuer cette action.",
       invalidSessionDuration:
         'La durée de séance demandée ne correspond pas à la durée de séance de ce coach.',
       batchSizeExceeded: 'Vous pouvez demander jusqu’à {max} séances dans un même lot.',
+      batchSizeExceededUnknownMax:
+        'Vous avez atteint le nombre maximal de séances autorisées dans un même lot.',
       duplicateSlotStartTime: 'Deux demandes ou plus dans ce lot ont la même heure de début.',
       overlappingSlots: 'Deux demandes ou plus dans ce lot se chevauchent.',
     },

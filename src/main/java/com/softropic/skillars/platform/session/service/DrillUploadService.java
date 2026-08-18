@@ -54,7 +54,7 @@ public class DrillUploadService {
             .orElseThrow(() -> new ResourceNotFoundException("Drill not found", "drill"));
 
         if (!"COACH".equals(drill.getLibraryType()) || !coachId.equals(drill.getOwnerCoachId())) {
-            throw new OperationNotAllowedException("Drill upload not allowed", SessionErrorCode.DRILL_UPLOAD_NOT_ALLOWED);
+            throw new OperationNotAllowedException("Drill upload not allowed", SessionErrorCode.DRILL_NOT_OWNED);
         }
 
         checkDrillUploadGate(coachId);
@@ -75,7 +75,7 @@ public class DrillUploadService {
                 if (video.getOperationalState() == OperationalState.READY) {
                     throw new OperationNotAllowedException(
                         "A video is already linked to this drill. Remove it before uploading a new one.",
-                        SessionErrorCode.DRILL_UPLOAD_NOT_ALLOWED);
+                        SessionErrorCode.DRILL_VIDEO_ALREADY_LINKED);
                 }
             });
         }
@@ -106,7 +106,7 @@ public class DrillUploadService {
             .orElseThrow(() -> new ResourceNotFoundException("Drill not found", "drill"));
 
         if (!"COACH".equals(drill.getLibraryType()) || !coachId.equals(drill.getOwnerCoachId())) {
-            throw new OperationNotAllowedException("Drill upload not allowed", SessionErrorCode.DRILL_UPLOAD_NOT_ALLOWED);
+            throw new OperationNotAllowedException("Drill upload not allowed", SessionErrorCode.DRILL_NOT_OWNED);
         }
 
         drillVideoRefRepository.findByDrillId(drillId).ifPresent(ref -> {

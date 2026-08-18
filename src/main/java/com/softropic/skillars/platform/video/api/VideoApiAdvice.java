@@ -7,6 +7,7 @@ import com.softropic.skillars.infrastructure.security.RequestMetadataProvider;
 import com.softropic.skillars.platform.video.contract.VideoErrorCode;
 import com.softropic.skillars.platform.video.contract.exception.PlaybackDeniedException;
 import com.softropic.skillars.platform.video.contract.exception.QuotaExceededException;
+import com.softropic.skillars.platform.video.contract.exception.RateLimitExceededException;
 import com.softropic.skillars.platform.video.contract.exception.TerminalStateViolationException;
 import com.softropic.skillars.platform.video.contract.exception.VideoDeletionNotAuthorisedException;
 import com.softropic.skillars.platform.video.contract.exception.VideoApprovalNotFoundException;
@@ -74,6 +75,14 @@ public class VideoApiAdvice {
     public ErrorDto videoQuotaExceededHandler(final QuotaExceededException ex) {
         ErrorDto dto = logErrorAndReturnDTO(ex, "video.quotaExceeded", VideoErrorCode.QUOTA_EXCEEDED.getErrorCode());
         videoMetrics.recordError(operationFromMdc(), VideoErrorCode.QUOTA_EXCEEDED.getErrorCode());
+        return dto;
+    }
+
+    @ExceptionHandler(RateLimitExceededException.class)
+    @ResponseStatus(HttpStatus.TOO_MANY_REQUESTS)
+    public ErrorDto videoRateLimitExceededHandler(final RateLimitExceededException ex) {
+        ErrorDto dto = logErrorAndReturnDTO(ex, "video.rateLimitExceeded", VideoErrorCode.UPLOAD_RATE_LIMITED.getErrorCode());
+        videoMetrics.recordError(operationFromMdc(), VideoErrorCode.UPLOAD_RATE_LIMITED.getErrorCode());
         return dto;
     }
 

@@ -6,6 +6,7 @@ public enum VideoErrorCode implements ErrorCode {
     VIDEO_NOT_FOUND,
     VALIDATION_FAILED,
     QUOTA_EXCEEDED,
+    UPLOAD_RATE_LIMITED,
     PLAYBACK_DENIED,
     PROVIDER_ERROR,
     SESSION_EXPIRED,

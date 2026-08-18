@@ -1,135 +1,70 @@
-# Senior Dev Review: skillars-deferred-31
+# Senior Dev Review: skillars-deferred-32
 
-Target: `_bmad-output/implementation-artifacts/skillars-deferred-31-coach-accept-flow-refresh-reschedule-error-split-and-slu-repository-coverage.md`
+Target: `_bmad-output/implementation-artifacts/skillars-deferred-32-drill-video-error-code-splits-authorization-copy-and-error-key-integration-coverage.md`
+Status at review: `ready-for-dev`
+Reviewed: 2026-08-18
 
-Method: every citation in the story (file:line, code snippets, "verified by grep" claims) was
-independently re-checked against the current working tree — not taken on the story's word — by
-reading the actual throw sites, catch blocks, i18n bundles, migrations and `deferred-work.md`
-entries it references. Findings below are only the ones that survived that check; several
-initially-suspicious items (e.g. the `payment.sessionPack.expired` vs. `packExpired` near-duplicate
-key, the batch-status transactional boundary, the "eight" vs. AC1's per-page bullets) were
-investigated and ruled out or downgraded — see the Non-Findings section at the end.
+Method: every citation in the story (file:line, throw-site tables, "verified by reading" claims, existing-test references, fixture-id blocks, ledger-item locations) was independently re-checked against the current working tree — not taken on the story's word. This included full reads of `DrillUploadService.java`, `SessionErrorCode.java`, `VideoService.java`, `VideoErrorCode.java`, `QuotaExceededException.java`, `QuotaService.java`, `VideoApiAdvice.java`, `RescheduleService.java`, `BookingBatchService.java`, `ApiAdvice.java`, `DrillLibraryService.java`, `DrillDetailPanel.vue`, `BookingRequestPage.vue`, `axios.js`; targeted greps across `src/` for every wire-code name the story adds or removes; and reads of the relevant IT classes (`DrillUploadResourceIT`, `RescheduleResourceIT`, `BookingBatchResourceIT`) to confirm existing-test citations and to check whether prescribed test extensions are actually mechanically achievable against the code as it exists today, not as the story assumes it exists.
 
-## Finding 1 (HIGH) — AC3's RescheduleService table miscounts the throw sites: one real site is missing entirely, and a different one is mislabeled
+**Overall assessment: this is an unusually well-verified draft.** Every throw-site line number I checked against `RescheduleService.java` (10 sites across 3 methods) was exact. Every frontend call-site citation for `booking.errors.requestNotAllowed` (5 sites) was exact. Every fixture-id-block and free-block citation in Dev Notes matched `docs/testing/test-data-isolation.md` verbatim. All six ledger items the story claims to close exist at the cited locations, already tagged `[OWNED BY skillars-deferred-32 ACn]`. Two of the "why this story exists" corrections (the missed `VideoService.java:135` retry site, the wrong `SluWeeklySnapshotRepositoryIT` fixture-count claim in `skillars-deferred-31`'s own notes) independently checked out. Two findings below survived that level of scrutiny; one is a trivial naming slip.
 
-**Claim being checked:** AC3 says *"`RescheduleService` throws `SecurityError.MISSING_RIGHTS` at
-nine sites, only two of which are genuine authorization failures"* and gives a 10-row table (2 keep
-+ 8 recode) mapping each site to a line number and target error code. Task 3 confirms: *"Re-code the
-eight non-authz throw sites per AC3's table."*
+---
 
-**What the code actually has** (`RescheduleService.java`, current working tree):
+## Finding 1 (HIGH) — AC2 undercounts the video-module's storage-cause `QuotaExceededException` throw sites: there are three, not two, and the omitted one is the *authoritative* enforcement point
 
-| Line | Method | Condition | Story's table row |
-|---|---|---|---|
-| 58 | `requestReschedule` | parent doesn't own booking | `:58` — keep MISSING_RIGHTS ✓ |
-| 61-63 | `requestReschedule` | not CONFIRMED/UPCOMING | `:61-62` — BOOKING_NOT_RESCHEDULABLE ✓ |
-| 64-67 | `requestReschedule` | start not in future | `:65-66` — START_TIME_IN_PAST ✓ |
-| 68-71 | `requestReschedule` | end not after start | `:69-70` — INVALID_TIME_RANGE ✓ |
-| 94-98 | `requestReschedule` | pending reschedule exists | `:96-97` — RESCHEDULE_ALREADY_PENDING ✓ |
-| 129 | `acceptReschedule` | coach doesn't own booking | `:129` — keep MISSING_RIGHTS ✓ |
-| 137-140 | `acceptReschedule` | not PENDING (unlocked pre-check) | `:138-139` — RESCHEDULE_NOT_PENDING ✓ |
-| 141-144 | `acceptReschedule` | booking not reschedulable | `:142-143` — BOOKING_NOT_RESCHEDULABLE ✓ |
-| 145-148 | `acceptReschedule` | start no longer in future | `:146-147` — START_TIME_IN_PAST ✓ |
-| **164-167** | **`acceptReschedule`** | **not PENDING (locked re-check, post-refresh)** | Story's table lists this exact line range (`:165-166`) but labels it **"(decline path) request is not PENDING"** — it is not the decline path; it's the *second* PENDING check inside `acceptReschedule`, four lines after the first one. |
-| **223-225** | **`declineReschedule`** | **coach doesn't own booking** | **Not in the table at all.** A third genuine-authz "coach does not own this booking" throw, structurally identical to the two rows marked "keep." |
-| **236-238** | **`declineReschedule`** | **not PENDING** | **Not in the table at all** — this is the actual decline-path "not PENDING" throw the table's `:165-166` row claims to describe, but no row cites its real line number (236-238). |
+**Claim being checked:** AC2 says *"`VideoErrorCode.QUOTA_EXCEEDED` stays and keeps the two storage sites"* (`VideoService.java:249` in `initializeUpload`, `:135` in `retryUpload`), and frames the whole AC as: `VideoService` throws `QuotaExceededException` at three sites total — two storage, one rate-limit (`:231`) — with the rate-limit one being split off.
 
-So the file has **12** `MISSING_RIGHTS` throw sites (3 genuine authz, 9 to recode), not the "nine
-sites, two genuine" the AC3 prose claims (whose own table, counted literally, only has 10 rows —
-already inconsistent with its own "nine" and with Task 3's "eight non-authz sites"). Two real sites
-are absent from the table outright (the `declineReschedule` ownership check and its real "not
-PENDING" throw), and the line number given for "(decline path) request is not PENDING" actually
-points at an unrelated throw site inside `acceptReschedule`.
+**What the code actually has:** `QuotaService.reserve(String ownerId, long bytes, VideoType videoType)` (`QuotaService.java:57-77`) throws the exact same 3-arg storage-cause `QuotaExceededException(ownerId, storageQuota, bytes)` at `QuotaService.java:76` — a **fourth** throw site of this exception class, in a different class than the three the AC enumerates. This is not a dead or unreachable path: `reserve()` is called from both `VideoService.initializeUpload` (line 257) and `VideoService.retryUpload` (line 148), immediately after each method's own `quotaProvider.check()` guard passes. `QuotaService.check()`'s own code comment states outright:
 
-**Why this matters for the dev doing the work:** the frontend half of AC3 correctly anticipates a
-`booking.rescheduleNotPending` branch on `handleDeclineReschedule` (Task 3: "branches in ...
-`handleDeclineReschedule`"), so the *intent* to fix decline's mapping is present — but a dev
-mechanically following the backend table's line citations will recode `acceptReschedule`'s second
-PENDING check (harmless — it needed `RESCHEDULE_NOT_PENDING` too) while never being pointed at
-`declineReschedule:236-238`, the throw site the frontend fix is actually for. The two target codes
-happen to coincide (`RESCHEDULE_NOT_PENDING` either way), which is the only reason this doesn't
-silently produce a wrong mapping — but nothing in the story tells the dev to open
-`declineReschedule` and look, and `RescheduleResourceIT` currently has zero `errorKey`/
-`MISSING_RIGHTS` assertions (`grep -n "errorKey\|MISSING_RIGHTS" RescheduleResourceIT.java` returns
-nothing), so there is no test safety net that would catch the throw site being missed. The
-`declineReschedule` ownership check (223-225) being absent from the table doesn't cause a wrong
-recode (it's correctly left as MISSING_RIGHTS by default, since it's not listed to change) — but it
-means the story's own audit trail is wrong about how many genuine-authz sites exist, which is exactly
-the kind of miscount this story's stated methodology ("reading the throw sites... directly rather
-than trusting the ledger's own citations") was supposed to catch.
+```java
+// ADVISORY ONLY — no lock held. A concurrent reserve() may drain quota between this
+// check and the caller's subsequent reserve() call. reserve() is the authoritative gate.
+```
 
-**Suggested fix before dev starts:** add two rows to AC3's table — `declineReschedule:223-225` "keep
-MISSING_RIGHTS (genuine authz, third site)" and `declineReschedule:236-238` "not PENDING →
-RESCHEDULE_NOT_PENDING" — and correct `:165-166`'s row to describe what it actually is (the second,
-locked-recheck PENDING throw inside `acceptReschedule`, not the decline path). Update "nine sites,
-two genuine" to "twelve sites, three genuine" and "eight non-authz" to "nine non-authz" throughout.
+So the two `VideoService` sites the AC calls "the storage sites" are the *non-authoritative* pre-check, while the actual enforcement point most likely to fire under real concurrent load — two uploads racing to consume the last bytes of quota — is `QuotaService.java:76`, which AC2 never mentions.
 
-## Finding 2 (MEDIUM) — AC1's success-path stale-check has no concrete anchor point for two of the three CoachBookingRequestsPage handlers
+**Why it matters:** Functionally this does not break the required fix — all three storage-cause sites already carry the 3-arg constructor and stay bucketed under the unchanged `VideoErrorCode.QUOTA_EXCEEDED`, so no code change is missing. But it undermines the precision this story explicitly prides itself on (the same section that catches the ledger's two-vs-three-site miss on `VideoService.java:135`, one paragraph above, makes the identical class of omission here). Concretely, it risks misleading whoever implements Task 2 in two ways: (a) if the dev writes or reasons about test coverage for "the two storage sites," a test that only stubs `quotaProvider.check()` to fail never exercises the path real production traffic is most likely to hit; (b) unlike Task 1 (which has an explicit `grep -rn "DRILL_UPLOAD_NOT_ALLOWED" src/` miss-check), Task 2 has no equivalent "grep all `QuotaExceededException` throw sites" step, so there is nothing in the task list that would have caught this, or that would catch a fifth site added later.
 
-**Claim being checked:** AC1 requires: *"Add the stale check on the success paths too — a silent
-refresh failure after a successful accept is the more likely case."* Task 1's per-handler bullets are
-explicit about *where* to add the failure-path check (e.g. "move `await loadCoachBookingRequests()`
-above the toast; after it, if... add the stale warning") but the success-path instruction is one
-generic bullet with no per-handler location.
+**Recommendation:** Correct AC2's site count to three storage-cause sites (`VideoService.java:249`, `VideoService.java:135`, `QuotaService.java:76`) plus the one rate-limit site (`VideoService.java:231`), and note in the Required section that `QuotaService.reserve()`'s throw is the authoritative one. No code change is needed as a result — this is a documentation-accuracy fix to the story, not a scope change — but it should be corrected before a dev agent trusts the "two storage sites" framing while writing verification.
 
-**What the code actually looks like:** `handleAccept` and `handleDecline`
-(`CoachBookingRequestsPage.vue:151-180`) have **no success-path code at all** today — no notify, no
-statement between the successful `await bookingStore.approveBooking(id)` and the `finally` block.
-The refresh that happens on success is buried a level down, inside the store's `approveBooking`/
-`rejectBooking` (`booking.store.js:348-356`), which the page never sees return a value it can key
-off. A dev implementing this AC has to invent a code location — insert an `if
-(bookingStore.coachRequestsError)` check directly after the successful `await`, with no existing
-notify or refresh call at that point to model it on. `handleAcceptAll` and both
-`CoachCommandCenterPage` handlers are unambiguous by contrast: they already have an explicit
-success-path refresh + notify block to attach the check to (e.g.
-`CoachCommandCenterPage.vue:375-377`). This isn't a false claim in the story — the requirement is
-correct and the fix is genuinely simple (one `if` block) — but the task breakdown's asymmetry (fully
-specified for failure paths, generic for success paths) is exactly the kind of gap that produces an
-inconsistent implementation across the three flows the AC is trying to unify. Worth a one-line
-addition to Task 1 naming the insertion point for `handleAccept`/`handleDecline` explicitly, the same
-way it does for the failure paths.
+---
 
-## Non-findings (checked, not defects)
+## Finding 2 (MEDIUM) — AC5/Task 5's instruction to "extend" a lock-interleaving test with an `errorKey` HTTP-body assertion is not achievable as written for the `:181-182` row, because that test never goes through HTTP
 
-- **`approveBooking`/`rejectBooking` lack their own try/catch in the store.** Verified this is
-  intentional and correct as-is: `acceptBooking(id)`/`declineBooking(id)` are unguarded so a mutation
-  failure propagates to the page's catch, while the *refresh* call one line later
-  (`loadCoachBookingRequests()`) never throws — so the net behavior matches what AC1 describes.
-  Nothing to fix here beyond AC1's own scope.
-- **`payment.sessionPack.expired` vs. the new `payment.sessionPack.packExpired`.** These are
-  different, pre-existing keys with overlapping subject matter (`expired` has a `{date}` param and is
-  currently unused anywhere in `src/frontend/src`; `packExpired` is the one AC4 relocates). Confirmed
-  via grep that `expired` has zero call sites today. This is a pre-existing dead-key oddity, not
-  something AC4 creates or worsens, and AC4's own convention rule doesn't need to resolve it. Not
-  flagged as a story defect — mentioned only in case a reviewer wonders about the naming overlap.
-  Out of this story's scope.
-- **AC2's `throw` replacing `return` inside `acceptedIds.isEmpty()`.** Checked whether this could
-  interact badly with the per-booking `REQUIRES_NEW` transactions or the trailing transaction: it
-  can't — the branch sits before any write in the enclosing `@Transactional` method, and every
-  per-booking accept already committed (or rolled back) independently via `perBookingTx`. Throwing
-  here rolls back nothing that matters. Consistent with the Dev Notes' preserved-invariant guidance.
-- **AC5's repository query has no `skill_code` filter**, so `findByPlayerIdFromWeek` returns rows
-  across every skill for a player in the date range — checked both production callers
-  (`SluDashboardService.java:49`, `SluNarrativeService.java:45`) and both already treat the result as
-  multi-skill-code by design (grouping/mapping by skill after the fetch). AC5's required fixture rows
-  don't need multiple skill codes to prove the year/week predicate, so this isn't a gap in the new
-  IT's design — noted only because it's a detail the AC doesn't call out, not because it's wrong.
-- **AC7's withdrawal of the `CoachBookingRequestsPage.vue:164` ledger item.** Independently confirmed
-  against both the current store code (`booking.store.js:302-314`, catches with no rethrow) and the
-  ledger entry itself (`deferred-work.md:1519`), which matches the story's characterization of it
-  word-for-word. The withdrawal is correct.
-- **AC2/AC5/AC6's file:line citations, i18n bundle anchors (`en-US/index.js:924`, `:1046`,
-  `:1068-1069`), and the V48/V46 migration claims** (`player_id` has no FK; `skill_code` FKs to
-  `skill_definitions`; `PAC`/`SHO` are seeded by V46) — all independently verified against the actual
-  files and match exactly.
+**Claim being checked:** AC5 says, for the `acceptReschedule` locked re-read `RESCHEDULE_NOT_PENDING` throw (`RescheduleService.java:181-182`): *"the class already has two lock-interleaving tests (`:537`, `:629`) that produce exactly that race; extend one of them with an errorKey assertion rather than writing a third."* Task 5 repeats this, and AC5's general requirement is "an IT case per uncovered row asserting 403 + the exact `"errorKey":"…"` substring, in the assertion style already used at `:437-440`" (an HTTP-response-body JSON substring check).
+
+**What the code actually has:** Both `acceptReschedule_declineCommitsWhileAcceptWaitsOnTheLock_acceptFailsAndDeclineStands` (`:537`) and its mirror `declineReschedule_acceptCommitsWhileDeclineWaitsOnTheLock_declineFailsAndAcceptStands` (`:629`) call the service method **directly** — `rescheduleService.acceptReschedule(bookingId, rescheduleId, COACH_USER_ID)` / `rescheduleService.declineReschedule(...)` inside an `ExecutorService`-submitted `Runnable`, not through `httpTestClient.makeHttpRequest`. The outcome is captured as a raw `Throwable` and asserted with `assertThat(acceptOutcome.get()).isInstanceOf(OperationNotAllowedException.class)`. There is no HTTP response and no JSON body anywhere in this test to extract an `"errorKey":"…"` substring from — the `:437-440` assertion style the AC says to mirror operates on `ex.getResponseBodyAsString()` from an `HttpClientErrorException`, which only exists when the call goes through the REST layer.
+
+**Why it matters:** This is a structural mismatch, not a determinism problem. The AC's own escape hatch ("if it still cannot be pinned deterministically, leave that one row uncovered with an in-test comment") addresses *flakiness*, but the actual obstacle here is that the prescribed assertion mechanism cannot apply to this test at all without restructuring it — either (a) rewriting the accepter/decliner thread to go through the real HTTP client (introducing session-cookie handling and network latency into a test whose entire point is precise `CountDownLatch`/`Thread.sleep(1500)` timing control around a 5-second DB lock timeout — a real flakiness risk the rewrite would introduce, not remove), or (b) asserting on `((OperationNotAllowedException) acceptOutcome.get()).getErrorCode()` directly, a different (and reasonable) verification mechanism that the AC doesn't authorize or even mention as an acceptable substitute. A dev agent following the AC literally is likely to either destabilize a carefully-built concurrency test or silently deviate from the prescribed assertion style without being told that's expected.
+
+**Recommendation:** Reword Task 5's `:181-182` row to say explicitly: extend `:537` with a **Java-level** assertion — `assertThat(acceptOutcome.get()).asInstanceOf(InstanceOfAssertFactories.throwable(OperationNotAllowedException.class)).extracting(OperationNotAllowedException::getErrorCode).isEqualTo(BookingError.RESCHEDULE_NOT_PENDING)` (or equivalent) — rather than an HTTP-body `errorKey` substring, and note why (the test is intentionally service-level, not HTTP-level, to control lock timing). This is still a real, mutation-verifiable assertion; it just isn't the same mechanism as the other rows, and the story should say so rather than implying uniformity.
+
+---
+
+## Finding 3 (MINOR) — AC1 cites `DrillLibraryService.list`; the method is named `listDrills`
+
+**Claim being checked:** AC1's background section: *"`DrillLibraryService.list` scopes non-`PLATFORM` results to the calling coach via `findByOwnerCoachIdAndStatus`."*
+
+**What the code actually has:** The method is `DrillLibraryService.listDrills(...)` (`DrillLibraryService.java:56`). The scoping behavior itself is correctly described — non-`PLATFORM` library requests do resolve through `drillRepository.findByOwnerCoachIdAndStatus(coachId, "ACTIVE")` exactly as claimed.
+
+**Why it matters:** Purely cosmetic — the cited `findByOwnerCoachIdAndStatus` symbol is unique enough that grepping for it finds the right code regardless of the wrong method name, and this claim isn't load-bearing for anything AC1 requires (it's background justification for why the `DRILL_NOT_OWNED` path is "not reachable today," not an instruction to change this method). Not worth blocking on; flagging only because the story inherited this same wrong name from the `deferred-work.md` item it quotes.
+
+**Recommendation:** Fix in passing if editing this section; not worth a dedicated pass.
+
+---
+
+## Verified correct (checked, not faulted)
+
+To keep the finding list free of noise, the following claims were specifically checked against source and held up exactly:
+
+- **AC1**: All three `DRILL_UPLOAD_NOT_ALLOWED` throw sites (`DrillUploadService.java:57,78,109`) and the exact message text at each — confirmed, and confirmed to be the *only* three sites in `src/` (full-repo grep). `SessionErrorCode.getErrorCode()` returns bare `name()` — confirmed, no exhaustive-switch update needed when the constant is removed (unlike `BookingError`). No backend `messages*.properties` entries exist for `DRILL_UPLOAD_NOT_ALLOWED` today — confirmed, matching the claim that AC1's new codes need none either. The three existing ITs cited (`initiateUpload_platformDrill_returns403` `:175`, `initiateUpload_otherCoachDrill_returns403` `:194`, `deleteVideo_platformDrill_returns403` `:383`) exist exactly there and assert only `HttpClientErrorException.Forbidden`, no `errorKey` yet — confirmed, consistent with "add assertions" rather than "update existing ones." No existing test seeds a `READY`-and-already-linked video through `initiateUpload` — confirmed (the only `READY` fixture in the file is for `deleteVideo` tests), so AC1's claim that this path is currently completely untested is accurate, not an oversight.
+- **AC2**: The `QuotaExceededException(String, String)` two-arg constructor is used **only** at `VideoService.java:231` across all of `src/main` and `src/test` — confirmed safe to remove. `VideoApiAdvice`'s private `logErrorAndReturnDTO`/`toErrorDTO` trio (distinct from `ApiAdvice`'s) passes `null` args to `messageSource` — confirmed at `VideoApiAdvice.java:149-161`. No `video.rateLimitExceeded` key collision in any bundle — confirmed. `axios.js` has no 429 interception (only 401/403) — confirmed, so AC2's unchanged-429-status claim doesn't interact with any frontend redirect logic.
+- **AC3**: All five `booking.errors.requestNotAllowed` call sites (`BookingRequestPage.vue:512,561`; `CoachBookingRequestsPage.vue:226`; `CoachCommandCenterPage.vue:412`; `ParentBookingsPage.vue:226`) — confirmed exact, and confirmed to be the complete set (no sixth site).
+- **AC4**: Every one of `BookingRequestPage.vue`'s six line citations (`:107,258,262,300,543,599-600`) — confirmed exact against current source, including that `maxBatchSize` genuinely gates the basket cap at `:300` and the `max` prop at `:107`, making the re-fetch load-bearing beyond the toast as claimed.
+- **AC5**: All ten `RescheduleService` throw-site line numbers across `requestReschedule`, `acceptReschedule`, `declineReschedule` — confirmed exact, all ten. The three existing `RescheduleResourceIT` `errorKey` assertions are at `:383,439,470` (prose) with their enclosing test methods starting at `:353,422,451` (table) — both citations are individually correct (assertion line vs. method-declaration line), not a contradiction as first appeared. The two lock-interleaving tests exist exactly at `:537` and `:629` with the names cited.
+- **AC6**: `acceptAll_withASiblingDeclinedBeforehand_endsPartiallyAccepted` exists exactly at `:422`, uses the `createBatchInDb(bookingCount)` helper, and goes through real HTTP via `httpTestClient.makeHttpRequest` — confirmed straightforward to adapt into a new all-declined test per Task 6 (no structural obstacle like Finding 2's). `BookingBatchService.java:292-293` is currently the `throw new OperationNotAllowedException(..., BookingError.BATCH_NONE_ACCEPTED)` statement (post-`skillars-deferred-31`) — confirmed, matching the mutation-verify instruction to revert exactly those lines.
+- **AC7 / Dev Notes**: All three fixture-id-block claims (`9560000010`–`9560000030` ⚠ `DrillTagResourceIT`; `9700000001`–`9700000011` ⚠ `ConversationResourceIT`; `9800000001`–`9800000020` ⚠ `MessagingAccessControlIT`) and the entire free-blocks list — confirmed verbatim against `docs/testing/test-data-isolation.md`. All six "Deferred Items Closed" table rows exist in `deferred-work.md` at the point of citation, each already tagged `[OWNED BY skillars-deferred-32 ACn]`. `sprint-status.yaml` still records `skillars-deferred-31-...: review` despite PR #61 having merged — confirmed, so AC7's new ledger item about this is accurate. `docs/testing/test-data-isolation.md:207` records `SluWeeklySnapshotRepositoryIT`'s fixture range as `9630000001`–`9630000002` (two ids), matching current code exactly and contradicting `skillars-deferred-31`'s own Completion Notes (which claimed three) — confirmed, so this AC7 item is correctly a documentation-only correction to a *different, already-closed* story rather than something this story needs to fix in code.
 
 ## Summary
 
-The story is unusually well-verified — nearly every citation checked out exactly against current
-code, and the withdrawal of the false `:164` ledger item is correct and well-evidenced. The one
-substantive problem is Finding 1: AC3's RescheduleService throw-site table is short two real sites
-and has mislabeled a third, which — combined with `RescheduleResourceIT` currently asserting nothing
-on these codes — creates a real risk that `declineReschedule`'s actual "not PENDING" throw site never
-gets touched, discovered only because the frontend task bullet for `handleDeclineReschedule` happens
-to name the right target key anyway. Recommend fixing AC3's table before dev-story starts. Finding 2
-is a minor task-breakdown gap, not a factual error, and can be fixed with one added sentence in Task 1.
+2 findings worth resolving before dev (1 HIGH — factual undercounting in AC2 that should be corrected in the story text; 1 MEDIUM — a mechanically-infeasible test instruction in AC5/Task 5 that should be reworded before a dev agent hits it), 1 MINOR naming nit, and a large surface area of highly specific claims (line numbers, existing-test citations, fixture-id blocks, ledger-item locations) that were checked individually and found accurate. No BLOCKER-level issues — nothing here invalidates a required fix or would ship wrong behavior if implemented as written; both substantive findings are about the story's own precision, in the same spirit the story itself applies to the ledger it draws from.
