@@ -9,6 +9,7 @@ import com.softropic.skillars.platform.video.repo.VideoQuotaRepository;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
 import com.softropic.skillars.platform.video.service.QuotaConfigService;
 import com.softropic.skillars.platform.video.contract.InitializeUploadResponse;
+import com.softropic.skillars.platform.video.contract.exception.QuotaExceededException;
 import com.softropic.skillars.platform.video.contract.exception.RateLimitExceededException;
 import com.softropic.skillars.platform.video.contract.exception.VideoValidationException;
 import com.softropic.skillars.platform.video.service.VideoDeletionService;
@@ -286,5 +287,29 @@ class VideoUploadResourceIT {
                 .content(body))
             .andExpect(status().isTooManyRequests())
             .andExpect(jsonPath("$.errorMsg.errorKey").value("UPLOAD_RATE_LIMITED"));
+    }
+
+    // Deferred-33 AC6: a hard storage-quota rejection does not clear on retry, unlike the transient
+    // rate-limit case above — 403, not 429.
+    @Test
+    @WithMockUser(roles = "COACH")
+    void initiateUpload_quotaExceeded_returns403WithQuotaExceededKey() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(1001L);
+        when(coachProfileService.getCoachIdByUserId(1001L)).thenReturn(COACH_ID);
+        when(videoService.initializeUpload(any()))
+            .thenThrow(new QuotaExceededException(COACH_ID.toString(), 900_000_000L, 10_485_760L));
+
+        String body = objectMapper.writeValueAsString(Map.of(
+            "fileName", "clip.mp4",
+            "fileSizeBytes", 10_485_760,
+            "mimeType", "video/mp4",
+            "videoType", "COACH_REVIEW"
+        ));
+
+        mockMvc.perform(post(INITIATE_URL)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+            .andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.errorMsg.errorKey").value("QUOTA_EXCEEDED"));
     }
 }

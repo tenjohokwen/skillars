@@ -149,8 +149,6 @@ public class BookingService {
         bookingStateMachine.validate(currentStatus, event);
         BookingStatus newStatus = bookingStateMachine.targetStatus(currentStatus, event);
 
-        applyRefundLogic(booking, event, currentStatus);
-
         booking.setStatus(newStatus.name());
         bookingRepository.save(booking);
         if (publishEvent) {
@@ -595,8 +593,8 @@ public class BookingService {
         try {
             return BookingStatus.valueOf(booking.getStatus());
         } catch (IllegalArgumentException e) {
-            throw new ResourceNotFoundException(
-                "Booking " + booking.getId() + " has unrecognised status '" + booking.getStatus() + "'", "booking");
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Booking " + booking.getId() + " has unrecognised status '" + booking.getStatus() + "'");
         }
     }
 
@@ -634,8 +632,8 @@ public class BookingService {
         // PAYMENT_PENDING and ACCEPTED, where batch bookings briefly rest — has nothing to refund,
         // so a >24h cancellation there must not mint a BOOKING_REFUND credit or restore a pack unit.
         // Deliberately a whitelist: a blacklist would leave newly-added pre-payment statuses open.
-        // Mirrors applyRefundLogic's existing CONFIRMED/UPCOMING condition rather than adding a
-        // third refund rule.
+        // This CONFIRMED/UPCOMING condition used to also be duplicated in a dead refund-tier field's
+        // populating method, deleted by Deferred-33 AC7 — not adding a third refund rule here.
         BookingStatus statusBeforeCancel = readStatusOrThrow(booking);
 
         // UAT.3 AC2. A CAPTURE_PENDING row means a Stripe charge for this booking is in flight, or
@@ -760,41 +758,6 @@ public class BookingService {
                 log.warn("resolveCoachEmail: no coach profile found for coachId={} bookingId={} — notification will not be sent", coachId, bookingId);
                 return "";
             });
-    }
-
-    private void applyRefundLogic(Booking booking, BookingEvent event, BookingStatus currentStatus) {
-        switch (event) {
-            case CANCEL_PARENT -> {
-                // Only compute refund eligibility when payment has actually been captured
-                if (currentStatus == BookingStatus.CONFIRMED || currentStatus == BookingStatus.UPCOMING) {
-                    // hoursUntilSession goes negative when the parent cancels after the session's start
-                    // time has already passed. cancelBookingAsParent — the only caller that reaches this
-                    // branch with CANCEL_PARENT — has no guard against that: it only checks ownership and
-                    // refuses a PAYMENT_PENDING+CAPTURE_PENDING booking, otherwise it transitions
-                    // unconditionally. So this is a normal, reachable path (a parent cancelling a booking
-                    // the coach never started), not caller error, and it correctly falls through to "NONE"
-                    // below. Whether a post-start-time parent cancellation should instead be settled as a
-                    // coach no-show (a different BookingEvent, different refund semantics) is an open
-                    // product question this comment does not resolve.
-                    //
-                    // ChronoUnit.HOURS.between truncates toward zero, so the "> 24" check below is
-                    // actually ">= 25 hours", not ">= 24 hours" as the user-facing "24 hours" copy implies:
-                    // a cancellation at 24h59m computes hoursUntilSession=24, fails "> 24", and is recorded
-                    // PARTIAL instead of FULL. cancelBookingAsParent's own refundEligible boolean
-                    // (line ~648) uses an exact Instant comparison instead and does not have this quirk, so
-                    // the two already-diverging refund rules (see the deferred-work.md item filed above)
-                    // diverge across the entire 24-25 hour window too, not only 6-24 hours. Not changed
-                    // here — doc-only, per the boundary intent being an open decision.
-                    long hoursUntilSession = ChronoUnit.HOURS.between(Instant.now(), booking.getRequestedStartTime());
-                    String eligibility = hoursUntilSession > 24 ? "FULL" : hoursUntilSession >= 6 ? "PARTIAL" : "NONE";
-                    booking.setRefundEligibility(eligibility);
-                }
-            }
-            case CANCEL_COACH -> booking.setRefundEligibility("FULL");
-            case NO_SHOW_PLAYER -> booking.setRefundEligibility("NONE");
-            case NO_SHOW_COACH -> booking.setRefundEligibility("FULL");
-            default -> { /* no refund logic for other events */ }
-        }
     }
 
     private String resolveEmail(Long userId, UUID bookingId) {

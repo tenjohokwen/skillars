@@ -673,6 +673,29 @@ class BookingServiceTest {
         verify(bookingRepository, never()).findByIdForUpdate(any());
     }
 
+    // Deferred-33 AC2: a corrupted/unrecognised status column value means the row exists but the
+    // server cannot interpret it — 409, not 404. A 404 would tell a caller who can already see the
+    // booking in their own list to stop looking for something that is, in fact, right there.
+    @Test
+    void cancelBookingAsParent_corruptedStatusColumn_returns409NotResourceNotFound() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "BOGUS_STATUS");
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.cancelBookingAsParent(booking.getId(), PARENT_ID))
+            .isInstanceOf(ResponseStatusException.class)
+            .satisfies(ex -> {
+                ResponseStatusException rse = (ResponseStatusException) ex;
+                assertThat(rse.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+                // Proves the "honest answer" claim from AC2, not just the status code: the message
+                // must actually name the unrecognised status, not read like a generic not-found.
+                assertThat(rse.getReason())
+                    .contains(booking.getId().toString())
+                    .contains("unrecognised status")
+                    .contains("BOGUS_STATUS");
+            });
+    }
+
     @Test
     void cancelBookingAsParent_acceptedBatchBooking_cancelsWithoutRefundEligibility() {
         // ACCEPTED is transiently reachable inside the accept transaction and carries the identical

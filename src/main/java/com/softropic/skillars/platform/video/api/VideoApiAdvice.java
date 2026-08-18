@@ -71,7 +71,7 @@ public class VideoApiAdvice {
     }
 
     @ExceptionHandler(QuotaExceededException.class)
-    @ResponseStatus(HttpStatus.TOO_MANY_REQUESTS)
+    @ResponseStatus(HttpStatus.FORBIDDEN)
     public ErrorDto videoQuotaExceededHandler(final QuotaExceededException ex) {
         ErrorDto dto = logErrorAndReturnDTO(ex, "video.quotaExceeded", VideoErrorCode.QUOTA_EXCEEDED.getErrorCode());
         videoMetrics.recordError(operationFromMdc(), VideoErrorCode.QUOTA_EXCEEDED.getErrorCode());

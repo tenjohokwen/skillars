@@ -598,7 +598,7 @@ all three bundles, same strings, single call site updated. Grep confirmed one co
 and zero hits on the old key path after; the runtime resolution check additionally asserts
 `booking.errors.packExpired` is now `undefined` in all three bundles.
 
-**AC5 — `SluWeeklySnapshotRepositoryIT`.** New IT, 5 tests, fixture block `9630000001`–`9630000003`.
+**AC5 — `SluWeeklySnapshotRepositoryIT`.** New IT, 5 tests, fixture block `9630000001`–`9630000002`.
 Beyond the cases the AC listed I added a **two-rollover** window (`(2024,50) → (2026,3)`) — it is the
 only shape in which a whole intervening year must come back regardless of its week numbers, and it kills
 a mutation the single-rollover case survives. The ordering test seeds deliberately backwards and uses
