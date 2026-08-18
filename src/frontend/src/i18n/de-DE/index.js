@@ -473,11 +473,12 @@ export default {
       rescheduleNotPending: 'Diese Verschiebungsanfrage wurde bereits bearbeitet.',
       listMayBeStale:
         'Diese Liste ist möglicherweise nicht aktuell. Laden Sie die Seite neu, um den neuesten Stand zu sehen.',
-      requestNotAllowed:
-        'Sie haben keinen Zugriff auf den Spieler oder das Sitzungspaket in dieser Anfrage.',
+      requestNotAllowed: 'Sie sind nicht berechtigt, diese Aktion auszuführen.',
       invalidSessionDuration:
         'Die angeforderte Sitzungsdauer entspricht nicht der Sitzungsdauer dieses Coaches.',
       batchSizeExceeded: 'Sie können bis zu {max} Sitzungen in einer Sammelanfrage anfragen.',
+      batchSizeExceededUnknownMax:
+        'Sie haben die maximale Anzahl an Sitzungen in einer Sammelanfrage erreicht.',
       duplicateSlotStartTime:
         'Zwei oder mehr Anfragen in dieser Sammelanfrage haben dieselbe Startzeit.',
       overlappingSlots: 'Zwei oder mehr Anfragen in dieser Sammelanfrage überschneiden sich.',
@@ -650,11 +651,13 @@ export default {
         uploadStarted: 'Video-Upload gestartet – die Verarbeitung kann einige Minuten dauern',
         videoRemoved: 'Video entfernt',
         quotaExceeded:
-          'Upload-Limit erreicht. Versuche es gleich noch einmal, oder upgrade dein Paket für mehr Speicherplatz.',
+          'Der Upload würde dein Video-Speicherkontingent überschreiten. Upgrade dein Paket, um mehr hochzuladen.',
+        rateLimited: 'Zu viele Uploads. Warte einen Moment und versuche es erneut.',
         constraintViolated:
           'Das Video überschreitet das 120-Sekunden- oder 500-MB-Limit für Demo-Übungen.',
         videoAlreadyLinked:
           'Diesem Drill ist bereits ein Video zugeordnet. Entferne es, bevor du ein neues hochlädst.',
+        notOwned: 'Du hast keine Berechtigung, für diesen Drill ein Video hochzuladen.',
         uploadFailed: 'Upload fehlgeschlagen. Bitte erneut versuchen.',
         removeFailed: 'Video konnte nicht entfernt werden. Bitte erneut versuchen.',
       },

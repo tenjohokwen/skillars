@@ -447,6 +447,43 @@ class BookingBatchResourceIT extends AbstractIntegrationTest {
             .isEqualTo("PARTIALLY_ACCEPTED");
     }
 
+    /**
+     * skillars-deferred-32 AC6. {@code BookingBatchServiceTest} already mutation-verifies
+     * {@code BATCH_NONE_ACCEPTED} at the Mockito level (against a mocked service); nothing before
+     * this proved {@code booking.batchNoneAccepted} actually round-trips through {@code ApiAdvice}
+     * to an HTTP body. This drives path (b) of the two the production comment above
+     * {@code acceptedIds.isEmpty()} names: a batch that is still PENDING but whose every booking has
+     * left REQUESTED — the cheapest deterministic route, per the sibling test above, which builds
+     * exactly this shape for one booking; this declines every sibling instead of one.
+     */
+    @Test
+    void acceptAll_everySiblingDeclinedBeforehand_returns403WithBatchNoneAcceptedKey() {
+        UUID batchId = createBatchInDb(2);
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update("UPDATE booking.bookings SET status = 'DECLINED' WHERE batch_id = ?", batchId);
+            return null;
+        });
+
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/batches/" + batchId + "/accept-all",
+            HttpMethod.POST, null, authenticatedHeaders(coachCookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"booking.batchNoneAccepted\"")
+                    .doesNotContain("MISSING_RIGHTS");
+            });
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM booking.booking_batches WHERE id = ?", String.class, batchId))
+            .as("a rejected acceptAll must not silently mark the batch processed")
+            .isEqualTo("PENDING");
+    }
+
     // ---- Helpers ----
 
     private UUID createBatchInDb(int bookingCount) {

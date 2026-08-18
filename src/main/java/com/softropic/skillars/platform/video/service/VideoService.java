@@ -18,6 +18,7 @@ import com.softropic.skillars.platform.video.contract.ConfirmUploadResponse;
 import com.softropic.skillars.platform.video.contract.event.VideoPublishedEvent;
 import com.softropic.skillars.platform.video.contract.event.VideoUploadedEvent;
 import com.softropic.skillars.platform.video.contract.exception.QuotaExceededException;
+import com.softropic.skillars.platform.video.contract.exception.RateLimitExceededException;
 import com.softropic.skillars.platform.video.contract.exception.VideoNotFoundException;
 import com.softropic.skillars.platform.video.contract.exception.VideoSessionExpiredException;
 import com.softropic.skillars.platform.video.contract.exception.VideoValidationException;
@@ -228,7 +229,7 @@ public class VideoService {
         // 1. Rate limit check — per ownerId, before any other work
         int rpm = properties.getUpload().getRateLimit().getRequestsPerMinute();
         if (!rateLimitingService.tryConsume(request.ownerId(), "video.upload.init", rpm, 1, TimeUnit.MINUTES)) {
-            throw new QuotaExceededException(request.ownerId(), "rate limit exceeded");
+            throw new RateLimitExceededException(request.ownerId(), "rate limit exceeded");
         }
 
         // 2. Validate file metadata

@@ -187,7 +187,15 @@ class DrillUploadResourceIT extends BaseSessionIT {
             payload,
             authenticatedHeaders(cookies),
             Map.class
-        )).isInstanceOf(HttpClientErrorException.Forbidden.class);
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"DRILL_NOT_OWNED\"")
+                    .doesNotContain("DRILL_UPLOAD_NOT_ALLOWED");
+            });
     }
 
     @Test
@@ -206,7 +214,57 @@ class DrillUploadResourceIT extends BaseSessionIT {
             payload,
             authenticatedHeaders(cookies),
             Map.class
-        )).isInstanceOf(HttpClientErrorException.Forbidden.class);
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"DRILL_NOT_OWNED\"")
+                    .doesNotContain("DRILL_UPLOAD_NOT_ALLOWED");
+            });
+    }
+
+    @Test
+    void initiateUpload_readyVideoAlreadyLinked_returns403WithVideoAlreadyLinkedKey() {
+        UUID linkedVideoId = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.videos (id, owner_id, provider, provider_asset_id, operational_state, access_state, title, visibility, created_at, updated_at) " +
+                "VALUES (?, ?, 'bunny', ?, 'READY', 'ACTIVE', 'Test Video', 'PRIVATE', ?, ?)",
+                linkedVideoId, instrCoachId.toString(), "asset-" + linkedVideoId,
+                Timestamp.from(Instant.now()), Timestamp.from(Instant.now())
+            );
+            jdbcTemplate.update(
+                "INSERT INTO session.drill_video_refs (drill_id, video_id, ref_count) VALUES (?, ?, 1)",
+                coachDrillId, linkedVideoId
+            );
+            return null;
+        });
+
+        String cookies = loginAndGetCookies(INSTR_EMAIL);
+        Map<String, Object> payload = Map.of(
+            "fileName", "demo.mp4",
+            "fileSizeBytes", 1024L,
+            "mimeType", "video/mp4",
+            "durationSeconds", 10
+        );
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE + "/" + coachDrillId + "/video/initiate",
+            HttpMethod.POST,
+            payload,
+            authenticatedHeaders(cookies),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"DRILL_VIDEO_ALREADY_LINKED\"")
+                    .doesNotContain("DRILL_UPLOAD_NOT_ALLOWED");
+            });
     }
 
     @Test
@@ -389,7 +447,15 @@ class DrillUploadResourceIT extends BaseSessionIT {
             null,
             authenticatedHeaders(cookies),
             Void.class
-        )).isInstanceOf(HttpClientErrorException.Forbidden.class);
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"DRILL_NOT_OWNED\"")
+                    .doesNotContain("DRILL_UPLOAD_NOT_ALLOWED");
+            });
     }
 
     // ── GET /video-upload/eligible ────────────────────────────────────────────

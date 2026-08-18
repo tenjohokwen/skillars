@@ -12,10 +12,4 @@ public class QuotaExceededException extends ApplicationException {
               Map.of("ownerId", ownerId, "currentBytes", currentBytes, "requestedBytes", requestedBytes),
               VideoErrorCode.QUOTA_EXCEEDED);
     }
-
-    public QuotaExceededException(String ownerId, String reason) {
-        super("Upload quota or rate limit exceeded",
-              Map.of("ownerId", ownerId, "reason", reason),
-              VideoErrorCode.QUOTA_EXCEEDED);
-    }
 }

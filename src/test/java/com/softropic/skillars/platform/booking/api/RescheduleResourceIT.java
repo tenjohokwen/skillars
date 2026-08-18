@@ -4,9 +4,11 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.service.RescheduleService;
 import com.softropic.skillars.platform.security.SecurityIT;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -472,6 +474,188 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
             });
     }
 
+    /**
+     * skillars-deferred-32 AC5, requestReschedule row 1 of 4: {@code :79-80}, the proposed start
+     * time itself has already passed.
+     */
+    @Test
+    void requestReschedule_proposedStartTimeInPast_returns403WithStartTimeInPastKey() {
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        Instant proposedStart = Instant.now().minus(1, ChronoUnit.DAYS);
+        Instant proposedEnd = proposedStart.plus(1, ChronoUnit.HOURS);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/reschedule",
+            HttpMethod.POST,
+            Map.of("proposedStartTime", proposedStart.toString(), "proposedEndTime", proposedEnd.toString()),
+            authenticatedHeaders(parentCookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"booking.startTimeInPast\"")
+                    .doesNotContain("MISSING_RIGHTS");
+            });
+    }
+
+    /**
+     * skillars-deferred-32 AC5, requestReschedule row 2 of 4: {@code :83-84}, the proposed end time
+     * is before the proposed start time.
+     */
+    @Test
+    void requestReschedule_proposedEndBeforeStart_returns403WithInvalidTimeRangeKey() {
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        Instant proposedEnd = proposedStart.minus(30, ChronoUnit.MINUTES);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/reschedule",
+            HttpMethod.POST,
+            Map.of("proposedStartTime", proposedStart.toString(), "proposedEndTime", proposedEnd.toString()),
+            authenticatedHeaders(parentCookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"booking.invalidTimeRange\"")
+                    .doesNotContain("MISSING_RIGHTS");
+            });
+    }
+
+    /**
+     * skillars-deferred-32 AC5, requestReschedule row 3 of 4: {@code :102-106}. UAT.2 AC3's
+     * same-length rule — {@code insertConfirmedBooking} makes a 1-hour booking, so a 2-hour proposal
+     * changes the session's length rather than just moving it.
+     */
+    @Test
+    void requestReschedule_proposedDurationDiffersFromOriginal_returns403WithInvalidSessionDurationKey() {
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        Instant proposedEnd = proposedStart.plus(2, ChronoUnit.HOURS);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/reschedule",
+            HttpMethod.POST,
+            Map.of("proposedStartTime", proposedStart.toString(), "proposedEndTime", proposedEnd.toString()),
+            authenticatedHeaders(parentCookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"booking.invalidSessionDuration\"")
+                    .doesNotContain("MISSING_RIGHTS");
+            });
+    }
+
+    /**
+     * skillars-deferred-32 AC5, requestReschedule row 4 of 4: {@code :110-112}. The second proposal
+     * matches the original booking's 1-hour duration so it clears every earlier check and reaches
+     * the pending-request guard.
+     */
+    @Test
+    void requestReschedule_pendingRequestAlreadyExists_returns403WithRescheduleAlreadyPendingKey() {
+        insertPendingReschedule();
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        Instant proposedEnd = proposedStart.plus(1, ChronoUnit.HOURS);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/reschedule",
+            HttpMethod.POST,
+            Map.of("proposedStartTime", proposedStart.toString(), "proposedEndTime", proposedEnd.toString()),
+            authenticatedHeaders(parentCookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"booking.rescheduleAlreadyPending\"")
+                    .doesNotContain("MISSING_RIGHTS");
+            });
+    }
+
+    /**
+     * skillars-deferred-32 AC5, acceptReschedule row 1 of 3: {@code :153-154}, the unlocked
+     * precheck — the request is already DECLINED before the coach's own accept ever reaches the
+     * locked re-read at {@code :181-182}.
+     */
+    @Test
+    void acceptReschedule_requestAlreadyDeclined_returns403WithRescheduleNotPendingKey() {
+        UUID rescheduleId = insertReschedule("DECLINED",
+            Instant.now().plus(7, ChronoUnit.DAYS), Instant.now().plus(7, ChronoUnit.DAYS).plus(1, ChronoUnit.HOURS));
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/reschedule/" + rescheduleId + "/accept",
+            HttpMethod.PUT, null, authenticatedHeaders(coachCookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"booking.rescheduleNotPending\"")
+                    .doesNotContain("MISSING_RIGHTS");
+            });
+    }
+
+    /**
+     * skillars-deferred-32 AC5, acceptReschedule row 2 of 3: {@code :157-159}. The reschedule
+     * request stays PENDING (clears the unlocked precheck) but the booking itself is no longer in a
+     * reschedulable status by the time the coach accepts.
+     */
+    @Test
+    void acceptReschedule_bookingNoLongerReschedulable_returns403WithNotReschedulableKey() {
+        UUID rescheduleId = insertPendingReschedule();
+        setBookingStatus("COMPLETED");
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/reschedule/" + rescheduleId + "/accept",
+            HttpMethod.PUT, null, authenticatedHeaders(coachCookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"booking.notReschedulable\"")
+                    .doesNotContain("MISSING_RIGHTS");
+            });
+    }
+
+    /**
+     * skillars-deferred-32 AC5, acceptReschedule row 3 of 3: {@code :162-163}. The request is
+     * PENDING and the booking is reschedulable, but the proposed start time itself is now in the
+     * past by the time the coach accepts.
+     */
+    @Test
+    void acceptReschedule_proposedStartNoLongerInFuture_returns403WithStartTimeInPastKey() {
+        UUID rescheduleId = insertReschedule("PENDING",
+            Instant.now().minus(1, ChronoUnit.DAYS), Instant.now().minus(1, ChronoUnit.DAYS).plus(1, ChronoUnit.HOURS));
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/reschedule/" + rescheduleId + "/accept",
+            HttpMethod.PUT, null, authenticatedHeaders(coachCookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"booking.startTimeInPast\"")
+                    .doesNotContain("MISSING_RIGHTS");
+            });
+    }
+
     @Test
     void acceptReschedule_wrongCoach_returns403() {
         UUID rescheduleId = insertPendingReschedule();
@@ -600,6 +784,19 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
         assertThat(acceptOutcome.get())
             .as("the accept must fail once its locked re-read sees the committed decline")
             .isInstanceOf(OperationNotAllowedException.class);
+        // skillars-deferred-32 AC5, :181-182 row: this is the locked re-read's own PENDING check
+        // (distinct from the unlocked precheck at :153-154, which this test never reaches — the
+        // decliner's thread commits DECLINED only after this test's unlocked read already observed
+        // PENDING). Asserted at the Java level, not via an HTTP-body errorKey substring, because
+        // this test calls rescheduleService directly inside an ExecutorService Runnable to keep the
+        // CountDownLatch/Thread.sleep(1500) lock timing deterministic — there is no HTTP response
+        // here to substring-match. Do NOT convert this test to httpTestClient to unify the
+        // assertion style: that would inject session-cookie handling and network latency into a
+        // test whose entire point is precise lock-timing control.
+        assertThat(acceptOutcome.get())
+            .asInstanceOf(InstanceOfAssertFactories.throwable(OperationNotAllowedException.class))
+            .extracting(OperationNotAllowedException::getErrorCode)
+            .isEqualTo(BookingError.RESCHEDULE_NOT_PENDING);
         assertThat(jdbcTemplate.queryForObject(
             "SELECT status FROM booking.booking_reschedule_requests WHERE id = ?", String.class, rescheduleId))
             .as("the coach's decline must stand — this is the discriminator, not whether the accept waited")
@@ -717,6 +914,27 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
                 "VALUES (?, ?, 'PARENT', ?, ?, 'PENDING', ?)",
                 id, bookingId, Timestamp.from(proposed),
                 Timestamp.from(proposed.plus(1, ChronoUnit.HOURS)),
+                Timestamp.from(Instant.now())
+            );
+            return null;
+        });
+        return id;
+    }
+
+    /**
+     * skillars-deferred-32 AC5: {@code insertPendingReschedule}'s generalisation — same table shape
+     * and same {@code UUID.randomUUID()} id scheme (no fixture-id-registry entry needed), but with a
+     * caller-chosen status and proposed window so AC5's rows that need a non-PENDING or
+     * already-past request don't need a second HTTP round trip to get there.
+     */
+    private UUID insertReschedule(String status, Instant proposedStart, Instant proposedEnd) {
+        UUID id = UUID.randomUUID();
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update(
+                "INSERT INTO booking.booking_reschedule_requests " +
+                "(id, booking_id, proposed_by, proposed_start_time, proposed_end_time, status, created_at) " +
+                "VALUES (?, ?, 'PARENT', ?, ?, ?, ?)",
+                id, bookingId, Timestamp.from(proposedStart), Timestamp.from(proposedEnd), status,
                 Timestamp.from(Instant.now())
             );
             return null;

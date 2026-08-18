@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-08-18 # skillars-deferred-31 implemented + code-review follow-ups applied (3 Patch findings resolved, 2 Defer acknowledged), status review (mvn -o verify green: surefire 890, failsafe 923, 0 failures/0 errors); skillars-deferred-30 done and merged (PR #60)
+# last_updated: 2026-08-18 # skillars-deferred-32 code review complete, status done (1 IT added for UPLOAD_RATE_LIMITED, 2 frontend patches, 1 pre-existing i18n gap deferred to ledger); skillars-deferred-31 done (merged, PR #61)
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -1177,4 +1177,55 @@ development_status:
   # Task 1 now names it per handler. Review's non-findings (payment.sessionPack.expired dead key, AC2's
   # transactional boundary, AC5's missing skill_code filter, the AC7 withdrawal) were all checked and
   # confirmed as non-defects.
-  skillars-deferred-31-coach-accept-flow-refresh-reschedule-error-split-and-slu-repository-coverage: review
+  skillars-deferred-31-coach-accept-flow-refresh-reschedule-error-split-and-slu-repository-coverage: done  # DONE 2026-08-18: merged to master as PR #61 (squash 51b7593) after its two adversarial code-review passes and green PR + master CI (build 11m02s; full mvn -o verify green pre-merge: surefire 890, failsafe 923, 0 failures/0 errors). Status had been left at `review` after the code review completed — same tracking-lag class as the skillars-deferred-5 entry the 2026-08-04 audit found; flipped here on Mbah's instruction rather than filed as a ledger item. Manual toast-rendering spot-check still NOT performed (no browser tooling — standing project-wide gap), unchanged by this flip.
+  # 2026-08-18: story creation grouped 6 small unrelated deferred-work.md items into one story (same
+  # spirit as deferred-11/20/…/31). All 6 re-verified against master @ 51b7593 by reading the throw
+  # sites, the @RestControllerAdvice handlers, the frontend errorKey chains and the existing IT classes.
+  # FOUR ledger claims were found wrong and are corrected in the ACs — a dev agent trusting the ledger
+  # over the code would ship the wrong fix in each case:
+  #   (a) the QUOTA_EXCEEDED item names 2 throw sites; there are 3 (VideoService:135, in retryUpload,
+  #       was missed) — "one code per site" would miscode the retry path;
+  #   (b) the same item quotes a toast string that no longer exists (deferred-29 replaced it with a
+  #       hedge naming both causes), so the defect is milder than filed but not closed;
+  #   (c) the batchSizeExceeded item prescribes "backend passes the real limit as a message argument",
+  #       which cannot work — ErrorMsg is (errorKey, message) and carries no args, and the call site
+  #       renders its own frontend i18n string from errorKey, never errorMsg.message;
+  #   (d) the reschedule-IT item says 7 uncovered throw sites; enumeration against source says 8.
+  #   AC1  DRILL_UPLOAD_NOT_ALLOWED (3 sites, 2 causes) split by CAUSE into DRILL_NOT_OWNED (:57,:109)
+  #        and DRILL_VIDEO_ALREADY_LINKED (:78); upload chain maps both; errorKey assertions added to 3
+  #        existing DrillUploadResourceIT tests that already prove 403.
+  #   AC2  VideoErrorCode.UPLOAD_RATE_LIMITED split off QUOTA_EXCEEDED for the rate-limit site only;
+  #        new RateLimitExceededException + VideoApiAdvice handler; status stays 429 for both (the
+  #        status-code question is filed as a new ledger item, not fixed here).
+  #   AC3  booking.errors.requestNotAllowed re-worded object-agnostic — 5 call sites across 4 pages
+  #        share it; key NOT renamed and no siblings added, deliberately.
+  #   AC4  BookingRequestPage re-fetches getBatchConfig() on the batchSizeExceeded branch before
+  #        quoting {max}; new no-number fallback key if the re-fetch fails.
+  #   AC5  errorKey ITs for the 8 uncovered RescheduleService throw sites (table in the story is the
+  #        authority); the locked re-read at :181 extends an existing lock-interleaving test rather
+  #        than adding a third, and may be left uncovered with an in-test comment if not deterministic.
+  #   AC6  BookingBatchResourceIT case driving a PENDING batch to zero accepted over HTTP, asserting
+  #        403 + booking.batchNoneAccepted.
+  #   AC7  ledger hygiene + 2 new items filed (429-for-storage-quota; deferred-31's Completion Notes
+  #        claim a 9630000001-3 fixture block where the IT uses only -1/-2 and the registry agrees with
+  #        the code). A third candidate — sprint-status recording deferred-31 as `review` after PR #61
+  #        merged — was fixed directly on 2026-08-18 instead of filed, see that entry above.
+  # NOT taken: per-booking outcome reporting from acceptAll (REST contract change); the 429 status
+  # change itself; branching DrillDetailPanel's bare remove-video catch (UX task); renaming or
+  # per-object-splitting requestNotAllowed (larger i18n task); the two refund/no-show product
+  # questions; all deploy-* items and anything needing a product/design decision.
+  # 2026-08-18: senior-dev review of the draft (story-review.md) — 1 HIGH, 1 MEDIUM, 1 MINOR, all three
+  # independently re-verified against source before applying, all three held. HIGH: AC2 enumerated the
+  # video QuotaExceededException as 3 throw sites (1 rate-limit + 2 storage); there are 4 across 2 classes
+  # — QuotaService.java:76, the post-SELECT-FOR-UPDATE gate, was missed entirely, and quotaProvider.check's
+  # own comment says it is ADVISORY ONLY while reserve() is authoritative, so the omitted site is the one
+  # concurrent traffic actually hits. AC2 now carries a 4-row table, says QUOTA_EXCEEDED keeps all THREE
+  # storage sites, and Task 2 gained the grep miss-check it lacked (Task 1 already had one). No code-scope
+  # change — the split is still rate-limit-only. MEDIUM: AC5/Task 5 told the dev to extend a lock-
+  # interleaving test with an HTTP-body errorKey substring assertion, which is mechanically impossible —
+  # RescheduleResourceIT:537/:629 call rescheduleService directly inside an ExecutorService Runnable
+  # (raw Throwable captured, no HTTP response) precisely to keep CountDownLatch/sleep timing deterministic
+  # around the 5s lock timeout. Reworded to a Java-level getErrorCode() assertion with an explicit
+  # "do NOT convert this test to httpTestClient" warning. MINOR: DrillLibraryService.list -> listDrills
+  # (name inherited from the ledger item; the scoping behaviour described was correct).
+  skillars-deferred-32-drill-video-error-code-splits-authorization-copy-and-error-key-integration-coverage: done  # 2026-08-18: dev-story implementation complete, all 7 ACs (8 tasks) done, then code-reviewed (Blind Hunter + Edge Case Hunter + Acceptance Auditor). AC1 SessionErrorCode.DRILL_UPLOAD_NOT_ALLOWED split into DRILL_NOT_OWNED/DRILL_VIDEO_ALREADY_LINKED by cause. AC2 VideoErrorCode.UPLOAD_RATE_LIMITED split off QUOTA_EXCEEDED (new RateLimitExceededException, QUOTA_EXCEEDED keeps all 3 storage sites incl. the previously-missed QuotaService.java:76). AC3 booking.errors.requestNotAllowed reworded object-agnostic in all 3 bundles, 5 call sites unchanged. AC4 BookingRequestPage re-fetches getBatchConfig() before quoting {max}; new batchSizeExceededUnknownMax fallback key. AC5 8 new RescheduleService errorKey ITs (7 HTTP cases + 1 Java-level assertion extending the existing lock-interleaving test) — corrected the ledger's 7-site count to 8. AC6 new BookingBatchResourceIT case proving booking.batchNoneAccepted round-trips through HTTP. AC7 all 6 ledger items annotated [CLOSED by skillars-deferred-32 ACn] with contradictions noted; 2 new items filed (429-for-storage-quota status question; deferred-31 fixture-count doc inaccuracy). Full mvn -o verify green: surefire 890/0/0/1(skipped), failsafe 932/0/0/4(skipped) — the +9 failsafe tests over deferred-31's 923 baseline are exactly this story's new IT methods. npx eslint clean, npx quasar build compiles. Every new i18n key grep-verified in all 3 frontend + all 4 backend bundles. All mutation-verifications (AC1: 2 constants, AC5: 8 throw sites, AC6: 1 throw site) confirmed failing-then-restored-byte-identical via git checkout. Manual toast-rendering spot-check NOT performed (no browser tooling — standing project-wide gap). Code review (2026-08-18): 0 AC violations found by the Acceptance Auditor. 3 patch findings fixed — new VideoUploadResourceIT case for UPLOAD_RATE_LIMITED (mutation-verified), a missing console.warn on BookingRequestPage's batch-config re-fetch failure, and a double-click race guard on the batch-submit dialog button. 1 pre-existing i18n gap (messages_de.properties missing 7 of 8 video.* keys) deferred to deferred-work.md. 5 findings dismissed as matching explicit spec/Dev Notes constraints.
