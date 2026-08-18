@@ -148,11 +148,28 @@ function formatDateTime(isoString, timezone) {
   return new Date(isoString).toLocaleString(locale.value, { timeZone: timezone })
 }
 
+// Post-mutation refresh contract, shared by every handler below (skillars-deferred-31 AC1):
+// refresh FIRST, then toast, so the message describes state the coach can already see; and after
+// every refresh — success path included — warn if it failed, because the store's loaders swallow
+// their own failures and no component renders the resulting error ref (see booking.store.js).
+//
+// Takes the refresh's OWN return value rather than re-reading bookingStore.coachRequestsError: that
+// ref is module-scoped and reset-then-written on every load, so a concurrent refresh — two rows
+// accepted in quick succession, which the per-row accepting[id]/declining[id] flags deliberately
+// allow — could otherwise attribute one action's failure to another, or clear it before it is read.
+function notifyIfRequestsStale(refreshed) {
+  if (!refreshed) {
+    $q.notify({ type: 'warning', message: t('booking.errors.listMayBeStale') })
+  }
+}
+
 async function handleAccept(id) {
   accepting.value[id] = true
   try {
-    await bookingStore.approveBooking(id)
+    // approveBooking runs loadCoachBookingRequests() itself and returns that refresh's outcome.
+    notifyIfRequestsStale(await bookingStore.approveBooking(id))
   } catch (err) {
+    const refreshed = await bookingStore.loadCoachBookingRequests()
     const errorKey = err?.response?.data?.errorMsg?.errorKey
     if (errorKey === 'booking.coachUnavailable') {
       $q.notify({ type: 'negative', message: t('booking.errors.coachUnavailable') })
@@ -161,7 +178,7 @@ async function handleAccept(id) {
     } else {
       $q.notify({ type: 'negative', message: t('booking.requests.acceptError') })
     }
-    await bookingStore.loadCoachBookingRequests()
+    notifyIfRequestsStale(refreshed)
   } finally {
     accepting.value[id] = false
   }
@@ -170,10 +187,12 @@ async function handleAccept(id) {
 async function handleDecline(id) {
   declining.value[id] = true
   try {
-    await bookingStore.rejectBooking(id)
+    // rejectBooking runs loadCoachBookingRequests() itself and returns that refresh's outcome.
+    notifyIfRequestsStale(await bookingStore.rejectBooking(id))
   } catch {
+    const refreshed = await bookingStore.loadCoachBookingRequests()
     $q.notify({ type: 'negative', message: t('booking.requests.declineError') })
-    await bookingStore.loadCoachBookingRequests()
+    notifyIfRequestsStale(refreshed)
   } finally {
     declining.value[id] = false
   }
@@ -182,24 +201,33 @@ async function handleDecline(id) {
 async function handleAcceptAll(batchId) {
   acceptingAll.value[batchId] = true
   try {
-    await bookingStore.handleAcceptAllBatch(batchId)
+    // handleAcceptAllBatch runs loadCoachBookingRequests() itself and returns that refresh's outcome.
+    notifyIfRequestsStale(await bookingStore.handleAcceptAllBatch(batchId))
     $q.notify({ message: t('booking.batch.acceptedAll'), type: 'positive' })
   } catch (err) {
+    const refreshed = await bookingStore.loadCoachBookingRequests()
     const errorKey = err?.response?.data?.errorMsg?.errorKey
-    // Only the three PRE-FLIGHT checks in BookingBatchService.acceptAll can reach the client: the
-    // per-booking throws inside the loop are swallowed by its own catch. Those three are batch
+    // FOUR outcomes reach the client from BookingBatchService.acceptAll. Three are PRE-FLIGHT
+    // checks — the per-booking throws inside the loop are swallowed by its own catch: batch
     // ownership (MISSING_RIGHTS), the already-processed batch (split out of MISSING_RIGHTS by the
     // skillars-deferred-30 review — the ordinary double-click case, not retryable) and the suspended
-    // coach. An earlier version of this comment counted two and omitted the ownership check.
+    // coach. The fourth is POST-loop: booking.batchNoneAccepted (skillars-deferred-31 AC2) fires
+    // when the loop accepted nothing, either because every per-booking accept threw and was
+    // swallowed or because the still-PENDING batch had no REQUESTED bookings left. It is the one
+    // outcome that says something about the loop's own result; it still carries no per-booking
+    // detail. Earlier versions of this comment counted two, then three.
     if (errorKey === 'booking.coachUnavailable') {
       $q.notify({ type: 'negative', message: t('booking.errors.coachUnavailable') })
     } else if (errorKey === 'booking.batchAlreadyProcessed') {
       $q.notify({ type: 'negative', message: t('booking.errors.batchAlreadyProcessed') })
+    } else if (errorKey === 'booking.batchNoneAccepted') {
+      $q.notify({ type: 'negative', message: t('booking.errors.batchNoneAccepted') })
     } else if (errorKey === 'MISSING_RIGHTS') {
       $q.notify({ type: 'negative', message: t('booking.errors.requestNotAllowed') })
     } else {
       $q.notify({ type: 'negative', message: t('booking.batch.acceptError') })
     }
+    notifyIfRequestsStale(refreshed)
   } finally {
     acceptingAll.value[batchId] = false
   }

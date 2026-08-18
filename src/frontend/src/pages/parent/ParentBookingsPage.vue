@@ -208,10 +208,27 @@ async function submitReschedule() {
     $q.notify({ message: t('booking.reschedule.requestSent'), type: 'positive' })
   } catch (err) {
     const errorKey = err?.response?.data?.errorMsg?.errorKey
+    // RescheduleService used to answer every one of these with SecurityError.MISSING_RIGHTS, so the
+    // else branch below covered five distinct non-authorization rejections. skillars-deferred-31 AC3
+    // split them; post-split MISSING_RIGHTS on this path carries exactly one meaning — the parent
+    // does not own this booking — which is why it gets the authorization wording with no retry advice.
     if (errorKey === 'booking.invalidSessionDuration') {
       $q.notify({ message: t('booking.errors.invalidSessionDuration'), type: 'negative' })
+    } else if (errorKey === 'booking.notReschedulable') {
+      $q.notify({ message: t('booking.errors.notReschedulable'), type: 'negative' })
+    } else if (errorKey === 'booking.startTimeInPast') {
+      $q.notify({ message: t('booking.errors.startTimeInPast'), type: 'negative' })
+    } else if (errorKey === 'booking.invalidTimeRange') {
+      $q.notify({ message: t('booking.errors.invalidTimeRange'), type: 'negative' })
+    } else if (errorKey === 'booking.rescheduleAlreadyPending') {
+      $q.notify({ message: t('booking.errors.rescheduleAlreadyPending'), type: 'negative' })
+    } else if (errorKey === 'MISSING_RIGHTS') {
+      $q.notify({ message: t('booking.errors.requestNotAllowed'), type: 'negative' })
     } else {
-      console.warn('[booking] unmapped errorKey:', errorKey, err)
+      // skillars-deferred-31 AC6: the diagnostic value only. boot/axios.js rejects with the ORIGINAL
+      // axios error, so `err` carries err.config.data — the serialized request body, which on this
+      // path holds a minor's playerId and free-text notes. errorKey is a wire constant.
+      console.warn('[booking] unmapped errorKey:', errorKey)
       $q.notify({ message: t('booking.reschedule.requestFailed'), type: 'negative' })
     }
   } finally {

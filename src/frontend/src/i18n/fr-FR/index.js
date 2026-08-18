@@ -884,6 +884,7 @@ export default {
         'Ce pack de séances a expiré le {date}. Contactez votre coach si une prolongation est possible.',
       exhausted: 'Votre pack de séances est maintenant entièrement utilisé',
       packCoachMismatch: 'Ce pack de séances est pour un autre coach.',
+      packExpired: 'Ce forfait de séances a expiré.',
       packExhausted: "Ce pack de séances n'a plus de séances restantes.",
       extendSuccess: "Votre pack de séances a été prolongé jusqu'au {date}",
       tierLabel: '{label} — {count} séances pour {price} €',
@@ -1202,7 +1203,14 @@ export default {
       invalidTimeRange: 'La fin de la séance doit être postérieure à son début.',
       slotOutsideAvailability: 'Cet horaire est en dehors des disponibilités de ce coach.',
       batchAlreadyProcessed: 'Ces demandes ont déjà été traitées.',
-      packExpired: 'Ce forfait de séances a expiré.',
+      batchNoneAccepted:
+        "Aucune des séances de cette demande n'a pu être acceptée.",
+      notReschedulable: 'Cette séance ne peut plus être reprogrammée.',
+      rescheduleAlreadyPending:
+        'Une demande de report est déjà en attente de réponse pour cette séance.',
+      rescheduleNotPending: 'Cette demande de report a déjà été traitée.',
+      listMayBeStale:
+        "Cette liste n’est peut-être plus à jour. Rechargez la page pour voir les dernières données.",
       requestNotAllowed:
         "Vous n’avez pas accès au joueur ou au forfait de séances de cette demande.",
       invalidSessionDuration:

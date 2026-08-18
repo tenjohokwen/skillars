@@ -369,21 +369,51 @@ function onWrapUpComplete() {
   }, 3000)
 }
 
+// Post-mutation refresh contract for the reschedule handlers (skillars-deferred-31 AC1): refresh
+// FIRST, then toast, so the message describes state the coach can already see; and after every
+// refresh — success path included — warn if it failed, because loadCoachSchedule swallows its own
+// failures into coachScheduleError and no component renders that ref (see booking.store.js).
+//
+// Takes the refresh's OWN return value rather than re-reading bookingStore.coachScheduleError. This
+// page fires loadCoachSchedule from several places that do not await it — the week-selector
+// handlers, onMounted, and onWrapUpComplete's 3-second setTimeout — any of which can reset or
+// overwrite that shared ref between a handler's await and its check.
+function notifyIfScheduleStale(refreshed) {
+  if (!refreshed) {
+    $q.notify({ type: 'warning', message: t('booking.errors.listMayBeStale') })
+  }
+}
+
 async function handleAcceptReschedule(booking) {
   rescheduleActionId.value = booking.bookingId
   try {
     await bookingStore.handleAcceptReschedule(booking.bookingId, booking.pendingReschedule.id)
-    await bookingStore.loadCoachSchedule(selectedWeek.value)
+    notifyIfScheduleStale(await bookingStore.loadCoachSchedule(selectedWeek.value))
     $q.notify({ message: t('booking.reschedule.accepted'), type: 'positive' })
   } catch (err) {
+    const refreshed = await bookingStore.loadCoachSchedule(selectedWeek.value)
     const errorKey = err?.response?.data?.errorMsg?.errorKey
+    // RescheduleService.acceptReschedule used to answer four of these with MISSING_RIGHTS
+    // (skillars-deferred-31 AC3). Post-split, MISSING_RIGHTS here means exactly one thing — this
+    // coach does not own the booking — so it gets the authorization wording, not retry advice.
+    // rescheduleNotPending covers both PENDING checks in that method: the unlocked early-out and the
+    // locked re-read that loses the race against a concurrent decline.
     if (errorKey === 'booking.coachUnavailable') {
       $q.notify({ type: 'negative', message: t('booking.errors.coachUnavailable') })
     } else if (errorKey === 'booking.slotUnavailable') {
       $q.notify({ type: 'negative', message: t('booking.errors.slotUnavailable') })
+    } else if (errorKey === 'booking.rescheduleNotPending') {
+      $q.notify({ type: 'negative', message: t('booking.errors.rescheduleNotPending') })
+    } else if (errorKey === 'booking.notReschedulable') {
+      $q.notify({ type: 'negative', message: t('booking.errors.notReschedulable') })
+    } else if (errorKey === 'booking.startTimeInPast') {
+      $q.notify({ type: 'negative', message: t('booking.errors.startTimeInPast') })
+    } else if (errorKey === 'MISSING_RIGHTS') {
+      $q.notify({ type: 'negative', message: t('booking.errors.requestNotAllowed') })
     } else {
       $q.notify({ type: 'negative', message: t('booking.reschedule.acceptFailed') })
     }
+    notifyIfScheduleStale(refreshed)
   } finally {
     rescheduleActionId.value = null
   }
@@ -393,10 +423,20 @@ async function handleDeclineReschedule(booking) {
   rescheduleActionId.value = booking.bookingId
   try {
     await bookingStore.handleDeclineReschedule(booking.bookingId, booking.pendingReschedule.id)
-    await bookingStore.loadCoachSchedule(selectedWeek.value)
+    notifyIfScheduleStale(await bookingStore.loadCoachSchedule(selectedWeek.value))
     $q.notify({ message: t('booking.reschedule.declined'), type: 'positive' })
-  } catch {
-    $q.notify({ message: t('booking.reschedule.declineFailed'), type: 'negative' })
+  } catch (err) {
+    const refreshed = await bookingStore.loadCoachSchedule(selectedWeek.value)
+    // Bare catch {} until skillars-deferred-31 AC3 — declineReschedule's not-PENDING rejection (the
+    // ordinary double-click, or losing the race to a concurrent accept) is now its own wire code and
+    // deserves its own message. Everything else keeps the generic decline failure.
+    const errorKey = err?.response?.data?.errorMsg?.errorKey
+    if (errorKey === 'booking.rescheduleNotPending') {
+      $q.notify({ message: t('booking.errors.rescheduleNotPending'), type: 'negative' })
+    } else {
+      $q.notify({ message: t('booking.reschedule.declineFailed'), type: 'negative' })
+    }
+    notifyIfScheduleStale(refreshed)
   } finally {
     rescheduleActionId.value = null
   }

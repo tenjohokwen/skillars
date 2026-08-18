@@ -411,6 +411,67 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
         assertThat(rescheduleStatus).isEqualTo("DECLINED");
     }
 
+    /**
+     * Deferred-31 AC3: {@code RescheduleService} used to throw {@code SecurityError.MISSING_RIGHTS}
+     * for nine non-authorization rejections, so every one of them rendered the same "you are not
+     * allowed" toast. This IT had zero assertions on any reschedule errorKey before this story, so
+     * the split shipped with no regression net at all. Parent path: a booking that is not
+     * CONFIRMED/UPCOMING is a state rejection, not an authorization one.
+     */
+    @Test
+    void requestReschedule_bookingNotInReschedulableStatus_returns403WithNotReschedulableKey() {
+        setBookingStatus("COMPLETED");
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        Instant proposedEnd   = proposedStart.plus(1, ChronoUnit.HOURS);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/reschedule",
+            HttpMethod.POST,
+            Map.of("proposedStartTime", proposedStart.toString(), "proposedEndTime", proposedEnd.toString()),
+            authenticatedHeaders(parentCookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"booking.notReschedulable\"")
+                    .doesNotContain("MISSING_RIGHTS");
+            });
+    }
+
+    /**
+     * Deferred-31 AC3, decline path ({@code declineReschedule}, far below the two methods most of
+     * that AC's line citations point at — the site an enumeration truncated mid-file misses).
+     * Declining an already-DECLINED request is the ordinary double-click, not an authorization
+     * failure.
+     */
+    @Test
+    void declineReschedule_requestAlreadyDeclined_returns403WithRescheduleNotPendingKey() {
+        UUID rescheduleId = insertPendingReschedule();
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        ResponseEntity<Void> first = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/reschedule/" + rescheduleId + "/decline",
+            HttpMethod.PUT, null, authenticatedHeaders(coachCookies), Void.class
+        );
+        assertThat(first.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/reschedule/" + rescheduleId + "/decline",
+            HttpMethod.PUT, null, authenticatedHeaders(coachCookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"booking.rescheduleNotPending\"")
+                    .doesNotContain("MISSING_RIGHTS");
+            });
+    }
+
     @Test
     void acceptReschedule_wrongCoach_returns403() {
         UUID rescheduleId = insertPendingReschedule();

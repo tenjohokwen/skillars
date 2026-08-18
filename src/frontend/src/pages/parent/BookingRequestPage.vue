@@ -480,6 +480,11 @@ async function submit() {
     succeeded = true
   } catch (err) {
     const errorKey = err?.response?.data?.errorMsg?.errorKey
+    // I18N NAMESPACE CONVENTION (skillars-deferred-31 AC4): a toast key lives in the namespace of
+    // the WIRE CODE's domain prefix, not the page that renders it. A `payment.*` errorKey therefore
+    // resolves under `payment.*` even though this is a booking page. Before this rule the four
+    // payment codes below landed in three different namespaces and the next author had nothing to
+    // follow. When adding a branch here, put the string where the code says, not where the file is.
     if (errorKey === 'booking.coachUnavailable') {
       $q.notify({ type: 'negative', message: t('booking.errors.coachUnavailable') })
     } else if (errorKey === 'booking.slotUnavailable') {
@@ -489,7 +494,7 @@ async function submit() {
     } else if (errorKey === 'payment.coachStripeNotConfigured') {
       $q.notify({ type: 'negative', message: t('payment.error.coachStripeNotConfigured') })
     } else if (errorKey === 'payment.packExpired') {
-      $q.notify({ type: 'negative', message: t('booking.errors.packExpired') })
+      $q.notify({ type: 'negative', message: t('payment.sessionPack.packExpired') })
     } else if (errorKey === 'payment.packCoachMismatch') {
       $q.notify({ type: 'negative', message: t('payment.sessionPack.packCoachMismatch') })
     } else if (errorKey === 'payment.packExhausted') {
@@ -506,7 +511,10 @@ async function submit() {
       // causes that used to share this code now have their own branches above.
       $q.notify({ type: 'negative', message: t('booking.errors.requestNotAllowed') })
     } else {
-      console.warn('[booking] unmapped errorKey:', errorKey, err)
+      // skillars-deferred-31 AC6: the diagnostic value only. boot/axios.js rejects with the ORIGINAL
+      // axios error, so `err` carries err.config.data — the serialized request body, which on this
+      // path holds a minor's playerId and free-text notes. errorKey is a wire constant.
+      console.warn('[booking] unmapped errorKey:', errorKey)
       $q.notify({ type: 'negative', message: t('booking.requests.submitError') })
     }
   } finally {
@@ -552,7 +560,10 @@ async function submitBatchRequest() {
     } else if (errorKey === 'MISSING_RIGHTS') {
       $q.notify({ message: t('booking.errors.requestNotAllowed'), type: 'negative' })
     } else {
-      console.warn('[booking] unmapped errorKey:', errorKey, err)
+      // skillars-deferred-31 AC6: the diagnostic value only. boot/axios.js rejects with the ORIGINAL
+      // axios error, so `err` carries err.config.data — the serialized request body, which on this
+      // path holds a minor's playerId and free-text notes. errorKey is a wire constant.
+      console.warn('[booking] unmapped errorKey:', errorKey)
       $q.notify({ message: t('booking.batch.submitError'), type: 'negative' })
     }
   }

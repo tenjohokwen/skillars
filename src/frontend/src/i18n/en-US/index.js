@@ -921,7 +921,12 @@ export default {
       invalidTimeRange: 'The session end time must be after its start time.',
       slotOutsideAvailability: "That time is outside this coach's available hours.",
       batchAlreadyProcessed: 'These requests have already been handled.',
-      packExpired: 'This session pack has expired.',
+      batchNoneAccepted: 'None of the sessions in this request could be accepted.',
+      notReschedulable: 'This session can no longer be rescheduled.',
+      rescheduleAlreadyPending:
+        'A reschedule request for this session is already awaiting a response.',
+      rescheduleNotPending: 'This reschedule request has already been handled.',
+      listMayBeStale: 'This list may be out of date. Reload the page to see the latest.',
       requestNotAllowed: 'You do not have access to the player or session pack in this request.',
       invalidSessionDuration:
         "The requested session length does not match this coach's session duration.",
@@ -1066,6 +1071,7 @@ export default {
         'This session pack expired on {date}. Contact your coach if an extension is possible.',
       exhausted: 'Your session pack is now fully used',
       packCoachMismatch: 'This session pack is for a different coach.',
+      packExpired: 'This session pack has expired.',
       packExhausted: 'This session pack has no remaining sessions.',
       extendSuccess: 'Your session pack has been extended to {date}',
       tierLabel: '{label} — {count} sessions for €{price}',

@@ -16,6 +16,13 @@ import com.softropic.skillars.infrastructure.exception.ErrorCode;
  * not own the player profile / the session pack). Everything here is request-state validation, which
  * is a different thing and needs its own user-facing message.
  *
+ * <p>The three {@code *_RESCHEDULE*} / {@code BOOKING_NOT_RESCHEDULABLE} codes were split out of
+ * {@code SecurityError.MISSING_RIGHTS} by {@code skillars-deferred-31} AC3 for the same reason, in
+ * {@code RescheduleService}: that class carried twelve {@code MISSING_RIGHTS} throws across its three
+ * public methods, of which only three (parent/coach does not own the booking) are authorization.
+ * {@code BATCH_NONE_ACCEPTED} (AC2) is not a split — it replaces a silent {@code return} that reported
+ * HTTP 2xx over a batch in which nothing was accepted.
+ *
  * <p>Note these still surface as HTTP 403: {@code ApiAdvice.operationDeniedHandler} maps
  * {@code OperationNotAllowedException} to {@code FORBIDDEN} unconditionally, independent of the code
  * carried. Splitting the code changes the {@code errorKey} and the message, not the status.
@@ -27,7 +34,11 @@ public enum BookingError implements ErrorCode {
     START_TIME_IN_PAST,
     INVALID_TIME_RANGE,
     SLOT_OUTSIDE_AVAILABILITY,
-    BATCH_ALREADY_PROCESSED;
+    BATCH_ALREADY_PROCESSED,
+    BATCH_NONE_ACCEPTED,
+    BOOKING_NOT_RESCHEDULABLE,
+    RESCHEDULE_ALREADY_PENDING,
+    RESCHEDULE_NOT_PENDING;
 
     @Override
     public String getErrorCode() {
@@ -39,6 +50,10 @@ public enum BookingError implements ErrorCode {
             case INVALID_TIME_RANGE        -> "booking.invalidTimeRange";
             case SLOT_OUTSIDE_AVAILABILITY -> "booking.slotOutsideAvailability";
             case BATCH_ALREADY_PROCESSED   -> "booking.batchAlreadyProcessed";
+            case BATCH_NONE_ACCEPTED       -> "booking.batchNoneAccepted";
+            case BOOKING_NOT_RESCHEDULABLE -> "booking.notReschedulable";
+            case RESCHEDULE_ALREADY_PENDING -> "booking.rescheduleAlreadyPending";
+            case RESCHEDULE_NOT_PENDING    -> "booking.rescheduleNotPending";
         };
     }
 }

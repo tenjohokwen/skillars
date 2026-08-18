@@ -32,6 +32,19 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+/**
+ * Reschedule request/accept/decline.
+ *
+ * <p>Deferred-31 AC3: this class used to throw {@code SecurityError.MISSING_RIGHTS} twelve times
+ * across its three public methods, so nine distinct state rejections — booking not reschedulable, a
+ * reschedule already pending, a request no longer PENDING, a start time in the past, an inverted
+ * time range — all reached the parent and the coach as the same "you are not allowed" toast. Only
+ * the three ownership checks ({@code requestReschedule}, {@code acceptReschedule},
+ * {@code declineReschedule}, one each) are genuine authorization and keep {@code MISSING_RIGHTS}.
+ * Everything else carries a {@code BookingError}. All of them still surface as HTTP 403 —
+ * {@code OperationNotAllowedException} maps to FORBIDDEN independent of the code it carries — so the
+ * split changed the {@code errorKey} and the message, not the status.
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -59,15 +72,16 @@ public class RescheduleService {
         }
         if (!RESCHEDULABLE_STATUSES.contains(booking.getStatus())) {
             throw new OperationNotAllowedException(
-                "Reschedule is only allowed for CONFIRMED or UPCOMING bookings", SecurityError.MISSING_RIGHTS);
+                "Reschedule is only allowed for CONFIRMED or UPCOMING bookings",
+                BookingError.BOOKING_NOT_RESCHEDULABLE);
         }
         if (!req.proposedStartTime().isAfter(Instant.now())) {
             throw new OperationNotAllowedException(
-                "Proposed start time must be in the future", SecurityError.MISSING_RIGHTS);
+                "Proposed start time must be in the future", BookingError.START_TIME_IN_PAST);
         }
         if (!req.proposedEndTime().isAfter(req.proposedStartTime())) {
             throw new OperationNotAllowedException(
-                "Proposed end time must be after start time", SecurityError.MISSING_RIGHTS);
+                "Proposed end time must be after start time", BookingError.INVALID_TIME_RANGE);
         }
         // UAT.2 AC3: a reschedule is a MOVE, not a resize. Without this, a parent reschedules a
         // compliant 60-minute session into an eight-hour one and the whole session-duration rule is
@@ -94,7 +108,8 @@ public class RescheduleService {
         rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(bookingId, "PENDING")
             .ifPresent(existing -> {
                 throw new OperationNotAllowedException(
-                    "A pending reschedule request already exists", SecurityError.MISSING_RIGHTS);
+                    "A pending reschedule request already exists",
+                    BookingError.RESCHEDULE_ALREADY_PENDING);
             });
 
         BookingRescheduleRequest rescheduleRequest = new BookingRescheduleRequest();
@@ -136,15 +151,16 @@ public class RescheduleService {
         }
         if (!"PENDING".equals(req.getStatus())) {
             throw new OperationNotAllowedException(
-                "Reschedule request is not in PENDING status", SecurityError.MISSING_RIGHTS);
+                "Reschedule request is not in PENDING status", BookingError.RESCHEDULE_NOT_PENDING);
         }
         if (!RESCHEDULABLE_STATUSES.contains(booking.getStatus())) {
             throw new OperationNotAllowedException(
-                "Booking is no longer in a reschedulable state", SecurityError.MISSING_RIGHTS);
+                "Booking is no longer in a reschedulable state",
+                BookingError.BOOKING_NOT_RESCHEDULABLE);
         }
         if (!req.getProposedStartTime().isAfter(Instant.now())) {
             throw new OperationNotAllowedException(
-                "Proposed start time is no longer in the future", SecurityError.MISSING_RIGHTS);
+                "Proposed start time is no longer in the future", BookingError.START_TIME_IN_PAST);
         }
 
         // Deferred-15 AC3. LOCK ORDERING: reschedule row first, coach second. declineReschedule
@@ -163,7 +179,7 @@ public class RescheduleService {
         entityManager.refresh(lockedReq, LockModeType.PESSIMISTIC_WRITE);
         if (!"PENDING".equals(lockedReq.getStatus())) {
             throw new OperationNotAllowedException(
-                "Reschedule request is not in PENDING status", SecurityError.MISSING_RIGHTS);
+                "Reschedule request is not in PENDING status", BookingError.RESCHEDULE_NOT_PENDING);
         }
         req = lockedReq;
 
@@ -234,7 +250,7 @@ public class RescheduleService {
         }
         if (!"PENDING".equals(req.getStatus())) {
             throw new OperationNotAllowedException(
-                "Reschedule request is not in PENDING status", SecurityError.MISSING_RIGHTS);
+                "Reschedule request is not in PENDING status", BookingError.RESCHEDULE_NOT_PENDING);
         }
 
         req.setStatus("DECLINED");
