@@ -1,5 +1,5 @@
 # generated: 2026-05-25
-# last_updated: 2026-08-18 # skillars-deferred-30 dev complete, moved to review (all 7 ACs done, full mvn -o verify green)
+# last_updated: 2026-08-18 # skillars-deferred-31 implemented + code-review follow-ups applied (3 Patch findings resolved, 2 Defer acknowledged), status review (mvn -o verify green: surefire 890, failsafe 923, 0 failures/0 errors); skillars-deferred-30 done and merged (PR #60)
 # project: javatemplate
 # project_key: NOKEY
 # tracking_system: file-system
@@ -1113,3 +1113,68 @@ development_status:
   # ConfigService.getBoolean's fail-open/no-alert gap; DrillMetadata.repDensity int-vs-Integer; the two
   # refund/no-show product questions; all deploy-* items and anything needing a product/design decision.
   skillars-deferred-30-error-toast-mapping-and-repository-boundary-test-coverage-fixes: done  # CODE REVIEW COMPLETE 2026-08-18: 3 adversarial layers (blind / edge-case / acceptance). Zero AC violations found. 2 decisions escalated and both resolved by Mbah: (1) split SecurityError.MISSING_RIGHTS - four non-authorization causes in BookingService.createBookingRequest and BookingBatchService.createBatch re-coded to distinct BookingError values (COACH_UNAVAILABLE reuse + START_TIME_IN_PAST, INVALID_TIME_RANGE, SLOT_OUTSIDE_AVAILABILITY), plus a fifth code BATCH_ALREADY_PROCESSED for BookingBatchService.acceptAll's already-processed pre-flight check - CORRECTED by the second review 2026-08-18, this entry originally listed BATCH_ALREADY_PROCESSED among createBatch's causes but that check lives in acceptAll (BookingBatchService.java:245-247), a different method, backend messages added to all 4 messages*.properties and booking.errors.* keys to all 3 frontend bundles, submit() +3 branches and submitBatchRequest() +5 branches (corrected from 6 by the second review), MISSING_RIGHTS toast reworded to authorization-only with retry advice removed - this is a wire contract change, small blast radius because OperationNotAllowedException maps to 403 regardless of code; (2) moved the pack-ownership check above the pack-expiry check, closing a three-way oracle over other parents' pack state that AC2's distinct toasts had made observable - comparison made null-safe via Objects.equals after the reorder exposed a fixture that never set parentId, new mutation-verified test createBookingRequest_expiredPackOwnedByAnotherParent_reportsMissingRightsNotExpiry pins it. 11 patches applied, 3 items deferred to deferred-work.md (one of which - submitBatchRequest MISSING_RIGHTS - was then closed by decision 1 rather than left open), 4 findings dismissed as false positives after refutation against source. Post-review full mvn -o verify green: 888 unit + 916 IT, 0 failures, 0 errors, BUILD SUCCESS; eslint exit 0 on all 7 changed frontend files. SECOND INDEPENDENT REVIEW 2026-08-18 (same 3 adversarial layers, run against the full diff including the first review's applied patches): 0 decisions, 6 patches, 1 defer, 13 dismissed. All 6 claims re-verified against source before applying and all 6 held. One code change: handleAcceptAll gained a MISSING_RIGHTS branch for BookingBatchService.acceptAll's batch-ownership pre-flight check (:241-243), which was reachable, unswallowed and falling to the generic toast, and its code comment - which wrongly counted two reachable pre-flight checks - now counts three. The other 5 patches were documentation corrections to claims this session's own first-review notes made: BATCH_ALREADY_PROCESSED was misattributed to createBatch when it lives in acceptAll, submitBatchRequest's branch count was overstated as 6 when the diff adds 5, AC2's and AC3's Completion Notes were stale post-Decision-1, and AC5's rationale was never reconciled with the correction the first review inserted into the test file. Post-second-review: eslint exit 0, npx quasar build succeeded, all 4 i18n keys used by handleAcceptAll resolve in all 3 bundles; backend untouched by the second review so the 888 unit + 916 IT green result above still stands. Manual toast-rendering verification still NOT performed (no browser tooling - standing project-wide gap), left unchecked and flagged for human spot-check. Prior entry (status was `review`) follows. 2026-08-18: all 7 ACs implemented, full mvn -o verify green (887 unit + 916 IT, 0 failures, 0 errors, BUILD SUCCESS); npx quasar build compiled clean; eslint clean on all 7 changed frontend files. AC4/AC5 mutation-verified (reverting each fix's target line failed the new/rewritten assertions as expected, then reverted). All 6 deferred-work.md items annotated [CLOSED by skillars-deferred-30 ACn] with closure descriptions (WORDING CORRECTED by the 2026-08-18 code review: this entry originally said the items were "flipped from [OWNED BY]" - they never carried an [OWNED BY skillars-deferred-30 ACn] marker, before or after; the only [OWNED BY] markers in the file belong to deferred-15/16/18. The closure annotations themselves are real and verified, only the provenance claim was wrong); 4 new ledger items were already filed at story creation, verified present not re-filed. NOT VERIFIED: the manual-verification subtasks in Tasks 1-3 (live toast rendering / reachability for AC1-AC3) — no browser tooling or frontend test infra available in this session, a standing project-wide gap; left unchecked rather than falsely marked done, flagged for human spot-check per this project's established practice.
+  # 2026-08-18: story creation grouped 6 small unrelated deferred-work.md items into one story (same
+  # spirit as deferred-11/20/21/22/23/24/25/26/27/28/29/30). Five of the six were filed by deferred-30
+  # itself with an explicit "file as a new ledger item, do not fix here".
+  #   AC1  code review of deferred-30 — the three coach accept flows have three different post-failure
+  #        refresh behaviours and handleAccept toasts before the reload it describes; normalise all
+  #        three (plus both decline handlers) to refresh-then-toast, and surface the silent refresh
+  #        failure the withdrawn items were circling: coachRequestsError/coachScheduleError are set by
+  #        the loaders, exported by the store, and rendered by NO component (grep-verified) — new
+  #        booking.errors.listMayBeStale warning on both success and failure paths.
+  #   AC2  deferred-30 story creation — BookingBatchService.acceptAll's bare `return` on zero accepted
+  #        bookings is an HTTP 2xx, so the coach reads "All sessions accepted" over nothing accepted and
+  #        the batch stays PENDING; throw new BookingError.BATCH_NONE_ACCEPTED (403 like every other
+  #        OperationNotAllowedException — no status-code change) and map it in handleAcceptAll.
+  #   AC3  code review of deferred-29 — RescheduleService throws SecurityError.MISSING_RIGHTS at 12 sites
+  #        across all 3 public methods, only 3 of which are genuine authorization failures; re-code the
+  #        other 9 to 3 new BookingError values (BOOKING_NOT_RESCHEDULABLE, RESCHEDULE_ALREADY_PENDING,
+  #        RESCHEDULE_NOT_PENDING) plus existing START_TIME_IN_PAST/INVALID_TIME_RANGE, and map them in
+  #        ParentBookingsPage.submitReschedule AND CoachCommandCenterPage.handleAcceptReschedule/
+  #        handleDeclineReschedule. SCOPE WIDENED from the ledger item (which named only the parent path)
+  #        — leaving the coach half unmapped would earn the exact criticism deferred-30 earned over
+  #        submitBatchRequest. CORRECTED by the story review (see below): the draft said "9 sites, 2
+  #        genuine" and omitted declineReschedule entirely.
+  #   AC4  code review of deferred-30 — four payment.* wire codes resolve into three i18n namespaces;
+  #        adopt "key lives in the wire code's domain namespace, not the rendering page", which makes
+  #        booking.errors.packExpired the single misplaced key -> payment.sessionPack.packExpired in all
+  #        3 bundles. Behaviour unchanged, same strings.
+  #   AC5  deferred-30 story creation — SluWeeklySnapshotRepository.findByPlayerIdFromWeek's compound
+  #        (year, week) predicate has zero real-DB coverage at any date (only mocked stubs in
+  #        SluDashboardServiceTest); new SluWeeklySnapshotRepositoryIT with both boundaries, a
+  #        year-rollover window and a foreign-player exclusion, mutation-verified. Claims fixture block
+  #        9630000001-9630000003 (registry + claimed-prefixes + free-blocks all three updated).
+  #   AC6  code review of deferred-29 — three console.warn(..., err) calls serialize a minor's playerId
+  #        and free-text notes into the browser console (boot/axios.js:176 rejects with the original
+  #        axios error, so err.config.data is the request body); log errorKey only.
+  #   AC7  Ledger hygiene: closes all 6 above with [CLOSED by skillars-deferred-31 ACn], WITHDRAWS the
+  #        CoachBookingRequestsPage.vue:164 "unguarded refresh -> unhandled promise rejection" item as
+  #        factually wrong (booking.store.js:302-314 catches without rethrow, so the await cannot reject
+  #        and the prescribed .catch(() => {}) would be dead code) — the SAME false premise the
+  #        deferred-30 review withdrew a sibling item for, filed independently hours later, so AC7 also
+  #        adds the never-rethrow comment at the two store loaders that would have prevented both.
+  #        Files acceptAll's missing per-booking failure detail as a new item.
+  # DELIBERATELY EXCLUDED (see the story file's "Why this story exists" for full reasoning):
+  # DrillMetadata.repDensity int-vs-Integer (backend contract + product decision); splitting
+  # SessionErrorCode.DRILL_UPLOAD_NOT_ALLOWED (contract change, and its extra path is unreachable today so
+  # there is no live defect); booking.errors.batchSizeExceeded's wrong {max} (backend contract change,
+  # excluded by deferred-29 and -30 for the same reason); QUOTA_EXCEEDED's rate-limit/storage-quota
+  # conflation (partly mitigated by deferred-29); the two refund/no-show product questions; per-booking
+  # outcome reporting from acceptAll (REST contract change); rendering the coach error refs as full
+  # banners (UX task); all deploy-* items and anything needing a product/design decision.
+  # 2026-08-18: senior-dev review of the draft (story-review.md) — 1 HIGH, 1 MEDIUM, both verified
+  # against source and applied. HIGH: AC3's throw-site table was short two real sites and mislabeled a
+  # third. RescheduleService has 12 MISSING_RIGHTS throws across requestReschedule (:54-120),
+  # acceptReschedule (:123-217) and declineReschedule (:218-250) — not the 9 the draft claimed; the row
+  # labelled "(decline path) not PENDING" cited :165-166, which is acceptReschedule's SECOND (locked
+  # re-read) PENDING check, while the real decline-path sites (:224 ownership, :237 not PENDING) were
+  # absent. Root cause: the draft's enumeration was truncated before the end of the file. Table rebuilt
+  # with a method column and a post-change grep count (3 remaining MISSING_RIGHTS) as the miss check.
+  # Also found RescheduleResourceIT asserts nothing on errorKey/MISSING_RIGHTS (zero grep hits), so
+  # Task 3 now requires adding 2 mutation-verified assertions rather than "updating" ones that do not
+  # exist. MEDIUM: AC1's success-path stale-check had no insertion point for handleAccept/handleDecline
+  # (they have no success-path code — the refresh lives in the store at booking.store.js:348-356);
+  # Task 1 now names it per handler. Review's non-findings (payment.sessionPack.expired dead key, AC2's
+  # transactional boundary, AC5's missing skill_code filter, the AC7 withdrawal) were all checked and
+  # confirmed as non-defects.
+  skillars-deferred-31-coach-accept-flow-refresh-reschedule-error-split-and-slu-repository-coverage: review

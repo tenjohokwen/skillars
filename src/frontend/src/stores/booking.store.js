@@ -299,6 +299,25 @@ export const useBookingStore = defineStore('booking', () => {
     }
   }
 
+  // CONTRACT — loadCoachBookingRequests and loadCoachSchedule below NEVER RETHROW. Each swallows its
+  // own failure into coachRequestsError / coachScheduleError and resolves normally, so an `await` on
+  // either can never reject and callers need no .catch() guard. Two independent review passes on the
+  // same day (2026-08-18) filed the same "unguarded refresh → unhandled promise rejection" defect
+  // against call sites of these loaders; both were withdrawn as factually wrong. The real residual is
+  // the opposite one — a failed refresh is silent, because coachRequestsError / coachScheduleError
+  // are rendered by no component — which is what the coach pages' stale-list warnings close
+  // (skillars-deferred-31 AC1). Do not add a rethrow here without fixing those call sites;
+  // BookingRequestPage relies on a failed fetch being swallowed rather than blanking the slot list.
+  //
+  // Each therefore RETURNS ITS OWN OUTCOME: true if this invocation refreshed, false if it failed.
+  // Callers deciding whether to warn "list may be out of date" must branch on that return value and
+  // NOT re-read the error ref. The refs are module-scoped and reset-then-written on every call, so a
+  // concurrent load — two rows accepted in quick succession (the per-row accepting[id]/declining[id]
+  // flags deliberately allow it), a week-selector watcher, or onWrapUpComplete's 3-second setTimeout
+  // reload — can overwrite or clear the ref between an earlier caller's await and its check, which
+  // would warn the wrong coach action or swallow a real staleness. The return value is per-invocation
+  // and cannot race. The refs stay as they are: they carry the error object itself, which a future
+  // error-banner treatment will want. (skillars-deferred-31 AC1, review follow-up.)
   async function loadCoachBookingRequests() {
     coachRequestsLoading.value = true
     coachRequestsError.value = null
@@ -306,8 +325,10 @@ export const useBookingStore = defineStore('booking', () => {
       const res = await getCoachBookingRequests()
       coachBookingRequests.value = res.singleBookings ?? []
       coachBatchGroups.value = res.batchGroups ?? []
+      return true
     } catch (e) {
       coachRequestsError.value = e
+      return false
     } finally {
       coachRequestsLoading.value = false
     }
@@ -320,8 +341,10 @@ export const useBookingStore = defineStore('booking', () => {
     try {
       const res = await getCoachSchedule(weekStart)
       coachSchedule.value = res
+      return true
     } catch (e) {
       coachScheduleError.value = e
+      return false
     } finally {
       coachScheduleLoading.value = false
     }
@@ -345,14 +368,16 @@ export const useBookingStore = defineStore('booking', () => {
     await loadParentBookings()
   }
 
+  // Both return their own refresh outcome so the caller can warn about a stale list without
+  // re-reading the shared error ref — see the CONTRACT note above loadCoachBookingRequests.
   async function approveBooking(id) {
     await acceptBooking(id)
-    await loadCoachBookingRequests()
+    return await loadCoachBookingRequests()
   }
 
   async function rejectBooking(id) {
     await declineBooking(id)
-    await loadCoachBookingRequests()
+    return await loadCoachBookingRequests()
   }
 
   async function handleStartSession(bookingId) {
@@ -545,7 +570,8 @@ export const useBookingStore = defineStore('booking', () => {
     batchAcceptError.value = null
     try {
       await acceptAllBatch(batchId)
-      await loadCoachBookingRequests()
+      // Returns its own refresh outcome — see the CONTRACT note above loadCoachBookingRequests.
+      return await loadCoachBookingRequests()
     } catch (e) {
       batchAcceptError.value = e
       throw e

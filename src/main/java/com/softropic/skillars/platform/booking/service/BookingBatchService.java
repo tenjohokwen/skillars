@@ -278,8 +278,19 @@ public class BookingBatchService {
         }
 
         if (acceptedIds.isEmpty()) {
+            // Two distinct paths reach this branch — it does NOT mean only "all of them failed":
+            //   (a) every per-booking acceptOneBooking threw and was swallowed by the loop's catch
+            //       above (slot collision, suspended coach seen under the lock, payment initiation);
+            //   (b) findByBatchIdAndStatus returned no REQUESTED bookings at all on a batch that is
+            //       still PENDING — e.g. every booking was already declined or expired individually.
+            // Deferred-31 AC2: this used to be a bare `return`, which is an HTTP 2xx, so the coach
+            // read "All sessions accepted" over nothing accepted while the batch stayed PENDING and
+            // every booking stayed REQUESTED. The log.warn below stays — it is the only per-booking
+            // diagnostic that survives the loop's swallow. Per-booking failure detail for the client
+            // needs a result DTO and a REST contract change; deliberately out of scope here.
             log.warn("No bookings were accepted in batch {}", batchId);
-            return;
+            throw new OperationNotAllowedException("No bookings in batch were accepted",
+                BookingError.BATCH_NONE_ACCEPTED);
         }
 
         // Resolved before the trailing transaction opens so that it contains only the batch write and

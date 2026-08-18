@@ -545,6 +545,76 @@ class BookingBatchServiceTest {
         verify(batchRepository, never()).save(any());
     }
 
+    /**
+     * Deferred-31 AC2, path (a): every per-booking accept threw and was swallowed by the loop's
+     * catch. acceptAll used to `return` here, which is an HTTP 2xx, so the coach read
+     * "All sessions accepted" over nothing accepted and the batch stayed PENDING.
+     */
+    @Test
+    void acceptAll_everyBookingFailsToAccept_throwsBatchNoneAcceptedAndLeavesBatchPending() {
+        BookingBatch batch = new BookingBatch();
+        batch.setId(BATCH_ID);
+        batch.setCoachId(COACH_ID);
+        batch.setParentId(PARENT_ID);
+        batch.setStatus("PENDING");
+        batch.setTotalAmount(BigDecimal.ZERO);
+        when(batchRepository.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+
+        CoachProfile coach = buildActiveCoach();
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+
+        Instant slot = Instant.now().plus(3, ChronoUnit.DAYS);
+        Booking requested = new Booking();
+        requested.setId(UUID.randomUUID());
+        requested.setStatus("REQUESTED");
+        requested.setRequestedStartTime(slot);
+        requested.setRequestedEndTime(slot.plus(1, ChronoUnit.HOURS));
+        when(bookingRepository.findByBatchIdAndStatus(BATCH_ID, "REQUESTED")).thenReturn(List.of(requested));
+        // Every per-booking accept dies on the slot-collision guard inside acceptOneBooking, and the
+        // loop's catch swallows it — acceptedIds ends up empty.
+        when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any()))
+            .thenReturn(List.of(bookingInStatus("CONFIRMED")));
+
+        assertThatThrownBy(() -> service.acceptAll(BATCH_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.BATCH_NONE_ACCEPTED));
+
+        verify(batchRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any(BatchBookingAcceptedEvent.class));
+        assertThat(batch.getStatus())
+            .as("nothing was accepted, so the batch must stay PENDING")
+            .isEqualTo("PENDING");
+    }
+
+    /**
+     * Deferred-31 AC2, path (b): the batch is still PENDING but findByBatchIdAndStatus returns no
+     * REQUESTED bookings at all, so the loop never runs. Same false-success symptom, different cause
+     * — both must reach the same 403.
+     */
+    @Test
+    void acceptAll_pendingBatchWithNoRequestedBookings_throwsBatchNoneAccepted() {
+        BookingBatch batch = new BookingBatch();
+        batch.setId(BATCH_ID);
+        batch.setCoachId(COACH_ID);
+        batch.setParentId(PARENT_ID);
+        batch.setStatus("PENDING");
+        batch.setTotalAmount(BigDecimal.ZERO);
+        when(batchRepository.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(buildActiveCoach()));
+        when(bookingRepository.findByBatchIdAndStatus(BATCH_ID, "REQUESTED")).thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.acceptAll(BATCH_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.BATCH_NONE_ACCEPTED));
+
+        verify(bookingService, never()).acceptAndInitiatePayment(any(), any());
+        verify(batchRepository, never()).save(any());
+        assertThat(batch.getStatus()).isEqualTo("PENDING");
+    }
+
     private Booking bookingInStatus(String status) {
         Booking b = new Booking();
         b.setId(UUID.randomUUID());

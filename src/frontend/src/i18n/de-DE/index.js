@@ -466,7 +466,13 @@ export default {
       invalidTimeRange: 'Das Ende der Sitzung muss nach ihrem Beginn liegen.',
       slotOutsideAvailability: 'Dieser Zeitpunkt liegt außerhalb der verfügbaren Zeiten dieses Coaches.',
       batchAlreadyProcessed: 'Diese Anfragen wurden bereits bearbeitet.',
-      packExpired: 'Dieses Sitzungspaket ist abgelaufen.',
+      batchNoneAccepted: 'Keine der Sitzungen in dieser Anfrage konnte angenommen werden.',
+      notReschedulable: 'Diese Sitzung kann nicht mehr verschoben werden.',
+      rescheduleAlreadyPending:
+        'Für diese Sitzung wartet bereits eine Verschiebungsanfrage auf eine Antwort.',
+      rescheduleNotPending: 'Diese Verschiebungsanfrage wurde bereits bearbeitet.',
+      listMayBeStale:
+        'Diese Liste ist möglicherweise nicht aktuell. Laden Sie die Seite neu, um den neuesten Stand zu sehen.',
       requestNotAllowed:
         'Sie haben keinen Zugriff auf den Spieler oder das Sitzungspaket in dieser Anfrage.',
       invalidSessionDuration:
@@ -980,6 +986,7 @@ export default {
         'Dieses Sitzungspaket ist am {date} abgelaufen. Kontaktieren Sie Ihren Coach für eine Verlängerung.',
       exhausted: 'Ihr Sitzungspaket ist vollständig aufgebraucht',
       packCoachMismatch: 'Dieses Sitzungspaket gilt für einen anderen Coach.',
+      packExpired: 'Dieses Sitzungspaket ist abgelaufen.',
       packExhausted: 'Dieses Sitzungspaket hat keine verbleibenden Sitzungen.',
       extendSuccess: 'Ihr Sitzungspaket wurde bis zum {date} verlängert',
       tierLabel: '{label} — {count} Sitzungen für €{price}',
