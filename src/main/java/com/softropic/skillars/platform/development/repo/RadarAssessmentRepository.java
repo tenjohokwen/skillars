@@ -58,6 +58,22 @@ public interface RadarAssessmentRepository extends JpaRepository<RadarAssessment
         @Param("parentId") Long parentId,
         @Param("excludeCoachId") UUID excludeCoachId);
 
+    // Same shape as countDistinctOtherCoachesBySkill, without excluding any coach — feeds the
+    // skills-radar confidence indicator's distinct_coach_count (skillars-deferred-40 AC3).
+    @Query(nativeQuery = true, value = """
+        SELECT rae.skill_code, COUNT(DISTINCT rae.coach_id)
+        FROM development.radar_assessment_entries rae
+        JOIN main.player_profiles pp ON pp.id = rae.player_id
+        WHERE rae.player_id = :playerId
+          AND pp.parent_id = :parentId
+          AND rae.skill_code IN (:skillCodes)
+        GROUP BY rae.skill_code
+        """)
+    List<Object[]> findDistinctCoachCountsByPlayerAndSkills(
+        @Param("playerId") Long playerId,
+        @Param("parentId") Long parentId,
+        @Param("skillCodes") Set<String> skillCodes);
+
     List<RadarAssessmentEntry> findByPlayerId(Long playerId);
 
     @Modifying

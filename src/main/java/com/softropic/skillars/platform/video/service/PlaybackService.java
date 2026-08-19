@@ -43,6 +43,7 @@ public class PlaybackService {
     private final VideoProperties properties;
     private final VideoMetrics videoMetrics;
     private final ConfigService configService;
+    private final QuotaService quotaService;
 
     @Transactional
     public PlaybackAuthorizationResponse authorizePlayback(UUID videoId, String viewerId, @Nullable String clientIp) {
@@ -106,6 +107,23 @@ public class PlaybackService {
             SignedPlaybackUrl signedUrl = videoProviderAdapter.generatePlaybackUrl(
                 video.getProviderAssetId(),
                 new PlaybackTokenClaims(viewerId, expiresAt, boundIp));
+
+            // Real per-request bandwidth metering isn't available from the provider (Bunny.net's Stream
+            // API "Get Video Statistics" response has no bandwidth field). Approximate: charge the
+            // video's own file size to its owner — the same owner storage_used_bytes already charges
+            // for hosting cost, not the viewer — once per successful playback authorization.
+            // Isolated in its own try/catch: this is internal bookkeeping only, and the signed playback
+            // URL above has already been issued by the provider — a transient bandwidth-tracking failure
+            // (e.g. a DB error) must not deny an otherwise-legitimate playback.
+            Long storageBytes = video.getStorageBytes();
+            if (storageBytes != null && storageBytes > 0) {
+                try {
+                    quotaService.incrementBandwidthUsedBytes(video.getOwnerId(), storageBytes);
+                } catch (Exception ex) {
+                    log.warn("Bandwidth tracking failed, playback still authorized: videoId={} ownerId={}",
+                        videoId, video.getOwnerId(), ex);
+                }
+            }
 
             // Generate download URL for owner of downloadable video types (HOMEWORK, DRILL_DEMO).
             // COACH_REVIEW: no download URL per FR-VID-009 — only signedHlsUrl is returned.

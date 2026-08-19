@@ -24,6 +24,9 @@ public class PlayerRadarComposite {
     @Column(name = "entry_count", nullable = false)
     private Integer entryCount;
 
+    @Column(name = "distinct_coach_count", nullable = false)
+    private Integer distinctCoachCount;
+
     @Column(name = "last_updated_at", nullable = false)
     private Instant lastUpdatedAt;
 }

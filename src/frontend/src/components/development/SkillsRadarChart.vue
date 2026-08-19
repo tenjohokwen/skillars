@@ -122,14 +122,14 @@
           :cx="node.x + 14"
           :cy="node.y - 10"
           r="4"
-          :fill="confidenceDotFill(node.skill.entryCount) === 'filled' ? 'var(--accent-primary)' : 'none'"
+          :fill="confidenceDotFill(node.skill.distinctCoachCount) === 'filled' ? 'var(--accent-primary)' : 'none'"
           :stroke="'var(--accent-primary)'"
           stroke-width="1.5"
-          :opacity="confidenceDotFill(node.skill.entryCount) === 'empty' ? 0.4 : 1"
+          :opacity="confidenceDotFill(node.skill.distinctCoachCount) === 'empty' ? 0.4 : 1"
         />
-        <!-- Half-fill dot for 1-2 entries -->
+        <!-- Half-fill dot for 1-2 distinct coaches -->
         <path
-          v-if="confidenceDotFill(node.skill.entryCount) === 'half'"
+          v-if="confidenceDotFill(node.skill.distinctCoachCount) === 'half'"
           :d="`M ${node.x + 14} ${node.y - 14} A 4 4 0 0 1 ${node.x + 14} ${node.y - 6} Z`"
           fill="var(--accent-primary)"
         />
@@ -152,8 +152,9 @@
     </svg>
 
     <!-- Accessible screen reader alternative — all 15 skills regardless of polygon selection -->
-    <!-- NOTE: entry_count counts total rows across all assessment types and coaches; a filled dot
-         may show even when the composite is capped (e.g. 3 OBJECTIVE-only assessments). -->
+    <!-- NOTE: the confidence dot is driven by distinctCoachCount (distinct coaches who have logged an
+         assessment), not entryCount (total assessment rows) — a single coach logging many assessments
+         no longer misrepresents multi-coach agreement (skillars-deferred-40 AC3). -->
     <table class="sr-only" aria-label="Skills Radar Data">
       <thead>
         <tr>

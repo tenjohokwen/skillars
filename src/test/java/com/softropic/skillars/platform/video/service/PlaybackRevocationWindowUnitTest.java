@@ -36,6 +36,7 @@ class PlaybackRevocationWindowUnitTest {
     @Mock VideoProviderAdapter videoProviderAdapter;
     @Mock VideoMetrics videoMetrics;
     @Mock ConfigService configService;
+    @Mock QuotaService quotaService;
 
     PlaybackService playbackService;
 
@@ -50,7 +51,7 @@ class PlaybackRevocationWindowUnitTest {
         when(configService.getLong("platform.video.playback.signed_url_ttl_minutes", 120L)).thenReturn(120L);
         when(configService.getBoolean("platform.video.playback.ip_binding_enabled", false)).thenReturn(false);
 
-        playbackService = new PlaybackService(videoRepository, playbackTokenRepository, videoProviderAdapter, properties, videoMetrics, configService);
+        playbackService = new PlaybackService(videoRepository, playbackTokenRepository, videoProviderAdapter, properties, videoMetrics, configService, quotaService);
     }
 
     @Test
