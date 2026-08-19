@@ -207,17 +207,20 @@ async function handleDecline(id) {
 
 // O(1) per-row lookup instead of a linear Array.find() scan per call — the template calls
 // failureReasonFor twice per pending row, once per re-render (skillars-deferred-34 code review
-// Decision→Defer, closed here). Vue's computed cache means this only rebuilds when
-// bookingStore.batchAcceptResultsByBatch itself changes, not on every unrelated re-render. Only
-// failed entries are stored — an accepted result and a missing result both correctly resolve to
-// "not found" below, matching the prior implementation's `!result || result.accepted` check.
-const failedResultByBatch = computed(() => {
+// Decision→Defer, closed by skillars-deferred-35 AC2). Vue's computed cache means this only rebuilds
+// when bookingStore.batchAcceptResultsByBatch itself changes, not on every unrelated re-render. Stores
+// EVERY result (accepted and failed) — skillars-deferred-35's first cut stored only failed entries,
+// which was behavior-preserving for failureReasonFor's one caller but discarded which bookingIds were
+// accepted, narrowing this computed's usefulness for any future caller (skillars-deferred-35 code
+// review, closed here). failureReasonFor below restores the `!result || result.accepted` guard the
+// pre-refactor Array.find() version used.
+const resultByBatch = computed(() => {
   const byBatch = {}
   for (const [batchId, results] of Object.entries(bookingStore.batchAcceptResultsByBatch)) {
     if (!results) continue
     const byBookingId = new Map()
     for (const r of results) {
-      if (!r.accepted && !byBookingId.has(r.bookingId)) byBookingId.set(r.bookingId, r)
+      if (!byBookingId.has(r.bookingId)) byBookingId.set(r.bookingId, r)
     }
     byBatch[batchId] = byBookingId
   }
@@ -225,8 +228,8 @@ const failedResultByBatch = computed(() => {
 })
 
 function failureReasonFor(batchId, bookingId) {
-  const result = failedResultByBatch.value[batchId]?.get(bookingId)
-  if (!result) return null
+  const result = resultByBatch.value[batchId]?.get(bookingId)
+  if (!result || result.accepted) return null
   if (result.errorKey === 'booking.slotUnavailable') return t('booking.errors.slotUnavailable')
   if (result.errorKey === 'booking.coachUnavailable') return t('booking.errors.coachUnavailable')
   return t('booking.batch.itemNotAccepted')

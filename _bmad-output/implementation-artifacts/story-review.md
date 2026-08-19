@@ -1,109 +1,127 @@
-# Senior-Dev Review: `skillars-deferred-35-batch-failure-diagnostics-lookup-perf-and-refund-docs`
+# Story Review: skillars-deferred-36-batch-none-accepted-log-coverage-and-result-map-fidelity
 
-**Reviewed:** `_bmad-output/implementation-artifacts/skillars-deferred-35-batch-failure-diagnostics-lookup-perf-and-refund-docs.md`
-**Method:** every AC's "verified current state" claim, code excerpt, and file:line citation was cross-checked
-against the actual file content on disk (not just trusted) — `BookingBatchService.java`, `ApplicationException.java`,
-`OperationNotAllowedException.java`/`AuthorizationException.java`, `ApiAdvice.java`, `ErrorDto.java`,
-`CoachBookingRequestsPage.vue`, `booking.store.js`, `BookingService.java`, `CancellationRefundService.java`,
-`BookingBatchServiceTest.java`, both target `docs/` HTML files, and the `deferred-work.md` line ranges AC5 touches.
-Findings below are all grounded in code actually read during this review — file:line citations are given so each
-can be independently re-verified in under a minute.
+Reviewed as a senior dev before dev-story execution. Every claim below was checked against the current
+working tree (not just the story's own text) — file paths, line numbers, class hierarchies, Maven/Failsafe
+config, and the deferred-work.md ledger's actual heading conventions. Items that turned out to be accurate
+on inspection are not listed as findings.
 
----
+## Findings
 
-## Finding 1 (Medium) — AC3's own "zero hits" grep check can never pass: `PARTIALLY_ACCEPTED` on `dev-docs/booking/index.html:80` matches the same pattern, and that line is untouched by this story
+### 1. AC3's prescribed heading name for the re-filed ledger item contradicts its own cited precedent
 
-Task 3 and AC4's doc-verification bullet both specify the same done-criteria:
+**Where:** AC3 / Task 3, and the "Explicitly NOT in this story" section.
 
+The story instructs filing the un-closed rebuild-cost/pruning half under a new
+`## Deferred from: code review of skillars-deferred-36-...` heading, citing "the `skillars-deferred-31` AC2
+entry at deferred-work.md line 1506" as the precedent for this split-closure pattern.
+
+Line 1506 is indeed the right item to point at for the *split-closure* pattern (partial close + re-file the
+residual) — but its residual half was **not** filed under a "code review of X" heading. It landed at
+deferred-work.md line 1521 under `## Deferred from: skillars-deferred-31 implementation (2026-08-18)`. The
+same is true for every other same-story (pre-review) re-filing in this ledger: `skillars-deferred-32
+implementation`, `skillars-deferred-33 implementation`, `skillars-deferred-26-...-fixes story creation`,
+`skillars-deferred-28-...-test story creation`, `skillars-deferred-30 story creation and review`. The
+`## Deferred from: code review of X` heading form is reserved, throughout this file's ~100 uses of it, for
+items surfaced by an actual subsequent code-review pass on already-shipped work — not for hygiene performed
+during a story's own AC3/closure step, which is what this story's AC3 is.
+
+Since `skillars-deferred-36` has not been code-reviewed yet at the point AC3 runs, filing under
+`## Deferred from: code review of skillars-deferred-36-...` would itself be a factually wrong heading
+(claiming a review that hasn't happened), and breaks the ledger's own established naming convention that a
+future story-creation pass (which this project's own workflow relies on to mine the ledger) uses to tell
+"found during implementation" apart from "found during review." The correct heading, matching the actual
+precedent, is `## Deferred from: skillars-deferred-36 implementation (2026-08-19)`.
+
+**Fix:** change AC3 / Task 3's heading instruction to `## Deferred from: skillars-deferred-36 implementation
+(2026-08-19)`.
+
+### 2. Tasks/Subtasks omit the "run targeted tests" step every recent sibling story includes
+
+**Where:** Task 1 and Task 2 checklists.
+
+`docs/validation-strategy.md` (cited in this story's own References) establishes "run targeted tests" as
+this project's standard validation policy, and the Dev Notes' "Established conventions this story must
+follow" section commits generally to following established conventions. Every directly preceding sibling
+story's task list makes this an explicit, separate checklist line: `skillars-deferred-35`'s Task 4 has
+"Targeted `BookingBatchServiceTest` suite green (26/26) per `docs/validation-strategy.md`'s
+smallest-relevant-scope policy," and `skillars-deferred-31`/`32`/`34` follow the same pattern.
+
+This story's Task 1 (AC1, backend) and Task 2 (AC2, frontend) both end without any subtask instructing a
+targeted test run — e.g. `mvn -Dtest=BookingBatchResourceIT test` for Task 1, or a frontend lint/build check
+for Task 2. Nothing about AC1 or AC2's prose substitutes for this — AC1's "Required" section describes what
+to add to the test, not that it must be run and confirmed green, and AC2 explicitly says its correctness
+must be confirmed "by inspection" (no automated frontend test exists), which makes an explicit backend
+test-run task even more load-bearing here since it's the *only* automated check this story gets.
+
+**Fix:** add a subtask under Task 1 ("Run `mvn -Dtest=BookingBatchResourceIT test`, confirm green including
+the new assertion") and note under Task 2 that AC2's correctness is confirmed by inspection only, matching
+how `skillars-deferred-35`'s Task 4 stated the same limitation explicitly rather than leaving it implicit.
+
+### 3. AC1's sample code: the appender-attach happens outside the `try`/`finally` it's claimed to be inside
+
+**Where:** AC1 "Required" code sample, and the surrounding prose's guarantee claim.
+
+The prose states: "The `try`/`finally` guarantees the appender is detached even if an assertion fails, so a
+failing run does not leak a stale appender into subsequent tests in the same JVM." Looking at the actual
+sample:
+
+```java
+Logger apiAdviceLogger = (Logger) LoggerFactory.getLogger(ApiAdvice.class);
+ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
+logCapture.start();
+apiAdviceLogger.addAppender(logCapture);
+
+String coachCookies = loginAndGetCookies(COACH_EMAIL);   // <-- outside the try
+try {
+    ...
+} finally {
+    apiAdviceLogger.detachAppender(logCapture);
+}
 ```
-grep -n "applyRefundLogic\|refundEligibility\|refundAmount\|PARTIAL" docs/dev-docs/booking/index.html docs/business-docs/money/index.html
-```
 
-should return **zero hits** after AC3's four dev-docs edits (lines 78, 346, 359-362, 412-422) and one business-docs
-edit (lines 149-160) are applied. Running that exact grep against the current file confirms every one of those five
-locations is indeed where `applyRefundLogic`/`refundEligibility`/`refundAmount`/`PARTIAL` appears **except one**:
+`addAppender` runs before the `try` opens, and `loginAndGetCookies(COACH_EMAIL)` — which can throw — sits
+between the attach and the `try`. If that call throws, `logCapture` is never detached: it stays attached to
+`ApiAdvice`'s logger (a singleton for the rest of the JVM run) and silently keeps accumulating every
+subsequent `ApiAdvice.logError` event system-wide, for the remainder of this Failsafe run — this project's
+own pom.xml documents that all ~135 IT classes share one JVM fork with no `forkCount`/`reuseForks`, so this
+is not a contained blast radius. `loginAndGetCookies` is an established, normally-reliable helper used
+throughout this test class, so the odds of it throwing here are low, but the code as written does not back
+the strength of the claim made about it, and the fix is one line.
 
-```
-docs/dev-docs/booking/index.html:80:      <li><strong>Batch bookings:</strong> ... the batch's aggregate status
-(<code>PENDING</code> / <code>PARTIALLY_ACCEPTED</code> / <code>FULLY_ACCEPTED</code> / <code>DECLINED</code>)
-rolls up automatically as individual bookings change status.</li>
-```
+**Fix:** move `apiAdviceLogger.addAppender(logCapture)` to the first line inside the `try` block (after
+`loginAndGetCookies`, before the HTTP call), so the entire attached-appender lifetime is covered by the
+`finally`.
 
-Line 80 is the very next bullet after the one AC3 replaces (line 78), describing the **batch acceptance status
-enum** (`PENDING`/`PARTIALLY_ACCEPTED`/`FULLY_ACCEPTED`/`DECLINED`) — a live, current, unrelated feature. It
-matches the grep pattern only because `PARTIALLY_ACCEPTED` contains the substring `PARTIAL`. This bullet is not
-in AC3's required-edit list, is not stale, and describes correct, current behavior (`BookingBatch.status`, the
-same enum `BookingBatchService.computeBatchStatus` writes) — it must not be touched.
+## Verified as accurate — no finding
 
-Consequence: even after every required AC3 edit is applied correctly, the grep the story itself prescribes as the
-pass/fail check will still report one hit, on a line that is fine as-is. A developer following the story literally
-will either (a) be confused into thinking an edit was missed or incomplete, or (b) "fix" the false positive by
-rewording or removing the unrelated, accurate batch-status bullet — which would be a real regression the story
-does not intend and explicitly scopes out ("does not otherwise restructure either file").
+For transparency, the following claims were specifically checked and confirmed correct, so they are not
+findings:
 
-**Suggested fix:** narrow the verification command so it doesn't false-positive on `PARTIALLY_ACCEPTED`, e.g.
-`grep -n "applyRefundLogic\|refundEligibility\|refundAmount\|[^Y_]PARTIAL\b"` or, more simply, just drop bare
-`PARTIAL` from the pattern and instead grep for the two literal tier tokens that actually indicate stale refund
-content: `FULL.*PARTIAL.*NONE\|refundEligibility\|refundAmount\|applyRefundLogic`. Simplest fix: state explicitly
-in Task 3 / AC4 that the grep's expected hit count is **1** (the untouched `PARTIALLY_ACCEPTED` batch-status
-bullet on line 80), not 0, so the dev isn't left second-guessing a correct diff.
-
----
-
-## What was verified and found accurate (no issue)
-
-To keep the above list free of false positives, these specific claims in the story were independently checked
-against current code and confirmed correct:
-
-- **AC1 / `BookingBatchService.acceptAll`** (`:236-339`): the loop, `acceptedIds`/`results` tracking, the exact
-  two-argument `acceptedIds.isEmpty()` throw being replaced, and the sibling `COACH_UNAVAILABLE` three-argument-
-  constructor precedent three lines above (`:258-260`) all match the story's quoted excerpts verbatim, including
-  line numbers.
-- **`OperationNotAllowedException`/`AuthorizationException`/`ApplicationException` constructor chain**: the
-  three-argument `OperationNotAllowedException(String, Map<String,Object>, ErrorCode)` constructor exists and
-  forwards through `AuthorizationException` to `ApplicationException(String, Throwable, Map, ErrorCode)`, whose
-  constructor `putAll`s the given map into its own internal `HashMap` — confirming `Map.of(...)`'s immutability is
-  a non-issue (it's copied, not stored by reference) and that reverting to the two-argument constructor really
-  does default `logContext` to an empty map (the mutation-verification AC4 describes will behave as claimed).
-- **`ApiAdvice.logError`** (`:636-651`) unconditionally reads `getLogContext()` for any `ApplicationException` and
-  logs it via `entries(ctx)` (`StructuredArguments.entries`, imported at `:83`) — exactly as claimed, and requires
-  no new plumbing.
-- **`ApiAdvice.operationDeniedHandler`** (`:267-277`) and `ErrorDto`'s fixed `helpCode`/`errorMsg`/`fieldErrors`
-  shape (`infrastructure.message.ErrorDto.java`) confirm the story's "this does not put `results` on the wire"
-  claim: the client-facing DTO has no field for it and the handler never reads `getLogContext()`.
-- **`resolveFailureCode`/`acceptOneBooking`** (`:352-398`): the test fixture path AC4 describes (a single
-  `REQUESTED` booking colliding via `findOverlappingBookings`) genuinely throws `OperationNotAllowedException`
-  with `BookingError.SLOT_UNAVAILABLE`, whose `getErrorCode()` is the literal string `"booking.slotUnavailable"`
-  (`BookingError.java:47`) — the exact `errorKey` value AC4's new assertion expects.
-- **`BookingBatchServiceTest`**'s two cited existing tests (`:690-726`, `:733-753`) match the story's description
-  of each fixture and both already-passing assertions; `BatchAcceptResult` and `List` are already imported in the
-  test file, so AC4's new assertions need no new imports.
-- **AC2 / `CoachBookingRequestsPage.vue`**: current `failureReasonFor` (`:208-215`), the template's two calls per
-  row (`:52-58`), the `import { ref, onMounted } from 'vue'` line (`:141`), and `handleAcceptAll`'s untouched
-  direct array read (`:230`) all match verbatim. Traced the proposed `computed`-based rewrite against every input
-  shape the store can actually produce — including the total-failure case, where `handleAcceptAllBatch` never
-  overwrites `batchAcceptResultsByBatch[batchId]` away from the `null` it's pre-set to (`booking.store.js:576`)
-  because the store's `catch` block re-throws before reaching the success assignment (`:579-582`) — and confirmed
-  the new `Map`-based lookup returns byte-identical results to the old `Array.find()` for every reachable case
-  (absent/null/empty/populated array × accepted/failed/absent bookingId), including that Pinia's ref-unwrapping on
-  `bookingStore.batchAcceptResultsByBatch` is already relied on reactively elsewhere in this same file, so wrapping
-  it in a `computed` introduces no new reactivity risk.
-- **No frontend test infrastructure exists** to contradict AC4's "verify by inspection" fallback: `package.json`'s
-  `test` script is a no-op (`"echo \"No test specified\" && exit 0"`), and no `*.spec.js`/`*.test.js` files exist
-  under `src/frontend/src`.
-- **AC3's real-behavior citations**: `BookingService.cancelBookingAsParent`'s binary `refundEligible` computation
-  (`:657-660`) and `CancellationRefundService.onBookingCancelledByParent`'s full-or-nothing read of it (`:36-53`)
-  match exactly. The replacement bullet's retained claims about coach-initiated cancellation, coach no-show, and
-  player no-show were independently checked against `onBookingCancelledByCoach`/`onCoachNoShow`/`onPlayerNoShow`
-  (`:56-134`) and are still accurate: both coach-side events always issue a full refund/pack restore, and player
-  no-show forfeits fully with no refund action — so AC3's replacement text doesn't introduce a new inaccuracy while
-  fixing the parent-cancellation tiering.
-- **Business-docs table** (`money/index.html:139-148`) independently confirmed still accurate against the same
-  binary rule, and the only other `PARTIAL`-pattern hits in that file (`:151,153,156`) all fall inside the one
-  callout AC3 replaces — no leftover stale text there.
-- **`deferred-work.md` line citations**: `:1543-1545` (skillars-deferred-33 docs item) and `:1552-1555` (the two
-  skillars-deferred-34 code-review findings) match exactly, including that both are already annotated
-  `[PICKED UP by skillars-deferred-35 story creation, 2026-08-19]` from this story's own creation pass, consistent
-  with AC5's plan to convert them to `[CLOSED by skillars-deferred-35 ACn]`.
-
-None of the above needs changes.
+- `ApiAdvice`'s real path (`platform/security/api/ApiAdvice.java`, public class, `@RestControllerAdvice`) and
+  the ledger's stale `infrastructure.exception.ApiAdvice` citation.
+- The exception chain `OperationNotAllowedException extends AuthorizationException extends
+  ApplicationException`, and that `operationDeniedHandler` → `handleSecErrorAndReturnDTO(AuthorizationException,
+  ...)` → `logErrorAndReturnDTO` → `logError` is the actual call path.
+- `ApiAdvice.logError`'s body, including `entries(ctx)`/`Map.of("batch id", ..., "per-booking results",
+  ...)` at `BookingBatchService.java:298-300`, matches the story's quoted code exactly.
+- No `junit-platform.properties` exists and Failsafe's `argLine` sets no JUnit 5 parallel-execution
+  properties — the "sequential execution, no cross-test appender interference" claim holds.
+- `grep -n "getLogContext" src/test` returns exactly the two hits in `BookingBatchServiceTest.java` the
+  story cites (lines 721, 756) — confirmed both are covered by mutation-verified unit assertions across
+  *both* `acceptedIds.isEmpty()` branches (non-empty `results` on path (a), empty `results` on path (b)).
+  This also confirms AC1's IT deliberately targeting only path (b) (empty `results`) is not a coverage gap:
+  payload *content* correctness for non-empty `results` is already unit-tested elsewhere: AC1's IT exists
+  only to prove `ApiAdvice` actually reads and logs whatever `getLogContext()` returns over a real request,
+  which it does regardless of whether `results` is empty.
+- `grep -rn "failedResultByBatch" src/frontend/` returns exactly the two lines AC2 touches — the rename has
+  no other call site, and `resultByBatch` collides with no existing identifier in either touched file.
+- AC2's behavior-preservation table (accepted/failed/absent × `null`/`[]`/populated) checks out by
+  inspection, including the one subtle case worth naming: if a batch's `results` array ever contained a
+  duplicate `bookingId` with one entry accepted and another failed, the currently-shipped code and the
+  pre-refactor `Array.find()` version diverge (shipped code's `!r.accepted` prefilter can surface a *later*
+  failed duplicate that `Array.find()` would never have reached), while AC2's fix removes exactly that
+  prefilter and restores byte-for-byte positional parity with `Array.find()`. Not a shipped defect (batch
+  results don't produce duplicate `bookingId`s in practice) and not a finding, but confirms AC2's fix is
+  correct on this axis rather than merely "probably fine."
+- No automated test currently exists for `CoachBookingRequestsPage.vue`, so AC2's "verify by inspection"
+  requirement is not a regression in rigor — there was nothing pinning this behavior before either.
