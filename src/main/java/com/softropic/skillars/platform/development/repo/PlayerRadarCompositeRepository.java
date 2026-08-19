@@ -15,18 +15,20 @@ public interface PlayerRadarCompositeRepository extends JpaRepository<PlayerRada
     @Transactional
     @Query(nativeQuery = true, value = """
         INSERT INTO development.player_radar_composites
-            (player_id, skill_code, composite_score, entry_count, last_updated_at)
-        VALUES (:playerId, :skillCode, :compositeScore, :entryCount, NOW())
+            (player_id, skill_code, composite_score, entry_count, distinct_coach_count, last_updated_at)
+        VALUES (:playerId, :skillCode, :compositeScore, :entryCount, :distinctCoachCount, NOW())
         ON CONFLICT (player_id, skill_code)
         DO UPDATE SET composite_score = EXCLUDED.composite_score,
                       entry_count = EXCLUDED.entry_count,
+                      distinct_coach_count = EXCLUDED.distinct_coach_count,
                       last_updated_at = EXCLUDED.last_updated_at
         """)
     void upsertComposite(
         @Param("playerId") Long playerId,
         @Param("skillCode") String skillCode,
         @Param("compositeScore") BigDecimal compositeScore,
-        @Param("entryCount") int entryCount);
+        @Param("entryCount") int entryCount,
+        @Param("distinctCoachCount") int distinctCoachCount);
 
     List<PlayerRadarComposite> findByIdPlayerId(Long playerId);
 

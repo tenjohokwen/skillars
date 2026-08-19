@@ -20,9 +20,14 @@ export const deleteAvailabilityBlock = (id) =>
 
 export const createBookingRequest = (request) => api.post('/api/bookings/requests', request)
 
-export const acceptBooking = (id) => api.put(`/api/bookings/requests/${id}/accept`)
+// skillars-deferred-40: scoped to these calls only (not the shared `api` instance) — matches
+// getCoachBookingRequests's 20s timeout precedent. `undefined` is passed as the data arg so the
+// config object lands in the config slot, not the request-body slot.
+export const acceptBooking = (id) =>
+  api.put(`/api/bookings/requests/${id}/accept`, undefined, { timeout: 20000 })
 
-export const declineBooking = (id) => api.put(`/api/bookings/requests/${id}/decline`)
+export const declineBooking = (id) =>
+  api.put(`/api/bookings/requests/${id}/decline`, undefined, { timeout: 20000 })
 
 export const getParentBookings = () => api.get('/api/bookings/requests')
 
@@ -62,7 +67,9 @@ export const declineReschedule = (id, rescheduleId) => api.put(`/api/bookings/${
 export const duplicateNextWeek = (id) => api.post(`/api/bookings/${id}/duplicate-next-week`)
 export const getBatchConfig = () => api.get('/api/bookings/batches/config')
 export const createBatch = (data) => api.post('/api/bookings/batches', data)
-export const acceptAllBatch = (batchId) => api.post(`/api/bookings/batches/${batchId}/accept-all`)
+// skillars-deferred-40: scoped to this call only, same rationale as acceptBooking/declineBooking above.
+export const acceptAllBatch = (batchId) =>
+  api.post(`/api/bookings/batches/${batchId}/accept-all`, undefined, { timeout: 20000 })
 
 export const cancelBooking = (bookingId) => api.post(`/api/bookings/${bookingId}/cancel`)
 export const coachCancelBooking = (bookingId, cancelReason) =>

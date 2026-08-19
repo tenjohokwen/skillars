@@ -9,5 +9,6 @@ public record SkillRadarEntry(
     BigDecimal compositeScore,     // null if no assessments yet
     BigDecimal baselineScore,      // null if no baseline recorded yet
     Integer entryCount,            // total assessment rows; null if no assessments
+    Integer distinctCoachCount,    // distinct coaches who logged an assessment; null if no assessments
     Instant lastUpdatedAt          // null if no assessments
 ) {}

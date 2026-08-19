@@ -148,6 +148,19 @@ public class QuotaService implements QuotaProvider {
         log.debug("Quota decremented: ownerId={} bytes={}", ownerId, bytes);
     }
 
+    // skillars-deferred-40 AC4: bandwidth_used_bytes was never incremented anywhere. Real per-request
+    // metering isn't available from the provider (see PlaybackService.authorizePlayback's call site
+    // comment), so this charges an approximation — the video's own file size — to its owner on each
+    // playback authorization.
+    @Transactional
+    public void incrementBandwidthUsedBytes(String ownerId, long bytes) {
+        if (bytes <= 0) return;
+        jdbcTemplate.update(
+            "UPDATE main.video_quotas SET bandwidth_used_bytes = bandwidth_used_bytes + ? WHERE user_id = ?",
+            bytes, ownerId);
+        log.debug("Bandwidth incremented: ownerId={} bytes={}", ownerId, bytes);
+    }
+
     @Override
     public ConsistencyGuarantee getConsistencyGuarantee() {
         return ConsistencyGuarantee.STRICT;

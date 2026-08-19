@@ -40,6 +40,13 @@ public class RadarCompositeCalculationService {
 
         try {
             List<Object[]> aggregates = radarRepository.findAggregatesByPlayerAndSkills(playerId, parentId, skills);
+            List<Object[]> distinctCoachCounts =
+                radarRepository.findDistinctCoachCountsByPlayerAndSkills(playerId, parentId, skills);
+
+            Map<String, Integer> distinctCoachCountBySkill = new HashMap<>();
+            for (Object[] row : distinctCoachCounts) {
+                distinctCoachCountBySkill.put((String) row[0], ((Number) row[1]).intValue());
+            }
 
             Map<String, Map<AssessmentType, double[]>> bySkill = new HashMap<>();
             for (Object[] row : aggregates) {
@@ -73,10 +80,11 @@ public class RadarCompositeCalculationService {
 
                 BigDecimal compositeScore = BigDecimal.valueOf(composite)
                     .setScale(2, java.math.RoundingMode.HALF_UP);
-                compositeRepository.upsertComposite(playerId, skill, compositeScore, totalCount);
+                int distinctCoachCount = distinctCoachCountBySkill.getOrDefault(skill, 0);
+                compositeRepository.upsertComposite(playerId, skill, compositeScore, totalCount, distinctCoachCount);
                 baselineRepository.insertBaselineIfAbsent(playerId, skill, compositeScore);
-                log.debug("Composite updated: player={} skill={} score={} entries={}",
-                    playerId, skill, compositeScore, totalCount);
+                log.debug("Composite updated: player={} skill={} score={} entries={} distinctCoaches={}",
+                    playerId, skill, compositeScore, totalCount, distinctCoachCount);
             }
         } catch (Exception e) {
             log.error("Composite recalculation failed for player={} skills={} — composite is now stale",

@@ -55,11 +55,13 @@ class RadarCompositeCalculatorTest {
         rows.add(new Object[]{"PAC", "OBJECTIVE", 80.0, 1L});
         when(radarRepository.findAggregatesByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
             .thenReturn(rows);
+        when(radarRepository.findDistinctCoachCountsByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
+            .thenReturn(List.<Object[]>of(new Object[]{"PAC", 1L}));
 
         service.onRadarEntrySubmitted(new RadarEntrySubmittedEvent(PLAYER_ID, PARENT_ID, Set.of("PAC")));
 
         ArgumentCaptor<BigDecimal> scoreCaptor = ArgumentCaptor.forClass(BigDecimal.class);
-        verify(compositeRepository).upsertComposite(eq(PLAYER_ID), eq("PAC"), scoreCaptor.capture(), eq(1));
+        verify(compositeRepository).upsertComposite(eq(PLAYER_ID), eq("PAC"), scoreCaptor.capture(), eq(1), eq(1));
         assertThat(scoreCaptor.getValue()).isEqualByComparingTo("40.00");
     }
 
@@ -72,11 +74,13 @@ class RadarCompositeCalculatorTest {
         rows.add(new Object[]{"PAC", "COACH_EVALUATION",  60.0, 1L});
         when(radarRepository.findAggregatesByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
             .thenReturn(rows);
+        when(radarRepository.findDistinctCoachCountsByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
+            .thenReturn(List.<Object[]>of(new Object[]{"PAC", 1L}));
 
         service.onRadarEntrySubmitted(new RadarEntrySubmittedEvent(PLAYER_ID, PARENT_ID, Set.of("PAC")));
 
         ArgumentCaptor<BigDecimal> scoreCaptor = ArgumentCaptor.forClass(BigDecimal.class);
-        verify(compositeRepository).upsertComposite(eq(PLAYER_ID), eq("PAC"), scoreCaptor.capture(), eq(3));
+        verify(compositeRepository).upsertComposite(eq(PLAYER_ID), eq("PAC"), scoreCaptor.capture(), eq(3), eq(1));
         assertThat(scoreCaptor.getValue()).isEqualByComparingTo("73.00");
     }
 
@@ -87,11 +91,13 @@ class RadarCompositeCalculatorTest {
         rows.add(new Object[]{"PAC", "OBJECTIVE", 70.0, 2L});
         when(radarRepository.findAggregatesByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
             .thenReturn(rows);
+        when(radarRepository.findDistinctCoachCountsByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
+            .thenReturn(List.<Object[]>of(new Object[]{"PAC", 2L}));
 
         service.onRadarEntrySubmitted(new RadarEntrySubmittedEvent(PLAYER_ID, PARENT_ID, Set.of("PAC")));
 
         ArgumentCaptor<BigDecimal> scoreCaptor = ArgumentCaptor.forClass(BigDecimal.class);
-        verify(compositeRepository).upsertComposite(eq(PLAYER_ID), eq("PAC"), scoreCaptor.capture(), eq(2));
+        verify(compositeRepository).upsertComposite(eq(PLAYER_ID), eq("PAC"), scoreCaptor.capture(), eq(2), eq(2));
         assertThat(scoreCaptor.getValue()).isEqualByComparingTo("35.00");
     }
 
@@ -102,11 +108,13 @@ class RadarCompositeCalculatorTest {
         rows.add(new Object[]{"SHO", "MATCH_OBSERVATION", 50.0, 1L});
         when(radarRepository.findAggregatesByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("SHO")))
             .thenReturn(rows);
+        when(radarRepository.findDistinctCoachCountsByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("SHO")))
+            .thenReturn(List.<Object[]>of(new Object[]{"SHO", 1L}));
 
         service.onRadarEntrySubmitted(new RadarEntrySubmittedEvent(PLAYER_ID, PARENT_ID, Set.of("SHO")));
 
         ArgumentCaptor<BigDecimal> scoreCaptor = ArgumentCaptor.forClass(BigDecimal.class);
-        verify(compositeRepository).upsertComposite(eq(PLAYER_ID), eq("SHO"), scoreCaptor.capture(), eq(1));
+        verify(compositeRepository).upsertComposite(eq(PLAYER_ID), eq("SHO"), scoreCaptor.capture(), eq(1), eq(1));
         assertThat(scoreCaptor.getValue()).isEqualByComparingTo("15.00");
     }
 
@@ -117,9 +125,36 @@ class RadarCompositeCalculatorTest {
         rows.add(new Object[]{"SHO", "OBJECTIVE", 60.0, 1L});
         when(radarRepository.findAggregatesByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC", "SHO")))
             .thenReturn(rows);
+        when(radarRepository.findDistinctCoachCountsByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC", "SHO")))
+            .thenReturn(List.<Object[]>of(new Object[]{"PAC", 1L}, new Object[]{"SHO", 1L}));
 
         service.onRadarEntrySubmitted(new RadarEntrySubmittedEvent(PLAYER_ID, PARENT_ID, Set.of("PAC", "SHO")));
 
-        verify(compositeRepository, times(2)).upsertComposite(eq(PLAYER_ID), any(), any(), anyInt());
+        verify(compositeRepository, times(2)).upsertComposite(eq(PLAYER_ID), any(), any(), anyInt(), anyInt());
+    }
+
+    @Test
+    void onRadarEntrySubmitted_distinctCoachCount_reflectsUniqueCoachesNotRowCount() {
+        // 3 assessment rows for PAC, but findDistinctCoachCountsByPlayerAndSkills reports only 1
+        // distinct coach (e.g. one prolific coach logging 3 assessments) — distinctCoachCount must
+        // reflect the distinct-coach query's result, not the row-count-derived entryCount.
+        List<Object[]> rows = new ArrayList<>();
+        rows.add(new Object[]{"PAC", "OBJECTIVE", 80.0, 3L});
+        when(radarRepository.findAggregatesByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
+            .thenReturn(rows);
+        when(radarRepository.findDistinctCoachCountsByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
+            .thenReturn(List.<Object[]>of(new Object[]{"PAC", 1L}));
+
+        service.onRadarEntrySubmitted(new RadarEntrySubmittedEvent(PLAYER_ID, PARENT_ID, Set.of("PAC")));
+
+        verify(compositeRepository).upsertComposite(eq(PLAYER_ID), eq("PAC"), any(), eq(3), eq(1));
+
+        // Now simulate a second coach also assessing PAC — same 3 rows, but 2 distinct coaches.
+        when(radarRepository.findDistinctCoachCountsByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
+            .thenReturn(List.<Object[]>of(new Object[]{"PAC", 2L}));
+
+        service.onRadarEntrySubmitted(new RadarEntrySubmittedEvent(PLAYER_ID, PARENT_ID, Set.of("PAC")));
+
+        verify(compositeRepository).upsertComposite(eq(PLAYER_ID), eq("PAC"), any(), eq(3), eq(2));
     }
 }

@@ -65,6 +65,7 @@ public class RadarDisplayService {
                 comp != null ? comp.getCompositeScore() : null,
                 base != null ? base.getBaselineScore()  : null,
                 comp != null ? comp.getEntryCount()     : null,
+                comp != null ? comp.getDistinctCoachCount() : null,
                 comp != null ? comp.getLastUpdatedAt()  : null
             );
         }).toList();

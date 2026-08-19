@@ -363,7 +363,7 @@ export const useBookingStore = defineStore('booking', () => {
       return true
     } catch (e) {
       if (requestId !== coachRequestsSequence) {
-        console.warn('Discarding failure from a superseded loadCoachBookingRequests call:', e)
+        console.warn('Discarding failure from a superseded loadCoachBookingRequests call:', e?.message || e)
         return true
       }
       coachRequestsError.value = e
