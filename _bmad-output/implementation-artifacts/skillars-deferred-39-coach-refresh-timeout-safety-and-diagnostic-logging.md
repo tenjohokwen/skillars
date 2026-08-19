@@ -8,10 +8,12 @@ Status: ready-for-dev
 
 As an engineer operating this platform,
 I want `loadCoachBookingRequests()` to never leave `coachRequestsLoading` stuck forever when the
-latest-issued request hangs, and to leave a diagnostic trace when a superseded call's failure is
-silently discarded,
+latest-issued request hangs, the coach to be told (not silently shown an empty inbox) when that hung
+initial load times out, and a diagnostic trace left when a superseded call's failure is silently
+discarded,
 so that `skillars-deferred-38`'s request-sequencing guard is robust against real network conditions
-instead of only the well-behaved case, and its edge cases are observable when they fire.
+instead of only the well-behaved case, and its edge cases are observable when they fire — for the coach,
+not just in the console.
 
 ### Why this story exists
 
@@ -73,23 +75,48 @@ Considered and rejected during story creation:
   `skillars-deferred-38` didn't weigh.
 - **Standing up frontend test infrastructure to cover this guard** — see line 1574 analysis above;
   explicitly out of scope for this story.
+- **Applying the same per-call timeout to the three sibling calls this same page also gates on loading
+  flags** (`handleAccept`→`approveBooking`→`acceptBooking`, `handleDecline`→`rejectBooking`→
+  `declineBooking`, `handleAcceptAll`→`handleAcceptAllBatch`→`acceptAllBatch`) — all share the identical
+  "zero timeout precedent, stuck-forever-if-hung" risk class this story fixes for
+  `getCoachBookingRequests()` (story-review Finding 2). Left out of this story's scope, which targets
+  only `deferred-work.md` lines 1573/1575, both specific to `loadCoachBookingRequests()`; filed as a new
+  ledger item (AC4) instead of silently expanding scope or leaving it unrecorded.
 
 ## Acceptance Criteria
 
-1. **AC1 — Timeout-safe `getCoachBookingRequests()` call.** `getCoachBookingRequests()`
-   (`src/frontend/src/api/booking.api.js:29`) passes a `timeout: 20000` (20s) axios config option on its
-   `api.get('/api/bookings/requests/coach')` call — scoped to this one endpoint only, not the shared
-   `api` instance. When the request exceeds 20s with no response, axios rejects with an `ECONNABORTED`
-   timeout error, which flows into `loadCoachBookingRequests()`'s existing `catch` block unchanged: if
-   this was still the latest-issued call (`requestId === coachRequestsSequence`), `coachRequestsError`
-   is set, the function returns `false`, and the `finally` block clears `coachRequestsLoading` — no
-   stuck spinner. If a newer call had already superseded it, the existing supersession check discards it
-   as today (see AC2 for its logging). No change to `loadCoachBookingRequests()` itself is required for
-   AC1 — the fix is entirely in the API call's config. Document the 20s choice with a one-line comment at
-   the call site (no established timeout precedent exists elsewhere in this codebase to match against;
-   20s is chosen as generous enough to never fire under normal backend latency while still bounding the
-   worst case, consistent with this ledger item's own framing of the risk as "low-probability... requires
-   a genuinely hung HTTP request, not just a slow one").
+1. **AC1 — Timeout-safe `getCoachBookingRequests()` call, with an observable failure on initial mount.**
+   (a) `getCoachBookingRequests()` (`src/frontend/src/api/booking.api.js:29`) passes a `timeout: 20000`
+   (20s) axios config option on its `api.get('/api/bookings/requests/coach')` call — scoped to this one
+   endpoint only, not the shared `api` instance. When the request exceeds 20s with no response, axios
+   rejects with an `ECONNABORTED` timeout error, which flows into `loadCoachBookingRequests()`'s existing
+   `catch` block unchanged: if this was still the latest-issued call (`requestId ===
+   coachRequestsSequence`), `coachRequestsError` is set, the function returns `false`, and the `finally`
+   block clears `coachRequestsLoading` — no stuck spinner. If a newer call had already superseded it, the
+   existing supersession check discards it as today (see AC2 for its logging). No change to
+   `loadCoachBookingRequests()` itself is required for (a) — the fix is entirely in the API call's config.
+   Document the 20s choice with a one-line comment at the call site (no established timeout precedent
+   exists elsewhere in this codebase to match against; 20s is chosen as generous enough to never fire
+   under normal backend latency while still bounding the worst case, consistent with this ledger item's
+   own framing of the risk as "low-probability... requires a genuinely hung HTTP request, not just a slow
+   one").
+   (b) **`CoachBookingRequestsPage.vue`'s `onMounted` hook** (currently `onMounted(() =>
+   bookingStore.loadCoachBookingRequests())`, fire-and-forget, no `await`) is changed to `async` and
+   awaits the call, passing its return value through the page's existing `notifyIfRequestsStale()` helper
+   (line 167) — the identical pattern the four other call sites (`handleAccept`, `handleDecline`,
+   `handleAcceptAll`, and their internal `approveBooking`/`rejectBooking` calls) already use. **Why this
+   is part of AC1, not a separate concern:** without it, (a)'s own fix is incomplete — a hung *initial*
+   load, the exact case (a) exists to bound, resolves after the 20s timeout into the empty-array default
+   state (`coachBookingRequests`/`coachBatchGroups` both default to `ref([])`,
+   `booking.store.js:117-118`, never written on the `catch` path), which `CoachBookingRequestsPage.vue`'s
+   template cannot distinguish from a genuinely empty inbox (there is no third "load failed" render
+   branch, and `coachRequestsError` is read by zero components — see the CONTRACT comment at
+   `booking.store.js:311`). Today that same hung load leaves the coach staring at an honest infinite
+   spinner; after (a) alone, it would silently resolve into "you have no booking requests," with no
+   toast, no banner, no recovery path — a false negative that could hide a real pending request, and a
+   worse failure mode than the one being fixed. (b) closes this using the page's own pre-existing
+   `notifyIfRequestsStale` pattern — no new UI, no new state, no new template branch. (story-review
+   Finding 1)
 
 2. **AC2 — Diagnostic trace for discarded superseded-call failures.** In `loadCoachBookingRequests()`'s
    `catch` block (`booking.store.js:364-367`), the `if (requestId !== coachRequestsSequence) return true`
@@ -100,15 +127,31 @@ Considered and rejected during story creation:
 
 3. **AC3 — Ledger hygiene.** In `deferred-work.md`:
    - Line 1573 (stuck spinner) annotated `[CLOSED by skillars-deferred-39 AC1]` with a closure note
-     describing the per-call timeout mechanism and why a global timeout was rejected.
+     describing the per-call timeout mechanism, the mount-toast fix, and why a global timeout was
+     rejected.
    - Line 1575 (no diagnostic trace) annotated `[CLOSED by skillars-deferred-39 AC2]` with a closure note
      describing the added `console.warn`.
    - Line 1574 (no test coverage — standing repo-wide gap) left **untouched**, exactly as the prior four
      stories left it.
 
+4. **AC4 — File the sibling stuck-spinner gap as a new ledger item.** `CoachBookingRequestsPage.vue`
+   gates three more per-action loading flags on three more un-timed-out `api` calls sharing the exact
+   same "zero timeout precedent, hangs forever if the request hangs" risk class AC1 fixes for
+   `getCoachBookingRequests()`: `handleAccept` → `approveBooking` → `acceptBooking`
+   (`booking.api.js:23`), `handleDecline` → `rejectBooking` → `declineBooking` (`booking.api.js:25`), and
+   `handleAcceptAll` → `handleAcceptAllBatch` → `acceptAllBatch` (`booking.api.js:62`) — each sets its
+   `try`-block loading flag and only clears it in the matching `finally`
+   (`CoachBookingRequestsPage.vue:173-192` etc.), structurally identical to the bug AC1 fixes, just
+   gating a per-row/per-batch button instead of the whole-page spinner. Deliberately out of this story's
+   scope (which targets only `deferred-work.md` lines 1573/1575, both specific to
+   `loadCoachBookingRequests()`) — add a new `deferred-work.md` section (`## Deferred from: story-review
+   of skillars-deferred-39-coach-refresh-timeout-safety-and-diagnostic-logging (2026-08-19)`) naming
+   these three sibling gaps, so they're on record rather than silently left unexamined. (story-review
+   Finding 2)
+
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add scoped request timeout (AC: #1)
+- [ ] Task 1: Add scoped request timeout + observable mount failure (AC: #1)
   - [ ] 1.1 In `src/frontend/src/api/booking.api.js`, change
     `export const getCoachBookingRequests = () => api.get('/api/bookings/requests/coach')` to pass a
     second argument `{ timeout: 20000 }`, with a one-line comment explaining the 20s choice and that it
@@ -117,6 +160,12 @@ Considered and rejected during story creation:
   - [ ] 1.2 Confirm by inspection that `loadCoachBookingRequests()`'s `catch` block
     (`booking.store.js:364-367`) needs no code change to correctly handle a timeout error — it is just
     another rejected promise, identical in shape to any other axios error already handled there.
+  - [ ] 1.3 In `src/frontend/src/pages/coach/CoachBookingRequestsPage.vue`, change the `onMounted` hook
+    (line 295-297) from `onMounted(() => { bookingStore.loadCoachBookingRequests() })` to
+    `onMounted(async () => { notifyIfRequestsStale(await bookingStore.loadCoachBookingRequests()) })`,
+    matching the four other call sites' existing pattern exactly. No other change to this file.
+  - [ ] 1.4 Run `npx eslint src/pages/coach/CoachBookingRequestsPage.vue` from `src/frontend` and confirm
+    clean.
 - [ ] Task 2: Log discarded superseded-call failures (AC: #2)
   - [ ] 2.1 In `booking.store.js`'s `loadCoachBookingRequests()` `catch` block, change line 365 from
     `if (requestId !== coachRequestsSequence) return true` to first `console.warn(...)` the discard (with
@@ -125,12 +174,15 @@ Considered and rejected during story creation:
     only the `catch` branch, matching line 1575's own scope ("discarded superseded-call **failures**").
   - [ ] 2.2 Run `npx eslint src/stores/booking.store.js src/api/booking.api.js` from
     `src/frontend` and confirm clean.
-- [ ] Task 3: Ledger hygiene (AC: #3)
+- [ ] Task 3: Ledger hygiene (AC: #3, #4)
   - [ ] 3.1 Annotate `deferred-work.md` line 1573 `[CLOSED by skillars-deferred-39 AC1]` with a closure
-    note.
+    note covering both the timeout and the mount-toast fix.
   - [ ] 3.2 Annotate `deferred-work.md` line 1575 `[CLOSED by skillars-deferred-39 AC2]` with a closure
     note.
   - [ ] 3.3 Leave line 1574 untouched.
+  - [ ] 3.4 Add a new `## Deferred from: story-review of
+    skillars-deferred-39-coach-refresh-timeout-safety-and-diagnostic-logging (2026-08-19)` section to
+    `deferred-work.md` naming the three sibling stuck-spinner gaps (AC4).
 
 ## Dev Notes
 
@@ -139,15 +191,21 @@ Considered and rejected during story creation:
   both ACs by inspection and `npx eslint`, matching those stories' own convention. Do not attempt to add
   test infrastructure as part of this story — that is explicitly out of scope (see "Considered and
   rejected" above).
-- **AC1 does not touch `loadCoachBookingRequests()`** — only `booking.api.js`. Do not add timeout-
-  specific branching logic inside the store function; a timeout is just another axios rejection and the
-  existing `catch` block already handles arbitrary errors generically via `coachRequestsError.value = e`.
+- **Neither AC1(a) nor AC1(b) touches `loadCoachBookingRequests()` itself** — (a) is a `booking.api.js`
+  config change, (b) is a `CoachBookingRequestsPage.vue` call-site change. Do not add timeout-specific
+  branching logic inside the store function; a timeout is just another axios rejection and the existing
+  `catch` block already handles arbitrary errors generically via `coachRequestsError.value = e`.
 - **AC2 touches only the `catch` block's supersession check, not the `try` block's** (line 342). The
   ledger item (line 1575) is specifically about discarded *failures*; a discarded *success* (line 342) is
   not a failure and logging it would be noise on the normal, expected, non-error path of an out-of-order
   response.
 - `getCoachBookingRequests()` is called from exactly one place in `booking.store.js`
   (`loadCoachBookingRequests()`, line 341) — no other caller is affected by the timeout addition.
+- **AC1(b)'s `onMounted` change must match the existing `notifyIfRequestsStale`/other-call-site pattern
+  exactly** — do not invent a new toast message, new error branch, or new template state. The helper
+  already exists at `CoachBookingRequestsPage.vue:167` and already handles `refreshed === false` by
+  notifying `booking.errors.listMayBeStale`; `onMounted` just needs to become `async` and pass the
+  awaited return value through it, identically to `handleAccept`/`handleDecline`/`handleAcceptAll`.
 - The shared axios response interceptor (`boot/axios.js:112-179`) already logs 401/403/5xx/network
   errors generically and re-rejects; a timeout error has no `error.response` (axios sets
   `error.code === 'ECONNABORTED'` with no HTTP response), so it falls into the interceptor's existing
@@ -159,12 +217,14 @@ Considered and rejected during story creation:
 
 ### Project Structure Notes
 
-- `src/frontend/src/api/booking.api.js` — API layer, one-line change (AC1).
+- `src/frontend/src/api/booking.api.js` — API layer, one-line change (AC1a).
+- `src/frontend/src/pages/coach/CoachBookingRequestsPage.vue` — `onMounted` hook only, matching an
+  existing pattern already used four times elsewhere in the same file (AC1b).
 - `src/frontend/src/stores/booking.store.js` — Pinia store, one-line change inside an existing function
   (AC2). No new functions, no new state.
-- `_bmad-output/implementation-artifacts/deferred-work.md` — ledger hygiene (AC3).
-- No new files. No `boot/axios.js` change. No `CoachBookingRequestsPage.vue` change — this story is
-  entirely inside the store/API layer, invisible to callers.
+- `_bmad-output/implementation-artifacts/deferred-work.md` — ledger hygiene, two closures + one new
+  section (AC3, AC4).
+- No new files. No `boot/axios.js` change.
 
 ### References
 
@@ -180,6 +240,13 @@ Considered and rejected during story creation:
 - [Source: `_bmad-output/implementation-artifacts/skillars-deferred-38-coach-refresh-request-sequencing-guard.md`
   — the story whose code review filed all three line-1573/1574/1575 items; its own
   `AbortController`/debounce rejection rationale is not revisited here]
+- [Source: `src/frontend/src/pages/coach/CoachBookingRequestsPage.vue` lines 5-19 (template render
+  order), 160-171 (`notifyIfRequestsStale`), 173-192, 194-206, 246-293 (the four existing call sites
+  AC1b/AC4 reference), 295-297 (`onMounted`, AC1b's target)]
+- [Source: `src/frontend/src/api/booking.api.js` lines 23, 25, 62 — `acceptBooking`, `declineBooking`,
+  `acceptAllBatch`, the three sibling un-timed-out calls AC4 files as a new ledger item]
+- [Source: `_bmad-output/implementation-artifacts/story-review.md` — this story's pre-implementation
+  review; Finding 1 (High) drove AC1b, Finding 2 (Medium) drove AC4]
 
 ## Dev Agent Record
 
@@ -196,3 +263,4 @@ Considered and rejected during story creation:
 | Date | Change |
 |---|---|
 | 2026-08-19 | Story created via bmad-create-story: two-item story (ledger mined thin of decision-free candidates for the sixth pass in a row; of the three items filed by `skillars-deferred-38`'s own code review, two — the stuck-spinner timeout gap and the missing diagnostic trace for discarded failures — are genuine, narrow, groupable candidates; the third, standing repo-wide absence of frontend test infrastructure, is an infrastructure-scale decision left alone exactly as the prior four stories left it). Adds a 20s per-call timeout to `getCoachBookingRequests()` (not the shared axios instance) so a hung latest-issued request can no longer leave `coachRequestsLoading` stuck forever, and a `console.warn` in `loadCoachBookingRequests()`'s catch block so a discarded superseded-call failure leaves a trace instead of vanishing silently. |
+| 2026-08-19 | Story review (`story-review.md`) found two issues in the draft. **Finding 1 (High):** AC1's timeout, as originally scoped, fixed the stuck-spinner *symptom* but turned a hung *initial-mount* load into a worse, silent failure — `onMounted` calls `loadCoachBookingRequests()` fire-and-forget, so after the 20s timeout the coach would see a false "no booking requests" empty state with no toast and no recovery path, since the template has no third "load failed" branch and `coachRequestsError` is read by zero components. Fixed rather than merely documented: AC1 split into (a) the timeout and (b) making `onMounted` `async` and routing its return value through the page's own pre-existing `notifyIfRequestsStale()` helper — the identical pattern the four other call sites already use. **Finding 2 (Medium):** the same "zero timeout precedent, hangs forever" risk class AC1 fixes for `getCoachBookingRequests()` also applies, unaddressed, to three sibling calls this same page gates loading flags on (`acceptBooking`, `declineBooking`, `acceptAllBatch`) — left out of this story's scope (it targets only `deferred-work.md` lines 1573/1575) but not silently: new AC4 files a fresh ledger item naming all three so the gap is on record, matching how line 1574's test-infra gap already gets an explicit accepted-tradeoff writeup rather than silence. Story now has 4 ACs; `CoachBookingRequestsPage.vue` added to the touched-files list. |

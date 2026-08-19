@@ -1,124 +1,134 @@
-# Senior Dev Review: skillars-deferred-38 (Coach-Booking-Requests Refresh Request-Sequencing Guard)
+# Story Review: skillars-deferred-39-coach-refresh-timeout-safety-and-diagnostic-logging
 
-Reviewed: `_bmad-output/implementation-artifacts/skillars-deferred-38-coach-refresh-request-sequencing-guard.md`
-Method: every factual claim in the story was re-verified against current code (not taken on the story's word) —
-all seven call sites of `loadCoachBookingRequests()` were located and read directly, the existing CONTRACT
-comment was read in full, and the mechanism was traced through every combination of call-order vs.
-resolve-order for two overlapping calls.
+Reviewed: 2026-08-19
+Scope: pre-implementation audit of the story spec (`Status: ready-for-dev`, no code changed yet) against
+current code at `src/frontend/src/stores/booking.store.js`, `src/frontend/src/api/booking.api.js`,
+`src/frontend/src/boot/axios.js`, `src/frontend/src/pages/coach/CoachBookingRequestsPage.vue`, and
+`_bmad-output/implementation-artifacts/deferred-work.md`.
 
-The story's core mechanism (AC1) is sound: a monotonically-increasing sequence counter, captured
-synchronously before the function's first `await`, correctly makes call-issuance order (not resolve order)
-authoritative, and is a no-op in the non-concurrent case. One real gap survived verification; it was folded
-into the story before finalizing rather than left for `dev-story` to discover.
-
-**Status: Findings 1 and 2 fixed in the story (2026-08-19).** A second review pass caught that Finding 1's own
-fix (rewording the shared "RETURNS ITS OWN OUTCOME" sentence) broke accuracy for `loadCoachSchedule`, which
-shares that sentence with `loadCoachBookingRequests` but gets no superseded-call guard in this story. The net
-result, after both passes: the shared sentence at `:312` is left completely untouched; the superseded-call
-semantics live only in the new `loadCoachBookingRequests`-specific paragraph, which now also carries an
-explicit contrast to `loadCoachSchedule` so a reader can't assume the guarantee applies there too. Task 1
-updated to match both times.
+**Fact-checks that passed:** line numbers 1573/1574/1575 in `deferred-work.md` match the story's quotes
+exactly; `grep -c "\[CLOSED"` = 105, `grep -c "\[PICKED UP"` = 0 as claimed; `getCoachBookingRequests()`
+has exactly one caller (`booking.store.js:341`); no existing axios-request-timeout precedent exists
+anywhere in `src/frontend/src`; the `catch` block quoted at `booking.store.js:364-367` matches current
+code verbatim; `video.store.js:189,210` do use the `console.warn('<message>:', err)` shape cited as
+precedent. The story's own factual groundwork is accurate — no false positives filed against it.
 
 ---
 
-## Finding 1 (Medium, confirmed): the original draft's "do not reword any existing CONTRACT sentence" instruction contradicted its own required code
+## Finding 1 (High): AC1's timeout turns a hung *initial* load into a silently wrong "empty inbox" state, not an error state
 
-**Where:** AC1's required-code block and Task 1, first draft.
+**What the story claims:** AC1's rationale frames the 20s timeout purely as a fix for the stuck-spinner
+symptom — the request rejects, `coachRequestsError` is set, `coachRequestsLoading` clears, "no stuck
+spinner." Nothing in the story's ACs, Dev Notes, or "Considered and rejected" section examines what the
+page actually renders once that spinner clears.
 
-The first draft added a new paragraph to the CONTRACT comment describing the sequencing guarantee, but left
-the existing sentence "Each therefore RETURNS ITS OWN OUTCOME: true if this invocation refreshed, false if it
-failed" untouched, and Task 1 explicitly instructed "do not remove or reword any existing CONTRACT sentence."
+**What actually happens on the case AC1 exists to fix (a hung *initial mount* load):**
+- `coachBookingRequests` and `coachBatchGroups` both default to `ref([])`
+  (`booking.store.js:117-118`) and are never written to on the `catch` path — only the `try` path
+  (lines 341-363) populates them.
+- `CoachBookingRequestsPage.vue`'s `onMounted` hook (line 296) calls
+  `bookingStore.loadCoachBookingRequests()` completely fire-and-forget — no `await`, no `.then`, no
+  `notifyIfRequestsStale()` — unlike all four other call sites (`handleAccept`, `handleDecline`,
+  `handleAcceptAll`, and their internal `approveBooking`/`rejectBooking` calls), which do check the
+  return value and toast `booking.errors.listMayBeStale` on failure.
+- The template's rendering order (`CoachBookingRequestsPage.vue:5-19`) is: spinner while
+  `coachRequestsLoading`, else **"inbox empty" if both arrays have length 0**, else the populated list.
+  There is no third branch for "load failed." `coachRequestsError` is read by zero components (the
+  CONTRACT comment at `booking.store.js:311` says this explicitly and is accurate).
 
-That instruction is wrong given what AC1's own code does: once the guard ships, a **superseded** call also
-returns `true`, despite not having refreshed anything itself — the existing sentence's literal claim ("true if
-this invocation refreshed") stops precisely describing the new behavior. This is not a correctness bug in the
-shipped code (the AC1 rationale on why `true` is the right return value for a superseded call is sound — a
-`false` would produce a spurious staleness toast on the older of two concurrent calls even when the newer one
-lands fine), but leaving the comment's wording unchanged would make it actively misleading about what `true`
-now guarantees, for the next reader who has no reason to know a superseded call exists — the same category of
-"is the doc comment still true after this diff" question `skillars-deferred-38`'s own predecessor stories treat
-seriously (`skillars-deferred-31`'s CONTRACT-comment addition, `skillars-deferred-37`'s two-decision CONTRACT
-extension).
+So: today, a hung initial load leaves the coach staring at a spinner forever — clearly broken, but at
+least honestly signaling "something is wrong, don't trust this." After AC1, the same hung request
+resolves after 20s into the empty-array default state, which the template cannot distinguish from a
+genuinely empty inbox. The coach sees "you have no booking requests" with **no toast, no banner, no
+console message the user can see** — a false negative that could cause a real pending request to be
+missed entirely, and it is unrecoverable without a manual page reload (there is no retry affordance).
+This is arguably a worse failure mode than the one being fixed, and it's the exact scenario AC1's own
+motivating case (a genuinely hung latest-issued call) drives the app into.
 
-**Applied:** AC1's required code now explicitly rewords that one sentence — "true if this invocation refreshed
-OR was itself superseded by a newer call ... false only if it failed and was not superseded" — leaving every
-other existing CONTRACT sentence untouched, and Task 1 now names this as the one sentence that must change
-rather than forbidding all rewording.
+Note this false-empty-state bug is not newly introduced by this story — it already exists today for any
+initial-mount failure (5xx, network-down, etc.), since none of those get a toast either. But AC1 is what
+makes the *timeout* case — previously invisible behind an infinite spinner — actually land in it, which
+is precisely the scenario this story sets out to make "robust" and "observable." As written, the story
+does neither for this specific, foreseeable path.
 
----
+**Suggested handling:** at minimum, the story should say explicitly that this tradeoff exists and is
+accepted (matching this ledger's pattern of naming tradeoffs rather than silently absorbing them). A
+stronger fix would have mount check `loadCoachBookingRequests()`'s return value and toast the same
+`booking.errors.listMayBeStale` warning the other four call sites already use — a small, low-risk,
+in-pattern addition that doesn't require distinguishing "error" from "empty" in the template. Either way,
+this should be a conscious decision recorded in the story, not an unexamined side effect.
 
-## Checked, no issue found (to save the next reader re-litigating these)
+**Evidence:** `booking.store.js:117-119,296(via CoachBookingRequestsPage.vue),311,341-367`;
+`CoachBookingRequestsPage.vue:5-19,167-171,296`.
 
-- **Increment-before-first-`await` ordering:** confirmed JavaScript runs all synchronous code up to a
-  function's first `await` without yielding, so two calls issued in the same tick (e.g. a click handler and a
-  watcher firing back-to-back) cannot interleave their `++coachRequestsSequence` reads — issuance order and
-  sequence-number order are guaranteed to agree. No lock is needed.
-- **Resolve-order independence:** traced all four orderings of two overlapping calls (older-issued
-  resolves-first-success, resolves-last-success, resolves-first-failure, resolves-last-failure, crossed with
-  the newer call's own success/failure) — in every case the guard correctly lets only the call matching the
-  *current* `coachRequestsSequence` value commit state, regardless of which one's HTTP response actually lands
-  first.
-- **`finally` guard correctness:** without guarding `finally`, an older call resolving after a newer call has
-  already started (but not yet finished) would clear `coachRequestsLoading` mid-flight for the newer call,
-  causing a premature loading-spinner disappearance. The guard added in AC1 prevents this; verified against
-  Vue's `ref` semantics (plain boolean assignment, no special batching interaction with this guard).
-- **Interaction with `skillars-deferred-37`'s pruning block:** the pruning block sits textually after the new
-  `requestId` check inside the `try`, so a superseded call's early `return true` correctly skips pruning
-  entirely — it never reads or writes `batchAcceptResultsByBatch` using a stale `coachBatchGroups` snapshot.
-- **Interaction with `handleAcceptAllBatch`'s own writes to `batchAcceptResultsByBatch`:** those writes (the
-  `null` placeholder, then the response data) happen inside `handleAcceptAllBatch` itself, before it calls
-  `loadCoachBookingRequests()`, and are not gated by the new sequence counter — only the *pruning read* of
-  `batchAcceptResultsByBatch` inside `loadCoachBookingRequests()` is. If `handleAcceptAllBatch`'s own trailing
-  refresh call is later superseded by a newer call (e.g. a concurrent mount), the newer call's own pruning pass
-  — using its own freshly-loaded `coachBatchGroups` — is what actually decides the batch's fate, which is
-  exactly the correctness property this story exists to establish. `handleAcceptAllBatch`'s return value is
-  unaffected either way, since `skillars-deferred-37` AC2 already made it return its own local `results`
-  variable rather than re-reading the store.
-- **Scope boundary against the sibling ledger item (line 1568):** re-read `skillars-deferred-37`'s own AC1
-  rationale for "prune only on the success path" and confirmed it is an explicit, reasoned decision (mirrors
-  the pre-existing stale-on-failure CONTRACT), not an oversight — correctly left out of this story's ACs.
-- **Call-site count:** `grep -n "loadCoachBookingRequests()" src/frontend/src/stores/booking.store.js
-  src/frontend/src/pages/coach/CoachBookingRequestsPage.vue` returns exactly seven hits (three internal, four
-  in the page), matching the story's own count and requiring no edits at any of them, confirming the guard
-  really is fully internal to the one function.
+`[RESOLVED — story revised]` Took the stronger fix, not just the disclosure. AC1 split into (a) the
+timeout and (b) making `CoachBookingRequestsPage.vue`'s `onMounted` `async` and routing its return value
+through the page's own pre-existing `notifyIfRequestsStale()` helper, matching the four other call
+sites' pattern exactly. New Task 1.3/1.4. `CoachBookingRequestsPage.vue` added to Project Structure
+Notes and References.
 
 ---
 
-## Second-pass review (2026-08-19)
+## Finding 2 (Medium): the same "no timeout anywhere" risk this story fixes for the GET also applies, unaddressed, to three sibling calls on the same page
 
-Re-verified against current code a second time, specifically checking AC1's required CONTRACT-comment diff
-against everything else that comment block documents (not just against `loadCoachBookingRequests` itself,
-which the first pass already checked thoroughly). One new gap found; not yet applied to the story.
+**What the story claims:** the "Considered and rejected" section evaluates one alternative to the
+per-call timeout — a *global* timeout on the shared `api` axios instance — and rejects it for blast
+radius (would affect login, payments, video upload, etc., across the whole app). It does not evaluate
+the narrower middle ground: applying the same reasoning to the other network calls that back this exact
+page's own loading flags.
 
-### Finding 2 (Medium, confirmed): AC1's reworded sentence is shared with `loadCoachSchedule` and becomes false for it
+**What's actually on this page:** `CoachBookingRequestsPage.vue` gates three more per-action loading
+flags on three more un-timed-out axios calls, all going through the same `api` instance with the same
+"zero timeout precedent" the story itself established via its `grep -rn "timeout"` sweep:
+- `handleAccept` → `accepting.value[id]` → `bookingStore.approveBooking(id)` →
+  `acceptBooking(id)` (`booking.api.js:23`, no timeout)
+- `handleDecline` → `declining.value[id]` → `bookingStore.rejectBooking(id)` →
+  `declineBooking(id)` (`booking.api.js:25`, no timeout)
+- `handleAcceptAll` → `acceptingAll.value[batchId]` → `bookingStore.handleAcceptAllBatch(batchId)` →
+  `acceptAllBatch(batchId)` (`booking.api.js:62`, no timeout)
 
-**Where:** `booking.store.js:302-320` — the CONTRACT comment block AC1 edits sits above **both**
-`loadCoachBookingRequests` (`:321-353`) and `loadCoachSchedule` (`:355-368`), not above
-`loadCoachBookingRequests` alone. Its opening line says so explicitly: "CONTRACT — `loadCoachBookingRequests`
-and `loadCoachSchedule` below NEVER RETHROW." Every sentence in the block, including the one at `:312` AC1
-targets, is written as "Each ..." — a single shared description of both functions' return-value contract, not
-two separate comments that happen to be adjacent.
+Each of these sets its loading flag in a `try` and only clears it in the matching `finally`
+(`CoachBookingRequestsPage.vue:173-192` etc.) — if the underlying call hangs forever, that row's or
+batch's spinner is stuck forever, structurally the identical bug AC1 is fixing for
+`getCoachBookingRequests()`, just gating a per-row/per-batch button instead of the whole-page spinner.
 
-AC1's required diff rewords line 312 from "true if this invocation refreshed, false if it failed" to "true if
-this invocation refreshed **OR was itself superseded by a newer call** ... false only if it failed **and was
-not superseded**" — but leaves the sentence's "Each" subject untouched. That reword is correct for
-`loadCoachBookingRequests` (which is what this story is actually giving the new superseded-call semantics to)
-but becomes **false for `loadCoachSchedule`**, which this story's own "Considered and rejected" section
-explicitly declines to touch ("Applying the same guard to `loadParentBookings`/`loadCoachSchedule`" — rejected
-as scope creep). Confirmed by reading `loadCoachSchedule` directly (`:355-368`): it has no sequence counter, no
-`requestId` capture, and no superseded-call check anywhere in its body — its `true`/`false` return still means
-exactly what the *original*, unreworded sentence said. After AC1 ships as currently specified, the shared
-comment would claim `loadCoachSchedule` also "return[s] true ... if ... superseded by a newer call," which is
-not true of the shipped code — a reader debugging a stale-schedule-warning bug that goes looking at this
-comment would be told a mechanism exists that doesn't.
+This story is about to close ledger line 1573 ("stuck `coachRequestsLoading` spinner") as fully
+resolved, on the same page where three sibling stuck-spinner bugs of the same class remain completely
+open and unexamined. That's not necessarily wrong to leave out of a narrowly-scoped story — but the
+"Considered and rejected" section's framing ("a global timeout... an unreviewed blast-radius change far
+outside this story's scope... Rejected in favor of a per-call timeout") reads as if the per-call/global
+tradeoff was the only axis considered, when a same-page/same-risk-class scoping question was equally
+available and goes unmentioned.
 
-This is the same category of defect `story-review.md`'s own Finding 1 was about (a CONTRACT sentence no longer
-matching what the code guarantees after this diff) — it just wasn't visible until checking the sentence against
-the *second* function the shared comment describes, not only against `loadCoachBookingRequests` itself.
+**Suggested handling:** not necessarily a fix-it-here item, but worth an explicit line in "Considered and
+rejected" (or a follow-up ledger item) noting these three sibling gaps exist and were knowingly left
+alone, the same way line 1574's test-infra gap gets an explicit accepted-tradeoff writeup rather than
+silence.
 
-**Applied (2026-08-19):** the shared "Each ... RETURNS ITS OWN OUTCOME" sentence at `:312` is no longer
-reworded — AC1's required code now leaves it exactly as-is (accurate for both functions, unchanged from before
-this story) and instead adds one clarifying clause to the end of the already-planned
-`loadCoachBookingRequests`-specific paragraph ("...unlike `loadCoachSchedule`, which carries no such guard and
-whose true/false always reflects whether that specific call itself refreshed"). Task 1 updated to match: it now
-explicitly says not to reword `:312` or any other existing sentence, and explains why.
+**Evidence:** `booking.api.js:23,25,62`; `CoachBookingRequestsPage.vue:173-192,194-...,246-...`.
+
+`[RESOLVED — story revised]` Took the follow-up-ledger-item option. New AC4 + Task 3.4: file a new
+`deferred-work.md` section naming all three sibling gaps (`acceptBooking`, `declineBooking`,
+`acceptAllBatch`), explicitly left un-fixed and out of this story's scope. New bullet added to
+"Considered and rejected" for the same reason.
+
+---
+
+## Items checked and found accurate (no finding filed)
+
+- AC1's claim that a timeout error "flows into the existing `catch` block unchanged" — confirmed; a
+  timeout rejection has no `error.response`, matches the generic `coachRequestsError.value = e` handling
+  already in place.
+- AC1's claim that the shared response interceptor's `else if (error.request)` branch handles a timeout
+  without throwing — confirmed by reading `boot/axios.js:126-178`; a timeout error carries `error.request`
+  truthy and `error.response` undefined, landing in that branch as described. (The branch's message,
+  "Unable to reach server," is arguably a slight misnomer for a slow-not-unreachable server, but this is
+  pre-existing interceptor copy untouched by this story and already flagged for by-inspection
+  verification in Dev Notes — not a new gap.)
+- AC2's scoping to only the `catch` branch (not the `try` block's supersession discard at line 342) is
+  correctly reasoned — a discarded success is not a failure, logging it would be noise.
+- The claim that `getCoachBookingRequests()` has exactly one caller, so the timeout addition can't affect
+  any other call site — confirmed via `grep -rn "getCoachBookingRequests" src`.
+- Global `useLoading()`/`onLoadingChange` (`boot/axios.js`, `composables/useLoading.js`) also currently
+  gets stuck indefinitely by the same hung-request scenario and is likewise bounded by AC1's fix as a
+  side effect — a positive, not a gap; not called out by the story but doesn't need to be.
