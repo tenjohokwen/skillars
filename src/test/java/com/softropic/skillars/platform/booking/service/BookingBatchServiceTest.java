@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.booking.service;
 
+import com.softropic.skillars.platform.booking.contract.BatchAcceptResult;
 import com.softropic.skillars.platform.booking.contract.BatchBookingAcceptedEvent;
 import com.softropic.skillars.platform.booking.contract.BatchBookingCreatedResponse;
 import com.softropic.skillars.platform.booking.contract.BatchBookingRequestedEvent;
@@ -28,8 +29,10 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.http.HttpStatus;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -42,6 +45,9 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -505,6 +511,137 @@ class BookingBatchServiceTest {
         assertThat(batch.getStatus())
             .as("one of the two bookings in this batch is DECLINED — the batch is not fully accepted")
             .isEqualTo("PARTIALLY_ACCEPTED");
+    }
+
+    /**
+     * Deferred-34 AC1/AC5: acceptAll must report a per-booking result, not just an aggregate batch
+     * status. Booking A has no collision and accepts; booking B collides and fails —
+     * mutation-verified against resolveFailureCode.
+     */
+    @Test
+    void acceptAll_oneSlotCollides_returnsOneAcceptedOneFailedResult() {
+        BookingBatch batch = new BookingBatch();
+        batch.setId(BATCH_ID);
+        batch.setCoachId(COACH_ID);
+        batch.setParentId(PARENT_ID);
+        batch.setStatus("PENDING");
+        batch.setTotalAmount(BigDecimal.ZERO);
+        when(batchRepository.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+
+        CoachProfile coach = buildActiveCoach();
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+
+        Instant slotA = Instant.now().plus(3, ChronoUnit.DAYS);
+        Instant slotB = Instant.now().plus(4, ChronoUnit.DAYS);
+        Booking bookingA = new Booking();
+        bookingA.setId(UUID.randomUUID());
+        bookingA.setStatus("REQUESTED");
+        bookingA.setRequestedStartTime(slotA);
+        bookingA.setRequestedEndTime(slotA.plus(1, ChronoUnit.HOURS));
+        Booking bookingB = new Booking();
+        bookingB.setId(UUID.randomUUID());
+        bookingB.setStatus("REQUESTED");
+        bookingB.setRequestedStartTime(slotB);
+        bookingB.setRequestedEndTime(slotB.plus(1, ChronoUnit.HOURS));
+        when(bookingRepository.findByBatchIdAndStatus(BATCH_ID, "REQUESTED"))
+            .thenReturn(List.of(bookingA, bookingB));
+
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), eq(slotA), any(), any(), any()))
+            .thenReturn(List.of());
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), eq(slotB), any(), any(), any()))
+            .thenReturn(List.of(bookingInStatus("CONFIRMED")));
+
+        when(bookingRepository.findByBatchId(BATCH_ID))
+            .thenReturn(List.of(bookingInStatus("PAYMENT_PENDING"), bookingB));
+        when(batchRepository.save(any())).thenReturn(batch);
+        when(userRepository.findById(any())).thenReturn(Optional.empty());
+
+        List<BatchAcceptResult> results = service.acceptAll(BATCH_ID, COACH_USER_ID);
+
+        assertThat(results).hasSize(2);
+        assertThat(results).anySatisfy(r -> {
+            assertThat(r.bookingId()).isEqualTo(bookingA.getId());
+            assertThat(r.accepted()).isTrue();
+            assertThat(r.errorKey()).isNull();
+        });
+        assertThat(results).anySatisfy(r -> {
+            assertThat(r.bookingId()).isEqualTo(bookingB.getId());
+            assertThat(r.accepted()).isFalse();
+            assertThat(r.errorKey()).isEqualTo("booking.slotUnavailable");
+        });
+    }
+
+    /**
+     * resolveFailureCode's Javadoc states its ResponseStatusException case (the corrupted-status
+     * throw site, BookingService.readStatusOrThrow) must NEVER be special-cased to leak
+     * getReason() into the wire errorKey, and must fall through to "generic.unknown" like any
+     * other unmapped exception. This test pins that fallback with an executable assertion, per
+     * the skillars-deferred-34 code review's Blind Hunter finding that the invariant was
+     * previously enforced only by a code comment.
+     */
+    @Test
+    void acceptAll_oneBookingHasCorruptedStatus_returnsGenericUnknownNotRawMessage() {
+        BookingBatch batch = new BookingBatch();
+        batch.setId(BATCH_ID);
+        batch.setCoachId(COACH_ID);
+        batch.setParentId(PARENT_ID);
+        batch.setStatus("PENDING");
+        batch.setTotalAmount(BigDecimal.ZERO);
+        when(batchRepository.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+
+        CoachProfile coach = buildActiveCoach();
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+
+        // A second, unrelated booking that succeeds — acceptAll's acceptedIds.isEmpty() branch
+        // throws BATCH_NONE_ACCEPTED instead of returning results when every booking fails, which
+        // would defeat this test's own point; this mirrors the existing one-succeeds-one-fails
+        // fixture shape used by acceptAll_oneSlotCollides_returnsOneAcceptedOneFailedResult.
+        Instant okSlot = Instant.now().plus(4, ChronoUnit.DAYS);
+        Booking ok = new Booking();
+        ok.setId(UUID.randomUUID());
+        ok.setStatus("REQUESTED");
+        ok.setRequestedStartTime(okSlot);
+        ok.setRequestedEndTime(okSlot.plus(1, ChronoUnit.HOURS));
+
+        Instant corruptedSlot = Instant.now().plus(3, ChronoUnit.DAYS);
+        Booking corrupted = new Booking();
+        corrupted.setId(UUID.randomUUID());
+        corrupted.setStatus("REQUESTED");
+        corrupted.setRequestedStartTime(corruptedSlot);
+        corrupted.setRequestedEndTime(corruptedSlot.plus(1, ChronoUnit.HOURS));
+        when(bookingRepository.findByBatchIdAndStatus(BATCH_ID, "REQUESTED"))
+            .thenReturn(List.of(ok, corrupted));
+
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(), any(), any(), any()))
+            .thenReturn(List.of());
+
+        doNothing().when(bookingService).acceptAndInitiatePayment(eq(ok.getId()), any());
+        doThrow(new ResponseStatusException(HttpStatus.CONFLICT,
+            "Booking " + corrupted.getId() + " has unrecognised status 'FOOBAR'"))
+            .when(bookingService).acceptAndInitiatePayment(eq(corrupted.getId()), any());
+
+        when(bookingRepository.findByBatchId(BATCH_ID)).thenReturn(List.of(ok, corrupted));
+        when(batchRepository.save(any())).thenReturn(batch);
+        when(userRepository.findById(any())).thenReturn(Optional.empty());
+
+        List<BatchAcceptResult> results = service.acceptAll(BATCH_ID, COACH_USER_ID);
+
+        assertThat(results).hasSize(2);
+        assertThat(results).anySatisfy(r -> {
+            assertThat(r.bookingId()).isEqualTo(ok.getId());
+            assertThat(r.accepted()).isTrue();
+        });
+        assertThat(results).anySatisfy(r -> {
+            assertThat(r.bookingId()).isEqualTo(corrupted.getId());
+            assertThat(r.accepted()).isFalse();
+            assertThat(r.errorKey())
+                .as("must fall back to the stable generic code, never the raw ResponseStatusException reason")
+                .isEqualTo("generic.unknown")
+                .doesNotContain(corrupted.getId().toString())
+                .doesNotContain("FOOBAR");
+        });
     }
 
     /** Deferred-15 AC4: a suspended coach cannot accept a batch, and fails the batch as a whole. */

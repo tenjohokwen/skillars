@@ -1,14 +1,17 @@
 package com.softropic.skillars.platform.booking.service;
 
+import com.softropic.skillars.infrastructure.exception.ApplicationException;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.booking.contract.ActorRole;
+import com.softropic.skillars.platform.booking.contract.BatchAcceptResult;
 import com.softropic.skillars.platform.booking.contract.BatchBookingAcceptedEvent;
 import com.softropic.skillars.platform.booking.contract.BatchBookingCreatedResponse;
 import com.softropic.skillars.platform.booking.contract.BatchBookingRequestedEvent;
 import com.softropic.skillars.platform.booking.contract.BatchRuleViolationException;
 import com.softropic.skillars.platform.booking.contract.BatchSlot;
 import com.softropic.skillars.platform.booking.contract.BookingError;
+import com.softropic.skillars.platform.booking.contract.BookingStateTransitionException;
 import com.softropic.skillars.platform.booking.contract.CreateBatchRequest;
 import com.softropic.skillars.platform.booking.contract.TransitionContext;
 import com.softropic.skillars.platform.booking.repo.Booking;
@@ -231,7 +234,7 @@ public class BookingBatchService {
      * back into a single transaction, and do not describe it as all-or-nothing.
      */
     @Transactional
-    public void acceptAll(UUID batchId, Long coachUserId) {
+    public List<BatchAcceptResult> acceptAll(UUID batchId, Long coachUserId) {
         BookingBatch batch = batchRepository.findById(batchId)
             .orElseThrow(() -> new ResourceNotFoundException("Booking batch not found", "booking_batch"));
 
@@ -259,6 +262,7 @@ public class BookingBatchService {
 
         List<Booking> requestedBookings = bookingRepository.findByBatchIdAndStatus(batchId, "REQUESTED");
         List<UUID> acceptedIds = new ArrayList<>();
+        List<BatchAcceptResult> results = new ArrayList<>();
 
         for (Booking b : requestedBookings) {
             try {
@@ -272,8 +276,10 @@ public class BookingBatchService {
                 // PaymentLifecycleService; same remedy.
                 perBookingTx.executeWithoutResult(tx -> acceptOneBooking(b, coach.getId(), coachUserId));
                 acceptedIds.add(b.getId());
+                results.add(new BatchAcceptResult(b.getId(), true, null));
             } catch (Exception e) {
                 log.warn("Failed to accept booking {} in batch {}: {}", b.getId(), batchId, e.getMessage());
+                results.add(new BatchAcceptResult(b.getId(), false, resolveFailureCode(e)));
             }
         }
 
@@ -328,6 +334,29 @@ public class BookingBatchService {
             }));
 
         log.info("Batch accepted: batchId={} acceptedCount={}", batchId, acceptedIds.size());
+
+        return results;
+    }
+
+    /**
+     * Every exception acceptOneBooking can throw today is one of these two shapes, both mapped to a stable
+     * dot-separated wire code. Everything else — including ResponseStatusException, whose one live throw site
+     * (readStatusOrThrow) builds its message from the raw booking id and the corrupted DB status value, not a
+     * stable code — falls into the generic bucket below. Do NOT special-case ResponseStatusException.getReason()
+     * back in: it is free-text diagnostic detail, not something safe to expose on the wire as errorKey, and
+     * every consumer of this field (see failureReasonFor in CoachBookingRequestsPage.vue) is written assuming
+     * errorKey is always either a known code or "generic.unknown". The fallback exists so a future throw site
+     * added without updating this method still reports something identifiable rather than silently losing the
+     * failure reason — do not treat it as dead code.
+     */
+    private String resolveFailureCode(Exception e) {
+        if (e instanceof ApplicationException ae && ae.getErrorCode() != null) {
+            return ae.getErrorCode().getErrorCode();
+        }
+        if (e instanceof BookingStateTransitionException bste) {
+            return bste.getErrorCode();
+        }
+        return "generic.unknown";
     }
 
     /**

@@ -490,20 +490,26 @@ public class BookingService {
         }
 
         Set<UUID> batchIds = batchedByBatchId.keySet();
-        Map<UUID, Integer> requestedCountMap = batchIds.isEmpty() ? Map.of()
+        Map<UUID, String> batchStatusMap = batchIds.isEmpty() ? Map.of()
             : batchRepository.findAllById(batchIds).stream()
-                .collect(Collectors.toMap(BookingBatch::getId, BookingBatch::getRequestedCount));
+                .collect(Collectors.toMap(BookingBatch::getId, BookingBatch::getStatus));
 
         List<BatchGroupedBookingResponse> batchGroups = batchedByBatchId.entrySet().stream().map(entry -> {
             UUID batchId = entry.getKey();
             List<Booking> batchBookings = entry.getValue();
-            int totalCount = requestedCountMap.getOrDefault(batchId, batchBookings.size());
+            // Deliberately the count of bookings still REQUESTED right now (this method's own query
+            // already filters to status='REQUESTED'), not BookingBatch.requestedCount (the original
+            // batch size at creation) — the latter goes stale the moment any sibling booking is
+            // individually accepted/declined, showing a coach "Accept all 5 sessions" when only 2
+            // remain. See skillars-deferred-34 code review Decision 2.
+            int totalCount = batchBookings.size();
             String parentName = batchBookings.isEmpty() ? "" : resolveParentName(batchBookings.get(0).getParentId());
             List<BookingResponse> bookingResponses = batchBookings.stream().map(b -> {
                 String playerName = resolvePlayerName(b.getPlayerId());
                 return toResponse(b, coach.getDisplayName(), playerName, parentName, null, batchId, totalCount);
             }).toList();
-            return new BatchGroupedBookingResponse(batchId, parentName, totalCount, bookingResponses);
+            String status = batchStatusMap.getOrDefault(batchId, "PENDING");
+            return new BatchGroupedBookingResponse(batchId, parentName, totalCount, bookingResponses, status);
         }).toList();
 
         return new CoachInboxResponse(singles, batchGroups);

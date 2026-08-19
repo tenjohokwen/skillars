@@ -49,6 +49,13 @@
                 <q-item-label caption>{{
                   formatDateTime(booking.requestedStartTime, booking.canonicalTimezone)
                 }}</q-item-label>
+                <q-item-label
+                  v-if="failureReasonFor(group.batchId, booking.id)"
+                  caption
+                  class="text-negative"
+                >
+                  {{ failureReasonFor(group.batchId, booking.id) }}
+                </q-item-label>
               </q-item-section>
               <q-item-section side>
                 <div class="row q-gutter-xs">
@@ -72,7 +79,7 @@
               </q-item-section>
             </q-item>
           </q-list>
-          <q-card-actions>
+          <q-card-actions v-if="batchIsActionable(group.status)">
             <q-btn
               unelevated
               color="positive"
@@ -198,12 +205,41 @@ async function handleDecline(id) {
   }
 }
 
+function failureReasonFor(batchId, bookingId) {
+  const results = bookingStore.batchAcceptResultsByBatch[batchId] ?? []
+  const result = results.find((r) => r.bookingId === bookingId)
+  if (!result || result.accepted) return null
+  if (result.errorKey === 'booking.slotUnavailable') return t('booking.errors.slotUnavailable')
+  if (result.errorKey === 'booking.coachUnavailable') return t('booking.errors.coachUnavailable')
+  return t('booking.batch.itemNotAccepted')
+}
+
+// Sourced from the batch's real, server-persisted status (BatchGroupedBookingResponse.status),
+// not from this session's own batchAcceptResultsByBatch — a client-only ref would forget a known
+// failure on reload/new tab, leaving "Accept All" clickable again for a batch acceptAll always
+// rejects with booking.batchAlreadyProcessed. See skillars-deferred-34 code review Decision 1.
+function batchIsActionable(status) {
+  return status === 'PENDING'
+}
+
 async function handleAcceptAll(batchId) {
   acceptingAll.value[batchId] = true
   try {
     // handleAcceptAllBatch runs loadCoachBookingRequests() itself and returns that refresh's outcome.
     notifyIfRequestsStale(await bookingStore.handleAcceptAllBatch(batchId))
-    $q.notify({ message: t('booking.batch.acceptedAll'), type: 'positive' })
+    const results = bookingStore.batchAcceptResultsByBatch[batchId] ?? []
+    const failedCount = results.filter((r) => !r.accepted).length
+    if (failedCount > 0) {
+      $q.notify({
+        type: 'warning',
+        message: t('booking.batch.partiallyAccepted', {
+          accepted: results.length - failedCount,
+          total: results.length,
+        }),
+      })
+    } else {
+      $q.notify({ message: t('booking.batch.acceptedAll'), type: 'positive' })
+    }
   } catch (err) {
     const refreshed = await bookingStore.loadCoachBookingRequests()
     const errorKey = err?.response?.data?.errorMsg?.errorKey

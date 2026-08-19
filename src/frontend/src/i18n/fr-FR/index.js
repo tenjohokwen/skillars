@@ -1197,6 +1197,8 @@ export default {
       acceptAll: 'Accepter les {n} séances',
       acceptedAll: 'Toutes les séances ont été acceptées',
       acceptError: "Impossible d'accepter toutes les séances. Veuillez réessayer.",
+      partiallyAccepted: '{accepted} séances sur {total} acceptées. Voir ci-dessous pour le reste.',
+      itemNotAccepted: "N'a pas pu être acceptée.",
     },
     errors: {
       coachUnavailable: "Ce coach n'est actuellement pas disponible.",

@@ -1,0 +1,14 @@
+# Team override for bmad-dev-story. Committed to the repo — applies to
+# everyone running /bmad-dev-story on this project.
+#
+# See docs/validation-strategy.md for the policy itself and for notes on
+# how this override mechanism works.
+
+[workflow]
+
+# Appends to the default persistent_facts (which already loads
+# **/project-context.md). This adds our local test-validation policy so it
+# is loaded as standing context on every /bmad-dev-story activation.
+persistent_facts = [
+  "file:{project-root}/docs/validation-strategy.md",
+]
