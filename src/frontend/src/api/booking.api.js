@@ -26,7 +26,10 @@ export const declineBooking = (id) => api.put(`/api/bookings/requests/${id}/decl
 
 export const getParentBookings = () => api.get('/api/bookings/requests')
 
-export const getCoachBookingRequests = () => api.get('/api/bookings/requests/coach')
+// skillars-deferred-39: scoped to this call only (not the shared `api` instance) — 20s is generous
+// enough to never fire under normal backend latency while still bounding a genuinely hung request.
+export const getCoachBookingRequests = () =>
+  api.get('/api/bookings/requests/coach', { timeout: 20000 })
 
 export const getBookingById = (id) => api.get(`/api/bookings/${id}`)
 
