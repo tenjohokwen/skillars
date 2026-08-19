@@ -75,7 +75,7 @@
       <li><strong>Availability-gated booking:</strong> a request is only accepted if the requested time falls inside one of the coach's declared <code>CoachAvailabilityWindow</code>s and doesn't fall inside a <code>CoachAvailabilityBlock</code> (blackout).</li>
       <li><strong>Coach must be booking-ready:</strong> the coach profile must not be <code>SUSPENDED</code>, and the coach must have a fully configured Stripe destination account (<code>paymentGateway.isCoachPaymentReady</code>) before a request can even be created.</li>
       <li><strong>No two active bookings can hold overlapping time for the same coach:</strong> a coach can have at most one booking in <code>REQUESTED</code>/<code>ACCEPTED</code>/<code>PAYMENT_PENDING</code>/<code>CONFIRMED</code>/<code>UPCOMING</code>/<code>IN_PROGRESS</code>/<code>PAUSED</code> status per overlapping <code>[requestedStartTime, requestedEndTime)</code> range. Enforced both at request creation and again when the coach accepts (closing the race where two overlapping requests are accepted before either commits) — see <a href="#slot-exclusivity">Slot exclusivity</a> below.</li>
-      <li><strong>Cancellation refund windows (parent-initiated):</strong> <code>applyRefundLogic</code> stamps <code>Booking.refundEligibility</code> with <code>FULL</code> (&gt;24h), <code>PARTIAL</code> (6–24h) or <code>NONE</code> (&lt;6h). A coach-initiated cancellation is always <code>FULL</code>, a coach no-show <code>FULL</code>, a player no-show <code>NONE</code>. <strong>But see the gotcha below — that column is dead, and <code>PARTIAL</code> pays out nothing.</strong></li>
+      <li><strong>Cancellation refund windows (parent-initiated):</strong> <code>cancelBookingAsParent</code> computes a binary <code>refundEligible</code> flag — <code>true</code> only if payment was already captured (booking was <code>CONFIRMED</code>/<code>UPCOMING</code>) <em>and</em> the session start is more than 24h away; otherwise the payment is forfeited. There is no partial-refund tier. A coach-initiated cancellation is always a full refund, a coach no-show is always a full refund, a player no-show forfeits fully.</li>
       <li><strong>Reschedule limits:</strong> only bookings in <code>CONFIRMED</code> or <code>UPCOMING</code> status can be rescheduled, only one pending reschedule request is allowed per booking at a time, and the proposed time must be in the future.</li>
       <li><strong>Batch bookings:</strong> a parent can request up to a configured maximum number of slots (<code>booking.batch.maxSize</code>) against one coach in a single submission; the coach can accept the whole batch in one action, and the batch's aggregate status (<code>PENDING</code> / <code>PARTIALLY_ACCEPTED</code> / <code>FULLY_ACCEPTED</code> / <code>DECLINED</code>) rolls up automatically as individual bookings change status.</li>
       <li><strong>A pack-funded booking must resolve to a live pack at creation:</strong> if the request carries a <code>sessionPackPurchaseId</code>, <code>BookingService</code> loads that <code>payment.repo.SessionPackPurchase</code> and rejects the request unless the pack belongs to the parent, matches the coach, and still has unexpired credits. The credit itself is not deducted here — <code>payment</code> does that at settlement.</li>
@@ -343,7 +343,7 @@ sequenceDiagram
 
   Parent->>CancellationResource: POST /{id}/cancel
   CancellationResource->>BookingService: cancelBookingAsParent()
-  BookingService->>BookingService: compute hoursBeforeSession -> refundEligibility (FULL/PARTIAL/NONE)
+  BookingService->>BookingService: compute hoursBeforeSession -> refundEligible (boolean: captured && >24h)
   BookingService->>BookingService: transition CANCEL_PARENT
   BookingService--)Coach: BookingCancelledByParentEvent
   Note over Parent,Coach: ...or, instead of cancelling outright:
@@ -357,9 +357,10 @@ sequenceDiagram
     </pre>
     <p>
       Cancellation and reschedule are separate, competing paths on a live booking. Cancellation always computes
-      a refund-eligibility tier based on hours-until-session before transitioning the booking to
-      <code>CANCELLED_PARENT</code> or <code>CANCELLED_COACH</code>; the actual refund is executed downstream
-      by <code>payment.CancellationRefundService</code> off the cancellation event, not by this module.
+      a binary refund-eligible flag (payment captured &amp; more than 24h until the session) before
+      transitioning the booking to <code>CANCELLED_PARENT</code> or <code>CANCELLED_COACH</code>; the actual
+      refund is executed downstream by <code>payment.CancellationRefundService</code> off the cancellation
+      event, not by this module.
       Reschedule only works while the booking is <code>CONFIRMED</code> or <code>UPCOMING</code>, allows only
       one pending proposal at a time, and — unlike cancellation — never changes the booking's status; it only
       overwrites the requested start/end time once the coach accepts.
@@ -409,16 +410,15 @@ sequenceDiagram
     </div>
 
     <h2>Conventions &amp; Gotchas</h2>
-    <div class="callout warn">
-      <p><strong><code>Booking.refundEligibility</code> is a dead column, and it disagrees with actual behaviour.</strong>
-      <code>applyRefundLogic</code> writes <code>FULL</code>/<code>PARTIAL</code>/<code>NONE</code> onto the booking,
-      but <em>nothing reads it</em> — grep confirms <code>getRefundEligibility()</code> has no callers, and the
-      string <code>"PARTIAL"</code> appears exactly once in the codebase, on the line that assigns it. What actually
-      decides whether money moves is the separate boolean computed in <code>cancelBookingAsParent</code>:
-      <code>paymentWasCaptured &amp;&amp; requestedStartTime.isAfter(now + 24h)</code>, carried on the event and read
-      by <code>payment.CancellationRefundService</code>. A parent cancelling 8 hours out is therefore stamped
-      <code>PARTIAL</code> and refunded <strong>nothing</strong>. Either wire the tiers up or drop the column —
-      don't trust it as-is.</p>
+    <div class="callout">
+      <p><strong>The old three-tier refund column is gone.</strong> An earlier version of this page warned
+      that <code>Booking.refundEligibility</code> (written by <code>applyRefundLogic</code> as
+      <code>FULL</code>/<code>PARTIAL</code>/<code>NONE</code>) was dead and disagreed with the real
+      behaviour above. <code>skillars-deferred-33</code> AC7 deleted <code>applyRefundLogic</code> and both
+      <code>Booking.refundEligibility</code>/<code>refundAmount</code> outright
+      (migration <code>V97__drop_booking_refund_eligibility_and_amount.sql</code>) rather than reconciling
+      them — there is now exactly one refund rule, the boolean <code>cancelBookingAsParent</code> computes
+      and <code>payment.CancellationRefundService</code> reads (see above).</p>
     </div>
     <div class="callout warn">
       <p><strong>There is now exactly one session-credit system, and booking doesn't own it.</strong> The two
