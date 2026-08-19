@@ -1,13 +1,18 @@
 package com.softropic.skillars.platform.booking.api;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.booking.contract.BatchAcceptResult;
 import com.softropic.skillars.platform.security.SecurityIT;
+import com.softropic.skillars.platform.security.api.ApiAdvice;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.core.ParameterizedTypeReference;
@@ -506,19 +511,40 @@ class BookingBatchResourceIT extends AbstractIntegrationTest {
             return null;
         });
 
+        // skillars-deferred-36 AC1: prove ApiAdvice.logError actually reads
+        // OperationNotAllowedException.getLogContext() over a real HTTP request — skillars-deferred-35 AC1
+        // only mutation-verified the exception's own getLogContext() at the BookingBatchServiceTest unit
+        // level; nothing before this test exercised ApiAdvice's read of it (skillars-deferred-35 code
+        // review, [Review][Defer] #2, closed here).
+        Logger apiAdviceLogger = (Logger) LoggerFactory.getLogger(ApiAdvice.class);
+        ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
+        logCapture.start();
+
         String coachCookies = loginAndGetCookies(COACH_EMAIL);
-        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
-            baseUrl() + "/api/bookings/batches/" + batchId + "/accept-all",
-            HttpMethod.POST, null, authenticatedHeaders(coachCookies), Void.class
-        ))
-            .isInstanceOf(HttpClientErrorException.class)
-            .satisfies(e -> {
-                HttpClientErrorException ex = (HttpClientErrorException) e;
-                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
-                assertThat(ex.getResponseBodyAsString())
-                    .contains("\"errorKey\":\"booking.batchNoneAccepted\"")
-                    .doesNotContain("MISSING_RIGHTS");
-            });
+        try {
+            apiAdviceLogger.addAppender(logCapture);
+
+            assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+                baseUrl() + "/api/bookings/batches/" + batchId + "/accept-all",
+                HttpMethod.POST, null, authenticatedHeaders(coachCookies), Void.class
+            ))
+                .isInstanceOf(HttpClientErrorException.class)
+                .satisfies(e -> {
+                    HttpClientErrorException ex = (HttpClientErrorException) e;
+                    assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(ex.getResponseBodyAsString())
+                        .contains("\"errorKey\":\"booking.batchNoneAccepted\"")
+                        .doesNotContain("MISSING_RIGHTS");
+                });
+
+            assertThat(logCapture.list)
+                .as("ApiAdvice.logError must have logged the batch id / per-booking results structured context")
+                .anySatisfy(event -> assertThat(event.getArgumentArray()[0].toString())
+                    .contains("batch id=" + batchId)
+                    .contains("per-booking results="));
+        } finally {
+            apiAdviceLogger.detachAppender(logCapture);
+        }
 
         assertThat(jdbcTemplate.queryForObject(
             "SELECT status FROM booking.booking_batches WHERE id = ?", String.class, batchId))
