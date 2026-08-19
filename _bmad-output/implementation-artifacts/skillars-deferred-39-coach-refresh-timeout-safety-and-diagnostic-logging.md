@@ -1,6 +1,6 @@
 # Story Deferred-39: Coach-Refresh Timeout Safety & Diagnostic Logging
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -151,38 +151,43 @@ Considered and rejected during story creation:
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add scoped request timeout + observable mount failure (AC: #1)
-  - [ ] 1.1 In `src/frontend/src/api/booking.api.js`, change
+- [x] Task 1: Add scoped request timeout + observable mount failure (AC: #1)
+  - [x] 1.1 In `src/frontend/src/api/booking.api.js`, change
     `export const getCoachBookingRequests = () => api.get('/api/bookings/requests/coach')` to pass a
     second argument `{ timeout: 20000 }`, with a one-line comment explaining the 20s choice and that it
     is scoped to this call only (skillars-deferred-38's stuck-spinner follow-up). Do not touch
     `boot/axios.js` or any other `*.api.js` export.
-  - [ ] 1.2 Confirm by inspection that `loadCoachBookingRequests()`'s `catch` block
+  - [x] 1.2 Confirm by inspection that `loadCoachBookingRequests()`'s `catch` block
     (`booking.store.js:364-367`) needs no code change to correctly handle a timeout error — it is just
     another rejected promise, identical in shape to any other axios error already handled there.
-  - [ ] 1.3 In `src/frontend/src/pages/coach/CoachBookingRequestsPage.vue`, change the `onMounted` hook
+  - [x] 1.3 In `src/frontend/src/pages/coach/CoachBookingRequestsPage.vue`, change the `onMounted` hook
     (line 295-297) from `onMounted(() => { bookingStore.loadCoachBookingRequests() })` to
     `onMounted(async () => { notifyIfRequestsStale(await bookingStore.loadCoachBookingRequests()) })`,
     matching the four other call sites' existing pattern exactly. No other change to this file.
-  - [ ] 1.4 Run `npx eslint src/pages/coach/CoachBookingRequestsPage.vue` from `src/frontend` and confirm
+  - [x] 1.4 Run `npx eslint src/pages/coach/CoachBookingRequestsPage.vue` from `src/frontend` and confirm
     clean.
-- [ ] Task 2: Log discarded superseded-call failures (AC: #2)
-  - [ ] 2.1 In `booking.store.js`'s `loadCoachBookingRequests()` `catch` block, change line 365 from
+- [x] Task 2: Log discarded superseded-call failures (AC: #2)
+  - [x] 2.1 In `booking.store.js`'s `loadCoachBookingRequests()` `catch` block, change line 365 from
     `if (requestId !== coachRequestsSequence) return true` to first `console.warn(...)` the discard (with
     the error object) and then `return true`, matching `video.store.js`'s `console.warn('<message>:',
     err)` shape. Keep the success-path supersession check (line 342, `try` block) unchanged — AC2 targets
     only the `catch` branch, matching line 1575's own scope ("discarded superseded-call **failures**").
-  - [ ] 2.2 Run `npx eslint src/stores/booking.store.js src/api/booking.api.js` from
+  - [x] 2.2 Run `npx eslint src/stores/booking.store.js src/api/booking.api.js` from
     `src/frontend` and confirm clean.
-- [ ] Task 3: Ledger hygiene (AC: #3, #4)
-  - [ ] 3.1 Annotate `deferred-work.md` line 1573 `[CLOSED by skillars-deferred-39 AC1]` with a closure
+- [x] Task 3: Ledger hygiene (AC: #3, #4)
+  - [x] 3.1 Annotate `deferred-work.md` line 1573 `[CLOSED by skillars-deferred-39 AC1]` with a closure
     note covering both the timeout and the mount-toast fix.
-  - [ ] 3.2 Annotate `deferred-work.md` line 1575 `[CLOSED by skillars-deferred-39 AC2]` with a closure
+  - [x] 3.2 Annotate `deferred-work.md` line 1575 `[CLOSED by skillars-deferred-39 AC2]` with a closure
     note.
-  - [ ] 3.3 Leave line 1574 untouched.
-  - [ ] 3.4 Add a new `## Deferred from: story-review of
+  - [x] 3.3 Leave line 1574 untouched.
+  - [x] 3.4 Add a new `## Deferred from: story-review of
     skillars-deferred-39-coach-refresh-timeout-safety-and-diagnostic-logging (2026-08-19)` section to
     `deferred-work.md` naming the three sibling stuck-spinner gaps (AC4).
+
+### Review Findings
+
+- [x] [Review][Patch] Unmount-before-settle race in `onMounted` fires a stale-list toast against a page the coach already left [`src/frontend/src/pages/coach/CoachBookingRequestsPage.vue:295-301`] — FIXED: added an `isMounted` flag (set `false` via a new `onUnmounted` hook) and gated the `notifyIfRequestsStale` call on it, matching the codebase's existing `useBookingSse` unmount-guard shape. `npx eslint` clean post-patch. (Blind Hunter + Edge Case Hunter, independently agreeing)
+- [x] [Review][Defer] `console.warn` logs the full raw Axios error object, which can carry request headers (e.g. `Authorization`) via `error.config` [`src/frontend/src/stores/booking.store.js:365-368`] — deferred, pre-existing. Matches this repo's existing `console.warn('<message>:', err)` convention (`video.store.js:189,210`), which has the same property — not unique to this diff, and browser-console-only (not transmitted anywhere), but worth tracking as a minor observability/security polish item rather than propagating silently forever.
 
 ## Dev Notes
 
@@ -252,11 +257,43 @@ Considered and rejected during story creation:
 
 ### Agent Model Used
 
+Claude Sonnet 5
+
 ### Debug Log References
+
+- Confirmed by inspection that `boot/axios.js`'s response interceptor's `else if (error.request)` branch
+  (network/timeout errors, no `error.response`) handles an `ECONNABORTED` timeout rejection the same as
+  any other network error — logs and re-rejects, no special-casing needed, no crash risk.
+- `npx eslint src/pages/coach/CoachBookingRequestsPage.vue` — clean.
+- `npx eslint src/stores/booking.store.js src/api/booking.api.js` — clean.
 
 ### Completion Notes List
 
+- AC1(a): `getCoachBookingRequests()` (`booking.api.js:29-31`) now passes `{ timeout: 20000 }`, scoped to
+  this one call only. Verified by inspection that `loadCoachBookingRequests()`'s `catch` block needed no
+  change — a timeout rejection is just another axios error, handled identically to any other.
+- AC1(b): `CoachBookingRequestsPage.vue`'s `onMounted` is now `async` and routes
+  `loadCoachBookingRequests()`'s return value through the existing `notifyIfRequestsStale()` helper,
+  matching the four other call sites' pattern exactly. No new template branch, no new state.
+- AC2: `loadCoachBookingRequests()`'s `catch` block now `console.warn`s a discarded superseded-call
+  failure (with the error object) before returning `true`, matching `video.store.js`'s existing
+  `console.warn('<message>:', err)` convention. The `try` block's success-path supersession check is
+  unchanged, per Dev Notes.
+- AC3: `deferred-work.md` lines 1573 and 1575 annotated `[CLOSED by skillars-deferred-39 AC1]` /
+  `AC2` respectively with closure notes; line 1574 (standing frontend-test-infra gap) left untouched.
+- AC4: new `## Deferred from: story-review of skillars-deferred-39-...` section appended to
+  `deferred-work.md`, naming the three sibling un-timed-out calls (`acceptBooking`, `declineBooking`,
+  `acceptAllBatch`) as a fresh, out-of-scope ledger item.
+- No automated test infrastructure exists for the frontend (standing repo-wide gap per Dev Notes) —
+  verified both ACs by inspection and `npx eslint`, matching the `skillars-deferred-35`–`38` convention.
+  Per this repo's `docs/validation-strategy.md`, `mvn verify` was not run (no backend code touched).
+
 ### File List
+
+- `src/frontend/src/api/booking.api.js` (modified)
+- `src/frontend/src/stores/booking.store.js` (modified)
+- `src/frontend/src/pages/coach/CoachBookingRequestsPage.vue` (modified; code review added an `isMounted`/`onUnmounted` guard)
+- `_bmad-output/implementation-artifacts/deferred-work.md` (modified; code review added one more deferred item)
 
 ## Change Log
 
@@ -264,3 +301,5 @@ Considered and rejected during story creation:
 |---|---|
 | 2026-08-19 | Story created via bmad-create-story: two-item story (ledger mined thin of decision-free candidates for the sixth pass in a row; of the three items filed by `skillars-deferred-38`'s own code review, two — the stuck-spinner timeout gap and the missing diagnostic trace for discarded failures — are genuine, narrow, groupable candidates; the third, standing repo-wide absence of frontend test infrastructure, is an infrastructure-scale decision left alone exactly as the prior four stories left it). Adds a 20s per-call timeout to `getCoachBookingRequests()` (not the shared axios instance) so a hung latest-issued request can no longer leave `coachRequestsLoading` stuck forever, and a `console.warn` in `loadCoachBookingRequests()`'s catch block so a discarded superseded-call failure leaves a trace instead of vanishing silently. |
 | 2026-08-19 | Story review (`story-review.md`) found two issues in the draft. **Finding 1 (High):** AC1's timeout, as originally scoped, fixed the stuck-spinner *symptom* but turned a hung *initial-mount* load into a worse, silent failure — `onMounted` calls `loadCoachBookingRequests()` fire-and-forget, so after the 20s timeout the coach would see a false "no booking requests" empty state with no toast and no recovery path, since the template has no third "load failed" branch and `coachRequestsError` is read by zero components. Fixed rather than merely documented: AC1 split into (a) the timeout and (b) making `onMounted` `async` and routing its return value through the page's own pre-existing `notifyIfRequestsStale()` helper — the identical pattern the four other call sites already use. **Finding 2 (Medium):** the same "zero timeout precedent, hangs forever" risk class AC1 fixes for `getCoachBookingRequests()` also applies, unaddressed, to three sibling calls this same page gates loading flags on (`acceptBooking`, `declineBooking`, `acceptAllBatch`) — left out of this story's scope (it targets only `deferred-work.md` lines 1573/1575) but not silently: new AC4 files a fresh ledger item naming all three so the gap is on record, matching how line 1574's test-infra gap already gets an explicit accepted-tradeoff writeup rather than silence. Story now has 4 ACs; `CoachBookingRequestsPage.vue` added to the touched-files list. |
+| 2026-08-19 | Implementation complete, status set to `review`. All 4 ACs shipped verbatim against the spec: AC1(a) `getCoachBookingRequests()` gains a scoped 20s `timeout`; AC1(b) `CoachBookingRequestsPage.vue`'s `onMounted` made `async`, wired through the existing `notifyIfRequestsStale()` helper; AC2 `loadCoachBookingRequests()`'s `catch` block now `console.warn`s a discarded superseded-call failure before returning; AC3 `deferred-work.md` lines 1573/1575 closed with mechanism notes, line 1574 left untouched; AC4 a new `deferred-work.md` section files the three sibling un-timed-out calls (`acceptBooking`, `declineBooking`, `acceptAllBatch`) as a fresh ledger item. `npx eslint` clean on all three touched frontend files; no automated test added, standing repo-wide gap per Dev Notes; `mvn verify` not run (no backend code touched, per `docs/validation-strategy.md`). |
+| 2026-08-19 | Code review complete, status set to `done`. Blind Hunter + Edge Case Hunter + Acceptance Auditor, 0 AC violations (Acceptance Auditor confirmed all 4 ACs shipped verbatim). Blind Hunter's separately-verified "no eslint config exists" claim was independently re-checked and found false — `eslint.config.js` exists at `src/frontend/`, both story-cited `npx eslint` commands re-run clean (exit 0). 1 patch applied: `onMounted`'s newly-awaited (up to 20s, per AC1a) `loadCoachBookingRequests()` call could resolve after the coach navigated away, firing `notifyIfRequestsStale()`'s toast against an unmounted page — a consequence that didn't exist pre-story, since `onMounted` was previously fire-and-forget with no post-await side effect. Fixed with an `isMounted` flag + `onUnmounted` hook, matching the codebase's existing `useBookingSse` unmount-guard shape; `npx eslint` clean post-patch. 1 finding deferred to `deferred-work.md` (AC2's `console.warn` logs the full raw Axios error object, which can carry `Authorization` headers via `error.config` — matches `video.store.js`'s existing convention, not unique to this diff, browser-console-only). 12 findings dismissed as noise (design trade-offs already reasoned in the spec's own "Considered and rejected" section, unverifiable claims contradicted by Edge Case Hunter's and Acceptance Auditor's project-read access, and the false "no eslint config" claim above). |

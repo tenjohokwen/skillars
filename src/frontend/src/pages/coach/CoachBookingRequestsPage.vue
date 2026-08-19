@@ -138,7 +138,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { useBookingStore } from 'src/stores/booking.store'
@@ -292,7 +292,13 @@ async function handleAcceptAll(batchId) {
   }
 }
 
-onMounted(() => {
-  bookingStore.loadCoachBookingRequests()
+let isMounted = true
+onUnmounted(() => {
+  isMounted = false
+})
+
+onMounted(async () => {
+  const refreshed = await bookingStore.loadCoachBookingRequests()
+  if (isMounted) notifyIfRequestsStale(refreshed)
 })
 </script>
