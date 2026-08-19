@@ -118,6 +118,10 @@ export const useBookingStore = defineStore('booking', () => {
   const coachBatchGroups = ref([])
   const coachRequestsLoading = ref(false)
   const coachRequestsError = ref(null)
+  // Non-reactive by design — this is an internal ordering token for loadCoachBookingRequests below, not
+  // page-visible state. Matches this file's existing plain-`let` counter pattern (useBookingSse's
+  // retryCount).
+  let coachRequestsSequence = 0
 
   const packPauseLoading = ref(false)
   const packPauseError = ref(null)
@@ -318,11 +322,24 @@ export const useBookingStore = defineStore('booking', () => {
   // would warn the wrong coach action or swallow a real staleness. The return value is per-invocation
   // and cannot race. The refs stay as they are: they carry the error object itself, which a future
   // error-banner treatment will want. (skillars-deferred-31 AC1, review follow-up.)
+  //
+  // loadCoachBookingRequests is additionally guarded against out-of-order responses: it is called from five
+  // sites (mount, accept-all, approve, reject, decline) whose calls can overlap, since the per-row
+  // accepting[id]/declining[id] and per-batch acceptingAll[batchId] flags are independent and place no limit
+  // on triggering several at once. A monotonically-increasing sequence counter (coachRequestsSequence) is
+  // captured per call; if a newer call has started by the time this one's response arrives, this call's
+  // outcome — success or failure — is discarded without touching any ref, including coachRequestsLoading, so
+  // an older, slower response can never overwrite a newer, faster one. This means the shared "true if this
+  // invocation refreshed" sentence above is imprecise for THIS function alone — a superseded call also
+  // returns true — unlike loadCoachSchedule, which carries no such guard and whose true/false always reflects
+  // whether that specific call itself refreshed. (skillars-deferred-38)
   async function loadCoachBookingRequests() {
+    const requestId = ++coachRequestsSequence
     coachRequestsLoading.value = true
     coachRequestsError.value = null
     try {
       const res = await getCoachBookingRequests()
+      if (requestId !== coachRequestsSequence) return true
       coachBookingRequests.value = res.singleBookings ?? []
       coachBatchGroups.value = res.batchGroups ?? []
       // skillars-deferred-37: batchAcceptResultsByBatch accumulates one entry per handleAcceptAllBatch
@@ -345,10 +362,11 @@ export const useBookingStore = defineStore('booking', () => {
       }
       return true
     } catch (e) {
+      if (requestId !== coachRequestsSequence) return true
       coachRequestsError.value = e
       return false
     } finally {
-      coachRequestsLoading.value = false
+      if (requestId === coachRequestsSequence) coachRequestsLoading.value = false
     }
   }
 
