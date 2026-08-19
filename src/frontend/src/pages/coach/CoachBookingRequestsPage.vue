@@ -246,9 +246,11 @@ function batchIsActionable(status) {
 async function handleAcceptAll(batchId) {
   acceptingAll.value[batchId] = true
   try {
-    // handleAcceptAllBatch runs loadCoachBookingRequests() itself and returns that refresh's outcome.
-    notifyIfRequestsStale(await bookingStore.handleAcceptAllBatch(batchId))
-    const results = bookingStore.batchAcceptResultsByBatch[batchId] ?? []
+    // handleAcceptAllBatch returns both its own refresh outcome and its own results — read results from
+    // here, not from bookingStore.batchAcceptResultsByBatch[batchId], which AC1's pruning can have
+    // already removed by the time this line runs (skillars-deferred-37 code review).
+    const { refreshed, results } = await bookingStore.handleAcceptAllBatch(batchId)
+    notifyIfRequestsStale(refreshed)
     const failedCount = results.filter((r) => !r.accepted).length
     if (failedCount > 0) {
       $q.notify({

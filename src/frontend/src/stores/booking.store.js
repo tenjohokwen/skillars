@@ -325,6 +325,24 @@ export const useBookingStore = defineStore('booking', () => {
       const res = await getCoachBookingRequests()
       coachBookingRequests.value = res.singleBookings ?? []
       coachBatchGroups.value = res.batchGroups ?? []
+      // skillars-deferred-37: batchAcceptResultsByBatch accumulates one entry per handleAcceptAllBatch
+      // call for the life of the page and is never otherwise cleared. A batch's entry becomes
+      // unreachable from the template the moment its batchId drops out of coachBatchGroups (the
+      // backend only returns batches with at least one booking still REQUESTED — BookingService.java
+      // getCoachBookingRequests), so prune it here, the one place every refresh path already passes
+      // through, keeping the store's size (and resultByBatch's per-refresh rebuild cost) bounded by
+      // what is currently visible instead of growing across the session (skillars-deferred-35/36 code
+      // review, closed here). Reassign only when pruning actually removes an entry: this function now
+      // runs on every approve/decline/mount too, not just accept-all, and Object.fromEntries always
+      // allocates a new object — an unconditional reassignment would mark batchAcceptResultsByBatch
+      // dirty on every refresh regardless of whether anything changed, forcing resultByBatch to rebuild
+      // on refreshes that touch no batch at all (this story's own code review finding, closed here).
+      const visibleBatchIds = new Set(coachBatchGroups.value.map((g) => g.batchId))
+      const currentEntries = Object.entries(batchAcceptResultsByBatch.value)
+      const prunedEntries = currentEntries.filter(([batchId]) => visibleBatchIds.has(batchId))
+      if (prunedEntries.length !== currentEntries.length) {
+        batchAcceptResultsByBatch.value = Object.fromEntries(prunedEntries)
+      }
       return true
     } catch (e) {
       coachRequestsError.value = e
@@ -575,13 +593,23 @@ export const useBookingStore = defineStore('booking', () => {
     batchAcceptError.value = null
     batchAcceptResultsByBatch.value = { ...batchAcceptResultsByBatch.value, [batchId]: null }
     try {
-      const response = await acceptAllBatch(batchId)
+      // acceptAllBatch resolves through the shared axios response interceptor (boot/axios.js), which
+      // already unwraps to response.data before resolving — `results` here IS the response body
+      // (List<BatchAcceptResult>), not an AxiosResponse (skillars-deferred-37 code review: the old
+      // `response.data` on this already-unwrapped value was always undefined, silently poisoning both
+      // batchAcceptResultsByBatch and this function's own return value).
+      const results = await acceptAllBatch(batchId)
       batchAcceptResultsByBatch.value = {
         ...batchAcceptResultsByBatch.value,
-        [batchId]: response.data,
+        [batchId]: results,
       }
-      // Returns its own refresh outcome — see the CONTRACT note above loadCoachBookingRequests.
-      return await loadCoachBookingRequests()
+      // Returns its own refresh outcome AND its own results — see the CONTRACT note above
+      // loadCoachBookingRequests. Callers must read results from here, not from
+      // batchAcceptResultsByBatch[batchId]: AC1's pruning (inside loadCoachBookingRequests, called next)
+      // can remove that entry before a caller gets a chance to re-read it, if something else resolved the
+      // batch's last REQUESTED sibling in the interim (skillars-deferred-37 code review, closed here).
+      const refreshed = await loadCoachBookingRequests()
+      return { refreshed, results }
     } catch (e) {
       batchAcceptError.value = e
       throw e

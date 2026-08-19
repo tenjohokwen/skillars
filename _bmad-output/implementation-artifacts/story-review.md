@@ -1,127 +1,86 @@
-# Story Review: skillars-deferred-36-batch-none-accepted-log-coverage-and-result-map-fidelity
+# Senior Dev Review: skillars-deferred-37 (Batch-Accept Result-Map Pruning & Rebuild-Cost Bound)
 
-Reviewed as a senior dev before dev-story execution. Every claim below was checked against the current
-working tree (not just the story's own text) — file paths, line numbers, class hierarchies, Maven/Failsafe
-config, and the deferred-work.md ledger's actual heading conventions. Items that turned out to be accurate
-on inspection are not listed as findings.
+Reviewed: `_bmad-output/implementation-artifacts/skillars-deferred-37-batch-accept-result-map-pruning-and-rebuild-cost-bound.md`
+Method: every factual claim in the story was re-verified against current code (not taken on the story's word), and the two named consumers of `batchAcceptResultsByBatch` plus every path that can change a `Booking`'s status away from `REQUESTED` were traced end to end.
 
-## Findings
+The story's core mechanism (AC1) is sound and its "current state" quotes match the code exactly. Two real gaps survived verification; one process nit is included for completeness.
 
-### 1. AC3's prescribed heading name for the re-filed ledger item contradicts its own cited precedent
+**Status: Findings 1 and 2 fixed in the story (2026-08-19).** Both are now folded into the story document
+itself: AC1 gained a length-check guard before reassigning `batchAcceptResultsByBatch`, and a new AC2 has
+`handleAcceptAllBatch` return `{ refreshed, results }` directly with `handleAcceptAll` consuming that instead
+of re-reading store state. Original AC2/AC3 renumbered to AC3/AC4. Finding 3 (ledger annotation ambiguity) was
+also resolved — the new AC4/Task 4 explicitly says to replace the `[PICKED UP ...]` tag rather than append
+alongside it.
 
-**Where:** AC3 / Task 3, and the "Explicitly NOT in this story" section.
+---
 
-The story instructs filing the un-closed rebuild-cost/pruning half under a new
-`## Deferred from: code review of skillars-deferred-36-...` heading, citing "the `skillars-deferred-31` AC2
-entry at deferred-work.md line 1506" as the precedent for this split-closure pattern.
+## Finding 1 (Medium-High, confirmed): pruning write unconditionally busts `resultByBatch`'s cache on every refresh — the opposite of what the story sets out to fix
 
-Line 1506 is indeed the right item to point at for the *split-closure* pattern (partial close + re-file the
-residual) — but its residual half was **not** filed under a "code review of X" heading. It landed at
-deferred-work.md line 1521 under `## Deferred from: skillars-deferred-31 implementation (2026-08-18)`. The
-same is true for every other same-story (pre-review) re-filing in this ledger: `skillars-deferred-32
-implementation`, `skillars-deferred-33 implementation`, `skillars-deferred-26-...-fixes story creation`,
-`skillars-deferred-28-...-test story creation`, `skillars-deferred-30 story creation and review`. The
-`## Deferred from: code review of X` heading form is reserved, throughout this file's ~100 uses of it, for
-items surfaced by an actual subsequent code-review pass on already-shipped work — not for hygiene performed
-during a story's own AC3/closure step, which is what this story's AC3 is.
+**Where:** `booking.store.js`, the AC1 pruning block, inside `loadCoachBookingRequests()`.
 
-Since `skillars-deferred-36` has not been code-reviewed yet at the point AC3 runs, filing under
-`## Deferred from: code review of skillars-deferred-36-...` would itself be a factually wrong heading
-(claiming a review that hasn't happened), and breaks the ledger's own established naming convention that a
-future story-creation pass (which this project's own workflow relies on to mine the ledger) uses to tell
-"found during implementation" apart from "found during review." The correct heading, matching the actual
-precedent, is `## Deferred from: skillars-deferred-36 implementation (2026-08-19)`.
+**Claim in the story:** pruning bounds `resultByBatch`'s rebuild cost to "what is currently visible" instead of letting it grow across the session.
 
-**Fix:** change AC3 / Task 3's heading instruction to `## Deferred from: skillars-deferred-36 implementation
-(2026-08-19)`.
+**What actually happens:** `loadCoachBookingRequests()` is called from **five** sites — `approveBooking` (`:375`), `rejectBooking` (`:380`), `handleAcceptAllBatch`'s trailing call (`:584`), and directly from `CoachBookingRequestsPage.vue` at mount (`:294`) and inside its own approve/decline error-recovery paths (`:179`, `:200`). Verified today (pre-story), **only** `handleAcceptAllBatch` ever writes to `batchAcceptResultsByBatch` — approving/declining a single booking, and page mount, never touch it, so they never mark `resultByBatch`'s dependency dirty.
 
-### 2. Tasks/Subtasks omit the "run targeted tests" step every recent sibling story includes
+AC1's required code does:
+```js
+batchAcceptResultsByBatch.value = Object.fromEntries(
+  Object.entries(batchAcceptResultsByBatch.value).filter(([batchId]) => visibleBatchIds.has(batchId))
+)
+```
+`Object.fromEntries(...)` always allocates a **new object**, even when the filter removes nothing (e.g. on mount, filtering `{}` still produces a new `{}`). Vue's `ref` reactivity is reference-based (`hasChanged` = `!Object.is(newVal, oldVal)`), so this assignment is treated as a change on **every single call**, regardless of whether anything was actually pruned. Since `CoachBookingRequestsPage.vue`'s template already re-renders on every load (because `coachBatchGroups`/`coachBookingRequests` are also reassigned) and calls `failureReasonFor` per pending row, `resultByBatch.value` is read on that same render — so the now-forced-dirty computed actually re-executes its full `Object.entries`/`Map`-building body every time, not just gets marked dirty and skipped.
 
-**Where:** Task 1 and Task 2 checklists.
+Net effect: after this change, **approving or declining a single unrelated booking, and every page mount, now also rebuilds `resultByBatch`** — work that never happened before this story and has nothing to do with batch results changing. The story fixes unbounded *growth* of what gets rebuilt but adds a new, previously-absent trigger that *fires the rebuild far more often*. At today's batch volumes this is cheap in absolute terms, but it works against the story's own stated goal and is easy to avoid.
 
-`docs/validation-strategy.md` (cited in this story's own References) establishes "run targeted tests" as
-this project's standard validation policy, and the Dev Notes' "Established conventions this story must
-follow" section commits generally to following established conventions. Every directly preceding sibling
-story's task list makes this an explicit, separate checklist line: `skillars-deferred-35`'s Task 4 has
-"Targeted `BookingBatchServiceTest` suite green (26/26) per `docs/validation-strategy.md`'s
-smallest-relevant-scope policy," and `skillars-deferred-31`/`32`/`34` follow the same pattern.
-
-This story's Task 1 (AC1, backend) and Task 2 (AC2, frontend) both end without any subtask instructing a
-targeted test run — e.g. `mvn -Dtest=BookingBatchResourceIT test` for Task 1, or a frontend lint/build check
-for Task 2. Nothing about AC1 or AC2's prose substitutes for this — AC1's "Required" section describes what
-to add to the test, not that it must be run and confirmed green, and AC2 explicitly says its correctness
-must be confirmed "by inspection" (no automated frontend test exists), which makes an explicit backend
-test-run task even more load-bearing here since it's the *only* automated check this story gets.
-
-**Fix:** add a subtask under Task 1 ("Run `mvn -Dtest=BookingBatchResourceIT test`, confirm green including
-the new assertion") and note under Task 2 that AC2's correctness is confirmed by inspection only, matching
-how `skillars-deferred-35`'s Task 4 stated the same limitation explicitly rather than leaving it implicit.
-
-### 3. AC1's sample code: the appender-attach happens outside the `try`/`finally` it's claimed to be inside
-
-**Where:** AC1 "Required" code sample, and the surrounding prose's guarantee claim.
-
-The prose states: "The `try`/`finally` guarantees the appender is detached even if an assertion fails, so a
-failing run does not leak a stale appender into subsequent tests in the same JVM." Looking at the actual
-sample:
-
-```java
-Logger apiAdviceLogger = (Logger) LoggerFactory.getLogger(ApiAdvice.class);
-ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
-logCapture.start();
-apiAdviceLogger.addAppender(logCapture);
-
-String coachCookies = loginAndGetCookies(COACH_EMAIL);   // <-- outside the try
-try {
-    ...
-} finally {
-    apiAdviceLogger.detachAppender(logCapture);
+**Suggested fix:** only reassign when the filter actually removed something, e.g.:
+```js
+const currentEntries = Object.entries(batchAcceptResultsByBatch.value)
+const prunedEntries = currentEntries.filter(([batchId]) => visibleBatchIds.has(batchId))
+if (prunedEntries.length !== currentEntries.length) {
+  batchAcceptResultsByBatch.value = Object.fromEntries(prunedEntries)
 }
 ```
 
-`addAppender` runs before the `try` opens, and `loginAndGetCookies(COACH_EMAIL)` — which can throw — sits
-between the attach and the `try`. If that call throws, `logCapture` is never detached: it stays attached to
-`ApiAdvice`'s logger (a singleton for the rest of the JVM run) and silently keeps accumulating every
-subsequent `ApiAdvice.logError` event system-wide, for the remainder of this Failsafe run — this project's
-own pom.xml documents that all ~135 IT classes share one JVM fork with no `forkCount`/`reuseForks`, so this
-is not a contained blast radius. `loginAndGetCookies` is an established, normally-reliable helper used
-throughout this test class, so the odds of it throwing here are low, but the code as written does not back
-the strength of the claim made about it, and the fix is one line.
+---
 
-**Fix:** move `apiAdviceLogger.addAppender(logCapture)` to the first line inside the `try` block (after
-`loginAndGetCookies`, before the HTTP call), so the entire attached-appender lifetime is covered by the
-`finally`.
+## Finding 2 (Medium, confirmed): the story's investigation misses a second, non-computed consumer of `batchAcceptResultsByBatch` — pruning can make it feed an incorrect notification
 
-## Verified as accurate — no finding
+**Where:** `CoachBookingRequestsPage.vue:251`, inside `handleAcceptAll`:
+```js
+const results = bookingStore.batchAcceptResultsByBatch[batchId] ?? []
+const failedCount = results.filter((r) => !r.accepted).length
+```
 
-For transparency, the following claims were specifically checked and confirmed correct, so they are not
-findings:
+The story's "Why this story exists" section and AC2 both reason only about `resultByBatch` and `failureReasonFor` ("nothing in the template can query it... AC1 alone is sufficient"). `handleAcceptAll` reads `batchAcceptResultsByBatch` directly, bypassing `resultByBatch` entirely, and this read happens **after** `await bookingStore.handleAcceptAllBatch(batchId)` resolves — i.e. after AC1's pruning has already run as part of that same call.
 
-- `ApiAdvice`'s real path (`platform/security/api/ApiAdvice.java`, public class, `@RestControllerAdvice`) and
-  the ledger's stale `infrastructure.exception.ApiAdvice` citation.
-- The exception chain `OperationNotAllowedException extends AuthorizationException extends
-  ApplicationException`, and that `operationDeniedHandler` → `handleSecErrorAndReturnDTO(AuthorizationException,
-  ...)` → `logErrorAndReturnDTO` → `logError` is the actual call path.
-- `ApiAdvice.logError`'s body, including `entries(ctx)`/`Map.of("batch id", ..., "per-booking results",
-  ...)` at `BookingBatchService.java:298-300`, matches the story's quoted code exactly.
-- No `junit-platform.properties` exists and Failsafe's `argLine` sets no JUnit 5 parallel-execution
-  properties — the "sequential execution, no cross-test appender interference" claim holds.
-- `grep -n "getLogContext" src/test` returns exactly the two hits in `BookingBatchServiceTest.java` the
-  story cites (lines 721, 756) — confirmed both are covered by mutation-verified unit assertions across
-  *both* `acceptedIds.isEmpty()` branches (non-empty `results` on path (a), empty `results` on path (b)).
-  This also confirms AC1's IT deliberately targeting only path (b) (empty `results`) is not a coverage gap:
-  payload *content* correctness for non-empty `results` is already unit-tested elsewhere: AC1's IT exists
-  only to prove `ApiAdvice` actually reads and logs whatever `getLogContext()` returns over a real request,
-  which it does regardless of whether `results` is empty.
-- `grep -rn "failedResultByBatch" src/frontend/` returns exactly the two lines AC2 touches — the rename has
-  no other call site, and `resultByBatch` collides with no existing identifier in either touched file.
-- AC2's behavior-preservation table (accepted/failed/absent × `null`/`[]`/populated) checks out by
-  inspection, including the one subtle case worth naming: if a batch's `results` array ever contained a
-  duplicate `bookingId` with one entry accepted and another failed, the currently-shipped code and the
-  pre-refactor `Array.find()` version diverge (shipped code's `!r.accepted` prefilter can surface a *later*
-  failed duplicate that `Array.find()` would never have reached), while AC2's fix removes exactly that
-  prefilter and restores byte-for-byte positional parity with `Array.find()`. Not a shipped defect (batch
-  results don't produce duplicate `bookingId`s in practice) and not a finding, but confirms AC2's fix is
-  correct on this axis rather than merely "probably fine."
-- No automated test currently exists for `CoachBookingRequestsPage.vue`, so AC2's "verify by inspection"
-  requirement is not a regression in rigor — there was nothing pinning this behavior before either.
+Today this coincidentally can't misfire from the accept-all call alone: a batch is pruned iff it has zero `REQUESTED` bookings left, which — if accept-all's own results are the only thing changing booking status — is exactly the fully-succeeded case (`failedCount` should be `0` anyway). But that invariant depends on **nothing else** changing any of the batch's sibling bookings' status between the accept-all response and the refresh. That assumption doesn't hold:
+
+- The UI itself allows it: each row has its own `handleDecline`/`declining[id]`, independent of `acceptingAll[batchId]` (`CoachBookingRequestsPage.vue:64-77`, `89`). A coach can decline a sibling row in the same batch while "Accept All" is still in flight or between its response and refresh — a concurrency pattern the store's own CONTRACT comment above `loadCoachBookingRequests` explicitly calls out as expected ("two rows accepted in quick succession... deliberately allow it").
+- Independent backend paths can transition a `REQUESTED` sibling away from `REQUESTED` with no coach action at all: `BookingExpiryScheduler.expireStaleRequests()` (`BookingExpiryScheduler.java:40-68`, every 5 minutes) auto-declines stale requests; `AdminCoachEnforcementService.suspendCoach()` (`AdminCoachEnforcementService.java:117-121`) force-cancels every `REQUESTED` booking for a coach being suspended; `PackSessionService.pausePack()` → `BookingService.cancelDueToPause()` cancels `REQUESTED` bookings belonging to a paused pack. `BookingBatchService.acceptAll`'s own coach-suspended check is deliberately **unlocked** (`BookingBatchService.java:253-259`, "taking the coach lock... would make every per-booking transaction block"), so a suspension landing mid-loop is an anticipated race, not a stretch.
+
+If any of these independently drives the batch's *last* still-`REQUESTED` sibling out of that status in the window between accept-all's response and the next `loadCoachBookingRequests()` refresh — while that sibling was recorded as a genuine failure in `response.data` — the batch gets pruned before `handleAcceptAll` reads it back. `results` falls back to `[]`, `failedCount` becomes `0`, and the coach sees "All sessions accepted" (`booking.batch.acceptedAll`) even though one sibling actually failed to accept. **Before this story, this read was always accurate** because nothing ever pruned the entry; pruning introduces this failure mode.
+
+This is a narrow, timing-dependent case, not a routine one — but it's real, reachable through already-documented concurrency the codebase anticipates, and the story never analyzes this read site at all despite explicitly claiming to have traced every queryable consumer.
+
+**Suggested fix:** decouple the notification from post-refresh store state — e.g. have `handleAcceptAllBatch` return `response.data` (or the failed count) directly to its caller instead of requiring `handleAcceptAll` to re-read a value that a concurrent refresh may have already pruned. If this risk is judged acceptable as-is, the story should say so explicitly rather than asserting (incorrectly) that only `resultByBatch`/`failureReasonFor` can ever observe pruning.
+
+---
+
+## Finding 3 (Low, process nit): AC3's ledger annotation is ambiguous about the existing `[PICKED UP]` tag
+
+`deferred-work.md:1567` already carries `[PICKED UP by skillars-deferred-37 story creation, 2026-08-19]` (added by this story's own creation step). AC3/Task 3 says to add `[CLOSED by skillars-deferred-37 AC1]` but doesn't say whether that **replaces** the `PICKED UP` tag or sits alongside it. Every other closed item in the ledger carries exactly one bracket-tag — `grep` finds zero lines with both `PICKED UP` and `CLOSED` co-existing — so replacement is clearly the intended convention, but the story doesn't say so, leaving room for a dev to append instead and produce a first-of-its-kind dual-tagged line.
+
+---
+
+## Checked, no issue found (to save the next reader re-litigating these)
+
+- **`batchId` type consistency:** `group.batchId` (from the JSON response) and the keys written into `batchAcceptResultsByBatch` (via `handleAcceptAllBatch(batchId)`, called with `group.batchId` from the template) are both plain strings — `Set.has` comparison in AC1 is safe, no coercion needed.
+- **Stale-on-failure consistency:** pruning sits inside the `try`, after the `coachBatchGroups` assignment, so a failed refresh leaves `batchAcceptResultsByBatch` exactly as stale as the rest of the page state — matches the CONTRACT comment's guarantee and the story's own AC1 requirement.
+- **Mid-flight `null`-placeholder pruning:** a concurrent, unrelated refresh *can* transiently prune an in-flight accept-all's `null` placeholder before that call's own response arrives, but `handleAcceptAllBatch` unconditionally rewrites the key with `response.data` right after, and its own trailing `loadCoachBookingRequests()` immediately re-evaluates visibility — so the final state is unaffected. Only a momentary internal state flicker, not observable.
+- **`sprint-status.yaml`/ledger read-through claims:** the "0 PICKED UP / 103 CLOSED" counts and the `## Deferred from: skillars-deferred-36 implementation (2026-08-19)` section/line number are accurate as of the current file (the single `PICKED UP` entry present now was added by this story's own workflow after that count was taken — consistent, not a discrepancy).
+
+---
+
+## Recommendation
+
+Do not block on Finding 3 (documentation clarity only). Findings 1 and 2 are both real and both fixable with small, targeted changes that stay within this story's stated scope (no redesign, no memoization) — worth resolving before or during `dev-story` rather than deferring again, since Finding 2 in particular contradicts a claim the story uses to justify AC2's "no diff needed" conclusion.
