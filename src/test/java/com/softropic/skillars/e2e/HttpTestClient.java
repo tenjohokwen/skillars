@@ -5,6 +5,7 @@ import com.google.common.collect.ImmutableList;
 import com.softropic.skillars.infrastructure.client.Client;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -70,6 +71,33 @@ public class HttpTestClient {
         HttpHeaders headersToSend = new HttpHeaders();
         headersToSend.setAccept(ImmutableList.of(MediaType.APPLICATION_JSON));
         return makeHttpRequest(uri, method, body, headersToSend, clazz);
+    }
+
+    /**
+     * Same as {@link #makeHttpRequest(String, HttpMethod, Map, HttpHeaders, Class)}, but for a
+     * generic response body (e.g. {@code List<SomeRecord>}) that a raw {@code Class<T>} cannot
+     * express — callers would otherwise have to deserialize into {@code List<Map>} and cast every
+     * element by hand, losing compile-time type safety against the actual response shape.
+     *
+     * @param uri           endpoint to hit
+     * @param method        method to use
+     * @param body          body to send
+     * @param headers       http headers of the request
+     * @param typeReference the generic type of the return value
+     * @return http call response
+     */
+    public <T> ResponseEntity<T> makeHttpRequest(String uri,
+                                                 HttpMethod method,
+                                                 Map<String, Object> body,
+                                                  @NotNull HttpHeaders headers,
+                                                 ParameterizedTypeReference<T> typeReference) {
+        HttpEntity<Map<String, Object>> requestEntity;
+        if (body != null) {
+            requestEntity = new HttpEntity<>(body, headers);
+        } else {
+            requestEntity = new HttpEntity<>(headers);
+        }
+        return testRestTemplate.exchange(uri, method, requestEntity, typeReference);
     }
 
     private URI createUriComponentsBuilder(String uri) {

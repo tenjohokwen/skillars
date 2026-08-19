@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.booking.api;
 
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.booking.contract.BatchAcceptResult;
 import com.softropic.skillars.platform.booking.contract.BatchBookingCreatedResponse;
 import com.softropic.skillars.platform.booking.contract.BatchConfigResponse;
 import com.softropic.skillars.platform.booking.contract.CreateBatchRequest;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.UUID;
 
 @Observed(name = "booking.batch")
@@ -45,9 +47,9 @@ public class BookingBatchResource {
 
     @PostMapping("/{batchId}/accept-all")
     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
-    public ResponseEntity<Void> acceptAll(@PathVariable UUID batchId) {
-        batchService.acceptAll(batchId, currentUserId());
-        return ResponseEntity.noContent().build();
+    public ResponseEntity<List<BatchAcceptResult>> acceptAll(@PathVariable UUID batchId) {
+        List<BatchAcceptResult> results = batchService.acceptAll(batchId, currentUserId());
+        return ResponseEntity.ok(results);
     }
 
     private Long currentUserId() {

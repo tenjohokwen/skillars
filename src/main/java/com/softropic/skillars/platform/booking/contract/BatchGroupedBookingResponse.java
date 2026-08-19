@@ -7,5 +7,6 @@ public record BatchGroupedBookingResponse(
     UUID batchId,
     String parentName,
     int totalCount,
-    List<BookingResponse> bookings
+    List<BookingResponse> bookings,
+    String status
 ) {}

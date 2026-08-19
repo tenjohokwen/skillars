@@ -458,6 +458,9 @@ export default {
       acceptAll: 'Alle {n} Sitzungen annehmen',
       acceptedAll: 'Alle Sitzungen angenommen',
       acceptError: 'Nicht alle Sitzungen konnten angenommen werden. Bitte erneut versuchen.',
+      partiallyAccepted:
+        '{accepted} von {total} Sitzungen angenommen. Details siehe unten.',
+      itemNotAccepted: 'Konnte nicht angenommen werden.',
     },
     errors: {
       coachUnavailable: 'Dieser Coach ist derzeit nicht verfügbar.',

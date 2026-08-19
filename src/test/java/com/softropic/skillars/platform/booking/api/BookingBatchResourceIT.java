@@ -4,11 +4,13 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.booking.contract.BatchAcceptResult;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
@@ -251,16 +253,22 @@ class BookingBatchResourceIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void acceptAll_asOwningCoach_returns204AndUpdatesBookingsAndBatch() {
+    void acceptAll_asOwningCoach_returns200AndUpdatesBookingsAndBatch() {
         UUID batchId = createBatchInDb(2);
         String coachCookies = loginAndGetCookies(COACH_EMAIL);
 
-        ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
+        ResponseEntity<List<BatchAcceptResult>> response = httpTestClient.makeHttpRequest(
             baseUrl() + "/api/bookings/batches/" + batchId + "/accept-all",
-            HttpMethod.POST, null, authenticatedHeaders(coachCookies), Void.class
+            HttpMethod.POST, null, authenticatedHeaders(coachCookies),
+            new ParameterizedTypeReference<List<BatchAcceptResult>>() {}
         );
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        List<BatchAcceptResult> results = response.getBody();
+        assertThat(results).hasSize(2);
+        for (BatchAcceptResult result : results) {
+            assertThat(result.accepted()).isTrue();
+        }
 
         String batchStatus = jdbcTemplate.queryForObject(
             "SELECT status FROM booking.booking_batches WHERE id = ?", String.class, batchId);
@@ -307,11 +315,22 @@ class BookingBatchResourceIT extends AbstractIntegrationTest {
         });
 
         String coachCookies = loginAndGetCookies(COACH_EMAIL);
-        ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
+        ResponseEntity<List<BatchAcceptResult>> response = httpTestClient.makeHttpRequest(
             baseUrl() + "/api/bookings/batches/" + batchId + "/accept-all",
-            HttpMethod.POST, null, authenticatedHeaders(coachCookies), Void.class
+            HttpMethod.POST, null, authenticatedHeaders(coachCookies),
+            new ParameterizedTypeReference<List<BatchAcceptResult>>() {}
         );
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        List<BatchAcceptResult> results = response.getBody();
+        assertThat(results).hasSize(2);
+        long acceptedCount = results.stream().filter(BatchAcceptResult::accepted).count();
+        long failedCount = results.stream().filter(r -> !r.accepted()).count();
+        assertThat(acceptedCount).isEqualTo(1);
+        assertThat(failedCount).isEqualTo(1);
+        BatchAcceptResult failedResult = results.stream()
+            .filter(r -> !r.accepted())
+            .findFirst().orElseThrow();
+        assertThat(failedResult.errorKey()).isEqualTo("booking.slotUnavailable");
 
         // The accepted booking does not stay in PAYMENT_PENDING: the trailing transaction publishes
         // BatchBookingAcceptedEvent, and PaymentLifecycleService settles it on AFTER_COMMIT. Asserting
@@ -339,6 +358,21 @@ class BookingBatchResourceIT extends AbstractIntegrationTest {
             "JOIN booking.bookings b ON b.id = bp.booking_id WHERE b.batch_id = ?",
             Integer.class, batchId);
         assertThat(settled).as("the accepted booking must have been settled, not stranded").isEqualTo(1);
+
+        // skillars-deferred-34 code review Decisions 1+2: the coach inbox must report this batch's
+        // real status (so the frontend can hide "Accept All" — a second click always fails with
+        // batchAlreadyProcessed) and a totalCount reflecting the 1 booking still REQUESTED, not the
+        // original 2-booking batch size, which would understate that the batch is no longer PENDING
+        // and mislabel the (already-hidden) button as "Accept all 2 sessions".
+        ResponseEntity<Map> inboxResponse = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/requests/coach",
+            HttpMethod.GET, null, authenticatedHeaders(coachCookies), Map.class
+        );
+        List<?> batchGroups = (List<?>) inboxResponse.getBody().get("batchGroups");
+        assertThat(batchGroups).hasSize(1);
+        Map<?, ?> group = (Map<?, ?>) batchGroups.get(0);
+        assertThat(group.get("status")).isEqualTo("PARTIALLY_ACCEPTED");
+        assertThat(group.get("totalCount")).isEqualTo(1);
     }
 
     @Test
@@ -430,11 +464,19 @@ class BookingBatchResourceIT extends AbstractIntegrationTest {
         });
 
         String coachCookies = loginAndGetCookies(COACH_EMAIL);
-        ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
+        ResponseEntity<List<BatchAcceptResult>> response = httpTestClient.makeHttpRequest(
             baseUrl() + "/api/bookings/batches/" + batchId + "/accept-all",
-            HttpMethod.POST, null, authenticatedHeaders(coachCookies), Void.class
+            HttpMethod.POST, null, authenticatedHeaders(coachCookies),
+            new ParameterizedTypeReference<List<BatchAcceptResult>>() {}
         );
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        List<BatchAcceptResult> results = response.getBody();
+        assertThat(results)
+            .as("the already-declined sibling was never in requestedBookings — it must not appear in the results")
+            .hasSize(2);
+        for (BatchAcceptResult result : results) {
+            assertThat(result.accepted()).isTrue();
+        }
 
         assertThat(jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM booking.bookings WHERE batch_id = ? AND status <> 'REQUESTED' AND status <> 'DECLINED'",

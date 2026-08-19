@@ -915,6 +915,8 @@ export default {
       acceptAll: 'Accept all {n} sessions',
       acceptedAll: 'All sessions accepted',
       acceptError: 'Could not accept all sessions. Please try again.',
+      partiallyAccepted: '{accepted} of {total} sessions accepted. See below for the rest.',
+      itemNotAccepted: 'Could not be accepted.',
     },
     errors: {
       coachUnavailable: 'This coach is currently unavailable.',

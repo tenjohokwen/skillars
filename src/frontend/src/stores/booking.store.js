@@ -564,12 +564,22 @@ export const useBookingStore = defineStore('booking', () => {
 
   const batchAcceptLoading = ref(false)
   const batchAcceptError = ref(null)
+  // Keyed by batchId, not a single shared value — see the note above. batchAcceptError/batchAcceptLoading stay
+  // single refs because nothing in this codebase reads them today (confirmed: no component references either
+  // name); the moment AC4 makes this new state something the UI actually reads, per-batch keying stops being
+  // optional.
+  const batchAcceptResultsByBatch = ref({})
 
   async function handleAcceptAllBatch(batchId) {
     batchAcceptLoading.value = true
     batchAcceptError.value = null
+    batchAcceptResultsByBatch.value = { ...batchAcceptResultsByBatch.value, [batchId]: null }
     try {
-      await acceptAllBatch(batchId)
+      const response = await acceptAllBatch(batchId)
+      batchAcceptResultsByBatch.value = {
+        ...batchAcceptResultsByBatch.value,
+        [batchId]: response.data,
+      }
       // Returns its own refresh outcome — see the CONTRACT note above loadCoachBookingRequests.
       return await loadCoachBookingRequests()
     } catch (e) {
@@ -653,6 +663,7 @@ export const useBookingStore = defineStore('booking', () => {
     submitBatch,
     batchAcceptLoading,
     batchAcceptError,
+    batchAcceptResultsByBatch,
     handleAcceptAllBatch,
   }
 })
