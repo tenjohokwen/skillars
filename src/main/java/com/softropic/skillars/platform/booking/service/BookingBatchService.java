@@ -296,6 +296,7 @@ public class BookingBatchService {
             // needs a result DTO and a REST contract change; deliberately out of scope here.
             log.warn("No bookings were accepted in batch {}", batchId);
             throw new OperationNotAllowedException("No bookings in batch were accepted",
+                Map.of("batch id", batchId, "per-booking results", results),
                 BookingError.BATCH_NONE_ACCEPTED);
         }
 

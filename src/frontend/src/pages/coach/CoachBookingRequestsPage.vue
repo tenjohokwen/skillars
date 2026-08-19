@@ -138,7 +138,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { useBookingStore } from 'src/stores/booking.store'
@@ -205,10 +205,28 @@ async function handleDecline(id) {
   }
 }
 
+// O(1) per-row lookup instead of a linear Array.find() scan per call — the template calls
+// failureReasonFor twice per pending row, once per re-render (skillars-deferred-34 code review
+// Decision→Defer, closed here). Vue's computed cache means this only rebuilds when
+// bookingStore.batchAcceptResultsByBatch itself changes, not on every unrelated re-render. Only
+// failed entries are stored — an accepted result and a missing result both correctly resolve to
+// "not found" below, matching the prior implementation's `!result || result.accepted` check.
+const failedResultByBatch = computed(() => {
+  const byBatch = {}
+  for (const [batchId, results] of Object.entries(bookingStore.batchAcceptResultsByBatch)) {
+    if (!results) continue
+    const byBookingId = new Map()
+    for (const r of results) {
+      if (!r.accepted && !byBookingId.has(r.bookingId)) byBookingId.set(r.bookingId, r)
+    }
+    byBatch[batchId] = byBookingId
+  }
+  return byBatch
+})
+
 function failureReasonFor(batchId, bookingId) {
-  const results = bookingStore.batchAcceptResultsByBatch[batchId] ?? []
-  const result = results.find((r) => r.bookingId === bookingId)
-  if (!result || result.accepted) return null
+  const result = failedResultByBatch.value[batchId]?.get(bookingId)
+  if (!result) return null
   if (result.errorKey === 'booking.slotUnavailable') return t('booking.errors.slotUnavailable')
   if (result.errorKey === 'booking.coachUnavailable') return t('booking.errors.coachUnavailable')
   return t('booking.batch.itemNotAccepted')

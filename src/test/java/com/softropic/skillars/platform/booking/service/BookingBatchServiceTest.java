@@ -715,8 +715,14 @@ class BookingBatchServiceTest {
 
         assertThatThrownBy(() -> service.acceptAll(BATCH_ID, COACH_USER_ID))
             .isInstanceOf(OperationNotAllowedException.class)
-            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
-                .isEqualTo(BookingError.BATCH_NONE_ACCEPTED));
+            .satisfies(e -> {
+                OperationNotAllowedException onae = (OperationNotAllowedException) e;
+                assertThat(onae.getErrorCode()).isEqualTo(BookingError.BATCH_NONE_ACCEPTED);
+                assertThat(onae.getLogContext())
+                    .containsEntry("batch id", BATCH_ID)
+                    .containsEntry("per-booking results",
+                        List.of(new BatchAcceptResult(requested.getId(), false, "booking.slotUnavailable")));
+            });
 
         verify(batchRepository, never()).save(any());
         verify(eventPublisher, never()).publishEvent(any(BatchBookingAcceptedEvent.class));
@@ -744,8 +750,13 @@ class BookingBatchServiceTest {
 
         assertThatThrownBy(() -> service.acceptAll(BATCH_ID, COACH_USER_ID))
             .isInstanceOf(OperationNotAllowedException.class)
-            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
-                .isEqualTo(BookingError.BATCH_NONE_ACCEPTED));
+            .satisfies(e -> {
+                OperationNotAllowedException onae = (OperationNotAllowedException) e;
+                assertThat(onae.getErrorCode()).isEqualTo(BookingError.BATCH_NONE_ACCEPTED);
+                assertThat(onae.getLogContext())
+                    .containsEntry("batch id", BATCH_ID)
+                    .containsEntry("per-booking results", List.of());
+            });
 
         verify(bookingService, never()).acceptAndInitiatePayment(any(), any());
         verify(batchRepository, never()).save(any());

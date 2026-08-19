@@ -146,17 +146,12 @@ flowchart LR
         <tr><td>Player no-show</td><td>Nothing — forfeited</td><td>No</td></tr>
       </tbody>
     </table>
-    <div class="callout warn">
-      <p><strong>There is no partial refund, despite what the booking record says.</strong> A cancelled booking gets
-      a <code>refundEligibility</code> label of <code>FULL</code> (&gt;24h), <code>PARTIAL</code> (6–24h) or
-      <code>NONE</code> (&lt;6h) written onto it. That label is <strong>never read by anything</strong> — no code
-      path issues a partial refund, and the word <code>PARTIAL</code> appears exactly once in the entire codebase,
-      at the line that assigns it.</p>
-      <p>What actually decides the money is a separate boolean: was payment captured, <em>and</em> is the session
-      more than 24 hours away. So a parent cancelling 8 hours out has a booking marked <code>PARTIAL</code> and
-      receives <strong>nothing</strong>. Do not quote a three-tier refund policy to a customer or put one in
-      marketing copy on the strength of that column — and flag it to engineering, because the label and the
-      behaviour disagreeing is a defect waiting to become a chargeback.</p>
+    <div class="callout">
+      <p><strong>Fixed as of <code>skillars-deferred-33</code>.</strong> This page used to warn that a
+      cancelled booking's <code>refundEligibility</code> label (<code>FULL</code>/<code>PARTIAL</code>/
+      <code>NONE</code>) was never read and disagreed with the table above — a defect risking a chargeback.
+      That dead column and the code that wrote it were deleted outright rather than reconciled; the table
+      above is the single, accurate source of truth.</p>
     </div>
     <p>
       "Excused" coach cancellations — mutual agreement, health/medical, family emergency, and weather — still refund
