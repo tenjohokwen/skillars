@@ -88,6 +88,16 @@ updates:
     #                 anywhere else: a semver update-type describes the version STRING, not
     #                 compatibility. For anything versioned by release train or by date,
     #                 "minor" is not a safety signal.
+    #
+    # hibernate-envers 7.x  PR #75 (6.6.14.Final -> 7.4.5.Final) failed all 827
+    #                 @SpringBootTest/*IT classes at context startup. hibernate-envers
+    #                 is pinned explicitly in the POM rather than inherited from Boot's
+    #                 BOM, so it moves independently of Hibernate core -- and Boot
+    #                 3.5.16 manages Hibernate ORM core at the 6.6.x line. Envers 7.x's
+    #                 TypeContributorImpl calls org.hibernate.boot.spi.EffectiveMappingDefaults,
+    #                 which only exists in Hibernate ORM 7.x, so the entityManagerFactory
+    #                 bean threw NoClassDefFoundError on every boot. Envers can only move
+    #                 to 7.x alongside Hibernate core, which only moves alongside Boot 4.x.
     ignore:
       - dependency-name: "org.springframework.boot:spring-boot-starter-parent"
         update-types: ["version-update:semver-major"]
@@ -97,3 +107,5 @@ updates:
         update-types:
           - "version-update:semver-major"
           - "version-update:semver-minor"
+      - dependency-name: "org.hibernate.orm:hibernate-envers"
+        update-types: ["version-update:semver-major"]
