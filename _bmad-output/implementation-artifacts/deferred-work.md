@@ -616,7 +616,7 @@ the story text first, then implemented as corrected:
 
 ## Deferred from: adversarial code review of skillars-7-2 Group 1 DB+Entities (2026-06-24)
 - D1: `parent_credit_balance` VIEW returns 0 rows (not a zero-balance row) for parents with no ledger history — safe via JPQL path; latent trap for native SQL consumers [`V62__session_payment_credit_wallet.sql`]
-- D2: Duplicate expiry query methods — `findByCoachIdAndExpiresAtBetween...` (coach-scoped) and `findExpiringWithinWindowAndSessionsRemaining` (JPQL all-coaches) overlap; coach-scoped method appears unused; verify in Group 2 service review [`SessionPackPurchaseRepository.java:21-25`]
+- D2: Duplicate expiry query methods — `findByCoachIdAndExpiresAtBetween...` (coach-scoped) and `findExpiringWithinWindowAndSessionsRemaining` (JPQL all-coaches) overlap; coach-scoped method appears unused; verify in Group 2 service review [`SessionPackPurchaseRepository.java:21-25`] `[PICKED UP by skillars-deferred-42 AC2]`
 - D3: `SessionPackPurchase.expiresAt` mutable with no `updatable=false` — service-layer enforced via `extendPack()` business rules; open setter is a footgun [`SessionPackPurchase.java`]
 - D5: `stripe_customers.last_payment_intent_id` not in AC 1 spec schema — intentional addition to support cash-out refund flow (Group 2 Decision D1 resolution); AC 1 should be updated to document this column [`V62__session_payment_credit_wallet.sql`, `StripeCustomer.java`]
 - D6: No `CHECK (stripe_customer_id LIKE 'cus_%')` format guard on `stripe_customers` — would catch placeholder IDs at DB boundary; application-layer only today [`V62__session_payment_credit_wallet.sql`]
@@ -803,7 +803,7 @@ the story text first, then implemented as corrected:
 
 ## Deferred from: code review of skillars-3-4-booking-state-machine-sse (2026-06-15)
 - No optimistic/pessimistic lock on `transition()` — concurrent callers can both pass `validate()` on the same booking; add `@Lock(PESSIMISTIC_WRITE)` in a concurrency-hardening pass [BookingService.java:85]
-- `getRequestedStartTime()` null not guarded before `ChronoUnit.HOURS.between()` in `applyRefundLogic` — in practice never null (set at creation); add guard if entity nullability changes [BookingService.java:256]
+- `getRequestedStartTime()` null not guarded before `ChronoUnit.HOURS.between()` in `applyRefundLogic` — in practice never null (set at creation); add guard if entity nullability changes [BookingService.java:256] `[STALE — verified against current code by skillars-deferred-42 story creation, 2026-08-20: moot. applyRefundLogic — the method this item's null-guard concern was about — was deleted outright by skillars-deferred-33 AC7 (migration V97__drop_booking_refund_eligibility_and_amount.sql), which also dropped the Booking.refundEligibility/refundAmount fields it wrote. grep -rn "applyRefundLogic" src/main/java src/test/java returns zero hits. Superseded by deletion, not a gap.]`
 - SSE endpoint accepts subscriptions for terminal-state bookings — emitters accumulate for COMPLETED/CANCELLED/REFUNDED bookings; implement lifecycle-based subscription guard in a resource-management pass [BookingEventResource.java:37]
 - `verifyIsParty` has no admin bypass path — no admin role exists yet; revisit when admin management stories are implemented
 - Negative `hoursUntilSession` for past-session cancellations silently maps to NONE — probably correct but undocumented; add an explicit branch or comment [BookingService.java:256] `[CLOSED by skillars-deferred-28 AC4]` Added a comment above `BookingService.applyRefundLogic`'s `hoursUntilSession` computation (`BookingService.java:762-763`) stating the actual, verified mechanism: `cancelBookingAsParent` — the only caller that reaches this branch with `CANCEL_PARENT` — has no start-time guard at all (only an ownership check and a `PAYMENT_PENDING`+`CAPTURE_PENDING` refusal), so a parent cancelling a booking after its session start time has already passed is a normal, reachable path, not caller error. An earlier draft of this AC had asserted the false "caller used the wrong event" explanation; corrected before any code was written. Doc-only, no behavior change. Whether a post-start-time parent cancellation should instead settle as a coach no-show is filed as a new open item below, not resolved here.
@@ -841,7 +841,7 @@ the story text first, then implemented as corrected:
 ## Deferred from: code review of skillars-2-4-contact-detail-sanitization-ux (2026-06-13)
 - Phone regex false positives — `PHONE_PATTERN` can match dates and numeric prose (e.g. "49-60 EUR") in bio text; no false-positive boundary test exists [ContactDetailSanitizer.java]
 - `wasModified` semantics with sequential email-then-phone substitution — phone regex runs on already-redacted string; edge case may cause unexpected detection flag behavior [ContactDetailSanitizer.java]
-- Duplicate i18n key `auth.coach.bioSanitizationWarning` (near-identical to `contactDetailWarning`, trailing period differs) — unused by this story but will silently diverge if either string is updated [src/frontend/src/i18n/en/index.js]
+- Duplicate i18n key `auth.coach.bioSanitizationWarning` (near-identical to `contactDetailWarning`, trailing period differs) — unused by this story but will silently diverge if either string is updated [src/frontend/src/i18n/en/index.js] `[PICKED UP by skillars-deferred-42 AC3]`
 
 ## Deferred from: code review of skillars-2-3-coach-public-profile-page (2026-06-13)
 - N+1 queries — `getPublicProfile` fires 8 sequential DB round-trips; acceptable for single-entity load now, but batch loading or `@EntityGraph` should be considered before Epic 3 traffic ramp [CoachProfileService.java]
@@ -907,7 +907,7 @@ the story text first, then implemented as corrected:
 - D5: registerCoach returns void not CoachRegistrationResult — intentional simplification; void sufficient for current ACs [CoachRegistrationService.java]
 - D6: resendVerificationEmail deletes unused tokens instead of marking used=true — deletion achieves invalidation intent [CoachRegistrationService.java:168]
 - D7: Hardcoded BIGINT test fixture IDs risk TSID collision — low probability, acceptable in test-only code [CoachRegistrationResourceIT.java]
-- D8: SecureRandom re-instantiated per generateOtp() call — low severity performance concern [CoachRegistrationService.java:generateOtp]
+- D8: SecureRandom re-instantiated per generateOtp() call — low severity performance concern [CoachRegistrationService.java:generateOtp] `[PICKED UP by skillars-deferred-42 AC1]`
 
 ## Deferred from: code review of skillars-1-3-coach-account-registration-email-verification Group A (2026-06-11)
 - D1: BIGINT PK with no DB sequence — pre-existing @Tsid pattern; direct SQL inserts require manual TSID generation [V21__skillars_security_extension.sql]
@@ -1055,7 +1055,7 @@ the story text first, then implemented as corrected:
 - Def3: Long arithmetic overflow in `storageUsedBytes + requestedBytes` — theoretical at practical quota sizes (max ~9.2 EB); no guard exists. [`QuotaService.java:check`, `QuotaService.java:reserve`]
 - Def4: `commit()` no-op on already-COMMITTED is indistinguishable from not-found — `updated == 0` is logged as debug; callers cannot differentiate idempotent from non-existent handle; intentional idempotency design. [`QuotaService.java:commit`]
 - Def5: `expireBatch()` exception mid-loop not caught — exception terminates the do-while; Spring `@Scheduled` catches it at the framework level; next firing will retry. [`QuotaReservationTimeoutService.java:expireStaleReservations`]
-- Def7: `VideoConfig.quotaProviderValidator` consistency guarantee logging — AC 10 requires logging the guarantee at startup; validator not in this diff; needs verification that it calls `getConsistencyGuarantee()` and logs it. [Out-of-diff verification needed]
+- Def7: `VideoConfig.quotaProviderValidator` consistency guarantee logging — AC 10 requires logging the guarantee at startup; validator not in this diff; needs verification that it calls `getConsistencyGuarantee()` and logs it. [Out-of-diff verification needed] `[STALE — verified against current code by skillars-deferred-42 story creation, 2026-08-20: already fixed. VideoConfig.java:53-63's quotaProviderValidator bean already logs "QuotaProvider active: {} — consistency guarantee: {}" at startup, immediately after resolving the active QuotaProvider bean — exactly the verification this item asked for. Added by an earlier story, unannotated in this ledger.]`
 - Def8: `BandwidthResetService` period drift when job runs late — `bandwidth_period_start` set to `NOW()` on actual run date, not 1st of month; next period boundary shifts accordingly; acceptable drift for non-billing context. [`BandwidthResetService.java:resetMonthlyBandwidth`]
 
 ## Deferred from: code review of skillars-6-1-video-module-foundation-quota-system Run 2 (2026-06-20)
