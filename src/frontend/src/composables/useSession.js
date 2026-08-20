@@ -13,6 +13,7 @@ import {
   cleanup,
 } from 'src/plugins/sessionManager';
 import { authApi } from 'src/api/auth.api';
+import { usePlayerStore } from 'src/stores/playerStore';
 
 /**
  * Composable for session management.
@@ -33,6 +34,7 @@ import { authApi } from 'src/api/auth.api';
  */
 export function useSession() {
   const router = useRouter();
+  const playerStore = usePlayerStore();
 
   // Re-export reactive refs as computed for component use
   const showWarningComputed = computed(() => showWarning.value);
@@ -63,6 +65,8 @@ export function useSession() {
     } catch {
       // Ignore logout errors
     }
+
+    playerStore.resetSelfPlayerId();
 
     // Clean up session state
     cleanup();

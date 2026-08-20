@@ -247,11 +247,13 @@ import { useSession } from 'src/composables/useSession';
 import { toggleTheme as bootToggleTheme, isDarkMode } from 'src/boot/theme';
 import ParentChildSwitcher from 'src/components/ParentChildSwitcher.vue';
 import { useAuthStore } from 'src/stores/auth.store';
+import { usePlayerStore } from 'src/stores/playerStore';
 
 const router = useRouter();
 const { t, locale } = useI18n();
 const { destroySession } = useSession();
 const authStore = useAuthStore();
+const playerStore = usePlayerStore();
 
 const leftDrawerOpen = ref(false);
 const darkMode = ref(isDarkMode());
@@ -296,6 +298,7 @@ function deleteUserCookie() {
 
 async function handleLogout() {
   await authStore.logout();
+  playerStore.resetSelfPlayerId();
   destroySession();
   deleteUserCookie();
   router.push('/login');

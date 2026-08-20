@@ -1,138 +1,197 @@
-# Senior Dev Review: skillars-deferred-42 (OTP SecureRandom Reuse, Session-Pack Dead-Query Removal & Duplicate i18n Key Cleanup)
+# Senior Dev Review: skillars-deferred-43 (Player Registration OTP Test Coverage & Shared Self-Profile Fetch Caching)
 
-Reviewed: `_bmad-output/implementation-artifacts/skillars-deferred-42-otp-secure-random-reuse-session-pack-dead-query-and-duplicate-i18n-key-cleanup.md`
+Reviewed: `_bmad-output/implementation-artifacts/skillars-deferred-43-player-registration-otp-coverage-and-self-profile-fetch-caching.md`
 
 Method: every factual claim was re-verified against current code, not taken on the story's word. Read in
-full: `CoachRegistrationService.java`, `ParentRegistrationService.java`, `PlayerRegistrationService.java`,
-`TwoFactorLoginService.java`, `Secret.java`, `SessionPackPurchaseRepository.java`,
-`SessionPackExpiryNotifier.java`, `SessionPackForfeitureScheduler.java`, and all three touched i18n bundles
-(`en-US`, `de-DE`, `fr-FR`). Every line-number citation and code excerpt in AC1–AC3 was checked exactly
-against the current repo — all matched byte-for-byte, including the three `generateOtp()` bodies, the
-`SessionPackPurchaseRepository` method and comment block, and all three `bioSanitizationWarning` locations.
-Grep re-verification of both AC2's dead-method claim and AC3's unused-key claim independently confirmed —
-`findByCoachIdAndExpiresAtBetweenAndExtendedAtIsNullAndRemainingSessionsGreaterThan` has exactly one hit
-(its own declaration) across `src/main`/`src/test`, and `bioSanitizationWarning` has zero hits outside the
-three i18n bundle files. The one recurring, confirmed problem is in AC4 — the same "tags already applied at
-story-creation time" pattern flagged in the `skillars-deferred-41` review — plus one factual error in AC2's
-own comment-handling rationale and one test-coverage gap in AC1 worth surfacing before `dev-story` runs.
+full: `PlayerRegistrationService.java`, `PlayerRegistrationResource.java`, `PlayerRegistrationRequest.java`,
+`AgePolicyService.java`, `CoachRegistrationResourceIT.java`, `AbstractIntegrationTest.java`,
+`DatabaseResetTestExecutionListener.java`, `V84__player_self_registration.sql`,
+`V21__skillars_security_extension.sql`, `playerStore.js`, `CoachPublicProfilePage.vue`,
+`BookingRequestPage.vue`, `PlayerHomeRedirectPage.vue`, `MainLayout.vue`, `auth.store.js`,
+`src/frontend/eslint.config.js`, and `deferred-work.md`'s D7/D8/D1/generateOtp items. AC1's line-number
+citations, the `ROLE_PLAYER` seeding claim, and AC3's two stale-item verifications all checked out exactly.
+The problems found are in AC2's scope and self-consistency, plus one factual error in AC1's own rationale
+that (harmlessly) doesn't affect the actual instruction given.
 
 ---
 
-## Finding 1 (Medium, confirmed): AC4's ledger-hygiene task list describes work that is already 100% complete — the story's own creation commit already applied every tag it asks for
+## Finding 1 (Medium, confirmed): AC2 undercounts the duplication it claims to fix — a third page, `PlayerHomeRedirectPage.vue`, independently calls the same `getMyProfile()` and is left untouched
 
-**Where:** AC4, Task 4 (4.1–4.4), and the "Status: ready-for-dev" / unchecked `- [ ]` checkboxes on Task 4. Also
-directly contradicts the story's own Dev Notes claim: *"unlike `skillars-deferred-41`, whose hygiene tags were
-pre-applied at story-creation time, this story's tags are NOT yet present in `deferred-work.md` as of story
-creation."*
+**Where:** AC2's framing ("`CoachPublicProfilePage.vue` and `BookingRequestPage.vue` each independently call
+`playerRegistrationApi.getMyProfile()` on mount for the same logical self-booking-player session") and the
+Project Structure Notes' file list, which names only those two `.vue` files as touched.
 
-That Dev Notes claim is false. `git show c8a958a -- _bmad-output/implementation-artifacts/deferred-work.md`
-(the story's own "Create Story Deferred-42" commit) shows all five tags AC4 lists were already written into
-`deferred-work.md` in that same commit:
+`grep -rn "getMyProfile" src/frontend/src` returns **three** hits, not two:
 
-- `` `[PICKED UP by skillars-deferred-42 AC1]` `` already sits on the D8 SecureRandom item
-  (`deferred-work.md:910`, under `## Deferred from: code review of
-  skillars-1-3-coach-account-registration-email-verification Group B (2026-06-11)`).
-- `` `[PICKED UP by skillars-deferred-42 AC2]` `` already sits on the D2 duplicate-expiry-query item
-  (`deferred-work.md:619`, under `## Deferred from: adversarial code review of skillars-7-2 Group 1
-  DB+Entities (2026-06-24)`).
-- `` `[PICKED UP by skillars-deferred-42 AC3]` `` already sits on the duplicate-i18n-key item
-  (`deferred-work.md:844`, under `## Deferred from: code review of
-  skillars-2-4-contact-detail-sanitization-ux (2026-06-13)`).
-- The full `` `[STALE — verified against current code by skillars-deferred-42 story creation, 2026-08-20:
-  already fixed. ...]` `` annotation — complete reasoning text, not a placeholder — is already appended
-  verbatim to Def7 (`deferred-work.md:1058`), matching AC4's specified text word-for-word.
-- The full `` `[STALE — ... moot. applyRefundLogic ...]` `` annotation is already appended verbatim to the
-  `getRequestedStartTime()` item (`deferred-work.md:806`), also matching AC4's specified text word-for-word.
-
-So there is nothing left in `deferred-work.md` for Task 4 to change. Two concrete problems follow for whoever
-picks this story up next:
-
-1. **Task 4's four unchecked `- [ ]` boxes present this as pending work**, and the Dev Notes actively instruct
-   `dev-story` to apply the tags "as part of implementing this story, not skip them expecting them to already
-   exist" — the opposite of what's true. A dev (or an automated `dev-story` run) trusting that instruction and
-   attempting a literal patch/diff against the untagged original line will fail to match, since the line
-   already carries the tag in the exact position the story describes adding it to.
-2. **This repeats the exact same premature-tagging mistake already found and documented in the
-   `skillars-deferred-41` review** (see that story's `story-review.md` Finding 1, same root cause: ledger
-   hygiene tags written at story-creation time instead of after `dev-story` ships the fix, per this ledger's
-   own established after-the-fact `[PICKED UP]`/`[STALE]`/`[CLOSED]` convention). That the same mistake
-   recurred one story later, with Dev Notes text explicitly (and incorrectly) asserting deferred-41's mistake
-   was *not* repeated here, suggests the story-creation process itself should stop writing these tags before
-   `dev-story` runs, not just get corrected story-by-story after the fact.
-
-**Recommendation:** Either (a) check off Task 4.1–4.4 now and rewrite the Dev Notes line to state AC4's ledger
-hygiene was already completed as part of story creation, so `dev-story` knows to skip it and only verify, or
-(b) revert the five tags in `deferred-work.md` until AC1–AC3's code actually ships, and let `dev-story` apply
-them at completion time per the codebase's established convention.
-
----
-
-## Finding 2 (Low-Medium, confirmed): AC2's rationale for the adjacent comment is factually wrong — "the derived query above" in that comment refers to the exact method this AC deletes, not "a different pairing"
-
-**Where:** AC2's parenthetical: *"(lines 26-28, which documents `findExpiringWithinWindowAndSessionsRemaining`
-and explicitly says "The derived query above is a different caller — leave it alone" about a **different
-pairing than this AC removes**)"*.
-
-`SessionPackPurchaseRepository.java:23-28` reads:
-
-```java
-List<SessionPackPurchase> findByCoachIdAndExpiresAtBetweenAndExtendedAtIsNullAndRemainingSessionsGreaterThan(
-    UUID coachId, Instant from, Instant to, int minSessions);
-
-// expiryWarnedAt IS NULL (Deferred-15 AC6): the notifier runs daily over a 14-day window, so
-// without this predicate one pack is re-selected on up to 14 consecutive mornings. Mirrors
-// findExpiredNotYetNotified below. The derived query above is a different caller — leave it alone.
-@Query("SELECT p FROM SessionPackPurchase p WHERE p.expiresAt BETWEEN :from AND :to AND p.extendedAt IS NULL AND p.remainingSessions > 0 AND p.expiryWarnedAt IS NULL")
-List<SessionPackPurchase> findExpiringWithinWindowAndSessionsRemaining(@Param("from") Instant from, @Param("to") Instant to);
+```
+src/frontend/src/pages/auth/PlayerHomeRedirectPage.vue:16:    const profile = await playerRegistrationApi.getMyProfile()
+src/frontend/src/pages/marketplace/CoachPublicProfilePage.vue:310:        const profile = await playerRegistrationApi.getMyProfile()
+src/frontend/src/pages/parent/BookingRequestPage.vue:600:      const profile = await playerRegistrationApi.getMyProfile()
 ```
 
-"Derived query" is Spring Data JPA terminology for a method-name-derived query (no `@Query` annotation) — the
-only such method directly above this comment is
-`findByCoachIdAndExpiresAtBetweenAndExtendedAtIsNullAndRemainingSessionsGreaterThan` at lines 23-24, i.e. the
-exact method AC2 deletes. (`findByIdForUpdate` further up at lines 18-21 is not a candidate — it uses an
-explicit `@Query`, so it isn't "derived.") This is also the same pairing the original ledger item (D2, quoted
-verbatim in this story's own "Why this story exists" section) names: *"`findByCoachIdAndExpiresAtBetween...`
-(coach-scoped) and `findExpiringWithinWindowAndSessionsRemaining` (JPQL all-coaches) overlap."* There is no
-second, different pairing this comment could instead be referring to.
+`PlayerHomeRedirectPage.vue` (lines 14-22) calls `getMyProfile()` on mount to resolve the player's own
+profile id and redirect to `/player/locker-room/<id>` (or `/player/profile-builder` on a 404) — the exact
+same "resolve this self-booking player's own id" purpose AC2 describes, for the exact same session. It's
+not an incidental omission either: `CoachPublicProfilePage.vue:263-265`'s own comment explicitly names this
+page as the precedent being followed — *"the player's own player-profile id, via the same GET
+`/api/security/players/me` call `PlayerHomeRedirectPage.vue` already uses"* — so whoever wrote AC2's source
+material had this file in view and didn't carry it into scope.
 
-Practically: once AC2 deletes lines 23-24, the comment's third sentence ("The derived query above is a
-different caller — leave it alone") becomes dangling — there will be no derived query directly above it
-anymore, only the unrelated `@Query`-based `findByIdForUpdate` two methods up. Task 2.2's own instruction
-("re-read the comment... adjust only if it now reads as referring to a deleted method") is correctly written
-and *is* a sufficient safety net if followed carefully — but the AC's own prose asserts the opposite ("a
-different pairing than this AC removes"), which could lead an implementer to conclude no edit is needed and
-leave a comment that references a method that no longer exists, immediately above a query it no longer sits
-next to.
+Practically: `PlayerHomeRedirectPage.vue` runs on essentially every player login (it's the home redirect), so
+it's the *first* of the three calls in a typical session, and after this story ships it will still be an
+uncached, un-consolidated call sitting right next to two now-cached ones. The story's own justification for
+AC2 — "a minor redundant network round-trip... a shared cache would be a clean follow-up" — applies to this
+file at least as much as to the two it names.
 
-**Recommendation:** Correct the AC2 parenthetical to acknowledge the comment's third sentence *is* about the
-method being deleted, and confirm during implementation that it reads as referring to a deleted method once
-lines 23-24 are gone — per Task 2.2's own (correct) instruction, that sentence should be removed or reworded
-at that point, not left as-is.
+**Recommendation:** Either fold `PlayerHomeRedirectPage.vue` into AC2 (replace its `getMyProfile()` call with
+`playerStore.fetchSelfPlayerId()` too — same one-line shape, and it would also mean the cache is usually
+already warm by the time the player reaches `CoachPublicProfilePage`/`BookingRequestPage`), or explicitly
+narrow AC2's own scope statement to acknowledge a third, deliberately-deferred caller exists, so a future
+audit doesn't rediscover this as a "new" gap.
 
 ---
 
-## Finding 3 (Low, confirmed): AC1's change to `PlayerRegistrationService.generateOtp()` has zero automated test coverage anywhere in the repo
+## Finding 2 (Medium, confirmed): AC2's cache has no invalidation on logout, and this app's logout is an in-SPA navigation, not a full reload — a second player logging in on the same tab can inherit the first player's cached `selfPlayerId`
 
-**Where:** AC1 and Task 1.3, which name `CoachRegistrationResourceIT` and `ParentRegistrationResourceIT` as
-"the two existing integration tests that exercise OTP-issuing registration flows end to end" and rely on them
-staying green as the regression safety net for all three files this AC touches.
+**Where:** AC2's `fetchSelfPlayerId()` spec — "returns `selfPlayerId.value` immediately if already non-null
+(cache hit — no network call)" — with no accompanying reset on logout, and no mention of this edge case
+anywhere in Dev Notes (which does cover the symmetric "cache must not persist a failure" case in detail, but
+not this one).
 
-`grep -rln "PlayerRegistrationService" src/test` and a repo-wide filename search for
-`*PlayerRegistrationResourceIT*` / `*PlayerRegistrationServiceTest*` both return zero results. No test file of
-any kind — integration or unit — references `PlayerRegistrationService`, even though `PlayerRegistrationResource`
-and `PlayerRegistrationService` both exist and are wired the same way as the Coach/Parent equivalents. This
-means the safety net Task 1.3 describes covers 2 of the 3 files AC1 changes; the `PlayerRegistrationService`
-edit is verified only by code-reading (the method body is confirmed byte-for-byte identical to the other two),
-not by any test execution.
+`MainLayout.vue:297-301`'s `handleLogout()`:
 
-This doesn't block the change — it's the same pre-existing "no automated frontend/some-backend test
-infrastructure" gap this story's own Dev Notes already acknowledge exists elsewhere (frontend), just previously
-unnoticed on the backend side for this specific service. Given the change is a mechanical, behavior-preserving
-one-liner mirrored identically across three files, the risk this surfaces is low — but Task 1.3 as written
-implies the two existing ITs constitute full regression coverage for "AC1," when they actually only exercise
-two of its three targets.
+```js
+async function handleLogout() {
+  await authStore.logout();
+  destroySession();
+  deleteUserCookie();
+  router.push('/login');
+}
+```
 
-**Recommendation:** Either add a note to Task 1.3 acknowledging `PlayerRegistrationService`'s change is
-unverified by any automated test (consistent with how this story's Dev Notes already flag other known gaps
-rather than silently having partial coverage), or confirm via manual/API-level smoke test during `dev-story`
-that player registration's OTP flow still issues a valid 6-digit code after the change.
+uses `router.push('/login')` — an SPA route change, not `window.location` — and `authStore.logout()`
+(`auth.store.js:43-55`) only clears the cookie and calls the logout API; neither it nor `handleLogout` resets
+any Pinia store. Grepping the frontend for a store-reset-on-logout mechanism (`$reset`, a router
+`beforeEach` guard, a full-reload redirect) turns up nothing. That means `playerStore` — a singleton for the
+life of the SPA — survives a logout/login cycle in the same browser tab.
+
+Today this is latent but self-limiting: `players`/`activePlayerId` (the existing pattern AC2 is told to
+mirror) has the same lack-of-reset, but `fetchPlayers()` has no cache-hit branch at all — it unconditionally
+re-fetches and overwrites `players.value` on every call (see Finding 4), so the next page that calls it
+self-heals regardless of what account was previously logged in. `fetchSelfPlayerId()` as specified is
+different by design: it deliberately *skips* the network call once `selfPlayerId.value` is set, specifically
+to avoid the round-trip. That means if Player A logs in, visits `CoachPublicProfilePage` or
+`BookingRequestPage` (caching Player A's id), logs out, and Player B logs in on the same tab and visits
+either page, `fetchSelfPlayerId()` returns Player A's cached id — Player B's own booking-request page would
+resolve `playerId` to the wrong player. This isn't a hypothetical UI glitch: `BookingRequestPage.vue:246-249`
+feeds this value straight into the `playerId` used to submit the booking request.
+
+**Recommendation:** Either reset `playerStore.selfPlayerId` (and arguably `players`/`activePlayerId` too,
+while touching this) in `authStore.logout()`/`handleLogout()`, or scope AC2 to accept this as a known,
+pre-existing multi-account-same-tab limitation being extended rather than introduced — but say so explicitly
+in Dev Notes rather than leaving it unaddressed, since the consequence here (a booking silently attributed to
+the wrong player) is more serious than the "which child is selected" staleness `players`/`activePlayerId`
+already tolerates.
+
+---
+
+## Finding 3 (Medium, confirmed): Task 2.4's "confirm eslint clean" directly conflicts with AC2's own instruction to leave the now-dead `playerRegistrationApi` import in place
+
+**Where:** AC2's parenthetical — *"`playerRegistrationApi` stays imported in both pages regardless (each
+still uses other exports from it, or — if it turns out `getMyProfile` was the only export either page used —
+leave the import as dead-import cleanup is not part of this AC's scope; verify via grep before removing
+anything)"* — versus Task 2.4: *"Run `npx eslint` on all three touched frontend files and confirm clean."*
+
+`grep -n "playerRegistrationApi" CoachPublicProfilePage.vue BookingRequestPage.vue` confirms the second
+branch of that parenthetical is what actually happens: `getMyProfile()` is the **only** use of
+`playerRegistrationApi` in both files (one import line, one call site, each). Once AC2's replacement removes
+that call site, the import becomes a genuinely unused binding in both files.
+
+`src/frontend/eslint.config.js:21` includes `js.configs.recommended` with no override for `no-unused-vars`
+anywhere in the file (confirmed by reading the full config and grepping for the rule). `eslint:recommended`
+enables `no-unused-vars` as an **error**, and it flags unused import bindings, not just unused local
+variables. So `npx eslint` on these two files after AC2's change as literally specified (import kept, call
+site removed) will report `'playerRegistrationApi' is defined but never used` and exit non-zero — Task 2.4
+cannot both "confirm clean" and honor AC2's explicit "leave the import" instruction.
+
+**Recommendation:** Resolve the conflict explicitly rather than leaving it for `dev-story` to discover at the
+lint step: either drop the now-genuinely-unused import in both files (the "dead-import cleanup is out of
+scope" hedge doesn't hold once it's confirmed, via the grep AC2 itself asks for, that there's nothing else in
+the file using it), or soften Task 2.4 to acknowledge the two `playerRegistrationApi` import lines as an
+expected, deliberate lint exception if the import is kept.
+
+---
+
+## Finding 4 (Low, confirmed): AC1's rationale for skipping a `@BeforeEach` authority seed is factually wrong about *why* `CoachRegistrationResourceIT` has one — though the actual instruction given (skip it) is still correct
+
+**Where:** AC1 — *"Unlike `CoachRegistrationResourceIT`'s `@BeforeEach` (which manually seeds `ROLE_COACH`
+because nothing else seeds it), `ROLE_PLAYER` (id 102) is already seeded by
+`V84__player_self_registration.sql` — no `@BeforeEach` authority seed is needed."*
+
+`ROLE_COACH` is **also** already seeded by a Flyway migration — `V21__skillars_security_extension.sql:35-39`:
+
+```sql
+INSERT INTO main.authority (id, name, status, created_by, created_date)
+VALUES
+    (100, 'ROLE_COACH',  'ACTIVE', 'system', NOW()),
+    (101, 'ROLE_PARENT', 'ACTIVE', 'system', NOW())
+ON CONFLICT (name) DO NOTHING;
+```
+
+— in exactly the same `INSERT INTO main.authority` shape `DatabaseResetTestExecutionListener` scans for
+(`INSERT_TARGET` regex, `flywaySeededTables()`) to build its snapshot-and-restore reference-data set, which
+runs `restoreReferenceData()` **before every test method**, ahead of both `@Sql` scripts and `@BeforeEach`
+(documented ordering: `reset (3000) -> @Sql (5000) -> @BeforeEach -> test`). So `ROLE_COACH` is already
+present in `main.authority` by the time `CoachRegistrationResourceIT`'s `@BeforeEach` runs its
+`ON CONFLICT (name) DO NOTHING` insert — that insert is a harmless no-op, not something "nothing else seeds."
+It's legacy code, most likely predating this reference-data-restore mechanism (which the class's own Javadoc
+describes as a fairly recent consolidation), left behind rather than cleaned up.
+
+This doesn't change what AC1 actually asks the implementer to do — `ROLE_PLAYER` genuinely is covered by the
+same restore mechanism via `V84`, so skipping `@BeforeEach` in the new `PlayerRegistrationResourceIT` is
+correct — but the stated justification ("unlike Coach, which needs it") is wrong and could mislead a future
+reader into thinking Coach's `@BeforeEach` is load-bearing when it isn't.
+
+**Recommendation:** Correct the parenthetical to something like "Coach's `@BeforeEach` insert is actually
+redundant too (`ROLE_COACH` is seeded by `V21` and restored the same way `ROLE_PLAYER` is by `V84`) — this
+new IT simply doesn't copy that now-unnecessary pattern," so the reasoning matches the mechanism rather than
+implying an asymmetry that doesn't exist. No code or task change needed.
+
+---
+
+## Finding 5 (Low, confirmed): AC2's cited precedent — "`fetchPlayers()`'s fetch-once-cache-in-store shape" — doesn't actually cache; it unconditionally re-fetches on every call
+
+**Where:** AC2's rationale, twice: *"this codebase already has an established, directly-mirrorable pattern
+for exactly this: `playerStore.js`'s existing `fetchPlayers()`/`players` pair (fetch-once, cache-in-store,
+re-read from state on subsequent calls) is the shape a `fetchSelfPlayerId()`/`selfPlayerId` pair on the same
+store should copy,"* and again in the Task list ("mirroring the `players`/`fetchPlayers()` fetch-once-cache-
+in-store shape").
+
+`playerStore.js:10-16`:
+
+```js
+async function fetchPlayers() {
+  const data = await playerProfileApi.listProfiles()
+  players.value = data
+  if (data.length > 0 && !activePlayerId.value) {
+    activePlayerId.value = data[0].id
+  }
+}
+```
+
+There is no cache-hit check here at all — no `if (players.value.length) return`. Every call to
+`fetchPlayers()` makes a fresh network call and overwrites `players.value` unconditionally; only
+`activePlayerId` has a (different) once-set guard. So "fetch-once, cache-in-store, re-read from state on
+subsequent calls" describes behavior this function doesn't have — the actual precedent in this codebase is
+"always refetch, unconditionally overwrite."
+
+This is low-stakes because it doesn't misdirect the actual implementation: AC2 independently and explicitly
+spells out the cache-hit/no-cache-on-failure logic `fetchSelfPlayerId()` must have, in enough detail that an
+implementer doesn't need to infer it from `fetchPlayers()`. But the claimed precedent doesn't exist as
+described, and citing it as justification ("this codebase already has an established... pattern for exactly
+this") overstates how settled this shape is here — this would be the *first* fetch-once-cache function on
+this store, not a mirror of an existing one.
+
+**Recommendation:** Rephrase the rationale to drop the "already established... exactly this" framing — the
+explicit behavior spec in AC2's bullet list stands on its own and doesn't need (incorrect) precedent to
+justify it.

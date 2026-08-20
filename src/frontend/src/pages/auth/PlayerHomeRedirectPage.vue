@@ -7,14 +7,15 @@
 <script setup>
 import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { playerRegistrationApi } from 'src/api/playerRegistration.api'
+import { usePlayerStore } from 'src/stores/playerStore'
 
 const router = useRouter()
+const playerStore = usePlayerStore()
 
 onMounted(async () => {
   try {
-    const profile = await playerRegistrationApi.getMyProfile()
-    router.replace(`/player/locker-room/${profile.id}`)
+    const id = await playerStore.fetchSelfPlayerId()
+    router.replace(`/player/locker-room/${id}`)
   } catch {
     // No profile yet (e.g. verified but never finished the profile-builder step) — send them there.
     router.replace('/player/profile-builder')

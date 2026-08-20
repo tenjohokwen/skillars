@@ -11,9 +11,11 @@ import GlobalLoadingBar from 'src/components/common/GlobalLoadingBar.vue';
 import SessionWarningDialog from 'src/components/common/SessionWarningDialog.vue';
 import { startSessionMonitoring, stopSessionMonitoring, cleanup } from 'src/plugins/sessionManager';
 import { useAuthStore } from 'src/stores/auth.store';
+import { usePlayerStore } from 'src/stores/playerStore';
 
 const router = useRouter();
 const authStore = useAuthStore();
+const playerStore = usePlayerStore();
 
 function isAuthenticated() {
   return document.cookie.includes('user=');
@@ -25,6 +27,7 @@ function handleSessionExpired() {
   // authenticated state and bounce the redirect back into the app.
   document.cookie = 'user=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
   authStore.logout(); // best-effort backend call fires in background; cookie/state already cleared
+  playerStore.resetSelfPlayerId();
   cleanup();
   const currentPath = window.location.pathname + window.location.search;
   router.push({

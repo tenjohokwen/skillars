@@ -226,7 +226,6 @@ import { useAuthStore } from 'src/stores/auth.store'
 import { useBookingStore } from 'src/stores/booking.store'
 import { usePlayerStore } from 'src/stores/playerStore'
 import { getBatchConfig } from 'src/api/booking.api'
-import { playerRegistrationApi } from 'src/api/playerRegistration.api'
 import SessionPackTracker from 'src/components/booking/SessionPackTracker.vue'
 import BookingStateChip from 'src/components/booking/BookingStateChip.vue'
 import PaymentMethodCard from 'src/components/payment/PaymentMethodCard.vue'
@@ -597,8 +596,7 @@ async function submitBatchRequest() {
 onMounted(async () => {
   if (authStore.isPlayer && !route.query.playerId) {
     try {
-      const profile = await playerRegistrationApi.getMyProfile()
-      selfPlayerId.value = profile.id
+      selfPlayerId.value = await playerStore.fetchSelfPlayerId()
     } catch (profileErr) {
       // A 404 is the expected, silent case: no player profile yet. Anything else (network/500)
       // is surfaced — canSubmit's playerId guard still blocks a broken submit either way, but

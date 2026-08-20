@@ -235,7 +235,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { getCoachProfile } from 'src/api/marketplace.api'
-import { playerRegistrationApi } from 'src/api/playerRegistration.api'
 import { useAuthStore } from 'src/stores/auth.store'
 import { useBookingStore } from 'src/stores/booking.store'
 import { usePlayerStore } from 'src/stores/playerStore'
@@ -307,8 +306,7 @@ onMounted(async () => {
       // parent_id and player_id — a self-registered player has no ownable pack), so no pack
       // loading here. The page still renders coach pricing above for a per-session quote.
       try {
-        const profile = await playerRegistrationApi.getMyProfile()
-        selfPlayerId.value = profile.id
+        selfPlayerId.value = await playerStore.fetchSelfPlayerId()
       } catch (profileErr) {
         // A 404 is the expected, silent case: verified but never finished the profile-builder
         // step (same precedent as PlayerHomeRedirectPage.vue). Anything else (network/500) is
