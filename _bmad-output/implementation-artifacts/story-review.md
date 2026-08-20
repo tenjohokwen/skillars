@@ -1,63 +1,117 @@
-# Story Review: Deferred-45 — Self-Player-Id Resolution Guard & Drill-Library Request Sequencing
+# Story Review: Deferred-46 — Self-Player-Id Dedup Reset Guard & Drill-Request Sequencing Guard Extraction
 
-Reviewed: `_bmad-output/implementation-artifacts/skillars-deferred-45-self-player-id-resolution-guard-and-drill-library-request-sequencing.md`
-Method: every factual claim in the story (line numbers, "no other call sites", "no changes needed to X") was
-re-verified against the current code on this branch, not trusted from the story's own prose.
+Reviewed: `_bmad-output/implementation-artifacts/skillars-deferred-46-self-player-id-dedup-reset-guard-and-drill-request-sequencing-guard-extraction.md`
+
+Method: every factual claim in the story (line numbers, "no other change needed", call-site lists, the
+AC3 ledger-tag state) was re-verified against the current code on this branch, not trusted from the story's
+own prose. Read in full: `src/frontend/src/stores/playerStore.js`, `src/frontend/src/stores/session.store.js`,
+`MainLayout.vue`, `App.vue`, `useSession.js`, `DrillLibraryPage.vue`, `SessionBuilderPage.vue`, and the
+`deferred-work.md` heading both ACs cite. AC1's and AC2's line numbers, the three `resetSelfPlayerId()` call
+sites, the three `fetchSelfPlayerId()` call sites, and AC2's proposed helper body (verified byte-for-byte
+against `fetchDrills()`'s current body) all checked out exactly. AC3's two ledger tags are also already
+present in `deferred-work.md` verbatim (lines 1620-1621), matching the story's own established precedent
+(confirmed by `skillars-deferred-44`'s and `-45`'s own reviews) that these are applied at story-creation time,
+not a defect. One real gap was found in AC1's fix, plus one low-severity internal inconsistency in AC1's own
+prose.
 
 ## Findings
 
-### 1. AC2 misses a second, more aggressive caller of the same race: `SessionBuilderPage.vue`
+### 1. AC1's fix is incomplete: `fetchSelfPlayerId()`'s `.finally()` unconditionally nulls the module-scoped cache, so a stale generation's settlement can still clobber a newer generation's in-flight request once `resetSelfPlayerId()` also clears it out-of-band
 
-**Severity: Medium (scope/completeness gap in the story, not a defect in the proposed fix's mechanics).**
+**Severity: Medium (confirmed) — a real, plausible race the AC's own "no other change needed" claim misses; consequence is a duplicated in-flight request, not corrupted data.**
 
-The story frames the `fetchDrills()`/`searchDrills()` concurrent-fetch race as living entirely between
-`DrillLibraryPage.vue`'s `applyFilters`/`clearFilters`/`clearSearch`/debounced-search and `onTabChange`. Task
-2.4 only asks the dev to "confirm `DrillLibraryPage.vue` requires no change," and the Dev Notes / Project
-Structure Notes never mention any other caller.
+**Where:** `src/frontend/src/stores/playerStore.js:44-46`, unmodified by this story's AC1 as scoped:
 
-But `session.store.js`'s `fetchDrills`/`searchDrills` have a second, independent caller:
-`src/frontend/src/pages/coach/SessionBuilderPage.vue`. Its local `fetchDrills()` wrapper
-(`SessionBuilderPage.vue:277-289`) calls `sessionStore.searchDrills(selectedLibrary.value)` and is wired to
-**both**:
-- the library `q-tabs`' `@update:model-value="fetchDrills"` (`:60`), and
-- the search `q-input`'s `@update:model-value="fetchDrills"` (`:84`) — with **no debounce at all**, unlike
-  `DrillLibraryPage.vue`'s 300ms `useDebounce`. Every keystroke fires a new `searchDrills()` call directly.
+```js
+.finally(() => {
+  selfPlayerIdRequest = null
+})
+```
 
-This page reads the exact same shared `sessionStore.drills` (`:95`) and `sessionStore.loading` (`:89`) state
-that `DrillLibraryPage.vue` reads, and is exposed to the identical class of race described in AC2 — arguably a
-worse instance of it, since there is no debounce to reduce call frequency. The story's own re-verification
-step ("re-verified against live code, not trusted from ledger prose") did not surface this second call site.
+This callback clears the module-scoped `selfPlayerIdRequest` **unconditionally** — it never checks whether
+`selfPlayerIdRequest` still refers to *this* promise chain before nulling it. Before AC1's fix, that's safe:
+the only way `selfPlayerIdRequest` ever becomes falsy again is via this exact `.finally()`, so at most one
+promise chain can ever be "the current" one at a time, and its own `.finally()` is always the correct owner of
+the clear.
 
-This does not break AC2's fix: because the sequencing guard lives inside `session.store.js` itself (shared
-across both functions, as AC2 correctly specifies), it transparently protects `SessionBuilderPage.vue`'s calls
-too, with no page-level change needed there either — same as `DrillLibraryPage.vue`. So no additional AC or
-task is required to *fix* anything.
+AC1 changes that invariant by making `resetSelfPlayerId()` **also** null `selfPlayerIdRequest`, out-of-band,
+while a request may still be in flight. That reopens a window the `.finally()` was never written to handle:
 
-**What's missing is verification/documentation, not code:** Task 2.4 and the Dev Notes should also state that
-`SessionBuilderPage.vue` was checked and requires no change (mirroring the `DrillLibraryPage.vue` bullet),
-so:
-- a dev implementing this story doesn't get a false impression that `DrillLibraryPage.vue` is the only
-  consumer relying on the new guard's correctness, and
-- manual verification (this story ships with no automated frontend tests, per its own Dev Notes) actually
-  exercises `SessionBuilderPage.vue`'s tab-change + rapid-keystroke search, which is the more easily
-  triggered instance of the race and the best manual regression check available for this AC.
+1. Caller A (generation 0) calls `fetchSelfPlayerId()` → creates request R0, `selfPlayerIdRequest = R0`
+   (R0's underlying `getMyProfile()` call is slow — the story's own motivating scenario, "logout/relogin
+   racing a slow fetch").
+2. `resetSelfPlayerId()` fires (logout) → generation becomes 1, and per AC1's fix, `selfPlayerIdRequest = null`.
+3. Caller B (generation 1, e.g. a different page's `onMounted` after re-login) calls `fetchSelfPlayerId()` →
+   sees `!selfPlayerIdRequest` (true, just reset) → creates a fresh request R1, `selfPlayerIdRequest = R1`.
+   This part is exactly what AC1 intends and correctly fixes.
+4. R0 (still generation-0, still pending from step 1) now settles — resolve or reject, doesn't matter,
+   `.finally()` always runs. Its generation check (`:36`) correctly skips writing `selfPlayerId.value` (0 ≠
+   1), but its `.finally()` callback still executes `selfPlayerIdRequest = null` **unconditionally** —
+   wiping out the reference to R1, which is still pending, not R0.
+5. Caller C (still generation 1 — e.g. a third page, since this store has three independent
+   `fetchSelfPlayerId()` call sites: `PlayerHomeRedirectPage.vue`, `CoachPublicProfilePage.vue`,
+   `BookingRequestPage.vue`) calls `fetchSelfPlayerId()` before R1 settles → sees `!selfPlayerIdRequest`
+   (wrongly true, clobbered by R0's stale `.finally()`) → starts a second, redundant concurrent request R2 for
+   the same generation, defeating the dedup cache's entire purpose.
 
-## Not flagged (verified accurate, no issue found)
+This can't happen in the current (pre-AC1) code, because `resetSelfPlayerId()` never touches
+`selfPlayerIdRequest` out-of-band today — it's a window newly opened by AC1's own fix, not a pre-existing gap.
+It doesn't corrupt displayed data (R1 and R2 both eventually resolve to the same correct id, both correctly
+generation-gated), but it does mean AC1's stated goal — "clearing `selfPlayerIdRequest` inside
+`resetSelfPlayerId()` closes both consequences at once, with no change needed anywhere else" and "No other
+change to `resetSelfPlayerId()` or `fetchSelfPlayerId()` is needed" — is not quite true: the dedup guarantee
+itself can still be broken by a stale request's `.finally()` firing after a newer one has already started,
+producing extra `getMyProfile()` network calls (and, if a caller happens to land in the gap right after R0's
+throw-on-missing-id fires per `skillars-deferred-45` AC1, an extra spurious rejection surface, though that
+part is unlikely to matter in practice since R2 would still resolve correctly for its own caller).
 
-- AC1's three call sites (`PlayerHomeRedirectPage.vue:22-30`, `CoachPublicProfilePage.vue:308-318`,
-  `BookingRequestPage.vue:599-607`) all branch their `catch` on `err.response?.status !== 404` exactly as
-  described; a plain thrown `Error` (no `.response`) correctly routes through the existing "genuine failure"
-  branch at all three. Confirmed no other call site of `fetchSelfPlayerId()` exists.
-- AC1's guard placement (throw after the existing generation-guarded cache write, `return profile.id` only
-  reachable once `profile.id` is guaranteed non-null) is logically sound; no null-pointer path.
-- AC2's mirrored `coachRequestsSequence` pattern in `booking.store.js:121-124,336-374` matches the story's
-  description verbatim, including the discard-and-`console.warn` catch shape and the finally-guard shape.
-- AC2's guard is behavior-preserving in the non-concurrent (common) case, as claimed — traced through
-  manually.
-- All three AC3 "stale" claims verified against current code: `CoachProfileService.java:334-341` returns
-  `getAverageRating()`/`getReviewCount()` (not hardcoded), `GdprExportService.java` has zero `@Transactional`
-  annotations, and `TimezoneSelect.vue` exists and is imported by both `ProfileBuilderStep1.vue` and
-  `ProfileBuilderStep4.vue`. All five `deferred-work.md` tags (2 `[PICKED UP]`, 3 `[STALE]`) are already
-  present verbatim in the ledger, matching AC3/Task 3 exactly.
-- No frontend test files exist for `playerStore.js` or `session.store.js` — the "no new automated test"
-  Dev Notes claim is accurate.
+**Recommendation:** either accept this residual race explicitly as an out-of-scope tradeoff (the same way
+several other ledger items in this story's own "why only these two" section were left alone with recorded
+reasoning), or close it by having the `.finally()` clear the cache only if it still owns the reference, e.g.
+capturing the promise in a local before assigning it to the module variable and checking identity:
+
+```js
+const request = playerRegistrationApi.getMyProfile()
+  .then((profile) => { /* unchanged */ })
+  .finally(() => {
+    if (selfPlayerIdRequest === request) selfPlayerIdRequest = null
+  })
+selfPlayerIdRequest = request
+```
+
+This is a slightly larger change than AC1's current "one added line" framing (it touches
+`fetchSelfPlayerId()`, not just `resetSelfPlayerId()`), so if this is to be fixed within this story, AC1's
+Dev Notes claim that "No other change to `resetSelfPlayerId()` or `fetchSelfPlayerId()` is needed" would need
+updating either way.
+
+---
+
+### 2. AC1's placement instruction contradicts its own stated justification
+
+**Severity: Low (confirmed) — purely cosmetic; the AC itself says ordering has no functional effect.**
+
+**Where:** AC1's second bullet:
+
+> "...for readability place it after the generation increment, matching the order the three
+> module-scoped/ref declarations already appear in at the top of the store (`selfPlayerId`, then
+> `selfPlayerIdRequest`, then `selfPlayerIdGeneration`)."
+
+The declared order at the top of the store (`playerStore.js:10-12`) is: `selfPlayerId` → `selfPlayerIdRequest`
+→ `selfPlayerIdGeneration`. To actually match that order, the three statements in `resetSelfPlayerId()` would
+need to read: `selfPlayerId.value = null`, then `selfPlayerIdRequest = null`, then
+`selfPlayerIdGeneration++` — i.e. the new statement placed **before** the generation increment.
+
+But the instruction's literal directive is to place the new statement **after** the generation increment,
+which produces the opposite order (`selfPlayerId`, `selfPlayerIdGeneration`, `selfPlayerIdRequest`) — the
+reverse of the declaration order the same sentence claims it's matching. The two halves of this instruction
+disagree with each other.
+
+Functionally moot either way (the AC's own text says "order does not matter functionally," and both readings
+are correct), but a dev following the stated *justification* ("matching declaration order") would write
+different code than a dev following the literal *directive* ("after the generation increment") — worth
+tightening so the two don't point in different directions.
+
+**Recommendation:** either fix the directive to say "before the generation increment" (matching the stated
+declaration-order justification), or fix the justification to describe the order actually being produced
+(`selfPlayerId`, `selfPlayerIdGeneration`, `selfPlayerIdRequest`) rather than claiming it mirrors the
+declaration order.

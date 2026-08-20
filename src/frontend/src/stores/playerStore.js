@@ -27,7 +27,7 @@ export const usePlayerStore = defineStore('player', () => {
     if (selfPlayerId.value !== null) return selfPlayerId.value
     if (!selfPlayerIdRequest) {
       const requestGeneration = selfPlayerIdGeneration
-      selfPlayerIdRequest = playerRegistrationApi.getMyProfile()
+      const request = playerRegistrationApi.getMyProfile()
         .then((profile) => {
           // Only apply the write if resetSelfPlayerId() hasn't fired since this
           // request started — otherwise a slow pre-logout fetch could resolve after
@@ -42,14 +42,21 @@ export const usePlayerStore = defineStore('player', () => {
           return profile.id
         })
         .finally(() => {
-          selfPlayerIdRequest = null
+          // Only clear the module-scoped reference if it still points at this
+          // request — resetSelfPlayerId() may already have cleared it out-of-band
+          // (and let a newer generation start its own request), in which case a
+          // stale generation's late settlement must not clobber that newer
+          // request's reference.
+          if (selfPlayerIdRequest === request) selfPlayerIdRequest = null
         })
+      selfPlayerIdRequest = request
     }
     return selfPlayerIdRequest
   }
 
   function resetSelfPlayerId() {
     selfPlayerId.value = null
+    selfPlayerIdRequest = null
     selfPlayerIdGeneration++
   }
 
