@@ -87,27 +87,56 @@ continues to run thin after 45 prior passes — only two substantive items clear
 ## Acceptance Criteria
 
 1. **AC1 — `playerStore.resetSelfPlayerId()` clears the in-flight request dedup cache alongside the
-   generation bump, so a caller in a new generation never receives a superseded generation's in-flight
-   response.** In `src/frontend/src/stores/playerStore.js`, inside `resetSelfPlayerId()` (`:51-54`):
-   - Add `selfPlayerIdRequest = null` to the function body, alongside the existing
-     `selfPlayerId.value = null` and `selfPlayerIdGeneration++` statements. Order does not matter
-     functionally (all three are synchronous), but for readability place it after the generation increment,
-     matching the order the three module-scoped/ref declarations already appear in at the top of the store
-     (`selfPlayerId`, then `selfPlayerIdRequest`, then `selfPlayerIdGeneration`).
-   - **No other change to `resetSelfPlayerId()` or `fetchSelfPlayerId()` is needed.** `fetchSelfPlayerId()`'s
-     existing `if (!selfPlayerIdRequest)` guard (`:28`), its generation-guarded cache write (`:36-38`), and
-     its unconditional throw-on-missing-id (`:39-41`, `skillars-deferred-45` AC1) are all correct as written
-     once `selfPlayerIdRequest` is properly reset — the fix works entirely by ensuring a post-reset caller
-     never sees a truthy stale `selfPlayerIdRequest` to reuse in the first place.
+   generation bump, and `fetchSelfPlayerId()`'s settlement handler only clears that cache if it still owns
+   the reference, so a caller in a new generation never receives a superseded generation's in-flight
+   response and a superseded generation's eventual settlement can never clobber a newer generation's own
+   in-flight request.** In `src/frontend/src/stores/playerStore.js`:
+   - Inside `resetSelfPlayerId()` (`:51-54`): add `selfPlayerIdRequest = null` to the function body,
+     alongside the existing `selfPlayerId.value = null` and `selfPlayerIdGeneration++` statements. Order
+     does not matter functionally (all three are synchronous), but for readability place it **before** the
+     generation increment, matching the order the three module-scoped/ref declarations already appear in at
+     the top of the store (`selfPlayerId`, then `selfPlayerIdRequest`, then `selfPlayerIdGeneration`).
+   - Inside `fetchSelfPlayerId()` (`:26-49`): capture the in-flight promise chain in a local `const request`
+     before assigning it to the module-scoped `selfPlayerIdRequest`, and change the `.finally()` callback to
+     only clear the module-scoped reference if it still points at *this* request:
+     ```js
+     if (!selfPlayerIdRequest) {
+       const requestGeneration = selfPlayerIdGeneration
+       const request = playerRegistrationApi.getMyProfile()
+         .then((profile) => {
+           if (requestGeneration === selfPlayerIdGeneration && profile?.id != null) {
+             selfPlayerId.value = profile.id
+           }
+           if (profile?.id == null) {
+             throw new Error('Player profile response has no id')
+           }
+           return profile.id
+         })
+         .finally(() => {
+           if (selfPlayerIdRequest === request) selfPlayerIdRequest = null
+         })
+       selfPlayerIdRequest = request
+     }
+     return selfPlayerIdRequest
+     ```
+     This closes a window `resetSelfPlayerId()`'s own fix (the bullet above) would otherwise open: without
+     this identity check, a stale generation's request settling *after* `resetSelfPlayerId()` has already let
+     a newer generation start its own fresh request would unconditionally null `selfPlayerIdRequest` in its
+     `.finally()` — wiping out the reference to the newer, still-pending request (not the stale one) and
+     letting a third caller start a redundant duplicate request for the same, newer generation. (Found by
+     this story's own review; see Review Findings below.)
    - **No call-site changes anywhere.** `resetSelfPlayerId()` is called from `MainLayout.vue`'s
      `handleLogout()`, `App.vue`'s `handleSessionExpired()`, and `useSession.js`'s `handleLogout()`
      (all three added by `skillars-deferred-43` AC2's own patch round) — none of these call sites need to
-     change; they already call `resetSelfPlayerId()` at the right moment, this AC only fixes what that
-     function itself does.
+     change; they already call `resetSelfPlayerId()` at the right moment, this AC only fixes what
+     `resetSelfPlayerId()`/`fetchSelfPlayerId()` themselves do. The three `fetchSelfPlayerId()` call sites
+     (`PlayerHomeRedirectPage.vue`, `CoachPublicProfilePage.vue`, `BookingRequestPage.vue`) also need no
+     change — both halves of the fix are internal to the store.
    - **The orphaned stale promise is not cancelled and does not need to be.** Whatever caller originally
      awaited the pre-reset `fetchSelfPlayerId()` call still receives its real outcome when it eventually
      settles (a JS Promise cannot be cancelled once created) — this AC's fix only ensures a *new* caller
-     after reset does not reuse that promise as its own.
+     after reset does not reuse that promise as its own, and that its eventual settlement cannot clobber a
+     newer request's reference either.
 
 2. **AC2 — `session.store.js`'s `fetchDrills()` and `searchDrills()` share one sequencing-guard helper
    instead of duplicating it, with no behavior change.** In `src/frontend/src/stores/session.store.js`:
@@ -186,13 +215,38 @@ continues to run thin after 45 prior passes — only two substantive items clear
    - Tag the same heading's `fetchDrills()`/`searchDrills()` duplication item with
      `` `[PICKED UP by skillars-deferred-46 AC2]` ``.
 
+### Review Findings
+
+`story-review.md` (2026-08-20) filed 2 findings against the draft, both confirmed and fixed in this revision:
+
+- **Finding 1 (Medium, confirmed):** AC1 as originally scoped ("no other change to `resetSelfPlayerId()` or
+  `fetchSelfPlayerId()` is needed" beyond the one added line) missed that `fetchSelfPlayerId()`'s existing
+  `.finally()` clears `selfPlayerIdRequest` unconditionally. Once `resetSelfPlayerId()` also clears it
+  out-of-band, a stale generation's request settling after a newer generation has already started its own
+  fresh request would clobber the newer request's reference via that unconditional `.finally()`, letting a
+  third caller start a redundant duplicate request for the same (newer) generation — not a data-correctness
+  bug, but a real hole in the dedup guarantee AC1 claims to close. Fixed: AC1 now also has
+  `fetchSelfPlayerId()` capture its promise chain in a local and guard `.finally()` with an identity check,
+  so only the request that actually owns the module-scoped reference can clear it.
+- **Finding 2 (Low, confirmed):** AC1's original placement instruction told the dev to place the new
+  statement *after* the generation increment while claiming that ordering *matches* the module's declared
+  variable order (`selfPlayerId`, `selfPlayerIdRequest`, `selfPlayerIdGeneration`) — the two halves
+  contradicted each other, since matching declared order actually requires placing it *before* the
+  increment. Fixed: the directive now says "before," consistent with its own stated justification.
+
+Both findings are folded directly into AC1's text above and Task 1 below, rather than filed as separate
+follow-up items — AC1 was not yet implemented at review time, so there was no diff to patch, only the spec
+to correct before `dev-story` picks it up.
+
 ## Tasks / Subtasks
 
-- [ ] Task 1: `playerStore.resetSelfPlayerId()` dedup-cache clear (AC: #1)
-  - [ ] 1.1 Add `selfPlayerIdRequest = null` to `resetSelfPlayerId()`.
-  - [ ] 1.2 Confirm `fetchSelfPlayerId()` requires no change (verify by reading, not editing).
+- [ ] Task 1: `playerStore.resetSelfPlayerId()`/`fetchSelfPlayerId()` dedup-cache guard (AC: #1)
+  - [ ] 1.1 Add `selfPlayerIdRequest = null` to `resetSelfPlayerId()`, placed before the generation increment.
+  - [ ] 1.2 Change `fetchSelfPlayerId()` to capture its in-flight promise chain in a local `const request`
+    and guard the `.finally()` callback with `if (selfPlayerIdRequest === request) selfPlayerIdRequest = null`.
   - [ ] 1.3 Confirm all three `resetSelfPlayerId()` call sites (`MainLayout.vue`, `App.vue`, `useSession.js`)
-    require no change (verify by reading, not editing).
+    and all three `fetchSelfPlayerId()` call sites (`PlayerHomeRedirectPage.vue`, `CoachPublicProfilePage.vue`,
+    `BookingRequestPage.vue`) require no change (verify by reading, not editing).
   - [ ] 1.4 Run `npx eslint` on the one touched file and confirm clean.
 - [ ] Task 2: `session.store.js` sequencing-guard extraction (AC: #2)
   - [ ] 2.1 Add the `runSequencedDrillsRequest(apiCall)` helper, lifted verbatim from `fetchDrills()`'s
@@ -213,11 +267,16 @@ continues to run thin after 45 prior passes — only two substantive items clear
 - **This story bundles two unrelated frontend-store fixes (player self-identity dedup-cache reset,
   drill-library sequencing-guard deduplication) by explicit instruction — do not look for a unifying theme
   beyond "small, real, decision-light, and this pass was asked to bundle."**
-- **AC1's fix is a single added line.** Do not add any conditional logic around clearing
-  `selfPlayerIdRequest` (e.g. "only clear it if no request is in flight") — the whole point is that clearing
-  it unconditionally on every reset is always correct: if nothing is in flight, clearing a `null` is a no-op;
-  if something is in flight, clearing the reference is exactly what stops a *future* caller from reusing it,
-  while the in-flight promise itself continues running independently for whoever is still awaiting it.
+- **AC1's fix touches two functions, not one.** `resetSelfPlayerId()`'s unconditional clear of
+  `selfPlayerIdRequest` is correct as scoped — do not add conditional logic there (e.g. "only clear it if no
+  request is in flight"): if nothing is in flight, clearing a `null` is a no-op; if something is in flight,
+  clearing the reference is exactly what stops a *future* caller from reusing it, while the in-flight promise
+  itself continues running independently for whoever is still awaiting it. But this story's own review found
+  that clearing alone reopens a different window — a stale generation's `.finally()` firing *after* a newer
+  generation has already started its own request would otherwise null out the newer request's reference —
+  which is why `fetchSelfPlayerId()`'s `.finally()` also needs the identity check described in AC1's second
+  bullet. Do not skip that half of the fix; it is required for the dedup guarantee to actually hold across a
+  reset, not optional hardening.
 - **AC2 is a pure refactor — it must not change behavior.** Every message, ordering, and guard condition in
   `runSequencedDrillsRequest` must match `fetchDrills()`'s current body exactly; the temptation to
   "improve" the extracted helper (renaming the warn message, changing supersession-check ordering, adding a
@@ -235,7 +294,10 @@ continues to run thin after 45 prior passes — only two substantive items clear
 ### Project Structure Notes
 
 - `src/frontend/src/stores/playerStore.js` — `resetSelfPlayerId()` gains one new statement
-  (`selfPlayerIdRequest = null`). No other line changes (AC1).
+  (`selfPlayerIdRequest = null`, placed before the generation increment); `fetchSelfPlayerId()`'s in-flight
+  promise chain is captured in a local `const request` and its `.finally()` callback gains an identity check
+  (`if (selfPlayerIdRequest === request) selfPlayerIdRequest = null`) before clearing the module-scoped
+  reference (AC1).
 - `src/frontend/src/stores/session.store.js` — new `runSequencedDrillsRequest(apiCall)` helper function;
   `fetchDrills()` and `searchDrills()` bodies replaced with one-line delegations to it. `params`-building
   logic inside `searchDrills()` is unchanged. `drillsRequestSequence` declaration and comment unchanged (AC2).
@@ -283,3 +345,4 @@ continues to run thin after 45 prior passes — only two substantive items clear
 | Date | Change |
 |---|---|
 | 2026-08-20 | Story created via story-creation process: bundled 2-item story per explicit instruction not to create another small story. Re-mined `deferred-work.md` end to end (1621 lines), re-verifying every candidate against current code rather than trusting ledger text. Both items were filed by `skillars-deferred-45`'s own code review and neither had been picked up. AC1 closes `playerStore.resetSelfPlayerId()`'s failure to clear the in-flight `selfPlayerIdRequest` dedup cache, which could let a new-generation caller receive a superseded generation's in-flight response (a stale valid id, or `skillars-deferred-45` AC1's new unconditional throw firing for the wrong caller). AC2 closes `session.store.js`'s `fetchDrills()`/`searchDrills()` verbatim-duplicated 3-point sequencing guard by extracting it into one shared `runSequencedDrillsRequest(apiCall)` helper, a purely mechanical, behavior-preserving refactor. Unlike `skillars-deferred-43`/`-44`/`-45`, no stale/already-resolved items were found during this pass's re-mine, so this story carries no hygiene AC3 beyond tagging its own two source items. Ledger remains thin after 45 prior passes — only two substantive items cleared the real/small/decision-light bar this pass, the same count as each of the three immediately preceding stories. |
+| 2026-08-20 | `story-review.md` findings applied. Finding 1/Medium (confirmed): AC1's original "no other change needed" framing missed that `fetchSelfPlayerId()`'s existing `.finally()` clears the dedup cache unconditionally — once `resetSelfPlayerId()` also clears it out-of-band, a stale generation's late settlement could clobber a newer generation's still-in-flight request reference, defeating the dedup guarantee for a third caller. Fixed by expanding AC1 to also have `fetchSelfPlayerId()` capture its promise in a local and guard `.finally()` with an identity check. Finding 2/Low (confirmed): AC1's placement instruction told the dev to place the new statement after the generation increment while claiming to match declared variable order, which actually requires placing it before — fixed by correcting the directive to "before." Status remains ready-for-dev. |
