@@ -1,109 +1,63 @@
-# Senior Dev Review: skillars-deferred-44 (Video Approval Observability Granularity & Player-Redirect Error Differentiation)
+# Story Review: Deferred-45 — Self-Player-Id Resolution Guard & Drill-Library Request Sequencing
 
-Reviewed: `_bmad-output/implementation-artifacts/skillars-deferred-44-video-approval-observability-granularity-and-player-redirect-error-differentiation.md`
+Reviewed: `_bmad-output/implementation-artifacts/skillars-deferred-45-self-player-id-resolution-guard-and-drill-library-request-sequencing.md`
+Method: every factual claim in the story (line numbers, "no other call sites", "no changes needed to X") was
+re-verified against the current code on this branch, not trusted from the story's own prose.
 
-Method: every factual claim was re-verified against current code, not taken on the story's word. Read in
-full: `VideoApprovalResource.java`, `VideoResource.java`, `PlayerHomeRedirectPage.vue`,
-`CoachPublicProfilePage.vue`, `BookingRequestPage.vue`, `playerStore.js`, `playerRegistration.api.js`,
-`boot/axios.js`, `router/routes.js`, `ShadowAccountResource.java`, `ShadowAccountService.java`,
-`ApiAdvice.java`, `QuotaConfigService.java`, `MessagingService.java`, and all four `deferred-work.md` sections
-AC3 targets. AC1's three method locations, AC2's precedent citations (`CoachPublicProfilePage.vue:309-317`,
-`BookingRequestPage.vue:598-607`), the `common.errorGeneric` presence in all three locale bundles, and both
-AC3 stale-item technical claims (the `Instant.EPOCH` comment and the switch-expression-vs-`MatchException`
-reasoning) all checked out exactly — including confirming `resolveTierKey()` really is a `default`-less
-switch *expression*, which JLS 14.11.1 does require to be exhaustive at compile time. AC3's four ledger tags
-are also already present in `deferred-work.md` verbatim, matching the story's own stated precedent that these
-are applied at story-creation time (not a defect — this mirrors `skillars-deferred-42`/`-43`'s corrected
-convention, already confirmed working as intended). Two problems were found: a real behavioral gap in AC2's
-catch-block scope that the story's own mirrored precedent doesn't share, and a factual error in AC1's prose
-about `VideoResource`'s annotation ordering convention.
+## Findings
 
----
+### 1. AC2 misses a second, more aggressive caller of the same race: `SessionBuilderPage.vue`
 
-## Finding 1 (Medium, confirmed): AC2's `catch` also wraps the success-path redirect, so a navigation/chunk-load failure after a *successful* profile fetch will be misreported as a profile error and wrongly send an onboarded player to the profile-builder
+**Severity: Medium (scope/completeness gap in the story, not a defect in the proposed fix's mechanics).**
 
-**Where:** AC2's instruction to change `catch { router.replace('/player/profile-builder') }` to
-`catch (err) { if (err.response?.status !== 404) { $q.notify(...) } router.replace('/player/profile-builder') }`,
-applied to `PlayerHomeRedirectPage.vue:16-22` as-is (the story explicitly says the surrounding
-`try`/`catch`/redirect shape is unchanged, only the catch body is edited).
+The story frames the `fetchDrills()`/`searchDrills()` concurrent-fetch race as living entirely between
+`DrillLibraryPage.vue`'s `applyFilters`/`clearFilters`/`clearSearch`/debounced-search and `onTabChange`. Task
+2.4 only asks the dev to "confirm `DrillLibraryPage.vue` requires no change," and the Dev Notes / Project
+Structure Notes never mention any other caller.
 
-The current (and, per AC2, still-unchanged) shape is:
+But `session.store.js`'s `fetchDrills`/`searchDrills` have a second, independent caller:
+`src/frontend/src/pages/coach/SessionBuilderPage.vue`. Its local `fetchDrills()` wrapper
+(`SessionBuilderPage.vue:277-289`) calls `sessionStore.searchDrills(selectedLibrary.value)` and is wired to
+**both**:
+- the library `q-tabs`' `@update:model-value="fetchDrills"` (`:60`), and
+- the search `q-input`'s `@update:model-value="fetchDrills"` (`:84`) — with **no debounce at all**, unlike
+  `DrillLibraryPage.vue`'s 300ms `useDebounce`. Every keystroke fires a new `searchDrills()` call directly.
 
-```js
-onMounted(async () => {
-  try {
-    const id = await playerStore.fetchSelfPlayerId()
-    router.replace(`/player/locker-room/${id}`)   // line 18 — inside the try
-  } catch {
-    router.replace('/player/profile-builder')
-  }
-})
-```
+This page reads the exact same shared `sessionStore.drills` (`:95`) and `sessionStore.loading` (`:89`) state
+that `DrillLibraryPage.vue` reads, and is exposed to the identical class of race described in AC2 — arguably a
+worse instance of it, since there is no debounce to reduce call frequency. The story's own re-verification
+step ("re-verified against live code, not trusted from ledger prose") did not surface this second call site.
 
-The `try` block covers **two** statements, not one: the `fetchSelfPlayerId()` call *and* the success-path
-`router.replace('/player/locker-room/${id}')` navigation. `player/locker-room/:playerId`
-(`router/routes.js:234-238`) is a lazy-loaded route (`component: () => import('pages/player/PlayerLockerRoomPlaceholderPage.vue')`), so `router.replace()` here can reject on its own — most plausibly from a dynamic
-`import()` failure (a stale JS chunk hash after a deploy is a common real-world SPA failure mode, not a
-contrived one).
+This does not break AC2's fix: because the sequencing guard lives inside `session.store.js` itself (shared
+across both functions, as AC2 correctly specifies), it transparently protects `SessionBuilderPage.vue`'s calls
+too, with no page-level change needed there either — same as `DrillLibraryPage.vue`. So no additional AC or
+task is required to *fix* anything.
 
-Contrast this with the exact precedent AC2 cites: in `CoachPublicProfilePage.vue:308-318` and
-`BookingRequestPage.vue:598-607`, the inner `try` wraps **only** the `fetchSelfPlayerId()` call — nothing
-that runs after a successful fetch is inside that same `try`. AC2 copies the precedent's `if
-(err.response?.status !== 404) { $q.notify(...) }` condition verbatim, but doesn't account for the fact that
-`PlayerHomeRedirectPage.vue`'s pre-existing `try` is scoped more broadly than the pattern it's copying from.
+**What's missing is verification/documentation, not code:** Task 2.4 and the Dev Notes should also state that
+`SessionBuilderPage.vue` was checked and requires no change (mirroring the `DrillLibraryPage.vue` bullet),
+so:
+- a dev implementing this story doesn't get a false impression that `DrillLibraryPage.vue` is the only
+  consumer relying on the new guard's correctness, and
+- manual verification (this story ships with no automated frontend tests, per its own Dev Notes) actually
+  exercises `SessionBuilderPage.vue`'s tab-change + rapid-keystroke search, which is the more easily
+  triggered instance of the race and the best manual regression check available for this AC.
 
-Consequence once AC2 ships: if `router.replace('/player/locker-room/${id}')` throws for any reason (the
-fetch itself already having succeeded — the player *does* have a profile), the rejection has no
-`.response` property, so `err.response?.status !== 404` evaluates to `true`. The new code will (a) show a
-"Something went wrong" toast that misattributes the failure to the profile fetch, which actually succeeded,
-and (b) still unconditionally redirect the player to `/player/profile-builder` — a page with no guard against
-an already-existing profile (`PlayerProfileBuilderPage.vue`'s submit just calls
-`playerRegistrationApi.createProfile()`, and `ShadowAccountService.createSelfOwnedPlayerProfile()` only
-rejects the *second* POST with a 409-mapped `ShadowAccountException` after the player has already been shown
-the builder form). This is worse than today's bare-catch behavior for this specific scenario: today, that
-same navigation failure silently redirects with no message at all; after AC2, it silently redirects **plus**
-shows a toast actively telling an onboarded player something is wrong with their profile, which isn't true.
+## Not flagged (verified accurate, no issue found)
 
-**Recommendation:** Narrow the `try` to wrap only `await playerStore.fetchSelfPlayerId()`, moving the
-success-path `router.replace(...)` outside the `try`/`catch` (mirroring the precedent's scoping exactly, not
-just its condition) — or, if the broader `try` is kept deliberately, note in AC2/Dev Notes that a
-post-fetch-success navigation failure will be misclassified as a non-404 profile error and accept that
-tradeoff explicitly rather than leaving it unaddressed.
-
----
-
-## Finding 2 (Low, confirmed): AC1's prose claims `@Observed` mirrors `VideoResource`'s convention of being placed "first, above the mapping annotation" — the actual convention is the opposite
-
-**Where:** AC1's closing sentence: *"Naming mirrors `VideoResource`'s exact `<class-scope>.<method-scope>`
-dot-hierarchy... applied to `video.approvals`'s own scope... and annotation ordering on each method mirrors
-`VideoResource`'s own convention of placing `@Observed` first, above the mapping annotation."*
-
-Direct read of every one of `VideoResource`'s five annotated methods shows `@Observed` placed **last**,
-immediately above the method signature — after the mapping annotation, after `@PreAuthorize`, and after
-`@ResponseStatus` where present, never first:
-
-```
-67  @PostMapping("/uploads/initiate")
-68  @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
-69  @Observed(name = "video.upload.initiate")        // last, not first
-70  public ResponseEntity<...> initiateUpload(
-
-151 @DeleteMapping("/{id}")
-152 @PreAuthorize("@videoAccessGuard.canDelete(authentication, #id)")
-153 @ResponseStatus(HttpStatus.NO_CONTENT)
-154 @Observed(name = "video.delete")                  // last, not first
-155 public void deleteVideo(@PathVariable UUID id) {
-```
-
-All five methods (`:69`, `:96`, `:116`, `:131`, `:154`) follow this same last-position pattern with zero
-exceptions. AC1's own concrete per-bullet instructions ("add `@Observed(...)` immediately above
-`listPendingApprovals()`", i.e., last, right before the method) actually get the position right — it's only
-the summary sentence describing *why* that's correct that states the rule backwards. Low functional risk
-(annotation order doesn't affect Spring AOP/Micrometer semantics either way), but a dev or agent trusting the
-prose over the positional instruction could place the three new annotations first, immediately above
-`@GetMapping`/`@PutMapping`, which would not actually match `VideoResource`'s convention and would partially
-defeat this AC's stated purpose of mirroring it.
-
-**Recommendation:** Correct the sentence to say `@Observed` is placed **last**, immediately above the method
-declaration (after the mapping/`@PreAuthorize`/`@ResponseStatus` annotations), matching what the per-bullet
-instructions already correctly specify.
+- AC1's three call sites (`PlayerHomeRedirectPage.vue:22-30`, `CoachPublicProfilePage.vue:308-318`,
+  `BookingRequestPage.vue:599-607`) all branch their `catch` on `err.response?.status !== 404` exactly as
+  described; a plain thrown `Error` (no `.response`) correctly routes through the existing "genuine failure"
+  branch at all three. Confirmed no other call site of `fetchSelfPlayerId()` exists.
+- AC1's guard placement (throw after the existing generation-guarded cache write, `return profile.id` only
+  reachable once `profile.id` is guaranteed non-null) is logically sound; no null-pointer path.
+- AC2's mirrored `coachRequestsSequence` pattern in `booking.store.js:121-124,336-374` matches the story's
+  description verbatim, including the discard-and-`console.warn` catch shape and the finally-guard shape.
+- AC2's guard is behavior-preserving in the non-concurrent (common) case, as claimed — traced through
+  manually.
+- All three AC3 "stale" claims verified against current code: `CoachProfileService.java:334-341` returns
+  `getAverageRating()`/`getReviewCount()` (not hardcoded), `GdprExportService.java` has zero `@Transactional`
+  annotations, and `TimezoneSelect.vue` exists and is imported by both `ProfileBuilderStep1.vue` and
+  `ProfileBuilderStep4.vue`. All five `deferred-work.md` tags (2 `[PICKED UP]`, 3 `[STALE]`) are already
+  present verbatim in the ledger, matching AC3/Task 3 exactly.
+- No frontend test files exist for `playerStore.js` or `session.store.js` — the "no new automated test"
+  Dev Notes claim is accurate.

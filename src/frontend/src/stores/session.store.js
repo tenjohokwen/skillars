@@ -18,21 +18,32 @@ export const useSessionStore = defineStore('session', () => {
   const canUploadVideo = ref(null)
   const uploadingDrillId = ref(null)
   const uploadProgress = ref(0)
+  // Non-reactive by design — this is an internal ordering token for fetchDrills/searchDrills
+  // below, not page-visible state. Matches booking.store.js's identical coachRequestsSequence
+  // pattern, skillars-deferred-38.
+  let drillsRequestSequence = 0
 
   async function fetchDrills(library) {
+    const requestId = ++drillsRequestSequence
     loading.value = true
     error.value = null
     try {
       const response = await sessionApi.getDrills(library)
+      if (requestId !== drillsRequestSequence) return
       drills.value = response
     } catch (err) {
+      if (requestId !== drillsRequestSequence) {
+        console.warn('Discarding failure from a superseded drill-list request:', err?.message || err)
+        return
+      }
       error.value = err
     } finally {
-      loading.value = false
+      if (requestId === drillsRequestSequence) loading.value = false
     }
   }
 
   async function searchDrills(library) {
+    const requestId = ++drillsRequestSequence
     loading.value = true
     error.value = null
     try {
@@ -49,11 +60,16 @@ export const useSessionStore = defineStore('session', () => {
         params.weakFootBias = activeFilters.value.weakFootBias
       }
       const response = await sessionApi.getDrills(library, params)
+      if (requestId !== drillsRequestSequence) return
       drills.value = response
     } catch (err) {
+      if (requestId !== drillsRequestSequence) {
+        console.warn('Discarding failure from a superseded drill-list request:', err?.message || err)
+        return
+      }
       error.value = err
     } finally {
-      loading.value = false
+      if (requestId === drillsRequestSequence) loading.value = false
     }
   }
 
