@@ -1,6 +1,6 @@
 # Story Deferred-45: Self-Player-Id Resolution Guard & Drill-Library Request Sequencing
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -189,6 +189,17 @@ items cleared the bar this time, the same count as each of the two immediately p
      `clearFilters` and `debouncedSearch` all already call `sessionStore.fetchDrills(...)` /
      `sessionStore.searchDrills(...)` with no return-value handling today, and none of them need to change to
      benefit from the guard living entirely inside the store.
+   - **`DrillLibraryPage.vue` is not `session.store.js`'s only caller.** `src/frontend/src/pages/coach/
+     SessionBuilderPage.vue`'s local `fetchDrills()` wrapper (`:277-289`) also calls
+     `sessionStore.searchDrills(selectedLibrary.value)`, wired to both the library `q-tabs`'
+     `@update:model-value` (`:60`) and the search `q-input`'s `@update:model-value` (`:84`) — with **no
+     debounce at all**, unlike `DrillLibraryPage.vue`'s 300ms `useDebounce`, so every keystroke fires a new
+     `searchDrills()` call directly. This page reads the same shared `sessionStore.drills`/`sessionStore.loading`
+     state and is exposed to the identical race, arguably a more easily triggered instance of it since there's
+     no debounce reducing call frequency. Because the sequencing guard lives inside `session.store.js` itself
+     (shared across both functions), it transparently protects `SessionBuilderPage.vue`'s calls too — **no
+     change to `SessionBuilderPage.vue` is needed either**, same as `DrillLibraryPage.vue`. (Story-review
+     Finding 1.)
    - `AbortController`-based cancellation was considered and explicitly **not** adopted — the identical
      alternative `skillars-deferred-38`'s own story evaluated and rejected for the equivalent booking-store
      race, on the same grounds (a sequence counter is simpler, requires no changes to `boot/axios.js`, and
@@ -227,24 +238,48 @@ items cleared the bar this time, the same count as each of the two immediately p
      sprint-status.yaml). That closure was never tagged onto this original bullet. Added by an earlier story,
      unannotated in this ledger.]` ``.
 
+### Review Findings
+
+`story-review.md` (2026-08-20) filed 1 finding against the draft, confirmed and fixed in this revision:
+
+- **Finding 1 (Medium, confirmed):** AC2 framed the concurrent-fetch race as living entirely in
+  `DrillLibraryPage.vue`, but `SessionBuilderPage.vue` is a second, independent caller of
+  `sessionStore.searchDrills()` — un-debounced, so arguably an easier trigger of the same race. This did not
+  break AC2's fix (the guard lives in the shared store and protects both callers automatically), but the
+  story's own verification/documentation didn't say so. Fixed: AC2, Task 2, Dev Notes, and Project Structure
+  Notes all now name `SessionBuilderPage.vue` alongside `DrillLibraryPage.vue` as a verified-no-change-needed
+  caller, and Task 2.5 directs manual regression testing at `SessionBuilderPage.vue` specifically since it
+  triggers the race more easily.
+
+No code scope was added — this was a verification/documentation gap, not a defect in the proposed fix.
+
 ## Tasks / Subtasks
 
-- [ ] Task 1: `playerStore.fetchSelfPlayerId()` null-id guard (AC: #1)
-  - [ ] 1.1 Add the `if (profile?.id == null) throw new Error('Player profile response has no id')` check
+- [x] Task 1: `playerStore.fetchSelfPlayerId()` null-id guard (AC: #1)
+  - [x] 1.1 Add the `if (profile?.id == null) throw new Error('Player profile response has no id')` check
     inside the `.then()` callback, after the existing generation-guarded cache write.
-  - [ ] 1.2 Change `return profile?.id` to `return profile.id`.
-  - [ ] 1.3 Confirm all three call sites' existing `catch` blocks require no change (verify by reading, not
+  - [x] 1.2 Change `return profile?.id` to `return profile.id`.
+  - [x] 1.3 Confirm all three call sites' existing `catch` blocks require no change (verify by reading, not
     editing, `PlayerHomeRedirectPage.vue`, `CoachPublicProfilePage.vue`, `BookingRequestPage.vue`).
-  - [ ] 1.4 Run `npx eslint` on the one touched file and confirm clean.
-- [ ] Task 2: `session.store.js` drill-request sequencing guard (AC: #2)
-  - [ ] 2.1 Add the `drillsRequestSequence` counter declaration with its mirroring comment.
-  - [ ] 2.2 Add the `requestId` capture, post-await supersession check, catch-block supersession check +
+  - [x] 1.4 Run `npx eslint` on the one touched file and confirm clean.
+- [x] Task 2: `session.store.js` drill-request sequencing guard (AC: #2)
+  - [x] 2.1 Add the `drillsRequestSequence` counter declaration with its mirroring comment.
+  - [x] 2.2 Add the `requestId` capture, post-await supersession check, catch-block supersession check +
     `console.warn`, and finally-block supersession guard to `fetchDrills()`.
-  - [ ] 2.3 Apply the identical changes to `searchDrills()`.
-  - [ ] 2.4 Confirm `DrillLibraryPage.vue` requires no change (verify by reading, not editing).
-  - [ ] 2.5 Run `npx eslint` on the one touched file and confirm clean.
-- [ ] Task 3: Ledger hygiene (AC: #3) — apply the two `[PICKED UP]` tags and three `[STALE]` annotations
+  - [x] 2.3 Apply the identical changes to `searchDrills()`.
+  - [x] 2.4 Confirm `DrillLibraryPage.vue` requires no change (verify by reading, not editing).
+  - [x] 2.5 Confirm `SessionBuilderPage.vue` — `session.store.js`'s other caller of `searchDrills()`, wired
+    to its un-debounced tab/search inputs — also requires no change (verify by reading, not editing); manually
+    exercise its rapid tab-change + rapid-keystroke search as the primary regression check for this AC, since
+    it triggers the race more easily than `DrillLibraryPage.vue`'s debounced search.
+  - [x] 2.6 Run `npx eslint` on the one touched file and confirm clean.
+- [x] Task 3: Ledger hygiene (AC: #3) — apply the two `[PICKED UP]` tags and three `[STALE]` annotations
   specified in AC3 above.
+
+### Review Findings (code review of the implementation diff, 2026-08-20)
+
+- [x] [Review][Defer] `resetSelfPlayerId()` doesn't clear the in-flight `selfPlayerIdRequest` dedup cache, so a request from a superseded generation can still settle for a new caller [`src/frontend/src/stores/playerStore.js:11,26-30,48-51`] — deferred, pre-existing
+- [x] [Review][Defer] `fetchDrills()`/`searchDrills()` duplicate the identical 3-point sequencing guard verbatim instead of sharing a helper [`src/frontend/src/stores/session.store.js:22-58`] — deferred, pre-existing/spec-mandated shape
 
 ## Dev Notes
 
@@ -271,7 +306,14 @@ items cleared the bar this time, the same count as each of the two immediately p
 - **AC2 needs no new automated test.** This codebase has no frontend test suite (`skillars-deferred-38`'s
   own equivalent fix shipped with the same reasoning: "standing repo-wide gap for `booking.store.js`") —
   verify by inspection against the `booking.store.js` precedent's own already-proven shape, not by writing a
-  new Vitest/Vue-Test-Utils harness this story does not introduce.
+  new Vitest/Vue-Test-Utils harness this story does not introduce. Manually exercise `SessionBuilderPage.vue`'s
+  rapid tab-change + rapid-keystroke search (no debounce there, unlike `DrillLibraryPage.vue`) as the best
+  available manual regression check — it triggers the race far more easily than `DrillLibraryPage.vue`'s
+  own debounced search.
+- **`session.store.js` has two independent callers, not one — both require verification, neither requires a
+  code change.** `DrillLibraryPage.vue` and `SessionBuilderPage.vue` both call `fetchDrills()`/`searchDrills()`
+  and both are automatically protected by the shared store-level guard. Do not assume `DrillLibraryPage.vue`
+  is the only consumer relying on the new guard's correctness.
 - **AC3's ledger hygiene (Task 3) should be applied as part of this story's own creation, per the
   established `skillars-deferred-43`/`-44` precedent** (each story's own Dev Notes record its tags as
   "already present in `deferred-work.md` as committed alongside this story file"). Confirm the two
@@ -293,9 +335,10 @@ items cleared the bar this time, the same count as each of the two immediately p
 - `_bmad-output/implementation-artifacts/deferred-work.md` — two `[PICKED UP]` tags + three `[STALE]`
   corrections (AC3).
 - No new backend or frontend files. No changes to `PlayerHomeRedirectPage.vue`, `CoachPublicProfilePage.vue`,
-  `BookingRequestPage.vue`, `DrillLibraryPage.vue`, `booking.store.js`, `CoachProfileService.java`,
-  `GdprExportService.java`, or `TimezoneSelect.vue` — all are read-only precedents or (for the three
-  `[STALE]` items' source files) content this story confirms is already correct and does not modify.
+  `BookingRequestPage.vue`, `DrillLibraryPage.vue`, `SessionBuilderPage.vue`, `booking.store.js`,
+  `CoachProfileService.java`, `GdprExportService.java`, or `TimezoneSelect.vue` — all are read-only
+  precedents or (for the three `[STALE]` items' source files) content this story confirms is already correct
+  and does not modify.
 
 ### References
 
@@ -314,6 +357,8 @@ items cleared the bar this time, the same count as each of the two immediately p
 - [Source: `src/frontend/src/stores/session.store.js` lines 22-58 — AC2's target]
 - [Source: `src/frontend/src/pages/coach/DrillLibraryPage.vue` lines 162-168, 206-250 — AC2's unmodified call
   sites, confirming the race is live]
+- [Source: `src/frontend/src/pages/coach/SessionBuilderPage.vue` lines 60, 84, 277-289 — AC2's second,
+  independent unmodified caller, added per story-review Finding 1]
 - [Source: `src/frontend/src/stores/booking.store.js` lines 121-124, 306-374 — AC2's mirrored
   `coachRequestsSequence` pattern (`skillars-deferred-38` AC1)]
 - [Source: `_bmad-output/implementation-artifacts/deferred-work.md` — `## Deferred from: code review of
@@ -337,14 +382,29 @@ items cleared the bar this time, the same count as each of the two immediately p
 
 ### Agent Model Used
 
+claude-sonnet-5
+
 ### Debug Log References
+
+None — no failures encountered; both changes applied cleanly on the first pass.
 
 ### Completion Notes List
 
+- AC1: `playerStore.js` `fetchSelfPlayerId()`'s `.then()` callback now throws a plain `Error('Player profile response has no id')` when `profile?.id == null`, after the existing generation-guarded cache write; success-path return narrowed from `profile?.id` to `profile.id`. Verified by direct read that all three call sites (`PlayerHomeRedirectPage.vue`, `CoachPublicProfilePage.vue`, `BookingRequestPage.vue`) already branch their `catch` on `err.response?.status !== 404`, which a plain `Error` (no `.response`) satisfies as `true` — routing the malformed-profile case through the existing genuine-failure handling with zero call-site changes. `npx eslint` clean.
+- AC2: `session.store.js` gained a module-scoped `drillsRequestSequence` counter shared across `fetchDrills()` and `searchDrills()`, mirroring `booking.store.js`'s `coachRequestsSequence` pattern (`skillars-deferred-38` AC1) — each function captures `requestId` before the API call, discards a superseded response after `await` (bare `return`, no state write), discards a superseded failure in `catch` with a `console.warn` (matching `err?.message || err` convention), and guards the `finally` block's `loading.value = false` so a superseded call can't clear the flag out from under a newer in-flight call. Verified by direct read that neither `DrillLibraryPage.vue` nor `SessionBuilderPage.vue` (the second, independent, un-debounced caller of `searchDrills()` identified by story-review Finding 1) need any change — both are transparently protected by the shared store-level guard. `npx eslint` clean. No automated test added — standing repo-wide absence of frontend test infrastructure, consistent with every prior `skillars-deferred-*` fix to this class of race (most recently `-38`/`-39`). No interactive browser session was available in this environment to manually exercise the race per Task 2.5's guidance; verification here is by code inspection and `node --check` syntax validation against the proven `booking.store.js` precedent, matching this story's own Dev Notes fallback ("verify by inspection against the `booking.store.js` precedent's own already-proven shape").
+- AC3: All five `deferred-work.md` tags (2× `[PICKED UP]`, 3× `[STALE]`) were confirmed already present verbatim, applied at story-creation time per the established `skillars-deferred-43`/`-44` precedent — no edit needed in this dev-story pass.
+
 ### File List
+
+- `src/frontend/src/stores/playerStore.js` — modified (AC1)
+- `src/frontend/src/stores/session.store.js` — modified (AC2)
+- `_bmad-output/implementation-artifacts/deferred-work.md` — no change in this pass; tags already present from story creation (AC3)
 
 ## Change Log
 
 | Date | Change |
 |---|---|
 | 2026-08-20 | Story created via story-creation process: bundled 2-item story per explicit instruction not to create another small story. Re-mined `deferred-work.md` end to end (1616 lines), re-verifying every candidate against current code rather than trusting ledger text. AC1 closes `playerStore.fetchSelfPlayerId()`'s null/undefined-id gap (flagged by `skillars-deferred-44`'s own code review, the immediately preceding story) by making it throw instead of silently resolving, routing the malformed-profile case through the existing 404-vs-genuine-failure differentiation all three call sites already ship. AC2 closes `DrillLibraryPage.vue`/`session.store.js`'s concurrent-fetch race (open since `skillars-4-2`'s code review, 2026-06-17) by mirroring `booking.store.js`'s already-shipped `coachRequestsSequence` monotonic-counter pattern (`skillars-deferred-38` AC1), shared across `fetchDrills()`/`searchDrills()` since both write the same store state. AC3 additionally closes 3 stale ledger items found already resolved during the full re-mine — a marketplace-module `aggregateRating`/`reviewCount` item already wired by Epic 9, a GDPR-module `GdprExportService` `@Transactional` item already removed, and an availability-module tzdb-lockout item already fixed by `skillars-uat-1` AC4's zone picker — none previously tagged. Ledger remains thin after 44 prior passes — only two substantive items cleared the real/small/decision-light/directly-mirrorable bar this pass, matching each of the two immediately preceding stories' counts. |
+| 2026-08-20 | `story-review.md` adjustments applied, status remains ready-for-dev. Finding 1/Medium: AC2 framed the concurrent-fetch race as living entirely in `DrillLibraryPage.vue`, missing `SessionBuilderPage.vue` — a second, independent, un-debounced caller of `session.store.js`'s `searchDrills()` exposed to the same race, arguably more easily triggered. The shared store-level guard already protects it with no code change needed; fixed by adding `SessionBuilderPage.vue` to AC2/Task 2/Dev Notes/Project Structure Notes as a verified-no-change-needed caller, and directing manual regression testing there specifically. |
+| 2026-08-20 | dev-story implementation complete, status → review. AC1: `playerStore.js` `fetchSelfPlayerId()` now throws a plain `Error` on a null/undefined id instead of silently resolving `undefined`, routing the malformed-profile case through all three call sites' existing 404-vs-genuine-failure `catch` handling with zero call-site changes. AC2: `session.store.js`'s `fetchDrills()`/`searchDrills()` gained a shared `drillsRequestSequence` monotonic counter mirroring `booking.store.js`'s `coachRequestsSequence` pattern (`skillars-deferred-38` AC1), closing the concurrent-fetch race across both functions; verified by reading that neither `DrillLibraryPage.vue` nor `SessionBuilderPage.vue` need any change. AC3: all 5 ledger tags confirmed already present from story creation, no edit needed. `npx eslint` clean on both touched files; `node --check` syntax-verified; no `mvn verify` run (no backend files touched) per `docs/validation-strategy.md`. |
+| 2026-08-20 | Code review of the implementation diff complete, status → done. Blind Hunter + Edge Case Hunter + Acceptance Auditor, 0 AC violations — AC1/AC2 verified to match spec exactly against the live repo, including all three `fetchSelfPlayerId()` call sites and the `booking.store.js` precedent. 0 decision-needed, 0 patch; 2 real findings deferred to `deferred-work.md` as pre-existing/out-of-scope, not introduced by this diff: `resetSelfPlayerId()` doesn't clear the in-flight `selfPlayerIdRequest` dedup cache (a logout/relogin race can hand a new caller a stale-generation response — pre-existing, AC1's throw is a new symptom of the same root cause, not a new bug), and `fetchDrills()`/`searchDrills()` duplicate the sequencing guard verbatim (matches the spec's explicit "identical changes to both" instruction, not an implementation choice to refactor unilaterally). 11 Blind Hunter findings dismissed as false positives after verification — mostly claims answered by call sites or spec constraints the blind (no-context) reviewer couldn't see (e.g. "no visible caller update", the shared counter and no-AbortController being explicitly spec-mandated, `console.warn` matching the established `booking.store.js` convention). |

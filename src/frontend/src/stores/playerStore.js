@@ -36,7 +36,10 @@ export const usePlayerStore = defineStore('player', () => {
           if (requestGeneration === selfPlayerIdGeneration && profile?.id != null) {
             selfPlayerId.value = profile.id
           }
-          return profile?.id
+          if (profile?.id == null) {
+            throw new Error('Player profile response has no id')
+          }
+          return profile.id
         })
         .finally(() => {
           selfPlayerIdRequest = null
