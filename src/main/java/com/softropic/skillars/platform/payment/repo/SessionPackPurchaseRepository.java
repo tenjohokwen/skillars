@@ -20,12 +20,9 @@ public interface SessionPackPurchaseRepository extends JpaRepository<SessionPack
     @Query("SELECT p FROM SessionPackPurchase p WHERE p.purchaseId = :id")
     Optional<SessionPackPurchase> findByIdForUpdate(@Param("id") UUID id);
 
-    List<SessionPackPurchase> findByCoachIdAndExpiresAtBetweenAndExtendedAtIsNullAndRemainingSessionsGreaterThan(
-        UUID coachId, Instant from, Instant to, int minSessions);
-
     // expiryWarnedAt IS NULL (Deferred-15 AC6): the notifier runs daily over a 14-day window, so
     // without this predicate one pack is re-selected on up to 14 consecutive mornings. Mirrors
-    // findExpiredNotYetNotified below. The derived query above is a different caller — leave it alone.
+    // findExpiredNotYetNotified below.
     @Query("SELECT p FROM SessionPackPurchase p WHERE p.expiresAt BETWEEN :from AND :to AND p.extendedAt IS NULL AND p.remainingSessions > 0 AND p.expiryWarnedAt IS NULL")
     List<SessionPackPurchase> findExpiringWithinWindowAndSessionsRemaining(@Param("from") Instant from, @Param("to") Instant to);
 

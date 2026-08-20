@@ -229,7 +229,6 @@ export default {
       step5Upload: 'Télécharger & Continuer',
       step5SkipLabel: "Ignorer pour l'instant",
       publishSuccess: 'Votre profil est en ligne ! Bienvenue sur Skillars.',
-      bioSanitizationWarning: "Les coordonnées seront supprimées lors de l'enregistrement.",
     },
   },
   marketplace: {

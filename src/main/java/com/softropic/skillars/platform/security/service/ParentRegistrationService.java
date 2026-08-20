@@ -53,6 +53,8 @@ import java.util.concurrent.TimeUnit;
 @RequiredArgsConstructor
 public class ParentRegistrationService {
 
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+
     private final UserRepository userRepository;
     private final AuthorityRepository authorityRepository;
     private final EmailVerificationTokenRepository emailTokenRepository;
@@ -232,8 +234,7 @@ public class ParentRegistrationService {
     }
 
     private String generateOtp() {
-        SecureRandom random = new SecureRandom();
-        int code = 100000 + random.nextInt(900000);
+        int code = 100000 + SECURE_RANDOM.nextInt(900000);
         return String.valueOf(code);
     }
 
