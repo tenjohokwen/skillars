@@ -225,7 +225,7 @@ import { useQuasar } from 'quasar'
 import { useAuthStore } from 'src/stores/auth.store'
 import { useBookingStore } from 'src/stores/booking.store'
 import { usePlayerStore } from 'src/stores/playerStore'
-import { getBatchConfig } from 'src/api/booking.api'
+import { getBatchConfig, getBookingRequestConfig } from 'src/api/booking.api'
 import SessionPackTracker from 'src/components/booking/SessionPackTracker.vue'
 import BookingStateChip from 'src/components/booking/BookingStateChip.vue'
 import PaymentMethodCard from 'src/components/payment/PaymentMethodCard.vue'
@@ -350,9 +350,11 @@ function formatSlot(isoString) {
 
 // ---- AC5: the parent's own pending/booked slots, shown as disabled rows ----
 
-// ACTIVE_SLOT_STATUSES on the backend — the exact set that makes a booking occupy the coach's
-// slot and therefore disappear from computedSlots. Keeping the two in step is the point.
-const OWN_BLOCKING_STATUSES = [
+// ACTIVE_SLOT_STATUSES on the backend, fetched via GET /api/bookings/requests/config — populated
+// from backend on mount. Hardcoded here only as a fetch-failure fallback identical to the values
+// this replaced, so a slow/failed config load still blocks the parent's own occupied slots
+// correctly instead of showing them all as available.
+const ownBlockingStatuses = ref([
   'REQUESTED',
   'ACCEPTED',
   'PAYMENT_PENDING',
@@ -360,7 +362,7 @@ const OWN_BLOCKING_STATUSES = [
   'UPCOMING',
   'IN_PROGRESS',
   'PAUSED',
-]
+])
 
 /** Milliseconds a zone is offset from UTC at a given instant. */
 function zoneOffsetMs(ts, timeZone) {
@@ -431,7 +433,7 @@ const ownBlockingBookings = computed(() => {
 
   return bookings.filter((b) => {
     if (String(b.coachId) !== String(coachId)) return false
-    if (!OWN_BLOCKING_STATUSES.includes(b.status)) return false
+    if (!ownBlockingStatuses.value.includes(b.status)) return false
     const start = Date.parse(b.requestedStartTime)
     return !Number.isNaN(start) && start >= from && start < to
   })
@@ -622,6 +624,12 @@ onMounted(async () => {
     maxBatchSize.value = res.maxSize
   } catch {
     console.warn('Could not load batch config, using default max size')
+  }
+  try {
+    const res = await getBookingRequestConfig()
+    ownBlockingStatuses.value = res.activeSlotStatuses
+  } catch {
+    console.warn('Could not load booking request config, using default active-slot statuses')
   }
 })
 

@@ -1,117 +1,76 @@
-# Story Review: Deferred-46 — Self-Player-Id Dedup Reset Guard & Drill-Request Sequencing Guard Extraction
+# Story Review: Deferred-47 — Booking Active-Slot-Status Config Endpoint & Frontend Wiring
 
-Reviewed: `_bmad-output/implementation-artifacts/skillars-deferred-46-self-player-id-dedup-reset-guard-and-drill-request-sequencing-guard-extraction.md`
+Reviewed: `_bmad-output/implementation-artifacts/skillars-deferred-47-booking-active-slot-status-config-endpoint-and-frontend-wiring.md`
 
-Method: every factual claim in the story (line numbers, "no other change needed", call-site lists, the
-AC3 ledger-tag state) was re-verified against the current code on this branch, not trusted from the story's
-own prose. Read in full: `src/frontend/src/stores/playerStore.js`, `src/frontend/src/stores/session.store.js`,
-`MainLayout.vue`, `App.vue`, `useSession.js`, `DrillLibraryPage.vue`, `SessionBuilderPage.vue`, and the
-`deferred-work.md` heading both ACs cite. AC1's and AC2's line numbers, the three `resetSelfPlayerId()` call
-sites, the three `fetchSelfPlayerId()` call sites, and AC2's proposed helper body (verified byte-for-byte
-against `fetchDrills()`'s current body) all checked out exactly. AC3's two ledger tags are also already
-present in `deferred-work.md` verbatim (lines 1620-1621), matching the story's own established precedent
-(confirmed by `skillars-deferred-44`'s and `-45`'s own reviews) that these are applied at story-creation time,
-not a defect. One real gap was found in AC1's fix, plus one low-severity internal inconsistency in AC1's own
-prose.
+Method: every factual claim in the story (line numbers, "no other call site" claims, the semantic choice of
+which backend constant to expose, the endpoint-ordering rationale, and the AC3 ledger-tag state) was
+re-verified against the current code on this branch, not trusted from the story's own prose. Read in full:
+`BookingService.java` (128-138, 419-607), `BookingResource.java`, `BookingBatchResource.java`,
+`BatchConfigResponse.java`, `ConfigResource.java`, `BookingRequestResourceIT.java`,
+`BookingBatchResourceIT.java`, `BookingRequestPage.vue`, `booking.api.js`, `booking.store.js`,
+`boot/axios.js`, `SecurityConstants.java`, and `deferred-work.md`'s cited line. Specifically checked and
+ruled out as non-issues:
+
+- **Which backend constant AC1 exposes.** `AvailabilityService.java:110` confirms `computedSlots` excludes
+  bookings via `BookingService.ACTIVE_SLOT_STATUSES` (the full 7-status set), not
+  `ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED` (the other package-private list in the same class, used only for
+  accept-time overlap checks). AC1's getter returns the correct one — the one that actually governs why a
+  booking disappears from the calendar, which is the semantic `OWN_BLOCKING_STATUSES` needs to match.
+- **Response-shape unwrapping.** `boot/axios.js:112-124`'s response interceptor returns `response.data`
+  directly, confirming AC2's `res.activeSlotStatuses` (mirroring the existing `res.maxSize` pattern at
+  `BookingRequestPage.vue:622`) is the correct access shape, not `res.data.activeSlotStatuses`.
+- **Jackson field naming.** No `property-naming-strategy`/`PropertyNamingStrategy` config exists anywhere
+  under `src/main/resources` or `src/main/java` — confirms the record's `activeSlotStatuses` accessor
+  serializes as camelCase `"activeSlotStatuses"` in the JSON body, matching what AC2's frontend code reads.
+- **"No other call site" claim (AC2).** Grep-confirmed: `OWN_BLOCKING_STATUSES` appears only at its
+  declaration (`:355`) and the one usage site (`:434`), both in `BookingRequestPage.vue`. No other file
+  references it.
+- **Route collision / path-matching risk.** `BookingResource.java` has no plain `GET /{id}` mapping (only
+  `PUT /{id}/accept` and `PUT /{id}/decline}`), and no other file outside the `booking.api`/`booking.service`/
+  `booking.contract` packages references `/api/bookings/...` paths (no separate security-filter allowlist or
+  gateway route table to update). The new `GET /config` cannot collide with anything regardless of where in
+  the class it's declared.
+- **AC1's negative-auth-test hedge.** Checked both `BookingRequestResourceIT.java` and
+  `BookingBatchResourceIT.java` for an existing role-rejection test on a `GET` endpoint specifically (as
+  opposed to the `POST`/`PUT` role-rejection tests both files already have) — none exists, including on
+  `BookingBatchResource.getConfig()` itself, the exact sibling endpoint AC1 mirrors. AC1's "if the file's
+  existing tests already establish a role-rejection convention for this resource — check before adding a new
+  one" hedge is accurate: no such convention exists yet, so the story correctly leaves this optional rather
+  than mandating a test pattern that isn't established.
+- **AC3's ledger tag.** `git show 834a3f0` (the story-creation commit itself) confirms
+  `` `[PICKED UP by skillars-deferred-47 AC1, AC2]` `` was already appended to `deferred-work.md`'s line-1276
+  item in that same commit. This matches the precedent already recorded in the `skillars-deferred-44/45/46`
+  reviews — this project's story-creation step applies the ledger tag at story-creation time, not dev time —
+  so Task 3 describing it as pending work for the dev agent is expected process, not a defect.
+- **All cited line numbers** (`BookingService.java:131-132`, `BookingRequestPage.vue:355-363,434,596-626,228`,
+  `booking.api.js:32,68`, `BookingBatchResource.java:35-39`) were checked against the current file contents
+  and are exact.
+
+One low-severity, purely cosmetic inconsistency was found. No functional gaps, missed corner cases, or false
+assumptions with real consequences survived verification.
 
 ## Findings
 
-### 1. AC1's fix is incomplete: `fetchSelfPlayerId()`'s `.finally()` unconditionally nulls the module-scoped cache, so a stale generation's settlement can still clobber a newer generation's in-flight request once `resetSelfPlayerId()` also clears it out-of-band
+### 1. AC1's endpoint-placement rationale cites a precedent that doesn't actually apply to the new endpoint
 
-**Severity: Medium (confirmed) — a real, plausible race the AC's own "no other change needed" claim misses; consequence is a duplicated in-flight request, not corrupted data.**
+**Severity: Low (confirmed) — cosmetic only; the placement itself is harmless regardless of where in the class it lands.**
 
-**Where:** `src/frontend/src/stores/playerStore.js:44-46`, unmodified by this story's AC1 as scoped:
+**Where:** AC1's third bullet:
 
-```js
-.finally(() => {
-  selfPlayerIdRequest = null
-})
-```
+> "...matches the file's own existing precedent of ordering literal-path routes before any `/{id}/...` routes
+> to avoid Spring path-matching ambiguity, noted in the file's `/coach` comment"
 
-This callback clears the module-scoped `selfPlayerIdRequest` **unconditionally** — it never checks whether
-`selfPlayerIdRequest` still refers to *this* promise chain before nulling it. Before AC1's fix, that's safe:
-the only way `selfPlayerIdRequest` ever becomes falsy again is via this exact `.finally()`, so at most one
-promise chain can ever be "the current" one at a time, and its own `.finally()` is always the correct owner of
-the clear.
+The `/coach` comment being invoked (`BookingResource.java:48`, `// Declared before /{id}/accept and
+/{id}/decline to avoid Spring path-matching ambiguity`) exists because `GET /coach` needed to be visually
+grouped ahead of `PUT /{id}/accept` and `PUT /{id}/decline` in that specific file layout. But Spring MVC
+dispatches on HTTP method + path together — a `GET` mapping can never actually collide with a `PUT
+/{id}/...` mapping regardless of declaration order, and this class has no plain `GET /{id}` mapping for the
+new `GET /config` to collide with either way. So there is no real path-matching ambiguity this story's
+placement choice is protecting against — the cited justification doesn't govern anything for this particular
+addition, even though the placement itself (between `getParentBookings()` and `getCoachBookingRequests()`) is
+perfectly fine on its own merits (grouping the two parent-facing GETs together).
 
-AC1 changes that invariant by making `resetSelfPlayerId()` **also** null `selfPlayerIdRequest`, out-of-band,
-while a request may still be in flight. That reopens a window the `.finally()` was never written to handle:
-
-1. Caller A (generation 0) calls `fetchSelfPlayerId()` → creates request R0, `selfPlayerIdRequest = R0`
-   (R0's underlying `getMyProfile()` call is slow — the story's own motivating scenario, "logout/relogin
-   racing a slow fetch").
-2. `resetSelfPlayerId()` fires (logout) → generation becomes 1, and per AC1's fix, `selfPlayerIdRequest = null`.
-3. Caller B (generation 1, e.g. a different page's `onMounted` after re-login) calls `fetchSelfPlayerId()` →
-   sees `!selfPlayerIdRequest` (true, just reset) → creates a fresh request R1, `selfPlayerIdRequest = R1`.
-   This part is exactly what AC1 intends and correctly fixes.
-4. R0 (still generation-0, still pending from step 1) now settles — resolve or reject, doesn't matter,
-   `.finally()` always runs. Its generation check (`:36`) correctly skips writing `selfPlayerId.value` (0 ≠
-   1), but its `.finally()` callback still executes `selfPlayerIdRequest = null` **unconditionally** —
-   wiping out the reference to R1, which is still pending, not R0.
-5. Caller C (still generation 1 — e.g. a third page, since this store has three independent
-   `fetchSelfPlayerId()` call sites: `PlayerHomeRedirectPage.vue`, `CoachPublicProfilePage.vue`,
-   `BookingRequestPage.vue`) calls `fetchSelfPlayerId()` before R1 settles → sees `!selfPlayerIdRequest`
-   (wrongly true, clobbered by R0's stale `.finally()`) → starts a second, redundant concurrent request R2 for
-   the same generation, defeating the dedup cache's entire purpose.
-
-This can't happen in the current (pre-AC1) code, because `resetSelfPlayerId()` never touches
-`selfPlayerIdRequest` out-of-band today — it's a window newly opened by AC1's own fix, not a pre-existing gap.
-It doesn't corrupt displayed data (R1 and R2 both eventually resolve to the same correct id, both correctly
-generation-gated), but it does mean AC1's stated goal — "clearing `selfPlayerIdRequest` inside
-`resetSelfPlayerId()` closes both consequences at once, with no change needed anywhere else" and "No other
-change to `resetSelfPlayerId()` or `fetchSelfPlayerId()` is needed" — is not quite true: the dedup guarantee
-itself can still be broken by a stale request's `.finally()` firing after a newer one has already started,
-producing extra `getMyProfile()` network calls (and, if a caller happens to land in the gap right after R0's
-throw-on-missing-id fires per `skillars-deferred-45` AC1, an extra spurious rejection surface, though that
-part is unlikely to matter in practice since R2 would still resolve correctly for its own caller).
-
-**Recommendation:** either accept this residual race explicitly as an out-of-scope tradeoff (the same way
-several other ledger items in this story's own "why only these two" section were left alone with recorded
-reasoning), or close it by having the `.finally()` clear the cache only if it still owns the reference, e.g.
-capturing the promise in a local before assigning it to the module variable and checking identity:
-
-```js
-const request = playerRegistrationApi.getMyProfile()
-  .then((profile) => { /* unchanged */ })
-  .finally(() => {
-    if (selfPlayerIdRequest === request) selfPlayerIdRequest = null
-  })
-selfPlayerIdRequest = request
-```
-
-This is a slightly larger change than AC1's current "one added line" framing (it touches
-`fetchSelfPlayerId()`, not just `resetSelfPlayerId()`), so if this is to be fixed within this story, AC1's
-Dev Notes claim that "No other change to `resetSelfPlayerId()` or `fetchSelfPlayerId()` is needed" would need
-updating either way.
-
----
-
-### 2. AC1's placement instruction contradicts its own stated justification
-
-**Severity: Low (confirmed) — purely cosmetic; the AC itself says ordering has no functional effect.**
-
-**Where:** AC1's second bullet:
-
-> "...for readability place it after the generation increment, matching the order the three
-> module-scoped/ref declarations already appear in at the top of the store (`selfPlayerId`, then
-> `selfPlayerIdRequest`, then `selfPlayerIdGeneration`)."
-
-The declared order at the top of the store (`playerStore.js:10-12`) is: `selfPlayerId` → `selfPlayerIdRequest`
-→ `selfPlayerIdGeneration`. To actually match that order, the three statements in `resetSelfPlayerId()` would
-need to read: `selfPlayerId.value = null`, then `selfPlayerIdRequest = null`, then
-`selfPlayerIdGeneration++` — i.e. the new statement placed **before** the generation increment.
-
-But the instruction's literal directive is to place the new statement **after** the generation increment,
-which produces the opposite order (`selfPlayerId`, `selfPlayerIdGeneration`, `selfPlayerIdRequest`) — the
-reverse of the declaration order the same sentence claims it's matching. The two halves of this instruction
-disagree with each other.
-
-Functionally moot either way (the AC's own text says "order does not matter functionally," and both readings
-are correct), but a dev following the stated *justification* ("matching declaration order") would write
-different code than a dev following the literal *directive* ("after the generation increment") — worth
-tightening so the two don't point in different directions.
-
-**Recommendation:** either fix the directive to say "before the generation increment" (matching the stated
-declaration-order justification), or fix the justification to describe the order actually being produced
-(`selfPlayerId`, `selfPlayerIdGeneration`, `selfPlayerIdRequest`) rather than claiming it mirrors the
-declaration order.
+**Recommendation:** either drop the "to avoid Spring path-matching ambiguity" clause from AC1's rationale (the
+grouping is just for readability, which is reason enough), or note explicitly that it's precautionary/stylistic
+consistency rather than a functional requirement — so a dev reading it doesn't spend time worrying about a
+non-existent ambiguity risk before treating grouping as flexible.
