@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.booking.api;
 
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.booking.contract.BookingRequestConfigResponse;
 import com.softropic.skillars.platform.booking.contract.BookingResponse;
 import com.softropic.skillars.platform.booking.contract.CoachInboxResponse;
 import com.softropic.skillars.platform.booking.contract.CreateBookingRequest;
@@ -43,6 +44,12 @@ public class BookingResource {
     @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<List<BookingResponse>> getParentBookings() {
         return ResponseEntity.ok(bookingService.getParentBookings(currentParentId()));
+    }
+
+    @GetMapping("/config")
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
+    public ResponseEntity<BookingRequestConfigResponse> getConfig() {
+        return ResponseEntity.ok(new BookingRequestConfigResponse(bookingService.getActiveSlotStatuses()));
     }
 
     // Declared before /{id}/accept and /{id}/decline to avoid Spring path-matching ambiguity

@@ -137,6 +137,10 @@ public class BookingService {
     static final List<String> ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED =
         ACTIVE_SLOT_STATUSES.stream().filter(s -> !s.equals("REQUESTED")).toList();
 
+    public List<String> getActiveSlotStatuses() {
+        return ACTIVE_SLOT_STATUSES;
+    }
+
     @Transactional
     public void transition(UUID bookingId, BookingEvent event, TransitionContext context) {
         transitionInternal(bookingId, event, context, true);

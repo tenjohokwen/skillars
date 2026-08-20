@@ -683,6 +683,24 @@ class BookingRequestResourceIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void getConfig_authenticatedParent_returns200WithActiveSlotStatuses() {
+        String cookies = loginAndGetCookies(PARENT_EMAIL);
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + BOOKINGS_BASE + "/config",
+            HttpMethod.GET,
+            null,
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody().get("activeSlotStatuses")).isEqualTo(
+            List.of("REQUESTED", "ACCEPTED", "PAYMENT_PENDING", "CONFIRMED", "UPCOMING", "IN_PROGRESS", "PAUSED")
+        );
+    }
+
+    @Test
     void getCoachBookingRequests_returnsOnlyRequestedBookingsForThisCoach() {
         // Create a booking first
         String parentCookies = loginAndGetCookies(PARENT_EMAIL);
