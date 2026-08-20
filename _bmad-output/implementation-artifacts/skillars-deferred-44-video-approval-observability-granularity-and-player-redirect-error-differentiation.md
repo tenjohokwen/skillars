@@ -1,6 +1,6 @@
 # Story Deferred-44: Video Approval Observability Granularity & Player-Redirect Error Differentiation
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -140,7 +140,12 @@ time, the same count as the immediately preceding story.
    `VideoApprovalResource.java` (used by the existing class-level annotation) — no new import needed. This
    is a pure, additive, non-functional annotation change: no method body, signature, `@PreAuthorize`, or
    `@ResponseStatus` is touched, and annotation ordering on each method mirrors `VideoResource`'s own
-   convention of placing `@Observed` first, above the mapping annotation.
+   convention of placing `@Observed` **last**, immediately above the method declaration — after the mapping
+   annotation, after `@PreAuthorize`, and after `@ResponseStatus` where present (confirmed against all five
+   of `VideoResource`'s annotated methods, e.g. `:69`, `:154` — zero exceptions to this ordering). The
+   per-bullet placements above ("immediately above `listPendingApprovals()`", etc.) already specify this
+   correctly; this paragraph previously stated the ordering backwards ("first, above the mapping
+   annotation") and has been corrected per story-review Finding 2.
 
 2. **AC2 — `PlayerHomeRedirectPage.vue`'s `catch` differentiates a 404 ("no profile yet", the expected,
    silent case) from any other error (surfaced via a toast), mirroring the pattern
@@ -150,7 +155,18 @@ time, the same count as the immediately preceding story.
      `<script setup>` (alongside the existing `const router = useRouter()` / `const playerStore =
      usePlayerStore()`), add `const $q = useQuasar()` and `const { t } = useI18n()` — mirroring
      `CoachPublicProfilePage.vue`'s own top-of-`<script setup>` declarations for the identical helpers.
-   - Change the `catch` block (`:19-22`) from the current unconditional
+   - **Narrow the `try` block to wrap only `await playerStore.fetchSelfPlayerId()`.** The current shape
+     (`:16-22`) wraps *both* the fetch call *and* the success-path `router.replace(\`/player/locker-room/
+     ${id}\`)` inside the same `try`, unlike the precedent this AC mirrors (`CoachPublicProfilePage.vue:308-
+     318` / `BookingRequestPage.vue:598-607`, where the inner `try` wraps only the fetch call). Left as-is,
+     a navigation failure on the *already-successful* fetch path (e.g. a stale-chunk dynamic-`import()`
+     failure on the lazy-loaded `player/locker-room/:playerId` route) would be caught, misreported via the
+     new non-404 notify branch as a profile error even though the fetch succeeded, and still redirect an
+     already-onboarded player to the profile-builder — worse than today's silent-redirect behavior for that
+     scenario. Fix: move `const id = await playerStore.fetchSelfPlayerId()` inside the `try`, but move
+     `router.replace(\`/player/locker-room/${id}\`)` *outside* the `try`/`catch`, after it — matching the
+     precedent's scoping exactly, not just its error-check condition. (Story-review Finding 1.)
+   - Change the `catch` block from the current unconditional
      `catch { router.replace('/player/profile-builder') }` to a named-parameter `catch (err) { ... }` that:
      (a) checks `if (err.response?.status !== 404) { $q.notify({ type: 'negative', message:
      t('common.errorGeneric') }) }` — the exact expression and message key `CoachPublicProfilePage.vue:315-
@@ -161,7 +177,9 @@ time, the same count as the immediately preceding story.
      which error occurred (a player who already has a profile and hit a transient network/500 error simply
      sees their existing info, or a chance to retry, not a security or data-loss issue), and inventing a new
      fallback destination for the error case would be exactly the kind of unscoped UX decision this pass is
-     not making. Only the **notification**, not the **navigation**, is new.
+     not making. Only the **notification**, not the **navigation**, is new — and with the `try` narrowed per
+     the bullet above, this `catch` now only fires for a genuine `fetchSelfPlayerId()` failure, never for a
+     post-success navigation failure.
    - No new i18n key is needed — `common.errorGeneric` is already defined in all three locale bundles.
 
 3. **AC3 — Ledger hygiene.** In `deferred-work.md`:
@@ -192,21 +210,43 @@ time, the same count as the immediately preceding story.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: `VideoApprovalResource` per-method `@Observed` granularity (AC: #1)
-  - [ ] 1.1 Add `@Observed(name = "video.approvals.list")` above `listPendingApprovals()`.
-  - [ ] 1.2 Add `@Observed(name = "video.approvals.approve")` above `approveVideo()`.
-  - [ ] 1.3 Add `@Observed(name = "video.approvals.reject")` above `rejectVideo()`.
-  - [ ] 1.4 Confirm the backend still compiles (`mvn -o -q clean compile`) — no test is added or expected for
+- [x] Task 1: `VideoApprovalResource` per-method `@Observed` granularity (AC: #1)
+  - [x] 1.1 Add `@Observed(name = "video.approvals.list")` above `listPendingApprovals()`.
+  - [x] 1.2 Add `@Observed(name = "video.approvals.approve")` above `approveVideo()`.
+  - [x] 1.3 Add `@Observed(name = "video.approvals.reject")` above `rejectVideo()`.
+  - [x] 1.4 Confirm the backend still compiles (`mvn -o -q clean compile`) — no test is added or expected for
     this annotation-only change (see Dev Notes).
-- [ ] Task 2: `PlayerHomeRedirectPage.vue` error differentiation (AC: #2)
-  - [ ] 2.1 Add `useQuasar`/`useI18n` imports and their `$q`/`t` declarations.
-  - [ ] 2.2 Change the bare `catch` to a named `catch (err)`, add the non-404 `$q.notify(...)` branch, keep
+- [x] Task 2: `PlayerHomeRedirectPage.vue` error differentiation (AC: #2)
+  - [x] 2.1 Add `useQuasar`/`useI18n` imports and their `$q`/`t` declarations.
+  - [x] 2.2 Narrow the `try` to wrap only `await playerStore.fetchSelfPlayerId()`; move the success-path
+    `router.replace(\`/player/locker-room/${id}\`)` outside the `try`/`catch`.
+  - [x] 2.3 Change the bare `catch` to a named `catch (err)`, add the non-404 `$q.notify(...)` branch, keep
     the unconditional `router.replace('/player/profile-builder')` call unchanged for both branches.
-  - [ ] 2.3 Run `npx eslint` on the touched file and confirm clean.
-- [ ] Task 3: Ledger hygiene (AC: #3) — apply the two `[PICKED UP]` tags and two `[STALE]` annotations
+  - [x] 2.4 Run `npx eslint` on the touched file and confirm clean.
+- [x] Task 3: Ledger hygiene (AC: #3) — apply the two `[PICKED UP]` tags and two `[STALE]` annotations
   specified in AC3 above.
 
 ### Review Findings
+
+`story-review.md` (2026-08-20) filed 2 findings against the draft, both confirmed and fixed in this revision:
+
+- **Finding 1 (Medium, confirmed):** AC2's `catch` as originally drafted also wrapped the success-path
+  `router.replace(\`/player/locker-room/${id}\`)`, unlike the precedent it mirrors — so a post-fetch-success
+  navigation failure would be misreported as a profile error and still redirect an onboarded player to the
+  profile-builder. Fixed: AC2 and Task 2 now narrow the `try` to wrap only `fetchSelfPlayerId()`, moving the
+  success-path redirect outside the `try`/`catch`, matching `CoachPublicProfilePage.vue`'s scoping exactly.
+- **Finding 2 (Low, confirmed):** AC1's summary prose stated `VideoResource` places `@Observed` "first,
+  above the mapping annotation" — backwards; direct read of all five annotated methods shows `@Observed`
+  placed **last**, immediately above the method declaration, with zero exceptions. The per-bullet placement
+  instructions were already correct; only the summary sentence was wrong. Fixed: AC1's prose corrected to
+  match the per-bullet instructions.
+
+Both fixes applied directly to the ACs/Tasks above; no scope was added beyond what the findings required.
+
+**bmad-code-review pass (2026-08-20)** — Blind Hunter (13 raw findings, no project context) + Edge Case Hunter (1 finding, full repo access) + Acceptance Auditor (0 AC violations, AC1/AC2 precedent claims and all 4 AC3 ledger tags independently re-verified against live code). 11 of 13 Blind Hunter findings dismissed as noise (double-instrumentation risk mirrors already-shipped `VideoResource` pattern this AC was told to mirror not redesign; build-only verification bar and zero-frontend-test-coverage both restate this story's own explicit, already-reasoned Dev Notes scope; the `@Observed` import claim was independently disproven — `VideoApprovalResource.java:10` already imports it; the "two unguarded profile-builder redirects" claim overcounts — there is only one such call site, shared by both branches; metric-name precision restates the spec's own explicit literal annotation value; "Task 3 marked complete without diff evidence" was independently disproven — all 4 ledger tags verified present verbatim in `deferred-work.md`, applied at the earlier story-creation commit per this story's own established precedent; the multi-revision-in-one-diff observation matches this repo's standing dev-story workflow convention; the `VideoResource.java` line-number citations were independently verified accurate; the non-HTTP-error comment gap is a documentation nitpick against otherwise-correct/safe behavior). 1 finding confirmed and fixed as a patch: the success-path `router.replace()` (line 32), moved outside the `try`/`catch` by this story's own earlier fix, had no `.catch()` — a rejected navigation (e.g. a stale-chunk load failure) is now fully unhandled with no fallback, worse than the pre-fix behavior. 1 finding (merged from Blind Hunter + Edge Case Hunter, both independently found the same gap) deferred to `deferred-work.md`: `fetchSelfPlayerId()` can resolve with a null/undefined id and no throw, producing a broken `/player/locker-room/undefined` navigation — pre-existing, unchanged by this diff, a property of the shared store contract used by all three call sites, out of scope for this narrowly-scoped AC.
+
+- [x] [Review][Patch] Success-path `router.replace()` has no `.catch()` — a rejected navigation is now fully unhandled [`src/frontend/src/pages/auth/PlayerHomeRedirectPage.vue:32`] — fixed: chained `.catch()` falls back to `router.replace('/player/profile-builder')`, `npx eslint` clean
+- [x] [Review][Defer] `fetchSelfPlayerId()` can resolve with a null/undefined id, producing a broken `/player/locker-room/undefined` navigation [`src/frontend/src/stores/playerStore.js:39`] — deferred, pre-existing
 
 ## Dev Notes
 
@@ -243,9 +283,9 @@ time, the same count as the immediately preceding story.
 - `src/main/java/com/softropic/skillars/platform/video/api/VideoApprovalResource.java` — three new
   method-level `@Observed` annotations added (AC1). No other line changes.
 - `src/frontend/src/pages/auth/PlayerHomeRedirectPage.vue` — two new imports, two new top-of-`<script setup>`
-  declarations, `catch` block changed from bare/unconditional to named-parameter with a non-404 notify branch
-  (AC2). The `onMounted`/`try` block, the success-path `router.replace` call, and the 404-path redirect
-  destination are all unchanged.
+  declarations, `try` narrowed to wrap only the `fetchSelfPlayerId()` call (success-path `router.replace`
+  moved outside it), `catch` block changed from bare/unconditional to named-parameter with a non-404 notify
+  branch (AC2). The 404-path redirect destination is unchanged.
 - `_bmad-output/implementation-artifacts/deferred-work.md` — two `[PICKED UP]` tags + two `[STALE]`
   corrections (AC3).
 - No new backend or frontend files. No changes to `VideoResource.java`, `CoachPublicProfilePage.vue`,
@@ -284,14 +324,50 @@ time, the same count as the immediately preceding story.
 
 ### Agent Model Used
 
+Claude Sonnet 5 (claude-sonnet-5), via `bmad-dev-story` workflow.
+
 ### Debug Log References
+
+None — no test failures or blockers encountered.
 
 ### Completion Notes List
 
+- AC1: Added three method-level `@Observed` annotations to `VideoApprovalResource.java`
+  (`video.approvals.list`, `video.approvals.approve`, `video.approvals.reject`), placed last —
+  immediately above each method declaration, after the mapping annotation/`@PreAuthorize`/`@ResponseStatus` —
+  matching `VideoResource`'s established ordering exactly. Class-level `@Observed(name = "video.approvals")`
+  left unchanged. `mvn -o -q clean compile` exits 0 (only pre-existing, unrelated frontend build warnings
+  printed at `[ERROR]` log level by the Maven frontend plugin — no Java compile errors).
+- AC2: `PlayerHomeRedirectPage.vue` gained `useQuasar`/`useI18n` imports and `$q`/`t` declarations. The `try`
+  now wraps only `fetchSelfPlayerId()`, assigning to a `let id` declared before the try so it's visible after.
+  The `catch (err)` block notifies (`common.errorGeneric`, `type: 'negative'`) only when
+  `err.response?.status !== 404`, then calls `router.replace('/player/profile-builder')` and `return`s. The
+  success-path `router.replace(\`/player/locker-room/${id}\`)` moved after the try/catch, reached only when no
+  error was thrown. The explicit `return` in the catch branch is required (and was not literally spelled out
+  in the AC's prose) to prevent falling through to the locker-room redirect with an undefined `id` after an
+  error — without it, the catch's own profile-builder redirect would immediately be followed by a second,
+  broken navigation call. Behavior otherwise matches AC2 exactly: notify-only on non-404, no navigation-target
+  change, byte-for-byte reuse of `CoachPublicProfilePage.vue`'s notify pattern. `npx eslint` on the file is
+  clean (only pre-existing npm config warnings printed, no lint errors).
+- AC3: All four ledger tags specified (two `[PICKED UP]`, two `[STALE ...]`) were already present verbatim in
+  `deferred-work.md` as committed alongside the story file — confirmed by direct grep, not re-applied, per
+  this story's own Dev Notes precedent.
+- Per `docs/validation-strategy.md`, only targeted verification was run (`mvn -o -q clean compile`, `npx
+  eslint` on the one touched frontend file) — `mvn verify` was not run, matching AC1's Dev Notes ("no test is
+  added or expected for this annotation-only change").
+
 ### File List
+
+- `src/main/java/com/softropic/skillars/platform/video/api/VideoApprovalResource.java` (modified — AC1)
+- `src/frontend/src/pages/auth/PlayerHomeRedirectPage.vue` (modified — AC2)
+- `_bmad-output/implementation-artifacts/deferred-work.md` (no change needed this session — AC3 tags already
+  present)
 
 ## Change Log
 
 | Date | Change |
 |---|---|
 | 2026-08-20 | Story created via story-creation process: bundled 2-item story per explicit instruction not to create another small story. Re-mined `deferred-work.md` end to end (1612 lines), re-verifying every candidate against current code rather than trusting ledger text. AC1 closes `VideoApprovalResource`'s class-level-only `@Observed` gap (flagged by `skillars-6-6`'s own code review, 2026-06-24) by mirroring `VideoResource`'s already-established per-method observability naming convention within the same video module. AC2 closes `PlayerHomeRedirectPage.vue`'s bare-`catch`-treats-every-error-identically gap (flagged by `skillars-deferred-43`'s own code review, the immediately preceding story) by mirroring the 404-vs-genuine-failure notify pattern `skillars-deferred-43` itself already shipped one file over, in `CoachPublicProfilePage.vue`. AC3 additionally closes 2 stale/incorrect-premise ledger items found during the full re-mine — a messaging-module `Instant.EPOCH` documentation item that was already resolved but never tagged (noticed once before by the `skillars-deferred-16` audit, never applied to the original bullet), and a video-quota-module `MatchException` concern whose technical premise was wrong from the start (a default-less Java switch expression is exhaustive at compile time, not runtime). Ledger remains thin after 43 prior passes — only two substantive items cleared the real/small/decision-light/directly-mirrorable bar this pass, matching the prior pass's count. |
+| 2026-08-20 | `story-review.md` adjustments applied, status remains ready-for-dev. Finding 1/Medium: AC2's `try` as originally drafted also wrapped the success-path `router.replace` call, unlike the `CoachPublicProfilePage.vue`/`BookingRequestPage.vue` precedent it mirrors — fixed by narrowing the `try` to wrap only `fetchSelfPlayerId()` and moving the success-path redirect outside it (AC2 and Task 2 updated). Finding 2/Low: AC1's summary prose stated `VideoResource` places `@Observed` "first, above the mapping annotation" — backwards; corrected to "last, immediately above the method declaration," matching what the per-bullet instructions already specified correctly. |
+| 2026-08-20 | `dev-story` implementation complete, status set to review. AC1: three method-level `@Observed` annotations added to `VideoApprovalResource.java`, `mvn -o -q clean compile` green. AC2: `PlayerHomeRedirectPage.vue`'s `catch` now differentiates 404 (silent) from other errors (`common.errorGeneric` toast), with the success-path redirect moved outside the narrowed `try`/`catch` and an explicit `return` in the catch branch to prevent a fall-through double-redirect; `npx eslint` clean. AC3: all four ledger tags confirmed already present verbatim in `deferred-work.md`, no edit needed. `mvn verify` not run per `docs/validation-strategy.md`. |
+| 2026-08-20 | `bmad-code-review` complete, status → done. Blind Hunter (13 raw, no project context) + Edge Case Hunter (1 finding, full repo access) + Acceptance Auditor (0 AC violations, AC1/AC2 precedents and all 4 AC3 ledger tags independently re-verified true). 11 Blind Hunter findings dismissed as noise after verification (see Review Findings section for detail). 1 patch applied: `PlayerHomeRedirectPage.vue:32`'s success-path `router.replace()` gained a `.catch()` falling back to `/player/profile-builder`, since a rejected navigation there was otherwise fully unhandled — a regression from this story's own earlier story-review fix that moved the call outside the `try`/`catch`; `npx eslint` clean post-patch. 1 finding (Blind Hunter + Edge Case Hunter, independently converged) deferred to `deferred-work.md`: `fetchSelfPlayerId()` can resolve with a null/undefined id with no throw, producing a broken `/player/locker-room/undefined` navigation — pre-existing, unchanged by this diff, a property of the shared store contract used by all three call sites. |

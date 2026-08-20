@@ -37,6 +37,7 @@ public class VideoApprovalResource {
 
     @GetMapping
     @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @Observed(name = "video.approvals.list")
     public ResponseEntity<List<VideoApprovalResponse>> listPendingApprovals() {
         Long parentId = currentParentId();
         List<VideoApprovalRequest> requests = videoApprovalService.getPendingApprovalsForParent(parentId);
@@ -61,6 +62,7 @@ public class VideoApprovalResource {
     @PutMapping("/{id}/approve")
     @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
     @ResponseStatus(HttpStatus.NO_CONTENT)
+    @Observed(name = "video.approvals.approve")
     public void approveVideo(@PathVariable UUID id) {
         videoApprovalService.approveVideo(id, currentParentId());
     }
@@ -68,6 +70,7 @@ public class VideoApprovalResource {
     @PutMapping("/{id}/reject")
     @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
     @ResponseStatus(HttpStatus.NO_CONTENT)
+    @Observed(name = "video.approvals.reject")
     public void rejectVideo(@PathVariable UUID id) {
         videoApprovalService.rejectVideo(id, currentParentId());
     }
