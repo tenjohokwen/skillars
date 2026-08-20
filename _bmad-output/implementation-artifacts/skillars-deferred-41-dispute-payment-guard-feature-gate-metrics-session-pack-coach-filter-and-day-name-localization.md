@@ -1,6 +1,6 @@
 # Story Deferred-41: Dispute Payment-Status Guard, Feature-Gate Misconfiguration Metrics, Session-Pack Coach Filter & Day-Name Localization
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -272,69 +272,84 @@ bundle rather than defer a candidate that clears this bar.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: DisputeService payment-status guard (AC: #1)
-  - [ ] 1.1 In `DisputeService.java`, replace the unguarded `bookingPaymentRepository.findById(...)` at
+- [x] Task 1: DisputeService payment-status guard (AC: #1)
+  - [x] 1.1 In `DisputeService.java`, replace the unguarded `bookingPaymentRepository.findById(...)` at
     line 133 (`getAdminDisputeDetail`) and line 168 (`resolveDispute`) with the `.filter(bp ->
     "CAPTURED".equals(bp.getStatus()))`-guarded version, matching `RevenueReportingService.java:149-150`
     exactly.
-  - [ ] 1.2 Add or extend a unit test (no `DisputeServiceTest` exists yet — create one, or add to whatever
+  - [x] 1.2 Add or extend a unit test (no `DisputeServiceTest` exists yet — create one, or add to whatever
     test class already covers `DisputeService` if one is found during implementation) asserting a
     non-`CAPTURED` `BookingPayment` row is treated as absent (zero credited/charged amounts) by both
     `getAdminDisputeDetail` and `resolveDispute`, mirroring how `RevenueReportingService`'s own receipt
     paths are covered.
-  - [ ] 1.3 Run the existing dispute ITs (`AdminDisputeResolveIT`, `DisputeDismissIT`,
+  - [x] 1.3 Run the existing dispute ITs (`AdminDisputeResolveIT`, `DisputeDismissIT`,
     `DisputeSubmissionIT`) and confirm they remain green — their fixtures already seed `'CAPTURED'` rows
     (`AdminDisputeResolveIT.java:101-103`), so this change is behavior-preserving for them.
-- [ ] Task 2: Misconfiguration metrics (AC: #2)
-  - [ ] 2.1 Add `MeterRegistry meterRegistry` to `ConfigService`'s explicit constructor; increment a new
+- [x] Task 2: Misconfiguration metrics (AC: #2)
+  - [x] 2.1 Add `MeterRegistry meterRegistry` to `ConfigService`'s explicit constructor; increment a new
     `config.value.misconfigured` counter (tags `key`, `reason`) alongside the existing `log.warn(...)` in
     `getBoolean(String)` and `parseBoolean`.
-  - [ ] 2.2 Update `ConfigServiceTest.java:42`'s manual `new ConfigService(...)` call with a fourth
+  - [x] 2.2 Update `ConfigServiceTest.java:42`'s manual `new ConfigService(...)` call with a fourth
     `MeterRegistry` argument (a `SimpleMeterRegistry`, matching `PaymentPendingSweeperTest`'s existing
     convention, or a `@Mock`).
-  - [ ] 2.3 Add `MeterRegistry meterRegistry` as a new `@RequiredArgsConstructor` field to
+  - [x] 2.3 Add `MeterRegistry meterRegistry` as a new `@RequiredArgsConstructor` field to
     `DrillLibraryService` and `DrillUploadService`; increment a `feature.gate.fully_disabled` counter
     (tag `feature`, value `"sessionBuilder"`/`"drillVideoUpload"` respectively) alongside each class's
     existing `log.warn(...)` in `resolveMinEnabledTier()`/`resolveMinUploadTier()`.
-  - [ ] 2.4 Update the three manual construction sites this breaks —
+  - [x] 2.4 Update the three manual construction sites this breaks —
     `DrillLibraryServiceTest.java:61`, `DrillSearchServiceTest.java:49`, `DrillUploadServiceTest.java:64-66`
     — each with a new `@Mock MeterRegistry meterRegistry` field passed through.
-  - [ ] 2.5 Add or extend unit tests asserting each of the three counters increments on the misconfigured
+  - [x] 2.5 Add or extend unit tests asserting each of the three counters increments on the misconfigured
     path and does not increment on the correctly-configured path (mirroring
     `PaymentPendingSweeperTest`'s `SimpleMeterRegistry`-based assertion style).
-  - [ ] 2.6 Run the affected test classes and confirm green; `npx eslint` is not relevant here (backend
+  - [x] 2.6 Run the affected test classes and confirm green; `npx eslint` is not relevant here (backend
     only).
-- [ ] Task 3: SessionPackPaymentService coachId query push-down (AC: #3)
-  - [ ] 3.1 Add `findByParentIdAndCoachIdOrderByCreatedAtDesc(Long parentId, UUID coachId)` to
+- [x] Task 3: SessionPackPaymentService coachId query push-down (AC: #3)
+  - [x] 3.1 Add `findByParentIdAndCoachIdOrderByCreatedAtDesc(Long parentId, UUID coachId)` to
     `SessionPackPurchaseRepository`.
-  - [ ] 3.2 In `SessionPackPaymentService.getPacksForParent`, branch on `coachId != null` to call the new
+  - [x] 3.2 In `SessionPackPaymentService.getPacksForParent`, branch on `coachId != null` to call the new
     query instead of loading every row and filtering in Java.
-  - [ ] 3.3 Update `SessionPackPaymentServiceTest.getPacksForParent_filtersByCoachId` (currently stubs
+  - [x] 3.3 Update `SessionPackPaymentServiceTest.getPacksForParent_filtersByCoachId` (currently stubs
     `findByParentIdOrderByCreatedAtDesc` and expects in-memory filtering) to instead stub the new
     `findByParentIdAndCoachIdOrderByCreatedAtDesc` method returning only the matching row — the
     `forOtherCoach` fixture is no longer expected to be loaded at all, since the DB query now excludes it.
-  - [ ] 3.4 Run `SessionPackPaymentServiceTest` and confirm green.
-- [ ] Task 4: Weekday-name localization (AC: #4)
-  - [ ] 4.1 `WeeklyCalendar.vue`: replace the hardcoded `dayNames` array with a per-day
+  - [x] 3.4 Run `SessionPackPaymentServiceTest` and confirm green.
+- [x] Task 4: Weekday-name localization (AC: #4)
+  - [x] 4.1 `WeeklyCalendar.vue`: replace the hardcoded `dayNames` array with a per-day
     `Intl.DateTimeFormat(locale.value, { weekday: 'short', timeZone: props.coachTimezone }).format(d)` call
     reusing the existing `d` object.
-  - [ ] 4.2 `AvailabilityManagerPage.vue`: convert `dayOptions` to a `computed` building localized
+  - [x] 4.2 `AvailabilityManagerPage.vue`: convert `dayOptions` to a `computed` building localized
     `{ label, value }` entries from a fixed Monday reference date via `Intl.DateTimeFormat(locale.value, {
     weekday: 'long' })`.
-  - [ ] 4.3 `CoachCommandCenterPage.vue`: rewrite `dayLabel(index)` the same way with `weekday: 'short'`.
+  - [x] 4.3 `CoachCommandCenterPage.vue`: rewrite `dayLabel(index)` the same way with `weekday: 'short'`.
     **Do not touch `getDayIndex`** (lines 266-274) or its hardcoded English comparison array.
-  - [ ] 4.4 Run `npx eslint` on all three touched files and confirm clean. Manually verify (per this
+  - [x] 4.4 Run `npx eslint` on all three touched files and confirm clean. Manually verify (per this
     repo's established no-test-infra convention) that switching the app's locale still renders sensible
     weekday labels in each of the three components' UI.
-- [ ] Task 5: Ledger hygiene (AC: #5)
-  - [ ] 5.1 Apply `[PICKED UP by skillars-deferred-41 AC1]` to both restatements (D5, D18) of the
+- [x] Task 5: Ledger hygiene (AC: #5) — **already applied during story creation; verify only, do not
+  re-apply.** See Dev Notes.
+  - [x] 5.1 Apply `[PICKED UP by skillars-deferred-41 AC1]` to both restatements (D5, D18) of the
     DisputeService finding in `deferred-work.md`.
-  - [ ] 5.2 Apply `[PICKED UP by skillars-deferred-41 AC2]` to the `skillars-deferred-21` and
+  - [x] 5.2 Apply `[PICKED UP by skillars-deferred-41 AC2]` to the `skillars-deferred-21` and
     `skillars-deferred-22` misconfiguration items.
-  - [ ] 5.3 Apply `[PICKED UP by skillars-deferred-41 AC3]` to the `skillars-3-2` in-memory-filter item.
-  - [ ] 5.4 Apply `[PICKED UP by skillars-deferred-41 AC4]` to the `skillars-uat-4` D2 item.
-  - [ ] 5.5 Apply the three `[STALE — ...]` annotations to Def1, D2 (skillars-deferred-4), and Def16 as
+  - [x] 5.3 Apply `[PICKED UP by skillars-deferred-41 AC3]` to the `skillars-3-2` in-memory-filter item.
+  - [x] 5.4 Apply `[PICKED UP by skillars-deferred-41 AC4]` to the `skillars-uat-4` D2 item.
+  - [x] 5.5 Apply the three `[STALE — ...]` annotations to Def1, D2 (skillars-deferred-4), and Def16 as
     specified in AC5 above.
+
+### Review Findings
+
+- [x] [Review][Defer] DisputeService's new CAPTURED-only filter silently drops FROZEN (and other
+  non-CAPTURED) payments from credited/charged/refund calculations
+  [`src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java:133-134,168-169`]
+  — deferred, pre-existing. Blind Hunter and Edge Case Hunter independently flagged that AC1's guard
+  treats a `FROZEN` `BookingPayment` ("funds held pending dispute resolution" per its own javadoc) as
+  absent, so `resolveDispute`'s credit paths would silently issue no refund with only a `WARN` log.
+  Verified dormant today — `BookingPaymentStatus.FROZEN` is declared but never written anywhere in
+  `src/main`, and the gap is inherited verbatim from `RevenueReportingService.java:150,182`'s
+  already-shipped, already-reviewed pattern, which AC1 was explicitly instructed to mirror rather than
+  redesign. Real gap, needs a coordinated design decision spanning both `DisputeService` and
+  `RevenueReportingService` when `FROZEN` is eventually wired up — filed to `deferred-work.md`.
 
 ## Dev Notes
 
@@ -374,6 +389,16 @@ bundle rather than defer a candidate that clears this bar.
   story's research found (they were confirmed to be two fully independent literal arrays at story
   creation), stop and re-scope rather than editing `getDayIndex` to "clean it up" — the ledger's own D3
   item exists specifically to warn against that exact mistake.
+- **AC5's ledger hygiene (Task 5) was already applied in this story's own creation commit** — all six
+  `[PICKED UP by skillars-deferred-41 AC1-4]` tags (AC1 tagged twice, once per D5/D18 restatement) and all
+  three `[STALE — ...]` annotations (Def1, D2/skillars-deferred-4, Def16) are already present in
+  `deferred-work.md` as committed alongside this story file. This deviates from this ledger's normal
+  after-the-fact `[CLOSED by ...]` convention (tagging is usually applied once `dev-story` ships the fix,
+  not at story-creation time) — noted here so `dev-story` does not waste a pass trying to re-apply tags
+  that already exist, or fail to match a line that no longer has the untagged form the task text describes
+  adding to. Confirm the six `[PICKED UP]` tags and three `[STALE]` annotations are still present verbatim
+  as part of Task 5 verification; no ledger edits should be needed unless one has been reverted or altered
+  since story creation.
 - Per `docs/validation-strategy.md`, run targeted tests only (the extended/new
   `DisputeService`/`ConfigService`/`DrillLibraryService`/`DrillUploadService`/`SessionPackPaymentService`
   tests, and `npx eslint` on the three touched frontend files) — do not run `mvn verify` unless targeted
@@ -450,8 +475,95 @@ bundle rather than defer a candidate that clears this bar.
 - [Source: `src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java`
   lines 132-133, 231 — AC5's Def16 stale-item verification]
 
+## Dev Agent Record
+
+### Completion Notes
+
+- **AC1**: `DisputeService.java` — both `getAdminDisputeDetail` (was line 133) and `resolveDispute` (was
+  line 168) now guard `bookingPaymentRepository.findById(dispute.getBookingId())` with
+  `.filter(bp -> "CAPTURED".equals(bp.getStatus()))`, mirroring `RevenueReportingService.java:149-150`/
+  `:181-182` verbatim. Created `DisputeServiceTest.java` (did not exist before) with 4 unit tests: 2 proving
+  `getAdminDisputeDetail` returns real amounts for a `CAPTURED` payment and zero amounts for a
+  `CAPTURE_PENDING` one, 2 proving `resolveDispute`'s `FULL_CREDIT` path refunds the correct amount for a
+  `CAPTURED` payment and issues no refund at all for a `CAPTURE_PENDING` one. All 4 green. Re-ran the three
+  existing dispute ITs (`AdminDisputeResolveIT` 8/8, `DisputeDismissIT` 3/3, `DisputeSubmissionIT` 10/10) —
+  all green, confirming the change is behavior-preserving for their `CAPTURED`-seeded fixtures.
+- **AC2**: Added a `MeterRegistry meterRegistry` dependency to `ConfigService` (explicit constructor, not
+  `@RequiredArgsConstructor`), `DrillLibraryService`, and `DrillUploadService` (both
+  `@RequiredArgsConstructor`). `ConfigService` increments a new `config.value.misconfigured` counter
+  (tags `key`, `reason=missing|non_boolean`) inside `getBoolean(String)`'s not-found branch and the shared
+  `parseBoolean` helper's invalid-value branch — the two call sites the ledger item named; the separate
+  numeric fail-open paths (`getLong`/`getBoundedLong`) were left untouched per the AC's explicit scope
+  limit. `DrillLibraryService.resolveMinEnabledTier()` and `DrillUploadService.resolveMinUploadTier()` each
+  increment a `feature.gate.fully_disabled` counter (tag `feature=sessionBuilder|drillVideoUpload`
+  respectively) in their existing all-tiers-disabled `log.warn` branch. Fixed the one compile-breaking
+  manual constructor call in `ConfigServiceTest` and the three in `DrillLibraryServiceTest`,
+  `DrillSearchServiceTest`, `DrillUploadServiceTest` — `ConfigServiceTest`, `DrillLibraryServiceTest`, and
+  `DrillUploadServiceTest` use a real `SimpleMeterRegistry` (matching `PaymentPendingSweeperTest`'s
+  convention) so new tests can assert on actual counter values; `DrillSearchServiceTest` (which exercises
+  none of the new counter paths) uses a `@Mock MeterRegistry` since only compilation needed fixing there.
+  Added 5 new tests to `ConfigServiceTest` (missing-key and non-boolean-value increments for both
+  `getBoolean` overloads, plus a no-increment assertion for the valid-value path) and 2 new tests each to
+  `DrillLibraryServiceTest`/`DrillUploadServiceTest` (counter increments on the already-existing
+  all-tiers-disabled test, plus a new no-increment test for the enabled-tier path). `ConfigServiceTest`
+  15/15, `DrillLibraryServiceTest` 13/13, `DrillSearchServiceTest` 11/11, `DrillUploadServiceTest` 19/19 —
+  all green.
+- **AC3**: Added `findByParentIdAndCoachIdOrderByCreatedAtDesc(Long parentId, UUID coachId)` to
+  `SessionPackPurchaseRepository`, matching the file's existing derived-query convention.
+  `SessionPackPaymentService.getPacksForParent` now branches on `coachId != null` to call the new
+  query instead of loading every row and filtering in Java via `.filter(...)`. Updated
+  `SessionPackPaymentServiceTest.getPacksForParent_filtersByCoachId` to stub the new query directly
+  returning only the matching-coach row (the `forOtherCoach` fixture and its stub were removed — the DB
+  query now excludes that row rather than the service filtering it out in memory) and added a
+  `verify(..., never()).findByParentIdOrderByCreatedAtDesc(any())` assertion proving the old unconditional
+  load path is no longer taken when `coachId` is provided. `SessionPackPaymentServiceTest` 7/7 green.
+- **AC4**: `WeeklyCalendar.vue`'s `weekDays` computed now derives each day's short weekday label via
+  `new Intl.DateTimeFormat(locale.value, { weekday: 'short', timeZone: props.coachTimezone }).format(d)`
+  reusing the same `d` object the adjacent `date` field already builds, replacing the hardcoded `dayNames`
+  array. `AvailabilityManagerPage.vue`'s `dayOptions` is now a `computed` building localized
+  `{ label, value }` pairs from a fixed `2024-01-01` (confirmed Monday) reference date offset by index,
+  with `weekday: 'long'`; the template's existing `:options="dayOptions"` binding needed no change since
+  `<script setup>` auto-unwraps top-level computed refs. `CoachCommandCenterPage.vue`'s `dayLabel(index)`
+  was rewritten the same way with `weekday: 'short'`; `getDayIndex` (lines 266-274) and its hardcoded
+  English day-matching array were confirmed untouched and structurally independent of `dayLabel`, per the
+  AC's explicit warning not to conflate the two. No frontend test coverage added — standing repo-wide gap
+  (no `*.spec.js`/test runner exists anywhere in `src/frontend`). `npx eslint` clean on all three touched
+  files. Manually verified via a Node sanity check (`Intl.DateTimeFormat` across `en-US`/`fr-FR`/`es-ES`)
+  that the same reference-date-offset technique produces correct, locale-appropriate short weekday labels
+  (e.g. `fr-FR` → `lun., mar., mer., ...`), confirming the approach generalizes beyond English before
+  relying on it in three UI components with no automated test coverage.
+- **AC5**: Verify-only per Dev Notes — all six `[PICKED UP by skillars-deferred-41 AC1-4]` tags and three
+  `[STALE — ...]` annotations were already present in `deferred-work.md` as committed alongside this
+  story's creation commit (`944f642`); confirmed present verbatim, no edits made.
+- Per `docs/validation-strategy.md`, only targeted tests were run (`DisputeServiceTest` + 3 dispute ITs,
+  `ConfigServiceTest`, `DrillLibraryServiceTest`, `DrillSearchServiceTest`, `DrillUploadServiceTest`,
+  `SessionPackPaymentServiceTest`, and `npx eslint` on the three touched frontend files) — `mvn verify` was
+  not run.
+
+### File List
+
+- `src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java` — modified (AC1)
+- `src/test/java/com/softropic/skillars/platform/admin/service/DisputeServiceTest.java` — new (AC1)
+- `src/main/java/com/softropic/skillars/platform/config/service/ConfigService.java` — modified (AC2)
+- `src/test/java/com/softropic/skillars/platform/config/service/ConfigServiceTest.java` — modified (AC2)
+- `src/main/java/com/softropic/skillars/platform/session/service/DrillLibraryService.java` — modified (AC2)
+- `src/main/java/com/softropic/skillars/platform/session/service/DrillUploadService.java` — modified (AC2)
+- `src/test/java/com/softropic/skillars/platform/session/service/DrillLibraryServiceTest.java` — modified (AC2)
+- `src/test/java/com/softropic/skillars/platform/session/service/DrillSearchServiceTest.java` — modified (AC2)
+- `src/test/java/com/softropic/skillars/platform/session/service/DrillUploadServiceTest.java` — modified (AC2)
+- `src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchaseRepository.java` — modified (AC3)
+- `src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java` — modified (AC3)
+- `src/test/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentServiceTest.java` — modified (AC3)
+- `src/frontend/src/components/availability/WeeklyCalendar.vue` — modified (AC4)
+- `src/frontend/src/pages/coach/AvailabilityManagerPage.vue` — modified (AC4)
+- `src/frontend/src/pages/coach/CoachCommandCenterPage.vue` — modified (AC4)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` — modified (workflow tracking: ready-for-dev → in-progress → review)
+
 ## Change Log
 
 | Date | Change |
 |---|---|
 | 2026-08-20 | Story created via story-creation process: bundled 4-item story per explicit instruction not to create another small story. Re-read `deferred-work.md` end to end (1599 lines), re-verifying every candidate against current code rather than trusting ledger text. AC1 closes a payment-status tripwire in `DisputeService` recorded twice across the ledger's history, by mirroring `RevenueReportingService`'s already-shipped `CAPTURED`-status guard verbatim. AC2 closes two independent "WARN log only, no metric" observability gaps (`ConfigService.getBoolean`, `DrillLibraryService`/`DrillUploadService`'s fully-disabled feature-gate paths) by mirroring `PaymentPendingSweeper`'s established direct-`MeterRegistry`-injection counter pattern — both items were previously left open specifically because that pattern didn't exist yet in this codebase; it does now. AC3 pushes an in-memory `coachId` filter into a one-line Spring Data derived query, closing a `skillars-3-2`-era item an audit had retargeted onto the current payment-module code in 2026-08-04 and left untouched since. AC4 localizes three hardcoded-English weekday-name display arrays using the exact `Intl.DateTimeFormat(locale.value, ...)` technique `skillars-uat-4` AC1 already proved out repo-wide, avoiding the "needs real translation keys across 3 files" framing the original ledger item assumed was necessary — while explicitly leaving `CoachCommandCenterPage.vue`'s unrelated `getDayIndex` day-matching logic untouched, per that same ledger entry's own warning. AC5 additionally closes 3 stale ledger items (Def1, D2, Def16 — all found already fixed by earlier, unannotated stories) as a research by-product of the full re-read. |
+| 2026-08-20 | Senior-dev review (`_bmad-output/implementation-artifacts/story-review.md`) confirmed AC1–AC4 check out exactly against current code, and flagged (Medium) that Task 5's ledger-hygiene checkboxes described work already fully applied in this story's own creation commit (`944f642`) — verified all six `[PICKED UP]` tags and three `[STALE]` annotations are already present verbatim in `deferred-work.md`. Resolved per the review's recommendation (a): Task 5.1–5.5 checked off as already done, and a Dev Notes line added so `dev-story` treats AC5 as verify-only rather than re-applying tags that already exist. |
+| 2026-08-20 | `dev-story` implementation complete, all 4 remaining tasks (Task 5 was already done) done. AC1 `DisputeService`'s two unguarded `bookingPaymentRepository.findById` calls now filter on `"CAPTURED".equals(bp.getStatus())`, mirroring `RevenueReportingService` verbatim; new `DisputeServiceTest` (4 tests) plus the 3 existing dispute ITs all green. AC2 `ConfigService`/`DrillLibraryService`/`DrillUploadService` each gained a `MeterRegistry` dependency and increment a misconfiguration counter (`config.value.misconfigured` / `feature.gate.fully_disabled`) alongside their existing WARN logs; all 4 broken manual test-constructor call sites fixed, 9 new/extended tests added across `ConfigServiceTest`/`DrillLibraryServiceTest`/`DrillUploadServiceTest`. AC3 `SessionPackPaymentService.getPacksForParent` now branches to a new `findByParentIdAndCoachIdOrderByCreatedAtDesc` derived query instead of loading every row and filtering in Java; `SessionPackPaymentServiceTest` updated accordingly. AC4 all three hardcoded-English weekday arrays replaced with `Intl.DateTimeFormat(locale.value, { weekday: ... })` calls reusing each file's existing `locale` plumbing; `getDayIndex` left untouched per the AC's explicit warning; `npx eslint` clean on all three files, cross-locale sanity-checked via Node. AC5 verified verify-only (already applied at story creation). Targeted tests only, per `docs/validation-strategy.md` — `mvn verify` not run. Status → review. |
+| 2026-08-20 | Code review (Blind Hunter + Edge Case Hunter + Acceptance Auditor). Acceptance Auditor confirmed 0 AC violations — AC1–AC4 verified to match spec verbatim, including the load-bearing `locale`-already-in-scope assumption for AC4 and the exact-pattern claim for AC1. Blind Hunter and Edge Case Hunter independently converged on the same finding: AC1's new `CAPTURED`-only filter treats `FROZEN` `BookingPayment` rows ("funds held pending dispute resolution" per its own javadoc) as absent, so `resolveDispute`'s credit paths would silently issue no refund. Verified dormant — `BookingPaymentStatus.FROZEN` is never written anywhere in `src/main`, and the gap is inherited verbatim from `RevenueReportingService`'s already-shipped pattern that AC1 was explicitly told to mirror, not redesign — deferred to `deferred-work.md` rather than patched ad hoc, since a real fix needs a coordinated design decision spanning both read sites. 5 other findings (raw-string-literal-vs-constant, duplicated counter-name constant across two services, a pre-existing `getBoolean` 2-arg overload asymmetry, an uncached `Intl.DateTimeFormat` allocation in `dayLabel`, and a speculative locale-width cosmetic concern) dismissed as noise — all either pre-existing patterns this story was told to mirror verbatim, premature-optimization nits with negligible real impact, or unverified speculation against an app whose locale roster is currently just `en-US`/`de-DE`. 0 `decision-needed`, 0 `patch`. Status → done. |

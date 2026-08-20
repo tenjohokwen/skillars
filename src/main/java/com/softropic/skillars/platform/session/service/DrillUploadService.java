@@ -23,6 +23,8 @@ import com.softropic.skillars.platform.video.contract.VideoType;
 import com.softropic.skillars.platform.video.service.VideoTypeConstraints;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
 import com.softropic.skillars.platform.video.service.VideoService;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -38,6 +40,8 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class DrillUploadService {
 
+    private static final String FEATURE_GATE_FULLY_DISABLED = "feature.gate.fully_disabled";
+
     private final DrillRepository drillRepository;
     private final DrillVideoRefRepository drillVideoRefRepository;
     private final VideoService videoService;
@@ -46,6 +50,7 @@ public class DrillUploadService {
     private final CoachProfileService coachProfileService;
     private final ApplicationEventPublisher eventPublisher;
     private final VideoTypeConstraints videoTypeConstraints;
+    private final MeterRegistry meterRegistry;
 
     public DrillUploadInitiateResponse initiateUpload(UUID drillId, Long coachUserId, DrillUploadInitiateRequest req) {
         UUID coachId = resolveCoachId(coachUserId);
@@ -149,6 +154,10 @@ public class DrillUploadService {
         }
         log.warn("No CoachSubscriptionTier has feature.drillVideoUpload.enabled.* set to true — "
                 + "drill_video_upload is unreachable for every coach regardless of subscription");
+        Counter.builder(FEATURE_GATE_FULLY_DISABLED)
+            .tag("feature", "drillVideoUpload")
+            .register(meterRegistry)
+            .increment();
         return null;
     }
 

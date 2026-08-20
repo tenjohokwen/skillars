@@ -275,7 +275,10 @@ function getDayIndex(instant, timezone) {
 }
 
 function dayLabel(index) {
-  return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][index]
+  const monday = new Date('2024-01-01T00:00:00')
+  const d = new Date(monday)
+  d.setDate(d.getDate() + index)
+  return new Intl.DateTimeFormat(locale.value, { weekday: 'short' }).format(d)
 }
 
 const bookingsByDay = computed(() => {

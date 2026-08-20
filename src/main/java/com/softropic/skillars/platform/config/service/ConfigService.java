@@ -6,6 +6,8 @@ import com.softropic.skillars.platform.config.contract.ConfigValueResponse;
 import com.softropic.skillars.platform.config.repo.PlatformConfig;
 import com.softropic.skillars.platform.config.repo.PlatformConfigRepository;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -24,19 +26,24 @@ import java.util.concurrent.TimeUnit;
 @Service
 public class ConfigService {
 
+    private static final String MISCONFIGURED_COUNTER = "config.value.misconfigured";
+
     private final PlatformConfigRepository configRepository;
     private final ConfigProperties configProperties;
     private final ConfigMapper configMapper;
+    private final MeterRegistry meterRegistry;
 
     private final ConcurrentHashMap<String, PlatformConfig> cache = new ConcurrentHashMap<>();
     private volatile Instant lastRefreshed = Instant.MIN;
 
     public ConfigService(PlatformConfigRepository configRepository,
                          ConfigProperties configProperties,
-                         ConfigMapper configMapper) {
+                         ConfigMapper configMapper,
+                         MeterRegistry meterRegistry) {
         this.configRepository = configRepository;
         this.configProperties = configProperties;
         this.configMapper = configMapper;
+        this.meterRegistry = meterRegistry;
     }
 
     @PostConstruct
@@ -108,6 +115,11 @@ public class ConfigService {
             .map(v -> parseBoolean(key, v, ""))
             .orElseGet(() -> {
                 log.warn("Feature gate config key '{}' not found in platform config; defaulting to false", key);
+                Counter.builder(MISCONFIGURED_COUNTER)
+                    .tag("key", key)
+                    .tag("reason", "missing")
+                    .register(meterRegistry)
+                    .increment();
                 return false;
             });
     }
@@ -127,6 +139,11 @@ public class ConfigService {
     private boolean parseBoolean(String key, String value, String logSuffix) {
         if (!"true".equalsIgnoreCase(value) && !"false".equalsIgnoreCase(value)) {
             log.warn("Config key '{}' has non-boolean value '{}' — treating as false{}", key, value, logSuffix);
+            Counter.builder(MISCONFIGURED_COUNTER)
+                .tag("key", key)
+                .tag("reason", "non_boolean")
+                .register(meterRegistry)
+                .increment();
         }
         return "true".equalsIgnoreCase(value);
     }
