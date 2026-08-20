@@ -158,13 +158,16 @@ defer a candidate that clears this bar.
 
 2. **AC2 — `SessionPackPurchaseRepository`'s confirmed-dead
    `findByCoachIdAndExpiresAtBetweenAndExtendedAtIsNullAndRemainingSessionsGreaterThan` method is deleted.**
-   Remove the method declaration at `SessionPackPurchaseRepository.java:23-24` in full. Do **not** touch the
-   comment block immediately below it (lines 26-28, which documents `findExpiringWithinWindowAndSessionsRemaining`
-   and explicitly says "The derived query above is a different caller — leave it alone" about a *different*
-   pairing than this AC removes) beyond whatever adjustment is needed for the comment to still read
-   correctly once the method above it is gone — re-read the comment in context after deleting and adjust
-   only if it now reads as referring to nothing. No other method in the file changes. Verify no compile
-   break: `grep -rn "findByCoachIdAndExpiresAtBetweenAndExtendedAtIsNullAndRemainingSessionsGreaterThan"
+   Remove the method declaration at `SessionPackPurchaseRepository.java:23-24` in full. The comment block
+   immediately below it (lines 26-28, which documents `findExpiringWithinWindowAndSessionsRemaining`) has a
+   third sentence — "The derived query above is a different caller — leave it alone" — that refers to
+   exactly the method this AC deletes (it is the only method-name-derived, non-`@Query` method directly
+   above that comment). Once lines 23-24 are gone, that sentence becomes dangling — there will be no
+   derived query directly above it anymore. Remove or reword that sentence so the comment no longer
+   references a deleted method; keep the rest of the comment (the `expiryWarnedAt IS NULL` rationale and
+   the `findExpiredNotYetNotified` mirror note), since that part still documents
+   `findExpiringWithinWindowAndSessionsRemaining` correctly. No other method in the file changes. Verify no
+   compile break: `grep -rn "findByCoachIdAndExpiresAtBetweenAndExtendedAtIsNullAndRemainingSessionsGreaterThan"
    src/main src/test` must return zero hits after the deletion, confirming this was genuinely unreferenced
    before and after.
 
@@ -211,13 +214,22 @@ defer a candidate that clears this bar.
   - [ ] 1.2 Apply the identical change to `ParentRegistrationService.java` and `PlayerRegistrationService.java`.
   - [ ] 1.3 Run `CoachRegistrationResourceIT` and `ParentRegistrationResourceIT` (the two existing
     integration tests that exercise OTP-issuing registration flows end to end) and confirm they remain
-    green — behavior-preserving, so no assertion should need updating.
+    green — behavior-preserving, so no assertion should need updating. **These two ITs cover only
+    `CoachRegistrationService` and `ParentRegistrationService`.** No test of any kind (integration or unit)
+    references `PlayerRegistrationService` anywhere in this repo — confirmed by
+    `grep -rln "PlayerRegistrationService" src/test` returning zero hits. Its `generateOtp()` change is the
+    same mechanical, behavior-preserving edit mirrored identically across all three files, but is verified
+    only by code-reading, not test execution. Either confirm via a manual/API-level smoke test that player
+    registration's OTP flow still issues a valid 6-digit code after the change, or note explicitly in the
+    Dev Agent Record that this file's change is unverified by automated tests (standing gap, not introduced
+    by this AC).
 - [ ] Task 2: `SessionPackPurchaseRepository` dead-query removal (AC: #2)
   - [ ] 2.1 Delete `findByCoachIdAndExpiresAtBetweenAndExtendedAtIsNullAndRemainingSessionsGreaterThan`
     from `SessionPackPurchaseRepository.java`.
-  - [ ] 2.2 Re-read the adjacent comment block (currently lines 26-28) and adjust only if it now reads as
-    referring to a deleted method; otherwise leave untouched, since it documents
-    `findExpiringWithinWindowAndSessionsRemaining`, not the deleted method.
+  - [ ] 2.2 The adjacent comment block's (currently lines 26-28) third sentence — "The derived query above
+    is a different caller — leave it alone" — refers to the method just deleted in 2.1. Remove or reword
+    that sentence so it no longer dangles; keep the rest of the comment intact, since it correctly
+    documents `findExpiringWithinWindowAndSessionsRemaining`.
   - [ ] 2.3 Confirm the module compiles and `SessionPackPurchaseRepositoryIT`,
     `SessionPackExpiryNotifierTest`/`SessionPackExpiryNotifierIT` (or whichever test classes currently
     cover this repository/its two live schedulers) remain green.
@@ -225,11 +237,12 @@ defer a candidate that clears this bar.
   - [ ] 3.1 Remove the `bioSanitizationWarning` key from `en-US/index.js`, `de-DE/index.js`, and
     `fr-FR/index.js`.
   - [ ] 3.2 Run `npx eslint` on all three touched files and confirm clean.
-- [ ] Task 4: Ledger hygiene (AC: #4)
-  - [ ] 4.1 Apply `[PICKED UP by skillars-deferred-42 AC1]` to the `skillars-1-3` Group B D8 item.
-  - [ ] 4.2 Apply `[PICKED UP by skillars-deferred-42 AC2]` to the `skillars-7-2` Group 1 D2 item.
-  - [ ] 4.3 Apply `[PICKED UP by skillars-deferred-42 AC3]` to the `skillars-2-4` duplicate-i18n-key item.
-  - [ ] 4.4 Apply the two `[STALE — ...]` annotations to Def7 (`skillars-6-1`) and the
+- [x] Task 4: Ledger hygiene (AC: #4) — **already applied during story creation; verify only, do not
+  re-apply.** See Dev Notes.
+  - [x] 4.1 Apply `[PICKED UP by skillars-deferred-42 AC1]` to the `skillars-1-3` Group B D8 item.
+  - [x] 4.2 Apply `[PICKED UP by skillars-deferred-42 AC2]` to the `skillars-7-2` Group 1 D2 item.
+  - [x] 4.3 Apply `[PICKED UP by skillars-deferred-42 AC3]` to the `skillars-2-4` duplicate-i18n-key item.
+  - [x] 4.4 Apply the two `[STALE — ...]` annotations to Def7 (`skillars-6-1`) and the
     `getRequestedStartTime()` null-guard item (`skillars-3-4`) as specified in AC4 above.
 
 ## Dev Notes
@@ -253,11 +266,15 @@ defer a candidate that clears this bar.
 - **AC3's key removal is scoped to exactly one key, in exactly three files** — do not also touch any
   `contactDetailWarning` entry, and do not attempt to reconcile the trailing-period inconsistency between
   the two keys' text (moot once `bioSanitizationWarning` no longer exists to diverge from its sibling).
-- **AC4's ledger hygiene (Task 4) should be applied as part of `dev-story`, following this ledger's normal
-  after-the-fact `[PICKED UP]`/`[STALE]` convention** — unlike `skillars-deferred-41`, whose hygiene tags
-  were pre-applied at story-creation time, this story's tags are NOT yet present in `deferred-work.md`
-  as of story creation; `dev-story` should apply all four tags listed in AC4 as part of implementing this
-  story, not skip them expecting them to already exist.
+- **AC4's ledger hygiene (Task 4) was already applied in this story's own creation commit** — all three
+  `[PICKED UP by skillars-deferred-42 AC1-3]` tags and both `[STALE — ...]` annotations (Def7, the
+  `skillars-3-4` `getRequestedStartTime()` item) are already present in `deferred-work.md` as committed
+  alongside this story file (`c8a958a`). This deviates from this ledger's normal after-the-fact
+  `[CLOSED by ...]` convention (tagging is usually applied once `dev-story` ships the fix, not at
+  story-creation time) — noted here so `dev-story` does not waste a pass trying to re-apply tags that
+  already exist, or fail to match a line that no longer has the untagged form the task text describes
+  adding to. Confirm the three `[PICKED UP]` tags and two `[STALE]` annotations are still present verbatim
+  in `deferred-work.md` before marking Task 4 complete; do not re-run the edits.
 - Per `docs/validation-strategy.md`, run targeted tests only (the two existing registration ITs for AC1,
   whichever repository/scheduler tests cover `SessionPackPurchaseRepository` for AC2, and `npx eslint` on
   the three touched frontend i18n files for AC3) — do not run `mvn verify` unless targeted tests prove
@@ -324,3 +341,4 @@ defer a candidate that clears this bar.
 | Date | Change |
 |---|---|
 | 2026-08-20 | Story created via story-creation process: bundled 3-item story per explicit instruction not to create another small story. Re-read `deferred-work.md` end to end (1603 lines), re-verifying every candidate against current code rather than trusting ledger text. AC1 closes an OTP `SecureRandom` per-call re-instantiation gap in `CoachRegistrationService`, found also present (undiscovered by the ledger) in `ParentRegistrationService` and `PlayerRegistrationService`, by mirroring `TwoFactorLoginService`/`Secret.java`'s already-shipped shared-static-instance pattern. AC2 deletes a `SessionPackPurchaseRepository` derived-query method confirmed to have zero callers anywhere in `src/main`/`src/test`, an item never actually verified since it was first raised in 2026-06-24. AC3 removes a duplicate, unused `auth.coach.bioSanitizationWarning` i18n key from all three live locale bundles, mirroring the orphaned-key-removal pattern `skillars-uat-6` AC3 already established. AC4 additionally closes 2 stale ledger items (Def7 from `skillars-6-1`, and a `skillars-3-4` null-guard item mooted by `skillars-deferred-33` AC7's deletion of its target method) found already resolved as a research by-product of the full re-read. |
+| 2026-08-20 | Senior-dev review (`_bmad-output/implementation-artifacts/story-review.md`) confirmed AC1-AC3 check out exactly against current code (every line-number citation and code excerpt verified byte-for-byte), and raised 3 findings. Finding 1 (Medium): Task 4's ledger-hygiene checkboxes described work already fully applied in this story's own creation commit (`c8a958a`) — verified all three `[PICKED UP]` tags and two `[STALE]` annotations are already present verbatim in `deferred-work.md`; the Dev Notes line claiming otherwise was also wrong. Resolved per the review's recommendation (a), mirroring how `skillars-deferred-41` resolved the identical mistake: Task 4.1-4.4 checked off as already done, and the Dev Notes line rewritten so `dev-story` treats AC4 as verify-only rather than re-applying tags that already exist. Finding 2 (Low-Medium): AC2's parenthetical incorrectly claimed the adjacent comment's "The derived query above is a different caller" sentence referred to "a different pairing than this AC removes" — it in fact refers to the exact method AC2 deletes (the only method-name-derived, non-`@Query` method directly above that comment). Corrected AC2 and Task 2.2 to state the sentence must be removed or reworded once the method above it is gone. Finding 3 (Low): AC1's `PlayerRegistrationService.generateOtp()` change has zero automated test coverage anywhere in the repo (`CoachRegistrationResourceIT`/`ParentRegistrationResourceIT` only cover the other two files) — Task 1.3 updated to flag this explicitly and require either a manual smoke test or an explicit Dev Agent Record note, rather than implying full coverage. |
