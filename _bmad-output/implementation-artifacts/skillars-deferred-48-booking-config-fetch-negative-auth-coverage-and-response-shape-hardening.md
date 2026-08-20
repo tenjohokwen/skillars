@@ -6,10 +6,10 @@ Status: ready-for-dev
 
 As an engineer operating this platform,
 I want the new `GET /api/bookings/requests/config` endpoint to have negative-auth IT coverage and
-`BookingRequestPage.vue`'s two config-fetch response bodies to be shape-validated before use,
+`BookingRequestPage.vue`'s config-fetch response bodies to be shape-validated before use at every call site,
 so that a wrong-role caller is provably rejected and a malformed/contract-drifted config response degrades
-to the known-good fallback instead of throwing inside the slot-rendering computed or silently comparing
-against the wrong shape.
+to the known-good fallback everywhere it's fetched, instead of throwing inside the slot-rendering computed,
+silently comparing against the wrong shape, or leaving the batch-size cap and its rejection toast broken.
 
 ### Why this story exists
 
@@ -103,45 +103,71 @@ reads:
      any change to `BookingBatchResourceIT.java`'s identical gap on `/batches/config`. All three are named in
      the source item as standing, not as this story's job.
 
-2. **AC2 — Both `onMounted` config fetches in `BookingRequestPage.vue` validate response shape before
-   assignment, falling back to the existing pre-fetch default on a malformed shape.**
-   In `src/frontend/src/pages/parent/BookingRequestPage.vue`'s `onMounted` (the two `try`/`catch` blocks
-   added by `skillars-deferred-47`, immediately after `bookingStore.loadPlayerPacks`):
-   - Replace the unconditional `maxBatchSize.value = res.maxSize` with a shape-checked assignment, warning and
-     keeping the current value otherwise:
-     ```js
-     try {
-       const res = await getBatchConfig()
-       if (Number.isInteger(res.maxSize) && res.maxSize > 0) {
-         maxBatchSize.value = res.maxSize
-       } else {
-         console.warn('Batch config response had an unexpected shape, using default max size')
+2. **AC2 — All three `getBatchConfig()`/`getBookingRequestConfig()` config-fetch call sites in
+   `BookingRequestPage.vue` validate response shape before assignment, falling back to the existing pre-fetch
+   default on a malformed shape.**
+
+   `getBatchConfig()` has **three** call sites in this file, not two — story-review.md Finding 1 (2026-08-20)
+   caught that the original draft of this AC only scoped the two `onMounted` fetches and missed the third, in
+   `submitBatchRequest()`'s `catch` block's `batchSizeExceeded` re-fetch branch, which carries the identical
+   unguarded `maxBatchSize.value = res.maxSize` pattern this AC exists to fix. All three are now in scope:
+
+   - In `onMounted` (the two `try`/`catch` blocks added by `skillars-deferred-47`, immediately after
+     `bookingStore.loadPlayerPacks`):
+     - Replace the unconditional `maxBatchSize.value = res.maxSize` with a shape-checked assignment, warning
+       and keeping the current value otherwise:
+       ```js
+       try {
+         const res = await getBatchConfig()
+         if (Number.isInteger(res.maxSize) && res.maxSize > 0) {
+           maxBatchSize.value = res.maxSize
+         } else {
+           console.warn('Batch config response had an unexpected shape, using default max size')
+         }
+       } catch {
+         console.warn('Could not load batch config, using default max size')
        }
-     } catch {
-       console.warn('Could not load batch config, using default max size')
+       ```
+     - Replace the unconditional `ownBlockingStatuses.value = res.activeSlotStatuses` the same way:
+       ```js
+       try {
+         const res = await getBookingRequestConfig()
+         if (Array.isArray(res.activeSlotStatuses)) {
+           ownBlockingStatuses.value = res.activeSlotStatuses
+         } else {
+           console.warn('Booking request config response had an unexpected shape, using default active-slot statuses')
+         }
+       } catch {
+         console.warn('Could not load booking request config, using default active-slot statuses')
+       }
+       ```
+   - In `submitBatchRequest()`'s `catch` block, the `errorKey === 'booking.batchSizeExceeded'` branch
+     (`:556-557`), apply the identical `maxBatchSize` guard used in `onMounted` above, in place:
+     ```js
+     const res = await getBatchConfig()
+     if (Number.isInteger(res.maxSize) && res.maxSize > 0) {
+       maxBatchSize.value = res.maxSize
+     } else {
+       console.warn('Batch config response had an unexpected shape, using previous max size')
      }
      ```
-   - Replace the unconditional `ownBlockingStatuses.value = res.activeSlotStatuses` the same way:
-     ```js
-     try {
-       const res = await getBookingRequestConfig()
-       if (Array.isArray(res.activeSlotStatuses)) {
-         ownBlockingStatuses.value = res.activeSlotStatuses
-       } else {
-         console.warn('Booking request config response had an unexpected shape, using default active-slot statuses')
-       }
-     } catch {
-       console.warn('Could not load booking request config, using default active-slot statuses')
-     }
-     ```
-   - **No change to the `catch` blocks' existing messages or to any other line in `onMounted`.** Both guards
-     are pure additions ahead of the existing assignment; the `try`/`catch` boundaries, the two exported API
-     calls, and every other line in the block are unchanged.
+     This branch has no surrounding `try`/`catch` of its own around this specific call within the outer
+     `try` — leave its existing outer `try`/`catch` (the one that already produces the
+     `'Could not re-fetch batch config, using previous max size'` warning on a thrown/network failure)
+     untouched; the new `if`/`else` only adds a shape check for the case where the call *succeeds* with a
+     malformed body. Do **not** change the `$q.notify(...)` toast that follows — it already reads
+     `maxBatchSize.value`, so once the guard prevents that ref from becoming `undefined`, the toast is
+     correct with no further edit.
+   - **No change to any `catch` block's existing warning message, to the outer `try`/`catch` structure in
+     `submitBatchRequest()`, or to any other line in either function.** All three guards are pure additions
+     ahead of their existing assignment; every exported API call and every other line in both blocks is
+     unchanged.
    - **Manually exercise** (this repo has no frontend test suite — see Dev Notes): confirm the happy path is
-     unaffected (both values still populate from a normal 200 response, identical to `skillars-deferred-47`'s
-     own behavior), and confirm a simulated malformed response (e.g. temporarily stub one fetch to resolve
-     `{}` in a local dev session) leaves the corresponding ref at its pre-fetch default with a console warning
-     instead of throwing inside `ownBlockingBookings`/`slotRows`.
+     unaffected on all three call sites (values still populate from a normal 200 response, identical to
+     `skillars-deferred-47`'s own behavior), and confirm a simulated malformed response (e.g. temporarily stub
+     a fetch to resolve `{}` in a local dev session) leaves the corresponding ref at its pre-fetch/previous
+     value with a console warning instead of propagating `undefined` into `batchAtMax`, `toggleSlotInBasket`,
+     the `batchSizeExceeded` toast, or `ownBlockingBookings`/`slotRows`.
 
 3. **AC3 — Ledger hygiene.** In `deferred-work.md`, tag both source items:
    - The `New GET /api/bookings/requests/config endpoint has no negative-auth-path...` item with
@@ -157,10 +183,14 @@ reads:
   - [ ] 1.2 Run targeted verification for the touched IT and confirm green (see Dev Notes — this project's
     `*IT` classes run under `maven-failsafe-plugin`, not `mvn test`).
 - [ ] Task 2: Frontend response-shape hardening (AC: #2)
-  - [ ] 2.1 Add the `Number.isInteger`/`> 0` guard around the `maxBatchSize.value` assignment.
-  - [ ] 2.2 Add the `Array.isArray` guard around the `ownBlockingStatuses.value` assignment.
-  - [ ] 2.3 Manually exercise both the happy path and a simulated malformed-response fallback.
-  - [ ] 2.4 Run `npx eslint` on the touched file and confirm clean.
+  - [ ] 2.1 Add the `Number.isInteger`/`> 0` guard around `onMounted`'s `maxBatchSize.value` assignment.
+  - [ ] 2.2 Add the `Array.isArray` guard around `onMounted`'s `ownBlockingStatuses.value` assignment.
+  - [ ] 2.3 Add the identical `Number.isInteger`/`> 0` guard around `submitBatchRequest()`'s
+    `batchSizeExceeded`-branch `maxBatchSize.value` assignment (story-review.md Finding 1 — the third,
+    originally-missed `getBatchConfig()` call site).
+  - [ ] 2.4 Manually exercise the happy path and a simulated malformed-response fallback on all three call
+    sites.
+  - [ ] 2.5 Run `npx eslint` on the touched file and confirm clean.
 - [ ] Task 3: Ledger hygiene (AC: #3) — apply both `[PICKED UP]` tags specified above.
 
 ## Dev Notes
@@ -178,9 +208,15 @@ reads:
   `-Dit.test=BookingRequestResourceIT#getConfig_coachRole_returns403` to scope to just the new test) and
   confirm a `target/failsafe-reports/...BookingRequestResourceIT.txt` report was actually written with the
   expected test count.
-- **AC2 is not behavior-changing on the happy path.** Both guards are additive checks ahead of an assignment
-  that already succeeds unconditionally today; a normal 200 response with the expected shape produces
-  identical `maxBatchSize.value`/`ownBlockingStatuses.value` results before and after this diff.
+- **AC2 is not behavior-changing on the happy path.** All three guards are additive checks ahead of an
+  assignment that already succeeds unconditionally today; a normal 200 response with the expected shape
+  produces identical `maxBatchSize.value`/`ownBlockingStatuses.value` results before and after this diff.
+- **`getBatchConfig()` has three call sites, not two** — story-review.md Finding 1 caught that the original
+  draft only scoped the two `onMounted` fetches. `submitBatchRequest()`'s `catch` block also calls it (its
+  `batchSizeExceeded`-rejection re-fetch), with the identical unguarded assignment; left unguarded, a
+  malformed response there specifically breaks `batchAtMax`/`toggleSlotInBasket` (both read
+  `maxBatchSize.value`) for the rest of the session and renders a literal "undefined" in the rejection toast.
+  All three call sites are now in AC2's scope — do not re-narrow back to two.
 - **No new frontend automated test coverage** — standing repo-wide gap, the same one recorded by every prior
   `skillars-deferred-*` frontend-only change (most recently `-45`/`-46`/`-47`). Manual exercise per AC2's own
   text is this project's established verification path here.
@@ -192,8 +228,8 @@ reads:
 
 - `src/test/java/com/softropic/skillars/platform/booking/api/BookingRequestResourceIT.java` — one new test
   method (AC1).
-- `src/frontend/src/pages/parent/BookingRequestPage.vue` — two `onMounted` assignments gain a shape guard;
-  no other line changes (AC2).
+- `src/frontend/src/pages/parent/BookingRequestPage.vue` — two `onMounted` assignments and one
+  `submitBatchRequest()` assignment gain a shape guard (three total); no other line changes (AC2).
 - `_bmad-output/implementation-artifacts/deferred-work.md` — two `[PICKED UP]` tags (AC3).
 - No changes to `BookingResource.java`, `BookingService.java`, `booking.api.js`, `BookingBatchResourceIT.java`,
   or any other file — all confirmed unnecessary by both source items' own analysis and this story's scoping
@@ -221,3 +257,4 @@ reads:
 | Date | Change |
 |---|---|
 | 2026-08-20 | Story created via story-creation process, bundling two small, non-decision-needing items both filed by `skillars-deferred-47`'s own code review — the immediately preceding story. Full re-mine of `deferred-work.md` found no other untagged item qualifying this pass (all either already picked up/closed by an intervening story, explicitly decision-needed, a standing accepted tradeoff, or an ops/infra item needing live-environment verification). |
+| 2026-08-20 | `story-review.md` Finding 1 (Medium, confirmed) applied: AC2's original scope covered only `getBatchConfig()`'s two `onMounted` call sites, missing its third — `submitBatchRequest()`'s `catch` block `batchSizeExceeded` re-fetch (`:556-557`) — which carries the identical unguarded assignment and, left unfixed, would have silently broken `batchAtMax`/`toggleSlotInBasket` and rendered "undefined" in the rejection toast on a malformed response. AC2, Task 2, Dev Notes, and Project Structure Notes updated to bring all three call sites into scope. |
