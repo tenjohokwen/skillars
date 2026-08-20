@@ -1,6 +1,6 @@
 # Story Deferred-42: OTP SecureRandom Reuse, Session-Pack Dead-Query Removal & Duplicate i18n Key Cleanup
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -207,12 +207,12 @@ defer a candidate that clears this bar.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: OTP `SecureRandom` reuse (AC: #1)
-  - [ ] 1.1 In `CoachRegistrationService.java`, add `private static final SecureRandom SECURE_RANDOM = new
+- [x] Task 1: OTP `SecureRandom` reuse (AC: #1)
+  - [x] 1.1 In `CoachRegistrationService.java`, add `private static final SecureRandom SECURE_RANDOM = new
     SecureRandom();` as a class-level field and update `generateOtp()` to use it instead of a per-call
     local instance.
-  - [ ] 1.2 Apply the identical change to `ParentRegistrationService.java` and `PlayerRegistrationService.java`.
-  - [ ] 1.3 Run `CoachRegistrationResourceIT` and `ParentRegistrationResourceIT` (the two existing
+  - [x] 1.2 Apply the identical change to `ParentRegistrationService.java` and `PlayerRegistrationService.java`.
+  - [x] 1.3 Run `CoachRegistrationResourceIT` and `ParentRegistrationResourceIT` (the two existing
     integration tests that exercise OTP-issuing registration flows end to end) and confirm they remain
     green — behavior-preserving, so no assertion should need updating. **These two ITs cover only
     `CoachRegistrationService` and `ParentRegistrationService`.** No test of any kind (integration or unit)
@@ -222,21 +222,26 @@ defer a candidate that clears this bar.
     only by code-reading, not test execution. Either confirm via a manual/API-level smoke test that player
     registration's OTP flow still issues a valid 6-digit code after the change, or note explicitly in the
     Dev Agent Record that this file's change is unverified by automated tests (standing gap, not introduced
-    by this AC).
-- [ ] Task 2: `SessionPackPurchaseRepository` dead-query removal (AC: #2)
-  - [ ] 2.1 Delete `findByCoachIdAndExpiresAtBetweenAndExtendedAtIsNullAndRemainingSessionsGreaterThan`
+    by this AC). **Done:** `CoachRegistrationResourceIT` 11/11 and `ParentRegistrationResourceIT` 11/11
+    green, 0 failures/errors. `PlayerRegistrationService`'s identical change noted in Dev Agent Record as
+    unverified by any automated test (per the alternative this subtask allows).
+- [x] Task 2: `SessionPackPurchaseRepository` dead-query removal (AC: #2)
+  - [x] 2.1 Delete `findByCoachIdAndExpiresAtBetweenAndExtendedAtIsNullAndRemainingSessionsGreaterThan`
     from `SessionPackPurchaseRepository.java`.
-  - [ ] 2.2 The adjacent comment block's (currently lines 26-28) third sentence — "The derived query above
+  - [x] 2.2 The adjacent comment block's (currently lines 26-28) third sentence — "The derived query above
     is a different caller — leave it alone" — refers to the method just deleted in 2.1. Remove or reword
     that sentence so it no longer dangles; keep the rest of the comment intact, since it correctly
     documents `findExpiringWithinWindowAndSessionsRemaining`.
-  - [ ] 2.3 Confirm the module compiles and `SessionPackPurchaseRepositoryIT`,
+  - [x] 2.3 Confirm the module compiles and `SessionPackPurchaseRepositoryIT`,
     `SessionPackExpiryNotifierTest`/`SessionPackExpiryNotifierIT` (or whichever test classes currently
-    cover this repository/its two live schedulers) remain green.
-- [ ] Task 3: Duplicate i18n key removal (AC: #3)
-  - [ ] 3.1 Remove the `bioSanitizationWarning` key from `en-US/index.js`, `de-DE/index.js`, and
+    cover this repository/its two live schedulers) remain green. **Done:** no `SessionPackExpiryNotifier`
+    test class exists in this repo; ran `SessionPackPurchaseRepositoryIT` (2/2 green) and
+    `SessionPackForfeitureSchedulerTest` (4/4 green) — the test classes that actually cover this repository
+    and its two live schedulers.
+- [x] Task 3: Duplicate i18n key removal (AC: #3)
+  - [x] 3.1 Remove the `bioSanitizationWarning` key from `en-US/index.js`, `de-DE/index.js`, and
     `fr-FR/index.js`.
-  - [ ] 3.2 Run `npx eslint` on all three touched files and confirm clean.
+  - [x] 3.2 Run `npx eslint` on all three touched files and confirm clean.
 - [x] Task 4: Ledger hygiene (AC: #4) — **already applied during story creation; verify only, do not
   re-apply.** See Dev Notes.
   - [x] 4.1 Apply `[PICKED UP by skillars-deferred-42 AC1]` to the `skillars-1-3` Group B D8 item.
@@ -244,6 +249,17 @@ defer a candidate that clears this bar.
   - [x] 4.3 Apply `[PICKED UP by skillars-deferred-42 AC3]` to the `skillars-2-4` duplicate-i18n-key item.
   - [x] 4.4 Apply the two `[STALE — ...]` annotations to Def7 (`skillars-6-1`) and the
     `getRequestedStartTime()` null-guard item (`skillars-3-4`) as specified in AC4 above.
+
+### Review Findings
+
+- [x] [Review][Defer] `PlayerRegistrationService.generateOtp()`'s `SecureRandom` reuse change has zero
+  automated test coverage anywhere in this repo — deferred, pre-existing. `grep -rln
+  "PlayerRegistrationService" src/test` returns zero hits (independently re-confirmed by both the Edge Case
+  Hunter and the Acceptance Auditor). This is the exact gap Task 1.3 already flags and explicitly permits
+  closing via a Dev Agent Record note rather than a smoke test — not a new defect introduced by this diff,
+  and not unique to this AC (mirrors the standing "no automated frontend/some-backend test infrastructure"
+  gap this story's own Dev Notes already acknowledge). Filed to `deferred-work.md` for future test-infra
+  passes to pick up.
 
 ## Dev Notes
 
@@ -330,11 +346,49 @@ defer a candidate that clears this bar.
 
 ### Completion Notes
 
-(none yet — story not implemented)
+- **AC1:** Added `private static final SecureRandom SECURE_RANDOM = new SecureRandom();` as the first field
+  in `CoachRegistrationService`, `ParentRegistrationService`, and `PlayerRegistrationService`, matching
+  `TwoFactorLoginService.java:26`'s placement. `generateOtp()` in all three now reads
+  `int code = 100000 + SECURE_RANDOM.nextInt(900000);` instead of instantiating a local `SecureRandom` per
+  call. Behavior-preserving — same distribution, same return type. `CoachRegistrationResourceIT` (11/11) and
+  `ParentRegistrationResourceIT` (11/11) both green, 0 failures/errors. `PlayerRegistrationService`'s
+  identical change has **no automated test coverage** — confirmed by `grep -rln "PlayerRegistrationService"
+  src/test` returning zero hits, both before and after this change. This is a pre-existing gap, not
+  introduced by this AC (mirrors Task 1.3's own flagged concern); the change was verified only by
+  code-reading (identical mechanical edit to the other two files) and was not smoke-tested manually against
+  a running app in this session.
+- **AC2:** Deleted `findByCoachIdAndExpiresAtBetweenAndExtendedAtIsNullAndRemainingSessionsGreaterThan` from
+  `SessionPackPurchaseRepository.java`. Re-verified immediately before deleting per Dev Notes: grep for the
+  method across `src/main`/`src/test` returned only its own declaration. Removed the adjacent comment's
+  dangling third sentence ("The derived query above is a different caller — leave it alone"), keeping the
+  `expiryWarnedAt IS NULL` rationale and `findExpiredNotYetNotified` mirror note intact, since those still
+  correctly document `findExpiringWithinWindowAndSessionsRemaining`. Post-deletion grep confirmed zero
+  remaining references. No `SessionPackExpiryNotifier`-specific test class exists in this repo;
+  `SessionPackPurchaseRepositoryIT` (2/2) and `SessionPackForfeitureSchedulerTest` (4/4) — the test classes
+  that actually exercise this repository and its two live schedulers — both green, 0 failures/errors.
+- **AC3:** Removed the `bioSanitizationWarning` line from the `auth.coach` block in `en-US/index.js:122`,
+  `de-DE/index.js:115`, and `fr-FR/index.js:232`. No `contactDetailWarning` entry touched. Post-deletion
+  `grep -rn "bioSanitizationWarning" src/frontend/src` returned zero hits. `npx eslint` on all three touched
+  files reported no errors.
+- **AC4:** Verify-only, per Dev Notes — all three `[PICKED UP]` tags and both `[STALE]` annotations were
+  already present in `deferred-work.md` as committed in this story's own creation commit (`c8a958a`);
+  re-confirmed present verbatim, no edits made.
+- **Environment note (not a story defect):** the first targeted-test attempt for both AC1 and AC2 failed with
+  cascading Spring `ApplicationContext` load failures (`NoClassDefFoundError` for classes — e.g.
+  `TestConfig$1`, `MailManager` — that were present in source but missing from a stale `target/classes`).
+  This was pre-existing `target/` staleness unrelated to this story's edits; `mvn -o -q clean test-compile`
+  resolved it, after which every targeted test listed above ran clean on the first attempt.
+- Per `docs/validation-strategy.md`, only targeted tests were run (no `mvn verify`).
 
 ### File List
 
-(none yet — story not implemented)
+- `src/main/java/com/softropic/skillars/platform/security/service/CoachRegistrationService.java` (AC1)
+- `src/main/java/com/softropic/skillars/platform/security/service/ParentRegistrationService.java` (AC1)
+- `src/main/java/com/softropic/skillars/platform/security/service/PlayerRegistrationService.java` (AC1)
+- `src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchaseRepository.java` (AC2)
+- `src/frontend/src/i18n/en-US/index.js` (AC3)
+- `src/frontend/src/i18n/de-DE/index.js` (AC3)
+- `src/frontend/src/i18n/fr-FR/index.js` (AC3)
 
 ## Change Log
 
@@ -342,3 +396,5 @@ defer a candidate that clears this bar.
 |---|---|
 | 2026-08-20 | Story created via story-creation process: bundled 3-item story per explicit instruction not to create another small story. Re-read `deferred-work.md` end to end (1603 lines), re-verifying every candidate against current code rather than trusting ledger text. AC1 closes an OTP `SecureRandom` per-call re-instantiation gap in `CoachRegistrationService`, found also present (undiscovered by the ledger) in `ParentRegistrationService` and `PlayerRegistrationService`, by mirroring `TwoFactorLoginService`/`Secret.java`'s already-shipped shared-static-instance pattern. AC2 deletes a `SessionPackPurchaseRepository` derived-query method confirmed to have zero callers anywhere in `src/main`/`src/test`, an item never actually verified since it was first raised in 2026-06-24. AC3 removes a duplicate, unused `auth.coach.bioSanitizationWarning` i18n key from all three live locale bundles, mirroring the orphaned-key-removal pattern `skillars-uat-6` AC3 already established. AC4 additionally closes 2 stale ledger items (Def7 from `skillars-6-1`, and a `skillars-3-4` null-guard item mooted by `skillars-deferred-33` AC7's deletion of its target method) found already resolved as a research by-product of the full re-read. |
 | 2026-08-20 | Senior-dev review (`_bmad-output/implementation-artifacts/story-review.md`) confirmed AC1-AC3 check out exactly against current code (every line-number citation and code excerpt verified byte-for-byte), and raised 3 findings. Finding 1 (Medium): Task 4's ledger-hygiene checkboxes described work already fully applied in this story's own creation commit (`c8a958a`) — verified all three `[PICKED UP]` tags and two `[STALE]` annotations are already present verbatim in `deferred-work.md`; the Dev Notes line claiming otherwise was also wrong. Resolved per the review's recommendation (a), mirroring how `skillars-deferred-41` resolved the identical mistake: Task 4.1-4.4 checked off as already done, and the Dev Notes line rewritten so `dev-story` treats AC4 as verify-only rather than re-applying tags that already exist. Finding 2 (Low-Medium): AC2's parenthetical incorrectly claimed the adjacent comment's "The derived query above is a different caller" sentence referred to "a different pairing than this AC removes" — it in fact refers to the exact method AC2 deletes (the only method-name-derived, non-`@Query` method directly above that comment). Corrected AC2 and Task 2.2 to state the sentence must be removed or reworded once the method above it is gone. Finding 3 (Low): AC1's `PlayerRegistrationService.generateOtp()` change has zero automated test coverage anywhere in the repo (`CoachRegistrationResourceIT`/`ParentRegistrationResourceIT` only cover the other two files) — Task 1.3 updated to flag this explicitly and require either a manual smoke test or an explicit Dev Agent Record note, rather than implying full coverage. |
+| 2026-08-20 | `dev-story` implementation complete, all tasks done. AC1: `CoachRegistrationService`, `ParentRegistrationService`, `PlayerRegistrationService` each gained a `private static final SecureRandom SECURE_RANDOM` field mirroring `TwoFactorLoginService`; `CoachRegistrationResourceIT` (11/11) and `ParentRegistrationResourceIT` (11/11) green — `PlayerRegistrationService`'s identical change remains untested by any automated test, noted in Dev Agent Record per Task 1.3's own flagged alternative. AC2: deleted `SessionPackPurchaseRepository`'s dead `findByCoachIdAndExpiresAtBetweenAndExtendedAtIsNullAndRemainingSessionsGreaterThan`, confirmed zero references before and after by grep, and removed the adjacent comment's now-dangling third sentence per the story-review's Finding 2 correction; `SessionPackPurchaseRepositoryIT` (2/2) and `SessionPackForfeitureSchedulerTest` (4/4) green. AC3: removed the duplicate `bioSanitizationWarning` key from all three live locale bundles; grep confirmed zero remaining references, `npx eslint` clean on all three files. AC4: verified all ledger tags already present from story creation, no edits needed. One environment issue surfaced and resolved during validation, unrelated to this story's edits: the first targeted-test attempt failed with cascading `NoClassDefFoundError`s from a stale `target/classes`; `mvn -o -q clean test-compile` fixed it, after which every targeted test passed on the next attempt. Targeted tests only per `docs/validation-strategy.md`; `mvn verify` not run. |
+| 2026-08-20 | Code review complete (`bmad-code-review`): Blind Hunter (12 raw findings, no project context) + Edge Case Hunter (0 findings, exhaustive path analysis over the diff hunks) + Acceptance Auditor (0 AC violations — independently re-verified all four ACs against live code, including spot-checking test-method counts and re-running the grep claims in the Dev Agent Record). 11 of 12 Blind Hunter findings dismissed as false positives or noise after independent re-verification: two were artifacts of an abbreviated diff excerpt used in the reviewer's own prompt construction (a phantom stray `+` character and a paraphrased sprint-status comment, neither present in the real diff); the claimed triplicated-`SecureRandom`-instead-of-centralized and static-instance-contention findings both contradict the story's own Dev Notes, which explicitly forbid a shared utility and cite `TwoFactorLoginService`'s already-shipped precedent; the i18n-consumer and `contactDetailWarning` claims were independently disproven by grep (`bioSanitizationWarning` has zero references anywhere in `src/frontend/src`; `contactDetailWarning` is untouched and still used in 6 files); the dead-imports claim was independently disproven (`UUID`/`Instant` both still used by other methods in `SessionPackPurchaseRepository.java`); the narrow-comment-cleanup-scope, inline-completion-note-style, and bundled-unrelated-concerns findings all match this repo's own established conventions. 1 finding confirmed and deferred: `PlayerRegistrationService.generateOtp()`'s change has zero automated test coverage anywhere in the repo — real, pre-existing, already flagged and accepted by Task 1.3's own allowed alternative; filed to `deferred-work.md`. 0 decision-needed, 0 patches. Status → done. |

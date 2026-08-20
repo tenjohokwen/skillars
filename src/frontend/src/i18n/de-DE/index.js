@@ -112,7 +112,6 @@ export default {
       step5Upload: 'Hochladen & Weiter',
       step5SkipLabel: 'Vorerst überspringen',
       publishSuccess: 'Dein Profil ist live! Willkommen bei Skillars.',
-      bioSanitizationWarning: 'Kontaktdaten werden beim Speichern entfernt.',
     },
     parent: {
       registerTitle: 'Elternkonto erstellen',

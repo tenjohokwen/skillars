@@ -119,7 +119,6 @@ export default {
       step5Upload: 'Upload & Continue',
       step5SkipLabel: 'Skip for now',
       publishSuccess: 'Your profile is live! Welcome to Skillars.',
-      bioSanitizationWarning: 'Contact details will be removed on save.',
     },
     parent: {
       registerTitle: 'Create Parent Account',
