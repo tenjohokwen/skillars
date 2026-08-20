@@ -1,76 +1,85 @@
-# Story Review: Deferred-47 — Booking Active-Slot-Status Config Endpoint & Frontend Wiring
+# Story Review: Deferred-48 — Booking Config-Fetch Negative-Auth Coverage & Response-Shape Hardening
 
-Reviewed: `_bmad-output/implementation-artifacts/skillars-deferred-47-booking-active-slot-status-config-endpoint-and-frontend-wiring.md`
+Reviewed: `_bmad-output/implementation-artifacts/skillars-deferred-48-booking-config-fetch-negative-auth-coverage-and-response-shape-hardening.md`
 
-Method: every factual claim in the story (line numbers, "no other call site" claims, the semantic choice of
-which backend constant to expose, the endpoint-ordering rationale, and the AC3 ledger-tag state) was
-re-verified against the current code on this branch, not trusted from the story's own prose. Read in full:
-`BookingService.java` (128-138, 419-607), `BookingResource.java`, `BookingBatchResource.java`,
-`BatchConfigResponse.java`, `ConfigResource.java`, `BookingRequestResourceIT.java`,
-`BookingBatchResourceIT.java`, `BookingRequestPage.vue`, `booking.api.js`, `booking.store.js`,
-`boot/axios.js`, `SecurityConstants.java`, and `deferred-work.md`'s cited line. Specifically checked and
-ruled out as non-issues:
+Method: every factual claim in the story (line numbers, "no other call site" claims, the security-annotation
+behavior AC1 rests on, and the AC3 ledger-tag state) was re-verified against the current code on this branch,
+not trusted from the story's own prose. Read in full: `BookingResource.java`, `BookingRequestResourceIT.java`
+(all `@Test` methods, `setUp`, helpers), `SecurityConstants.java`, `ApplicationAccessDeniedHandler.java`,
+`ApiAdvice.java`'s `AccessDeniedException` handler, `BookingRequestPage.vue` (full `<script>` block), and
+`deferred-work.md`'s two cited items. Specifically checked and ruled out as non-issues:
 
-- **Which backend constant AC1 exposes.** `AvailabilityService.java:110` confirms `computedSlots` excludes
-  bookings via `BookingService.ACTIVE_SLOT_STATUSES` (the full 7-status set), not
-  `ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED` (the other package-private list in the same class, used only for
-  accept-time overlap checks). AC1's getter returns the correct one — the one that actually governs why a
-  booking disappears from the calendar, which is the semantic `OWN_BLOCKING_STATUSES` needs to match.
-- **Response-shape unwrapping.** `boot/axios.js:112-124`'s response interceptor returns `response.data`
-  directly, confirming AC2's `res.activeSlotStatuses` (mirroring the existing `res.maxSize` pattern at
-  `BookingRequestPage.vue:622`) is the correct access shape, not `res.data.activeSlotStatuses`.
-- **Jackson field naming.** No `property-naming-strategy`/`PropertyNamingStrategy` config exists anywhere
-  under `src/main/resources` or `src/main/java` — confirms the record's `activeSlotStatuses` accessor
-  serializes as camelCase `"activeSlotStatuses"` in the JSON body, matching what AC2's frontend code reads.
-- **"No other call site" claim (AC2).** Grep-confirmed: `OWN_BLOCKING_STATUSES` appears only at its
-  declaration (`:355`) and the one usage site (`:434`), both in `BookingRequestPage.vue`. No other file
-  references it.
-- **Route collision / path-matching risk.** `BookingResource.java` has no plain `GET /{id}` mapping (only
-  `PUT /{id}/accept` and `PUT /{id}/decline}`), and no other file outside the `booking.api`/`booking.service`/
-  `booking.contract` packages references `/api/bookings/...` paths (no separate security-filter allowlist or
-  gateway route table to update). The new `GET /config` cannot collide with anything regardless of where in
-  the class it's declared.
-- **AC1's negative-auth-test hedge.** Checked both `BookingRequestResourceIT.java` and
-  `BookingBatchResourceIT.java` for an existing role-rejection test on a `GET` endpoint specifically (as
-  opposed to the `POST`/`PUT` role-rejection tests both files already have) — none exists, including on
-  `BookingBatchResource.getConfig()` itself, the exact sibling endpoint AC1 mirrors. AC1's "if the file's
-  existing tests already establish a role-rejection convention for this resource — check before adding a new
-  one" hedge is accurate: no such convention exists yet, so the story correctly leaves this optional rather
-  than mandating a test pattern that isn't established.
-- **AC3's ledger tag.** `git show 834a3f0` (the story-creation commit itself) confirms
-  `` `[PICKED UP by skillars-deferred-47 AC1, AC2]` `` was already appended to `deferred-work.md`'s line-1276
-  item in that same commit. This matches the precedent already recorded in the `skillars-deferred-44/45/46`
-  reviews — this project's story-creation step applies the ledger tag at story-creation time, not dev time —
-  so Task 3 describing it as pending work for the dev agent is expected process, not a defect.
-- **All cited line numbers** (`BookingService.java:131-132`, `BookingRequestPage.vue:355-363,434,596-626,228`,
-  `booking.api.js:32,68`, `BookingBatchResource.java:35-39`) were checked against the current file contents
-  and are exact.
+- **AC1's 403 mechanism.** `AccessDeniedException` (thrown by Spring Security when `@PreAuthorize`'s
+  `HAS_PARENT_OR_PLAYER_ROLE` expression fails) is mapped to `HttpStatus.FORBIDDEN` by
+  `ApiAdvice.java:249-257`, routed there via `ApplicationAccessDeniedHandler`. A coach caller genuinely gets
+  403, not 401 or 500 — AC1's expected outcome is correct.
+- **AC1's "mirrors existing pattern" framing.** `acceptBooking_wrongCoach_returns403` /
+  `declineBooking_wrongCoach_returns403` (the cited precedent) actually assert a different mechanism — a
+  second *same-role* coach rejected by `BookingService.acceptBooking`'s ownership check
+  (`OperationNotAllowedException` → 403), not a `@PreAuthorize` role rejection. The assertion *shape*
+  (`assertThatThrownBy(...).isInstanceOf(HttpClientErrorException.class)...isEqualTo(HttpStatus.FORBIDDEN)`)
+  is identical and the new test is correct regardless, so this doesn't change AC1's outcome — noted only
+  because the story's "mirrors this file's own established wrong-role negative-test shape" description
+  slightly overstates how analogous the two mechanisms are. Not worth a story edit.
+- **AC1's "no PLAYER-role fixture" claim.** Grep-confirmed: no `PLAYER_EMAIL`/`PLAYER` role user constant
+  exists anywhere in `BookingRequestResourceIT.java`. Correct basis for scoping a `PLAYER`-role test out.
+- **AC1 test's setup dependencies.** `getConfig()` takes no booking-specific arguments
+  (`bookingService.getActiveSlotStatuses()` is parameterless); `@PreAuthorize` short-circuits before the
+  controller method body runs. The new test needs nothing beyond `COACH_EMAIL`'s existing `setUp()` insert —
+  no additional fixture data required, contrary to a plausible-looking concern that a coach with no
+  associated booking data might hit a different failure mode.
+- **AC2's guard logic.** Both snippets correctly reject non-integer/non-positive `maxSize` and non-array
+  `activeSlotStatuses`, falling back to the pre-fetch `ref` default exactly as specified. `res` here is
+  already `response.data` (axios interceptor unwraps it — confirmed unchanged from the prior story's own
+  review), so `res.activeSlotStatuses`/`res.maxSize` remain the correct access shape.
+- **AC3's ledger tags.** Both `[PICKED UP by skillars-deferred-48 AC1]` / `AC2` tags are already present on
+  `deferred-work.md`'s cited lines (1625-1626) — consistent with this project's established convention (seen
+  in every prior `skillars-deferred-*` review) of applying the tag at story-creation time, not dev time. Not
+  a defect.
+- **All cited line numbers** (`BookingResource.java:49-53`, `BookingRequestPage.vue:622-633,436`) match the
+  current file contents exactly.
 
-One low-severity, purely cosmetic inconsistency was found. No functional gaps, missed corner cases, or false
-assumptions with real consequences survived verification.
+One real functional gap was found in AC2's scope. No issues survived in AC1 or AC3.
 
 ## Findings
 
-### 1. AC1's endpoint-placement rationale cites a precedent that doesn't actually apply to the new endpoint
+### 1. AC2 hardens two of `getBatchConfig()`'s three call sites — the third, in `submitBatchRequest()`'s error-recovery branch, keeps the exact unguarded assignment the story exists to fix
 
-**Severity: Low (confirmed) — cosmetic only; the placement itself is harmless regardless of where in the class it lands.**
+**Severity: Medium (confirmed) — not a crash, but silently breaks basket-add gating and renders a broken
+user-facing toast, in exactly the malformed-response scenario this story is hardening against.**
 
-**Where:** AC1's third bullet:
+**Where:** `BookingRequestPage.vue:556-557`, inside `submitBatchRequest()`'s `catch` block, `errorKey ===
+'booking.batchSizeExceeded'` branch:
 
-> "...matches the file's own existing precedent of ordering literal-path routes before any `/{id}/...` routes
-> to avoid Spring path-matching ambiguity, noted in the file's `/coach` comment"
+```js
+const res = await getBatchConfig()
+maxBatchSize.value = res.maxSize
+```
 
-The `/coach` comment being invoked (`BookingResource.java:48`, `// Declared before /{id}/accept and
-/{id}/decline to avoid Spring path-matching ambiguity`) exists because `GET /coach` needed to be visually
-grouped ahead of `PUT /{id}/accept` and `PUT /{id}/decline` in that specific file layout. But Spring MVC
-dispatches on HTTP method + path together — a `GET` mapping can never actually collide with a `PUT
-/{id}/...` mapping regardless of declaration order, and this class has no plain `GET /{id}` mapping for the
-new `GET /config` to collide with either way. So there is no real path-matching ambiguity this story's
-placement choice is protecting against — the cited justification doesn't govern anything for this particular
-addition, even though the placement itself (between `getParentBookings()` and `getCoachBookingRequests()`) is
-perfectly fine on its own merits (grouping the two parent-facing GETs together).
+This is the *same* `getBatchConfig()` call and the *same* `maxBatchSize.value = res.maxSize` unguarded
+assignment AC2 patches at `:623-624` (the `onMounted` copy). The story's own AC2 text scopes itself explicitly
+to "the two `try`/`catch` blocks added by `skillars-deferred-47`... immediately after
+`bookingStore.loadPlayerPacks`" — i.e. only the two `onMounted` fetches — and Dev Notes states "AC2 is not
+behavior-changing on the happy path" without acknowledging this third call site exists at all. The source
+deferred item this story is bundled from also only names the `:622` `onMounted` copy as the "identical
+unvalidated-trust pattern," missing this one.
 
-**Recommendation:** either drop the "to avoid Spring path-matching ambiguity" clause from AC1's rationale (the
-grouping is just for readability, which is reason enough), or note explicitly that it's precautionary/stylistic
-consistency rather than a functional requirement — so a dev reading it doesn't spend time worrying about a
-non-existent ambiguity risk before treating grouping as flexible.
+**Consequence of a malformed/contract-drifted `getBatchConfig()` response reaching this branch specifically**
+(e.g. `res.maxSize` missing or non-numeric): `maxBatchSize.value` becomes `undefined`, and two other reactive
+sites read it immediately afterward, both in this same file:
+- `batchAtMax` (`:266`, `bookingStore.batchBasketSize >= maxBatchSize.value`) becomes permanently `false`
+  regardless of basket size, since any comparison against `undefined` is `false`.
+- `toggleSlotInBasket` (`:304`, `bookingStore.batchBasketSize < maxBatchSize.value`) becomes permanently
+  `false` the same way — silently blocking the parent from adding *any* further slot to the basket for the
+  rest of the session, with no error shown for the block itself.
+- The toast fired one line later (`:559`, `t('booking.errors.batchSizeExceeded', { max: maxBatchSize.value
+  })`) renders the literal word "undefined" in the user-facing message.
+
+This branch is reached less often than the `onMounted` fetches (only when a parent's submit is rejected for
+exceeding the batch size), but it is a real, reachable path with the identical shape-drift exposure the story
+is otherwise closing, using the same API call.
+
+**Recommendation:** apply AC2's same `Number.isInteger(res.maxSize) && res.maxSize > 0` guard (warning and
+keeping the current value on failure) to this third call site before considering the `getBatchConfig()`
+hardening complete, or explicitly re-scope AC2's text/Dev Notes to acknowledge this call site is left open and
+why.

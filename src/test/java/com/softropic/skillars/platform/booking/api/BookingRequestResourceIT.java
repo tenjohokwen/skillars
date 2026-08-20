@@ -701,6 +701,21 @@ class BookingRequestResourceIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void getConfig_coachRole_returns403() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + BOOKINGS_BASE + "/config",
+            HttpMethod.GET,
+            null,
+            authenticatedHeaders(cookies),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    @Test
     void getCoachBookingRequests_returnsOnlyRequestedBookingsForThisCoach() {
         // Create a booking first
         String parentCookies = loginAndGetCookies(PARENT_EMAIL);

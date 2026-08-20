@@ -554,11 +554,19 @@ async function submitBatchRequest() {
       refetchingBatchMaxSize.value = true
       try {
         const res = await getBatchConfig()
-        maxBatchSize.value = res.maxSize
-        $q.notify({
-          message: t('booking.errors.batchSizeExceeded', { max: maxBatchSize.value }),
-          type: 'negative',
-        })
+        if (Number.isInteger(res.maxSize) && res.maxSize > 0) {
+          maxBatchSize.value = res.maxSize
+          $q.notify({
+            message: t('booking.errors.batchSizeExceeded', { max: maxBatchSize.value }),
+            type: 'negative',
+          })
+        } else {
+          console.warn('Batch config response had an unexpected shape, using previous max size')
+          $q.notify({
+            message: t('booking.errors.batchSizeExceededUnknownMax'),
+            type: 'negative',
+          })
+        }
       } catch {
         console.warn('Could not re-fetch batch config, using previous max size')
         $q.notify({
@@ -621,13 +629,21 @@ onMounted(async () => {
   }
   try {
     const res = await getBatchConfig()
-    maxBatchSize.value = res.maxSize
+    if (Number.isInteger(res.maxSize) && res.maxSize > 0) {
+      maxBatchSize.value = res.maxSize
+    } else {
+      console.warn('Batch config response had an unexpected shape, using default max size')
+    }
   } catch {
     console.warn('Could not load batch config, using default max size')
   }
   try {
     const res = await getBookingRequestConfig()
-    ownBlockingStatuses.value = res.activeSlotStatuses
+    if (Array.isArray(res.activeSlotStatuses) && res.activeSlotStatuses.length > 0) {
+      ownBlockingStatuses.value = res.activeSlotStatuses
+    } else {
+      console.warn('Booking request config response had an unexpected shape, using default active-slot statuses')
+    }
   } catch {
     console.warn('Could not load booking request config, using default active-slot statuses')
   }
