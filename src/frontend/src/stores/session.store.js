@@ -23,12 +23,12 @@ export const useSessionStore = defineStore('session', () => {
   // pattern, skillars-deferred-38.
   let drillsRequestSequence = 0
 
-  async function fetchDrills(library) {
+  async function runSequencedDrillsRequest(apiCall) {
     const requestId = ++drillsRequestSequence
     loading.value = true
     error.value = null
     try {
-      const response = await sessionApi.getDrills(library)
+      const response = await apiCall()
       if (requestId !== drillsRequestSequence) return
       drills.value = response
     } catch (err) {
@@ -42,35 +42,24 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
+  async function fetchDrills(library) {
+    return runSequencedDrillsRequest(() => sessionApi.getDrills(library))
+  }
+
   async function searchDrills(library) {
-    const requestId = ++drillsRequestSequence
-    loading.value = true
-    error.value = null
-    try {
-      const params = {}
-      if (searchQuery.value) params.q = searchQuery.value
-      if (activeFilters.value.skill) params.skill = activeFilters.value.skill
-      if (activeFilters.value.difficultyTier)
-        params.difficultyTier = activeFilters.value.difficultyTier
-      if (activeFilters.value.equipment) params.equipment = activeFilters.value.equipment
-      if (
-        activeFilters.value.weakFootBias !== null &&
-        activeFilters.value.weakFootBias !== undefined
-      ) {
-        params.weakFootBias = activeFilters.value.weakFootBias
-      }
-      const response = await sessionApi.getDrills(library, params)
-      if (requestId !== drillsRequestSequence) return
-      drills.value = response
-    } catch (err) {
-      if (requestId !== drillsRequestSequence) {
-        console.warn('Discarding failure from a superseded drill-list request:', err?.message || err)
-        return
-      }
-      error.value = err
-    } finally {
-      if (requestId === drillsRequestSequence) loading.value = false
+    const params = {}
+    if (searchQuery.value) params.q = searchQuery.value
+    if (activeFilters.value.skill) params.skill = activeFilters.value.skill
+    if (activeFilters.value.difficultyTier)
+      params.difficultyTier = activeFilters.value.difficultyTier
+    if (activeFilters.value.equipment) params.equipment = activeFilters.value.equipment
+    if (
+      activeFilters.value.weakFootBias !== null &&
+      activeFilters.value.weakFootBias !== undefined
+    ) {
+      params.weakFootBias = activeFilters.value.weakFootBias
     }
+    return runSequencedDrillsRequest(() => sessionApi.getDrills(library, params))
   }
 
   async function cloneDrill(drillId) {

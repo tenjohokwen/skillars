@@ -1,6 +1,6 @@
 # Story Deferred-46: Self-Player-Id Dedup Reset Guard & Drill-Request Sequencing Guard Extraction
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -240,27 +240,27 @@ to correct before `dev-story` picks it up.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: `playerStore.resetSelfPlayerId()`/`fetchSelfPlayerId()` dedup-cache guard (AC: #1)
-  - [ ] 1.1 Add `selfPlayerIdRequest = null` to `resetSelfPlayerId()`, placed before the generation increment.
-  - [ ] 1.2 Change `fetchSelfPlayerId()` to capture its in-flight promise chain in a local `const request`
+- [x] Task 1: `playerStore.resetSelfPlayerId()`/`fetchSelfPlayerId()` dedup-cache guard (AC: #1)
+  - [x] 1.1 Add `selfPlayerIdRequest = null` to `resetSelfPlayerId()`, placed before the generation increment.
+  - [x] 1.2 Change `fetchSelfPlayerId()` to capture its in-flight promise chain in a local `const request`
     and guard the `.finally()` callback with `if (selfPlayerIdRequest === request) selfPlayerIdRequest = null`.
-  - [ ] 1.3 Confirm all three `resetSelfPlayerId()` call sites (`MainLayout.vue`, `App.vue`, `useSession.js`)
+  - [x] 1.3 Confirm all three `resetSelfPlayerId()` call sites (`MainLayout.vue`, `App.vue`, `useSession.js`)
     and all three `fetchSelfPlayerId()` call sites (`PlayerHomeRedirectPage.vue`, `CoachPublicProfilePage.vue`,
     `BookingRequestPage.vue`) require no change (verify by reading, not editing).
-  - [ ] 1.4 Run `npx eslint` on the one touched file and confirm clean.
-- [ ] Task 2: `session.store.js` sequencing-guard extraction (AC: #2)
-  - [ ] 2.1 Add the `runSequencedDrillsRequest(apiCall)` helper, lifted verbatim from `fetchDrills()`'s
+  - [x] 1.4 Run `npx eslint` on the one touched file and confirm clean.
+- [x] Task 2: `session.store.js` sequencing-guard extraction (AC: #2)
+  - [x] 2.1 Add the `runSequencedDrillsRequest(apiCall)` helper, lifted verbatim from `fetchDrills()`'s
     current body with the API call generalized to the parameter.
-  - [ ] 2.2 Rewrite `fetchDrills(library)` to delegate to the helper.
-  - [ ] 2.3 Rewrite `searchDrills(library)` to build `params` unchanged, then delegate to the helper.
-  - [ ] 2.4 Confirm `DrillLibraryPage.vue` and `SessionBuilderPage.vue` require no change (verify by
+  - [x] 2.2 Rewrite `fetchDrills(library)` to delegate to the helper.
+  - [x] 2.3 Rewrite `searchDrills(library)` to build `params` unchanged, then delegate to the helper.
+  - [x] 2.4 Confirm `DrillLibraryPage.vue` and `SessionBuilderPage.vue` require no change (verify by
     reading, not editing).
-  - [ ] 2.5 Manually exercise `DrillLibraryPage.vue`'s tab-change/filter/search flows and
+  - [x] 2.5 Manually exercise `DrillLibraryPage.vue`'s tab-change/filter/search flows and
     `SessionBuilderPage.vue`'s rapid tab-change + rapid-keystroke search, confirming the refactor is
     behavior-preserving (drills list updates correctly, no stale-response flicker, loading spinner clears
     correctly) — the same manual regression check `skillars-deferred-45` Task 2.5 established for this guard.
-  - [ ] 2.6 Run `npx eslint` on the one touched file and confirm clean.
-- [ ] Task 3: Ledger hygiene (AC: #3) — apply the two `[PICKED UP]` tags specified above.
+  - [x] 2.6 Run `npx eslint` on the one touched file and confirm clean.
+- [x] Task 3: Ledger hygiene (AC: #3) — apply the two `[PICKED UP]` tags specified above.
 
 ## Dev Notes
 
@@ -326,19 +326,23 @@ to correct before `dev-story` picks it up.
 
 ### Agent Model Used
 
-
+claude-sonnet-5
 
 ### Debug Log References
 
-
+None — no failures encountered; both changes applied cleanly on the first pass.
 
 ### Completion Notes List
 
-
+- AC1: `playerStore.js` `resetSelfPlayerId()` now clears `selfPlayerIdRequest = null` (placed before the generation increment) alongside its existing `selfPlayerId.value = null` and `selfPlayerIdGeneration++`. `fetchSelfPlayerId()`'s in-flight promise chain is now captured in a local `const request` before being assigned to the module-scoped `selfPlayerIdRequest`, and its `.finally()` callback now only clears the module-scoped reference if it still points at that same request (`if (selfPlayerIdRequest === request) selfPlayerIdRequest = null`), closing the residual clobber window story-review Finding 1 identified. Verified by direct read that all three `resetSelfPlayerId()` call sites (`MainLayout.vue`, `App.vue`, `useSession.js`) and all three `fetchSelfPlayerId()` call sites (`PlayerHomeRedirectPage.vue`, `CoachPublicProfilePage.vue`, `BookingRequestPage.vue`) need no change — both halves of the fix are internal to the store. `npx eslint` clean.
+- AC2: `session.store.js` gained a `runSequencedDrillsRequest(apiCall)` helper — a byte-for-byte lift of `fetchDrills()`'s prior body with the API call generalized to a parameter — and `fetchDrills()`/`searchDrills()` now delegate to it as one-liners (`searchDrills()`'s `params`-building logic is unchanged). Verified by direct read that neither `DrillLibraryPage.vue` nor `SessionBuilderPage.vue` need any change — both call `fetchDrills`/`searchDrills` the same way before and after, and neither reads a return value from either function. `npx eslint` clean. No interactive browser session was available in this environment to manually exercise Task 2.5's tab-change/filter/search regression check; verification here is by direct code comparison confirming the extracted helper is byte-for-byte identical to the pre-refactor `fetchDrills()` body (same message, same ordering, same guard conditions), matching this story's own Dev Notes fallback and the same limitation `skillars-deferred-45`'s own completion notes recorded for the equivalent check.
+- AC3: Both `deferred-work.md` `[PICKED UP by skillars-deferred-46 ACn]` tags were confirmed already present verbatim, applied at story-creation time per the established `skillars-deferred-43`/`44`/`45` precedent — no edit needed in this dev-story pass.
 
 ### File List
 
-
+- `src/frontend/src/stores/playerStore.js` — modified (AC1)
+- `src/frontend/src/stores/session.store.js` — modified (AC2)
+- `_bmad-output/implementation-artifacts/deferred-work.md` — no change in this pass; tags already present from story creation (AC3)
 
 ## Change Log
 
@@ -346,3 +350,5 @@ to correct before `dev-story` picks it up.
 |---|---|
 | 2026-08-20 | Story created via story-creation process: bundled 2-item story per explicit instruction not to create another small story. Re-mined `deferred-work.md` end to end (1621 lines), re-verifying every candidate against current code rather than trusting ledger text. Both items were filed by `skillars-deferred-45`'s own code review and neither had been picked up. AC1 closes `playerStore.resetSelfPlayerId()`'s failure to clear the in-flight `selfPlayerIdRequest` dedup cache, which could let a new-generation caller receive a superseded generation's in-flight response (a stale valid id, or `skillars-deferred-45` AC1's new unconditional throw firing for the wrong caller). AC2 closes `session.store.js`'s `fetchDrills()`/`searchDrills()` verbatim-duplicated 3-point sequencing guard by extracting it into one shared `runSequencedDrillsRequest(apiCall)` helper, a purely mechanical, behavior-preserving refactor. Unlike `skillars-deferred-43`/`-44`/`-45`, no stale/already-resolved items were found during this pass's re-mine, so this story carries no hygiene AC3 beyond tagging its own two source items. Ledger remains thin after 45 prior passes — only two substantive items cleared the real/small/decision-light bar this pass, the same count as each of the three immediately preceding stories. |
 | 2026-08-20 | `story-review.md` findings applied. Finding 1/Medium (confirmed): AC1's original "no other change needed" framing missed that `fetchSelfPlayerId()`'s existing `.finally()` clears the dedup cache unconditionally — once `resetSelfPlayerId()` also clears it out-of-band, a stale generation's late settlement could clobber a newer generation's still-in-flight request reference, defeating the dedup guarantee for a third caller. Fixed by expanding AC1 to also have `fetchSelfPlayerId()` capture its promise in a local and guard `.finally()` with an identity check. Finding 2/Low (confirmed): AC1's placement instruction told the dev to place the new statement after the generation increment while claiming to match declared variable order, which actually requires placing it before — fixed by correcting the directive to "before." Status remains ready-for-dev. |
+| 2026-08-20 | dev-story implementation complete, status → review. AC1: `playerStore.js` `resetSelfPlayerId()` now clears `selfPlayerIdRequest` alongside the generation bump; `fetchSelfPlayerId()`'s `.finally()` now identity-checks before clearing the module-scoped reference, closing the residual clobber window identified by story-review Finding 1. AC2: `session.store.js`'s `fetchDrills()`/`searchDrills()` now delegate to a shared `runSequencedDrillsRequest(apiCall)` helper, a byte-for-byte behavior-preserving extraction; verified by reading that neither `DrillLibraryPage.vue` nor `SessionBuilderPage.vue` need any change. AC3: both ledger tags confirmed already present from story creation, no edit needed. `npx eslint` clean on both touched files; `node --check` syntax-verified; no `mvn verify` run (no backend files touched) per `docs/validation-strategy.md`. |
+| 2026-08-20 | Code review complete, status → done. Blind Hunter + Edge Case Hunter + Acceptance Auditor, 0 AC violations. 12 raw findings (11 Blind Hunter, 1 Edge Case Hunter merged with a matching Blind Hunter item), all dismissed: the stale-promise-value and no-cancellation concerns are explicitly addressed and accepted in this story's own Dev Notes; the microtask-ordering worry is invalid per Promise spec guarantees; naming/comment/bundling/asymmetric-logging/bare-`return` items match the spec's own prescribed code verbatim; the `searchDrills` params-outside-try/catch edge case was verified unreachable (`activeFilters.value` is only ever reassigned as a full 4-key object across all call sites in `DrillLibraryPage.vue`, never nulled). 0 decision-needed, 0 patch, 0 defer. |
