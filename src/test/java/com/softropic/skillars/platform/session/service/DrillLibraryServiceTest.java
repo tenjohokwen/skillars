@@ -20,6 +20,7 @@ import com.softropic.skillars.platform.video.contract.AccessState;
 import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -51,6 +52,7 @@ class DrillLibraryServiceTest {
     @Mock private VideoRepository videoRepository;
     @Mock private VideoProviderAdapter videoProviderAdapter;
 
+    private SimpleMeterRegistry meterRegistry;
     private DrillLibraryService service;
 
     private static final Long COACH_USER_ID = 9500000010L;
@@ -58,7 +60,8 @@ class DrillLibraryServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new DrillLibraryService(drillRepository, drillVideoRefRepository, drillTagRepository, configService, coachProfileService, videoRepository, videoProviderAdapter);
+        meterRegistry = new SimpleMeterRegistry();
+        service = new DrillLibraryService(drillRepository, drillVideoRefRepository, drillTagRepository, configService, coachProfileService, videoRepository, videoProviderAdapter, meterRegistry);
         when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_PROFILE_ID);
     }
 
@@ -181,6 +184,19 @@ class DrillLibraryServiceTest {
             .isInstanceOf(FeatureGatedException.class)
             .hasMessage("Feature 'session_builder' is not currently available at any subscription tier")
             .satisfies(e -> assertThat(((FeatureGatedException) e).getRequiredTier()).isNull());
+
+        assertThat(meterRegistry.get("feature.gate.fully_disabled")
+            .tag("feature", "sessionBuilder").counter().count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void checkSessionBuilderGate_instructorTierEnabled_doesNotIncrementFullyDisabledCounter() {
+        when(coachProfileService.getCoachSubscriptionTier(COACH_PROFILE_ID)).thenReturn(CoachSubscriptionTier.INSTRUCTOR);
+        when(configService.getBoolean("feature.sessionBuilder.enabled.INSTRUCTOR")).thenReturn(true);
+
+        service.checkSessionBuilderGate(COACH_USER_ID);
+
+        assertThat(meterRegistry.find("feature.gate.fully_disabled").counter()).isNull();
     }
 
     // ── batchVideoLookup (via listDrills PLATFORM path) ──────────────────────

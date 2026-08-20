@@ -21,6 +21,7 @@ import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
 import com.softropic.skillars.platform.video.service.VideoService;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -53,6 +54,7 @@ class DrillUploadServiceTest {
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private VideoTypeConstraints videoTypeConstraints;
 
+    private SimpleMeterRegistry meterRegistry;
     private DrillUploadService service;
 
     private static final Long COACH_USER_ID = 9500000010L;
@@ -61,9 +63,11 @@ class DrillUploadServiceTest {
 
     @BeforeEach
     void setUp() {
+        meterRegistry = new SimpleMeterRegistry();
         service = new DrillUploadService(
             drillRepository, drillVideoRefRepository, videoService,
-            videoRepository, configService, coachProfileService, eventPublisher, videoTypeConstraints
+            videoRepository, configService, coachProfileService, eventPublisher, videoTypeConstraints,
+            meterRegistry
         );
         when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
     }
@@ -235,6 +239,27 @@ class DrillUploadServiceTest {
             .isInstanceOf(FeatureGatedException.class)
             .hasMessage("Feature 'drill_video_upload' is not currently available at any subscription tier")
             .satisfies(e -> assertThat(((FeatureGatedException) e).getRequiredTier()).isNull());
+
+        assertThat(meterRegistry.get("feature.gate.fully_disabled")
+            .tag("feature", "drillVideoUpload").counter().count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void initiateUpload_instructorTierEnabled_doesNotIncrementFullyDisabledCounter() {
+        Drill drill = coachDrill(DRILL_ID, COACH_ID);
+        when(drillRepository.findById(DRILL_ID)).thenReturn(Optional.of(drill));
+        when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.INSTRUCTOR);
+        when(configService.getBoolean("feature.drillVideoUpload.enabled.INSTRUCTOR")).thenReturn(true);
+        UUID videoId = UUID.randomUUID();
+        when(videoService.initializeUpload(any())).thenReturn(
+            new InitializeUploadResponse(videoId, UUID.randomUUID(), "p", "https://tus.example.com/upload",
+                Instant.now(), "test-sig", 9_999_999_999L, 12345L)
+        );
+        when(drillVideoRefRepository.findByDrillId(DRILL_ID)).thenReturn(Optional.empty());
+
+        service.initiateUpload(DRILL_ID, COACH_USER_ID, new DrillUploadInitiateRequest("v.mp4", 1024L, "video/mp4", 10));
+
+        assertThat(meterRegistry.find("feature.gate.fully_disabled").counter()).isNull();
     }
 
     @Test

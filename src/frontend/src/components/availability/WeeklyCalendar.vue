@@ -92,19 +92,22 @@ const timeSlots = computed(() => {
 
 const weekDays = computed(() => {
   const days = []
-  const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
   const base = new Date(props.weekStart + 'T00:00:00')
   if (isNaN(base.getTime())) return days
   for (let i = 0; i < 7; i++) {
     const d = new Date(props.weekStart + 'T00:00:00')
     d.setDate(d.getDate() + i)
+    const label = new Intl.DateTimeFormat(locale.value, {
+      weekday: 'short',
+      timeZone: props.coachTimezone,
+    }).format(d)
     const date = new Intl.DateTimeFormat(locale.value, {
       month: 'short', day: 'numeric',
       timeZone: props.coachTimezone,
     }).format(d)
     days.push({
       isoDay: i + 1,
-      label: dayNames[i],
+      label,
       date,
       fullDate: d.toISOString().slice(0, 10),
     })

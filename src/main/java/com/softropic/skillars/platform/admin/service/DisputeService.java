@@ -130,7 +130,8 @@ public class DisputeService {
             .map(p -> p.getDisplayName())
             .orElse("[coach not found]");
 
-        Optional<BookingPayment> paymentOpt = bookingPaymentRepository.findById(dispute.getBookingId());
+        Optional<BookingPayment> paymentOpt = bookingPaymentRepository.findById(dispute.getBookingId())
+            .filter(bp -> "CAPTURED".equals(bp.getStatus()));
         BigDecimal creditDebited = paymentOpt.map(BookingPayment::getCreditDebited).orElse(BigDecimal.ZERO);
         BigDecimal stripeCharged = paymentOpt.map(BookingPayment::getStripeCharged).orElse(BigDecimal.ZERO);
         BigDecimal sessionPrice = creditDebited.add(stripeCharged);
@@ -165,7 +166,8 @@ public class DisputeService {
         Booking booking = bookingRepository.findById(dispute.getBookingId())
             .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "Booking"));
 
-        Optional<BookingPayment> paymentOpt = bookingPaymentRepository.findById(dispute.getBookingId());
+        Optional<BookingPayment> paymentOpt = bookingPaymentRepository.findById(dispute.getBookingId())
+            .filter(bp -> "CAPTURED".equals(bp.getStatus()));
         BigDecimal sessionPrice = paymentOpt
             .map(p -> p.getCreditDebited().add(p.getStripeCharged()))
             .orElse(BigDecimal.ZERO);

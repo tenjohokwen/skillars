@@ -222,15 +222,17 @@ function nextWeek() {
   if (coachId.value) store.loadAvailability(coachId.value, currentWeekStart.value)
 }
 
-const dayOptions = [
-  { label: 'Monday', value: 1 },
-  { label: 'Tuesday', value: 2 },
-  { label: 'Wednesday', value: 3 },
-  { label: 'Thursday', value: 4 },
-  { label: 'Friday', value: 5 },
-  { label: 'Saturday', value: 6 },
-  { label: 'Sunday', value: 7 },
-]
+const dayOptions = computed(() => {
+  const monday = new Date('2024-01-01T00:00:00')
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(monday)
+    d.setDate(d.getDate() + i)
+    return {
+      label: new Intl.DateTimeFormat(locale.value, { weekday: 'long' }).format(d),
+      value: i + 1,
+    }
+  })
+})
 
 function onEditWindow(win) {
   editingWindow.value = win

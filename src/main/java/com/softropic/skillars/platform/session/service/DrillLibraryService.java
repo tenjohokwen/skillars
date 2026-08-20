@@ -21,6 +21,8 @@ import com.softropic.skillars.platform.session.repo.DrillVideoRef;
 import com.softropic.skillars.platform.session.repo.DrillVideoRefRepository;
 import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -44,6 +46,8 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class DrillLibraryService {
 
+    private static final String FEATURE_GATE_FULLY_DISABLED = "feature.gate.fully_disabled";
+
     private final DrillRepository drillRepository;
     private final DrillVideoRefRepository drillVideoRefRepository;
     private final DrillTagRepository drillTagRepository;
@@ -51,6 +55,7 @@ public class DrillLibraryService {
     private final CoachProfileService coachProfileService;
     private final VideoRepository videoRepository;
     private final VideoProviderAdapter videoProviderAdapter;
+    private final MeterRegistry meterRegistry;
 
     @Transactional(readOnly = true)
     public List<DrillResponse> listDrills(
@@ -252,6 +257,10 @@ public class DrillLibraryService {
         }
         log.warn("No CoachSubscriptionTier has feature.sessionBuilder.enabled.* set to true — "
                 + "session_builder is unreachable for every coach regardless of subscription");
+        Counter.builder(FEATURE_GATE_FULLY_DISABLED)
+            .tag("feature", "sessionBuilder")
+            .register(meterRegistry)
+            .increment();
         return null;
     }
 

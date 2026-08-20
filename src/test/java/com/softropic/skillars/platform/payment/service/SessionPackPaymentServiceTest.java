@@ -30,6 +30,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -48,7 +50,6 @@ class SessionPackPaymentServiceTest {
     private static final Long PARENT_ID = 8001L;
     private static final Long PLAYER_ID = 8002L;
     private static final UUID COACH_ID = UUID.randomUUID();
-    private static final UUID OTHER_COACH_ID = UUID.randomUUID();
     private static final UUID TIER_ID = UUID.randomUUID();
 
     @Test
@@ -85,17 +86,16 @@ class SessionPackPaymentServiceTest {
         Instant now = Instant.now();
         SessionPackPurchase forCoach = purchase(3, now.plus(10, ChronoUnit.DAYS), null);
         forCoach.setCoachId(COACH_ID);
-        SessionPackPurchase forOtherCoach = purchase(3, now.plus(10, ChronoUnit.DAYS), null);
-        forOtherCoach.setCoachId(OTHER_COACH_ID);
 
-        when(sessionPackPurchaseRepository.findByParentIdOrderByCreatedAtDesc(PARENT_ID))
-            .thenReturn(List.of(forCoach, forOtherCoach));
+        when(sessionPackPurchaseRepository.findByParentIdAndCoachIdOrderByCreatedAtDesc(PARENT_ID, COACH_ID))
+            .thenReturn(List.of(forCoach));
         when(sessionPackTierRepository.findAllById(any())).thenReturn(List.of());
 
         List<SessionPackPurchaseResponse> responses = sessionPackPaymentService.getPacksForParent(PARENT_ID, COACH_ID);
 
         assertThat(responses).hasSize(1);
         assertThat(responses.get(0).purchaseId()).isEqualTo(forCoach.getPurchaseId());
+        verify(sessionPackPurchaseRepository, never()).findByParentIdOrderByCreatedAtDesc(any());
     }
 
     // ─── getSavedPaymentMethod (Deferred-11 AC 4) ─────────────────────────────────

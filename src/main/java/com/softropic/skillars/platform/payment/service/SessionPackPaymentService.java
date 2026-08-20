@@ -80,9 +80,9 @@ public class SessionPackPaymentService {
     }
 
     public List<SessionPackPurchaseResponse> getPacksForParent(Long parentId, UUID coachId) {
-        List<SessionPackPurchase> purchases = sessionPackPurchaseRepository.findByParentIdOrderByCreatedAtDesc(parentId).stream()
-            .filter(p -> coachId == null || coachId.equals(p.getCoachId()))
-            .toList();
+        List<SessionPackPurchase> purchases = coachId == null
+            ? sessionPackPurchaseRepository.findByParentIdOrderByCreatedAtDesc(parentId)
+            : sessionPackPurchaseRepository.findByParentIdAndCoachIdOrderByCreatedAtDesc(parentId, coachId);
         List<UUID> tierIds = purchases.stream().map(SessionPackPurchase::getPackTierId).distinct().toList();
         Map<UUID, SessionPackTier> tiersById = sessionPackTierRepository.findAllById(tierIds).stream()
             .collect(Collectors.toMap(SessionPackTier::getPackTierId, t -> t));

@@ -5,6 +5,7 @@ import com.softropic.skillars.platform.config.contract.ConfigValueType;
 import com.softropic.skillars.platform.config.repo.PlatformConfig;
 import com.softropic.skillars.platform.config.repo.PlatformConfigRepository;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.instancio.Instancio;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,12 +35,15 @@ class ConfigServiceTest {
     @Mock
     private ConfigMapper configMapper;
 
+    private SimpleMeterRegistry meterRegistry;
+
     private ConfigService configService;
 
     @BeforeEach
     void setUp() {
         when(configProperties.getCacheTtlSeconds()).thenReturn(300L);
-        configService = new ConfigService(configRepository, configProperties, configMapper);
+        meterRegistry = new SimpleMeterRegistry();
+        configService = new ConfigService(configRepository, configProperties, configMapper, meterRegistry);
     }
 
     private PlatformConfig entry(String key, String value, ConfigValueType type) {
@@ -161,6 +165,56 @@ class ConfigServiceTest {
         boolean result = configService.getBoolean("feature.gate", true);
 
         assertThat(result).isFalse();
+    }
+
+    @Test
+    void getBoolean_singleArg_missingKey_incrementsMisconfiguredCounterWithMissingReason() {
+        when(configRepository.findAll()).thenReturn(List.of());
+        configService.init();
+
+        configService.getBoolean("absent.gate");
+
+        assertThat(meterRegistry.get("config.value.misconfigured")
+                .tag("key", "absent.gate").tag("reason", "missing").counter().count())
+                .isEqualTo(1.0);
+    }
+
+    @Test
+    void getBoolean_singleArg_nonBooleanValue_incrementsMisconfiguredCounterWithNonBooleanReason() {
+        when(configRepository.findAll()).thenReturn(List.of(
+                entry("feature.gate", "yes", ConfigValueType.STRING)));
+        configService.init();
+
+        configService.getBoolean("feature.gate");
+
+        assertThat(meterRegistry.get("config.value.misconfigured")
+                .tag("key", "feature.gate").tag("reason", "non_boolean").counter().count())
+                .isEqualTo(1.0);
+    }
+
+    @Test
+    void getBoolean_withDefault_nonBooleanValue_incrementsMisconfiguredCounterWithNonBooleanReason() {
+        when(configRepository.findAll()).thenReturn(List.of(
+                entry("feature.gate", "maybe", ConfigValueType.STRING)));
+        configService.init();
+
+        configService.getBoolean("feature.gate", true);
+
+        assertThat(meterRegistry.get("config.value.misconfigured")
+                .tag("key", "feature.gate").tag("reason", "non_boolean").counter().count())
+                .isEqualTo(1.0);
+    }
+
+    @Test
+    void getBoolean_validValue_doesNotIncrementMisconfiguredCounter() {
+        when(configRepository.findAll()).thenReturn(List.of(
+                entry("feature.gate", "true", ConfigValueType.STRING)));
+        configService.init();
+
+        boolean result = configService.getBoolean("feature.gate");
+
+        assertThat(result).isTrue();
+        assertThat(meterRegistry.find("config.value.misconfigured").counter()).isNull();
     }
 
     @Test

@@ -10,6 +10,7 @@ import com.softropic.skillars.platform.session.repo.DrillRepository;
 import com.softropic.skillars.platform.session.repo.DrillTagRepository;
 import com.softropic.skillars.platform.session.repo.DrillVideoRefRepository;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.instancio.Instancio;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,6 +39,7 @@ class DrillSearchServiceTest {
     @Mock private CoachProfileService coachProfileService;
     @Mock private VideoRepository videoRepository;
     @Mock private VideoProviderAdapter videoProviderAdapter;
+    @Mock private MeterRegistry meterRegistry;
 
     private DrillLibraryService service;
 
@@ -46,7 +48,7 @@ class DrillSearchServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new DrillLibraryService(drillRepository, drillVideoRefRepository, drillTagRepository, configService, coachProfileService, videoRepository, videoProviderAdapter);
+        service = new DrillLibraryService(drillRepository, drillVideoRefRepository, drillTagRepository, configService, coachProfileService, videoRepository, videoProviderAdapter, meterRegistry);
         when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_PROFILE_ID);
         lenient().when(drillVideoRefRepository.findByDrillIdIn(anyList())).thenReturn(List.of());
     }
