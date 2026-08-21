@@ -119,4 +119,29 @@ class VideoServiceTest {
         inOrder.verify(quotaProvider).reserve(anyString(), anyLong(), any());
         inOrder.verify(uploadSessionRepository).save(any(UploadSession.class));
     }
+
+    @Test
+    void failTranscoding_transitionsToFailedBeforeReleasingQuota() {
+        // Story deferred-52 AC1: transitionOperationalState(FAILED) and quotaProvider.release() must
+        // now happen in separate transactional phases (split from a single @Transactional method), so
+        // a release() failure can no longer roll back the FAILED state transition. This InOrder check
+        // is a structural/documentation assertion of call ordering only — see AC1's Dev Notes caveat:
+        // VideoService is constructed here as a plain object with no Spring transactional AOP proxy, so
+        // no mock-based test in this file can exercise real @Transactional rollback semantics.
+        UUID videoId = UUID.randomUUID();
+        Video video = new Video();
+        video.setProviderAssetId("asset-1");
+        when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
+
+        UploadSession session = new UploadSession();
+        session.setReservationHandle("handle-3");
+        when(uploadSessionRepository.findFirstByVideoIdAndProviderUploadIdOrderByCreatedAtDesc(videoId, "asset-1"))
+            .thenReturn(Optional.of(session));
+
+        service.failTranscoding(videoId);
+
+        InOrder inOrder = inOrder(videoLifecycleService, quotaProvider);
+        inOrder.verify(videoLifecycleService).transitionOperationalState(videoId, OperationalState.FAILED);
+        inOrder.verify(quotaProvider).release("handle-3");
+    }
 }

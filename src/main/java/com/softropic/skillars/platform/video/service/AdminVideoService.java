@@ -55,22 +55,31 @@ public class AdminVideoService {
                 videoProviderAdapter.deleteAsset(video.getProviderAssetId());
             }
 
-            // Atomic: set DELETED + release quota for any PENDING session
-            transactionTemplate.execute(status -> {
+            // Phase 1 (atomic): set DELETED + mark any PENDING session EXPIRED. No quotaProvider call
+            // inside this transaction, so a release() failure can no longer roll back the
+            // DELETED/EXPIRED writes.
+            UploadSession expiredSession = transactionTemplate.execute(status -> {
                 Video v = videoRepository.findById(videoId)
                         .orElseThrow(() -> new VideoNotFoundException(videoId));
                 v.setOperationalState(OperationalState.DELETED);
                 videoRepository.save(v);
 
-                uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)
+                return uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)
                         .filter(s -> s.getStatus() == UploadSessionStatus.PENDING)
-                        .ifPresent(s -> {
-                            quotaProvider.release(s.getReservationHandle());
+                        .map(s -> {
                             s.setStatus(UploadSessionStatus.EXPIRED);
                             uploadSessionRepository.save(s);
-                        });
-                return null;
+                            return s;
+                        })
+                        .orElse(null);
             });
+
+            // Phase 2: release quota OUTSIDE any transaction — same pattern as VideoService.failTranscoding.
+            if (expiredSession != null && expiredSession.getReservationHandle() != null) {
+                quotaProvider.release(expiredSession.getReservationHandle());
+            } else if (expiredSession != null) {
+                log.warn("No reservation handle found for videoId={} during admin delete — quota not released", videoId);
+            }
 
             log.info("Admin deleted video {}", videoId);
         } finally {

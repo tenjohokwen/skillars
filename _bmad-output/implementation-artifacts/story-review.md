@@ -1,145 +1,154 @@
-# Senior-Dev Review: Story Deferred-51 (Gemini Truncation Safety, Moderation-Sweep E2E Coverage & BookingServiceTest Injection Hygiene)
+# Story Review: skillars-deferred-52
 
-Reviewed file: `_bmad-output/implementation-artifacts/skillars-deferred-51-gemini-truncation-safety-moderation-queue-e2e-coverage-and-booking-service-test-hygiene.md`
+Reviewed: `skillars-deferred-52-video-quota-release-transaction-isolation-and-gdpr-export-booking-dedup.md`
+(Status at review time: `ready-for-dev`, Dev Agent Record empty, all task checkboxes unchecked.)
 
-Method: every factual claim in the story (line citations, grep results, constructor arity, config
-defaults, ledger text, test-class shapes) was independently re-verified against the live repo, not
-trusted from the story text. Findings below are limited to things actually confirmed against the
-code — no speculative "might be an issue" items.
+## Method
 
----
-
-## Finding 1 (Confirmed, High severity) — AC1's prescribed unit test does not test the fix
-
-**Where:** AC1's new test `contentWithSurrogatePairAtTruncationBoundary_dropsWholePairRatherThanSplittingIt`
-(story lines 133–145), targeting `GeminiModerationServiceTest.java`.
-
-**The problem:** the test captures the *entire* prompt string (`promptTemplate + "\n\n---BEGIN USER
-CONTENT---\n" + sanitizedInput + "\n---END USER CONTENT---"`) and asserts on its **last character**:
-
-```java
-Character.isHighSurrogate(sentPrompt.charAt(sentPrompt.length() - 1))  // asserted false
-```
-
-The last character of the prompt is always part of the fixed literal suffix `"\n---END USER
-CONTENT---"` — a hyphen — regardless of what happened at the truncation boundary in the middle of
-the string. This assertion is unconditionally true whether or not AC1's fix is applied.
-
-The second assertion, `!sentPrompt.contains("😀")`, doesn't discriminate either. Worked through by
-hand with the story's own example (`content = "x".repeat(99) + "😀" + "x".repeat(10)`,
-`maxInputChars = 100`):
-
-- **Unpatched code** (`content.substring(0, 100)`): keeps indices 0–99, i.e. 99 `x`s plus the emoji's
-  lone high surrogate (`\uD83D`) — the low surrogate (`\uDE00`) is truncated away. The 2-character
-  sequence `"😀"` (high+low together) is therefore **not present** in the resulting prompt either —
-  only a dangling high surrogate is, followed by `\n---END USER CONTENT---`.
-- **Patched code**: backs the cutoff off to 99, dropping the whole pair — `"😀"` is also absent.
-
-Both the buggy and the fixed implementation produce a prompt containing neither `"😀"` nor a
-surrogate as the *final* character, so both assertions pass identically either way. Revert AC1's
-production fix and this test still goes green — it would not catch a regression, and per the
-project's own established mutation-verification discipline (used throughout this same ledger, e.g.
-D2/D6 entries), that means the test doesn't actually prove what AC1 claims.
-
-**Why it's reachable, not theoretical:** this isn't a corner case in the fix — it's the primary test
-the story specifies for AC1, described as mirroring `AdminQueueService.preview()`'s already-fixed
-sibling bug, which is the whole point of this AC.
-
-**Suggested correction:** mirror the file's own existing `contentExceedsMaxInputChars_
-truncatedBeforeSending` test shape (which the story's own text says to mirror, but then deviates
-from) — build the exact expected full prompt string with the correctly-truncated content and assert
-equality via `verify(geminiClient).evaluate(expectedPrompt)`, the same pattern already used two
-tests up in the same file. That pattern pins the *exact* surviving content, which would fail on the
-unpatched code (expected `"x".repeat(99)` vs. actual `"x".repeat(99) + "\uD83D"`).
+Every factual claim in the story (line numbers, "confirmed by grep", "no test exists", cited patterns) was
+re-verified against the live repository rather than trusted from the story text — reading
+`VideoService.java`, `AdminVideoService.java`, `GdprExportService.java`, `Booking.java`,
+`QuotaService.java`, `UploadSessionExpiryScheduler.java`, `WebhookEventProcessorScheduler.java`,
+`VideoServiceTest.java`, `VideoPurgedEventIT.java`, `AdminVideoIT.java`, `GdprExportIT.java`, and the
+relevant `deferred-work.md` sections, plus `git log`/`git show` across ~8 prior "Create Story" commits to
+establish this project's actual ledger-tagging convention. The story's core technical premises for AC1,
+AC2, and AC3 (the transaction-boundary bug in both services, the reference-identity `.distinct()` bug, the
+line numbers, the "no existing test file" claims) all check out exactly as described — **no false positives
+are reported below for those**. The findings that follow are real gaps, not restatements of the story's own
+already-correct analysis.
 
 ---
 
-## Finding 2 (Confirmed, Medium severity) — AC1's proposed fix throws for `maxInputChars <= 0`
+## Finding 1 (High) — AC4's ledger edits are already committed with the wrong status tag, before any code fix exists
 
-**Where:** AC1's code sample (story lines 111–119):
+**What's wrong:** AC4 instructs tagging `Def24`, the new `AdminVideoService.deleteVideo()` item, and `D2` as
+`` `[CLOSED by skillars-deferred-52 ACn]` ``. This has **already been applied to `deferred-work.md` and
+committed to master** in `3a44618` ("Create Story Deferred-52..."), i.e. at story-creation time, before any
+implementation. But the actual code these items describe is **still unfixed**:
+`VideoService.failTranscoding()` still carries method-level `@Transactional` with the release call inside it
+(`VideoService.java:391-411`), `AdminVideoService.deleteVideo()` still releases quota inside the same
+`transactionTemplate.execute(...)` block as the `DELETED` write (`AdminVideoService.java:58-73`), and
+`GdprExportService.buildBookings()` still ends in `.stream().distinct()` and is still `private`
+(`GdprExportService.java:115-126`). The story's own Status (`ready-for-dev`), empty Dev Agent Record, and
+all-unchecked task list confirm no implementation has happened.
 
-```java
-int cutoff = maxInputChars;
-if (content.length() > cutoff && Character.isHighSurrogate(content.charAt(cutoff - 1))) {
-    cutoff--;
-}
-```
+**Why this matters:** this project's own established convention — confirmed by inspecting the "Create
+Story" commits for deferred-38, -40, -41, -42, -45, -48, -49, -50, and -51 — is to tag items a new story is
+about to fix (but hasn't yet) as `` [PICKED UP by skillars-deferred-NN ACn] ``, and reserve
+`` [CLOSED by ...] `` for items **verified already fixed** by separate, completed work (the "found stale
+during re-mining" case). E.g. `c8a958a` (Create Story Deferred-42) tags its own not-yet-implemented targets
+`[PICKED UP by skillars-deferred-42 AC1/AC2/AC3]`, and those tags are still `PICKED UP` — never rewritten
+to `CLOSED` — even after the implementation commit (`8b22c1e`) landed. Story-52's AC4 breaks this
+convention for its own three items (Def24→AC1, the new item→AC2, D2→AC3) by writing `CLOSED` at creation
+time instead. (The fourth AC4 edit — RW3's "outside transaction" half — correctly uses `CLOSED`, because
+that half genuinely was already fixed by separate, prior work; that one is not in question here.)
 
-If `maxInputChars` is configured to `0` (or negative), and `content` is non-blank (guaranteed by the
-earlier blank-check), then `content.length() > cutoff` is true and `content.charAt(cutoff - 1)`
-evaluates `charAt(-1)`, throwing `StringIndexOutOfBoundsException`. This happens **before** the
-`try/catch` block that already exists around the Gemini call (story/production code lines 53–67), so
-the exception propagates uncaught out of `moderate()` — a regression the current (unfixed) code does
-not have: `content.substring(0, 0)` for `maxInputChars = 0` simply returns `""`, no exception.
+**Concrete risk:** if this story stalls, is reprioritized, or only partially implemented (e.g. AC1/AC2 land
+but AC3 doesn't), the ledger will permanently and incorrectly report a real, still-present bug as fixed.
+This project's own workflow explicitly relies on the ledger being trustworthy for exactly this purpose —
+`skillars-deferred-49`'s and `-50`'s own creation notes cite prior re-mining passes confirming sections are
+"thin" precisely by trusting `CLOSED`/`STALE` tags rather than re-reading every line. A future re-mining
+pass will skip these three items forever, believing them done.
 
-No profile in the repo currently sets `max-input-chars` to `0` (checked `application.yaml:277,282`
-and `application-test.yaml:104` — 4000, 2000 and 100 respectively), so this is not reachable with
-today's configuration. It is a real latent crash for any future misconfiguration of this
-`@Value`-injected `int` field, which carries no validation. Worth a one-line guard (e.g. `cutoff > 0
-&&` in the condition) since the fix is already touching this exact block, but not blocking if the
-team accepts the config-value trust boundary as-is.
-
----
-
-## Finding 3 (Confirmed, Informational) — AC4's ledger tagging is already done
-
-**Where:** AC4 / Task 4 (story lines 269–283, 301–302).
-
-All four `[PICKED UP by skillars-deferred-51 AC*]` tags AC4 instructs the dev to add were **already
-applied to `deferred-work.md` by the story-creation commit itself** (`fdadd6e`, 8 lines changed in
-that file). Verified directly: the D5, D7, and both `BookingServiceTest` bullets (review-round and
-D17 patch-round) in the live `deferred-work.md` already carry their respective `[PICKED UP by
-skillars-deferred-51 AC1/AC2/AC3]` tags right now, before any AC1–AC3 code exists.
-
-This matches an established pattern in this repo — `git log -S "PICKED UP by skillars-deferred-41
-AC1"` shows that tag was also introduced by its story's *creation* commit rather than its
-implementation commit — so this is very likely intentional process convention, not a mistake.
-Flagging it only because the story's own Task list presents Task 4 as pending work ("apply the three
-`[PICKED UP]` tags"), which could cause a dev to attempt an `Edit`/find-replace against text that no
-longer matches (already tagged), or to waste time double-checking whether they missed a step. Worth
-a one-line Dev Note acknowledging AC4 is already satisfied at pickup and only needs verification, not
-action.
+**Recommendation:** change all three of this story's own tags from `CLOSED` to `PICKED UP` in
+`deferred-work.md` right now (matching the established convention), and correct AC4's instructions
+accordingly so the tags only flip to `CLOSED` once the corresponding code fix actually lands (in the
+implementation commit, per precedent).
 
 ---
 
-## Everything else checked and found accurate (no false positives worth reporting)
+## Finding 2 (Medium) — AC1's mandated "regression test" cannot distinguish fixed from buggy code
 
-For completeness, since the ask was explicitly to avoid false positives, here is what was verified
-and confirmed *correct* rather than flagged:
+**What's wrong:** AC1 requires a test that stubs `quotaProvider.release(...)` to throw and asserts
+`videoLifecycleService.transitionOperationalState(...)` was still invoked with `FAILED`, claiming "the
+pre-fix code could never prove this." That claim is incorrect. `VideoServiceTest` constructs `VideoService`
+as a plain object (`service = new VideoService(...)`, `VideoServiceTest.java:66-68`) with no Spring
+transactional AOP proxy in play — so `@Transactional`'s rollback semantics are never exercised by this test
+class regardless of whether the annotation is present on the method. In **both** the current buggy code and
+the proposed fix, `transitionOperationalState(...)` is called strictly before `quotaProvider.release(...)`
+in program order (`VideoService.java:399` then `:406-407` today; same relative order after the AC1
+refactor). Run the exact same test — unmodified — against today's pre-fix `failTranscoding()`, and
+`verify(videoLifecycleService).transitionOperationalState(videoId, OperationalState.FAILED)` passes
+identically, because Mockito verification only checks that a call happened, not whether a surrounding
+transaction would have rolled it back.
 
-- **AC1 core algorithm**: backing the cutoff off by one when `content.charAt(cutoff - 1)` is a high
-  surrogate is the right and sufficient check — a pair fully inside the truncation boundary always
-  has its *low* surrogate at that position, not its high one, so the check can't false-trigger.
-- **AC2's chain**: independently traced `MessageModerationSweeper.sweep()` → `sweepOne()` →
-  `MessageHeldForReviewEvent` → `AdminAlertEventListener.onMessageHeldForReview` (REQUIRES_NEW,
-  synchronous) → `AdminQueueService.buildSummary` → the `GET /api/admin/queue` response shape, and
-  `AdminMessageService.approveMessage` → `resolveOpenAlert(..., MODERATION_UNRESOLVED, ...)`. Every
-  step matches the story's test code exactly, including the expected summary string
-  `"MODERATION_ORPHAN_SWEPT: Stranded content"` (reason prefix + `preview()` of the content) and the
-  post-approve `RESOLVED` status.
-- **AC2 fixture correctness**: `sweptMessageId = 9000_001_004L` doesn't collide with any existing ID
-  in the file's `9000_001_xxx` sequence; `COACH_USER_ID`/`CONVERSATION_ID` are valid FKs seeded by
-  `setUp()`; the 1-hour-old `created_at` clears the 30-minute default grace period
-  (`platform.messaging.moderation_orphan_grace_minutes`, confirmed default in `V91` migration, no
-  test-profile override); `releaseSchedulerLock` is genuinely inherited from `AbstractIntegrationTest`
-  and genuinely necessary given `sweep()`'s `lockAtLeastFor = "PT2M"`.
-- **AC3 mechanics**: `BookingService` is confirmed to have exactly one Lombok
-  `@RequiredArgsConstructor`-generated 15-arg constructor with types matching 1:1, uniquely, against
-  the test's 15 mock/spy fields — `@InjectMocks` constructor-injection by type will resolve
-  unambiguously. `BookingStateMachine.transition(...)` is confirmed to carry real, consequential state
-  logic (a full `BookingStatus × BookingEvent → BookingStatus` map) that several `BookingServiceTest`
-  assertions depend on (`booking.getStatus()` equality checks), so `@Spy` (not `@Mock`, unlike the
-  sibling `ExpiredPackBookingValidationTest`) is the correct call — a bare mock would silently null out
-  every transition. All cited grep results (`grep -c "bookingStateMachine\."` → 0 outside the deleted
-  block; `new BookingService(` / `new BookingStateMachine(` → only the two lines being deleted;
-  repo-wide `new BookingService(` → only this file) reproduce exactly as claimed. Line citations
-  (`:89-90`, `:97-112`, `:99-107`) match the current file precisely.
-- **Ledger provenance**: D5, D6, D7 (skillars-deferred-16 review section) and both `uat-3`
-  review/patch-round `BookingServiceTest` bullets read exactly as the story quotes/paraphrases them,
-  including D6's staleness writeup and D3/D4's product-decision framing for the deliberate exclusions.
-- **`ExpiredPackBookingValidationTest`'s `@InjectMocks` pattern predates both ledger filings** — first
-  committed 2026-06-25, well before the 2026-08-05 and 2026-08-11 entries the story cites.
-- **Failsafe/`mvn test` split**: `pom.xml` confirms `maven-failsafe-plugin` is bound to
-  `integration-test`/`verify` with no `surefire` IT wiring, matching the Dev Notes' gotcha.
-- **`MessagingService.java:160`'s 2000-code-point guard** is confirmed separate and untouched by AC1's
-  change, as the story claims.
+**Why it matters:** this test provides no actual regression protection for the bug the story exists to fix
+(a real DB-level rollback of the FAILED transition). This project does have an established way to test real
+rollback behavior — `VideoPurgedEventIT.java` wraps a call in
+`transactionTemplate.execute(status -> { ...; status.setRollbackOnly(); return null; })` inside a genuine
+Spring IT context with a real transaction manager — but that requires an integration test, which AC1 doesn't
+attempt (AC2 explicitly rules out the equivalent IT approach as impractical for the same reason; AC1 doesn't
+raise the question at all).
+
+**Recommendation:** keep the test (it's still useful as a documentation/structural check that the two calls
+are sequenced correctly), but drop the "proves the fix" / "pre-fix code could never prove this" framing from
+AC1 — it overclaims what a mock-based unit test can show. If real regression coverage of the rollback
+behavior is wanted, it needs an IT-level test following the `VideoPurgedEventIT` pattern (inject a quota
+failure and assert the video is *not* left in `PROCESSING`/still-committed `FAILED` after a real transaction
+boundary) — likely out of scope for a "decision-light" bundled story, in which case say so explicitly rather
+than asserting the unit test already covers it.
+
+---
+
+## Finding 3 (Medium) — Task 2.3 names the wrong IT as end-to-end coverage for AC2's change
+
+**What's wrong:** Task 2.3 says: "Also run `mvn -o integration-test -Dit.test=AdminVideoIT,VideoPurgedEventIT`
+to confirm the existing end-to-end `deleteVideo` coverage still passes unchanged." `VideoPurgedEventIT.java`
+does **not** exercise `AdminVideoService.deleteVideo()` at all — every test in that file calls
+`videoDeletionService.deleteVideo(video.getId(), LifecycleTrigger.SYSTEM, true)` (`:55`, `:67`), where
+`videoDeletionService` is `VideoDeletionService`, a completely separate class (confirmed: grep for
+`AdminVideoService` inside `VideoDeletionService.java` returns zero hits — it has its own
+`VideoRepository`/`VideoDeletionOutboxRepository` fields and no dependency on `AdminVideoService`
+whatsoever). Only `AdminVideoIT.java` actually calls `adminVideoService.deleteVideo(video.getId())`.
+
+**Why it matters:** running `VideoPurgedEventIT` after the AC2 refactor will pass regardless of whether the
+refactor is correct, since it never touches the changed code path — it provides zero verification signal for
+this story's change, contrary to what Task 2.3 claims. A dev following the task list as written would get a
+false sense that two ITs validated the change when only one did.
+
+**Recommendation:** drop `VideoPurgedEventIT` from Task 2.3's verification command (or, if there's a reason
+to also confirm `VideoDeletionService`'s unrelated deletion path is unaffected, say so explicitly rather than
+implying it covers `AdminVideoService.deleteVideo()`).
+
+---
+
+## Finding 4 (Low) — AC1/AC2's cited "existing test pattern" doesn't exist where claimed
+
+**What's wrong:** AC1 says to add tests "mirroring however this file's existing `completeTranscoding` tests
+already stub `transactionTemplate`" — but `VideoServiceTest.java` has **zero** tests for `completeTranscoding`
+(confirmed by grep across the whole test tree — the only references to `completeTranscoding` in tests are
+`verify(videoService).completeTranscoding(...)` mock-verification calls in an unrelated test file,
+`ModerationOrchestrationServiceTest.java`, not a test of `VideoService` itself). `VideoServiceTest`'s actual
+`transactionTemplate` handling (`:58-69`) is not a per-test Mockito stub at all — it's a single hand-written
+anonymous `TransactionTemplate` subclass built once in `@BeforeEach` that always invokes the callback,
+shared by every test in the file. This fixture is sufficient for AC1's new tests as-is (no extra "mocking"
+step is actually needed), so the practical impact is low — but the citation points a dev toward a pattern
+that isn't there.
+
+AC2 has the same issue one level worse: it says to mirror "`VideoServiceTest`'s
+`transactionTemplate.execute(any())`-invokes-the-real-callback stubbing style" while also specifying
+`@InjectMocks AdminVideoService` + `@Mock` for every field (implying a genuine Mockito-mocked
+`TransactionTemplate`, stubbed per test) — a style `VideoServiceTest` does not use anywhere. That style
+*does* exist and is genuinely reusable in this codebase (e.g. `ModerationOrchestrationServiceTest.java:57,78`:
+`@Mock TransactionTemplate transactionTemplate;` + `lenient().when(transactionTemplate.execute(any())).thenAnswer(...)`),
+just under a different file than the one cited.
+
+**Recommendation:** for AC1, drop the "completeTranscoding tests already stub transactionTemplate" claim —
+just say to reuse the existing `@BeforeEach` `txTemplate` fixture for the new tests. For AC2, cite
+`ModerationOrchestrationServiceTest.java` (or similar) as the pattern to mirror instead of `VideoServiceTest`.
+
+---
+
+## Summary
+
+| # | Severity | Area | One-line issue |
+|---|----------|------|-----------------|
+| 1 | High | AC4 / ledger | `CLOSED` tags already committed for unimplemented fixes; should be `PICKED UP` per established convention |
+| 2 | Medium | AC1 test plan | Mandated "regression test" passes identically against the pre-fix code — proves nothing about the actual bug |
+| 3 | Medium | Task 2.3 | `VideoPurgedEventIT` cited as `deleteVideo` coverage but tests an unrelated `VideoDeletionService` method |
+| 4 | Low | AC1/AC2 test plan | Cited "existing" test-stubbing patterns don't exist in the named file (real pattern exists, just elsewhere / doesn't need inventing) |
+
+AC1/AC2/AC3's core bug analysis, all cited file:line references, the "no existing test file"/"zero tests"
+claims, the `Collectors` import caveat, the `Booking`/`QuotaService`/`UploadSessionExpiryScheduler`/
+`WebhookEventProcessorScheduler` technical claims, and the "Deliberately not picked up" scoping were all
+independently re-verified and are accurate — no changes needed there.

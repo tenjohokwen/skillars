@@ -1076,7 +1076,7 @@ the story text first, then implemented as corrected:
 
 ## Deferred from: code review of skillars-6-2 pass 5 (2026-06-22)
 
-- Def24: `failTranscoding()` state-transition rollback on `quotaProvider.release()` exception — `failTranscoding()` is `@Transactional`; if `QuotaService.release()` throws (DB connection loss), the entire TX rolls back including `transitionOperationalState(FAILED)`, leaving the video in `PROCESSING`. Scheduler retries recover normally; only fails permanently if max-attempts exhaust during a persistent quota DB outage. Architectural fix: separate state transition and quota release into independent TXs (same pattern as `completeTranscoding()`). [`VideoService.java:failTranscoding`]
+- Def24: `failTranscoding()` state-transition rollback on `quotaProvider.release()` exception — `failTranscoding()` is `@Transactional`; if `QuotaService.release()` throws (DB connection loss), the entire TX rolls back including `transitionOperationalState(FAILED)`, leaving the video in `PROCESSING`. Scheduler retries recover normally; only fails permanently if max-attempts exhaust during a persistent quota DB outage. Architectural fix: separate state transition and quota release into independent TXs (same pattern as `completeTranscoding()`). [`VideoService.java:failTranscoding`] `[CLOSED by skillars-deferred-52 AC1: failTranscoding() no longer carries method-level @Transactional — the read + transitionOperationalState(FAILED) now run inside transactionTemplate.execute(...), and quotaProvider.release(...) runs after that transaction returns, so a release() failure can no longer roll back the FAILED transition.]`
 
 ## Deferred from: code review of skillars-6-3-content-moderation-pipeline (2026-06-22)
 
@@ -1088,7 +1088,7 @@ the story text first, then implemented as corrected:
 
 - RW1: SSE subscribe → onStatusChanged race — state transition committed between `videoService.findById()` and `emitter.send(currentStatus)` is missed. Polling fallback mitigates. Architectural limitation of SSE without event sourcing. [`VideoSseService.java:39`, `VideoEventResource.java:39`]
 - RW2: scanned_at misleading on upsert retry path — `@Column(updatable=false)` retains original failed-attempt timestamp even when SLA retry overwrites outcome to PASSED. Fix requires append-only per-attempt rows (architectural scope beyond this story). [`VideoModerationScan.java:39`]
-- RW3: Quota release outside transaction on encoding.failed in SCANNING — same pattern as Def24; `quotaProvider.release()` after committed SCANNING→FAILED transition; if release throws, quota is permanently leaked. [`WebhookEventProcessorScheduler.java:185-187`]
+- RW3: Quota release outside transaction on encoding.failed in SCANNING — same pattern as Def24; `quotaProvider.release()` after committed SCANNING→FAILED transition; if release throws, quota is permanently leaked. [`WebhookEventProcessorScheduler.java:185-187`] **[CLOSED — the "outside transaction" half was already fixed at an unannotated earlier point, confirmed by `skillars-deferred-52` story creation, 2026-08-21: `WebhookEventProcessorScheduler`'s `encoding.failed`/SCANNING branch (`:171-236` in the current file) already runs its state transition inside its own `transactionTemplate.execute(...)` block and calls `releaseQuota(...)` only after that transaction returns, with no `@Transactional` wrapper — no code change was needed for this half.** The item's second half — "if release throws, quota is permanently leaked" — is **not** closed by that existing split and is re-filed below as its own item, since splitting state from release only prevents rollback corruption; it does nothing about a release call that itself fails with no retry.]
 
 ## Deferred from: code review of skillars-6-6-player-video-management-portal (2026-06-24)
 - W2: N+1 queries in `VideoApprovalResource.listPendingApprovals()` — one `playerProfileService.getPlayerNameByPlayerId()` + one `videoRepository.findById()` per approval row; acknowledged in spec TODO; acceptable for single-family use. [`VideoApprovalResource.java`]
@@ -1135,7 +1135,7 @@ the story text first, then implemented as corrected:
 
 ## Deferred from: code review of skillars-10-4-gdpr-data-tools-account-deletion (2026-06-30)
 - D1: DB connection held during S3 upload — `GdprExportService.buildExport()` annotated `@Transactional` keeps a DB connection checked out from the pool for the entire ZIP build + S3 put. Resolved if Patch 1 (remove `@Transactional`) is applied; defer this entry only if Patch 1 is skipped. [GdprExportService.java:180] `[STALE — verified against current code by skillars-deferred-45 story creation, 2026-08-20: already fixed. GdprExportService.java carries no @Transactional annotation anywhere — not on the class, not on buildExport(), not on any other method (grep confirms zero hits) — so Patch 1, the condition this item's own text names for closing it, was applied. Added by an earlier story, unannotated in this ledger.]`
-- D2: `.distinct()` on Booking list may silently no-op — if `Booking` entity doesn't override `equals()`/`hashCode()`, stream `.distinct()` uses object identity and won't deduplicate. Unlikely to manifest given role separation, but address in a JPA entity hygiene pass. [GdprExportService.java:250]
+- D2: `.distinct()` on Booking list may silently no-op — if `Booking` entity doesn't override `equals()`/`hashCode()`, stream `.distinct()` uses object identity and won't deduplicate. **This item's own "unlikely to manifest given role separation" framing is outdated**: `skillars-uat-5`'s self-registration flow means a self-booking adult player's bookings carry `parentId == playerId == their own userId`, so `buildBookings` genuinely calls both `findAllByParentIdOrderByRequestedStartTimeAsc(userId)` and `findAllByPlayerId(userId)` and gets the same row back as two distinct Java object instances (no shared persistence context — the class carries no `@Transactional` anywhere) — reference-identity `.distinct()` cannot catch this, and a self-registered player's GDPR export currently lists every one of their own bookings twice. [GdprExportService.java:250] `[CLOSED by skillars-deferred-52 AC3: buildBookings() now dedupes via a LinkedHashMap<UUID, Booking> keyed on Booking.getId(), preserving first-seen (parent-first) order, instead of reference-identity .stream().distinct(). Note the ledger's "unlikely to manifest given role separation" framing was already stale before this fix — see this story's AC3 for why.]`
 
 ## Deferred from: code review of skillars-deferred-2 (2026-07-01)
 - D1: `BookingExpiredEvent`/`BookingReminderEvent`/`BookingConfirmedEvent` constructors are invoked positionally with 6-8 raw same-typed arguments across new test files — pre-existing lack of a builder on these event classes; a future field reorder could silently miscompile or swap same-typed fields with no test catching it. [`src/main/java/com/softropic/skillars/platform/booking/contract/`]
@@ -1639,3 +1639,49 @@ story's bar. **Two of the four have since been closed by that story's own code r
 
 - **`duplicateNextWeek`'s new overlap check has a TOCTOU race with `save()`.** A concurrent transaction can insert an overlapping booking after the new `findOverlappingBookings` check but before `save()`, letting the race slip past the guard and surface as an unmapped 500 at commit via the DB exclusion constraint — same class of gap as `acceptReschedule`'s already-deferred unlocked-read TOCTOU race above. Explicitly acknowledged and scoped out by this story itself ("no new coach-row locking... same TOCTOU race the unlocked read already had — a real improvement, not a complete fix"), so not a regression this diff introduces, just a narrower version of a pre-existing class of gap. [`src/main/java/com/softropic/skillars/platform/booking/service/BookingDuplicationService.java:75-88`]
 - **The new `duplicateNextWeek_overlapsAnotherBooking_throwsSlotUnavailable` unit test doesn't verify the arguments passed to `findOverlappingBookings`** (coach id, computed start/end, status list, null exclude-id) — it stubs the call with `any()` everywhere and never checks it was invoked correctly. Inconsistent with this same story's own AC3 rigor for the sibling `isSlotWithinAvailabilityWindow` calls, but optional polish, not required by AC1's spec. [`src/test/java/com/softropic/skillars/platform/booking/service/BookingDuplicationServiceTest.java`]
+
+## Deferred from: skillars-deferred-52 story creation (2026-08-21)
+
+Written while scoping `skillars-deferred-52`, which re-mined an older (2026-06-22 through 2026-06-30),
+never-revisited section of this ledger after confirming the more recently active section
+(post-`skillars-deferred-34`) is already thin per `skillars-deferred-49`/`-50`'s own creation notes. Two
+items came from that older section (Def24 under `## Deferred from: code review of skillars-6-2 pass 5
+(2026-06-22)`, closed by this story's AC1; D2 under `## Deferred from: code review of
+skillars-10-4-gdpr-data-tools-account-deletion (2026-06-30)`, closed by AC3) — both re-tagged in place
+above rather than duplicated here. This section holds only what the story-creation pass newly found:
+
+- **`AdminVideoService.deleteVideo()` has the identical transaction-boundary anti-pattern Def24 named
+  for `VideoService.failTranscoding()`, never previously tracked under its own entry.** Found while
+  verifying Def24 against live code: `deleteVideo` (`AdminVideoService.java:45-80`) calls
+  `quotaProvider.release(...)` (`:68`) inside the same `transactionTemplate.execute(...)` block that
+  writes the video's `DELETED` state and expires its pending upload session — a release failure there
+  rolls back the DELETED write the same way Def24 describes for `failTranscoding`. `[CLOSED by
+  skillars-deferred-52 AC2: the transaction now returns the expired UploadSession (or null) and
+  quotaProvider.release(...) is called after the transaction returns, so a release() failure can no
+  longer roll back the DELETED/EXPIRED writes.]`
+- **Re-scoped from RW3 (`## Deferred from: post-implementation review of skillars-6-3 (2026-06-22)`):
+  once state and quota release are split into separate transactions (as Def24/RW3 both asked for, and as
+  AC1/AC2 now do for `VideoService.failTranscoding`/`AdminVideoService.deleteVideo`, and as an
+  unannotated earlier change already did for `WebhookEventProcessorScheduler`'s `encoding.failed`/SCANNING
+  branch), a release failure can no longer corrupt the state transition — but nothing retries the release
+  call itself if it throws.** Four call sites now share this shape: the three above, plus
+  `UploadSessionExpiryScheduler.processExpired()`, which is the only one of the four with any mitigation
+  — it wraps its release call in `try { ... } catch (Exception e) { log.warn(...); continue; }`, relying
+  on its own `@Scheduled` re-run to retry next cycle. The other three have no equivalent retry. Whether
+  they need one is a real, undecided design question, not a mechanical fix: `QuotaService.release()`
+  (`:122-137`) is idempotent (a repeat call on an already-`RELEASED`/`COMMITTED` reservation is a
+  documented no-op), which suggests the *existing* webhook max-attempts/backoff machinery
+  (`WebhookEventProcessorScheduler.handleFailure`) and the video-failure path's own retry surface (if
+  any — not traced by this story) might already make a bare retry safe to add without new
+  de-duplication logic — but whether either of those two call sites is actually re-driven by anything
+  after a failure, and whether `AdminVideoService.deleteVideo` (an admin-initiated, synchronous call with
+  no scheduler behind it at all) should instead surface the release failure to the caller rather than
+  silently swallow it, both need a decision before a fix is written. [`src/main/java/com/softropic/skillars/platform/video/service/VideoService.java:failTranscoding`,
+  `src/main/java/com/softropic/skillars/platform/video/service/AdminVideoService.java:deleteVideo`,
+  `src/main/java/com/softropic/skillars/platform/video/service/WebhookEventProcessorScheduler.java:171-236`,
+  `src/main/java/com/softropic/skillars/platform/video/service/UploadSessionExpiryScheduler.java:40-53`]
+
+## Deferred from: code review of skillars-deferred-52-video-quota-release-transaction-isolation-and-gdpr-export-booking-dedup (2026-08-21)
+
+- New AC1/AC2 unit tests (`VideoServiceTest`, `AdminVideoServiceTest`) verify call ordering only (`InOrder`), not the actual resulting state (session `EXPIRED`, video `DELETED`/`FAILED`) — backstopped by `AdminVideoIT`'s existing 10-test end-to-end coverage of `deleteVideo`, so low severity. [`src/test/java/com/softropic/skillars/platform/video/service/VideoServiceTest.java`, `src/test/java/com/softropic/skillars/platform/video/service/AdminVideoServiceTest.java`]
+- Possible additional `.stream().distinct()`-on-entity-without-`equals()`/`hashCode()` instances may exist in other `GdprExportService` builder methods (e.g. `buildPayments`, `buildMessages`) — unconfirmed, worth a follow-up grep in a future pass. [`src/main/java/com/softropic/skillars/platform/admin/service/GdprExportService.java`]

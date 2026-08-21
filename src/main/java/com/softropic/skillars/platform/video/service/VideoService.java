@@ -389,17 +389,21 @@ public class VideoService {
     }
 
     @Observed(name = "video.transcoding.failed")
-    @Transactional
     public void failTranscoding(UUID videoId) {
-        // Read providerAssetId before state transition so we can anchor session lookup below
-        String providerAssetId = videoRepository.findById(videoId)
-            .map(Video::getProviderAssetId)
-            .orElse(null);
+        // Phase 1: read providerAssetId and transition to FAILED, in one short transaction.
+        String providerAssetId = transactionTemplate.execute(status -> {
+            String assetId = videoRepository.findById(videoId)
+                .map(Video::getProviderAssetId)
+                .orElse(null);
+            videoLifecycleService.transitionOperationalState(videoId, OperationalState.FAILED);
+            return assetId;
+        });
 
-        videoLifecycleService.transitionOperationalState(videoId, OperationalState.FAILED);
-
-        // Anchor to providerAssetId to avoid releasing the retry session's quota when a late
-        // webhook fires for the original failed upload after a retryUpload() has started
+        // Phase 2: release quota OUTSIDE any transaction — mirrors completeTranscoding() and
+        // UploadSessionExpiryScheduler.processExpired()'s "release outside any @Transactional
+        // boundary" convention, so a release() failure can no longer roll back the FAILED transition
+        // committed above. Anchor to providerAssetId to avoid releasing the retry session's quota when
+        // a late webhook fires for the original failed upload after a retryUpload() has started.
         UploadSession session = (providerAssetId != null)
             ? uploadSessionRepository.findFirstByVideoIdAndProviderUploadIdOrderByCreatedAtDesc(videoId, providerAssetId).orElse(null)
             : uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId).orElse(null);
