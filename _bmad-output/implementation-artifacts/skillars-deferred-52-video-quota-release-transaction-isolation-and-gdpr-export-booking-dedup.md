@@ -150,19 +150,26 @@ section around `deferred-work.md`'s D4–D7 items). This story is numbered 52 to
    - No new fields/imports: `transactionTemplate` is already a constructor-injected field on this class
      (`VideoService.java:55`, used by `completeTranscoding`).
    - **Unit test** in `src/test/java/com/softropic/skillars/platform/video/service/VideoServiceTest.java`
-     (this file exists; it currently has **zero** tests for `failTranscoding` — confirmed by grep). Add
-     a test proving the split: mock `transactionTemplate.execute(any())` to actually invoke the passed
-     `TransactionCallback` (mirroring however this file's existing `completeTranscoding` tests already
-     stub `transactionTemplate` — check that pattern first and reuse it, do not invent a new one), then
-     assert `videoLifecycleService.transitionOperationalState(videoId, OperationalState.FAILED)` was
-     called before `quotaProvider.release(...)` (an `InOrder` verification — this file already imports
-     `org.mockito.InOrder`, confirming that pattern is established here) and that both happen even when
-     mocked separately. Also add a regression test that specifically proves the fix: stub
-     `quotaProvider.release(...)` to throw, and assert `videoLifecycleService.transitionOperationalState`
-     was still invoked with `FAILED` — the pre-fix code could never prove this (an exception thrown from
-     inside a real `@Transactional` method propagates and the caller never observes the state as
-     committed; the point of this test is to show the two are no longer coupled, not to simulate a real
-     rollback with Mockito).
+     (this file exists; it currently has **zero** tests for `failTranscoding` — confirmed by grep). This
+     file has no per-test Mockito-stubbed `TransactionTemplate` and no existing `completeTranscoding` tests
+     to mirror (confirmed: zero references to `completeTranscoding` anywhere in this test file) — instead
+     it builds one real, hand-written anonymous `TransactionTemplate` subclass once in `@BeforeEach`
+     (`:58-69`) that always invokes the callback, shared by every test in the file; reuse that existing
+     fixture as-is for the new tests, no extra stubbing step is needed. Add a test proving the split:
+     assert `videoLifecycleService.transitionOperationalState(videoId, OperationalState.FAILED)` was called
+     before `quotaProvider.release(...)` (an `InOrder` verification — this file already imports
+     `org.mockito.InOrder`, confirming that pattern is established here). **Note the limit of what a
+     mock-based unit test can show here**: because `VideoServiceTest` constructs `VideoService` as a plain
+     object with no Spring transactional AOP proxy in play, no test in this file — old or new — can exercise
+     real `@Transactional` rollback semantics; a test that stubs `quotaProvider.release(...)` to throw and
+     asserts `transitionOperationalState` was still called would pass identically against **both** the
+     pre-fix and post-fix code, since `transitionOperationalState` runs strictly before `release(...)` in
+     program order either way — it would not prove the fix, only that the two calls remain in the same
+     relative order. Keep the `InOrder` test as a structural/documentation check of that ordering; do not
+     claim it proves the rollback bug is fixed. Proving the actual rollback behavior would need an
+     integration test following `VideoPurgedEventIT`'s `transactionTemplate.execute(status -> { ...;
+     status.setRollbackOnly(); return null; })` pattern inside a real Spring transaction context — out of
+     scope for this story (see AC2's equivalent IT-impracticality note).
 
 2. **AC2 — `AdminVideoService.deleteVideo()` gets the identical fix: `quotaProvider.release()` moves
    outside the `transactionTemplate.execute(...)` block that writes `DELETED` and expires the pending
@@ -218,14 +225,20 @@ section around `deferred-work.md`'s D4–D7 items). This story is numbered 52 to
      `videoRepository` are all already constructor-injected fields on this class.
    - **Test coverage:** there is currently **no** `AdminVideoServiceTest.java` (confirmed — file does not
      exist) and no unit test anywhere covers `deleteVideo`'s quota-release ordering at all (the existing
-     `AdminVideoIT.java` and `VideoPurgedEventIT.java` cover `deleteVideo` end-to-end but were not written
-     to assert internal transaction-boundary ordering). Do **not** attempt to prove the rollback bug via
+     `AdminVideoIT.java` covers `deleteVideo` end-to-end but was not written to assert internal
+     transaction-boundary ordering; `VideoPurgedEventIT.java` does **not** cover `deleteVideo` at all — every
+     test in that file calls `VideoDeletionService.deleteVideo(...)`, a completely separate class with no
+     dependency on `AdminVideoService`, confirmed by grep). Do **not** attempt to prove the rollback bug via
      an `IT` (would need a way to make a real Postgres-backed quota release throw mid-transaction, which
      this codebase has no harness for). Instead, create a new
      `src/test/java/com/softropic/skillars/platform/video/service/AdminVideoServiceTest.java`
      (`@ExtendWith(MockitoExtension.class)`, `@InjectMocks AdminVideoService`, `@Mock` for every
-     constructor-injected field this class has), mirroring `VideoServiceTest`'s
-     `transactionTemplate.execute(any())`-invokes-the-real-callback stubbing style, with one test proving
+     constructor-injected field this class has). `VideoServiceTest` does not use a per-test Mockito-stubbed
+     `TransactionTemplate` (see AC1's test note), so mirror `ModerationOrchestrationServiceTest.java`
+     instead (`:57,78`: `@Mock TransactionTemplate transactionTemplate;` +
+     `lenient().when(transactionTemplate.execute(any())).thenAnswer(...)`), the pattern that actually
+     exists in this codebase for a genuinely mocked, per-test-stubbed `TransactionTemplate`. With that in
+     place, write one test proving
      `quotaProvider.release(...)` is called with the expired session's reservation handle **after** the
      transaction returns (an `InOrder` check against the mocked `videoRepository.save(...)` write and the
      `quotaProvider.release(...)` call), and one test proving `deleteVideo` on a video with **no**
@@ -297,50 +310,53 @@ section around `deferred-work.md`'s D4–D7 items). This story is numbered 52 to
        `.equals()` under Java's default identity semantics) while the second continues to pass — confirm
        this before finalizing, per this project's established red-then-green verification convention.
 
-4. **AC4 — Ledger hygiene.** In `deferred-work.md`:
-   - Tag Def24 (`## Deferred from: code review of skillars-6-2 pass 5 (2026-06-22)`) →
-     `` `[CLOSED by skillars-deferred-52 AC1]` `` with a one-line closure note (matching this ledger's
-     established `[CLOSED by ... ACn]` annotation convention used throughout the file), and keep the
-     original text below it per convention.
-   - Add a new item to that same section (or a new one directly below it) recording D2's fix:
-     `AdminVideoService.deleteVideo()`'s identical anti-pattern, found during this story's creation and
-     closed by AC2 — since it was never previously tracked under its own entry, do not retroactively
-     invent a fictitious original filing date; date it to this story's creation.
-   - Tag RW3 (`## Deferred from: post-implementation review of skillars-6-3 (2026-06-22)`) with an
-     honest, split annotation: the "outside transaction" half is `` `[CLOSED — already fixed at an
-     unannotated earlier point, confirmed by skillars-deferred-52 story creation]` ``; the "if release
-     throws, quota is permanently leaked" half is **not** closed by anything in this story and should be
-     **re-filed** as its own new item (not deleted) under a new heading
-     `## Deferred from: skillars-deferred-52 story creation (<this story's creation date>)`, worded to
-     cover all four now-split-or-already-split call sites uniformly (`VideoService.failTranscoding`,
-     `AdminVideoService.deleteVideo`, `WebhookEventProcessorScheduler`'s SCANNING branch, and the existing
-     `UploadSessionExpiryScheduler` — the last one already has a catch-and-retry-next-cycle mitigation the
-     other three lack) so a future pass can decide, as a real design question, whether all four need the
-     same retry treatment or whether `release()`'s own idempotency (confirmed at
-     `QuotaService.java:122-137`: a repeat `release()` call on an already-`RELEASED`/`COMMITTED`
-     reservation is a safe no-op) already makes the existing webhook-retry/scheduler-retry machinery
-     sufficient without new code.
-   - Tag D2 (`## Deferred from: code review of skillars-10-4-gdpr-data-tools-account-deletion
-     (2026-06-30)`) → `` `[CLOSED by skillars-deferred-52 AC3]` ``, and correct its own text inline: the
-     item's "unlikely to manifest given role separation" framing is outdated (superseded by
-     `skillars-uat-5`'s self-registration flow) — note this in the closure annotation so a future reader
-     does not re-read the stale framing as still accurate.
+4. **AC4 — Ledger hygiene.** This project's established convention (confirmed against the "Create Story"
+   commits for deferred-38, -40, -41, -42, -45, -48, -49, -50, -51) is: at **story-creation** time, tag an
+   item this story is about to fix as `` `[PICKED UP by skillars-deferred-NN ACn]` `` — appended after the
+   item's existing text/citation, without rewriting the body to describe a fix that hasn't happened yet.
+   `` `[CLOSED by ...]` `` is reserved for items **verified already fixed by separate, completed work**
+   (the "found stale during re-mining" case). Only flip a `PICKED UP` tag to `CLOSED` in the
+   **implementation** commit, once the corresponding code change actually lands — never at story-creation
+   time, even for a story's own not-yet-implemented targets. This was already applied correctly at this
+   story's creation (see `deferred-work.md`'s Def24, the new `AdminVideoService.deleteVideo()` item, and D2,
+   all tagged `[PICKED UP by skillars-deferred-52 ACn]`; RW3's "outside transaction" half is the one
+   exception — it's tagged `CLOSED` because that half genuinely was already fixed by separate, prior work,
+   confirmed during this story's creation). This AC's job during **implementation** is to flip those three
+   `PICKED UP` tags to `CLOSED` once AC1/AC2/AC3 actually land — one commit, matching the code:
+   - Once AC1 ships: flip Def24's `[PICKED UP by skillars-deferred-52 AC1]` → `[CLOSED by
+     skillars-deferred-52 AC1]`, with a one-line closure note describing the actual fix (mirroring this
+     ledger's established `[CLOSED by ... ACn]` annotation convention), keeping the original text below it.
+   - Once AC2 ships: flip the `AdminVideoService.deleteVideo()` item's `[PICKED UP by skillars-deferred-52
+     AC2]` → `[CLOSED by skillars-deferred-52 AC2]` the same way.
+   - Once AC3 ships: flip D2's `[PICKED UP by skillars-deferred-52 AC3]` → `[CLOSED by skillars-deferred-52
+     AC3]`, and correct its own text inline: the item's "unlikely to manifest given role separation" framing
+     is outdated (superseded by `skillars-uat-5`'s self-registration flow) — note this in the closure
+     annotation so a future reader does not re-read the stale framing as still accurate.
+   - **If a partial implementation lands** (e.g. AC1/AC2 ship but AC3 doesn't, or the story is only
+     partially merged), flip only the tags for the ACs that actually shipped — leave the rest at
+     `PICKED UP`. The ledger must never claim a still-unfixed item is `CLOSED`.
+   - RW3's re-filed "if release throws, quota is permanently leaked" residual (already filed at story
+     creation under `## Deferred from: skillars-deferred-52 story creation`, covering all four
+     now-split-or-already-split call sites) needs no further action from this AC — it's an intentionally
+     open design question, not something this story closes.
 
 ## Tasks / Subtasks
 
 - [ ] Task 1: `VideoService.failTranscoding()` transaction split (AC: #1)
   - [ ] 1.1 Remove the method-level `@Transactional`, wrap the read + state transition in
     `transactionTemplate.execute(...)`, move the quota-release block after it returns, per AC1's snippet.
-  - [ ] 1.2 Add the new `VideoServiceTest` coverage described in AC1 (InOrder assertion; regression test
-    proving the state transition and the release are no longer coupled).
+  - [ ] 1.2 Add the new `VideoServiceTest` coverage described in AC1 (the `InOrder` structural check —
+    note this proves call ordering, not the actual rollback bug, per AC1's own caveat).
   - [ ] 1.3 Run `mvn -o test -Dtest=VideoServiceTest` and confirm green.
 - [ ] Task 2: `AdminVideoService.deleteVideo()` transaction split (AC: #2)
   - [ ] 2.1 Refactor `deleteVideo` per AC2's snippet — transaction returns the expired session (or
     `null`), release happens after.
   - [ ] 2.2 Create `AdminVideoServiceTest.java` with the two tests described in AC2.
   - [ ] 2.3 Run `mvn -o test -Dtest=AdminVideoServiceTest` and confirm green. Also run
-    `mvn -o integration-test -Dit.test=AdminVideoIT,VideoPurgedEventIT` to confirm the existing
-    end-to-end `deleteVideo` coverage still passes unchanged (behavior-preserving refactor).
+    `mvn -o integration-test -Dit.test=AdminVideoIT` to confirm the existing end-to-end `deleteVideo`
+    coverage still passes unchanged (behavior-preserving refactor) — `VideoPurgedEventIT` does not exercise
+    `AdminVideoService.deleteVideo()` (it only covers the separate `VideoDeletionService` class), so it
+    provides no verification signal for this change and is not part of this task's gate.
 - [ ] Task 3: `GdprExportService.buildBookings()` id-based dedupe (AC: #3)
   - [ ] 3.1 Drop `buildBookings`'s `private` modifier; replace `.stream().distinct()` with the
     `LinkedHashMap`-based dedupe per AC3's snippet. Verify whether `Collectors` is still used elsewhere
@@ -456,3 +472,4 @@ _To be filled in by the dev agent._
 | Date | Change |
 |---|---|
 | 2026-08-21 | Story created via story-creation process, bundling three items re-mined from an older, never-revisited section of `deferred-work.md` (2026-06-22 through 2026-06-30) after confirming the more recently active section (post-`skillars-deferred-34`) is already thin per `skillars-deferred-49`/`-50`'s own creation notes. All three re-verified against live code at creation time: `VideoService.failTranscoding` (`:391-411`) still carries method-level `@Transactional` with the quota release inside it; `AdminVideoService.deleteVideo` (`:45-80`) was found, independently of any ledger entry, to have the identical anti-pattern; `Booking.java` (`:19-28`) confirmed to have no `equals()`/`hashCode()` override, and `GdprExportService.buildBookings` (`:115-126`) confirmed to call both `findAllByParentIdOrderByRequestedStartTimeAsc` and `findAllByPlayerId` for a `PLAYER`-role caller, which collide for a self-registered player whose `parentId == playerId`. One related item (RW3, a different call site with the same pattern) was found already fixed at an unannotated earlier point; its own narrower residual concern (no retry if `release()` itself throws post-split) is re-filed rather than silently closed or silently ignored. Two other candidate areas surfaced during re-mining but explicitly not picked up: `skillars-deferred-40`'s `NeglectedSkillDetectionService` unchunked-loop item (a deliberate, already-reasoned detective-control decision from that story, not a fresh bug) and `ConfigGuardIT`'s shared-row test-isolation hazard (real but low-value/low-probability, not substantial enough to justify inclusion). |
+| 2026-08-21 | `story-review.md` filed 4 findings against the draft, all fixed: Finding 1/High — `deferred-work.md`'s `Def24`, the new `AdminVideoService.deleteVideo()` item, and `D2` had been tagged `[CLOSED by skillars-deferred-52 ACn]` at story-creation time, before any code fix existed, breaking this project's established convention (confirmed against 9 prior "Create Story" commits) of tagging not-yet-implemented targets `[PICKED UP by ...]` and reserving `[CLOSED by ...]` for separately-already-fixed items — reverted all three to `PICKED UP` in `deferred-work.md`, and rewrote AC4 to instruct flipping them to `CLOSED` only in the implementation commit, per-AC if the story lands partially. Finding 2/Medium — AC1's mandated "regression test" (stub `release()` to throw, assert the state transition still fires) was claimed to prove the fix, but `VideoServiceTest` constructs `VideoService` as a plain object with no Spring transactional-AOP proxy, so the same test passes identically against the pre-fix code — reworded AC1 to keep the test as a structural `InOrder` ordering check only, with an explicit caveat that real rollback coverage would need an IT following `VideoPurgedEventIT`'s pattern, out of this story's scope. Finding 3/Medium — Task 2.3 (and AC2's own text) cited `VideoPurgedEventIT` as existing `deleteVideo` coverage; it tests the unrelated `VideoDeletionService` class only (confirmed by grep) — dropped it from Task 2.3's verification command and corrected AC2's text. Finding 4/Low — AC1/AC2 cited a `completeTranscoding`-test `transactionTemplate` stubbing pattern in `VideoServiceTest` that doesn't exist there (the file has zero `completeTranscoding` tests and uses a single hand-written `@BeforeEach` `TransactionTemplate`, not per-test Mockito stubs) — corrected AC1 to point at the real fixture, and AC2 to cite `ModerationOrchestrationServiceTest.java`'s genuine `@Mock TransactionTemplate` pattern instead. |
