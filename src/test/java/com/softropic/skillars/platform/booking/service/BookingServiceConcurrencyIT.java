@@ -16,6 +16,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.sql.Date;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -256,12 +257,18 @@ class BookingServiceConcurrencyIT extends AbstractIntegrationTest {
                         "UPDATE marketplace.coach_profiles SET status = 'SUSPENDED' WHERE id = ?",
                         coachProfileId);
                     suspensionStagedAndLockHeld.countDown();
-                    // Hold the lock long enough for the booking thread to pass its unlocked read
-                    // and block on findByIdForUpdate; the repository's lock timeout is 5s.
+                    // Hold the lock until the booking thread is genuinely blocked on
+                    // findByIdForUpdate, not for a fixed guessed duration.
                     try {
-                        Thread.sleep(1500);
+                        awaitAnotherSessionBlockedOnCoachProfileLock(Duration.ofSeconds(10));
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
+                        // Do not silently fall through to commit: an interrupt here means the block was
+                        // never confirmed, so releasing the lock now would reintroduce the exact
+                        // non-determinism this helper exists to eliminate.
+                        throw new AssertionError("Interrupted before observing the booking thread "
+                            + "genuinely blocked on the coach_profiles lock — results below are not "
+                            + "trustworthy.", e);
                     }
                     return null;
                 });
@@ -336,9 +343,15 @@ class BookingServiceConcurrencyIT extends AbstractIntegrationTest {
                         "UPDATE marketplace.coach_profiles SET status = 'SUSPENDED' WHERE id = ?", coachProfileId);
                     suspensionStagedAndLockHeld.countDown();
                     try {
-                        Thread.sleep(1500);
+                        awaitAnotherSessionBlockedOnCoachProfileLock(Duration.ofSeconds(10));
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
+                        // Do not silently fall through to commit: an interrupt here means the block was
+                        // never confirmed, so releasing the lock now would reintroduce the exact
+                        // non-determinism this helper exists to eliminate.
+                        throw new AssertionError("Interrupted before observing the accepting thread "
+                            + "genuinely blocked on the coach_profiles lock — results below are not "
+                            + "trustworthy.", e);
                     }
                     return null;
                 });
@@ -375,6 +388,38 @@ class BookingServiceConcurrencyIT extends AbstractIntegrationTest {
             .as("a booking accepted here would rest in PAYMENT_PENDING, which suspendCoach's "
                 + "REQUESTED-only cancellation sweep never sees")
             .isEqualTo("REQUESTED");
+    }
+
+    /**
+     * Polls pg_locks until another backend is observed waiting (granted = false) on this session's own
+     * current transaction id, or fails the test if that never happens within the timeout. Deterministic
+     * replacement for a fixed-duration sleep guess — a {@code SELECT ... FOR UPDATE} blocked on a row
+     * this transaction holds does not take a distinct row-level entry in pg_locks; Postgres implements
+     * it as the blocked backend waiting on THIS transaction's xid to complete (locktype = 'transactionid'),
+     * which is exactly what this query targets. pg_locks is a system view reflecting all backends
+     * instance-wide, so polling it from inside this thread's own open transaction (via the same
+     * jdbcTemplate bean already used for the staging UPDATE two lines above) is safe: it is not subject
+     * to this transaction's MVCC row-data snapshot. (An earlier version of this helper matched on
+     * pg_stat_activity.query ILIKE '%coach_profiles%' instead — that field does not reliably reflect the
+     * blocked statement's text while the backend is parked waiting, so it never matched; pg_locks'
+     * blocked-on-our-xid check is the correct, textbook mechanism and has no such ambiguity.)
+     */
+    private void awaitAnotherSessionBlockedOnCoachProfileLock(Duration timeout) throws InterruptedException {
+        Instant deadline = Instant.now().plus(timeout);
+        while (Instant.now().isBefore(deadline)) {
+            Integer blockedCount = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM pg_locks " +
+                "WHERE locktype = 'transactionid' AND granted = false " +
+                "AND pid != pg_backend_pid() AND transactionid = pg_current_xact_id()::text::xid",
+                Integer.class);
+            if (blockedCount != null && blockedCount > 0) {
+                return;
+            }
+            Thread.sleep(50);
+        }
+        throw new AssertionError("No other session was observed blocked on the coach_profiles row lock "
+            + "within " + timeout + " — this test's staging assumption failed, results below are not "
+            + "trustworthy.");
     }
 
     private Booking seedRequestedBooking(long parentId, long playerId, Instant start, Instant end) {

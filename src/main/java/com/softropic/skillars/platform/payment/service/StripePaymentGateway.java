@@ -45,7 +45,7 @@ public class StripePaymentGateway implements PaymentGateway {
 
         PaymentIntentCreateParams.Builder builder = PaymentIntentCreateParams.builder()
             .setAmount(amountCents)
-            .setCurrency("eur")
+            .setCurrency(configService.getString("platform.payment.currency"))
             .setConfirm(true)
             .setTransferData(PaymentIntentCreateParams.TransferData.builder()
                 .setDestination(coachStripeAccountId)

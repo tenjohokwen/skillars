@@ -1,141 +1,111 @@
-# Story Review: skillars-deferred-52
+# Story Review: skillars-deferred-53
 
-Reviewed: `skillars-deferred-52-video-quota-release-transaction-isolation-and-gdpr-export-booking-dedup.md`
+Reviewed: `skillars-deferred-53-concurrency-race-test-determinism-and-hardcoded-currency-configuration.md`
 (Status at review time: `ready-for-dev`, Dev Agent Record empty, all task checkboxes unchecked.)
 
 ## Method
 
-Every factual claim in the story (line numbers, "confirmed by grep", "no test exists", cited patterns) was
-re-verified against the live repository rather than trusted from the story text — reading
-`VideoService.java`, `AdminVideoService.java`, `GdprExportService.java`, `Booking.java`,
-`QuotaService.java`, `UploadSessionExpiryScheduler.java`, `WebhookEventProcessorScheduler.java`,
-`VideoServiceTest.java`, `VideoPurgedEventIT.java`, `AdminVideoIT.java`, `GdprExportIT.java`, and the
-relevant `deferred-work.md` sections, plus `git log`/`git show` across ~8 prior "Create Story" commits to
-establish this project's actual ledger-tagging convention. The story's core technical premises for AC1,
-AC2, and AC3 (the transaction-boundary bug in both services, the reference-identity `.distinct()` bug, the
-line numbers, the "no existing test file" claims) all check out exactly as described — **no false positives
-are reported below for those**. The findings that follow are real gaps, not restatements of the story's own
-already-correct analysis.
+Every factual claim in the story was re-verified against the live repository rather than trusted from the
+story text: read `BookingServiceConcurrencyIT.java` in full, `BookingService.java`'s `createBookingRequest`
+and `acceptBooking` (including every query issued before the coach-row lock, to check for an earlier
+lock-wait whose SQL text could false-trigger the new polling helper), `CoachProfileRepository.java`,
+`CoachProfile.java`'s `@Table` mapping, `StripePaymentGateway.java`, `StripePaymentGatewayTest.java` in
+full, `ConfigService.java`, every `platform_config`-seeding migration (`V20`, `V90`–`V93`) to check the
+migration-style claim, `SharedContainers.java` and `AbstractIntegrationTest.java` (DB role, container
+topology), `TestConfig.java` and every payment-module IT that references `PaymentGateway`
+(`CaptureReservationIT`, `PaymentWebhookIdempotencyIT`, `SessionPackPaymentResourceIT`,
+`StripeOnboardingResourceIT`) to check whether any of them actually exercise the real
+`StripePaymentGateway` bean, `pom.xml`'s surefire/failsafe configuration, and `deferred-work.md` at all
+three cited line numbers plus the new AC2 entry. AC1/AC2's core race-test analysis, AC3's currency-hardcoding
+analysis, and AC4's ledger-tagging state all check out exactly as described — **no false positives are
+reported below for those premises.** The findings below are real gaps in the story's execution detail, not
+restatements of the story's own already-correct analysis.
 
 ---
 
-## Finding 1 (High) — AC4's ledger edits are already committed with the wrong status tag, before any code fix exists
+## Finding 1 (Medium) — AC3's new migration omits `ON CONFLICT (key) DO NOTHING`, contradicting the story's own instruction to mirror V93's style
 
-**What's wrong:** AC4 instructs tagging `Def24`, the new `AdminVideoService.deleteVideo()` item, and `D2` as
-`` `[CLOSED by skillars-deferred-52 ACn]` ``. This has **already been applied to `deferred-work.md` and
-committed to master** in `3a44618` ("Create Story Deferred-52..."), i.e. at story-creation time, before any
-implementation. But the actual code these items describe is **still unfixed**:
-`VideoService.failTranscoding()` still carries method-level `@Transactional` with the release call inside it
-(`VideoService.java:391-411`), `AdminVideoService.deleteVideo()` still releases quota inside the same
-`transactionTemplate.execute(...)` block as the `DELETED` write (`AdminVideoService.java:58-73`), and
-`GdprExportService.buildBookings()` still ends in `.stream().distinct()` and is still `private`
-(`GdprExportService.java:115-126`). The story's own Status (`ready-for-dev`), empty Dev Agent Record, and
-all-unchecked task list confirm no implementation has happened.
+**What's wrong:** AC3's SQL snippet for `V99__payment_currency_config.sql` is a bare `INSERT ... VALUES (604, ...)` with no conflict clause. But every `platform_config` seed migration since this pattern was established — `V90`, `V91`, and `V93` (the exact migration this story cites as "the most recent prior seed" to match "column list/style") — ends in `ON CONFLICT (key) DO NOTHING;`. `V93`'s own migration comment spells out why this is not decorative:
 
-**Why this matters:** this project's own established convention — confirmed by inspecting the "Create
-Story" commits for deferred-38, -40, -41, -42, -45, -48, -49, -50, and -51 — is to tag items a new story is
-about to fix (but hasn't yet) as `` [PICKED UP by skillars-deferred-NN ACn] ``, and reserve
-`` [CLOSED by ...] `` for items **verified already fixed** by separate, completed work (the "found stale
-during re-mining" case). E.g. `c8a958a` (Create Story Deferred-42) tags its own not-yet-implemented targets
-`[PICKED UP by skillars-deferred-42 AC1/AC2/AC3]`, and those tags are still `PICKED UP` — never rewritten
-to `CLOSED` — even after the implementation commit (`8b22c1e`) landed. Story-52's AC4 breaks this
-convention for its own three items (Def24→AC1, the new item→AC2, D2→AC3) by writing `CLOSED` at creation
-time instead. (The fourth AC4 edit — RW3's "outside transaction" half — correctly uses `CLOSED`, because
-that half genuinely was already fixed by separate, prior work; that one is not in question here.)
+> "The id MUST be free. `main.platform_config.id` is PRIMARY KEY with no sequence (V20:8) — ids are
+> hand-assigned — and the ON CONFLICT target below is `key`, a DIFFERENT unique constraint
+> (`uq_platform_config_key`, V20:9). An id collision therefore raises a PK violation the ON CONFLICT
+> (key) clause never sees, failing Flyway on every database that has run V91."
 
-**Concrete risk:** if this story stalls, is reprioritized, or only partially implemented (e.g. AC1/AC2 land
-but AC3 doesn't), the ledger will permanently and incorrectly report a real, still-present bug as fixed.
-This project's own workflow explicitly relies on the ledger being trustworthy for exactly this purpose —
-`skillars-deferred-49`'s and `-50`'s own creation notes cite prior re-mining passes confirming sections are
-"thin" precisely by trusting `CLOSED`/`STALE` tags rather than re-reading every line. A future re-mining
-pass will skip these three items forever, believing them done.
+AC3's instruction says to match V93's "exact column list/style," and does copy the column list and the
+`NOW()` convention, but drops the one clause V93 itself explains is load-bearing for migration safety.
 
-**Recommendation:** change all three of this story's own tags from `CLOSED` to `PICKED UP` in
-`deferred-work.md` right now (matching the established convention), and correct AC4's instructions
-accordingly so the tags only flip to `CLOSED` once the corresponding code fix actually lands (in the
-implementation commit, per precedent).
+**Why it matters:** this is a real, verified deviation from an established, explicitly-documented project
+convention, not a stylistic nit — every other seed of this table in the last several migrations does this on
+purpose. Following AC3's snippet literally reintroduces the exact failure mode V93 was written to guard
+against for `platform.payment.currency`'s row.
+
+**Recommendation:** append `ON CONFLICT (key) DO NOTHING;` to AC3's migration snippet, matching `V90`/
+`V91`/`V93` exactly.
 
 ---
 
-## Finding 2 (Medium) — AC1's mandated "regression test" cannot distinguish fixed from buggy code
+## Finding 2 (Medium) — Task 3.4's IT-level "no wiring regression" check names an IT that, like every other payment-module IT, does not exercise the real `StripePaymentGateway`
 
-**What's wrong:** AC1 requires a test that stubs `quotaProvider.release(...)` to throw and asserts
-`videoLifecycleService.transitionOperationalState(...)` was still invoked with `FAILED`, claiming "the
-pre-fix code could never prove this." That claim is incorrect. `VideoServiceTest` constructs `VideoService`
-as a plain object (`service = new VideoService(...)`, `VideoServiceTest.java:66-68`) with no Spring
-transactional AOP proxy in play — so `@Transactional`'s rollback semantics are never exercised by this test
-class regardless of whether the annotation is present on the method. In **both** the current buggy code and
-the proposed fix, `transitionOperationalState(...)` is called strictly before `quotaProvider.release(...)`
-in program order (`VideoService.java:399` then `:406-407` today; same relative order after the AC1
-refactor). Run the exact same test — unmodified — against today's pre-fix `failTranscoding()`, and
-`verify(videoLifecycleService).transitionOperationalState(videoId, OperationalState.FAILED)` passes
-identically, because Mockito verification only checks that a call happened, not whether a surrounding
-transaction would have rolled it back.
+**What's wrong:** Task 3.4 says: "Run `mvn -o integration-test -Dit.test=PaymentWebhookIdempotencyIT` (or
+whichever payment-module IT actually exercises `chargeAndCapture` end to end — verify which one during
+implementation rather than assuming) to confirm no wiring regression from the new config key." The premise —
+that *some* IT exercises the real `StripePaymentGateway.chargeAndCapture()` — does not hold anywhere in this
+codebase:
 
-**Why it matters:** this test provides no actual regression protection for the bug the story exists to fix
-(a real DB-level rollback of the FAILED transition). This project does have an established way to test real
-rollback behavior — `VideoPurgedEventIT.java` wraps a call in
-`transactionTemplate.execute(status -> { ...; status.setRollbackOnly(); return null; })` inside a genuine
-Spring IT context with a real transaction manager — but that requires an integration test, which AC1 doesn't
-attempt (AC2 explicitly rules out the equivalent IT approach as impractical for the same reason; AC1 doesn't
-raise the question at all).
+- `TestConfig.java:94-98` declares `@Primary @Bean PaymentGateway paymentGateway() { return new
+  StubPaymentGateway(); }`. Every `*IT` class extends `AbstractIntegrationTest`, which `@Import`s
+  `TestConfig` — so `StubPaymentGateway` is the `PaymentGateway` bean everywhere in the IT suite by
+  construction; the real `@Service StripePaymentGateway` bean exists in the context but is never the one
+  autowired behind the `PaymentGateway` interface.
+- `PaymentWebhookIdempotencyIT` itself — the story's own named candidate — confirms this in its own code
+  comment: `"First event: Case C (zero credit, full Stripe charge via StubPaymentGateway)"`. It never touches
+  the real class.
+- `CaptureReservationIT` (`BasePaymentIT`'s most payment-focused subclass) uses `@MockitoSpyBean
+  PaymentGateway paymentGateway` — a spy wrapping the same `StubPaymentGateway` `@Primary` bean, stubbed via
+  `doReturn(...).when(paymentGateway).chargeAndCapture(...)`. Its own Javadoc even name-checks
+  `StripePaymentGateway` while testing the interface, not the implementation.
+- `SessionPackPaymentResourceIT` fully replaces `PaymentGateway` with `@MockitoBean PaymentGateway
+  paymentGateway` (a pure mock).
+- A repo-wide grep for any test wiring the real bean (`new StripePaymentGateway`, a
+  `StripePaymentGateway`-typed field, or a `@Qualifier` selecting it) returns zero hits outside the pure
+  Mockito unit test `StripePaymentGatewayTest`.
 
-**Recommendation:** keep the test (it's still useful as a documentation/structural check that the two calls
-are sequenced correctly), but drop the "proves the fix" / "pre-fix code could never prove this" framing from
-AC1 — it overclaims what a mock-based unit test can show. If real regression coverage of the rollback
-behavior is wanted, it needs an IT-level test following the `VideoPurgedEventIT` pattern (inject a quota
-failure and assert the video is *not* left in `PROCESSING`/still-committed `FAILED` after a real transaction
-boundary) — likely out of scope for a "decision-light" bundled story, in which case say so explicitly rather
-than asserting the unit test already covers it.
+**Why it matters:** no integration test in this suite can currently prove "no wiring regression" for the
+`.setCurrency(configService.getString(...))` change, because none of them route through the code that would
+call it. The task's parenthetical hedge ("verify which one... rather than assuming") correctly anticipates
+that the named IT might be wrong, but doesn't anticipate that *no* IT is right — a dev could spend time
+hunting for a nonexistent target, or worse, run `PaymentWebhookIdempotencyIT`/`CaptureReservationIT`, see
+green, and believe the currency wiring was IT-verified when it was not (both exercise the stub).
 
----
-
-## Finding 3 (Medium) — Task 2.3 names the wrong IT as end-to-end coverage for AC2's change
-
-**What's wrong:** Task 2.3 says: "Also run `mvn -o integration-test -Dit.test=AdminVideoIT,VideoPurgedEventIT`
-to confirm the existing end-to-end `deleteVideo` coverage still passes unchanged." `VideoPurgedEventIT.java`
-does **not** exercise `AdminVideoService.deleteVideo()` at all — every test in that file calls
-`videoDeletionService.deleteVideo(video.getId(), LifecycleTrigger.SYSTEM, true)` (`:55`, `:67`), where
-`videoDeletionService` is `VideoDeletionService`, a completely separate class (confirmed: grep for
-`AdminVideoService` inside `VideoDeletionService.java` returns zero hits — it has its own
-`VideoRepository`/`VideoDeletionOutboxRepository` fields and no dependency on `AdminVideoService`
-whatsoever). Only `AdminVideoIT.java` actually calls `adminVideoService.deleteVideo(video.getId())`.
-
-**Why it matters:** running `VideoPurgedEventIT` after the AC2 refactor will pass regardless of whether the
-refactor is correct, since it never touches the changed code path — it provides zero verification signal for
-this story's change, contrary to what Task 2.3 claims. A dev following the task list as written would get a
-false sense that two ITs validated the change when only one did.
-
-**Recommendation:** drop `VideoPurgedEventIT` from Task 2.3's verification command (or, if there's a reason
-to also confirm `VideoDeletionService`'s unrelated deletion path is unaffected, say so explicitly rather than
-implying it covers `AdminVideoService.deleteVideo()`).
+**Recommendation:** drop the IT-level verification instruction, or replace it with an explicit statement
+that no existing IT exercises the real gateway and that `StripePaymentGatewayTest`'s AC3 unit test (task 3.3)
+is the only verification this change gets — which is an accurate and sufficient description of what AC3
+actually delivers, just not what Task 3.4 currently claims.
 
 ---
 
-## Finding 4 (Low) — AC1/AC2's cited "existing test pattern" doesn't exist where claimed
+## Finding 3 (Low-Medium) — AC1's own "run it 3-5 times" instruction names the wrong Maven goal, contradicting the story's own IT-execution gotcha and Task 1.3
 
-**What's wrong:** AC1 says to add tests "mirroring however this file's existing `completeTranscoding` tests
-already stub `transactionTemplate`" — but `VideoServiceTest.java` has **zero** tests for `completeTranscoding`
-(confirmed by grep across the whole test tree — the only references to `completeTranscoding` in tests are
-`verify(videoService).completeTranscoding(...)` mock-verification calls in an unrelated test file,
-`ModerationOrchestrationServiceTest.java`, not a test of `VideoService` itself). `VideoServiceTest`'s actual
-`transactionTemplate` handling (`:58-69`) is not a per-test Mockito stub at all — it's a single hand-written
-anonymous `TransactionTemplate` subclass built once in `@BeforeEach` that always invokes the callback,
-shared by every test in the file. This fixture is sufficient for AC1's new tests as-is (no extra "mocking"
-step is actually needed), so the practical impact is low — but the citation points a dev toward a pattern
-that isn't there.
+**What's wrong:** AC1's Test Coverage paragraph says: "this file has no `@RepeatedTest` convention to reuse;
+a manual repeated `mvn -o test` invocation is sufficient, no new annotation needed." But
+`BookingServiceConcurrencyIT` is an `*IT` class, and this story's own Dev Notes state the opposite two
+sections later: "`*IT` classes run under `maven-failsafe-plugin`, bound to `integration-test`/`verify`,
+**not** `mvn test`. Use `mvn -o integration-test -Dit.test=<ClassName>`." Task 1.3, two paragraphs above AC1's
+prose, already gets this right (`mvn -o integration-test -Dit.test=BookingServiceConcurrencyIT`).
+`pom.xml`'s `maven-surefire-plugin` block has no custom `<includes>`, so default Surefire include patterns
+apply (`**/*Test.java` and similar) — `*IT.java` files are excluded by convention and picked up only by
+Failsafe's `integration-test`/`verify` goals.
 
-AC2 has the same issue one level worse: it says to mirror "`VideoServiceTest`'s
-`transactionTemplate.execute(any())`-invokes-the-real-callback stubbing style" while also specifying
-`@InjectMocks AdminVideoService` + `@Mock` for every field (implying a genuine Mockito-mocked
-`TransactionTemplate`, stubbed per test) — a style `VideoServiceTest` does not use anywhere. That style
-*does* exist and is genuinely reusable in this codebase (e.g. `ModerationOrchestrationServiceTest.java:57,78`:
-`@Mock TransactionTemplate transactionTemplate;` + `lenient().when(transactionTemplate.execute(any())).thenAnswer(...)`),
-just under a different file than the one cited.
+**Why it matters:** `mvn -o test`, run as literally instructed, will not execute `BookingServiceConcurrencyIT`
+at all and will still report `BUILD SUCCESS`. A dev following AC1's literal repeated-run instruction to
+"build confidence the flakiness class is actually closed" could run this five times, see green five times,
+and have verified nothing — the one check this AC exists to motivate.
 
-**Recommendation:** for AC1, drop the "completeTranscoding tests already stub transactionTemplate" claim —
-just say to reuse the existing `@BeforeEach` `txTemplate` fixture for the new tests. For AC2, cite
-`ModerationOrchestrationServiceTest.java` (or similar) as the pattern to mirror instead of `VideoServiceTest`.
+**Recommendation:** fix AC1's Test Coverage paragraph to say `mvn -o integration-test
+-Dit.test=BookingServiceConcurrencyIT#createBookingRequest_coachSuspendedAfterUnlockedRead_isRejectedWithCoachUnavailable`
+(or the class-level form), matching Task 1.3 and the Dev Notes gotcha it otherwise correctly states
+elsewhere in the same story.
 
 ---
 
@@ -143,12 +113,21 @@ just say to reuse the existing `@BeforeEach` `txTemplate` fixture for the new te
 
 | # | Severity | Area | One-line issue |
 |---|----------|------|-----------------|
-| 1 | High | AC4 / ledger | `CLOSED` tags already committed for unimplemented fixes; should be `PICKED UP` per established convention |
-| 2 | Medium | AC1 test plan | Mandated "regression test" passes identically against the pre-fix code — proves nothing about the actual bug |
-| 3 | Medium | Task 2.3 | `VideoPurgedEventIT` cited as `deleteVideo` coverage but tests an unrelated `VideoDeletionService` method |
-| 4 | Low | AC1/AC2 test plan | Cited "existing" test-stubbing patterns don't exist in the named file (real pattern exists, just elsewhere / doesn't need inventing) |
+| 1 | Medium | AC3 / migration | `V99` snippet omits `ON CONFLICT (key) DO NOTHING`, breaking the exact V93 convention AC3 says to mirror |
+| 2 | Medium | Task 3.4 | No IT in the repo exercises the real `StripePaymentGateway` — the named/implied "end to end" IT check is unfindable, not just mis-named |
+| 3 | Low-Medium | AC1 test plan | "`mvn -o test`" for a repeated manual run of an `*IT` class contradicts the story's own IT-execution gotcha and Task 1.3's correct command |
 
-AC1/AC2/AC3's core bug analysis, all cited file:line references, the "no existing test file"/"zero tests"
-claims, the `Collectors` import caveat, the `Booking`/`QuotaService`/`UploadSessionExpiryScheduler`/
-`WebhookEventProcessorScheduler` technical claims, and the "Deliberately not picked up" scoping were all
-independently re-verified and are accurate — no changes needed there.
+AC1/AC2's race-condition analysis (confirmed: `findByIdForUpdate` is the first and only lock-acquiring call
+in both `createBookingRequest` and `acceptBooking` before the coach row lock is released, so the new
+`pg_stat_activity`-polling helper cannot false-trigger on an earlier, unrelated lock wait), the
+`pg_stat_activity` mechanism itself (confirmed safe against transaction MVCC snapshots, and confirmed both
+threads share the same Postgres superuser role — `postgres`, per `SharedContainers.java` — so the restricted
+per-role visibility Postgres applies to `pg_stat_activity.query`/`wait_event_type` for other roles' backends
+never applies here), the `jakarta.persistence.lock.timeout`-has-no-effect context cited for why the booking
+thread blocks indefinitely, AC3's currency-hardcoding analysis (`StripePaymentGateway.java:48` confirmed the
+only `.setCurrency(...)` call site in the file), the migration id availability (`604` confirmed free; `603`
+confirmed the current max), `StripePaymentGatewayTest`'s `stubCoachAndCommission()` mandatory-stub reasoning
+(confirmed: all four existing `chargeAndCapture` tests reach the `setCurrency` line unconditionally before
+any early-exception path, so the new stub cannot introduce an `UnnecessaryStubbingException`), and AC4's
+ledger-tagging state (`deferred-work.md:1107`, `:1193`, and the new `:1691` entry all confirmed tagged
+exactly as the story claims) were all independently re-verified and are accurate — no changes needed there.

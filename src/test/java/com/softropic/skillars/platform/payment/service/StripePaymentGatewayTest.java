@@ -58,6 +58,7 @@ class StripePaymentGatewayTest {
         account.setChargesEnabled(true);
         when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
         when(configService.getString("platform.commission.rate")).thenReturn("0.10");
+        when(configService.getString("platform.payment.currency")).thenReturn("eur");
     }
 
     private void stubStripeCustomer(Long parentId, String stripeCustomerId) {
@@ -81,6 +82,26 @@ class StripePaymentGatewayTest {
         org.mockito.Mockito.verify(stripeClient)
             .createPaymentIntent(any(PaymentIntentCreateParams.class), keyCaptor.capture());
         assertThat(keyCaptor.getValue()).startsWith("pi-" + PACK_TIER_ID + "-1001-");
+    }
+
+    @Test
+    void chargeAndCapture_passesConfiguredCurrencyToStripe() throws StripeException {
+        stubCoachAndCommission();
+        stubStripeCustomer(1001L, "cus_1001");
+        // Deliberately NOT "eur" — that was the old hardcoded literal. Stubbing a distinctive value
+        // proves the currency is actually read from config rather than still hardcoded: a reversion to
+        // .setCurrency("eur") would fail this assertion instead of coincidentally passing it.
+        when(configService.getString("platform.payment.currency")).thenReturn("usd");
+        when(stripeClient.createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class)))
+            .thenReturn(mockIntent("pi_1"));
+
+        stripePaymentGateway.chargeAndCapture(PACK_TIER_ID, 1001L, COACH_ID, AMOUNT);
+
+        ArgumentCaptor<PaymentIntentCreateParams> paramsCaptor =
+            ArgumentCaptor.forClass(PaymentIntentCreateParams.class);
+        org.mockito.Mockito.verify(stripeClient)
+            .createPaymentIntent(paramsCaptor.capture(), any(String.class));
+        assertThat(paramsCaptor.getValue().getCurrency()).isEqualTo("usd");
     }
 
     @Test
