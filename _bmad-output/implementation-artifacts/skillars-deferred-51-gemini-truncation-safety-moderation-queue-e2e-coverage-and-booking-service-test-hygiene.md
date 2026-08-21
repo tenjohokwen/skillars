@@ -109,7 +109,7 @@ test change is needed; D6 is stale.
      with:
      ```java
      int cutoff = maxInputChars;
-     if (content.length() > cutoff && Character.isHighSurrogate(content.charAt(cutoff - 1))) {
+     if (cutoff > 0 && content.length() > cutoff && Character.isHighSurrogate(content.charAt(cutoff - 1))) {
          // A char-count cutoff can land between a surrogate pair's two halves — the same class of
          // bug AdminQueueService.preview() already fixes for its own content-preview truncation
          // (deferred-work.md, "code review of skillars-deferred-16" D5). Back off by one so the
@@ -121,6 +121,14 @@ test change is needed; D6 is stale.
          ? content.substring(0, cutoff)
          : content;
      ```
+     **`cutoff > 0` guard — story-review.md Finding 2 (Medium):** without it, a misconfigured
+     `max-input-chars` of `0` (or negative) combined with non-blank `content` reaches
+     `content.charAt(cutoff - 1)` → `charAt(-1)` → uncaught `StringIndexOutOfBoundsException`,
+     propagating out of `moderate()` *before* the existing `try/catch` around the Gemini call (a
+     regression versus today's code, where `substring(0, 0)` just returns `""`). No profile in this
+     repo currently sets `max-input-chars` to `0` (`application.yaml:277,282` = 4000/2000,
+     `application-test.yaml:104` = 100 — checked directly), so this isn't reachable today, but the fix
+     is already touching this exact line and the guard is one clause.
      `maxInputChars` is a UTF-16-char-count config value (`platform.messaging.moderation.gemini.max-input-chars`,
      default 4000), not a code-point count, so this mirrors `AdminQueueService.preview()`'s
      *intent* (never split a pair) using a shape adapted to that difference — `preview()`'s own
@@ -134,13 +142,36 @@ test change is needed; D6 is stale.
      `src/test/java/com/softropic/skillars/platform/messaging/service/GeminiModerationServiceTest.java`:
      add `contentWithSurrogatePairAtTruncationBoundary_dropsWholePairRatherThanSplittingIt`, mirroring the
      existing `contentExceedsMaxInputChars_truncatedBeforeSending` test's shape (stub `geminiClient.evaluate`
-     to return `SAFE`, `maxInputChars` is already set to `100` by this class's `setUp()`). Construct
-     `String content = "x".repeat(99) + "😀" + "x".repeat(10)` — `content.length()` is 111 (99 + 2 + 10), so
-     truncation triggers, and the emoji's high surrogate sits at index 99 (`maxInputChars - 1`), exactly the
-     boundary a raw `substring(0, 100)` would split. Capture the prompt sent to `geminiClient.evaluate` via
-     `ArgumentCaptor<String>` and assert: it does not end in an unpaired high surrogate
-     (`Character.isHighSurrogate(sentPrompt.charAt(sentPrompt.length() - 1))` is `false`), and it does not
-     contain `"😀"` at all (the whole incomplete pair was dropped, not half-kept). Do not modify
+     to return `SAFE`, `maxInputChars` is already set to `100` by this class's `setUp()`).
+     **Assert via exact `verify(geminiClient).evaluate(expectedPrompt)`, not a last-character/`contains`
+     check — story-review.md Finding 1 (High).** The story's original draft asserted
+     `!Character.isHighSurrogate(sentPrompt.charAt(sentPrompt.length() - 1))` and
+     `!sentPrompt.contains("😀")`; both pass identically whether or not the fix is applied, because the
+     prompt's last character is always the fixed literal suffix's `-`, and the *unpatched* code
+     (`substring(0, 100)`) already drops the emoji's low surrogate as collateral — so `"😀"` (the full
+     pair) is absent either way, and neither assertion pins the dangling high surrogate the bug
+     actually leaves behind. Use this shape instead, built the same way
+     `contentExceedsMaxInputChars_truncatedBeforeSending` already does:
+     ```java
+     @Test
+     void contentWithSurrogatePairAtTruncationBoundary_dropsWholePairRatherThanSplittingIt() {
+         when(geminiClient.evaluate(any())).thenReturn(ModerationVerdict.SAFE);
+         String content = "x".repeat(99) + "😀" + "x".repeat(10); // 99 + 2 + 10 = 111 chars
+
+         service.moderate(1L, content);
+
+         String expectedTruncated = "x".repeat(99); // whole pair dropped, not split
+         String expectedPrompt = "Test prompt:\n"
+             + "\n\n---BEGIN USER CONTENT---\n"
+             + expectedTruncated
+             + "\n---END USER CONTENT---";
+         verify(geminiClient).evaluate(expectedPrompt);
+     }
+     ```
+     `content.charAt(99)` (index `maxInputChars - 1`) is the emoji's high surrogate, exactly the
+     boundary a raw `substring(0, 100)` would split — on unpatched code this test's expected value
+     would need to be `"x".repeat(99) + "\uD83D"` instead, so this pins the exact surviving content
+     and fails on the unpatched code, unlike the last-character/`contains` checks. Do not modify
      `contentExceedsMaxInputChars_truncatedBeforeSending` or any other existing test — none of them touch a
      surrogate pair, so their expected output is unchanged by this fix.
 
@@ -298,8 +329,11 @@ test change is needed; D6 is stale.
     positional constructor call in `setUp()`.
   - [ ] 3.2 Run the full `BookingServiceTest` suite and confirm every existing test still passes unchanged —
     this is a pure test-harness refactor, no test behavior should change.
-- [ ] Task 4: Ledger hygiene (AC: #4) — apply the three `[PICKED UP]` tags (four bullet locations) specified
-  above.
+- [ ] Task 4: Ledger hygiene (AC: #4) — verify the three `[PICKED UP]` tags (four bullet locations)
+  specified above. **Already done — story-review.md Finding 3 (Informational).** All four tags were
+  already applied to `deferred-work.md` by this story's own creation commit (`fdadd6e`); no `Edit` is
+  needed, only a re-check that the tags are present (matches this project's established pattern of
+  applying ledger tags at story-creation time, e.g. `skillars-deferred-41`).
 
 ## Dev Notes
 
@@ -374,3 +408,4 @@ test change is needed; D6 is stale.
 | Date | Change |
 |---|---|
 | 2026-08-21 | Story created via story-creation process, bundling two items filed by `skillars-deferred-16`'s code review (unpicked for 46 story-cycles) with one item filed twice by `skillars-uat-3`'s code review — per explicit instruction not to create another small story. All three re-verified against live code at creation time rather than trusted from ledger text: `GeminiModerationService.java:43-45` still truncates on a raw char index with no surrogate-pair guard (read directly, confirmed against the already-fixed sibling `AdminQueueService.preview()`); `AdminQueueIT`/`MessageApproveIT`/`MessageBlockIT` still hand-insert their `MODERATION_UNRESOLVED` alert row via `jdbcTemplate` rather than driving it through a real sweep (grepped for `INSERT INTO admin.admin_alerts` across all four messaging/admin IT files — no sweep-driven path found); `BookingServiceTest.java:100-107` still hand-lists all 15 constructor arguments, confirmed against the sibling `ExpiredPackBookingValidationTest.java`'s already-shipped `@InjectMocks` pattern. One sibling item from the same `skillars-deferred-16` review section (D6, `SoftDeleteIT`'s concurrency-test weakness) was found already fixed by intervening work and is documented as stale in "Why this story exists" rather than picked up — the current `SoftDeleteIT.java:245-289` already drives real concurrent HTTP calls and asserts on independently-observed outcomes, not a tautological primary-key count. Two other items from the same `skillars-deferred-16` section (D3, D4) and the `jakarta.persistence.lock.timeout`/booking-locking-strategy items already excluded by `skillars-deferred-49`/`-50` were deliberately not picked up — all need a design/product decision this bundled small-fix story should not make ad hoc, per the reasoning recorded in "Why this story exists" above. |
+| 2026-08-21 | `story-review.md` applied: 3 findings, all addressed before dev starts. Finding 1/High: AC1's prescribed unit test asserted on the prompt's last character and a `contains("😀")` check, both of which pass identically on unpatched and patched code (the unpatched `substring(0, 100)` already drops the emoji's low surrogate as collateral, so the full pair is absent either way, and the prompt's last character is always the fixed literal suffix) — replaced with an exact `verify(geminiClient).evaluate(expectedPrompt)` pin, mirroring the file's own existing `contentExceedsMaxInputChars_truncatedBeforeSending` pattern, which does fail on the unpatched code. Finding 2/Medium: AC1's code sample threw `StringIndexOutOfBoundsException` for a `maxInputChars <= 0` misconfiguration (`charAt(-1)`), uncaught by the existing try/catch — not reachable with any current profile's config, but fixed with a one-clause `cutoff > 0 &&` guard since the change was already touching the line. Finding 3/Informational: AC4/Task 4's four ledger tags were already applied by this story's own creation commit; Task 4 reworded to "verify" rather than "apply," matching this project's established pattern of tagging at story-creation time. No other issues found — story-review.md's "Everything else checked" section independently confirmed AC1's core algorithm, AC2's full sweep→queue→approve chain and fixture correctness, and AC3's constructor/spy mechanics all accurate against the live repo. |
