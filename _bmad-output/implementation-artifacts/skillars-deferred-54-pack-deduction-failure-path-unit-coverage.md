@@ -1,6 +1,6 @@
 # Story Deferred-54: Pack Deduction Failure Path Unit Coverage
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -124,16 +124,29 @@ gap as its own story rather than skip the cycle or resolve a design-decision ite
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Pack-deduction-failure unit test (AC: #1)
-  - [ ] 1.1 Add the `import static org.mockito.Mockito.doThrow;` static import to `CreditRoutingTest.java`.
-  - [ ] 1.2 Add `packBasedBooking_deductSessionFails_callsPersistFailureWithZeroReversal` per AC1's snippet,
+- [x] Task 1: Pack-deduction-failure unit test (AC: #1)
+  - [x] 1.1 Add the `import static org.mockito.Mockito.doThrow;` static import to `CreditRoutingTest.java`.
+  - [x] 1.2 Add `packBasedBooking_deductSessionFails_callsPersistFailureWithZeroReversal` per AC1's snippet,
     placed immediately after `packBasedBooking_noStripeNoCreditConsulted` (`:147-161`).
-  - [ ] 1.3 Run `mvn -o test -Dtest=CreditRoutingTest` and confirm all tests green (existing tests plus the
+  - [x] 1.3 Run `mvn -o test -Dtest=CreditRoutingTest` and confirm all tests green (existing tests plus the
     new one). This is a plain Surefire unit test class (no `IT` suffix) — `mvn -o test`, not
     `mvn -o integration-test`, is the correct command.
-- [ ] Task 2: Ledger hygiene (AC: #2) — flip `deferred-work.md` line 1119's `[PICKED UP by
-  skillars-deferred-54 AC1]` tag to `[CLOSED by skillars-deferred-54 AC1]` with a one-line closure note,
-  once AC1 ships.
+- [x] Task 2: Ledger hygiene (AC: #2) — flipped `deferred-work.md` line 1119's `[PICKED UP by
+  skillars-deferred-54 AC1]` tag to `[CLOSED by skillars-deferred-54 AC1]` with a one-line closure note.
+  AC1 shipped.
+
+### Review Findings
+
+- [x] [Review][Patch] Task 2's checklist line still reads "once AC1 ships" (future-conditional) even
+  though it is checked off and AC1 has shipped — stale wording left over from copying the unchecked task
+  text verbatim [`skillars-deferred-54-pack-deduction-failure-path-unit-coverage.md:134-136`]
+- [x] [Review][Defer] `handlePackBasedBooking` only catches `PaymentGatewayException` from
+  `packSessionService.deductSession(purchaseId)`; a non-`PaymentGatewayException` throw (e.g. a
+  repository-layer `DataAccessException` from `deductSession`'s `save(purchase)` call) would propagate
+  uncaught out of the `AFTER_COMMIT` `REQUIRES_NEW` `onBookingAccepted` listener, and this failure mode has
+  no test at any level — pre-existing production behavior, unchanged by this diff (test-only story), out
+  of AC1's explicit scope (D21 and AC1 both target the `PaymentGatewayException` catch branch specifically)
+  [`PaymentLifecycleService.java:162-175`] — deferred, pre-existing
 
 ## Dev Notes
 
@@ -187,11 +200,26 @@ gap as its own story rather than skip the cycle or resolve a design-decision ite
 
 ### Agent Model Used
 
+Claude Sonnet 5
+
 ### Debug Log References
+
+None — implementation matched the story spec exactly on the first attempt, no debugging needed.
 
 ### Completion Notes List
 
+- AC1: Added `packBasedBooking_deductSessionFails_callsPersistFailureWithZeroReversal` to
+  `CreditRoutingTest.java`, immediately after `packBasedBooking_noStripeNoCreditConsulted`, per the
+  story's exact snippet. Added the `org.mockito.Mockito.doThrow` static import. `mvn -o test
+  -Dtest=CreditRoutingTest`: 10/10 green (9 existing + 1 new). No production code changed.
+- AC2: Flipped `deferred-work.md` line 1119's `[PICKED UP by skillars-deferred-54 AC1]` tag to
+  `[CLOSED by skillars-deferred-54 AC1]` with a one-line closure note describing the actual fix.
+- `mvn verify` not run locally per `docs/validation-strategy.md`; GitHub CI is the full-verification gate.
+
 ### File List
+
+- `src/test/java/com/softropic/skillars/platform/payment/service/CreditRoutingTest.java` (modified — AC1)
+- `_bmad-output/implementation-artifacts/deferred-work.md` (modified — AC2)
 
 ## Change Log
 
@@ -199,3 +227,5 @@ gap as its own story rather than skip the cycle or resolve a design-decision ite
 |---|---|
 | 2026-08-21 | Story created via story-creation process, shipping a single item alone rather than bundled, per explicit user decision after the ledger was confirmed dry of groupable items across two re-mining passes. D21 (`deferred-work.md:1119`) re-verified against live code: `PaymentLifecycleService.java:162-175`'s catch branch still calls `persistPaymentFailure` on `deductSession` failure with no unit test covering it; the "requires new mock infrastructure" blocker D21 originally cited no longer applies, since `CreditRoutingTest.java:50` already has `persistenceService` mocked and `@InjectMocks`-wired (added by unrelated later work). AC1 adds one new unit test mirroring the existing credit-path failure test's assertion shape. AC2 ledger hygiene. |
 | 2026-08-22 | `story-review.md` reviewed against the draft: 0 defects found. Every factual claim (line numbers, method signatures, control flow, existing test behavior, the AC2 ledger-tag state) was independently re-verified against the live files it cites and confirmed accurate; the proposed test snippet compiles and correctly exercises the targeted branch. Two non-blocking notes, neither requiring a change: (1) the story's "batch-path equivalent" phrasing is accurate as written (parity of coverage, not of underlying mechanism — the batch path catches the broader `Exception` and calls `declineBatchBooking`, not `persistPaymentFailure`), flagged only so a fast reader doesn't misread it; (2) an optional `verify(packSessionService).deductSession(packId)` call for symmetry with the sibling success test was suggested but explicitly not requested, since omitting it is consistent with the `stripeDecline_...` test AC1 mirrors, which omits the same verification for the same reason. No changes made to AC1/AC2 or the test snippet; status remains ready-for-dev. |
+| 2026-08-22 | dev-story implementation complete, status review. AC1: added `packBasedBooking_deductSessionFails_callsPersistFailureWithZeroReversal` to `CreditRoutingTest.java` exactly per the story's snippet, `mvn -o test -Dtest=CreditRoutingTest` 10/10 green (9 existing + 1 new), no production code changed. AC2: flipped `deferred-work.md` line 1119's `[PICKED UP by skillars-deferred-54 AC1]` tag to `[CLOSED by skillars-deferred-54 AC1]` with a one-line closure note. No deviations from the story spec. `mvn verify` not run locally per `docs/validation-strategy.md`; GitHub CI is the full-verification gate. |
+| 2026-08-22 | Code review complete (`/bmad-code-review`), status done. Blind Hunter + Edge Case Hunter + Acceptance Auditor run against the implementation diff. Acceptance Auditor: 0 AC violations — independently re-verified `handlePackBasedBooking`'s catch branch, `deductSession`'s void signature, the new test's placement/import/assertions, and the AC2 ledger-tag flip against live code, all matching. 1 patch applied: Task 2's checklist line said "once AC1 ships" (future-conditional) despite being checked off — reworded to past tense now that AC1 has shipped. 1 finding deferred to `deferred-work.md`: `handlePackBasedBooking` only catches `PaymentGatewayException` from `deductSession`; a non-`PaymentGatewayException` throw (e.g. a repository-layer `DataAccessException`) would propagate uncaught out of the `AFTER_COMMIT` listener, untested at any level — pre-existing, unreachable via any current throw site, out of AC1's explicit scope, flagged independently by both Blind Hunter and Edge Case Hunter. 10 findings dismissed as noise/false-positive — notably Blind Hunter's claims (made without project access) that `PaymentGatewayException("payment.packExhausted")` isn't confirmed thrown in production (it is, `PackSessionService.java:57`), that the `anyString()` verify args are unverified failure-reason text (they're actually `parentEmail`/`coachDisplayName` — `persistPaymentFailure` has no reason/message param at all), and that a missing explicit `verify(deductSession(...))` call risks a silent no-op (ruled out by `MockitoExtension`'s strict-stubs mode, which fails the test on an unconsumed stub). |
