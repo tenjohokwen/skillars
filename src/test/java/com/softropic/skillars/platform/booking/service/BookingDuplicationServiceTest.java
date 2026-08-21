@@ -1,8 +1,10 @@
 package com.softropic.skillars.platform.booking.service;
 
+import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.DuplicateBookingProposedEvent;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.service.PackSessionService;
@@ -37,6 +39,7 @@ class BookingDuplicationServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private PackSessionService packSessionService;
     @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
 
     private BookingDuplicationService service;
 
@@ -53,7 +56,7 @@ class BookingDuplicationServiceTest {
     void setUp() {
         service = new BookingDuplicationService(
             bookingService, bookingRepository, coachProfileRepository,
-            userRepository, packSessionService, eventPublisher
+            userRepository, packSessionService, eventPublisher, coachAvailabilityWindowRepository
         );
 
         Instant past = Instant.now().minus(8, ChronoUnit.DAYS);
@@ -77,6 +80,7 @@ class BookingDuplicationServiceTest {
         UUID activePackId = UUID.randomUUID();
         when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(true);
         when(packSessionService.findActivePackId(PLAYER_ID, COACH_ID)).thenReturn(activePackId);
 
         // Override the start time to be far enough in the past that +7 days is in the future
@@ -146,6 +150,7 @@ class BookingDuplicationServiceTest {
 
         when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(true);
         when(packSessionService.findActivePackId(PLAYER_ID, COACH_ID)).thenThrow(
             new OperationNotAllowedException(
                 "No effective session credits available for this coach", SecurityError.MISSING_RIGHTS));
@@ -153,6 +158,26 @@ class BookingDuplicationServiceTest {
         assertThatThrownBy(() -> service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID))
             .isInstanceOf(OperationNotAllowedException.class)
             .hasMessageContaining("credits");
+    }
+
+    /** Deferred-49 AC2: repeat-next-week must fit the coach's CURRENT availability. */
+    @Test
+    void duplicateNextWeek_slotOutsideAvailabilityWindow_throwsSlotOutsideAvailability() {
+        Instant originalStart = Instant.now().minus(6, ChronoUnit.DAYS);
+        completedBooking.setRequestedStartTime(originalStart);
+        completedBooking.setRequestedEndTime(originalStart.plus(1, ChronoUnit.HOURS));
+
+        when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(false);
+
+        assertThatThrownBy(() -> service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.SLOT_OUTSIDE_AVAILABILITY));
+
+        verify(bookingRepository, never()).save(any());
+        verify(packSessionService, never()).findActivePackId(any(), any());
     }
 
     @Test

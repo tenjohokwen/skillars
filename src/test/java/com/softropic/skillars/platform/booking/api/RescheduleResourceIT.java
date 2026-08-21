@@ -26,6 +26,8 @@ import org.springframework.web.client.HttpClientErrorException;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
@@ -117,6 +119,20 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
                 "INSERT INTO marketplace.coach_pricing (coach_id, per_session_price, currency) VALUES (?, 50.00, 'EUR')",
                 coachProfileId
             );
+
+            // Deferred-49 AC1: wide-open availability, every day of week, so every existing test's
+            // day-agnostic Instant.now().plus(N, DAYS) proposal keeps landing inside SOME window
+            // regardless of when CI runs. Narrowing to a single day/hour range would make those
+            // existing tests flaky by construction — see the story's own fixture note. Seeded only
+            // for coachProfileId; no test in this file proposes a reschedule against coachProfile2Id.
+            for (short dayOfWeek = 1; dayOfWeek <= 7; dayOfWeek++) {
+                jdbcTemplate.update(
+                    "INSERT INTO marketplace.coach_availability_windows " +
+                    "(id, coach_id, day_of_week, start_time, end_time, canonical_timezone) " +
+                    "VALUES (?, ?, ?, '00:00:00', '23:59:59', 'Europe/Berlin')",
+                    UUID.randomUUID(), coachProfileId, dayOfWeek
+                );
+            }
 
             insertUser(COACH_2_USER_ID, COACH_2_EMAIL, passwordHash, "COACH");
             jdbcTemplate.update(
@@ -554,6 +570,38 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
     }
 
     /**
+     * Deferred-49 AC1 (story-review.md Finding 3): a "far enough in the future" proposal cannot
+     * trigger this rejection under this file's own wide-open, every-day-of-week fixture — every
+     * calendar day has full 00:00:00-23:59:59 coverage, so any ordinary same-day proposal lands
+     * inside SOME window. The only way to fail the check is a proposal whose end crosses past
+     * 23:59:59 on the START's own calendar date, since isSlotWithinAvailabilityWindow anchors
+     * windowEnd to the start date only (BookingService.java:844) — the next day's window is never
+     * matched because day-of-week is compared against the START's day-of-week, not the end's.
+     */
+    @Test
+    void requestReschedule_slotOutsideAvailabilityWindow_returns403WithSlotOutsideAvailabilityKey() {
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        ZonedDateTime lateNightStart = ZonedDateTime.now(ZoneId.of("Europe/Berlin")).plusDays(5)
+            .withHour(23).withMinute(30).withSecond(0).withNano(0);
+        Instant proposedStart = lateNightStart.toInstant();
+        Instant proposedEnd = proposedStart.plus(1, ChronoUnit.HOURS);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/reschedule",
+            HttpMethod.POST,
+            Map.of("proposedStartTime", proposedStart.toString(), "proposedEndTime", proposedEnd.toString()),
+            authenticatedHeaders(parentCookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"booking.slotOutsideAvailability\"");
+            });
+    }
+
+    /**
      * skillars-deferred-32 AC5, requestReschedule row 4 of 4: {@code :110-112}. The second proposal
      * matches the original booking's 1-hour duration so it clears every earlier check and reaches
      * the pending-request guard.
@@ -942,10 +990,21 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
         return id;
     }
 
+    /**
+     * Deferred-49 AC2 (story-review.md Finding 1): must also advance requested_end_time, not just
+     * requested_start_time. Leaving requested_end_time at its insertConfirmedBooking-seeded value
+     * (now+2d+1h) while start moves to now-2d gives duplicateNextWeek's caller a ~4-day-long booking
+     * to advance by 7 days — a span no single-day availability window, wide-open or not, can ever
+     * satisfy, breaking duplicateNextWeek_asOwningCoachWithCompletedBooking_returns204 once AC2's
+     * check lands. Preserving the original 1-hour duration keeps that test's booking inside the
+     * wide-open fixture window seeded above.
+     */
     private void setBookingStatus(String status) {
         transactionTemplate.execute(s -> {
-            jdbcTemplate.update("UPDATE booking.bookings SET status = ?, requested_start_time = ? WHERE id = ?",
-                status, Timestamp.from(Instant.now().minus(2, ChronoUnit.DAYS)), bookingId);
+            Instant newStart = Instant.now().minus(2, ChronoUnit.DAYS);
+            jdbcTemplate.update(
+                "UPDATE booking.bookings SET status = ?, requested_start_time = ?, requested_end_time = ? WHERE id = ?",
+                status, Timestamp.from(newStart), Timestamp.from(newStart.plus(1, ChronoUnit.HOURS)), bookingId);
             return null;
         });
     }

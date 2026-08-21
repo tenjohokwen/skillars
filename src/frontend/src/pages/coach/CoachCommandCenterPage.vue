@@ -411,6 +411,8 @@ async function handleAcceptReschedule(booking) {
       $q.notify({ type: 'negative', message: t('booking.errors.notReschedulable') })
     } else if (errorKey === 'booking.startTimeInPast') {
       $q.notify({ type: 'negative', message: t('booking.errors.startTimeInPast') })
+    } else if (errorKey === 'booking.slotOutsideAvailability') {
+      $q.notify({ type: 'negative', message: t('booking.errors.slotOutsideAvailability') })
     } else if (errorKey === 'MISSING_RIGHTS') {
       $q.notify({ type: 'negative', message: t('booking.errors.requestNotAllowed') })
     } else {

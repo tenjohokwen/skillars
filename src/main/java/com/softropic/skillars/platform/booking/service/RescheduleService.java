@@ -13,6 +13,8 @@ import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequest;
 import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequestRepository;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
+import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
+import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
@@ -62,6 +64,7 @@ public class RescheduleService {
     // Deferred-15 AC4: needed for the locked re-reads in acceptReschedule — findByIdForUpdate is
     // JPQL and returns an already-managed instance untouched. BookingService injects one the same way.
     private final EntityManager entityManager;
+    private final CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
 
     @Transactional
     public void requestReschedule(UUID bookingId, Long parentUserId, CreateRescheduleRequest req) {
@@ -105,6 +108,18 @@ public class RescheduleService {
                     "original minutes", originalDuration.toMinutes()),
                 BookingError.INVALID_SESSION_DURATION);
         }
+        // Deferred-49 AC1: current availability, re-validated at request time — a coach who has
+        // since narrowed their hours can reject a reschedule proposal the same way an initial
+        // booking request is already blocked, even though the original booking was legitimate
+        // when made. Reuses BookingService's own package-private helper rather than a second copy.
+        List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachId(booking.getCoachId());
+        if (!bookingService.isSlotWithinAvailabilityWindow(req.proposedStartTime(), req.proposedEndTime(), windows)) {
+            throw new OperationNotAllowedException(
+                "Proposed slot is not within coach availability",
+                Map.of("proposed start time", req.proposedStartTime(), "proposed end time", req.proposedEndTime()),
+                BookingError.SLOT_OUTSIDE_AVAILABILITY);
+        }
+
         rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(bookingId, "PENDING")
             .ifPresent(existing -> {
                 throw new OperationNotAllowedException(
@@ -201,6 +216,23 @@ public class RescheduleService {
         if (lockedCoach.getStatus() == CoachProfileStatus.SUSPENDED) {
             throw new OperationNotAllowedException("Coach is suspended",
                 Map.of("submitted coach id", coach.getId()), BookingError.COACH_UNAVAILABLE);
+        }
+
+        // Deferred-49 AC4: requestReschedule already checked availability when the proposal was
+        // made, but a reschedule can sit PENDING indefinitely — the coach may have narrowed their
+        // hours since. Re-checked here, at the point the booking's time actually gets finalized, the
+        // same way the start-time-in-past and coach-suspension checks above are re-validated at
+        // accept time rather than trusted from proposal time. Placed before the overlap check below
+        // (not after) so a reschedule outside availability is rejected on that basis even when the
+        // slot also happens to be free — matches this method's existing check ordering, where each
+        // earlier check gates the next rather than running independently.
+        List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachId(coach.getId());
+        if (!bookingService.isSlotWithinAvailabilityWindow(req.getProposedStartTime(), req.getProposedEndTime(), windows)) {
+            throw new OperationNotAllowedException(
+                "Proposed slot is not within coach availability",
+                Map.of("submitted coach id", coach.getId(), "proposed start time", req.getProposedStartTime(),
+                    "proposed end time", req.getProposedEndTime()),
+                BookingError.SLOT_OUTSIDE_AVAILABILITY);
         }
 
         List<Booking> overlapping = bookingRepository.findOverlappingBookings(

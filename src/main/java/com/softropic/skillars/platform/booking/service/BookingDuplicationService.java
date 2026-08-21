@@ -2,9 +2,12 @@ package com.softropic.skillars.platform.booking.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.security.SecurityError;
+import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.DuplicateBookingProposedEvent;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
+import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.service.PackSessionService;
@@ -18,6 +21,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -31,6 +36,7 @@ public class BookingDuplicationService {
     private final UserRepository userRepository;
     private final PackSessionService packSessionService;
     private final ApplicationEventPublisher eventPublisher;
+    private final CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
 
     @Transactional
     public UUID duplicateNextWeek(UUID originalBookingId, Long coachUserId) {
@@ -54,6 +60,18 @@ public class BookingDuplicationService {
             throw new OperationNotAllowedException(
                 "Proposed session time is in the past", SecurityError.MISSING_RIGHTS);
         }
+
+        // Deferred-49 AC2: same current-availability enforcement as requestReschedule — a coach can
+        // no longer repeat-next-week into a time they don't currently work, even if the original
+        // booking was legitimate when made. Reuses BookingService's own package-private helper.
+        List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachId(coach.getId());
+        if (!bookingService.isSlotWithinAvailabilityWindow(newStart, newEnd, windows)) {
+            throw new OperationNotAllowedException(
+                "Proposed slot is not within coach availability",
+                Map.of("proposed start time", newStart, "proposed end time", newEnd),
+                BookingError.SLOT_OUTSIDE_AVAILABILITY);
+        }
+
         UUID packId = packSessionService.findActivePackId(original.getPlayerId(), original.getCoachId());
 
         Booking newBooking = new Booking();

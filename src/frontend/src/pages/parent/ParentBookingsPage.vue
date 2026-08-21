@@ -220,6 +220,8 @@ async function submitReschedule() {
       $q.notify({ message: t('booking.errors.startTimeInPast'), type: 'negative' })
     } else if (errorKey === 'booking.invalidTimeRange') {
       $q.notify({ message: t('booking.errors.invalidTimeRange'), type: 'negative' })
+    } else if (errorKey === 'booking.slotOutsideAvailability') {
+      $q.notify({ message: t('booking.errors.slotOutsideAvailability'), type: 'negative' })
     } else if (errorKey === 'booking.rescheduleAlreadyPending') {
       $q.notify({ message: t('booking.errors.rescheduleAlreadyPending'), type: 'negative' })
     } else if (errorKey === 'MISSING_RIGHTS') {
