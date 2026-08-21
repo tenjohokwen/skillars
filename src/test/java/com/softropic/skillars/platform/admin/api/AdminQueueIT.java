@@ -4,6 +4,7 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.messaging.service.MessageModerationSweeper;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -53,6 +54,7 @@ class AdminQueueIT extends AbstractIntegrationTest {
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private HttpTestClient httpTestClient;
     @Autowired private PasswordEncoder passwordEncoder;
+    @Autowired private MessageModerationSweeper sweeper;
 
     @LocalServerPort private int randomServerPort;
 
@@ -256,6 +258,53 @@ class AdminQueueIT extends AbstractIntegrationTest {
         // Under the code-point limit, so it comes back whole and intact.
         assertThat(summary).isEqualTo(astral);
         assertThat(Character.isHighSurrogate(summary.charAt(summary.length() - 1))).isFalse();
+    }
+
+    // Deferred-16 code review D7: no test previously drove this chain past a hand-inserted alert row.
+    @Test
+    void sweepThenApprove_endToEndChain_alertAppearsInQueueThenResolves() {
+        long sweptMessageId = 9000_001_004L; // next id in this file's own 9000_001_xxx local sequence
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO messaging.messages (id, conversation_id, sender_id, sender_role, content, "
+                + "moderation_status, created_at) VALUES (?, ?, ?, 'COACH', 'Stranded content', 'PENDING', ?)",
+                sweptMessageId, CONVERSATION_ID, COACH_USER_ID,
+                Timestamp.from(Instant.now().minusSeconds(3600)));
+            return null;
+        });
+
+        releaseSchedulerLock("MessageModerationSweeper_sweep");
+        sweeper.sweep();
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT moderation_status FROM messaging.messages WHERE id = ?", String.class, sweptMessageId))
+            .isEqualTo("UNDER_REVIEW");
+
+        String cookies = loginAndGetCookies(ADMIN_EMAIL);
+        ResponseEntity<Map> queueResp = httpTestClient.makeHttpRequest(
+            baseUrl() + QUEUE_URL + "?type=MODERATION_UNRESOLVED",
+            HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+        assertThat(queueResp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> content = (List<Map<String, Object>>) queueResp.getBody().get("content");
+        Map<String, Object> entry = content.stream()
+            .filter(e -> String.valueOf(sweptMessageId).equals(e.get("referenceId")))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("Swept message's alert not found in the real queue response"));
+        assertThat(entry.get("summary")).isEqualTo("MODERATION_ORPHAN_SWEPT: Stranded content");
+
+        ResponseEntity<Void> approveResp = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/admin/messages/" + sweptMessageId + "/approve",
+            HttpMethod.POST, null, authenticatedHeaders(cookies), Void.class);
+        assertThat(approveResp.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT moderation_status FROM messaging.messages WHERE id = ?", String.class, sweptMessageId))
+            .isEqualTo("APPROVED");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM admin.admin_alerts WHERE reference_id = ? AND type = 'MODERATION_UNRESOLVED'",
+            String.class, String.valueOf(sweptMessageId)))
+            .isEqualTo("RESOLVED");
     }
 
     @Test

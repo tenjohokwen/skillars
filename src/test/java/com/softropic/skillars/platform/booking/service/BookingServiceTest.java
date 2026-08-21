@@ -35,7 +35,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEvent;
 import org.springframework.context.ApplicationEventPublisher;
@@ -86,7 +88,10 @@ class BookingServiceTest {
     // proven by BookingServiceConcurrencyIT against a live database, as the AC requires.
     @Mock private EntityManager entityManager;
 
-    private BookingStateMachine bookingStateMachine;
+    @Spy
+    private BookingStateMachine bookingStateMachine = new BookingStateMachine();
+
+    @InjectMocks
     private BookingService bookingService;
 
     private static final Long PARENT_ID = 100L;
@@ -96,15 +101,6 @@ class BookingServiceTest {
 
     @BeforeEach
     void setUp() {
-        bookingStateMachine = new BookingStateMachine();
-        bookingService = new BookingService(
-            bookingRepository, bookingStateMachine, coachProfileRepository,
-            paymentGateway, coachAvailabilityWindowRepository, playerProfileRepository,
-            userRepository, eventPublisher,
-            rescheduleRequestRepository, bookingBatchRepository,
-            sessionPackPurchaseRepository, coachPricingRepository, sessionDurationResolver,
-            bookingPaymentRepository, entityManager
-        );
         // UAT.2 AC3: every create-path fixture in this class books exactly one hour, which is the
         // platform default. Lenient because the tests that fail before reaching the duration check
         // (unknown player, wrong parent, suspended coach, reversed range) never call it.

@@ -1,6 +1,6 @@
 # Story Deferred-51: Gemini Moderation Truncation Safety, Moderation-Sweep Admin-Queue End-to-End Coverage & BookingServiceTest Injection Hygiene
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -315,25 +315,41 @@ test change is needed; D6 is stale.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: `GeminiModerationService` surrogate-safe truncation (AC: #1)
-  - [ ] 1.1 Replace the truncation block at `GeminiModerationService.java:43-45` per AC1.
-  - [ ] 1.2 Add `contentWithSurrogatePairAtTruncationBoundary_dropsWholePairRatherThanSplittingIt` to
+- [x] Task 1: `GeminiModerationService` surrogate-safe truncation (AC: #1)
+  - [x] 1.1 Replace the truncation block at `GeminiModerationService.java:43-45` per AC1.
+  - [x] 1.2 Add `contentWithSurrogatePairAtTruncationBoundary_dropsWholePairRatherThanSplittingIt` to
     `GeminiModerationServiceTest.java`.
-  - [ ] 1.3 Run targeted verification and confirm green, including all pre-existing tests in the same file.
-- [ ] Task 2: Messaging moderation-sweep-to-queue-to-approve end-to-end IT (AC: #2)
-  - [ ] 2.1 Add the `MessageModerationSweeper` autowiring and the new test to `AdminQueueIT.java`.
-  - [ ] 2.2 Run the full `AdminQueueIT` suite (not just the new test) and confirm every pre-existing test
+  - [x] 1.3 Run targeted verification and confirm green, including all pre-existing tests in the same file.
+- [x] Task 2: Messaging moderation-sweep-to-queue-to-approve end-to-end IT (AC: #2)
+  - [x] 2.1 Add the `MessageModerationSweeper` autowiring and the new test to `AdminQueueIT.java`.
+  - [x] 2.2 Run the full `AdminQueueIT` suite (not just the new test) and confirm every pre-existing test
     still passes — the new fixture row must be additive-only.
-- [ ] Task 3: `BookingServiceTest` constructor-injection hygiene (AC: #3)
-  - [ ] 3.1 Switch `bookingStateMachine`/`bookingService` to `@Spy`/`@InjectMocks` per AC3, deleting the
+- [x] Task 3: `BookingServiceTest` constructor-injection hygiene (AC: #3)
+  - [x] 3.1 Switch `bookingStateMachine`/`bookingService` to `@Spy`/`@InjectMocks` per AC3, deleting the
     positional constructor call in `setUp()`.
-  - [ ] 3.2 Run the full `BookingServiceTest` suite and confirm every existing test still passes unchanged —
+  - [x] 3.2 Run the full `BookingServiceTest` suite and confirm every existing test still passes unchanged —
     this is a pure test-harness refactor, no test behavior should change.
-- [ ] Task 4: Ledger hygiene (AC: #4) — verify the three `[PICKED UP]` tags (four bullet locations)
+- [x] Task 4: Ledger hygiene (AC: #4) — verify the three `[PICKED UP]` tags (four bullet locations)
   specified above. **Already done — story-review.md Finding 3 (Informational).** All four tags were
   already applied to `deferred-work.md` by this story's own creation commit (`fdadd6e`); no `Edit` is
   needed, only a re-check that the tags are present (matches this project's established pattern of
-  applying ledger tags at story-creation time, e.g. `skillars-deferred-41`).
+  applying ledger tags at story-creation time, e.g. `skillars-deferred-41`). Re-verified during
+  dev-story: all four `[PICKED UP by skillars-deferred-51 AC1/AC2/AC3]` tags confirmed present.
+
+### Review Findings
+
+- [x] [Review][Patch] Surrogate-truncation guard uses a single `if`, not a loop — malformed content with
+  two-or-more consecutive unpaired high surrogates straddling the cutoff still leaves the truncated
+  prompt ending in an unpaired high surrogate, the exact defect class AC1 exists to close
+  [src/main/java/com/softropic/skillars/platform/messaging/service/GeminiModerationService.java:44] —
+  **fixed**: `if` replaced with `while` (guarded by the pre-existing `content.length() > cutoff` check,
+  moved to wrap the loop so `charAt(cutoff - 1)` stays bounds-safe on every iteration — the initial
+  patch attempt dropped that guard and reintroduced a `StringIndexOutOfBoundsException` for any
+  short/untruncated message, caught by re-running the test suite before considering the patch done).
+  New regression test `contentWithConsecutiveUnpairedHighSurrogatesAtTruncationBoundary_
+  dropsBothRatherThanSplitting` added to `GeminiModerationServiceTest.java`
+  (`"x".repeat(98) + "\uD800\uD800" + "x".repeat(10)` at `maxInputChars=100` — both lone high
+  surrogates dropped, not just one). `GeminiModerationServiceTest`: 11/11 green.
 
 ## Dev Notes
 
@@ -403,9 +419,74 @@ test change is needed; D6 is stale.
   — the sibling test's already-shipped `@InjectMocks` pattern AC3 mirrors]
 - [Source: `docs/validation-strategy.md` — targeted-test-only validation policy]
 
+## Dev Agent Record
+
+### Agent Model Used
+
+Claude Sonnet 5
+
+### Debug Log References
+
+Implemented in story order: Task 1 (`GeminiModerationService` surrogate-safe truncation) → Task 2
+(moderation-sweep-to-queue-to-approve end-to-end IT) → Task 3 (`BookingServiceTest` constructor-injection
+hygiene) → Task 4 (already done at story creation, verified only). Followed red-green for Task 1: the new
+`contentWithSurrogatePairAtTruncationBoundary_dropsWholePairRatherThanSplittingIt` unit test was written
+first and confirmed failing (`mvn -o test -Dtest=GeminiModerationServiceTest#...` — `Wanted but not
+invoked` against the unpatched 100-char-cutoff prompt) before the production fix landed; cleared on the
+next run (10/10). Tasks 2 and 3 needed no production-code fix — AC2's new IT passed against the existing
+`MessageModerationSweeper`/`AdminAlertEventListener`/`AdminMessageService` chain on first run, and AC3 is a
+pure test-harness refactor with an explicitly-predicted-clean set of drift-guard greps, both confirmed
+exactly as the story specified. No deviations from the story's own AC1/AC2/AC3 code snippets — all
+insertion points, prompt shapes, and fixture placements matched exactly as specified (story-review.md's
+pre-dev pass had already verified these against live code). No blockers encountered.
+
+### Completion Notes List
+
+- AC1: `GeminiModerationService.moderate`'s truncation now backs off one character whenever the raw
+  char-count cutoff would land inside a UTF-16 surrogate pair, mirroring `AdminQueueService.preview()`'s
+  already-shipped fix for the identical bug class, with the `cutoff > 0` guard from story-review.md
+  Finding 2 preventing a `StringIndexOutOfBoundsException` on a hypothetical `maxInputChars <= 0`
+  misconfiguration. New unit test (rewritten per story-review.md Finding 1 to assert an exact
+  `verify(geminiClient).evaluate(expectedPrompt)` match rather than a last-character/`contains` check)
+  confirmed red against unpatched code, green after the fix. `GeminiModerationServiceTest`: 10/10 green.
+- AC2: `AdminQueueIT` gained a real end-to-end test driving a message from `MessageModerationSweeper.sweep()`
+  through the real `GET /api/admin/queue?type=MODERATION_UNRESOLVED` response and a real approve call,
+  proving the sweep → alert → queue-listing → resolution chain that was previously only covered in
+  isolated hand-inserted-alert-row tests. No production code changed — the chain already worked correctly;
+  the gap was purely test coverage. Full `AdminQueueIT` suite: 9/9 green (8 pre-existing + 1 new), confirming
+  additive-only.
+- AC3: `BookingServiceTest` now uses `@InjectMocks`/`@Spy` instead of a hand-listed 15-argument positional
+  `BookingService` constructor call, matching the sibling `ExpiredPackBookingValidationTest`'s pattern —
+  with `bookingStateMachine` kept as `@Spy` (not `@Mock`) since this file's accept/decline/reschedule tests
+  exercise real state-machine transition validation the sibling never reaches. Pure test-harness refactor;
+  full `BookingServiceTest` suite: 30/30 green, no test behavior changed.
+- AC4: Verified only — the four `[PICKED UP by skillars-deferred-51 AC1/AC2/AC3]` tags in `deferred-work.md`
+  were already applied at story-creation time (confirmed present, unchanged); no edit made.
+- Verification: `mvn -o test -Dtest=GeminiModerationServiceTest` — 10/10 green (AC1). `mvn -o
+  integration-test -Dit.test=AdminQueueIT` — 9/9 green (AC2). `mvn -o test -Dtest=BookingServiceTest` —
+  30/30 green (AC3). No full `mvn verify` run, per `docs/validation-strategy.md`'s targeted-verification
+  policy (CI is the full-suite gate).
+
+### File List
+
+- `src/main/java/com/softropic/skillars/platform/messaging/service/GeminiModerationService.java` (modified
+  — surrogate-pair-safe truncation cutoff in `moderate` (AC1))
+- `src/test/java/com/softropic/skillars/platform/messaging/service/GeminiModerationServiceTest.java`
+  (modified — new
+  `contentWithSurrogatePairAtTruncationBoundary_dropsWholePairRatherThanSplittingIt` test (AC1))
+- `src/test/java/com/softropic/skillars/platform/admin/api/AdminQueueIT.java` (modified — new
+  `MessageModerationSweeper` autowiring, new `sweepThenApprove_endToEndChain_alertAppearsInQueueThenResolves`
+  test (AC2))
+- `src/test/java/com/softropic/skillars/platform/booking/service/BookingServiceTest.java` (modified —
+  `bookingStateMachine`/`bookingService` switched to `@Spy`/`@InjectMocks`, positional constructor call
+  removed from `setUp()` (AC3))
+- `_bmad-output/implementation-artifacts/deferred-work.md` (already tagged at story creation — no change
+  this pass, AC4)
+
 ## Change Log
 
 | Date | Change |
 |---|---|
 | 2026-08-21 | Story created via story-creation process, bundling two items filed by `skillars-deferred-16`'s code review (unpicked for 46 story-cycles) with one item filed twice by `skillars-uat-3`'s code review — per explicit instruction not to create another small story. All three re-verified against live code at creation time rather than trusted from ledger text: `GeminiModerationService.java:43-45` still truncates on a raw char index with no surrogate-pair guard (read directly, confirmed against the already-fixed sibling `AdminQueueService.preview()`); `AdminQueueIT`/`MessageApproveIT`/`MessageBlockIT` still hand-insert their `MODERATION_UNRESOLVED` alert row via `jdbcTemplate` rather than driving it through a real sweep (grepped for `INSERT INTO admin.admin_alerts` across all four messaging/admin IT files — no sweep-driven path found); `BookingServiceTest.java:100-107` still hand-lists all 15 constructor arguments, confirmed against the sibling `ExpiredPackBookingValidationTest.java`'s already-shipped `@InjectMocks` pattern. One sibling item from the same `skillars-deferred-16` review section (D6, `SoftDeleteIT`'s concurrency-test weakness) was found already fixed by intervening work and is documented as stale in "Why this story exists" rather than picked up — the current `SoftDeleteIT.java:245-289` already drives real concurrent HTTP calls and asserts on independently-observed outcomes, not a tautological primary-key count. Two other items from the same `skillars-deferred-16` section (D3, D4) and the `jakarta.persistence.lock.timeout`/booking-locking-strategy items already excluded by `skillars-deferred-49`/`-50` were deliberately not picked up — all need a design/product decision this bundled small-fix story should not make ad hoc, per the reasoning recorded in "Why this story exists" above. |
 | 2026-08-21 | `story-review.md` applied: 3 findings, all addressed before dev starts. Finding 1/High: AC1's prescribed unit test asserted on the prompt's last character and a `contains("😀")` check, both of which pass identically on unpatched and patched code (the unpatched `substring(0, 100)` already drops the emoji's low surrogate as collateral, so the full pair is absent either way, and the prompt's last character is always the fixed literal suffix) — replaced with an exact `verify(geminiClient).evaluate(expectedPrompt)` pin, mirroring the file's own existing `contentExceedsMaxInputChars_truncatedBeforeSending` pattern, which does fail on the unpatched code. Finding 2/Medium: AC1's code sample threw `StringIndexOutOfBoundsException` for a `maxInputChars <= 0` misconfiguration (`charAt(-1)`), uncaught by the existing try/catch — not reachable with any current profile's config, but fixed with a one-clause `cutoff > 0 &&` guard since the change was already touching the line. Finding 3/Informational: AC4/Task 4's four ledger tags were already applied by this story's own creation commit; Task 4 reworded to "verify" rather than "apply," matching this project's established pattern of tagging at story-creation time. No other issues found — story-review.md's "Everything else checked" section independently confirmed AC1's core algorithm, AC2's full sweep→queue→approve chain and fixture correctness, and AC3's constructor/spy mechanics all accurate against the live repo. |
+| 2026-08-21 | Dev implementation complete (AC1-AC4). AC1: `GeminiModerationService.moderate`'s truncation now backs off one character when the cutoff would split a UTF-16 surrogate pair (with the `cutoff > 0` guard from story-review.md Finding 2); new test written first and confirmed failing against unpatched code (red — actual prompt carried 100 x's + a dangling high surrogate vs. expected 99 x's) before the fix landed (green). `GeminiModerationServiceTest`: 10/10 green. AC2: `AdminQueueIT` gained the `MessageModerationSweeper` autowiring and `sweepThenApprove_endToEndChain_alertAppearsInQueueThenResolves`, driving a real sweep → alert → `GET /api/admin/queue?type=MODERATION_UNRESOLVED` → approve chain; passed on first run (no production bug found). Full `AdminQueueIT` suite: 9/9 green (8 pre-existing + 1 new), confirming the new fixture row is additive-only. AC3: `BookingServiceTest` switched `bookingStateMachine`/`bookingService` to `@Spy`/`@InjectMocks` per AC3's exact shape; all three drift-guard greps (`bookingStateMachine\.` outside the deleted block, `new BookingService`/`new BookingStateMachine` repo-wide) confirmed clean as the story predicted. Full `BookingServiceTest` suite: 30/30 green, no test behavior changed. AC4: re-verified all four `[PICKED UP by skillars-deferred-51 AC1/AC2/AC3]` tags present in `deferred-work.md` (already applied at story creation) — no edit needed. Targeted verification only, per `docs/validation-strategy.md`; no full `mvn verify` run locally (CI is the full-suite gate). Status → review. |
