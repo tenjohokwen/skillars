@@ -112,7 +112,7 @@ public class GdprExportService {
         return profile;
     }
 
-    private List<Booking> buildBookings(User user, Long userId) {
+    List<Booking> buildBookings(User user, Long userId) {
         List<Booking> bookings = new java.util.ArrayList<>(
             bookingRepository.findAllByParentIdOrderByRequestedStartTimeAsc(userId));
 
@@ -123,7 +123,15 @@ public class GdprExportService {
         coachProfileRepository.findByUserId(userId).ifPresent(cp ->
             bookings.addAll(bookingRepository.findAllByCoachId(cp.getId())));
 
-        return bookings.stream().distinct().collect(Collectors.toList());
+        // Booking has no equals()/hashCode() override, so .stream().distinct() would use reference
+        // identity and silently fail to dedupe rows fetched twice via different repository calls
+        // (e.g. a self-registered player whose parentId == playerId). Dedupe by id instead, preserving
+        // first-seen order (parent bookings first, matching the sequencing above).
+        java.util.Map<UUID, Booking> byId = new java.util.LinkedHashMap<>();
+        for (Booking b : bookings) {
+            byId.putIfAbsent(b.getId(), b);
+        }
+        return new java.util.ArrayList<>(byId.values());
     }
 
     private java.util.Map<String, Object> buildPayments(User user, Long userId) {

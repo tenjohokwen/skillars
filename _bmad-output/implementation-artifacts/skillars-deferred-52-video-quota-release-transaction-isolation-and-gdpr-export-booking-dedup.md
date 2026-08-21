@@ -1,6 +1,6 @@
 # Story Deferred-52: Video Quota-Release Transaction Isolation & GDPR Export Booking De-Duplication
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -342,34 +342,60 @@ section around `deferred-work.md`'s D4–D7 items). This story is numbered 52 to
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: `VideoService.failTranscoding()` transaction split (AC: #1)
-  - [ ] 1.1 Remove the method-level `@Transactional`, wrap the read + state transition in
+- [x] Task 1: `VideoService.failTranscoding()` transaction split (AC: #1)
+  - [x] 1.1 Remove the method-level `@Transactional`, wrap the read + state transition in
     `transactionTemplate.execute(...)`, move the quota-release block after it returns, per AC1's snippet.
-  - [ ] 1.2 Add the new `VideoServiceTest` coverage described in AC1 (the `InOrder` structural check —
+  - [x] 1.2 Add the new `VideoServiceTest` coverage described in AC1 (the `InOrder` structural check —
     note this proves call ordering, not the actual rollback bug, per AC1's own caveat).
-  - [ ] 1.3 Run `mvn -o test -Dtest=VideoServiceTest` and confirm green.
-- [ ] Task 2: `AdminVideoService.deleteVideo()` transaction split (AC: #2)
-  - [ ] 2.1 Refactor `deleteVideo` per AC2's snippet — transaction returns the expired session (or
+  - [x] 1.3 Run `mvn -o test -Dtest=VideoServiceTest` and confirm green.
+- [x] Task 2: `AdminVideoService.deleteVideo()` transaction split (AC: #2)
+  - [x] 2.1 Refactor `deleteVideo` per AC2's snippet — transaction returns the expired session (or
     `null`), release happens after.
-  - [ ] 2.2 Create `AdminVideoServiceTest.java` with the two tests described in AC2.
-  - [ ] 2.3 Run `mvn -o test -Dtest=AdminVideoServiceTest` and confirm green. Also run
+  - [x] 2.2 Create `AdminVideoServiceTest.java` with the two tests described in AC2.
+  - [x] 2.3 Run `mvn -o test -Dtest=AdminVideoServiceTest` and confirm green. Also run
     `mvn -o integration-test -Dit.test=AdminVideoIT` to confirm the existing end-to-end `deleteVideo`
     coverage still passes unchanged (behavior-preserving refactor) — `VideoPurgedEventIT` does not exercise
     `AdminVideoService.deleteVideo()` (it only covers the separate `VideoDeletionService` class), so it
     provides no verification signal for this change and is not part of this task's gate.
-- [ ] Task 3: `GdprExportService.buildBookings()` id-based dedupe (AC: #3)
-  - [ ] 3.1 Drop `buildBookings`'s `private` modifier; replace `.stream().distinct()` with the
+- [x] Task 3: `GdprExportService.buildBookings()` id-based dedupe (AC: #3)
+  - [x] 3.1 Drop `buildBookings`'s `private` modifier; replace `.stream().distinct()` with the
     `LinkedHashMap`-based dedupe per AC3's snippet. Verify whether `Collectors` is still used elsewhere
     in the file before touching its import.
-  - [ ] 3.2 Create `GdprExportServiceTest.java` with the three tests described in AC3. Follow the
+  - [x] 3.2 Create `GdprExportServiceTest.java` with the three tests described in AC3. Follow the
     red-then-green check: confirm the first and third tests fail against the pre-fix `.distinct()` code,
     then pass once the fix lands.
-  - [ ] 3.3 Run `mvn -o test -Dtest=GdprExportServiceTest` and confirm green. Also run
+  - [x] 3.3 Run `mvn -o test -Dtest=GdprExportServiceTest` and confirm green. Also run
     `mvn -o integration-test -Dit.test=GdprExportIT` to confirm the existing REST-layer coverage is
     unaffected (that IT does not exercise `buildBookings`'s content directly, so no behavior change is
     expected there — it exists to catch any accidental compile/wiring break from the visibility change).
-- [ ] Task 4: Ledger hygiene (AC: #4) — apply all four annotations described in AC4 to
+- [x] Task 4: Ledger hygiene (AC: #4) — apply all four annotations described in AC4 to
   `deferred-work.md`, including filing the new re-scoped RW3 residual item.
+
+### Review Findings
+
+Adversarial code review (Blind Hunter + Edge Case Hunter + Acceptance Auditor). Acceptance Auditor found
+0 AC violations — every AC1-AC4 claim and Dev Agent Record test-run claim independently re-verified against
+the live repo, including re-running the actual `mvn` commands and independently repeating the AC3
+mutation check. 1 patch, 2 deferred, 16 dismissed (unreachable given entities are always DB-persisted;
+false alarms from Blind Hunter's no-context review, resolved by full-context verification; or already
+explicitly addressed by this story's own spec/Dev Notes — notably the quota-permanently-leaked-on-release-
+failure class across all four split call sites, which is the exact RW3 residual this story's own AC4
+already filed to `deferred-work.md` as an intentionally open design question, not a fresh miss).
+
+- [x] [Review][Patch] `AdminVideoService.deleteVideo()`'s Phase 2 `quotaProvider.release(...)` call has no
+  null-`reservationHandle` guard, unlike its sibling fix in `VideoService.failTranscoding` (AC1), which
+  explicitly checks `session.getReservationHandle() != null` before releasing and logs a warning
+  otherwise. Since AC2 explicitly frames itself as giving `AdminVideoService` "the identical fix" as AC1,
+  this guard should mirror AC1's for parity. [`AdminVideoService.java:78-80`] — **Fixed**: added the same
+  null-check + warning-log branch (`AdminVideoServiceTest` re-run 2/2 green, no behavior change for the
+  common case).
+- [x] [Review][Defer] New AC1/AC2 unit tests (`VideoServiceTest`, `AdminVideoServiceTest`) verify call
+  ordering only (`InOrder`), not the actual resulting state (session `EXPIRED`, video `DELETED`/`FAILED`)
+  — backstopped by `AdminVideoIT`'s existing 10-test end-to-end coverage of `deleteVideo`, so low severity.
+  [`VideoServiceTest.java`, `AdminVideoServiceTest.java`] — deferred, pre-existing
+- [x] [Review][Defer] Possible additional `.stream().distinct()`-on-entity-without-`equals()`/`hashCode()`
+  instances may exist in other `GdprExportService` builder methods (e.g. `buildPayments`, `buildMessages`)
+  — unconfirmed, worth a follow-up grep in a future pass. [`GdprExportService.java`] — deferred, pre-existing
 
 ## Dev Notes
 
@@ -459,13 +485,66 @@ section around `deferred-work.md`'s D4–D7 items). This story is numbered 52 to
 
 ### Agent Model Used
 
-_To be filled in by the dev agent._
+Claude Sonnet 5 (bmad-dev-story workflow)
 
 ### Debug Log References
 
+- `mvn -o test -Dtest=VideoServiceTest` → 3/3 passed (AC1)
+- `mvn -o test -Dtest=AdminVideoServiceTest` → 2/2 passed (AC2)
+- `mvn -o integration-test -Dit.test=AdminVideoIT` → 10/10 passed (AC2, behavior-preserving refactor check)
+- `mvn -o test -Dtest=GdprExportServiceTest` → 3/3 passed (AC3)
+- `mvn -o integration-test -Dit.test=GdprExportIT` → 7/7 passed (AC3, wiring/compile check)
+- Red-then-green mutation check for AC3 (per Task 3.2): temporarily reverted `buildBookings` to the
+  original `.stream().distinct()` and re-ran `GdprExportServiceTest` — confirmed
+  `buildBookings_selfRegisteredPlayer_...` and `buildBookings_coachProfileBookingsSameIdAsParentBookings_...`
+  both failed (2 objects instead of 1 deduped), while `buildBookings_noOverlap_allBookingsPreserved`
+  still passed, exactly as AC3 specified. Restored the fix afterward; re-ran green (3/3).
+- `mvn -o -q test -Dtest=VideoServiceTest,AdminVideoServiceTest,GdprExportServiceTest` → 8/8 passed
+  (combined final run)
+- Per `docs/validation-strategy.md`, `mvn verify` was not run locally; GitHub CI is the full-verification
+  gate.
+
 ### Completion Notes List
 
+- AC1: `VideoService.failTranscoding()` no longer carries method-level `@Transactional`. Phase 1 (read
+  `providerAssetId` + `transitionOperationalState(FAILED)`) runs inside `transactionTemplate.execute(...)`;
+  Phase 2 (`quotaProvider.release(...)`) runs after that transaction returns, mirroring
+  `completeTranscoding()`'s existing phase-split shape. Added `failTranscoding_transitionsToFailedBeforeReleasingQuota`
+  to `VideoServiceTest` as a structural `InOrder` check only (per AC1's own caveat: this test file
+  constructs `VideoService` without a Spring transactional AOP proxy, so no mock-based test here can
+  prove real rollback semantics).
+- AC2: `AdminVideoService.deleteVideo()` refactored identically — the `transactionTemplate.execute(...)`
+  block now returns the expired `UploadSession` (or `null`) instead of calling `quotaProvider.release(...)`
+  inside it; the release call happens after the transaction returns. New
+  `AdminVideoServiceTest.java` created (file did not previously exist) with two tests: an `InOrder`
+  check proving release happens after the `DELETED` save, and a `never()` check proving no release call
+  when there's no `PENDING` session. `AdminVideoIT` (10 tests) re-run green to confirm the refactor is
+  behavior-preserving end-to-end.
+- AC3: `GdprExportService.buildBookings()` visibility relaxed from `private` to package-private (for
+  direct unit testing, matching the project's `BookingService.isSlotWithinAvailabilityWindow`
+  precedent). Reference-identity `.stream().distinct()` replaced with an id-keyed
+  `LinkedHashMap<UUID, Booking>` dedupe that preserves first-seen (parent-first) order. `Collectors`
+  import retained — still used by `buildPayments`. New `GdprExportServiceTest.java` created with the
+  three specified tests; red-then-green mutation check performed and confirmed per Debug Log above.
+  `GdprExportIT` (7 tests) re-run green — confirms no wiring/compile regression from the visibility
+  change (that IT does not exercise `buildBookings` content directly, as expected).
+- AC4: Flipped all three `[PICKED UP by skillars-deferred-52 ACn]` tags in `deferred-work.md` to
+  `[CLOSED by skillars-deferred-52 ACn]` with closure notes describing the actual fix, now that AC1/AC2/AC3
+  all shipped in full (no partial-landing case applied). RW3's re-scoped "if release throws, quota is
+  permanently leaked" residual item (filed at story-creation time under `## Deferred from:
+  skillars-deferred-52 story creation`) required no further action — it remains an intentionally open
+  design question, not something this story closes.
+- No frontend changes, per Dev Notes.
+
 ### File List
+
+- `src/main/java/com/softropic/skillars/platform/video/service/VideoService.java` (modified — AC1)
+- `src/test/java/com/softropic/skillars/platform/video/service/VideoServiceTest.java` (modified — AC1)
+- `src/main/java/com/softropic/skillars/platform/video/service/AdminVideoService.java` (modified — AC2)
+- `src/test/java/com/softropic/skillars/platform/video/service/AdminVideoServiceTest.java` (new — AC2)
+- `src/main/java/com/softropic/skillars/platform/admin/service/GdprExportService.java` (modified — AC3)
+- `src/test/java/com/softropic/skillars/platform/admin/service/GdprExportServiceTest.java` (new — AC3)
+- `_bmad-output/implementation-artifacts/deferred-work.md` (modified — AC4)
 
 ## Change Log
 
@@ -473,3 +552,5 @@ _To be filled in by the dev agent._
 |---|---|
 | 2026-08-21 | Story created via story-creation process, bundling three items re-mined from an older, never-revisited section of `deferred-work.md` (2026-06-22 through 2026-06-30) after confirming the more recently active section (post-`skillars-deferred-34`) is already thin per `skillars-deferred-49`/`-50`'s own creation notes. All three re-verified against live code at creation time: `VideoService.failTranscoding` (`:391-411`) still carries method-level `@Transactional` with the quota release inside it; `AdminVideoService.deleteVideo` (`:45-80`) was found, independently of any ledger entry, to have the identical anti-pattern; `Booking.java` (`:19-28`) confirmed to have no `equals()`/`hashCode()` override, and `GdprExportService.buildBookings` (`:115-126`) confirmed to call both `findAllByParentIdOrderByRequestedStartTimeAsc` and `findAllByPlayerId` for a `PLAYER`-role caller, which collide for a self-registered player whose `parentId == playerId`. One related item (RW3, a different call site with the same pattern) was found already fixed at an unannotated earlier point; its own narrower residual concern (no retry if `release()` itself throws post-split) is re-filed rather than silently closed or silently ignored. Two other candidate areas surfaced during re-mining but explicitly not picked up: `skillars-deferred-40`'s `NeglectedSkillDetectionService` unchunked-loop item (a deliberate, already-reasoned detective-control decision from that story, not a fresh bug) and `ConfigGuardIT`'s shared-row test-isolation hazard (real but low-value/low-probability, not substantial enough to justify inclusion). |
 | 2026-08-21 | `story-review.md` filed 4 findings against the draft, all fixed: Finding 1/High — `deferred-work.md`'s `Def24`, the new `AdminVideoService.deleteVideo()` item, and `D2` had been tagged `[CLOSED by skillars-deferred-52 ACn]` at story-creation time, before any code fix existed, breaking this project's established convention (confirmed against 9 prior "Create Story" commits) of tagging not-yet-implemented targets `[PICKED UP by ...]` and reserving `[CLOSED by ...]` for separately-already-fixed items — reverted all three to `PICKED UP` in `deferred-work.md`, and rewrote AC4 to instruct flipping them to `CLOSED` only in the implementation commit, per-AC if the story lands partially. Finding 2/Medium — AC1's mandated "regression test" (stub `release()` to throw, assert the state transition still fires) was claimed to prove the fix, but `VideoServiceTest` constructs `VideoService` as a plain object with no Spring transactional-AOP proxy, so the same test passes identically against the pre-fix code — reworded AC1 to keep the test as a structural `InOrder` ordering check only, with an explicit caveat that real rollback coverage would need an IT following `VideoPurgedEventIT`'s pattern, out of this story's scope. Finding 3/Medium — Task 2.3 (and AC2's own text) cited `VideoPurgedEventIT` as existing `deleteVideo` coverage; it tests the unrelated `VideoDeletionService` class only (confirmed by grep) — dropped it from Task 2.3's verification command and corrected AC2's text. Finding 4/Low — AC1/AC2 cited a `completeTranscoding`-test `transactionTemplate` stubbing pattern in `VideoServiceTest` that doesn't exist there (the file has zero `completeTranscoding` tests and uses a single hand-written `@BeforeEach` `TransactionTemplate`, not per-test Mockito stubs) — corrected AC1 to point at the real fixture, and AC2 to cite `ModerationOrchestrationServiceTest.java`'s genuine `@Mock TransactionTemplate` pattern instead. |
+| 2026-08-21 | Implementation complete, status review. AC1: `VideoService.failTranscoding()` split into a `transactionTemplate.execute(...)` phase (read + `transitionOperationalState(FAILED)`) followed by an out-of-transaction `quotaProvider.release(...)` phase; added `failTranscoding_transitionsToFailedBeforeReleasingQuota` to `VideoServiceTest` (`mvn -o test -Dtest=VideoServiceTest` 3/3 green). AC2: `AdminVideoService.deleteVideo()` refactored identically — release moved outside the `DELETED`/`EXPIRED`-writing transaction; new `AdminVideoServiceTest.java` created with 2 tests (`mvn -o test -Dtest=AdminVideoServiceTest` 2/2 green); `AdminVideoIT` re-run to confirm behavior preservation (10/10 green). AC3: `GdprExportService.buildBookings()` made package-private, `.stream().distinct()` replaced with an id-keyed `LinkedHashMap` dedupe; new `GdprExportServiceTest.java` created with the 3 specified tests, including a red-then-green mutation check confirming 2 of the 3 tests fail against the pre-fix `.distinct()` code (`mvn -o test -Dtest=GdprExportServiceTest` 3/3 green post-fix); `GdprExportIT` re-run to confirm no wiring regression (7/7 green). AC4: flipped all three `[PICKED UP by skillars-deferred-52 ACn]` tags in `deferred-work.md` (Def24, the new `AdminVideoService.deleteVideo()` item, D2) to `[CLOSED by skillars-deferred-52 ACn]` with closure notes, since all three ACs shipped in full — no partial-landing case applied. `mvn verify` not run locally per `docs/validation-strategy.md`. |
+| 2026-08-21 | Code review complete, status done. Blind Hunter + Edge Case Hunter + Acceptance Auditor. Acceptance Auditor found 0 AC violations — independently re-ran every `mvn` test/IT command and repeated the AC3 mutation check itself, all matching the Dev Agent Record's claims exactly. 1 patch applied: `AdminVideoService.deleteVideo()`'s Phase 2 release call gained the null-`reservationHandle` guard + warning log that its sibling fix in `VideoService.failTranscoding` (AC1) already had, closing a parity gap (`AdminVideoServiceTest` re-run 2/2 green). 2 findings deferred to `deferred-work.md`: new AC1/AC2 unit tests verify call ordering only, not resulting state (backstopped by `AdminVideoIT`'s existing e2e coverage); possible additional `.distinct()`-on-entity-without-`equals()`/`hashCode()` instances may exist in other `GdprExportService` builder methods, unconfirmed. 16 findings dismissed as noise/already-addressed/unreachable — notably the quota-permanently-leaked-on-release-failure class across all four split call sites, which is the exact RW3 residual this story's own AC4 already filed to `deferred-work.md` as an intentionally open design question, not a fresh miss; and a null-id-Booking-collapse concern in the AC3 dedupe, unreachable since `Booking` objects are always DB-persisted (non-null id) when returned by the repository finder methods `buildBookings` calls. |
