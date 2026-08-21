@@ -98,6 +98,9 @@ class RescheduleServiceTest {
         Instant proposedEnd = proposedStart.plus(1, ChronoUnit.HOURS);
         service.requestReschedule(BOOKING_ID, PARENT_ID, new CreateRescheduleRequest(proposedStart, proposedEnd));
 
+        // Deferred-50 AC3: verify the actual proposed times were passed, not (for example) the
+        // booking's original requestedStartTime/requestedEndTime — an argument-swap regression.
+        verify(bookingService).isSlotWithinAvailabilityWindow(eq(proposedStart), eq(proposedEnd), any());
         verify(rescheduleRepo).save(any(BookingRescheduleRequest.class));
         ArgumentCaptor<RescheduleRequestedEvent> captor = ArgumentCaptor.forClass(RescheduleRequestedEvent.class);
         verify(eventPublisher).publishEvent(captor.capture());
@@ -290,6 +293,9 @@ class RescheduleServiceTest {
 
         service.acceptReschedule(BOOKING_ID, RESCHEDULE_ID, COACH_USER_ID);
 
+        // Deferred-50 AC3: verify the actual proposed times were passed, not (for example) the
+        // booking's original requestedStartTime/requestedEndTime — an argument-swap regression.
+        verify(bookingService).isSlotWithinAvailabilityWindow(eq(proposedStart), eq(proposedEnd), any());
         assertThat(confirmedBooking.getRequestedStartTime()).isEqualTo(proposedStart);
         assertThat(confirmedBooking.getRequestedEndTime()).isEqualTo(proposedEnd);
         assertThat(pending.getStatus()).isEqualTo("ACCEPTED");
