@@ -107,6 +107,41 @@ class GeminiModerationServiceTest {
     }
 
     @Test
+    void contentWithSurrogatePairAtTruncationBoundary_dropsWholePairRatherThanSplittingIt() {
+        when(geminiClient.evaluate(any())).thenReturn(ModerationVerdict.SAFE);
+        String content = "x".repeat(99) + "😀" + "x".repeat(10); // 99 + 2 + 10 = 111 chars
+
+        service.moderate(1L, content);
+
+        String expectedTruncated = "x".repeat(99); // whole pair dropped, not split
+        String expectedPrompt = "Test prompt:\n"
+            + "\n\n---BEGIN USER CONTENT---\n"
+            + expectedTruncated
+            + "\n---END USER CONTENT---";
+        verify(geminiClient).evaluate(expectedPrompt);
+    }
+
+    @Test
+    void contentWithConsecutiveUnpairedHighSurrogatesAtTruncationBoundary_dropsBothRatherThanSplitting() {
+        // Malformed content, not a legitimate astral character: two lone high surrogates back to
+        // back (reachable via a crafted JSON payload's raw \uD800\uD800 escapes, which pass
+        // MessagingService.sendMessage's only length guard since codePointCount() counts each
+        // unpaired surrogate as its own code point). A single-backoff fix would land on the first
+        // lone surrogate (still unpaired) and stop; the loop must keep backing off.
+        when(geminiClient.evaluate(any())).thenReturn(ModerationVerdict.SAFE);
+        String content = "x".repeat(98) + "\uD800\uD800" + "x".repeat(10); // 98 + 2 + 10 = 110 chars
+
+        service.moderate(1L, content);
+
+        String expectedTruncated = "x".repeat(98); // both lone high surrogates dropped
+        String expectedPrompt = "Test prompt:\n"
+            + "\n\n---BEGIN USER CONTENT---\n"
+            + expectedTruncated
+            + "\n---END USER CONTENT---";
+        verify(geminiClient).evaluate(expectedPrompt);
+    }
+
+    @Test
     void contentWithinMaxInputChars_notTruncated() {
         when(geminiClient.evaluate(any())).thenReturn(ModerationVerdict.SAFE);
         String shortContent = "short message";
