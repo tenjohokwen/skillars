@@ -159,9 +159,13 @@ below.
      precise, non-sleep-based release point matters here.
    - **Test coverage**: this AC's change *is* the test hardening — no separate new test needed. Confirm the
      hardened test still passes deterministically: run it standalone several times in a row (this file has
-     no `@RepeatedTest` convention to reuse; a manual repeated `mvn -o test` invocation is sufficient, no
-     new annotation needed) to build confidence the flakiness class is actually closed, not just
-     relocated.
+     no `@RepeatedTest` convention to reuse; a manual repeated invocation is sufficient, no new annotation
+     needed) to build confidence the flakiness class is actually closed, not just relocated. Since
+     `BookingServiceConcurrencyIT` is an `*IT` class, this means repeating
+     `mvn -o integration-test -Dit.test=BookingServiceConcurrencyIT#createBookingRequest_coachSuspendedAfterUnlockedRead_isRejectedWithCoachUnavailable`
+     (Failsafe, not `mvn -o test` — see this story's own IT-execution gotcha in Dev Notes and Task 1.3),
+     not a plain Surefire `mvn -o test` run, which would silently skip this class entirely and report
+     `BUILD SUCCESS` having verified nothing.
 
 2. **AC2 — `BookingServiceConcurrencyIT#acceptBooking_coachSuspendedAfterUnlockedRead_isRejectedWithCoachUnavailable`
    gets the identical fix.**
@@ -186,11 +190,17 @@ below.
      VALUES (604, 'platform.payment.currency', 'eur', 'STRING',
              'ISO 4217 currency code (lowercase, as Stripe''s API expects) used for all Stripe charges. '
              || 'Single-currency platform today; extracted from a hardcoded literal so a future '
-             || 'multi-currency change does not require a code deploy for this value alone.', NOW());
+             || 'multi-currency change does not require a code deploy for this value alone.', NOW())
+     ON CONFLICT (key) DO NOTHING;
      ```
      Match the exact column list/style of the most recent prior seed (`V93__session_duration.sql`'s
      `(id, key, value, value_type, description, updated_at)` with `NOW()`), not the older no-`updated_at`
-     style some earlier migrations use.
+     style some earlier migrations use. The `ON CONFLICT (key) DO NOTHING` clause is not decorative:
+     `main.platform_config.id` is `PRIMARY KEY` with no sequence (ids are hand-assigned), and the conflict
+     target is `key` (`uq_platform_config_key`), a *different* unique constraint — an id collision raises a
+     PK violation the `ON CONFLICT (key)` clause never sees, failing Flyway on any database that has already
+     run a later migration reusing this id. Every `platform_config` seed since `V90` (`V90`, `V91`, `V93`)
+     ends this way; V93's own migration comment spells out this exact failure mode.
    - Current shape:
      ```java
      PaymentIntentCreateParams.Builder builder = PaymentIntentCreateParams.builder()
@@ -271,9 +281,13 @@ below.
     `StripePaymentGatewayTest`'s `stubCoachAndCommission()` helper; add the new
     `chargeAndCapture_passesConfiguredCurrencyToStripe` test per AC3's description.
   - [ ] 3.4 Run `mvn -o test -Dtest=StripePaymentGatewayTest` and confirm green (all existing tests plus
-    the new one). Run `mvn -o integration-test -Dit.test=PaymentWebhookIdempotencyIT` (or whichever
-    payment-module IT actually exercises `chargeAndCapture` end to end — verify which one during
-    implementation rather than assuming) to confirm no wiring regression from the new config key.
+    the new one). No IT-level check is needed or possible here: every `*IT` class extends
+    `AbstractIntegrationTest`, which `@Import`s `TestConfig`, whose `@Primary PaymentGateway` bean is
+    `StubPaymentGateway` — the real `@Service StripePaymentGateway` bean is never autowired behind the
+    `PaymentGateway` interface in any IT (confirmed by story-review against `PaymentWebhookIdempotencyIT`,
+    `CaptureReservationIT`, `SessionPackPaymentResourceIT`, and a repo-wide grep for any test wiring the real
+    class). `StripePaymentGatewayTest`'s new `chargeAndCapture_passesConfiguredCurrencyToStripe` (task 3.3)
+    is the only verification this change gets, and is sufficient.
 - [ ] Task 4: Ledger hygiene (AC: #4) — apply all annotations described in AC4 to `deferred-work.md`.
 
 ## Dev Notes
@@ -365,3 +379,4 @@ _To be filled in during implementation._
 | Date | Change |
 |---|---|
 | 2026-08-21 | Story created via story-creation process, bundling two items re-mined from previously-unpicked sections of `deferred-work.md` (2026-06-24 and 2026-08-04) after confirming the more recently active section (post-`skillars-deferred-40`) is thin — every untagged item there either needs a design/product decision this kind of bundled small-fix story should not make ad hoc, is a standing accepted frontend-test-infrastructure gap, or is too small alone to justify a story (full detail in "Deliberately not picked up" above). Both source items re-verified against live code at creation time: `BookingServiceConcurrencyIT.java:262`'s `Thread.sleep(1500)` is still present; `StripePaymentGateway.java:48`'s `.setCurrency("eur")` is still a string literal, confirmed the only `setCurrency` call site in the file. One related item (the `acceptBooking` sibling test at `:319-378`, carrying the identical `Thread.sleep(1500)` pattern at `:339`) was found independently while verifying the first and filed fresh as AC2, following the same "found while verifying, filed and picked up in the same pass" precedent `skillars-deferred-52` set for its own independently-found `AdminVideoService.deleteVideo()` duplicate. Two stale ledger items were checked and found to no longer name real code (`effectiveCredits` in `BookingService.java`, `lastPaymentIntentId`/`stripePaymentMethodId` in `CashOutService`/`CashOutServiceTest` — zero grep hits for either) and left un-annotated, out of this story's scope to fix ledger housekeeping unrelated to its own ACs. One item (`skillars-deferred-16`'s D6, `SoftDeleteIT`'s concurrency-test synchronization concern) was confirmed already fixed by separate, unannotated prior work — same finding `skillars-deferred-51`'s own creation notes already recorded — and was not re-picked-up or re-annotated here. |
+| 2026-08-21 | story-review adjustments applied, status remains ready-for-dev. `story-review.md` filed 3 findings against the draft, all fixed. AC1/AC2's race-condition analysis, the `pg_stat_activity` mechanism, AC3's currency-hardcoding analysis, the migration id, `stubCoachAndCommission()`'s mandatory-stub reasoning, and AC4's ledger-tagging state were all independently re-verified and confirmed accurate — no changes needed there. Finding 1/Medium: AC3's `V99` migration snippet omitted `ON CONFLICT (key) DO NOTHING`, contradicting AC3's own instruction to mirror `V93`'s style — every `platform_config` seed since `V90` uses this clause, and `V93`'s own comment explains it guards against a real Flyway PK-violation failure mode on databases that already ran a later migration reusing the id — added the clause plus a note explaining why it's load-bearing. Finding 2/Medium: Task 3.4 named `PaymentWebhookIdempotencyIT` (or "whichever payment-module IT actually exercises `chargeAndCapture`") as an IT-level wiring check, but no IT in the codebase exercises the real `StripePaymentGateway` bean — every `*IT` class gets `TestConfig`'s `@Primary StubPaymentGateway` via `AbstractIntegrationTest`, confirmed by reading `PaymentWebhookIdempotencyIT`, `CaptureReservationIT`, `SessionPackPaymentResourceIT`, and a repo-wide grep — rewrote Task 3.4 to drop the unfindable IT check and state plainly that `StripePaymentGatewayTest`'s new unit test (task 3.3) is the only verification this change gets. Finding 3/Low-Medium: AC1's Test Coverage paragraph told the dev to repeat-run the hardened race test via `mvn -o test`, contradicting this same story's own IT-execution gotcha (`*IT` classes run under Failsafe, not Surefire) and Task 1.3's correct command two paragraphs above — `mvn -o test` would silently skip `BookingServiceConcurrencyIT` and report `BUILD SUCCESS` having verified nothing; corrected AC1 to specify the `mvn -o integration-test -Dit.test=...` form. |
