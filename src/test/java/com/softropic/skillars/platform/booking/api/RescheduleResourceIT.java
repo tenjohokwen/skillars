@@ -69,6 +69,7 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
     private UUID coachProfileId;
     private UUID coachProfile2Id;
     private UUID bookingId;
+    private UUID coachProfile2BookingId;
     private UUID packTierId;
 
     @BeforeEach
@@ -77,6 +78,7 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
         coachProfileId  = UUID.randomUUID();
         coachProfile2Id = UUID.randomUUID();
         bookingId       = UUID.randomUUID();
+        coachProfile2BookingId = UUID.randomUUID();
 
         transactionTemplate.execute(status -> {
             jdbcTemplate.update(
@@ -149,6 +151,35 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
             jdbcTemplate.update(
                 "INSERT INTO marketplace.coach_pricing (coach_id, per_session_price, currency) VALUES (?, 50.00, 'EUR')",
                 coachProfile2Id
+            );
+
+            // Deferred-50 AC2: a narrow, single-day-of-week window for coachProfile2Id — unlike
+            // coachProfileId's wide-open every-day fixture above, this lets a test trigger
+            // SLOT_OUTSIDE_AVAILABILITY via a genuine "ordinary hours, coach doesn't work this day"
+            // scenario instead of the midnight-crossing construction the wide-open fixture requires.
+            // Day computed at test-run time (not a fixed constant) so the fixture/test pair isn't
+            // itself flaky against which day of week CI happens to run on. Both the window's
+            // day-of-week and the booking's start time are derived from the same captured instant
+            // (not two separate now() calls) so a midnight rollover between them can't desync the
+            // booking from its own just-seeded window.
+            ZonedDateTime coachProfile2FixtureNow = ZonedDateTime.now(ZoneId.of("Europe/Berlin"));
+            int narrowWindowDayOfWeek = coachProfile2FixtureNow.plusDays(2).getDayOfWeek().getValue();
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_availability_windows " +
+                "(id, coach_id, day_of_week, start_time, end_time, canonical_timezone) " +
+                "VALUES (?, ?, ?, '08:00:00', '18:00:00', 'Europe/Berlin')",
+                UUID.randomUUID(), coachProfile2Id, narrowWindowDayOfWeek
+            );
+            Instant coachProfile2BookingStart = coachProfile2FixtureNow
+                .plusDays(2).withHour(10).withMinute(0).withSecond(0).withNano(0).toInstant();
+            jdbcTemplate.update(
+                "INSERT INTO booking.bookings " +
+                "(id, parent_id, player_id, coach_id, requested_start_time, requested_end_time, " +
+                "status, canonical_timezone, version, created_at, updated_at) " +
+                "VALUES (?, ?, ?, ?, ?, ?, 'CONFIRMED', 'Europe/Berlin', 0, ?, ?)",
+                coachProfile2BookingId, PARENT_ID, PLAYER_ID, coachProfile2Id,
+                Timestamp.from(coachProfile2BookingStart), Timestamp.from(coachProfile2BookingStart.plus(1, ChronoUnit.HOURS)),
+                Timestamp.from(Instant.now()), Timestamp.from(Instant.now())
             );
 
             // Story 11.2: BookingDuplicationService's pack-eligibility check now queries
@@ -602,6 +633,36 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
     }
 
     /**
+     * Deferred-50 AC2: a genuine "ordinary hours, coach just doesn't work this day" rejection,
+     * distinct from the midnight-crossing test above. Uses coachProfile2Id's narrow single-day
+     * window (seeded in setUp) — the proposal below falls on a different day of week, at an
+     * ordinary daytime hour, so this proves the day-of-week rejection path rather than the
+     * start-date-anchored window-end edge case the other test exercises.
+     */
+    @Test
+    void requestReschedule_ordinaryHoursCoachDoesNotWorkThisDay_returns403WithSlotOutsideAvailabilityKey() {
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        ZonedDateTime proposedZdt = ZonedDateTime.now(ZoneId.of("Europe/Berlin"))
+            .plusDays(3).withHour(10).withMinute(0).withSecond(0).withNano(0);
+        Instant proposedStart = proposedZdt.toInstant();
+        Instant proposedEnd = proposedStart.plus(1, ChronoUnit.HOURS);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + coachProfile2BookingId + "/reschedule",
+            HttpMethod.POST,
+            Map.of("proposedStartTime", proposedStart.toString(), "proposedEndTime", proposedEnd.toString()),
+            authenticatedHeaders(parentCookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"booking.slotOutsideAvailability\"");
+            });
+    }
+
+    /**
      * skillars-deferred-32 AC5, requestReschedule row 4 of 4: {@code :110-112}. The second proposal
      * matches the original booking's 1-hour duration so it clears every earlier check and reaches
      * the pending-request guard.
@@ -729,9 +790,12 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
 
+        // Deferred-50 AC2 (story-review.md Finding 1): scoped by coach_id too, not just parent_id —
+        // AC2's new coachProfile2Id fixture booking shares PARENT_ID (the file's only parent), so a
+        // parent_id-only count would double-count it and break this assertion.
         Integer newBookingCount = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM booking.bookings WHERE parent_id = ? AND id != ?",
-            Integer.class, PARENT_ID, bookingId);
+            "SELECT COUNT(*) FROM booking.bookings WHERE parent_id = ? AND coach_id = ? AND id != ?",
+            Integer.class, PARENT_ID, coachProfileId, bookingId);
         assertThat(newBookingCount).isEqualTo(1);
     }
 

@@ -22,6 +22,7 @@ import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -81,6 +82,7 @@ class BookingDuplicationServiceTest {
         when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(true);
+        when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any())).thenReturn(List.of());
         when(packSessionService.findActivePackId(PLAYER_ID, COACH_ID)).thenReturn(activePackId);
 
         // Override the start time to be far enough in the past that +7 days is in the future
@@ -103,6 +105,10 @@ class BookingDuplicationServiceTest {
         Booking saved = bookingCaptor.getValue();
 
         Instant expectedStart = originalStart.plus(7, ChronoUnit.DAYS);
+        Instant expectedEnd = expectedStart.plus(1, ChronoUnit.HOURS);
+        // Deferred-50 AC3: verify the actual duplicated-slot times were passed, not (for example)
+        // the original booking's pre-duplication times — an argument-swap regression.
+        verify(bookingService).isSlotWithinAvailabilityWindow(eq(expectedStart), eq(expectedEnd), any());
         assertThat(saved.getRequestedStartTime()).isEqualTo(expectedStart);
         assertThat(saved.getCoachId()).isEqualTo(COACH_ID);
         assertThat(saved.getPlayerId()).isEqualTo(PLAYER_ID);
@@ -175,6 +181,28 @@ class BookingDuplicationServiceTest {
             .isInstanceOf(OperationNotAllowedException.class)
             .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
                 .isEqualTo(BookingError.SLOT_OUTSIDE_AVAILABILITY));
+
+        verify(bookingRepository, never()).save(any());
+        verify(packSessionService, never()).findActivePackId(any(), any());
+    }
+
+    /** Deferred-50 AC1: repeat-next-week must not double-book the coach at the duplicated slot. */
+    @Test
+    void duplicateNextWeek_overlapsAnotherBooking_throwsSlotUnavailable() {
+        Instant originalStart = Instant.now().minus(6, ChronoUnit.DAYS);
+        completedBooking.setRequestedStartTime(originalStart);
+        completedBooking.setRequestedEndTime(originalStart.plus(1, ChronoUnit.HOURS));
+
+        when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(true);
+        when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any()))
+            .thenReturn(List.of(new Booking()));
+
+        assertThatThrownBy(() -> service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.SLOT_UNAVAILABLE));
 
         verify(bookingRepository, never()).save(any());
         verify(packSessionService, never()).findActivePackId(any(), any());

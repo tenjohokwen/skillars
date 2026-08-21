@@ -72,6 +72,21 @@ public class BookingDuplicationService {
                 BookingError.SLOT_OUTSIDE_AVAILABILITY);
         }
 
+        // Deferred-50 AC1: duplicateNextWeek previously relied solely on the DB-level exclusion
+        // constraint at commit to catch a double-booking, surfacing as an unmapped 500 rather than a
+        // clean rejection. Mirrors acceptReschedule's own overlap check (Deferred-14 AC4) — same
+        // repository method, status list, and error code. excludeBookingId is null: unlike a
+        // reschedule, this new booking doesn't exist yet, so there is nothing to exclude.
+        List<Booking> overlapping = bookingRepository.findOverlappingBookings(
+            coach.getId(), newStart, newEnd,
+            BookingService.ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED, null);
+        if (!overlapping.isEmpty()) {
+            throw new OperationNotAllowedException(
+                "The proposed slot is no longer available — another booking occupies that time",
+                Map.of("coach id", coach.getId(), "proposed start time", newStart, "proposed end time", newEnd),
+                BookingError.SLOT_UNAVAILABLE);
+        }
+
         UUID packId = packSessionService.findActivePackId(original.getPlayerId(), original.getCoachId());
 
         Booking newBooking = new Booking();
