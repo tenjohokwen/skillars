@@ -100,12 +100,17 @@ left alone.
      and `packSessionService.findActivePackId` are never reached. Also add `when(bookingRepository
      .findOverlappingBookings(any(), any(), any(), any(), any())).thenReturn(List.of());` to the existing
      `duplicateNextWeek_completedBooking_createsNewRequestedBookingAdvancedBy7DaysAndCarriesOverPack` test
-     (`:79-117`) — it is the only existing test that reaches past the new check into `bookingRepository.save(...)`,
-     and an unstubbed Mockito `@Mock` method returning `List` defaults to `null`, which would NPE at
-     `overlapping.isEmpty()` rather than cleanly failing the test with a clear assertion — check every
-     other existing test in the file for the same unstubbed-default risk before assuming only this one
-     test is affected (the class's own established caution, see `skillars-deferred-49`'s Task 1.4/4.2
-     for the identical pattern on a boolean mock).
+     (`:79-117`) — it is the only existing test that reaches past the new check into `bookingRepository.save(...)`.
+     **Correction — story-review.md Finding 2 (Medium): the reason for this stub is NOT an NPE risk.**
+     Mockito's default answer for an unstubbed `@Mock` method returning `List` is an **empty list**, not
+     `null` (verified against this project's resolved `mockito-core:5.17.0`) — an unstubbed
+     `findOverlappingBookings(...)` call returns `[]`, so `overlapping.isEmpty()` is `true` and execution
+     simply continues past the new check silently, with no failure of any kind. Add the explicit
+     `.thenReturn(List.of())` stub anyway, as good practice (self-documenting, doesn't rely on an implicit
+     default), not because any existing test would otherwise NPE or fail — none of this file's other
+     existing tests are actually at risk from this change (traced individually: `duplicateNextWeek_noCreditsAvailable_throws`,
+     the only other test reaching past where the new check sits, throws from `packSessionService.findActivePackId`
+     immediately after and never depends on the overlap result).
    - **Integration test optional, not required.** `RescheduleResourceIT`'s existing
      `duplicateNextWeek_asOwningCoachWithCompletedBooking_returns204` test has no second booking to
      overlap against, so it is unaffected by this AC and needs no change. Adding a dedicated new IT for
@@ -150,6 +155,20 @@ left alone.
      `requestReschedule` test in this file — `COACH_2_EMAIL`/`COACH_2_USER_ID` already exist in the
      file's constants (`:55,59`) purely for the coach-ownership tests that already use `coachProfile2Id`
      as a foil; no new constant needed.
+   - **Required companion fix, or `duplicateNextWeek_asOwningCoachWithCompletedBooking_returns204` breaks
+     — story-review.md Finding 1 (High).** That existing test (`:720-736`) asserts the post-duplication
+     booking count via `SELECT COUNT(*) FROM booking.bookings WHERE parent_id = ? AND id != ?` scoped by
+     `PARENT_ID` only, with no `coach_id` filter, then asserts the result `isEqualTo(1)`. `setUp()` runs
+     before every test (the DB is truncated between tests — no cross-test leakage), so once this AC's new
+     `coachProfile2Id` booking exists using `PARENT_ID` (the only parent this file's fixture has —
+     `insertConfirmedBooking` hardcodes it, and this AC's own new test authenticates as `PARENT_EMAIL`),
+     that query's baseline count is already 1 before `duplicateNextWeek` even runs, making the post-call
+     count 2 and the `isEqualTo(1)` assertion fail. This is the same class of fixture-collision breakage
+     `skillars-deferred-49`'s own review already hit on this identical test (its Finding 1). Fix
+     `duplicateNextWeek_asOwningCoachWithCompletedBooking_returns204`'s count query to scope by
+     `coach_id = ?` (bound to `coachProfileId`) in addition to `parent_id = ?`, so it counts only bookings
+     for the coach it's actually asserting about. Do this as part of Task 2, not left for Task 2.3's
+     verification pass to merely catch.
 
 3. **AC3 — the availability-window unit tests verify the actual arguments passed to
    `isSlotWithinAvailabilityWindow`, not just that it was called with `any()`.**
@@ -185,6 +204,10 @@ left alone.
    `duplicateNextWeek` DST-shift quirk) and the fourth from `skillars-deferred-49` proper
    (`isSlotWithinAvailabilityWindow`'s cross-midnight-window limitation) untouched — none are picked up
    by this story, per the scoping reasoning in "Why this story exists" above.
+   - **Already done — story-review.md Finding 3 (Low/Informational).** All three tags were already
+     applied to `deferred-work.md` in the same commit that created this story file (verified via
+     `git blame`). Task 4 requires no further code change; do not re-apply or second-guess this step when
+     executing the story.
 
 ## Tasks / Subtasks
 
@@ -198,7 +221,11 @@ left alone.
   - [ ] 2.1 Seed the narrow availability window and the `CONFIRMED` booking for `coachProfile2Id` in
     `setUp()`, without touching the `coachProfileId`-scoped pack fixture below it.
   - [ ] 2.2 Add `requestReschedule_ordinaryHoursCoachDoesNotWorkThisDay_returns403WithSlotOutsideAvailabilityKey`.
-  - [ ] 2.3 Run the full `RescheduleResourceIT` suite (not just the new test) and confirm every
+  - [ ] 2.3 Fix `duplicateNextWeek_asOwningCoachWithCompletedBooking_returns204`'s booking-count query to
+    scope by `coach_id = ?` (`coachProfileId`) in addition to `parent_id = ?` (story-review.md Finding 1
+    — required, this test breaks otherwise once AC2's `coachProfile2Id` booking exists under the same
+    `PARENT_ID`).
+  - [ ] 2.4 Run the full `RescheduleResourceIT` suite (not just the new test) and confirm every
     pre-existing test — including the ~25 that key off `coachProfileId`'s wide-open fixture — still
     passes; the new `coachProfile2Id` fixture must be additive-only.
 - [ ] Task 3: Availability-check argument verification (AC: #3)
@@ -206,7 +233,9 @@ left alone.
   - [ ] 3.2 Add the duplicate-next-week argument assertion to `BookingDuplicationServiceTest`.
   - [ ] 3.3 Confirm all three new assertions pass against the current, unmodified production code; if
     any fails, stop and report rather than silently adjusting the assertion.
-- [ ] Task 4: Ledger hygiene (AC: #4) — apply the three `[PICKED UP]` tags specified above.
+- [x] Task 4: Ledger hygiene (AC: #4) — apply the three `[PICKED UP]` tags specified above. Already done
+  as of story creation (story-review.md Finding 3) — verify the tags are present in `deferred-work.md`,
+  no edit needed.
 
 ## Dev Notes
 
@@ -261,8 +290,11 @@ left alone.
   — `findOverlappingBookings`, AC1's reused query]
 - [Source: `src/test/java/com/softropic/skillars/platform/booking/api/RescheduleResourceIT.java:69-175`
   — `setUp()`, `coachProfile2Id`'s existing-but-availability-window-less fixture, AC2's target]
-- [Source: `src/test/java/com/softropic/skillars/platform/booking/api/RescheduleResourceIT.java:384-404`
-  — the existing midnight-crossing `SLOT_OUTSIDE_AVAILABILITY` test, AC2's sibling (not replaced)]
+- [Source: `src/test/java/com/softropic/skillars/platform/booking/api/RescheduleResourceIT.java:572-602`
+  — the existing midnight-crossing `SLOT_OUTSIDE_AVAILABILITY` test
+  (`requestReschedule_slotOutsideAvailabilityWindow_returns403WithSlotOutsideAvailabilityKey`), AC2's
+  sibling (not replaced); line range corrected by story-review.md Finding 4 from the stale `:384-404`
+  citation carried forward from `skillars-deferred-49`'s ledger text — the file has grown since]
 - [Source: `src/test/java/com/softropic/skillars/platform/booking/api/BookingRequestResourceIT.java`
   — the narrow-window fixture shape AC2 mirrors, per `skillars-deferred-49` AC1's own citation]
 - [Source: `src/test/java/com/softropic/skillars/platform/booking/service/RescheduleServiceTest.java:79-181`
@@ -286,3 +318,4 @@ left alone.
 | Date | Change |
 |---|---|
 | 2026-08-21 | Story created via story-creation process, bundling three items filed by `skillars-deferred-49`'s own code review (`deferred-work.md`'s "code review of skillars-deferred-49-..." section) — per explicit instruction not to create another small story. All three re-verified against live code at creation time rather than trusted from ledger text: `BookingDuplicationService.duplicateNextWeek` still has no overlap check (`BookingDuplicationService.java:41-101` read directly); `RescheduleResourceIT`'s `SLOT_OUTSIDE_AVAILABILITY` coverage is still midnight-crossing-only (`:384-404`), and `coachProfile2Id` is confirmed present in the fixture with no availability window or booking of its own (`:69-175`); `RescheduleServiceTest`/`BookingDuplicationServiceTest` still stub `isSlotWithinAvailabilityWindow(any(), any(), any())` everywhere, confirmed by grep. Three other items from the same review section deliberately not picked up: the validation-logic-duplication DRY nit (matches this project's own accepted anti-abstraction convention, `skillars-deferred-48` precedent), the `acceptReschedule` unlocked-read TOCTOU race (needs a `CoachProfileService` locking-strategy decision, out of a bundled small-fix story's scope), and `duplicateNextWeek`'s DST-shift-of-duplicated-time quirk (pre-existing behavior, no proposed fix in the ledger item itself). |
+| 2026-08-21 | `story-review.md` applied: 4 findings, all addressed before dev started. Finding 1/High: AC2's new `coachProfile2Id` booking (under the file's only parent, `PARENT_ID`) collides with `duplicateNextWeek_asOwningCoachWithCompletedBooking_returns204`'s `parent_id`-only (no `coach_id` filter) booking-count assertion, breaking it exactly the way an analogous fixture collision broke the same test in `skillars-deferred-49`'s own review; fixed by adding a required companion fix (scope that query's count by `coach_id` too) directly to AC2/Task 2, not left for verification to merely catch. Finding 2/Medium: AC1's stated reason for the `List.of()` stub — an unstubbed Mockito `List`-returning mock defaulting to `null` and NPEing — is factually wrong for this project's resolved Mockito version (default is an empty list, execution silently continues instead); corrected the rationale in AC1/Task 1.2 while keeping the stub itself as good practice. Finding 3/Low: AC4/Task 4's three ledger tags were already applied at story-creation time (same commit); Task 4 marked done, with a note that no further edit is needed. Finding 4/Low: the References section's midnight-crossing-test line citation was stale (`:384-404` carried forward from `skillars-deferred-49`'s ledger text); corrected to `:572-602`. No other issues found — story-review.md's "Verified accurate" section independently confirmed every other AC1–AC3 file/line citation, insertion point, and cross-AC independence claim against the live repo. |

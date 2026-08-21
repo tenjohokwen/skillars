@@ -1,132 +1,152 @@
-# Story Review: Deferred-49 — Reschedule & Duplicate-Next-Week Current-Availability-Window Enforcement
+# Story Review: skillars-deferred-50 (Duplicate-Next-Week Overlap Guard, Reschedule Ordinary-Hours IT Coverage & Availability-Check Argument Verification)
 
-Reviewed: `_bmad-output/implementation-artifacts/skillars-deferred-49-reschedule-and-duplicate-current-availability-window-enforcement.md`
+Reviewed against the live repo at commit `4aeabc1` (branch
+`duplicate-next-week-overlap-guard-reschedule-ordinary-hours-coverage-and-availability-test-hardening`).
+Every file/line citation in the story was independently re-checked against the current source,
+not trusted from the story text. 4 findings below; everything else in the story checks out (see
+"Verified accurate" at the end) — no changes are recommended beyond addressing these.
 
-Method: every factual claim in the story (line numbers, "no dedicated IT" claims, the fixture-breakage
-mechanism AC1 already flags, and the frontend/i18n "already exists" claims) was re-verified against the
-current code on this branch. Read in full: `RescheduleService.java`, `BookingDuplicationService.java`,
-`BookingService.isSlotWithinAvailabilityWindow` (`:827-854`), `RescheduleServiceTest.java`,
-`BookingDuplicationServiceTest.java`, `RescheduleResourceIT.java` (all `@Test` methods, `setUp`, and
-helpers), `ParentBookingsPage.vue`'s `submitReschedule()`, `CoachCommandCenterPage.vue`'s
-`handleRepeatNextWeek()`, `BookingError.java`, and the three i18n bundles' `slotOutsideAvailability` keys.
-Specifically checked and ruled out as non-issues:
+---
 
-- **AC1/AC2's cited line numbers and "before/after" insertion points.** All match the current file contents
-  exactly (`RescheduleService.java:97-113`, `BookingDuplicationService.java:53-57`).
-- **AC1's fixture-breakage claim itself.** Confirmed real: `RescheduleResourceIT.setUp()` seeds no
-  `marketplace.coach_availability_windows` row at all, and its proposal times are bare
-  `Instant.now().plus(N, DAYS)` with no hour anchoring — the story's own required 7-day, wide-open-window
-  fixture fix is necessary and correctly scoped for *that* breakage.
-- **AC3's i18n and frontend claims.** `booking.errors.slotOutsideAvailability` is present verbatim in all
-  three locale bundles at the cited lines; `ParentBookingsPage.vue`'s `submitReschedule()` catch chain and
-  `CoachCommandCenterPage.vue`'s bare `handleRepeatNextWeek()` catch both match the story's description
-  exactly — no frontend gap there.
-- **`Booking.coachId` / `CoachAvailabilityWindow.coach_id` semantics.** Both key off `CoachProfile.id`, the
-  same space `BookingService.createBookingRequest` already uses — AC1/AC2's `findByCoachId(booking.getCoachId())`
-  / `findByCoachId(coach.getId())` calls are the correct id.
-- **Field-append / constructor-order guidance.** Correct for both services' `@RequiredArgsConstructor` and
-  both existing test files' positional constructor calls.
+## Finding 1 (High) — AC2's fixture addition breaks an existing IT test's booking-count assertion; the story's "additive only" claim does not hold
 
-Four issues survived verification — two are concrete test breakages the story's own scoping text asserts
-won't happen, one is a test-authoring approach in the story that cannot achieve its own stated goal, and one
-is an unaddressed corner case in the design decision itself.
+**AC2** directs adding a new `CONFIRMED` booking for `coachProfile2Id` in `setUp()`, "mirroring the
+shape `insertConfirmedBooking(bookingId)` already creates for `coachProfileId`" — which means the
+new booking's `parent_id` will be `PARENT_ID`, the same parent every other fixture booking in this
+file uses (`insertConfirmedBooking` at `RescheduleResourceIT.java:942-953` hardcodes `PARENT_ID`;
+there's no parameterized coach-only variant, so a dev following the "mirror the shape" instruction
+will naturally reuse `PARENT_ID`, and there is no other parent user this test file could plausibly
+use for it — `requestReschedule` requires the caller's `parentUserId` to equal the booking's
+`parent_id`, and the new AC2 test authenticates as `PARENT_EMAIL`).
 
-## Findings
+`setUp()` runs before **every** test method — confirmed via `DatabaseResetTestExecutionListener`,
+which truncates the database before each test method runs, so there is no cross-test leakage to
+rely on for isolation; every test gets a fresh copy of whatever `setUp()` inserts.
 
-### 1. AC2's "no IT change required" claim is wrong — it will break an existing IT in the very file AC1 already touches
+`duplicateNextWeek_asOwningCoachWithCompletedBooking_returns204`
+(`RescheduleResourceIT.java:720-736`) asserts:
 
-**Severity: High (confirmed) — a currently-green integration test starts failing the moment AC2 ships,
-regardless of AC1's fixture fix.**
+```java
+Integer newBookingCount = jdbcTemplate.queryForObject(
+    "SELECT COUNT(*) FROM booking.bookings WHERE parent_id = ? AND id != ?",
+    Integer.class, PARENT_ID, bookingId);
+assertThat(newBookingCount).isEqualTo(1);
+```
 
-**Where:** `RescheduleResourceIT.java:672-688`, `duplicateNextWeek_asOwningCoachWithCompletedBooking_returns204`.
+This query is scoped only by `parent_id` and excludes only the one `bookingId` field — it has no
+`coach_id` filter. Once AC2's `coachProfile2Id` booking exists (parent `PARENT_ID`, a different
+`id` than `bookingId`), the baseline count before `duplicateNextWeek` even runs is already 1, and
+after the call creates its own new booking the count becomes 2 — the assertion `isEqualTo(1)`
+fails.
 
-AC2 states: *"No new/changed integration test required. `BookingDuplicationService` has no dedicated
-`*ResourceIT` of its own found in the repo... unit coverage in `BookingDuplicationServiceTest` is
-sufficient."* This is false: `RescheduleResourceIT.java` — the exact file AC1 is already modifying —
-contains a full HTTP-level happy-path test for `duplicate-next-week` at `:672-688`.
+This is not a hypothetical: `skillars-deferred-49`'s own code review already hit this exact test
+with an analogous fixture-collision bug (its change log, `deferred-49` story file: "Finding 1/High:
+AC2's 'no IT change required' claim was wrong — `duplicateNextWeek_asOwningCoachWithCompletedBooking_returns204`
+... breaks regardless of AC1's fixture, because `setBookingStatus` leaves the booking with a ~4-day
+span; fixed by specifying a required fix to that helper"). This test is a known fragile point for
+exactly this class of fixture change, and this story's AC2 doesn't mention it at all.
 
-Worse, even applying AC1's mandated fixture (a 7-day, `00:00:00`–`23:59:59` wide-open window per day of
-week) does not save this test. The test calls `setBookingStatus("COMPLETED")` (`:945-951`), which updates
-only `status` and `requested_start_time` (to `Instant.now().minus(2, DAYS)`) and leaves `requested_end_time`
-untouched at its `insertConfirmedBooking`-seeded value (`Instant.now().plus(2, DAYS).plus(1, HOURS)`). That
-gives the booking used by this test an actual duration of ~4 days 1 hour. `duplicateNextWeek` adds 7 days to
-both bounds, preserving that same ~4-day span. `isSlotWithinAvailabilityWindow` anchors `windowEnd` to the
-session's *start* calendar date (`:844`, `w.getEndTime().atDate(startZdt.toLocalDate())`), so no single-day
-window — wide-open or not — can ever satisfy a multi-day span. Once AC2's check lands, this test will start
-returning 403/`booking.slotOutsideAvailability` instead of 204.
+**AC2's text asserts "this is additive only" and Task 2.3 asks the dev to "confirm every
+pre-existing test ... still passes; the new `coachProfile2Id` fixture must be additive-only" — that
+verification step will catch this at implementation time, but the AC itself should have flagged
+the required companion fix up front** (e.g., scope the count query to `coach_id = ?`, or give the
+new `coachProfile2Id` booking a distinct parent, or exclude it explicitly), the same way AC2's own
+citation of `setBookingStatus`'s prior fix shows this project's convention of calling out such
+fixture-collision fixes explicitly rather than leaving them to "verification will catch it."
 
-This needs either a dedicated fixture note (parallel to AC1's) covering this test, or a fix to
-`setBookingStatus` to also advance `requested_end_time`, called out explicitly — AC2's task list (2.4) as
-written will lead the dev agent to skip IT changes entirely on the "no dedicated IT exists" premise and never
-notice this test.
+**Recommendation:** amend AC2 (or flag it as a Dev Note) to either scope
+`duplicateNextWeek_asOwningCoachWithCompletedBooking_returns204`'s count query to
+`coach_id = coachProfileId`, or otherwise account for the new fixture booking, before Task 2 is
+implemented.
 
-### 2. AC1's own existing unit tests break, and the story's test-guidance never says so
+---
 
-**Severity: High (confirmed) — two currently-green unit tests fail once AC1's check is added, with no
-guidance to fix them.**
+## Finding 2 (Medium) — AC1's stated reason for the `List.of()` stub fix is factually wrong: Mockito does not default unstubbed `List`-returning mocks to `null`
 
-**Where:** `RescheduleServiceTest.java:87-103` (`requestReschedule_parentOwnsBooking_confirmedStatus_createsRequest`)
-and `:113-140` (`requestReschedule_legacyThreeHourBooking_movesAtItsOwnLength`).
+AC1's unit-test guidance says:
 
-Both tests reach past the duration-match check into `rescheduleRepo.save(...)` without stubbing
-`bookingService.isSlotWithinAvailabilityWindow(...)`. Since `bookingService` is a Mockito `@Mock`, an
-unstubbed call to that method returns Mockito's default `boolean` value, `false`. Once AC1 inserts the
-availability check between the duration check and the pending-request check, both tests will start hitting
-`OperationNotAllowedException(SLOT_OUTSIDE_AVAILABILITY)` instead of reaching `save(...)`, and both will fail.
+> an unstubbed Mockito `@Mock` method returning `List` defaults to `null`, which would NPE at
+> `overlapping.isEmpty()` rather than cleanly failing the test with a clear assertion
 
-AC2's parallel test-guidance explicitly anticipates this for `BookingDuplicationServiceTest` ("confirm the
-file's existing happy-path test(s) still pass once the mock is stubbed to return `true`"). AC1's guidance for
-`RescheduleServiceTest` has no equivalent sentence — it only describes the two *new* tests to add. A dev
-agent following AC1 literally will not think to add
-`when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(true)` to these two
-pre-existing tests' setup, or thread it into `setUp()`.
+This is incorrect. Mockito's default answer for `@Mock`-created mocks (`RETURNS_DEFAULTS`, backed
+by `ReturnsEmptyValues`) returns an **empty collection** for `Collection`/`List`/`Set`/`Map` return
+types, not `null`. Verified empirically against this project's actual resolved Mockito version
+(`mockito-core:5.17.0`, confirmed via `mvn dependency:tree`): a plain `@Mock` interface method
+returning `List<String>`, called unstubbed, returns `[]`, and `result == null` is `false`.
 
-### 3. AC1's suggested new-IT-test approach cannot produce the rejection it's meant to test, given AC1's own mandated fixture
+Practical consequence: an unstubbed `bookingRepository.findOverlappingBookings(...)` call would
+return an empty list, so `overlapping.isEmpty()` evaluates to `true` and execution simply
+**continues past the new check silently** — no NPE, no failure. Tracing all 5 pre-existing
+`BookingDuplicationServiceTest` tests against this confirms none of them are actually at NPE risk;
+`duplicateNextWeek_noCreditsAvailable_throws` (the one other test that reaches past where the new
+check will sit) passes regardless, since it doesn't depend on the overlap result — `packSessionService.findActivePackId`
+throws immediately after.
 
-**Severity: Medium (confirmed) — as written, the guidance leads to a test that most likely won't fail the
-way its name promises, undermining regression coverage for the very AC it verifies.**
+This doesn't change the recommended action — adding the explicit
+`.thenReturn(List.of())` stub to the happy-path test is still good practice (makes the test
+self-documenting and doesn't rely on implicit Mockito defaults) — but the story's stated
+justification is wrong, and the follow-on instruction to "check every other existing test in the
+file for the same unstubbed-default risk" is chasing a risk that doesn't exist in this codebase's
+actual Mockito version. Worth correcting the rationale so a future reader doesn't take the wrong
+lesson about Mockito's default behavior.
 
-**Where:** AC1's bullet on `requestReschedule_slotOutsideAvailabilityWindow_returns403WithSlotOutsideAvailabilityKey`,
-and the fixture it depends on (`coach_availability_windows`, all 7 `day_of_week` values, `00:00:00`–`23:59:59`).
+---
 
-AC1 tells the dev to mirror `BookingRequestResourceIT.createBookingRequest_slotOutsideAvailabilityWindow_returns422`'s
-convention: pick a time "far enough in the future" (`Instant.now().plusSeconds(21 * 24 * 3600)`-style) to
-land outside the window. That convention works in `BookingRequestResourceIT` because its fixture is a single
-*narrow* window (next-day, 08:00–18:00) — a far-future date lands on an arbitrary day of week with no window
-at all.
+## Finding 3 (Low/Informational) — AC4's ledger tags are already applied; Task 4 has nothing left to do
 
-AC1's own mandated `RescheduleResourceIT` fixture is categorically different: it seeds a window for **every**
-day of week, each covering **all** of `00:00:00`–`23:59:59`. Given `isSlotWithinAvailabilityWindow`'s
-day-of-week + intra-day-boundary matching (`:827-854`), there is no "far enough in the future" plain-hours
-proposal that lands outside this fixture — every calendar day has full coverage. The only way to fail the
-check under this fixture is a session whose `endZdt` crosses past `23:59:59` on the *start's* calendar date
-(a proposal starting late at night, e.g. 23:30, running past midnight) — since `windowEnd` is anchored to the
-start date only. A "3 weeks out, 1 hour long, arbitrary hour" proposal (the pattern AC1 explicitly suggests)
-will, in the overwhelming majority of cases, land fully inside some day's window and return 204 instead of
-403 — the opposite of what the new test is supposed to assert, and the kind of thing that would pass CI while
-silently testing nothing.
+AC4 and Task 4 direct the dev to add `[PICKED UP by skillars-deferred-50 AC1/AC2/AC3]` tags to the
+three ledger items in `deferred-work.md`. Checking the live file: all three tags are **already
+present** (`deferred-work.md:1631-1633`), applied in the same commit that created this story file
+(`4aeabc1`, per `git blame`). The other three items in that ledger section correctly remain
+untagged, matching AC4's "leave untouched" instruction.
 
-### 4. Design gap: `acceptReschedule` never re-validates availability at accept time, though it already re-validates other proposal-time facts there
+Not a defect — the end state AC4 asks for already exists — but worth flagging so whoever executes
+Task 4 doesn't spend time second-guessing an apparently-already-done step, and so the story's
+completion checklist isn't misread as incomplete when this one item requires no code change.
 
-**Severity: Low/Open question — not a broken test, but a real hole in "current availability" enforcement as
-the story frames its own goal.**
+---
 
-**Where:** `RescheduleService.acceptReschedule` (`:137-231`).
+## Finding 4 (Low) — Stale line-number citation for the existing midnight-crossing test
 
-The story's stated semantics are "a reschedule... must fit the coach's CURRENT availability, re-validated at
-request time" — but `acceptReschedule` is the method that actually finalizes the booking's
-`requested_start_time`/`requested_end_time` (`:217-218`), and it already demonstrates the codebase's own
-precedent for re-checking proposal-time facts against present-tense state at accept time: it re-checks
-`proposedStartTime().isAfter(Instant.now())` again (`:161-164`, identical to the check already made in
-`requestReschedule`), takes a pessimistic coach lock specifically to catch a suspension that lands mid-flight
-(`:193-204`), and re-checks slot overlap against the *proposed* window (`:206-215`). Availability windows are
-conspicuously absent from that re-check list.
+The story's References section cites the existing `SLOT_OUTSIDE_AVAILABILITY` midnight-crossing
+test at `RescheduleResourceIT.java:384-404`. In the live file that test
+(`requestReschedule_slotOutsideAvailabilityWindow_returns403WithSlotOutsideAvailabilityKey`) is
+actually at lines **572–602** — the file has grown (more tests added) since that citation was
+first written into the ledger by `skillars-deferred-49`'s own review, and this story's References
+section carried the stale line numbers forward without re-verifying them, despite the story's own
+"Why this story exists" section stating all citations were "re-verified against the live repo
+during this story's creation, not just trusted from the ledger text." The test name itself is
+correct and unambiguous, so this doesn't block implementation, but the specific line range is
+wrong.
 
-A reschedule request can sit `PENDING` for an arbitrary length of time. If the coach narrows their
-`coach_availability_windows` after a parent's proposal but before the coach accepts it, `acceptReschedule`
-will still happily finalize the booking into a slot outside the coach's now-current availability — precisely
-the scenario this story's own "Why this story exists" section describes as the problem, just reached through
-the accept door instead of the request door. This may be an intentional scope boundary ("re-validated at
-request time" read literally), but the story doesn't explicitly rule accept-time re-validation in or out, and
-the accept-time precedent already set for `START_TIME_IN_PAST`/`SLOT_UNAVAILABLE`/`COACH_UNAVAILABLE` argues
-for treating it the same way. Worth an explicit decision before implementation, not left implicit.
+---
+
+## Verified accurate (no issues found)
+
+- AC1's insertion point (`BookingDuplicationService.java`, after the availability check ending at
+  `:73`, before `packSessionService.findActivePackId(...)` at `:75`) — exact match.
+- `bookingRepository`, `BookingService.ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED` (package-private,
+  same package), and `BookingError.SLOT_UNAVAILABLE` are all already in scope / already defined as
+  claimed; `findOverlappingBookings`'s `null`-excludeBookingId handling is explicit in its `@Query`
+  (`BookingRepository.java:27`), confirming AC1's `null` argument choice is safe.
+- `RescheduleService.acceptReschedule`'s overlap check and coach-row locking citations
+  (`RescheduleService.java:208-215`, `:238-247`) are accurate.
+- AC2's fixture-insertion boundaries (`coachProfile2Id` insert at `:143-152`, pack-purchase block
+  at `:154-170`) are pinpoint-accurate against the live file.
+- AC2's narrow-window fixture shape matches `BookingRequestResourceIT`'s existing precedent
+  (`day_of_week`/`start_time`/`end_time`/`canonical_timezone` columns, dynamic day-of-week
+  computation via `ZonedDateTime`), including the `TIME` column type in the `V26` migration
+  accepting the `'08:00:00'`-style literals.
+- AC3's target tests (`requestReschedule_parentOwnsBooking_confirmedStatus_createsRequest`,
+  `acceptReschedule_coachOwnsBooking_updatesTimesAndStatus`,
+  `duplicateNextWeek_completedBooking_createsNewRequestedBookingAdvancedBy7DaysAndCarriesOverPack`)
+  all exist as named, at the cited (or near-cited) line ranges, and each has the local variables
+  needed (`proposedStart`/`proposedEnd`/`expectedStart`) to write the described argument
+  assertions without further plumbing. `eq()` is available via the existing
+  `import static org.mockito.Mockito.*` (Mockito extends ArgumentMatchers), so no new import is
+  needed.
+- The `maven-failsafe-plugin` IT-execution gotcha and `docs/validation-strategy.md` targeted-test
+  guidance are both accurate as stated.
+- No cross-AC production-code coupling: AC1 (BookingDuplicationService) and AC2
+  (RescheduleService.requestReschedule, different method/class) don't interact, and AC1's new
+  overlap check is coach-scoped, so AC2's new `coachProfile2Id` booking cannot trigger it.
