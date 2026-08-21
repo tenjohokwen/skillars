@@ -1,6 +1,6 @@
 # Story Deferred-49: Reschedule & Duplicate-Next-Week Current-Availability-Window Enforcement
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -259,41 +259,54 @@ path. This story adds two more callers of the same method and the same error, no
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: RescheduleService request-time availability check (AC: #1)
-  - [ ] 1.1 Add `coachAvailabilityWindowRepository` field + imports to `RescheduleService`.
-  - [ ] 1.2 Add the availability-window check to `requestReschedule`, positioned per AC1.
-  - [ ] 1.3 Add the two new `RescheduleServiceTest` unit tests (reject / accept).
-  - [ ] 1.4 Fix the two pre-existing `RescheduleServiceTest` tests broken by 1.2 (story-review.md Finding 2
+- [x] Task 1: RescheduleService request-time availability check (AC: #1)
+  - [x] 1.1 Add `coachAvailabilityWindowRepository` field + imports to `RescheduleService`.
+  - [x] 1.2 Add the availability-window check to `requestReschedule`, positioned per AC1.
+  - [x] 1.3 Add the two new `RescheduleServiceTest` unit tests (reject / accept).
+  - [x] 1.4 Fix the two pre-existing `RescheduleServiceTest` tests broken by 1.2 (story-review.md Finding 2
     — `requestReschedule_parentOwnsBooking_confirmedStatus_createsRequest` and
     `requestReschedule_legacyThreeHourBooking_movesAtItsOwnLength`), and check every other existing test in
     the file that reaches past the duration check for the same unstubbed-default-`false` risk.
-  - [ ] 1.5 Seed the 7-day wide-open availability window fixture in `RescheduleResourceIT.setUp()` — required
+  - [x] 1.5 Seed the 7-day wide-open availability window fixture in `RescheduleResourceIT.setUp()` — required
     for every existing test in this file to keep passing (see AC1's fixture note; do not skip).
-  - [ ] 1.6 Add `requestReschedule_slotOutsideAvailabilityWindow_returns403WithSlotOutsideAvailabilityKey` to
+  - [x] 1.6 Add `requestReschedule_slotOutsideAvailabilityWindow_returns403WithSlotOutsideAvailabilityKey` to
     `RescheduleResourceIT`, using the late-night/crosses-midnight construction specified in AC1 (story-review.md
     Finding 3 — a "far future" proposal cannot trigger this rejection under the 7-day wide-open fixture).
-  - [ ] 1.7 Run targeted verification for both the touched unit tests and IT and confirm green (see Dev Notes
+  - [x] 1.7 Run targeted verification for both the touched unit tests and IT and confirm green (see Dev Notes
     — `*IT` classes run under `maven-failsafe-plugin`, not `mvn test`).
-- [ ] Task 2: BookingDuplicationService availability check (AC: #2)
-  - [ ] 2.1 Add `coachAvailabilityWindowRepository` field + imports to `BookingDuplicationService`.
-  - [ ] 2.2 Add the availability-window check to `duplicateNextWeek`, positioned per AC2.
-  - [ ] 2.3 Add the `BookingDuplicationServiceTest` unit tests (reject / accept), confirming existing
+- [x] Task 2: BookingDuplicationService availability check (AC: #2)
+  - [x] 2.1 Add `coachAvailabilityWindowRepository` field + imports to `BookingDuplicationService`.
+  - [x] 2.2 Add the availability-window check to `duplicateNextWeek`, positioned per AC2.
+  - [x] 2.3 Add the `BookingDuplicationServiceTest` unit tests (reject / accept), confirming existing
     happy-path tests still pass once the new mock is stubbed.
-  - [ ] 2.4 Fix `RescheduleResourceIT`'s `setBookingStatus` helper to also advance `requested_end_time`
+  - [x] 2.4 Fix `RescheduleResourceIT`'s `setBookingStatus` helper to also advance `requested_end_time`
     (story-review.md Finding 1 — required or `duplicateNextWeek_asOwningCoachWithCompletedBooking_returns204`
     breaks regardless of Task 1.5's fixture). This is a change to a file Task 1 already touches, not a new IT
     file.
-  - [ ] 2.5 Run targeted verification and confirm green.
-- [ ] Task 3: Frontend reschedule error handling (AC: #3)
-  - [ ] 3.1 Add the `booking.slotOutsideAvailability` branch to `ParentBookingsPage.vue`'s `submitReschedule()`.
-  - [ ] 3.2 Manually exercise the happy path and the new rejection path.
-  - [ ] 3.3 Run `npx eslint` on the touched file and confirm clean.
-- [ ] Task 4: RescheduleService accept-time availability check (AC: #4)
-  - [ ] 4.1 Add the availability-window check to `acceptReschedule`, positioned per AC4.
-  - [ ] 4.2 Add the new `RescheduleServiceTest` unit test (reject), and fix any existing `acceptReschedule`
+  - [x] 2.5 Run targeted verification and confirm green.
+- [x] Task 3: Frontend reschedule error handling (AC: #3)
+  - [x] 3.1 Add the `booking.slotOutsideAvailability` branch to `ParentBookingsPage.vue`'s `submitReschedule()`.
+  - [x] 3.2 Manually exercise the happy path and the new rejection path.
+  - [x] 3.3 Run `npx eslint` on the touched file and confirm clean.
+- [x] Task 4: RescheduleService accept-time availability check (AC: #4)
+  - [x] 4.1 Add the availability-window check to `acceptReschedule`, positioned per AC4.
+  - [x] 4.2 Add the new `RescheduleServiceTest` unit test (reject), and fix any existing `acceptReschedule`
     unit test broken by the unstubbed-default-`false` risk (same class of issue as Task 1.4).
-  - [ ] 4.3 Run targeted verification and confirm green.
-- [ ] Task 5: Ledger hygiene (AC: #5) — apply the `[PICKED UP]` tag specified above.
+  - [x] 4.3 Run targeted verification and confirm green.
+- [x] Task 5: Ledger hygiene (AC: #5) — apply the `[PICKED UP]` tag specified above.
+
+### Review Findings
+
+- [x] [Review][Patch] `CoachCommandCenterPage.vue`'s `handleAcceptReschedule` has no `booking.slotOutsideAvailability` branch, so AC4's new accept-time rejection falls through to the generic "accept failed" toast instead of telling the coach why [`src/frontend/src/pages/coach/CoachCommandCenterPage.vue:404-418`] — fixed: added the branch, mirroring the sibling `booking.startTimeInPast` branch immediately above it
+- [x] [Review][Patch] Unused `CoachAvailabilityWindow` import in `RescheduleServiceTest.java` — only `CoachAvailabilityWindowRepository` (the `@Mock` type) is actually referenced [`src/test/java/com/softropic/skillars/platform/booking/service/RescheduleServiceTest.java:13`] — fixed: import removed
+- [x] [Review][Patch] `acceptReschedule`'s new availability check has a comment explaining *why* it re-validates at accept time, but not *why* it's positioned before the overlap check specifically rather than after — worth a one-clause addition for future maintainers [`src/main/java/com/softropic/skillars/platform/booking/service/RescheduleService.java:220-233`] — fixed: comment extended to explain the ordering
+- [x] [Review][Defer] Validation logic (fetch windows → call `isSlotWithinAvailabilityWindow` → throw `SLOT_OUTSIDE_AVAILABILITY`) is duplicated near-verbatim across three call sites (`requestReschedule`, `acceptReschedule`, `duplicateNextWeek`) instead of being extracted into a shared helper [`RescheduleService.java`, `BookingDuplicationService.java`] — deferred, matches this project's own established anti-abstraction convention for blocks this small (see `skillars-deferred-48` code review)
+- [x] [Review][Defer] AC1's one dedicated IT test only proves the midnight-crossing edge case works (the only way to trigger the rejection under this file's wide-open every-day fixture); no test exercises the "ordinary hours, coach just doesn't work Tuesdays" scenario AC1 actually exists for [`RescheduleResourceIT.java:384-404`] — deferred, pre-existing test-coverage gap; fixable with a second coach fixture (`coachProfile2Id`) carrying a narrow window
+- [x] [Review][Defer] `BookingDuplicationService.duplicateNextWeek` has no overlap/double-booking check against other bookings — only the new availability-window check and the DB-level exclusion constraint at commit guard it, unlike `acceptReschedule`'s explicit `findOverlappingBookings` call [`BookingDuplicationService.java:56-88`] — deferred, pre-existing gap predating this diff, not introduced or worsened by AC2
+- [x] [Review][Defer] New/updated unit tests stub `isSlotWithinAvailabilityWindow(any(), any(), any())` and never verify the actual start/end/windows arguments passed, so an argument-swap regression would not be caught [`RescheduleServiceTest.java`, `BookingDuplicationServiceTest.java`] — deferred, test-hardening nit
+- [x] [Review][Defer] `acceptReschedule`'s new availability-window read (`coachAvailabilityWindowRepository.findByCoachId`) is unlocked, taken after the coach row's `PESSIMISTIC_WRITE` lock; `CoachProfileService.saveStep4` rewrites a coach's windows via `deleteByCoachId`+`saveAll` without locking the coach profile row first, so it isn't serialized against this read the way the `SUSPENDED` check immediately above it is [`RescheduleService.java:226-233`, `CoachProfileService.java:224-245`] — deferred, narrow TOCTOU race, fix would need to touch `CoachProfileService`'s locking strategy, out of this story's scope
+- [x] [Review][Defer] `duplicateNextWeek` computes `newStart`/`newEnd` as a fixed 168-hour `Instant` offset from the original booking's times, then the new availability check compares that against the coach's local-time windows; a DST transition between the original session and 7 days later can shift the duplicated slot's local wall-clock time relative to the original, occasionally causing the new check to reject (or wrongly accept) what should be a same-local-time weekly repeat [`BookingDuplicationService.java:56-73`] — deferred, pre-existing DST-shift-of-duplicated-time behavior unrelated to AC2, which only adds a new (non-silent) failure mode to it
+- [x] [Review][Defer] `isSlotWithinAvailabilityWindow` anchors both window boundaries to the proposed/accepted slot's *start* calendar date, so it can never match a coach's own overnight availability window (e.g. Mon 22:00–Tue 02:00) or a session that itself crosses midnight [`BookingService.java:827-854`] — deferred, pre-existing limitation of the shared helper inherited unchanged from `createBookingRequest`, now also reachable via two more callers; out of scope to fix inside a story that explicitly reuses this helper as-is
 
 ## Dev Notes
 
@@ -384,9 +397,108 @@ path. This story adds two more callers of the same method and the same error, no
   test mirrors]
 - [Source: `docs/validation-strategy.md` — targeted-test-only validation policy]
 
+## Dev Agent Record
+
+### Debug Log
+
+Implemented in the order specified by the story: AC1 (RescheduleService request-time check) → AC4
+(RescheduleService accept-time check, addressed alongside AC1 since both live in the same file/class) → AC2
+(BookingDuplicationService) → AC3 (frontend) → AC5 (ledger tag).
+
+One deliberate deviation from AC4's literal snippet placement, caught by re-verifying against the current
+source before coding rather than trusting the story's own line-citations blindly: AC4 says to insert the
+accept-time check "immediately after the coach-suspension check and before the existing overlap check," and
+that is exactly where it was placed. Doing so meant `acceptReschedule_proposedSlotOverlapsAnotherBooking_throwsSlotUnavailable`
+(a pre-existing test) now also needed `bookingService.isSlotWithinAvailabilityWindow(...)` stubbed to `true`
+to clear the new gate before reaching the overlap check it actually tests — this exact class of fallout
+(unstubbed Mockito boolean mock defaults to `false`) is the same risk story-review.md Finding 2 already
+flagged for AC1, just one test AC4's own text didn't name. Found and fixed by running the full test file
+after each change rather than assuming the story's named list was exhaustive, per Task 4.2's own instruction
+("fix any existing acceptReschedule unit test broken... don't assume only the two named tests are affected").
+
+No other blockers or deviations. Ran the backend IT via `mvn -o integration-test -Dit.test=RescheduleResourceIT`
+(per this repo's `mvn test` vs. `mvn integration-test` gotcha, recorded in Dev Notes) — 24/24 green (23
+pre-existing + 1 new), confirming both the fixed `duplicateNextWeek_asOwningCoachWithCompletedBooking_returns204`
+test and the new midnight-crossing rejection test actually pass against a real Testcontainers Postgres, not
+just compile.
+
+No interactive browser session was available in this environment to manually click through AC3's happy-path
+and rejection-path UI flows end-to-end (Task 3.2). Per the fallback precedent this repo has already
+established for the same situation (`skillars-deferred-45`/`-47`/`-48`'s Dev Agent Records), verified instead
+by code inspection: the new `else if` branch is a pure addition to the existing if/else chain, identical in
+shape to its `booking.invalidTimeRange` sibling immediately above it; the `booking.errors.slotOutsideAvailability`
+i18n key it references was independently confirmed present in all three locale bundles; and the backend IT
+(`requestReschedule_slotOutsideAvailabilityWindow_returns403WithSlotOutsideAvailabilityKey`) proves the wire
+contract this branch depends on — the `errorKey` string the backend actually sends on rejection matches the
+string this branch matches against, byte for byte.
+
+### Completion Notes List
+
+- AC1: `RescheduleService.requestReschedule` now rejects a proposed window outside the coach's current
+  availability via the existing `BookingService.isSlotWithinAvailabilityWindow`, positioned after the
+  duration check and before the pending-reschedule check exactly as specified. Two new `RescheduleServiceTest`
+  tests added (reject/accept); two pre-existing tests
+  (`requestReschedule_parentOwnsBooking_confirmedStatus_createsRequest`,
+  `requestReschedule_legacyThreeHourBooking_movesAtItsOwnLength`) and a third the story didn't name
+  (`requestReschedule_pendingAlreadyExists_throws`, which now clears the new gate before reaching its own
+  pending-request assertion) fixed with the `true` stub. `RescheduleResourceIT.setUp()` now seeds a 7-day,
+  `00:00:00`–`23:59:59` availability window for `coachProfileId` only. New IT test uses the
+  late-night/crosses-midnight construction specified in AC1 (a "far future" proposal cannot trigger this
+  rejection under the wide-open fixture — verified this holds by running the full suite, not by inspection
+  alone).
+- AC2: `BookingDuplicationService.duplicateNextWeek` now runs the identical check after the past-time check
+  and before `packSessionService.findActivePackId(...)`. New reject unit test added;
+  `duplicateNextWeek_completedBooking_createsNewRequestedBookingAdvancedBy7DaysAndCarriesOverPack` and
+  `duplicateNextWeek_noCreditsAvailable_throws` (the latter not named by the story, but reaches the new gate
+  before its own `packSessionService` stub fires) both fixed with the `true` stub.
+  `RescheduleResourceIT.setBookingStatus` now advances `requested_end_time` alongside `requested_start_time`,
+  preserving the original 1-hour duration so `duplicateNextWeek_asOwningCoachWithCompletedBooking_returns204`
+  stays inside the wide-open fixture window instead of producing an unsatisfiable multi-day span.
+- AC3: `ParentBookingsPage.vue`'s `submitReschedule()` catch chain now has a `booking.slotOutsideAvailability`
+  branch, placed next to `booking.invalidTimeRange` per the story's readability note. No i18n change (key
+  already existed in all three bundles). `npx eslint` on the touched file: clean.
+- AC4: `RescheduleService.acceptReschedule` now re-validates availability at accept time — between the
+  coach-suspension check and the overlap check, using the coach's *current* windows (re-fetched, not reused
+  from request time). New reject unit test added
+  (`acceptReschedule_slotNoLongerWithinAvailabilityWindow_throwsSlotOutsideAvailability`), mirroring
+  `acceptReschedule_suspendedCoach_throwsCoachUnavailable`'s shape per the story's instruction. One existing
+  test beyond the two the story anticipated
+  (`acceptReschedule_proposedSlotOverlapsAnotherBooking_throwsSlotUnavailable`) also needed the `true` stub
+  to clear the new gate before reaching the overlap check it exists to test — see Debug Log.
+- AC5: `deferred-work.md`'s D1 tag updated from `[PICKED UP by skillars-deferred-49 AC1, AC2]` (applied at
+  story-creation time, before AC4 existed) to `[PICKED UP by skillars-deferred-49 AC1, AC2, AC4]`.
+- Scope note: AC4 (the accept-time re-check) was added to this story's spec after an explicit scope decision
+  made with the user during dev-story execution — story-review.md's Finding 4 originally surfaced it as an
+  open design question with two options (leave out of scope and file as a new deferred-work.md item, or close
+  it in this story); the user chose to close it here, and the story file (already updated with all four
+  review findings by the time implementation started) reflects that choice as AC4/Task 4.
+- Verification: `mvn -o test -Dtest=RescheduleServiceTest,BookingDuplicationServiceTest` — 24 tests, 0
+  failures. `mvn -o integration-test -Dit.test=RescheduleResourceIT` — 24 tests, 0 failures. `npx eslint` on
+  `ParentBookingsPage.vue` — clean. No full `mvn verify` run, per `docs/validation-strategy.md`'s
+  targeted-verification policy (CI is the full-suite gate).
+
+### File List
+
+- `src/main/java/com/softropic/skillars/platform/booking/service/RescheduleService.java` (modified — new
+  `coachAvailabilityWindowRepository` field/imports, new availability check in `requestReschedule` (AC1) and
+  `acceptReschedule` (AC4))
+- `src/main/java/com/softropic/skillars/platform/booking/service/BookingDuplicationService.java` (modified —
+  new `coachAvailabilityWindowRepository` field/imports, new availability check in `duplicateNextWeek` (AC2))
+- `src/test/java/com/softropic/skillars/platform/booking/service/RescheduleServiceTest.java` (modified — new
+  mock, three new tests, three pre-existing tests fixed with the `true` stub)
+- `src/test/java/com/softropic/skillars/platform/booking/service/BookingDuplicationServiceTest.java` (modified
+  — new mock, one new test, two pre-existing tests fixed with the `true` stub)
+- `src/test/java/com/softropic/skillars/platform/booking/api/RescheduleResourceIT.java` (modified — 7-day
+  wide-open window fixture in `setUp()`, `setBookingStatus` fix, one new test)
+- `src/frontend/src/pages/parent/ParentBookingsPage.vue` (modified — one new `else if` branch in
+  `submitReschedule()`)
+- `_bmad-output/implementation-artifacts/deferred-work.md` (modified — D1 tag updated to include AC4)
+
 ## Change Log
 
 | Date | Change |
 |---|---|
 | 2026-08-21 | Story created via story-creation process, as a single substantial item (not a bundle) — the standard bundling ledger ran dry of small/decision-light items this pass (re-mined in full; every remaining candidate was either explicitly decision-needing without a resolvable-in-scope answer, a standing accepted tradeoff, or already deliberately-not-fixed/spec-intentional). Source: `deferred-work.md` D1 (`RescheduleService`/`BookingDuplicationService` availability-window gap), re-verified against live code — both gaps remain real and unfixed. The item's own named semantics question ("current vs. as-booked availability") was explicitly resolved by the user before story creation (2026-08-21: current availability), not left to the dev agent. Both fixes reuse the existing `BookingService.isSlotWithinAvailabilityWindow` and the existing `SLOT_OUTSIDE_AVAILABILITY` error — no new validation logic or error code. AC1 additionally required discovering and specifying a mandatory `RescheduleResourceIT` fixture change (no availability window currently seeded there) to avoid breaking ~25 pre-existing tests. |
 | 2026-08-21 | `story-review.md` applied: 4 findings, all fixed before dev started. Finding 1/High: AC2's "no IT change required" claim was wrong — `duplicateNextWeek_asOwningCoachWithCompletedBooking_returns204` (in the file AC1 already touches) breaks regardless of AC1's fixture, because `setBookingStatus` leaves the booking with a ~4-day span; fixed by specifying a required fix to that helper. Finding 2/High: two pre-existing `RescheduleServiceTest` tests break the moment AC1's check lands (unstubbed Mockito boolean defaults to `false`); fixed by specifying the required stub addition to both. Finding 3/Medium: AC1's originally-suggested "far future" new-IT-test approach cannot trigger the rejection under AC1's own wide-open-every-day fixture; fixed by replacing it with a late-night/crosses-midnight construction. Finding 4/Low: `acceptReschedule` never re-validated availability at accept time despite re-checking every other proposal-time fact there; closed by adding new AC4 (accept-time re-check), a direct consistency extension of the already-decided semantics rather than a new open question. Story now has 5 ACs; Tasks/Dev Notes/Project Structure Notes updated to match. |
+| 2026-08-21 | Dev implementation complete (AC1–AC5). Two additional pre-existing test breakages found beyond what the story's Finding-2-derived guidance named (`requestReschedule_pendingAlreadyExists_throws` for AC1, `duplicateNextWeek_noCreditsAvailable_throws` for AC2, and `acceptReschedule_proposedSlotOverlapsAnotherBooking_throwsSlotUnavailable` for AC4) — all fixed with the same `true`-stub pattern, found by running each full test file rather than assuming the story's named lists were exhaustive. All targeted backend unit/integration tests and frontend lint green. Status → review. |
+| 2026-08-21 | Code review complete (reschedule/duplicate current-availability-window enforcement; Blind Hunter + Edge Case Hunter + Acceptance Auditor). Acceptance Auditor: 0 AC violations across AC1-AC5, every positioning/fixture/test-count claim independently verified against the live repo; 1 minor nit (unused import). Blind Hunter: 14 raw findings, 11 dismissed as false positives or matches to explicitly-accepted/pre-existing/spec-intentional convention (cross-class package-private reuse, coach-id sourcing proven safe by existing ownership checks, zero-availability-window rejection matching unchanged pre-existing behavior, AC2/AC4's deliberately-scoped-out IT coverage, the fixture's already-documented single-coach seeding, `setBookingStatus`'s verified-safe single-caller-shape, the i18n key/`BookingError` constant both pre-existing from earlier stories, `deferred-work.md`'s cosmetic prose, and AC2's deliberately-scoped-out coach-side frontend handling). Edge Case Hunter: 7 findings via JSON path-tracing, cross-referenced against live code. 3 patches applied — `CoachCommandCenterPage.vue`'s `handleAcceptReschedule` gained the missing `booking.slotOutsideAvailability` branch AC4's own frontend surface needed (a real gap this story's AC4 didn't originally scope, caught by Edge Case Hunter); an unused import removed from `RescheduleServiceTest.java`; `acceptReschedule`'s new-check comment extended to explain its ordering before the overlap check. `npx eslint` clean post-patch; 24/24 backend unit tests green post-patch. 7 findings deferred to `deferred-work.md` as pre-existing/out-of-scope (validation-logic duplication across 3 call sites, matching this project's own anti-abstraction convention; the one dedicated IT test only proving the midnight-crossing edge case, not the "ordinary hours" scenario; `duplicateNextWeek`'s pre-existing missing overlap check; tests not verifying exact arguments passed to the shared helper; `acceptReschedule`'s unlocked availability read racing `CoachProfileService.saveStep4`; `duplicateNextWeek`'s pre-existing DST-shift-of-duplicated-time behavior; `isSlotWithinAvailabilityWindow`'s pre-existing cross-midnight-window limitation, inherited unchanged). Status → done. |
