@@ -45,6 +45,7 @@ class DrillUploadResourceIT extends BaseSessionIT {
     private UUID otherCoachId;
 
     private UUID coachDrillId;
+    private UUID scoutCoachDrillId;
     private UUID platformDrillId;
     private UUID otherCoachDrillId;
 
@@ -87,6 +88,10 @@ class DrillUploadResourceIT extends BaseSessionIT {
             coachDrillId = UUID.randomUUID();
             insertDrill(coachDrillId, "Coach Test Drill", "COACH", instrCoachId, "ACTIVE");
 
+            // Coach drill owned by scoutCoach
+            scoutCoachDrillId = UUID.randomUUID();
+            insertDrill(scoutCoachDrillId, "Scout Test Drill", "COACH", scoutCoachId, "ACTIVE");
+
             // Platform drill
             platformDrillId = jdbcTemplate.queryForObject(
                 "SELECT id FROM session.drills WHERE library_type = 'PLATFORM' AND status = 'ACTIVE' LIMIT 1",
@@ -104,12 +109,12 @@ class DrillUploadResourceIT extends BaseSessionIT {
     @AfterEach
     void tearDown() {
         transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM session.drill_video_refs WHERE drill_id IN (?, ?)", coachDrillId, otherCoachDrillId);
+            jdbcTemplate.update("DELETE FROM session.drill_video_refs WHERE drill_id IN (?, ?, ?)", coachDrillId, scoutCoachDrillId, otherCoachDrillId);
             jdbcTemplate.update("DELETE FROM main.upload_sessions WHERE video_id IN (SELECT id FROM main.videos WHERE owner_id IN (?, ?, ?))",
                 instrCoachId.toString(), scoutCoachId.toString(), otherCoachId.toString());
             jdbcTemplate.update("DELETE FROM main.videos WHERE owner_id IN (?, ?, ?)",
                 instrCoachId.toString(), scoutCoachId.toString(), otherCoachId.toString());
-            jdbcTemplate.update("DELETE FROM session.drills WHERE id IN (?, ?)", coachDrillId, otherCoachDrillId);
+            jdbcTemplate.update("DELETE FROM session.drills WHERE id IN (?, ?, ?)", coachDrillId, scoutCoachDrillId, otherCoachDrillId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_subscriptions WHERE coach_id IN (?, ?, ?)",
                 instrCoachId, scoutCoachId, otherCoachId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id IN (?, ?, ?)",
@@ -163,12 +168,18 @@ class DrillUploadResourceIT extends BaseSessionIT {
         );
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
-            baseUrl() + DRILLS_BASE + "/" + coachDrillId + "/video/initiate",
+            baseUrl() + DRILLS_BASE + "/" + scoutCoachDrillId + "/video/initiate",
             HttpMethod.POST,
             payload,
             authenticatedHeaders(cookies),
             Map.class
-        )).isInstanceOf(HttpClientErrorException.Forbidden.class);
+        ))
+            .isInstanceOf(HttpClientErrorException.Forbidden.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"security.featureGated\"");
+            });
     }
 
     @Test
@@ -283,7 +294,13 @@ class DrillUploadResourceIT extends BaseSessionIT {
             payload,
             authenticatedHeaders(cookies),
             Map.class
-        )).isInstanceOf(HttpClientErrorException.UnprocessableEntity.class);
+        ))
+            .isInstanceOf(HttpClientErrorException.UnprocessableEntity.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"video.constraintViolated\"");
+            });
     }
 
     @Test
@@ -302,7 +319,13 @@ class DrillUploadResourceIT extends BaseSessionIT {
             payload,
             authenticatedHeaders(cookies),
             Map.class
-        )).isInstanceOf(HttpClientErrorException.UnprocessableEntity.class);
+        ))
+            .isInstanceOf(HttpClientErrorException.UnprocessableEntity.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getResponseBodyAsString())
+                    .contains("\"errorKey\":\"video.constraintViolated\"");
+            });
     }
 
     @Test

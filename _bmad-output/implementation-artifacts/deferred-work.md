@@ -759,7 +759,7 @@ the story text first, then implemented as corrected:
 - W4: `resolveMinUploadTier` depends on `CoachSubscriptionTier` enum declaration order — informational only; used in error message hint, not in access control; wrong hint if enum is not declared in ascending rank order [`DrillUploadService.java`]
 - W5: Signed playback URL expires in 2 h but is cached in Pinia store indefinitely — coach must reload to get fresh URL after 2+ hours of idle time; expected signed-URL behaviour [`DrillLibraryService.java`]
 - W6: `@Async` on `VideoPhysicalDeletionListener` uses default `SimpleAsyncTaskExecutor` (unbounded threads) — low volume expected; add named executor if burst deletion scenarios emerge [`VideoPhysicalDeletionListener.java`]
-- W7: IT test `initiateUpload_scoutCoach_returns403WithFeatureGatedCode` does not verify error code in response body — functional behaviour is correct; test hardening pass [`DrillUploadResourceIT.java`] `[PICKED UP by skillars-deferred-56 AC1 — two sibling tests in the same file with the identical gap (initiateUpload_fileSizeTooLarge_returns422WithConstraintViolatedCode, initiateUpload_durationTooLong_returns422WithConstraintViolatedCode) found independently during skillars-deferred-56 story creation and bundled into the same AC.]`
+- W7: IT test `initiateUpload_scoutCoach_returns403WithFeatureGatedCode` does not verify error code in response body — functional behaviour is correct; test hardening pass [`DrillUploadResourceIT.java`] `[CLOSED by skillars-deferred-56 AC1 — errorKey assertions added to this test and its two sibling tests (initiateUpload_fileSizeTooLarge_returns422WithConstraintViolatedCode, initiateUpload_durationTooLong_returns422WithConstraintViolatedCode); this test's fixture also switched from coachDrillId to a new scoutCoachDrillId (owned by the scout coach) so the ownership check no longer fires before the feature gate; DrillUploadResourceIT 13/13 green.]`
 - W8: AC 3 "configurable 60-min timeout" not specifically wired to drill uploads — inherits pre-existing `UploadSession.expiresAt` scheduler; not changed by this story [`platform.video` scheduler]
 - W9: `@TransactionalEventListener` silently drops events if called outside a transaction — hypothetical only; `DrillUploadService` is `@Transactional` so all call paths have a transaction [`VideoPhysicalDeletionListener.java`]
 
@@ -1710,4 +1710,44 @@ above rather than duplicated here. This section holds only what the story-creati
   Edge Case Hunter) during that story's review. Both of `deductSession`'s current production throw sites
   (`payment.packNotFound`, `payment.packExhausted`) are already `PaymentGatewayException`, so this is not
   reachable today via any known code path — only a future change to `deductSession` (or an unexpected
-  persistence-layer exception) would trigger it. [`src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java:162-175`, `src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java:51-61`] `[PICKED UP by skillars-deferred-56 AC2 — previously investigated and left un-annotated by skillars-deferred-55 story creation (2026-08-22) on the same "not reachable via any current throw site" grounds; picked up this pass as a defensive-hardening item consistent with this ledger's own established test-assertion-hardening/payment-safety theme (skillars-deferred-53/-54/-55), not because reachability changed.]`
+  persistence-layer exception) would trigger it. [`src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java:162-175`, `src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java:51-61`] `[CLOSED by skillars-deferred-56 AC2 — catch clause widened from PaymentGatewayException to RuntimeException, with a mirrored CreditRoutingTest unit test (packBasedBooking_deductSessionFailsWithNonPaymentGatewayException_callsPersistFailureWithZeroReversal); CreditRoutingTest 11/11 green. Note: this AC's own story review found a residual risk in the recovery write's transactional survivability — see the fresh item filed immediately below.]`
+
+## Deferred from: story review of skillars-deferred-56-drill-upload-error-code-assertions-and-pack-deduction-exception-safety (2026-08-22)
+
+- `PaymentLifecycleService.handlePackBasedBooking`'s widened `RuntimeException` catch (AC2 above) may not
+  survive its own motivating scenario: `deductSession` is `@Transactional` and joins the same physical
+  transaction as `onBookingAccepted`'s enclosing `@Transactional(propagation = Propagation.REQUIRES_NEW)`
+  `AFTER_COMMIT` listener rather than starting its own. Under Spring's default rollback rule, an unchecked
+  exception propagating out of a *participating* (non-new) `@Transactional` method marks that shared
+  transaction rollback-only at the AOP boundary, before the exception ever reaches the catch block.
+  `persistenceService.persistPaymentFailure(...)` — also `@Transactional`, default `REQUIRED` — joins that
+  same now-rollback-only transaction; its writes will likely still execute against Postgres, but when the
+  outer `REQUIRES_NEW` transaction reaches its own commit point, Spring rolls the whole thing back instead,
+  silently discarding the failure record this catch branch exists to guarantee. This mechanism is not
+  introduced by AC2 — it already applies identically to the pre-existing `PaymentGatewayException` branch —
+  but has caused no observed harm there only because both of `deductSession`'s current
+  `PaymentGatewayException` throw sites fire before any DB write; AC2 is the first change built around a
+  scenario (`.save(purchase)` failing) where a write may already be in flight when the exception hits.
+  `CreditRoutingTest`'s new AC2 test uses a `@Mock`-ed `persistenceService`, so it cannot observe whether
+  the write survives a real Spring transaction commit — no test at any level closes this gap. Needs either a
+  real `*IT`-level test forcing a genuine `DataAccessException` inside the actual
+  `AFTER_COMMIT`/`REQUIRES_NEW` flow, and/or a design decision on how failure recording should survive a
+  rollback-only transaction. [`src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java:138-139,162-175`, `src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java:51-61`, `src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java:206-207`]
+
+## Deferred from: code review of skillars-deferred-56-drill-upload-error-code-assertions-and-pack-deduction-exception-safety (2026-08-22)
+
+- `handlePackBasedBooking`'s catch clause widening from `PaymentGatewayException` to bare `RuntimeException`
+  (rather than a narrower type) will also silently absorb unrelated programming bugs from `deductSession` (NPE,
+  `IllegalStateException`, etc.), funneling them into the same "expected business failure" `persistPaymentFailure`
+  + `log.error` path already used for pack-exhausted/not-found — collapsing the distinction between an expected
+  business failure and an unexpected system defect into one code path and one log signature, which could make
+  future regressions harder to triage from logs/alerts alone. Deferred: pre-existing design trade-off the
+  story's own Dev Notes already explicitly reasoned through and defended (narrowest common supertype covering
+  both known throw sites and any future unchecked throw, deliberately excluding `Error`); revisit only if a
+  future pass needs finer-grained handling of this call's failure categories.
+  [`src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java:167`]
+- `sprint-status.yaml`'s `last_updated` field has grown into a single, unbounded YAML comment line spanning the
+  cumulative history of 56+ stories — effectively unreviewable in normal diff/PR tooling and a guaranteed
+  merge-conflict/diff-noise hotspot on every future story. Deferred: pre-existing repo-wide bookkeeping
+  convention predating this story by dozens of prior stories, not something this one story should unilaterally
+  restructure. [`_bmad-output/implementation-artifacts/sprint-status.yaml`]

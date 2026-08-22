@@ -1,6 +1,6 @@
 # Story Deferred-56: Drill-Upload Error-Code Assertions & Pack-Deduction Exception Safety
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -329,24 +329,90 @@ a live bug.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: `DrillUploadResourceIT` error-code assertions (AC: #1)
-  - [ ] 1.1 Add the `scoutCoachDrillId` fixture to `setUp()`/`tearDown()` and the `.satisfies(...)` block to
+- [x] Task 1: `DrillUploadResourceIT` error-code assertions (AC: #1)
+  - [x] 1.1 Add the `scoutCoachDrillId` fixture to `setUp()`/`tearDown()` and the `.satisfies(...)` block to
     `initiateUpload_scoutCoach_returns403WithFeatureGatedCode`, pointing it at `scoutCoachDrillId` instead
     of `coachDrillId`, per AC1a's snippet (story-review Finding 1: the original `coachDrillId` fixture is
     owned by `instrCoachId`, so the ownership check fires before the feature gate does).
-  - [ ] 1.2 Add the `.satisfies(...)` block to
+  - [x] 1.2 Add the `.satisfies(...)` block to
     `initiateUpload_fileSizeTooLarge_returns422WithConstraintViolatedCode`, per AC1b.
-  - [ ] 1.3 Add the `.satisfies(...)` block to `initiateUpload_durationTooLong_returns422WithConstraintViolatedCode`,
+  - [x] 1.3 Add the `.satisfies(...)` block to `initiateUpload_durationTooLong_returns422WithConstraintViolatedCode`,
     per AC1c.
-  - [ ] 1.4 Run `mvn -o integration-test -Dit.test=DrillUploadResourceIT` and confirm green.
-- [ ] Task 2: `PaymentLifecycleService` pack-deduction exception widening (AC: #2)
-  - [ ] 2.1 Widen `handlePackBasedBooking`'s catch clause from `PaymentGatewayException` to
+  - [x] 1.4 Run `mvn -o integration-test -Dit.test=DrillUploadResourceIT` and confirm green.
+- [x] Task 2: `PaymentLifecycleService` pack-deduction exception widening (AC: #2)
+  - [x] 2.1 Widen `handlePackBasedBooking`'s catch clause from `PaymentGatewayException` to
     `RuntimeException`, and add `e` to the log call, per AC2's snippet.
-  - [ ] 2.2 Add `packBasedBooking_deductSessionFailsWithNonPaymentGatewayException_callsPersistFailureWithZeroReversal`
+  - [x] 2.2 Add `packBasedBooking_deductSessionFailsWithNonPaymentGatewayException_callsPersistFailureWithZeroReversal`
     to `CreditRoutingTest.java`, per AC2's snippet.
-  - [ ] 2.3 Run `mvn -o test -Dtest=CreditRoutingTest` and confirm all tests green (existing plus the new one).
-- [ ] Task 3: Ledger hygiene (AC: #3) — flip the two `PICKED UP` tags applied at story creation to `CLOSED`
+  - [x] 2.3 Run `mvn -o test -Dtest=CreditRoutingTest` and confirm all tests green (existing plus the new one).
+- [x] Task 3: Ledger hygiene (AC: #3) — flip the two `PICKED UP` tags applied at story creation to `CLOSED`
   once AC1/AC2 land, and file the new rollback-only residual-risk item once AC2 ships, per AC3.
+
+### Review Findings
+
+Code review (Blind Hunter + Edge Case Hunter + Acceptance Auditor) of the implementation diff, 2026-08-22.
+Acceptance Auditor: 0 AC violations — all three ACs independently re-verified against live code (ownership
+check ordering, errorKey mapping strings, `PaymentGatewayException` import still needed at two other call
+sites, `deductSession`'s own throw sites untouched, exact file scope matches the story's declared File List).
+
+- [x] [Review][Patch] **Resolved by user decision (2026-08-22), applied:** wrapped the `persistenceService.persistPaymentFailure(...)`
+  call inside `handlePackBasedBooking`'s new `catch (RuntimeException e)` block in its own inner
+  `try`/`catch (RuntimeException pfe)` that logs-and-swallows, so a secondary failure there can no longer crash
+  the `AFTER_COMMIT` listener uncaught (failure mode 2 below). This fixes the loud/uncaught failure mode only —
+  the silent rollback-only discard (failure mode 1) is explicitly accepted as a documented, unfixed residual
+  risk per this same decision; no further code change for that half. Original finding, for context:
+  AC2's own newly-filed `deferred-work.md` residual-risk item — that
+  `handlePackBasedBooking`'s `RuntimeException` catch may not survive its own motivating scenario — was
+  independently re-derived by both Blind Hunter and Edge Case Hunter from the diff alone, and elaborated with
+  one additional concrete failure mode neither the story nor my own pre-implementation review named: if
+  `persistenceService.persistPaymentFailure(...)` itself throws for *any* reason inside the new catch block
+  (unrelated to the rollback-only mechanism — no `try`/`catch` wraps that call), the exception propagates
+  straight out of `handlePackBasedBooking` uncaught, out of the `AFTER_COMMIT` listener — the exact outcome
+  this AC's own title ("Exception Safety") claims to prevent (`PaymentLifecycleService.java:167-172`, flagged
+  by Edge Case Hunter). Combined with the already-documented silent-discard mechanism (rollback-only marking
+  on the shared `REQUIRES_NEW` transaction), this AC has two distinct, still-open failure modes for its one
+  motivating scenario — one silent (write discarded), one loud (crashes the listener) — and the only new test
+  (`CreditRoutingTest`'s mocked unit test) can observe neither, since `persistenceService` is a plain `@Mock`
+  with no real Spring transaction behavior. The team already made a considered choice to document rather than
+  fix this (matching this project's established convention), and the scenario remains unreachable via any
+  current `deductSession` throw site — but three independent review passes converging on the same open gap in
+  a payment-integrity safety net warrants an explicit call: **ship as documented-and-accepted, or add a real
+  `*IT`-level test (and/or wrap the inner `persistPaymentFailure` call in its own `try`/`catch` for the loud
+  failure mode) before closing this story?**
+- [x] [Review][Defer] `handlePackBasedBooking`'s catch clause widening from `PaymentGatewayException` to bare
+  `RuntimeException` (rather than a narrower type, e.g. `DataAccessException` specifically) will also silently
+  absorb unrelated programming bugs from `deductSession` (NPE, `IllegalStateException`, etc.), funneling them
+  into the same "expected business failure" `persistPaymentFailure` + `log.error` path already used for
+  pack-exhausted/not-found — collapsing the distinction between an expected business failure and an unexpected
+  system defect into one code path and one log signature, which could make future regressions harder to triage
+  from logs/alerts alone [`PaymentLifecycleService.java:167`] — deferred, pre-existing design trade-off the
+  story's own Dev Notes already explicitly reasoned through and defended (narrowest common supertype covering
+  both known throw sites and any future unchecked throw, deliberately excluding `Error`); revisit only if a
+  future pass needs finer-grained handling of this call's failure categories.
+- [x] [Review][Defer] `sprint-status.yaml`'s `last_updated` field has grown into a single, unbounded YAML
+  comment line spanning the cumulative history of 56+ stories — effectively unreviewable in normal diff/PR
+  tooling and a guaranteed merge-conflict/diff-noise hotspot on every future story [`sprint-status.yaml`] —
+  deferred, pre-existing repo-wide bookkeeping convention predating this story by dozens of prior stories, not
+  something this one story should unilaterally restructure.
+
+**Dismissed as noise (7, all independently re-verified against the live repo before dismissal):** the
+`.satisfies(...)` raw-JSON-substring error-code assertions (`.contains("\"errorKey\":\"...\"")`) were claimed
+fragile versus deserializing to a structured field — matches the exact, already-established pattern this same
+file's three pre-existing hardened tests (`initiateUpload_platformDrill_returns403`,
+`initiateUpload_otherCoachDrill_returns403`, `initiateUpload_readyVideoAlreadyLinked_returns403WithVideoAlreadyLinkedKey`)
+already use, not a new pattern this diff introduces; the duplicated `HttpClientErrorException` cast-and-assert
+block across the three hardened tests was claimed missing a shared helper — same reasoning, mirrors the
+identical inline shape those same three pre-existing tests already use, and the story's own AC1 text explicitly
+instructs mirroring that pattern; the new log line's `e.getMessage()` alongside a trailing `e` argument was
+claimed redundant, and a null `e.getMessage()` was claimed to produce an ugly `error=null` — both real but
+trivial, harmless, and a standard SLF4J idiom (message summary + full throwable for the stack trace); the
+fixture-ownership fix (new `scoutCoachDrillId`) was claimed "asserted, not demonstrated" by a
+no-project-access reviewer — independently re-verified true by the Acceptance Auditor directly against
+`DrillUploadService.java:61-65`'s live ownership-then-gate check ordering; and widening only
+`handlePackBasedBooking`'s catch (not the two other, unrelated `PaymentGatewayException` catch sites in the
+same file at lines 208 and 329) was claimed inconsistent scope — those two sites guard entirely different call
+chains (Stripe charge, batch booking) with no corresponding ledger item, not sibling instances of the same gap,
+and expanding into them would be exactly the kind of scope creep this ledger's stories consistently decline.
 
 ## Dev Notes
 
@@ -423,19 +489,46 @@ a live bug.
 
 ### Agent Model Used
 
-_To be filled by dev agent._
+Claude Sonnet 5 (`claude-sonnet-5`), via the `bmad-dev-story` workflow.
 
 ### Debug Log References
 
-_To be filled by dev agent._
+- Initial `mvn -o integration-test -Dit.test=DrillUploadResourceIT` run collided with a concurrently-run
+  `mvn -o test -Dtest=CreditRoutingTest` against the same `target/classes` directory, producing a spurious
+  `NoClassDefFoundError: com/softropic/skillars/infrastructure/message/ErrorDto` / `ApplicationContext
+  failure threshold exceeded` cascade across all 13 tests in the class. Root-caused to the two concurrent
+  Maven processes racing on shared build output, not a real code or classpath issue (`ErrorDto.class`
+  existed on disk and was well-formed). Re-ran `DrillUploadResourceIT` alone once the other process
+  finished — 13/13 green.
 
 ### Completion Notes List
 
-_To be filled by dev agent._
+- AC1: Added a new `scoutCoachDrillId` fixture (`setUp()`/`tearDown()`) owned by the scout coach, per
+  story-review Finding 1, and repointed `initiateUpload_scoutCoach_returns403WithFeatureGatedCode` at it.
+  Added `.satisfies(...)` `errorKey` assertions to all three target tests
+  (`initiateUpload_scoutCoach_returns403WithFeatureGatedCode`,
+  `initiateUpload_fileSizeTooLarge_returns422WithConstraintViolatedCode`,
+  `initiateUpload_durationTooLong_returns422WithConstraintViolatedCode`). `mvn -o integration-test
+  -Dit.test=DrillUploadResourceIT`: 13/13 green.
+- AC2: Widened `PaymentLifecycleService.handlePackBasedBooking`'s catch clause from
+  `PaymentGatewayException` to `RuntimeException`, added the exception to the log call. Added
+  `packBasedBooking_deductSessionFailsWithNonPaymentGatewayException_callsPersistFailureWithZeroReversal`
+  to `CreditRoutingTest.java`. `PaymentGatewayException` import left in place (still used at two other
+  catch sites in the same file). `mvn -o test -Dtest=CreditRoutingTest`: 11/11 green (10 existing + 1 new).
+- AC3: Flipped both `deferred-work.md` `PICKED UP` tags to `CLOSED` (line 762 for AC1, line ~1713 for AC2)
+  with closure notes naming the actual fixes and test results. Filed a fresh, untagged `deferred-work.md`
+  item under a new `## Deferred from: story review of skillars-deferred-56-...` section capturing AC2's
+  "Known residual risk" note (rollback-only transaction may discard the recovery write) verbatim in
+  summary, per the story's own AC3 instruction.
+- No deviations from the story spec. No new dependencies. `mvn verify` not run locally per
+  `docs/validation-strategy.md` — only the two targeted commands above were run.
 
 ### File List
 
-_To be filled by dev agent._
+- `src/test/java/com/softropic/skillars/platform/session/api/DrillUploadResourceIT.java` (modified)
+- `src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java` (modified)
+- `src/test/java/com/softropic/skillars/platform/payment/service/CreditRoutingTest.java` (modified)
+- `_bmad-output/implementation-artifacts/deferred-work.md` (modified)
 
 ## Change Log
 
@@ -443,3 +536,5 @@ _To be filled by dev agent._
 |---|---|
 | 2026-08-22 | Story created via story-creation process, bundling two items re-mined from `deferred-work.md`: one from its most-recently-active tail (post-`skillars-deferred-49`), one from a previously-never-revisited old section (2026-06-17), after the tail alone was confirmed to hold only a single fresh candidate. AC1 closes a test-assertion gap in `DrillUploadResourceIT` (`skillars-4-3`'s own code review, W7) — bundled with two previously-untracked sibling tests carrying the identical gap, found while fixing W7 itself. AC2 closes `skillars-deferred-54`'s own deferred finding (`handlePackBasedBooking`'s narrow catch clause) — previously investigated and explicitly left un-annotated by `skillars-deferred-55`'s own creation on reachability grounds; picked up this pass on different grounds (small, mechanical, theme-consistent defensive hardening, not a reachability change — see "Why this story exists" for the full reasoning). AC3 is ledger hygiene for both. Five additional stale items found and tagged during the re-mine (none picked up as an AC): `refresh_alreadyUsedToken`'s entirely-commented-out test (line 863), `restore-from-snapshot.sh`'s deletion (line 964), the `BookingExpiredEvent`/`BookingReminderEvent`/`BookingConfirmedEvent` builder already existing (line 1141), a project-wide `.distinct()` audit closing out the `GdprExportService` item definitively (line 1687), and a `getConversations()` messaging-module fix already shipped unannotated (`skillars-8-2` D1/D2, embedded audit prose, not independently tagged). Two items considered and explicitly not picked up: `skillars-10-1 patches`' D1/D2 (test-fixture-only risk; intentional spec asymmetry). |
 | 2026-08-22 | story-review adjustments applied, status remains ready-for-dev. `story-review.md` filed 2 findings against the draft, both fixed. Finding 1/High: AC1a's fixture bug — `initiateUpload_scoutCoach_returns403WithFeatureGatedCode` posted to `coachDrillId`, owned by `instrCoachId`, so `DrillUploadService`'s ownership check would fire before the feature gate, making AC1a's specified `errorKey` assertion fail (actual body `DRILL_NOT_OWNED`, not `security.featureGated`) rather than stay green — added a new `scoutCoachDrillId` fixture (owned by `scoutCoachId`) to `setUp()`/`tearDown()` and repointed the test at it, per Finding 1's recommendation. Finding 2/Medium: AC2's widened `RuntimeException` catch may not survive its own motivating scenario — Spring marks the shared `REQUIRES_NEW` transaction rollback-only at the AOP boundary when `deductSession` (itself `@Transactional`, participating not new) throws, before the `catch` block runs, so `persistPaymentFailure`'s recovery write can be silently discarded on commit; the story's own new test uses a mocked `persistenceService` and cannot observe this. Per Finding 2's recommendation (b), documented as a known, accepted residual risk in AC2's own text and Dev Notes rather than expanding this small hardening story's scope into a real `*IT`-level transactional test — AC3 now also files a fresh (untagged) `deferred-work.md` item for this risk once AC2 ships, so it isn't lost. Both findings independently re-verified against live code (`DrillUploadResourceIT.java`, `DrillUploadService.java:61-65`, `PackSessionService.java:51-61`, `PaymentLifecycleService.java:138-139,224-229`, `BookingPaymentPersistenceService.java:206-207`) before applying. Everything else in the draft (AC1b/AC1c fixtures, errorKey serialization shape, AC2's import-removal hedge, AC2's test snippet compiling cleanly, AC3's ledger-tag state) was independently re-verified as accurate — no changes needed there. |
+| 2026-08-22 | dev-story implementation complete, status review. AC1 added the `scoutCoachDrillId` fixture and `.satisfies(...)` `errorKey` assertions to all three target `DrillUploadResourceIT` tests, `mvn -o integration-test -Dit.test=DrillUploadResourceIT` 13/13 green. AC2 widened `PaymentLifecycleService.handlePackBasedBooking`'s catch clause to `RuntimeException` and added the mirrored `CreditRoutingTest` unit test, `mvn -o test -Dtest=CreditRoutingTest` 11/11 green. AC3 flipped both `deferred-work.md` `PICKED UP` tags to `CLOSED` and filed a fresh ledger item for AC2's known residual risk (rollback-only transaction may discard the recovery write). No deviations from spec; no new dependencies; `mvn verify` not run per `docs/validation-strategy.md`. |
+| 2026-08-22 | code review complete (Blind Hunter + Edge Case Hunter + Acceptance Auditor). Acceptance Auditor: 0 AC violations. 1 decision-needed finding resolved by user: AC2's already-documented rollback-only residual risk was independently re-derived by both adversarial layers and elaborated with a second, previously-unnamed failure mode — `persistPaymentFailure`'s call inside the new catch block had no inner `try`/`catch`, so a secondary failure there would crash the `AFTER_COMMIT` listener uncaught rather than degrade gracefully. User decided: add the inner `try`/`catch` (fixes the crash/loud mode) but explicitly accept the silent rollback-only-discard mode as documented, unfixed risk — no `*IT`-level test added. Applied: `handlePackBasedBooking`'s `persistPaymentFailure(...)` call now wrapped in its own `catch (RuntimeException pfe)` that logs and swallows; `mvn -o test -Dtest=CreditRoutingTest` 11/11 green post-patch (no regression). 2 findings deferred to `deferred-work.md` (bare-`RuntimeException` catch may mask unrelated programming bugs, collapsing expected-business-failure vs. unexpected-system-defect log signatures — pre-existing, already-reasoned design trade-off; `sprint-status.yaml`'s `last_updated` field has grown into an unbounded, unreviewable single-line audit trail — pre-existing repo-wide convention, out of this story's scope). 7 findings dismissed as noise after independent re-verification — notably JSON-substring `errorKey` assertions and duplicated cast-and-assert test boilerplate, both claimed fragile/needing a helper by a no-project-access reviewer but confirmed to exactly match this same file's three pre-existing, already-hardened sibling tests' established pattern. |
