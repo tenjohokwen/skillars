@@ -204,6 +204,12 @@ class BookingDuplicationServiceTest {
             .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
                 .isEqualTo(BookingError.SLOT_UNAVAILABLE));
 
+        verify(bookingRepository).findOverlappingBookings(
+            eq(COACH_ID),
+            eq(originalStart.plus(7, ChronoUnit.DAYS)),
+            eq(originalStart.plus(1, ChronoUnit.HOURS).plus(7, ChronoUnit.DAYS)),
+            eq(BookingService.ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED),
+            isNull());
         verify(bookingRepository, never()).save(any());
         verify(packSessionService, never()).findActivePackId(any(), any());
     }

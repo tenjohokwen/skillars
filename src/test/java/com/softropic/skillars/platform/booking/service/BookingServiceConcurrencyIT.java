@@ -408,9 +408,14 @@ class BookingServiceConcurrencyIT extends AbstractIntegrationTest {
         Instant deadline = Instant.now().plus(timeout);
         while (Instant.now().isBefore(deadline)) {
             Integer blockedCount = jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM pg_locks " +
-                "WHERE locktype = 'transactionid' AND granted = false " +
-                "AND pid != pg_backend_pid() AND transactionid = pg_current_xact_id()::text::xid",
+                "SELECT count(*) FROM pg_locks waiting " +
+                "WHERE waiting.locktype = 'transactionid' AND waiting.granted = false " +
+                "AND waiting.pid != pg_backend_pid() " +
+                "AND waiting.transactionid = pg_current_xact_id()::text::xid " +
+                "AND EXISTS (" +
+                "  SELECT 1 FROM pg_locks rel" +
+                "  WHERE rel.pid = waiting.pid AND rel.relation = 'marketplace.coach_profiles'::regclass" +
+                ")",
                 Integer.class);
             if (blockedCount != null && blockedCount > 0) {
                 return;

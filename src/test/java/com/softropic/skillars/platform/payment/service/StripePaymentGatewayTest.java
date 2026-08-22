@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.payment.service;
 
 import com.softropic.skillars.infrastructure.util.TestClockProvider;
 import com.softropic.skillars.platform.config.service.ConfigService;
+import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.softropic.skillars.platform.payment.repo.CoachStripeAccount;
 import com.softropic.skillars.platform.payment.repo.CoachStripeAccountRepository;
 import com.softropic.skillars.platform.payment.repo.StripeCustomer;
@@ -29,6 +30,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
@@ -170,6 +172,70 @@ class StripePaymentGatewayTest {
         org.mockito.Mockito.verify(stripeClient, org.mockito.Mockito.times(2))
             .createPaymentIntent(any(PaymentIntentCreateParams.class), keyCaptor.capture());
         assertThat(keyCaptor.getAllValues()).doesNotHaveDuplicates();
+    }
+
+    @Test
+    void chargeAndCapture_missingCommissionRateConfig_throwsPaymentGatewayException() throws StripeException {
+        CoachStripeAccount account = new CoachStripeAccount();
+        account.setStripeAccountId("acct_test");
+        account.setOnboardingStatus("COMPLETE");
+        account.setChargesEnabled(true);
+        when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
+        IllegalStateException configError =
+            new IllegalStateException("Missing platform config key: platform.commission.rate");
+        when(configService.getString("platform.commission.rate")).thenThrow(configError);
+
+        assertThatThrownBy(() -> stripePaymentGateway.chargeAndCapture(PACK_TIER_ID, 1001L, COACH_ID, AMOUNT))
+            .isInstanceOf(PaymentGatewayException.class)
+            .satisfies(e -> assertThat(((PaymentGatewayException) e).getErrorCode())
+                .isEqualTo("payment.configurationUnavailable"))
+            .satisfies(e -> assertThat(e.getCause()).isSameAs(configError));
+
+        org.mockito.Mockito.verify(stripeClient, org.mockito.Mockito.never())
+            .createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class));
+    }
+
+    @Test
+    void chargeAndCapture_missingCurrencyConfig_throwsPaymentGatewayException() throws StripeException {
+        CoachStripeAccount account = new CoachStripeAccount();
+        account.setStripeAccountId("acct_test");
+        account.setOnboardingStatus("COMPLETE");
+        account.setChargesEnabled(true);
+        when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
+        when(configService.getString("platform.commission.rate")).thenReturn("0.10");
+        IllegalStateException configError =
+            new IllegalStateException("Missing platform config key: platform.payment.currency");
+        when(configService.getString("platform.payment.currency")).thenThrow(configError);
+
+        assertThatThrownBy(() -> stripePaymentGateway.chargeAndCapture(PACK_TIER_ID, 1001L, COACH_ID, AMOUNT))
+            .isInstanceOf(PaymentGatewayException.class)
+            .satisfies(e -> assertThat(((PaymentGatewayException) e).getErrorCode())
+                .isEqualTo("payment.configurationUnavailable"))
+            .satisfies(e -> assertThat(e.getCause()).isSameAs(configError));
+
+        org.mockito.Mockito.verify(stripeClient, org.mockito.Mockito.never())
+            .createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class));
+    }
+
+    @Test
+    void chargeAndCapture_malformedCommissionRateConfig_throwsPaymentGatewayException() throws StripeException {
+        // Review finding: new BigDecimal(...) parsing a non-numeric config value must fail the same
+        // predictable way as a missing key, not leak an unwrapped NumberFormatException.
+        CoachStripeAccount account = new CoachStripeAccount();
+        account.setStripeAccountId("acct_test");
+        account.setOnboardingStatus("COMPLETE");
+        account.setChargesEnabled(true);
+        when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
+        when(configService.getString("platform.commission.rate")).thenReturn("not-a-number");
+
+        assertThatThrownBy(() -> stripePaymentGateway.chargeAndCapture(PACK_TIER_ID, 1001L, COACH_ID, AMOUNT))
+            .isInstanceOf(PaymentGatewayException.class)
+            .satisfies(e -> assertThat(((PaymentGatewayException) e).getErrorCode())
+                .isEqualTo("payment.configurationUnavailable"))
+            .satisfies(e -> assertThat(e.getCause()).isInstanceOf(NumberFormatException.class));
+
+        org.mockito.Mockito.verify(stripeClient, org.mockito.Mockito.never())
+            .createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class));
     }
 
     @Test

@@ -39,13 +39,22 @@ public class StripePaymentGateway implements PaymentGateway {
     @Override
     public String chargeAndCapture(UUID referenceId, Long parentId, UUID coachId, BigDecimal amount) {
         String coachStripeAccountId = resolveCoachStripeAccountId(coachId);
-        BigDecimal commissionRate = new BigDecimal(configService.getString("platform.commission.rate"));
+
+        BigDecimal commissionRate;
+        String currency;
+        try {
+            commissionRate = new BigDecimal(configService.getString("platform.commission.rate"));
+            currency = configService.getString("platform.payment.currency");
+        } catch (IllegalStateException | NumberFormatException e) {
+            log.error("Payment configuration unavailable: error={}", e.getMessage());
+            throw new PaymentGatewayException("payment.configurationUnavailable", e);
+        }
         long amountCents = toCents(amount);
         long feeCents = toCents(amount.multiply(commissionRate).setScale(2, RoundingMode.HALF_UP));
 
         PaymentIntentCreateParams.Builder builder = PaymentIntentCreateParams.builder()
             .setAmount(amountCents)
-            .setCurrency(configService.getString("platform.payment.currency"))
+            .setCurrency(currency)
             .setConfirm(true)
             .setTransferData(PaymentIntentCreateParams.TransferData.builder()
                 .setDestination(coachStripeAccountId)
