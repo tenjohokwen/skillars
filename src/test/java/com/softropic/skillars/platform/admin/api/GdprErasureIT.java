@@ -30,6 +30,8 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.verify;
 
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
 class GdprErasureIT extends AbstractIntegrationTest {
@@ -301,6 +303,53 @@ class GdprErasureIT extends AbstractIntegrationTest {
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
                 .isEqualTo(HttpStatus.UNAUTHORIZED));
+    }
+
+    @Test
+    void erase_playerUser_deletesPerformanceReportFromS3() {
+        UUID reportId = UUID.randomUUID();
+        String storageKey = "reports/" + reportId + "/report.pdf";
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO development.performance_reports "
+                    + "(id, coach_id, player_id, generated_at, storage_key, next_steps) "
+                    + "VALUES (?, ?, ?, ?, ?, 'Keep working on first touch')",
+                reportId, coachProfileId, PLAYER_ID, Timestamp.from(Instant.now()), storageKey);
+            return null;
+        });
+
+        String cookies = loginAndGetCookies(PLAYER_EMAIL);
+        httpTestClient.makeHttpRequest(
+            baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class);
+
+        verify(fileStorageService).deleteRawBytes(storageKey);
+        int count = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.performance_reports WHERE id = ?", Integer.class, reportId);
+        assertThat(count).isZero();
+    }
+
+    @Test
+    void erase_playerUser_s3DeleteFails_erasureStillCompletes() {
+        UUID reportId = UUID.randomUUID();
+        String storageKey = "reports/" + reportId + "/report.pdf";
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO development.performance_reports "
+                    + "(id, coach_id, player_id, generated_at, storage_key, next_steps) "
+                    + "VALUES (?, ?, ?, ?, ?, 'Keep working on first touch')",
+                reportId, coachProfileId, PLAYER_ID, Timestamp.from(Instant.now()), storageKey);
+            return null;
+        });
+        doThrow(new RuntimeException("simulated S3 failure"))
+            .when(fileStorageService).deleteRawBytes(storageKey);
+
+        String cookies = loginAndGetCookies(PLAYER_EMAIL);
+        httpTestClient.makeHttpRequest(
+            baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class);
+
+        int count = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.performance_reports WHERE id = ?", Integer.class, reportId);
+        assertThat(count).isZero();
     }
 
     // ── helpers ──

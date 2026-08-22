@@ -619,7 +619,7 @@ the story text first, then implemented as corrected:
 - D2: Duplicate expiry query methods — `findByCoachIdAndExpiresAtBetween...` (coach-scoped) and `findExpiringWithinWindowAndSessionsRemaining` (JPQL all-coaches) overlap; coach-scoped method appears unused; verify in Group 2 service review [`SessionPackPurchaseRepository.java:21-25`] `[PICKED UP by skillars-deferred-42 AC2]`
 - D3: `SessionPackPurchase.expiresAt` mutable with no `updatable=false` — service-layer enforced via `extendPack()` business rules; open setter is a footgun [`SessionPackPurchase.java`]
 - D5: `stripe_customers.last_payment_intent_id` not in AC 1 spec schema — intentional addition to support cash-out refund flow (Group 2 Decision D1 resolution); AC 1 should be updated to document this column [`V62__session_payment_credit_wallet.sql`, `StripeCustomer.java`]
-- D6: No `CHECK (stripe_customer_id LIKE 'cus_%')` format guard on `stripe_customers` — would catch placeholder IDs at DB boundary; application-layer only today [`V62__session_payment_credit_wallet.sql`] `[PICKED UP by skillars-deferred-57 AC3]`
+- D6: No `CHECK (stripe_customer_id LIKE 'cus_%')` format guard on `stripe_customers` — would catch placeholder IDs at DB boundary; application-layer only today [`V62__session_payment_credit_wallet.sql`] `[CLOSED by skillars-deferred-57 AC3 — added V100 (ADD CONSTRAINT ... NOT VALID) + V101 (VALIDATE CONSTRAINT), a format-guard CHECK (stripe_customer_id LIKE 'cus_%') on payment.stripe_customers, split across two migrations per story-review Finding 1 so the safety of adding it is independent of the table's live row count.]`
 
 ## Deferred from: code review of skillars-7-1-stripe-connect-onboarding-commission-engine (2026-06-24)
 - D2: Session pack purchase always fails with `payment.providerUnavailable` in Story 7.1 — intentional stub behaviour per spec; Story 7.2 implements real charging [`StripePaymentGateway.java`]
@@ -653,8 +653,8 @@ the story text first, then implemented as corrected:
 ## Deferred from: code review of skillars-5-5-pdf-performance-report-unified-player-timeline (2026-06-19)
 - D1: `slu_value` and `calculated_at` column names in `SluRepository` native queries not explicitly verified against the actual migration file — runtime `BadSqlGrammarException` risk; confirm column names from V-series migration before deploying [`SluRepository.java:36,42`]
 - D2: S3 I/O (Academy logo download + PDF upload to S3) executes inside `@Transactional generateReport` — blocking calls hold DB connection for the duration; may exhaust connection pool under concurrent load [`ReportGenerationService.java:87-142`]
-- D4: No rate limit on `POST /api/development/players/{playerId}/reports` — a coach can call in a loop; each call generates a PDF, uploads to S3, inserts a DB row, writes a timeline event, and queues a parent email; trivial cost-amplification DoS vector [`PerformanceReportResource.java`] `[PICKED UP by skillars-deferred-57 AC2]`
-- D5: `nextSteps` stored permanently on `performance_reports` with no redaction or deletion API — coach cannot correct defamatory or incorrect notes after generation; GDPR erasure story must add `PerformanceReportRepository.deleteByPlayerId` + S3 object deletion for each `storage_key` [`ReportGenerationService.java`, `performance_reports` table] `[PICKED UP by skillars-deferred-57 AC1 — re-scoped to the S3-orphan half specifically: GdprErasureService.deletePlayerDevelopmentData already calls performanceReportRepository.deleteAllByPlayerId(playerId) (a bulk JPQL DELETE, added by an earlier unannotated change), so the DB-row half of this item is already closed; that bulk delete never reads storage_key, so the S3 PDF objects it points at are never deleted — this AC closes that remaining gap. The "coach cannot correct... notes" half is a separate, out-of-scope product question about post-generation editing, not addressed here.]`
+- D4: No rate limit on `POST /api/development/players/{playerId}/reports` — a coach can call in a loop; each call generates a PDF, uploads to S3, inserts a DB row, writes a timeline event, and queues a parent email; trivial cost-amplification DoS vector [`PerformanceReportResource.java`] `[CLOSED by skillars-deferred-57 AC2 — added @RateLimited(key = "report_generate", capacity = 10, duration = 1, unit = MINUTES) to ReportGenerationService.generateReport, reusing this project's existing declarative rate-limit mechanism.]`
+- D5: `nextSteps` stored permanently on `performance_reports` with no redaction or deletion API — coach cannot correct defamatory or incorrect notes after generation; GDPR erasure story must add `PerformanceReportRepository.deleteByPlayerId` + S3 object deletion for each `storage_key` [`ReportGenerationService.java`, `performance_reports` table] `[CLOSED by skillars-deferred-57 AC1 — GdprErasureService.deletePlayerDevelopmentData now fetches each performance report's storage_key before the bulk DB delete and calls fileStorageService.deleteRawBytes on it, log-and-swallow on failure, mirroring the existing GDPR export-zip S3-delete pattern in the same class. The "coach cannot correct... notes" half remains out-of-scope, a separate product question about post-generation editing.]`
 - D6: `getParentEmailByPlayerId` fires 2 separate DB queries (getParentIdByPlayerId + userRepository.findById) — no single-query fetch for parent email+name; TOCTOU gap if parent account deleted between calls [`PlayerProfileService.java`]
 
 ## Deferred from: code review of skillars-6-5-video-privacy-rbac-account-deletion-cascades (2026-06-23)
@@ -1751,3 +1751,33 @@ above rather than duplicated here. This section holds only what the story-creati
   merge-conflict/diff-noise hotspot on every future story. Deferred: pre-existing repo-wide bookkeeping
   convention predating this story by dozens of prior stories, not something this one story should unilaterally
   restructure. [`_bmad-output/implementation-artifacts/sprint-status.yaml`]
+
+## Deferred from: code review of skillars-deferred-57-gdpr-report-file-cleanup-report-generation-rate-limiting-and-stripe-customer-id-format-guard (2026-08-22)
+
+- Rate-limit bucket for the new `report_generate` key is IP-keyed, not per-coach — coaches sharing an
+  office/NAT IP share one 10/minute bucket, and any caller whose IP lookup fails collapses onto a shared
+  `"report_generate:unknown"` bucket. Deferred: inherited from the established `@RateLimited` IP-keying
+  mechanism already in use at 6 other call sites (`CoachRegistrationService`,
+  `PlayerRegistrationService`, `ParentRegistrationService`); not introduced by this story, and changing
+  the keying strategy is a shared-aspect change with a wider blast radius than one call site.
+  [`src/main/java/com/softropic/skillars/infrastructure/security/RateLimitingAspect.java`]
+- AC1's new S3-delete loop in `GdprErasureService.deletePlayerDevelopmentData` runs unbounded, sequential,
+  blocking `fileStorageService.deleteRawBytes(...)` calls inside `erase()`'s `REQUIRES_NEW` transaction —
+  one S3 round-trip per performance report, no cap, no batching, no async offload. For any player/parent
+  with a large report history this extends the held DB connection's lifetime proportionally. Deferred:
+  fixing this properly needs batching and/or moving the S3 cleanup outside the transactional boundary
+  (e.g. an async post-commit step), which is new infrastructure beyond this story's bounded-fix scope, not
+  a mechanical change; today's report volume per player is small in practice, so this is a scaling risk
+  rather than a live bug. Revisit if report-history size per player grows materially.
+  [`src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java`]
+- AC3's `V101__stripe_customer_id_format_guard_validate.sql` (`VALIDATE CONSTRAINT`) has no remediation
+  path for a pre-existing non-conforming row: if any live `payment.stripe_customers` row ever failed the
+  `cus_%` check, `V101` (and the deploy) would hard-fail with no backfill/quarantine step in either `V100`
+  or `V101`. Story-review Finding 1 addressed this migration's lock-duration safety (the `NOT VALID`/
+  `VALIDATE CONSTRAINT` split) but not this separate data-conformance risk — every current write site and
+  test fixture was verified `cus_`-prefixed (see AC3's own rationale), but the table's actual live data was
+  never queried, matching the same "no production DB access at authoring time" limitation Finding 1 already
+  named. Deferred: no practical fix available without production DB access to verify actual conformance;
+  if `V101` ever fails a real deploy, the remediation is a one-off backfill/quarantine migration for the
+  specific non-conforming rows found, not a change to this story's migrations.
+  [`src/main/resources/db/migration/V101__stripe_customer_id_format_guard_validate.sql`]

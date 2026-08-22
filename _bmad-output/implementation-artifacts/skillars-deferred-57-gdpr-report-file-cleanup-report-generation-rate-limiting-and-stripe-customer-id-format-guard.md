@@ -1,6 +1,6 @@
 # Story Deferred-57: GDPR Report-File Cleanup, Report-Generation Rate Limiting & Stripe Customer ID Format Guard
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -342,29 +342,29 @@ was left alone rather than padded into this story to hit a size target.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: GDPR erasure S3 cleanup for performance reports (AC: #1)
-  - [ ] 1.1 Add the fetch-then-delete-then-bulk-delete shape to
+- [x] Task 1: GDPR erasure S3 cleanup for performance reports (AC: #1)
+  - [x] 1.1 Add the fetch-then-delete-then-bulk-delete shape to
     `GdprErasureService.deletePlayerDevelopmentData`, per AC1's snippet.
-  - [ ] 1.2 Add `erase_playerUser_deletesPerformanceReportFromS3` to `GdprErasureIT.java`, per AC1's
+  - [x] 1.2 Add `erase_playerUser_deletesPerformanceReportFromS3` to `GdprErasureIT.java`, per AC1's
     snippet, including the new `Mockito.verify` static import.
-  - [ ] 1.3 Run `mvn -o integration-test -Dit.test=GdprErasureIT` and confirm all tests green (existing
+  - [x] 1.3 Run `mvn -o integration-test -Dit.test=GdprErasureIT` and confirm all tests green (existing
     plus the new one).
-- [ ] Task 2: Rate-limit report generation (AC: #2)
-  - [ ] 2.1 Add `@RateLimited(key = "report_generate", capacity = 10, duration = 1, unit = TimeUnit.MINUTES)`
+- [x] Task 2: Rate-limit report generation (AC: #2)
+  - [x] 2.1 Add `@RateLimited(key = "report_generate", capacity = 10, duration = 1, unit = TimeUnit.MINUTES)`
     to `ReportGenerationService.generateReport`, with the two new imports.
-  - [ ] 2.2 Confirm no existing report-generation test regresses (targeted run per AC2's Test coverage
+  - [x] 2.2 Confirm no existing report-generation test regresses (targeted run per AC2's Test coverage
     note — check for an existing `ReportGenerationServiceTest`/`PerformanceReportResourceIT` first).
-- [ ] Task 3: `stripe_customer_id` format guard (AC: #3)
-  - [ ] 3.1 Add `V100__stripe_customer_id_format_guard.sql` (`NOT VALID`) and
+- [x] Task 3: `stripe_customer_id` format guard (AC: #3)
+  - [x] 3.1 Add `V100__stripe_customer_id_format_guard.sql` (`NOT VALID`) and
     `V101__stripe_customer_id_format_guard_validate.sql` (`VALIDATE CONSTRAINT`) as two separate
     migrations, per AC3's snippet and story-review Finding 1.
-  - [ ] 3.2 Add `StripeCustomerRepositoryIT.java` (new file), per AC3's snippet.
-  - [ ] 3.3 Update `docs/testing/test-data-isolation.md`'s fixture registry table and claimed-prefix list
+  - [x] 3.2 Add `StripeCustomerRepositoryIT.java` (new file), per AC3's snippet.
+  - [x] 3.3 Update `docs/testing/test-data-isolation.md`'s fixture registry table and claimed-prefix list
     to add `9640000001`–`9640000002` / `StripeCustomerRepositoryIT`.
-  - [ ] 3.4 Run `mvn -o integration-test -Dit.test=StripeCustomerRepositoryIT` and confirm both tests
+  - [x] 3.4 Run `mvn -o integration-test -Dit.test=StripeCustomerRepositoryIT` and confirm both tests
     green; run `mvn -o integration-test -Dit.test=SessionPackPaymentResourceIT,CaptureReservationIT` and
     confirm no regression.
-- [ ] Task 4: Ledger hygiene (AC: #4) — flip the three `PICKED UP` tags applied at story creation to
+- [x] Task 4: Ledger hygiene (AC: #4) — flip the three `PICKED UP` tags applied at story creation to
   `CLOSED` once AC1/AC2/AC3 land, per AC4.
 
 ### Review Findings
@@ -392,6 +392,58 @@ schema, and test-fixture claim was independently re-verified and matched live co
   access available at story-review time). AC1 and AC2 had zero findings; see "Everything else independently
   re-verified as accurate" in `story-review.md` for the full list of what was checked, including several
   things this story didn't even originally claim to verify.
+
+Post-implementation code review (`bmad-code-review`), 2026-08-22, adversarial 3-layer pass (Blind Hunter,
+Edge Case Hunter, Acceptance Auditor) against the implemented diff.
+
+- [x] [Review][Decision] **Deferred, documented:** Unbounded, sequential, blocking S3 deletes run inside
+  `erase()`'s `REQUIRES_NEW` transaction, with no cap/batching/async offload —
+  `GdprErasureService.java:194`'s new `findByPlayerIdOrderByGeneratedAtDesc(...).forEach(...)` loop
+  performs one blocking S3 round-trip per performance report with no limit on report count, extending the
+  held DB connection's lifetime for any player/parent with a large report history. A proper fix needs
+  batching and/or moving S3 cleanup outside the transactional boundary — new infrastructure beyond this
+  story's bounded-fix scope. Filed as a fresh `deferred-work.md` item under `## Deferred from: code review
+  of skillars-deferred-57-... (2026-08-22)`.
+- [x] [Review][Decision] **Fixed:** `@RateLimited` + `@Transactional` ordering was unspecified on
+  `ReportGenerationService.generateReport` (both advisors defaulted to `Ordered.LOWEST_PRECEDENCE`),
+  meaning the rate-limit check could run after the transactional interceptor had already acquired a
+  pooled DB connection. Fixed at the shared-aspect level (benefits all 6+ existing `@RateLimited` call
+  sites, not just this one): added `@Order(Ordered.HIGHEST_PRECEDENCE + 100)` to `RateLimitingAspect`,
+  guaranteeing it always wraps outside `@Transactional`. **Not literal `HIGHEST_PRECEDENCE`**: that value
+  ties Spring's own `ExposeInvocationInterceptor` (also `HIGHEST_PRECEDENCE`), non-deterministically
+  flipping this aspect ahead of it and breaking `AopContext`/`MethodInvocation`-dependent machinery —
+  reproduced directly by `RateLimitingAspectIT` (`IllegalStateException: No MethodInvocation found`, whose
+  own message names this exact hazard) when first tried with the literal value during this fix. `+ 100`
+  resolved it; `RateLimitingAspectIT` 2/2 green, `ReportGenerationServiceTest` 13/13 green after the fix.
+- [x] [Review][Decision] **Deferred, documented:** `V101__stripe_customer_id_format_guard_validate.sql`'s
+  `VALIDATE CONSTRAINT` has no remediation path for pre-existing non-conforming rows — if any live
+  `payment.stripe_customers` row fails the `cus_%` check, the migration (and the deploy) hard-fails with no
+  backfill/quarantine step in either `V100` or `V101`. Story-review Finding 1 addressed lock-duration
+  safety but not this separate data-conformance risk; no production DB access available to verify actual
+  conformance, matching Finding 1's own limitation. Filed as a fresh `deferred-work.md` item in the same
+  section as above.
+- [x] [Review][Patch] **Fixed:** AC4's `deferred-work.md` line 657 `PICKED UP` tag was never flipped — a
+  duplicate `CLOSED` tag had been appended on a new line beneath it instead of replacing it in place.
+  Merged into a single `CLOSED by skillars-deferred-57 AC1` tag on the item's own line, matching the
+  format already used at lines 656 and 622
+  [`_bmad-output/implementation-artifacts/deferred-work.md`]
+- [x] [Review][Patch] **Fixed:** added `erase_playerUser_s3DeleteFails_erasureStillCompletes` to
+  `GdprErasureIT.java` — stubs `fileStorageService.deleteRawBytes` to throw and asserts erasure still
+  completes (the bulk DB delete still runs) despite the S3 failure, proving the log-and-swallow `catch`
+  block actually degrades gracefully. `GdprErasureIT` 14/14 green after the addition
+  [`src/test/java/com/softropic/skillars/platform/admin/api/GdprErasureIT.java`]
+- [x] [Review][Patch] **Fixed:** `StripeCustomerRepositoryIT.validCusPrefixedId_saves`'s fixture cleanup
+  is now wrapped in `try`/`finally` with an `existsById` guard before `deleteById`, so an assertion
+  failure before cleanup no longer leaks the fixture row (and the guard avoids masking the original
+  failure with `EmptyResultDataAccessException` if the save never actually persisted).
+  `StripeCustomerRepositoryIT` 2/2 green after the fix
+  [`src/test/java/com/softropic/skillars/platform/payment/repo/StripeCustomerRepositoryIT.java`]
+- [x] [Review][Defer] Rate-limit bucket for `report_generate` is IP-keyed, not per-coach — coaches sharing
+  an office/NAT IP share one 10/minute bucket, and any caller whose IP lookup fails collapses onto a
+  shared `"report_generate:unknown"` bucket
+  [`src/main/java/com/softropic/skillars/infrastructure/security/RateLimitingAspect.java`] — deferred,
+  pre-existing: inherited from the established `@RateLimited` IP-keying mechanism already used at 6 other
+  call sites, not introduced by this story
 
 ## Dev Notes
 
@@ -484,19 +536,67 @@ schema, and test-fixture claim was independently re-verified and matched live co
 
 ### Agent Model Used
 
-_To be filled in by the dev agent._
+Claude Sonnet 5 (`claude-sonnet-5`), via the `bmad-dev-story` workflow.
 
 ### Debug Log References
 
-_To be filled in by the dev agent._
+None — no unexpected failures. All targeted Maven commands passed on the first run.
 
 ### Completion Notes List
 
-_To be filled in by the dev agent._
+- AC1: `GdprErasureService.deletePlayerDevelopmentData` now fetches each player's `PerformanceReport`
+  rows via `findByPlayerIdOrderByGeneratedAtDesc` and deletes each one's S3 object via
+  `fileStorageService.deleteRawBytes(report.getStorageKey())` before the existing bulk DB delete,
+  log-and-swallow on failure (mirrors the existing GDPR export-zip S3-delete pattern in the same class).
+  Added `erase_playerUser_deletesPerformanceReportFromS3` to `GdprErasureIT.java` plus a new
+  `Mockito.verify` static import. `mvn -o integration-test -Dit.test=GdprErasureIT`: 13/13 green.
+- AC2: Added `@RateLimited(key = "report_generate", capacity = 10, duration = 1, unit = TimeUnit.MINUTES)`
+  to `ReportGenerationService.generateReport`, plus the two new imports (`RateLimited`, `TimeUnit`).
+  `mvn -o test -Dtest=ReportGenerationServiceTest`: 13/13 green, no regression.
+- AC3: Added two new migrations — `V100__stripe_customer_id_format_guard.sql` (`ADD CONSTRAINT ...
+  CHECK (stripe_customer_id LIKE 'cus_%') NOT VALID`) and
+  `V101__stripe_customer_id_format_guard_validate.sql` (`VALIDATE CONSTRAINT`) — per story-review
+  Finding 1's resolution, as two separate Flyway migrations/transactions. Added new
+  `StripeCustomerRepositoryIT.java` (2 tests: valid `cus_`-prefixed id saves, non-`cus_`-prefixed id
+  throws `DataIntegrityViolationException`). Updated `docs/testing/test-data-isolation.md`'s fixture
+  registry table and claimed-prefix list to add the `9640` block.
+  `mvn -o integration-test -Dit.test=StripeCustomerRepositoryIT`: 2/2 green.
+  `mvn -o integration-test -Dit.test=SessionPackPaymentResourceIT,CaptureReservationIT`: 20/20 green
+  (13 + 7), confirming no regression from the new constraint against existing `cus_`-prefixed fixtures.
+- AC4: Flipped all three `deferred-work.md` `PICKED UP` tags (lines 622, 656, 657) to `CLOSED` with
+  closure notes naming the actual fixes, in the same commit as the code changes.
+- No deviations from the story spec — every code citation (file paths, line numbers, method signatures,
+  fixture values) matched live code exactly on inspection, matching story-review's own finding that AC1
+  and AC2 had zero pre-implementation findings. `mvn verify` not run locally per
+  `docs/validation-strategy.md` — only the targeted commands above were run.
+- Post-implementation code review (adversarial 3-layer pass) filed 6 findings; all resolved. 3 Patch
+  findings fixed directly (duplicate/unflipped `deferred-work.md` tag; missing GDPR S3-delete-failure test
+  coverage; unguarded `StripeCustomerRepositoryIT` cleanup). 1 Decision finding fixed at the shared-aspect
+  level: `RateLimitingAspect` gained `@Order(Ordered.HIGHEST_PRECEDENCE + 100)` so it always wraps outside
+  `@Transactional` — first attempted with the literal `HIGHEST_PRECEDENCE`, which ties Spring's own
+  `ExposeInvocationInterceptor` and broke `RateLimitingAspectIT` with `IllegalStateException: No
+  MethodInvocation found`; `+ 100` avoids the collision. 2 Decision findings deferred and documented as
+  fresh `deferred-work.md` items (unbounded sequential S3 deletes in GDPR erasure; `V101`'s missing
+  remediation path for pre-existing non-conforming rows) — both are genuine architectural/production-data
+  questions beyond this bounded story's scope, not mechanical fixes. Re-verification after all fixes:
+  `GdprErasureIT` 14/14, `StripeCustomerRepositoryIT` 2/2, `RateLimitingAspectIT` 2/2,
+  `ReportGenerationServiceTest` 13/13 — all green, no regressions.
 
 ### File List
 
-_To be filled in by the dev agent._
+- `src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java` (modified)
+- `src/test/java/com/softropic/skillars/platform/admin/api/GdprErasureIT.java` (modified — includes the
+  post-review S3-delete-failure test)
+- `src/main/java/com/softropic/skillars/platform/development/service/ReportGenerationService.java` (modified)
+- `src/main/java/com/softropic/skillars/infrastructure/security/RateLimitingAspect.java` (modified —
+  post-review `@Order` fix)
+- `src/main/resources/db/migration/V100__stripe_customer_id_format_guard.sql` (new)
+- `src/main/resources/db/migration/V101__stripe_customer_id_format_guard_validate.sql` (new)
+- `src/test/java/com/softropic/skillars/platform/payment/repo/StripeCustomerRepositoryIT.java` (new —
+  includes the post-review cleanup fix)
+- `docs/testing/test-data-isolation.md` (modified)
+- `_bmad-output/implementation-artifacts/deferred-work.md` (modified — includes the post-review tag fix
+  and two freshly filed residual-risk items)
 
 ## Change Log
 
@@ -504,3 +604,5 @@ _To be filled in by the dev agent._
 |---|---|
 | 2026-08-22 | Story created via story-creation process, bundling three items re-mined from `deferred-work.md`'s middle span (2026-06-19 through 2026-06-30 — Stories 5.1-5.6, 6.1-6.6, 7.1-7.5, 8.1-8.4, 10.1-10.4, 11.1-11.3), the one large section this ledger's own audits have repeatedly flagged as "not re-checked" by any prior `skillars-deferred-*` story-creation pass. AC1 closes the S3-orphan half of `skillars-5-5` D5 (the DB-row half was already closed by earlier unannotated work) — GDPR erasure was silently leaving every player's performance-report PDFs in S3 forever. AC2 closes `skillars-5-5` D4 — rate-limits report generation using this project's existing `@RateLimited` mechanism, already proven at 6 other call sites. AC3 closes `skillars-7-2` Group 1 D6 — adds a format-guard `CHECK` constraint on `stripe_customer_id`, verified safe against every current write site and test fixture. AC4 is ledger hygiene for all three. Considered and explicitly not picked up: `skillars-3-4`'s stale "no admin role exists yet" admin-bypass item (now reachable in principle since Epic 10 shipped admin roles, but the actual fix needs a security-posture decision); `skillars-6-5` W8 (needs a new reconciliation job, bigger than a bounded fix); `skillars-10-2`'s unbounded strikes list (explicitly tagged low-risk by its own text). |
 | 2026-08-22 | story-review adjustments applied, status remains ready-for-dev. `story-review.md` filed 1 finding against the draft (Medium), fixed. Finding 1: AC3's original safety argument for an unconditional `ALTER TABLE ... ADD CONSTRAINT` cited `V94`/`V99` as documenting an "established tolerance" for `ACCESS EXCLUSIVE` locking at this table's size — both citations independently re-checked and neither actually supports that claim, and no migration in this project's history discusses lock duration or row-count tolerance at all; the table's actual current row count in any live environment was never independently verified. Per the finding's recommendation (b), fixed by splitting AC3's migration into two files/transactions — `V100` (`ADD CONSTRAINT ... NOT VALID`, brief `ACCESS EXCLUSIVE` lock, no scan) and `V101` (`VALIDATE CONSTRAINT`, lighter `SHARE UPDATE EXCLUSIVE` lock) — making the constraint's addition safe regardless of actual table size, rather than pursuing recommendation (a) (verifying a live row count, not possible at story-review time with no production DB access). AC1 and AC2, and every other AC3 claim, were independently re-verified as accurate — no changes needed there. |
+| 2026-08-22 | dev-story implementation complete, status review. AC1 added the S3-delete fetch-then-delete step to `GdprErasureService.deletePlayerDevelopmentData` plus one new `GdprErasureIT` test, `mvn -o integration-test -Dit.test=GdprErasureIT` 13/13 green. AC2 added `@RateLimited(key = "report_generate", capacity = 10, duration = 1, unit = MINUTES)` to `ReportGenerationService.generateReport`, `mvn -o test -Dtest=ReportGenerationServiceTest` 13/13 green. AC3 added `V100`/`V101` migrations (`NOT VALID` + `VALIDATE CONSTRAINT` split per story-review Finding 1) plus new `StripeCustomerRepositoryIT` (2/2 green) and updated `docs/testing/test-data-isolation.md`'s fixture registry; regression run `mvn -o integration-test -Dit.test=SessionPackPaymentResourceIT,CaptureReservationIT` 20/20 green. AC4 flipped all three `deferred-work.md` `PICKED UP` tags to `CLOSED` with closure notes. No deviations from spec — every citation matched live code exactly; no new dependencies; `mvn verify` not run per `docs/validation-strategy.md`. |
+| 2026-08-22 | post-implementation code review complete (adversarial 3-layer pass), all 6 findings resolved, status → done. 3 Patch findings fixed directly: `deferred-work.md` line 657's duplicate/unflipped ledger tag merged into one `CLOSED` tag; `GdprErasureIT` gained `erase_playerUser_s3DeleteFails_erasureStillCompletes` covering the previously-untested log-and-swallow failure path; `StripeCustomerRepositoryIT`'s fixture cleanup wrapped in `try`/`finally` with an `existsById` guard. 1 Decision finding fixed: `RateLimitingAspect` gained an explicit `@Order(Ordered.HIGHEST_PRECEDENCE + 100)` so it always wraps outside `@Transactional` (benefits all 6+ existing `@RateLimited` call sites, not just AC2's new one) — first tried with literal `HIGHEST_PRECEDENCE`, which collided with Spring's own `ExposeInvocationInterceptor` (also `HIGHEST_PRECEDENCE`) and broke `RateLimitingAspectIT`; `+ 100` fixed it cleanly. 2 Decision findings deferred and documented as fresh `deferred-work.md` items (unbounded sequential S3 deletes in GDPR erasure; `V101`'s missing remediation path for pre-existing non-conforming rows) — both need larger redesigns or production DB access beyond this bounded story's scope. Full re-verification: `GdprErasureIT` 14/14, `StripeCustomerRepositoryIT` 2/2, `RateLimitingAspectIT` 2/2, `ReportGenerationServiceTest` 13/13 — all green. |
