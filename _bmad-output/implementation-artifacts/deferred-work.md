@@ -759,7 +759,7 @@ the story text first, then implemented as corrected:
 - W4: `resolveMinUploadTier` depends on `CoachSubscriptionTier` enum declaration order — informational only; used in error message hint, not in access control; wrong hint if enum is not declared in ascending rank order [`DrillUploadService.java`]
 - W5: Signed playback URL expires in 2 h but is cached in Pinia store indefinitely — coach must reload to get fresh URL after 2+ hours of idle time; expected signed-URL behaviour [`DrillLibraryService.java`]
 - W6: `@Async` on `VideoPhysicalDeletionListener` uses default `SimpleAsyncTaskExecutor` (unbounded threads) — low volume expected; add named executor if burst deletion scenarios emerge [`VideoPhysicalDeletionListener.java`]
-- W7: IT test `initiateUpload_scoutCoach_returns403WithFeatureGatedCode` does not verify error code in response body — functional behaviour is correct; test hardening pass [`DrillUploadResourceIT.java`]
+- W7: IT test `initiateUpload_scoutCoach_returns403WithFeatureGatedCode` does not verify error code in response body — functional behaviour is correct; test hardening pass [`DrillUploadResourceIT.java`] `[CLOSED by skillars-deferred-56 AC1 — errorKey assertions added to this test and its two sibling tests (initiateUpload_fileSizeTooLarge_returns422WithConstraintViolatedCode, initiateUpload_durationTooLong_returns422WithConstraintViolatedCode); this test's fixture also switched from coachDrillId to a new scoutCoachDrillId (owned by the scout coach) so the ownership check no longer fires before the feature gate; DrillUploadResourceIT 13/13 green.]`
 - W8: AC 3 "configurable 60-min timeout" not specifically wired to drill uploads — inherits pre-existing `UploadSession.expiresAt` scheduler; not changed by this story [`platform.video` scheduler]
 - W9: `@TransactionalEventListener` silently drops events if called outside a transaction — hypothetical only; `DrillUploadService` is `@Transactional` so all call paths have a transaction [`VideoPhysicalDeletionListener.java`]
 
@@ -860,7 +860,7 @@ the story text first, then implemented as corrected:
 - Tests use raw `jdbcTemplate` inserts instead of Instancio for test data — project rule violation but tests are functionally correct [AuthResourceIT.java]
 - `AuthResourceIT` lacks `@Testcontainers` annotation — may be managed via inherited `TestConfig` or `SecurityIT` base class; verify before next review [AuthResourceIT.java]
 - `@Observed` at class level vs per-method on `AuthResource` — class-level is a valid Micrometer pattern; no metric data lost [AuthResource.java]
-- `refresh_alreadyUsedToken` test does not assert `Set-Cookie: rtkn=; Max-Age=0` in the 401 response — minor AC2 coverage gap [AuthResourceIT.java]
+- `refresh_alreadyUsedToken` test does not assert `Set-Cookie: rtkn=; Max-Age=0` in the 401 response — minor AC2 coverage gap [AuthResourceIT.java] `[STALE — verified against current code by skillars-deferred-56 story creation, 2026-08-22: the entire refresh_alreadyUsedToken_revokesAllAndReturns401 test is commented out (AuthResourceIT.java:281-323, wrapped in a block comment) behind a "TODO the system should have a single JWT refresh mechanism" note — there is no live test for this item to strengthen. Added by an earlier, unannotated change.]`
 - `ROLE_ROUTES` duplicated across `LoginPage.vue` and `router/index.js` — DRY violation; divergence would cause infinite redirect loop, but no current divergence
 - `fr-FR` locale may be missing `auth.coach` sub-tree — investigate whether gap is pre-existing from a prior story [i18n/fr-FR/index.js]
 - `hydrated` flag in router factory is closure-scoped — SSR-unsafe but app is SPA only [src/frontend/src/router/index.js]
@@ -961,7 +961,7 @@ the story text first, then implemented as corrected:
 
 ## Deferred from: code review of deploy-3-2-scripted-restore-process (2026-06-04)
 - fstab not updated after snapshot restore — new volume mounted with `mount /dev/sdb ...` but no fstab update; volume won't auto-mount on reboot if volume UUID changed. Beyond Task 2 scope [restore-from-snapshot.sh:62]
-- DOMAIN sourced from .env in restore-from-snapshot.sh but never used — spec says "source .env for DOMAIN" but no reference to DOMAIN in script [restore-from-snapshot.sh:19]
+- DOMAIN sourced from .env in restore-from-snapshot.sh but never used — spec says "source .env for DOMAIN" but no reference to DOMAIN in script [restore-from-snapshot.sh:19] `[STALE — verified against current code by skillars-deferred-56 story creation, 2026-08-22: restore-from-snapshot.sh no longer exists (find returns zero hits) — deleted along with volume-snapshot.sh by skillars-uat-6 AC5-AC7 per this file's own D1 closure note under "Deferred from: skillars-uat-3-payment-capture-integrity-and-backup-retention". Added by an earlier, unannotated change.]`
 - App and DB left in partial state on mid-restore failure — no recovery trap by design; operator must manually restart the app service and investigate [restore-from-dump.sh:90]
 - /dev/sdb hardcoded, no filesystem UUID verification — per spec; operator confirms correct attachment at the Hetzner Console ENTER prompt [restore-from-snapshot.sh:23]
 
@@ -1138,7 +1138,7 @@ the story text first, then implemented as corrected:
 - D2: `.distinct()` on Booking list may silently no-op — if `Booking` entity doesn't override `equals()`/`hashCode()`, stream `.distinct()` uses object identity and won't deduplicate. **This item's own "unlikely to manifest given role separation" framing is outdated**: `skillars-uat-5`'s self-registration flow means a self-booking adult player's bookings carry `parentId == playerId == their own userId`, so `buildBookings` genuinely calls both `findAllByParentIdOrderByRequestedStartTimeAsc(userId)` and `findAllByPlayerId(userId)` and gets the same row back as two distinct Java object instances (no shared persistence context — the class carries no `@Transactional` anywhere) — reference-identity `.distinct()` cannot catch this, and a self-registered player's GDPR export currently lists every one of their own bookings twice. [GdprExportService.java:250] `[CLOSED by skillars-deferred-52 AC3: buildBookings() now dedupes via a LinkedHashMap<UUID, Booking> keyed on Booking.getId(), preserving first-seen (parent-first) order, instead of reference-identity .stream().distinct(). Note the ledger's "unlikely to manifest given role separation" framing was already stale before this fix — see this story's AC3 for why.]`
 
 ## Deferred from: code review of skillars-deferred-2 (2026-07-01)
-- D1: `BookingExpiredEvent`/`BookingReminderEvent`/`BookingConfirmedEvent` constructors are invoked positionally with 6-8 raw same-typed arguments across new test files — pre-existing lack of a builder on these event classes; a future field reorder could silently miscompile or swap same-typed fields with no test catching it. [`src/main/java/com/softropic/skillars/platform/booking/contract/`]
+- D1: `BookingExpiredEvent`/`BookingReminderEvent`/`BookingConfirmedEvent` constructors are invoked positionally with 6-8 raw same-typed arguments across new test files — pre-existing lack of a builder on these event classes; a future field reorder could silently miscompile or swap same-typed fields with no test catching it. [`src/main/java/com/softropic/skillars/platform/booking/contract/`] `[STALE — verified against current code by skillars-deferred-56 story creation, 2026-08-22: BookingExpiredEvent.java already has a private constructor taking a Builder plus a public static builder(), with named fluent setters for every field (source/bookingId/parentId/parentEmail/coachDisplayName/requestedStartTime/canonicalTimezone) — no positional constructor exists to invoke. Added by an earlier, unannotated change.]`
 
 ## Deferred from: code review of skillars-deferred-3 (2026-07-01)
 - D1: V76 partial index predicate hardcodes status literals (`'EXHAUSTED', 'EXPIRED'`) with no in-diff verification against the full status enum — a future added status could silently fall inside the "active" partial index instead of being excluded. [`src/main/resources/db/migration/V76__missing_indexes.sql`]
@@ -1684,7 +1684,7 @@ above rather than duplicated here. This section holds only what the story-creati
 ## Deferred from: code review of skillars-deferred-52-video-quota-release-transaction-isolation-and-gdpr-export-booking-dedup (2026-08-21)
 
 - New AC1/AC2 unit tests (`VideoServiceTest`, `AdminVideoServiceTest`) verify call ordering only (`InOrder`), not the actual resulting state (session `EXPIRED`, video `DELETED`/`FAILED`) — backstopped by `AdminVideoIT`'s existing 10-test end-to-end coverage of `deleteVideo`, so low severity. [`src/test/java/com/softropic/skillars/platform/video/service/VideoServiceTest.java`, `src/test/java/com/softropic/skillars/platform/video/service/AdminVideoServiceTest.java`] `[CLOSED by skillars-deferred-55 AC2 — only AdminVideoServiceTest closed, per its own re-scoping: deleteVideo_pendingSession_releasesQuotaAfterTransactionCommits gained assertThat(video.getOperationalState()).isEqualTo(DELETED) and assertThat(session.getStatus()).isEqualTo(EXPIRED); deleteVideo_noPendingSession_neverReleasesQuota gained the video-state assertion too. VideoServiceTest was never a real gap (see AC2's rationale) and remains unchanged.]`
-- Possible additional `.stream().distinct()`-on-entity-without-`equals()`/`hashCode()` instances may exist in other `GdprExportService` builder methods (e.g. `buildPayments`, `buildMessages`) — unconfirmed, worth a follow-up grep in a future pass. [`src/main/java/com/softropic/skillars/platform/admin/service/GdprExportService.java`]
+- Possible additional `.stream().distinct()`-on-entity-without-`equals()`/`hashCode()` instances may exist in other `GdprExportService` builder methods (e.g. `buildPayments`, `buildMessages`) — unconfirmed, worth a follow-up grep in a future pass. [`src/main/java/com/softropic/skillars/platform/admin/service/GdprExportService.java`] `[STALE — verified against current code by skillars-deferred-56 story creation, 2026-08-22: previously investigated narrowly by skillars-deferred-55 (grepped only GdprExportService.java). This pass widened the grep to every .distinct() call site in src/main/java (10 total, across BookingBatchService/CoachProfileService/DrillLibraryService/EquipmentListService/GdprExportService/PackSessionService/RadarDisplayService/SessionPlanService/SessionTemplateService) — every remaining call operates on a String/UUID/Instant extracted via .map(...) beforehand, never on a raw JPA entity. buildPayments/buildMessages themselves contain no .distinct() call at all. Nothing further to act on; closing this out definitively rather than re-flagging.]`
 
 ## Deferred from: skillars-deferred-53 story creation (2026-08-21)
 
@@ -1710,4 +1710,44 @@ above rather than duplicated here. This section holds only what the story-creati
   Edge Case Hunter) during that story's review. Both of `deductSession`'s current production throw sites
   (`payment.packNotFound`, `payment.packExhausted`) are already `PaymentGatewayException`, so this is not
   reachable today via any known code path — only a future change to `deductSession` (or an unexpected
-  persistence-layer exception) would trigger it. [`src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java:162-175`, `src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java:51-61`]
+  persistence-layer exception) would trigger it. [`src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java:162-175`, `src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java:51-61`] `[CLOSED by skillars-deferred-56 AC2 — catch clause widened from PaymentGatewayException to RuntimeException, with a mirrored CreditRoutingTest unit test (packBasedBooking_deductSessionFailsWithNonPaymentGatewayException_callsPersistFailureWithZeroReversal); CreditRoutingTest 11/11 green. Note: this AC's own story review found a residual risk in the recovery write's transactional survivability — see the fresh item filed immediately below.]`
+
+## Deferred from: story review of skillars-deferred-56-drill-upload-error-code-assertions-and-pack-deduction-exception-safety (2026-08-22)
+
+- `PaymentLifecycleService.handlePackBasedBooking`'s widened `RuntimeException` catch (AC2 above) may not
+  survive its own motivating scenario: `deductSession` is `@Transactional` and joins the same physical
+  transaction as `onBookingAccepted`'s enclosing `@Transactional(propagation = Propagation.REQUIRES_NEW)`
+  `AFTER_COMMIT` listener rather than starting its own. Under Spring's default rollback rule, an unchecked
+  exception propagating out of a *participating* (non-new) `@Transactional` method marks that shared
+  transaction rollback-only at the AOP boundary, before the exception ever reaches the catch block.
+  `persistenceService.persistPaymentFailure(...)` — also `@Transactional`, default `REQUIRED` — joins that
+  same now-rollback-only transaction; its writes will likely still execute against Postgres, but when the
+  outer `REQUIRES_NEW` transaction reaches its own commit point, Spring rolls the whole thing back instead,
+  silently discarding the failure record this catch branch exists to guarantee. This mechanism is not
+  introduced by AC2 — it already applies identically to the pre-existing `PaymentGatewayException` branch —
+  but has caused no observed harm there only because both of `deductSession`'s current
+  `PaymentGatewayException` throw sites fire before any DB write; AC2 is the first change built around a
+  scenario (`.save(purchase)` failing) where a write may already be in flight when the exception hits.
+  `CreditRoutingTest`'s new AC2 test uses a `@Mock`-ed `persistenceService`, so it cannot observe whether
+  the write survives a real Spring transaction commit — no test at any level closes this gap. Needs either a
+  real `*IT`-level test forcing a genuine `DataAccessException` inside the actual
+  `AFTER_COMMIT`/`REQUIRES_NEW` flow, and/or a design decision on how failure recording should survive a
+  rollback-only transaction. [`src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java:138-139,162-175`, `src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java:51-61`, `src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java:206-207`]
+
+## Deferred from: code review of skillars-deferred-56-drill-upload-error-code-assertions-and-pack-deduction-exception-safety (2026-08-22)
+
+- `handlePackBasedBooking`'s catch clause widening from `PaymentGatewayException` to bare `RuntimeException`
+  (rather than a narrower type) will also silently absorb unrelated programming bugs from `deductSession` (NPE,
+  `IllegalStateException`, etc.), funneling them into the same "expected business failure" `persistPaymentFailure`
+  + `log.error` path already used for pack-exhausted/not-found — collapsing the distinction between an expected
+  business failure and an unexpected system defect into one code path and one log signature, which could make
+  future regressions harder to triage from logs/alerts alone. Deferred: pre-existing design trade-off the
+  story's own Dev Notes already explicitly reasoned through and defended (narrowest common supertype covering
+  both known throw sites and any future unchecked throw, deliberately excluding `Error`); revisit only if a
+  future pass needs finer-grained handling of this call's failure categories.
+  [`src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java:167`]
+- `sprint-status.yaml`'s `last_updated` field has grown into a single, unbounded YAML comment line spanning the
+  cumulative history of 56+ stories — effectively unreviewable in normal diff/PR tooling and a guaranteed
+  merge-conflict/diff-noise hotspot on every future story. Deferred: pre-existing repo-wide bookkeeping
+  convention predating this story by dozens of prior stories, not something this one story should unilaterally
+  restructure. [`_bmad-output/implementation-artifacts/sprint-status.yaml`]

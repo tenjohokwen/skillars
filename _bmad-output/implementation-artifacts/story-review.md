@@ -1,94 +1,133 @@
-# Story Review: skillars-deferred-55
+# Story Review: Deferred-56 — Drill-Upload Error-Code Assertions & Pack-Deduction Exception Safety
 
-Reviewed: `skillars-deferred-55-test-assertion-hardening-and-payment-config-lookup-safety.md`
-(Status at review time: `ready-for-dev`, Dev Agent Record empty, all task checkboxes unchecked.)
-
-## Method
-
-Every factual claim in the story was re-verified against the live repository rather than trusted from the
-story text: read `BookingDuplicationServiceTest.java` and `BookingDuplicationService.java` in full (AC1);
-`AdminVideoServiceTest.java`, `AdminVideoService.java`, `VideoServiceTest.java`, and `VideoService.java` in
-full, plus the `Video`/`UploadSession` entity field defaults (AC2); `BookingServiceConcurrencyIT.java`'s
-helper and both race tests, `CoachProfile.java`'s `@Table` mapping (AC3); `StripePaymentGateway.java` in
-full, `StripePaymentGatewayTest.java` in full, `ConfigService.getString`, `PaymentGatewayException`, and
-every caller of `chargeAndCapture` (`PaymentLifecycleService.java`, `SessionPackPaymentService.java`) to
-check whether any catches `IllegalStateException` specifically or otherwise depends on the current uncaught
-behavior (AC4); the resolved `mockito-core` version (`5.17.0`, confirmed via `mvn dependency:tree`) and its
-`Mockito`/`ArgumentMatchers` class hierarchy (AC1); and `deferred-work.md` at all four cited line numbers to
-confirm the `[PICKED UP by skillars-deferred-55 ACn]` tags match the story's AC5 description. AC2's,
-AC3's, and AC4's core technical analyses all check out exactly as described — **no false positives are
-reported below for those premises.** The two findings below are real gaps in the story's execution detail.
+Senior-dev audit of `skillars-deferred-56-drill-upload-error-code-assertions-and-pack-deduction-exception-safety.md`
+(status `ready-for-dev`) against live code, before implementation. Every finding below was verified by reading
+the actual production/test files and, where cited, the actual `deferred-work.md` lines — nothing here is taken
+on the story's word alone.
 
 ---
 
-## Finding 1 (Medium) — AC2 leaves `AdminVideoServiceTest`'s sibling test without the same state assertion it just added, missing a distinct regression the AC's own rationale exists to catch
+## Finding 1 (High) — AC1a's fixture posts to the wrong drill: `initiateUpload_scoutCoach_returns403WithFeatureGatedCode` will fail, not stay green, once the specified assertion is added
 
-**What's wrong:** AC2 adds `assertThat(video.getOperationalState()).isEqualTo(OperationalState.DELETED)` and
-`assertThat(session.getStatus()).isEqualTo(UploadSessionStatus.EXPIRED)` to
-`deleteVideo_pendingSession_releasesQuotaAfterTransactionCommits` only. `AdminVideoServiceTest`'s other
-`deleteVideo` test, `deleteVideo_noPendingSession_neverReleasesQuota`, still asserts nothing about the
-video's resulting state after `service.deleteVideo(videoId)` runs — only `verify(quotaProvider,
-never()).release(any())`.
+**What's wrong:** AC1a instructs adding a `.satisfies(...)` block asserting
+`"\"errorKey\":\"security.featureGated\""` to `initiateUpload_scoutCoach_returns403WithFeatureGatedCode`. That
+assertion is correct **only if the request actually reaches `checkDrillUploadGate`**. It does not.
 
-Confirmed in `AdminVideoService.java:61-75`: the `v.setOperationalState(OperationalState.DELETED);
-videoRepository.save(v);` pair executes **unconditionally**, before the session lookup that determines
-whether a session gets expired:
+The test logs in as `SCOUT_EMAIL` and POSTs to `coachDrillId`
+(`DrillUploadResourceIT.java:165-166`). But `coachDrillId` is created in `setUp()` as:
 
 ```java
-UploadSession expiredSession = transactionTemplate.execute(status -> {
-    Video v = videoRepository.findById(videoId).orElseThrow(...);
-    v.setOperationalState(OperationalState.DELETED);
-    videoRepository.save(v);
-
-    return uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)
-            .filter(s -> s.getStatus() == UploadSessionStatus.PENDING)
-            .map(s -> { s.setStatus(UploadSessionStatus.EXPIRED); ...; return s; })
-            .orElse(null);
-});
+// Coach drill owned by instrCoach
+coachDrillId = UUID.randomUUID();
+insertDrill(coachDrillId, "Coach Test Drill", "COACH", instrCoachId, "ACTIVE");
 ```
 
-**Why it matters:** AC2's own rationale is "a regression that dropped `v.setOperationalState(...)` before
-`save(v)` would still pass the existing `InOrder` check unchanged... the two new assertions inspect the
-actual object after the call completes, closing that gap." That argument is only complete for the
-pending-session branch. A future refactor that accidentally moved the state-transition *inside* the
-session-lookup's `.map(...)` callback (plausible: a dev "simplifying" the method by handling video-state and
-session-state together only when a session exists) would still pass
-`deleteVideo_pendingSession_releasesQuotaAfterTransactionCommits` (a session exists there, so the moved code
-would still run) — but would silently leave a **session-less** video stuck out of `DELETED` state, with
-`deleteVideo_noPendingSession_neverReleasesQuota` never noticing, since that test asserts nothing about
-`video.getOperationalState()` at all. This is exactly the class of gap AC2 exists to close, just unclosed
-for the one branch that doesn't happen to also exercise the session path.
+(`DrillUploadResourceIT.java:86-88`, `insertDrill(id, name, libraryType, ownerCoachId, status)` per
+`BaseSessionIT.java:136`) — owned by **`instrCoachId`**, not `scoutCoachId`. `scoutCoachId` is created for the
+coach profile/subscription and used only in teardown; it is never assigned as the owner of any drill anywhere
+in this file (confirmed by grep — its only other references are profile creation and cleanup).
 
-**Recommendation:** add `assertThat(video.getOperationalState()).isEqualTo(OperationalState.DELETED);` to
-`deleteVideo_noPendingSession_neverReleasesQuota` as well (no session-status assertion needed there — no
-session exists in that test's fixture). One line, same object reference already in scope
-(`video` is already a local variable in that test method).
+`DrillUploadService.initiateUpload` checks ownership **before** the feature gate:
+
+```java
+if (!"COACH".equals(drill.getLibraryType()) || !coachId.equals(drill.getOwnerCoachId())) {
+    throw new OperationNotAllowedException("Drill upload not allowed", SessionErrorCode.DRILL_NOT_OWNED);
+}
+checkDrillUploadGate(coachId);   // never reached for this test
+```
+
+(`DrillUploadService.java:61-65`). Since the authenticated coach is `scoutCoachId` and the drill's owner is
+`instrCoachId`, this throws `OperationNotAllowedException(DRILL_NOT_OWNED)` — mapped to `403` by
+`ApiAdvice.operationDeniedHandler` (`ApiAdvice.java:267-277`) with `errorKey = "DRILL_NOT_OWNED"` (the exact
+same handler and errorKey the file's own already-hardened `initiateUpload_platformDrill_returns403` and
+`initiateUpload_otherCoachDrill_returns403` tests already assert). `checkDrillUploadGate` — and therefore
+`FeatureGatedException`/`security.featureGated` — is never reached.
+
+**Why it matters:** today the test's only assertion is `.isInstanceOf(HttpClientErrorException.Forbidden.class)`
+(`DrillUploadResourceIT.java:171`), which passes coincidentally — `DRILL_NOT_OWNED` and `security.featureGated`
+are both mapped to HTTP 403, so the test can't tell them apart. Adding AC1a's specified `.contains("\"errorKey\":
+\"security.featureGated\"")` check, exactly as written, will make this test **fail** (actual body contains
+`DRILL_NOT_OWNED`, not `security.featureGated`) — directly contradicting the story's own Task 1.4 / AC1 "Test
+coverage" instruction to run the suite and "confirm all tests remain green." The SCOUT-tier gate itself is real
+and correctly configured (`V42__drill_video_upload_config.sql:2`: `feature.drillVideoUpload.enabled.SCOUT =
+'false'`) — the story's intent is right, only the fixture wiring is wrong.
+
+**Recommendation:** add a drill fixture actually owned by the scout coach before applying AC1a's assertion, e.g.
+in `setUp()`:
+
+```java
+scoutCoachDrillId = UUID.randomUUID();
+insertDrill(scoutCoachDrillId, "Scout Test Drill", "COACH", scoutCoachId, "ACTIVE");
+```
+
+(with matching cleanup added to `tearDown()`'s existing `DELETE ... WHERE drill_id IN (...)` statements), and
+point `initiateUpload_scoutCoach_returns403WithFeatureGatedCode` at `scoutCoachDrillId` instead of `coachDrillId`.
+This is a one-line-of-setup fix, but it is required for AC1a to test what its own name and AC text claim it
+tests — without it, the story ships a hardened assertion against a test that structurally can't reach the code
+path it's named for.
 
 ---
 
-## Finding 2 (Low) — AC1's instructed new imports (`ArgumentMatchers.eq`, `ArgumentMatchers.isNull`) are unnecessary; both already resolve via the file's existing wildcard import
+## Finding 2 (Medium) — AC2's widened catch may not survive its own motivating scenario: a `DataAccessException` from `deductSession` marks the shared `REQUIRES_NEW` transaction rollback-only before `persistPaymentFailure` ever runs, and no test in the story can observe this
 
-**What's wrong:** AC1 instructs: "Add `import static org.mockito.ArgumentMatchers.eq;` and `import static
-org.mockito.ArgumentMatchers.isNull;` (this file currently only statically imports
-`org.mockito.ArgumentMatchers.any` alongside a wildcard `org.mockito.Mockito.*`, neither of which covers
-`eq`/`isNull`)." That parenthetical premise is false: `org.mockito.Mockito` (resolved version `5.17.0`,
-confirmed via `mvn -o dependency:tree`) is declared `public class Mockito extends ArgumentMatchers`
-(confirmed via `javap` against the actual jar) — so every `ArgumentMatchers` static method, including `eq`
-and `isNull`, is inherited by `Mockito` and therefore already reachable through the file's existing `import
-static org.mockito.Mockito.*;` (`BookingDuplicationServiceTest.java:32`). This isn't hypothetical: `eq(...)`
-is already called unqualified, with no dedicated import, at `BookingDuplicationServiceTest.java:111`
-(`verify(bookingService).isSlotWithinAvailabilityWindow(eq(expectedStart), eq(expectedEnd), any());`) in this
-exact file today — live proof the wildcard already resolves it.
+**What's wrong:** AC2's stated rationale for choosing `RuntimeException` over a narrower type is explicit:
+`deductSession`'s `sessionPackPurchaseRepository.save(purchase)` "can throw an unchecked
+`org.springframework.dao.DataAccessException` subtype on a real persistence failure" — that's the scenario the
+widened catch is built to survive.
 
-**Why it matters:** low severity — adding the two explicit imports is harmless (a single-type static import
-shadows a wildcard one without conflict per JLS, so no compile error results), but it's unnecessary busywork
-the story presents as required, and a dev following it literally would add two redundant import lines
-(and might waste time double-checking why a "missing" import compiles fine without their addition, when
-in fact it always did).
+But `deductSession` is itself `@Transactional` (`PackSessionService.java:51`, default `REQUIRED`), called from
+`handlePackBasedBooking`, which runs inside `onBookingAccepted`'s `@Transactional(propagation =
+Propagation.REQUIRES_NEW)` `AFTER_COMMIT` listener (`PaymentLifecycleService.java:138-139`) — so `deductSession`
+joins that same physical transaction rather than starting its own. Under Spring's default `@Transactional`
+rollback rule, when an unchecked exception propagates out of a `@Transactional`-proxied method that is
+*participating* in an existing transaction (not a new one), Spring's `TransactionInterceptor` marks that shared
+transaction `rollback-only` at the AOP boundary — **before the exception ever reaches the caller's `catch`
+block.** This happens for any `RuntimeException`, not only ones tied to an actual failed SQL statement.
 
-**Recommendation:** drop the "Add `import static...`" instruction from AC1 for `eq`/`isNull` entirely —
-only `ChronoUnit`/`List` etc. already imported in the file are needed, none of which require any addition
-for this AC.
+`persistenceService.persistPaymentFailure(...)` (the recovery write AC2's new catch branch calls) is itself
+`@Transactional` (default `REQUIRED` — `BookingPaymentPersistenceService.java:206-207`), so it joins that same
+now-rollback-only transaction. Its `INSERT`/`UPDATE` statements will very likely still execute against Postgres
+(marking rollback-only is Spring bookkeeping, not a DB-level lock), but when `onBookingAccepted`'s outer
+`REQUIRES_NEW` transaction reaches its own commit point, Spring sees `isRollbackOnly() == true` and rolls back
+the whole thing instead — silently discarding the very failure record this code exists to guarantee, for
+exactly the `DataAccessException` scenario the AC names as its reason for existing.
+
+This is corroborated by a comment already in this exact file, describing the team having been bitten by a
+closely related "nested `@Transactional` write inside an `AFTER_COMMIT` listener quietly loses data" class of
+bug before (`PaymentLifecycleService.java:224-229`: *"the nested `@Transactional` calls in
+`PackSessionService`/`BookingPaymentPersistenceService` would join a completed transaction and lose their
+writes... found while proving Deferred-12 AC6 end-to-end; `BatchPaymentIT` never caught it because it invokes
+this listener directly, with no surrounding transaction"*) — the failure mode is different in mechanism
+(rollback-only marking vs. joining an already-completed transaction) but identical in shape: writes made inside
+this listener silently vanish.
+
+**Why it matters:** the only test AC2 adds — `CreditRoutingTest`'s new
+`packBasedBooking_deductSessionFailsWithNonPaymentGatewayException_...` — is a Mockito unit test where
+`persistenceService` is a plain `@Mock` (confirmed: `CreditRoutingTest.java:49`, with an existing comment
+explaining `@InjectMocks` needs it mocked or every path NPEs). A mocked bean has no `@Transactional` AOP
+behavior at all, so this test can only prove "the right method was called with the right arguments" — it cannot
+observe whether that call's write actually survives a real Spring transaction commit. The story's own Dev Notes
+say AC2 "does not alter any currently-tested behavior," which is true, but also means the one new behavior this
+AC adds (recovering from a real persistence failure) is untested at the only level that could catch this class
+of bug.
+
+To be clear about scope: this rollback-only mechanism is **not introduced by this story** — it already applies
+identically to the existing, already-shipped `PaymentGatewayException` catch branch. It has caused no observed
+harm there only because both of `deductSession`'s current `PaymentGatewayException` throw sites fire *before*
+any DB write (`orElseThrow` on a read, or a check before `.save()`) — so there's no write-in-flight for the
+rollback to silently discard in the pre-existing case. AC2 is the first change to make this mechanism
+consequential, specifically because it's designed around a scenario (`.save(purchase)` failing) that, by
+definition, means a write was attempted before the transaction got marked rollback-only.
+
+**Recommendation:** before treating this AC as fully closing the gap it targets, either (a) add a real
+`*IT`-level test that forces `sessionPackPurchaseRepository.save(...)` to fail with a genuine `DataAccessException`
+inside the real `AFTER_COMMIT`/`REQUIRES_NEW` flow and asserts a `BookingPayment` row with a failure status
+actually exists in the database afterward (this would either prove my analysis wrong or catch the bug for real,
+unlike the mocked unit test), or (b) explicitly document this as a known, accepted residual risk in Dev Notes
+(matching this project's own established convention of documenting rather than silently shipping unverified
+defensive code) rather than the current framing, which asserts unqualified that this AC "closes the gap" and
+"can no longer crash an `AFTER_COMMIT` event listener uncaught" — the crash is prevented, but the recovery
+write it was meant to guarantee may not be.
 
 ---
 
@@ -96,29 +135,38 @@ for this AC.
 
 | # | Severity | Area | One-line issue |
 |---|----------|------|-----------------|
-| 1 | Medium | AC2 / `AdminVideoServiceTest` | `deleteVideo_noPendingSession_neverReleasesQuota` gets no video-state assertion, missing a distinct regression class the sibling test can't catch |
-| 2 | Low | AC1 / imports | Instructed `eq`/`isNull` imports are unnecessary — both already resolve via the file's existing `Mockito.*` wildcard |
+| 1 | High | AC1a / `DrillUploadResourceIT` | `initiateUpload_scoutCoach_returns403WithFeatureGatedCode` posts to a drill owned by the wrong coach — the ownership check fires first, so AC1a's specified assertion will fail, not stay green |
+| 2 | Medium | AC2 / `PaymentLifecycleService` | Widened `RuntimeException` catch may not survive its own motivating `DataAccessException` scenario, due to Spring's rollback-only marking on the shared `REQUIRES_NEW` transaction — untestable by the story's Mockito-only new test |
 
-AC2's re-scoping decision to leave `VideoServiceTest` unchanged (verified: `failTranscoding`'s state
-transition happens only inside the mocked `videoLifecycleService`, so no real object exists there for a
-stronger assertion — this is not a gap, just correctly identified as already-maximal for a mockist test),
-AC3's `pg_locks` narrowing (verified: `marketplace.coach_profiles` is `CoachProfile`'s exact
-schema-qualified table name per `CoachProfile.java:25`; the `EXISTS` clause's premise — that a session
-executing `SELECT ... FOR UPDATE` against a table always holds a granted, immediately-visible table-level
-lock on it before it can ever be blocked on the row itself — holds under Postgres's lock-acquisition order,
-so there is no race window where the outer query could see the transactionid wait before the relation lock
-is visible; and `deferred-53`'s own prior story-review already confirmed `findByIdForUpdate` is the first
-and only lock-acquiring call in both `createBookingRequest` and `acceptBooking`, so the narrowed query
-cannot introduce new flakiness against either race test), and AC4's config-safety fix (verified: neither
-`PaymentLifecycleService` nor `SessionPackPaymentService` — the only two callers of `chargeAndCapture` —
-catch `IllegalStateException` specifically anywhere, so nothing currently depends on the pre-fix uncaught
-behavior; `PaymentLifecycleService.java:207`'s existing `catch (PaymentGatewayException e)` around the
-`chargeAndCapture` call site already does the right thing — log and `persistPaymentFailure(...,
-BigDecimal.ZERO, ...)` — for a charge that never reached Stripe, exactly the same as it already does for a
-`StripeException`-derived failure, so routing the new config-lookup failure through the same exception type
-is a strict improvement, not a new risk; both new unit test snippets use `CoachStripeAccount`'s real
-Lombok-generated setters and avoid `stubCoachAndCommission()`'s "always succeeds" stub correctly, with no
-unused-stub risk under `MockitoExtension`'s strict-stubs mode) were all independently re-verified and are
-accurate — no changes needed there. AC5's ledger-tagging state (`deferred-work.md:1641`, `:1686`, `:1695`,
-`:1698` all confirmed tagged exactly as the story's AC5 describes, at the same line numbers the story cites)
-is also accurate.
+**Everything else independently re-verified as accurate, no changes needed:**
+
+- **AC1b/AC1c** (`initiateUpload_fileSizeTooLarge_...`, `initiateUpload_durationTooLong_...`): both use
+  `INSTR_EMAIL` + `coachDrillId`, which *is* owned by `instrCoachId` — ownership passes, `checkDrillUploadGate`
+  passes (INSTRUCTOR tier is enabled per `V42__drill_video_upload_config.sql:3`, and the file's own
+  `initiateUpload_instructorCoach_returns201WithUploadUrl` already proves this tier clears the gate today), and
+  the file-size/duration payloads (`600_000_000` bytes, `150`s) correctly reach `VideoTypeConstraints.validate`
+  before any "already linked" check can interfere (confirmed call order in `DrillUploadService.java:61-83`). No
+  fixture bug here — these two are safe to harden exactly as specified.
+- The `security.featureGated` and `video.constraintViolated` errorKey claims are both correct: `ErrorMsg` is a
+  record `(String errorKey, String message)` (`ErrorMsg.java:6`) nested inside `ErrorDto.errorMsg`, so Jackson
+  serializes `"errorMsg":{"errorKey":"...","message":"..."}` — a substring `.contains("\"errorKey\":\"...\"")`
+  check matches regardless of the nesting, exactly as the file's own already-passing hardened tests
+  (`DRILL_NOT_OWNED`, `DRILL_VIDEO_ALREADY_LINKED`) already prove.
+- All cited production line numbers checked and accurate: `DrillUploadService.java:144` (`FeatureGatedException`
+  throw), `:72` (`VideoValidationException` catch), `SessionApiAdvice.java:18-24`, `ApiAdvice.java:326-331`,
+  `PaymentLifecycleService.java:162-175`, `PackSessionService.java:51-61`.
+- AC2's import-removal hedge ("check whether `PaymentGatewayException` is still needed elsewhere before
+  removing it") is correct to be cautious: the import is still used at two other catch sites in the same file
+  (`PaymentLifecycleService.java:207,328`), so it must stay.
+- AC2's new `CreditRoutingTest` snippet compiles cleanly against the live file: `doThrow`, `eq`, `anyString`,
+  `any(Instant.class)`, `PARENT_ID`, `BOOKING_ID`, the `event(...)` helper, and all referenced mocks are already
+  present and imported, and the snippet is a structurally exact mirror of the existing sibling test
+  `packBasedBooking_deductSessionFails_callsPersistFailureWithZeroReversal` (`CreditRoutingTest.java:164-179`).
+- AC3's ledger hygiene: both `[PICKED UP by skillars-deferred-56 ACn]` tags (line 762, lines 1702-1713) and all
+  five `[STALE — verified... by skillars-deferred-56 story creation]` annotations (lines 863, 964, 1141, 1687,
+  and the acknowledged-but-intentionally-untagged `skillars-8-2` D1/D2 mention) were independently re-checked
+  against the live ledger text and are accurate as described — no premature `[CLOSED]` tags, no
+  misrepresentation of what each stale item actually verified.
+- The "why AC2 was previously left un-annotated by `skillars-deferred-55`, picked up now on different grounds"
+  framing is self-consistent and doesn't overclaim reachability that isn't there — the story is honest that this
+  remains defensive hardening for unreachable code, not a live-bug fix.

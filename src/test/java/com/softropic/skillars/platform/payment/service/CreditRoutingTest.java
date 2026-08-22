@@ -179,6 +179,23 @@ class CreditRoutingTest {
     }
 
     @Test
+    void packBasedBooking_deductSessionFailsWithNonPaymentGatewayException_callsPersistFailureWithZeroReversal() {
+        UUID packId = UUID.randomUUID();
+        doThrow(new IllegalStateException("simulated repository failure"))
+            .when(packSessionService).deductSession(packId);
+
+        service.onBookingAccepted(event(packId));
+
+        verify(creditWalletService, never()).getBalance(any());
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any());
+        verify(persistenceService, never()).persistPaymentSuccess(
+            any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        verify(persistenceService).persistPaymentFailure(
+            eq(BOOKING_ID), eq(BigDecimal.ZERO),
+            eq(PARENT_ID), anyString(), anyString(), any(Instant.class), anyString());
+    }
+
+    @Test
     void stripeDecline_chargesCaptureFails_callsPersistFailureWithZeroReversal() {
         // Case B: balance 20, price 50 → Stripe for 30 → Stripe fails
         when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("20.00"));

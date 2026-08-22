@@ -164,10 +164,16 @@ public class PaymentLifecycleService {
                                         Instant requestedStartTime, String canonicalTimezone) {
         try {
             packSessionService.deductSession(purchaseId);
-        } catch (PaymentGatewayException e) {
-            log.error("Pack session deduction failed: bookingId={} purchaseId={}", bookingId, purchaseId);
-            persistenceService.persistPaymentFailure(bookingId, BigDecimal.ZERO,
-                parentId, parentEmail, coachDisplayName, requestedStartTime, canonicalTimezone);
+        } catch (RuntimeException e) {
+            log.error("Pack session deduction failed: bookingId={} purchaseId={} error={}",
+                bookingId, purchaseId, e.getMessage(), e);
+            try {
+                persistenceService.persistPaymentFailure(bookingId, BigDecimal.ZERO,
+                    parentId, parentEmail, coachDisplayName, requestedStartTime, canonicalTimezone);
+            } catch (RuntimeException pfe) {
+                log.error("Failed to persist pack payment failure record: bookingId={} purchaseId={} error={}",
+                    bookingId, purchaseId, pfe.getMessage(), pfe);
+            }
             return;
         }
         persistenceService.persistPaymentSuccess(bookingId, BigDecimal.ZERO, BigDecimal.ZERO, null, null,
