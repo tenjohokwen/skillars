@@ -1,82 +1,124 @@
-# Story Review: Deferred-54 (Pack Deduction Failure Path Unit Coverage)
+# Story Review: skillars-deferred-55
 
-Reviewed: `_bmad-output/implementation-artifacts/skillars-deferred-54-pack-deduction-failure-path-unit-coverage.md`
-Method: every factual claim (line numbers, method signatures, control flow, existing test behavior) was
-re-verified against the live files it cites — `PaymentLifecycleService.java`, `PackSessionService.java`,
-`CreditRoutingTest.java`, `BookingPaymentPersistenceService.java`, `BatchAcceptPaymentIT.java`, and
-`deferred-work.md` — not taken on the story's word.
+Reviewed: `skillars-deferred-55-test-assertion-hardening-and-payment-config-lookup-safety.md`
+(Status at review time: `ready-for-dev`, Dev Agent Record empty, all task checkboxes unchecked.)
 
-## Verdict
+## Method
 
-No defects found. The story's technical claims all check out, the proposed test snippet compiles and
-correctly exercises the branch it targets, and the AC2 ledger-hygiene state matches what's actually in
-`deferred-work.md`. One minor completeness suggestion below (non-blocking).
+Every factual claim in the story was re-verified against the live repository rather than trusted from the
+story text: read `BookingDuplicationServiceTest.java` and `BookingDuplicationService.java` in full (AC1);
+`AdminVideoServiceTest.java`, `AdminVideoService.java`, `VideoServiceTest.java`, and `VideoService.java` in
+full, plus the `Video`/`UploadSession` entity field defaults (AC2); `BookingServiceConcurrencyIT.java`'s
+helper and both race tests, `CoachProfile.java`'s `@Table` mapping (AC3); `StripePaymentGateway.java` in
+full, `StripePaymentGatewayTest.java` in full, `ConfigService.getString`, `PaymentGatewayException`, and
+every caller of `chargeAndCapture` (`PaymentLifecycleService.java`, `SessionPackPaymentService.java`) to
+check whether any catches `IllegalStateException` specifically or otherwise depends on the current uncaught
+behavior (AC4); the resolved `mockito-core` version (`5.17.0`, confirmed via `mvn dependency:tree`) and its
+`Mockito`/`ArgumentMatchers` class hierarchy (AC1); and `deferred-work.md` at all four cited line numbers to
+confirm the `[PICKED UP by skillars-deferred-55 ACn]` tags match the story's AC5 description. AC2's,
+AC3's, and AC4's core technical analyses all check out exactly as described — **no false positives are
+reported below for those premises.** The two findings below are real gaps in the story's execution detail.
 
-## Claims verified accurate
+---
 
-- `PaymentLifecycleService.java:162-175` (`handlePackBasedBooking`) catches exactly `PaymentGatewayException`
-  from `packSessionService.deductSession(purchaseId)` and calls `persistenceService.persistPaymentFailure(...)`
-  with `BigDecimal.ZERO` as the reversal amount, then `return`s — matches the story's description and the
-  proposed test's assertions line for line.
-- `PackSessionService.deductSession(UUID)` (`PackSessionService.java:51-61`) is `void` and throws
-  `PaymentGatewayException` from two sites (`payment.packNotFound`, `payment.packExhausted`) — the story's
-  `doThrow(...).when(...)` guidance is correct; `when(...).thenThrow(...)` would not compile here.
-- `CreditRoutingTest.java` import block (`:1-35`) has no `org.mockito.Mockito.doThrow` static import today —
-  the story correctly flags this as a required addition.
-- `persistPaymentFailure`'s real signature (`BookingPaymentPersistenceService.java:207-209`) is
-  `(UUID bookingId, BigDecimal creditToReverse, Long parentId, String parentEmail, String coachDisplayName,
-  Instant requestedStartTime, String canonicalTimezone)` — exactly 7 params, matching the proposed test's
-  7-matcher `verify(...)` call arg-for-arg (type and position).
-- `persistPaymentSuccess`'s real signature (`BookingPaymentPersistenceService.java:178-181`) has 10 params —
-  matching the proposed `never()` verification's 10 `any()` matchers, and consistent with how every other
-  test in the file already verifies it (e.g. `duplicateEvent_idempotencyNoOp`).
-- Placement instruction ("immediately after `packBasedBooking_noStripeNoCreditConsulted`") is accurate:
-  that test spans `:147-161` in the live file, and `stripeDecline_chargesCaptureFails_callsPersistFailureWithZeroReversal`
-  (the test AC1 says it mirrors) spans `:163-181` — both citations are exact.
-- `@Mock BookingPaymentPersistenceService persistenceService` is present at `CreditRoutingTest.java:50` and
-  wired via `@InjectMocks` — the "no new mock infrastructure needed" claim, which is what makes D21's
-  original "requires new mock infrastructure" blocker stale, is correct.
-- No naming collision: no method named `packBasedBooking_deductSessionFails_callsPersistFailureWithZeroReversal`
-  (or similar) already exists in `CreditRoutingTest.java`.
-- `deferred-work.md:1119` (D21) is tagged `` `[PICKED UP by skillars-deferred-54 AC1]` `` exactly as the story
-  states, confirming AC2's starting state is accurate.
-- The "deliberately not picked up" D20 claim — that neither `lastPaymentIntentId` nor `stripePaymentMethodId`
-  appear anywhere in `CashOutService.java`/`CashOutServiceTest.java` — was independently re-grepped and
-  confirmed: zero hits for both names in either file.
-- `BatchAcceptPaymentIT.acceptAll_packDeductionFails_bookingReachesDeclined` (`:116-126`) exists exactly as
-  cited and does exercise a pack-deduction failure at the batch level.
-- Trace through `onBookingAccepted` with the proposed test's setup confirms the exception path is reached
-  as described: `isSettled`/`hasReservation` both read the `lenient()`-stubbed empty `Optional` from
-  `setUp()`, `event.getSessionPackPurchaseId() != null` routes into `handlePackBasedBooking`, and the mock's
-  `doThrow` fires exactly where the catch block expects it. No stubbing-strictness (`MockitoExtension`
-  `STRICT_STUBS`) issue: the new test's own stub is consumed by the call it's meant to trigger.
+## Finding 1 (Medium) — AC2 leaves `AdminVideoServiceTest`'s sibling test without the same state assertion it just added, missing a distinct regression the AC's own rationale exists to catch
 
-## Non-blocking observation (not a defect, not requested as a fix)
+**What's wrong:** AC2 adds `assertThat(video.getOperationalState()).isEqualTo(OperationalState.DELETED)` and
+`assertThat(session.getStatus()).isEqualTo(UploadSessionStatus.EXPIRED)` to
+`deleteVideo_pendingSession_releasesQuotaAfterTransactionCommits` only. `AdminVideoServiceTest`'s other
+`deleteVideo` test, `deleteVideo_noPendingSession_neverReleasesQuota`, still asserts nothing about the
+video's resulting state after `service.deleteVideo(videoId)` runs — only `verify(quotaProvider,
+never()).release(any())`.
 
-**The "batch-path equivalent" is not byte-for-byte the same failure-handling code, even though the story
-never claims it is.** The batch path's pack loop (`PaymentLifecycleService.java:247-267`) catches the
-*broader* `Exception` (not just `PaymentGatewayException`) and calls `persistenceService.declineBatchBooking(...)`,
-not `persistPaymentFailure(...)`. The story's language — "batch-path equivalent of this exact failure is
-already covered... this story closes the single-booking-path gap to parity with the batch path, at the unit
-level" — is accurate as written (parity of *coverage*, not parity of *mechanism*), but a future reader
-skimming quickly could misread "parity with the batch path" as implying the two code paths converge on the
-same persistence call. They don't. No change requested — the story's actual AC1 text and test snippet
-correctly target `persistPaymentFailure`, matching the real single-booking code path.
+Confirmed in `AdminVideoService.java:61-75`: the `v.setOperationalState(OperationalState.DELETED);
+videoRepository.save(v);` pair executes **unconditionally**, before the session lookup that determines
+whether a session gets expired:
 
-## Minor completeness suggestion (optional, non-blocking)
+```java
+UploadSession expiredSession = transactionTemplate.execute(status -> {
+    Video v = videoRepository.findById(videoId).orElseThrow(...);
+    v.setOperationalState(OperationalState.DELETED);
+    videoRepository.save(v);
 
-The proposed test omits `verify(packSessionService).deductSession(packId);`, even though its direct sibling
-success test (`packBasedBooking_noStripeNoCreditConsulted`) includes that same verification. This isn't a
-correctness gap — the stubbed `doThrow` firing is itself proof the mock was invoked, and the mirrored
-`stripeDecline_...` failure test the story cites as AC1's template also omits verifying its own triggering
-call (`chargeAndCapture`) for the same reason — so omitting it is actually *consistent* with the pattern
-being mirrored. Flagging only as an optional add for symmetry with the pack success test specifically, not
-as something AC1 needs to change.
+    return uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)
+            .filter(s -> s.getStatus() == UploadSessionStatus.PENDING)
+            .map(s -> { s.setStatus(UploadSessionStatus.EXPIRED); ...; return s; })
+            .orElse(null);
+});
+```
 
-## Scope check
+**Why it matters:** AC2's own rationale is "a regression that dropped `v.setOperationalState(...)` before
+`save(v)` would still pass the existing `InOrder` check unchanged... the two new assertions inspect the
+actual object after the call completes, closing that gap." That argument is only complete for the
+pending-session branch. A future refactor that accidentally moved the state-transition *inside* the
+session-lookup's `.map(...)` callback (plausible: a dev "simplifying" the method by handling video-state and
+session-state together only when a session exists) would still pass
+`deleteVideo_pendingSession_releasesQuotaAfterTransactionCommits` (a session exists there, so the moved code
+would still run) — but would silently leave a **session-less** video stuck out of `DELETED` state, with
+`deleteVideo_noPendingSession_neverReleasesQuota` never noticing, since that test asserts nothing about
+`video.getOperationalState()` at all. This is exactly the class of gap AC2 exists to close, just unclosed
+for the one branch that doesn't happen to also exercise the session path.
 
-Confirmed this story makes no production code claims that don't hold: `handlePackBasedBooking`'s catch
-branch was re-read directly and does exactly what AC1's Dev Notes assert, with no other exception type or
-branch in that method needing coverage. The single try/catch in `handlePackBasedBooking` is the entire
-failure surface D21 describes — there is no partial-success or secondary-failure state within this method
-that the proposed single test would miss.
+**Recommendation:** add `assertThat(video.getOperationalState()).isEqualTo(OperationalState.DELETED);` to
+`deleteVideo_noPendingSession_neverReleasesQuota` as well (no session-status assertion needed there — no
+session exists in that test's fixture). One line, same object reference already in scope
+(`video` is already a local variable in that test method).
+
+---
+
+## Finding 2 (Low) — AC1's instructed new imports (`ArgumentMatchers.eq`, `ArgumentMatchers.isNull`) are unnecessary; both already resolve via the file's existing wildcard import
+
+**What's wrong:** AC1 instructs: "Add `import static org.mockito.ArgumentMatchers.eq;` and `import static
+org.mockito.ArgumentMatchers.isNull;` (this file currently only statically imports
+`org.mockito.ArgumentMatchers.any` alongside a wildcard `org.mockito.Mockito.*`, neither of which covers
+`eq`/`isNull`)." That parenthetical premise is false: `org.mockito.Mockito` (resolved version `5.17.0`,
+confirmed via `mvn -o dependency:tree`) is declared `public class Mockito extends ArgumentMatchers`
+(confirmed via `javap` against the actual jar) — so every `ArgumentMatchers` static method, including `eq`
+and `isNull`, is inherited by `Mockito` and therefore already reachable through the file's existing `import
+static org.mockito.Mockito.*;` (`BookingDuplicationServiceTest.java:32`). This isn't hypothetical: `eq(...)`
+is already called unqualified, with no dedicated import, at `BookingDuplicationServiceTest.java:111`
+(`verify(bookingService).isSlotWithinAvailabilityWindow(eq(expectedStart), eq(expectedEnd), any());`) in this
+exact file today — live proof the wildcard already resolves it.
+
+**Why it matters:** low severity — adding the two explicit imports is harmless (a single-type static import
+shadows a wildcard one without conflict per JLS, so no compile error results), but it's unnecessary busywork
+the story presents as required, and a dev following it literally would add two redundant import lines
+(and might waste time double-checking why a "missing" import compiles fine without their addition, when
+in fact it always did).
+
+**Recommendation:** drop the "Add `import static...`" instruction from AC1 for `eq`/`isNull` entirely —
+only `ChronoUnit`/`List` etc. already imported in the file are needed, none of which require any addition
+for this AC.
+
+---
+
+## Summary
+
+| # | Severity | Area | One-line issue |
+|---|----------|------|-----------------|
+| 1 | Medium | AC2 / `AdminVideoServiceTest` | `deleteVideo_noPendingSession_neverReleasesQuota` gets no video-state assertion, missing a distinct regression class the sibling test can't catch |
+| 2 | Low | AC1 / imports | Instructed `eq`/`isNull` imports are unnecessary — both already resolve via the file's existing `Mockito.*` wildcard |
+
+AC2's re-scoping decision to leave `VideoServiceTest` unchanged (verified: `failTranscoding`'s state
+transition happens only inside the mocked `videoLifecycleService`, so no real object exists there for a
+stronger assertion — this is not a gap, just correctly identified as already-maximal for a mockist test),
+AC3's `pg_locks` narrowing (verified: `marketplace.coach_profiles` is `CoachProfile`'s exact
+schema-qualified table name per `CoachProfile.java:25`; the `EXISTS` clause's premise — that a session
+executing `SELECT ... FOR UPDATE` against a table always holds a granted, immediately-visible table-level
+lock on it before it can ever be blocked on the row itself — holds under Postgres's lock-acquisition order,
+so there is no race window where the outer query could see the transactionid wait before the relation lock
+is visible; and `deferred-53`'s own prior story-review already confirmed `findByIdForUpdate` is the first
+and only lock-acquiring call in both `createBookingRequest` and `acceptBooking`, so the narrowed query
+cannot introduce new flakiness against either race test), and AC4's config-safety fix (verified: neither
+`PaymentLifecycleService` nor `SessionPackPaymentService` — the only two callers of `chargeAndCapture` —
+catch `IllegalStateException` specifically anywhere, so nothing currently depends on the pre-fix uncaught
+behavior; `PaymentLifecycleService.java:207`'s existing `catch (PaymentGatewayException e)` around the
+`chargeAndCapture` call site already does the right thing — log and `persistPaymentFailure(...,
+BigDecimal.ZERO, ...)` — for a charge that never reached Stripe, exactly the same as it already does for a
+`StripeException`-derived failure, so routing the new config-lookup failure through the same exception type
+is a strict improvement, not a new risk; both new unit test snippets use `CoachStripeAccount`'s real
+Lombok-generated setters and avoid `stubCoachAndCommission()`'s "always succeeds" stub correctly, with no
+unused-stub risk under `MockitoExtension`'s strict-stubs mode) were all independently re-verified and are
+accurate — no changes needed there. AC5's ledger-tagging state (`deferred-work.md:1641`, `:1686`, `:1695`,
+`:1698` all confirmed tagged exactly as the story's AC5 describes, at the same line numbers the story cites)
+is also accurate.

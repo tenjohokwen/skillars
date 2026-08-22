@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.video.service;
 
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
+import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.contract.QuotaProvider;
 import com.softropic.skillars.platform.video.contract.UploadSessionStatus;
 import com.softropic.skillars.platform.video.repo.ReconciliationIncidentRepository;
@@ -20,6 +21,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.util.Optional;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
@@ -69,6 +71,8 @@ class AdminVideoServiceTest {
         InOrder inOrder = inOrder(videoRepository, quotaProvider);
         inOrder.verify(videoRepository).save(video);
         inOrder.verify(quotaProvider).release("handle-1");
+        assertThat(video.getOperationalState()).isEqualTo(OperationalState.DELETED);
+        assertThat(session.getStatus()).isEqualTo(UploadSessionStatus.EXPIRED);
     }
 
     @Test
@@ -81,5 +85,6 @@ class AdminVideoServiceTest {
         service.deleteVideo(videoId);
 
         verify(quotaProvider, never()).release(any());
+        assertThat(video.getOperationalState()).isEqualTo(OperationalState.DELETED);
     }
 }
