@@ -191,6 +191,14 @@ public class GdprErasureService {
         playerRadarBaselineRepository.deleteAllByPlayerId(playerId);
         playerRadarCompositeRepository.deleteAllByPlayerId(playerId);
         radarAssessmentRepository.deleteAllByPlayerId(playerId);
+        performanceReportRepository.findByPlayerIdOrderByGeneratedAtDesc(playerId).forEach(report -> {
+            try {
+                fileStorageService.deleteRawBytes(report.getStorageKey());
+            } catch (Exception e) {
+                log.warn("[GDPR_ERASURE_S3_DELETE_WARN] Failed to delete performance report PDF: "
+                    + "reportId={} playerId={}", report.getId(), playerId, e);
+            }
+        });
         performanceReportRepository.deleteAllByPlayerId(playerId);
         homeworkCompletionRepository.deleteAllByPlayerId(playerId);
     }

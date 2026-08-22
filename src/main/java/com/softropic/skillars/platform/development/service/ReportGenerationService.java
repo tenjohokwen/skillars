@@ -35,6 +35,7 @@ import com.softropic.skillars.platform.security.contract.exception.FeatureGatedE
 import com.softropic.skillars.platform.security.contract.util.AuthoritiesConstants;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
+import com.softropic.skillars.infrastructure.security.RateLimited;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -60,6 +61,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Service
@@ -89,6 +91,7 @@ public class ReportGenerationService {
     private String baseUrl;
 
     @Transactional
+    @RateLimited(key = "report_generate", capacity = 10, duration = 1, unit = TimeUnit.MINUTES)
     public void generateReport(Long coachUserId, Long playerId, String nextSteps) {
         coachPlayerAuthorizationService.requireCoachPlayerRelationship(coachUserId, playerId);
         UUID coachId = coachProfileService.getCoachIdByUserId(coachUserId);
