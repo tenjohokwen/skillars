@@ -72,10 +72,14 @@ current tree rather than trusted from the ledger's own text:
   Stripe API always prefixes `cus_` for both live and test-mode keys, not an app-constructed string — and
   every test fixture across `SessionPackPaymentResourceIT`, `PackPriceLockedOnPurchaseTest`,
   `CaptureReservationIT`, `StripePaymentGatewayTest` and `SessionPackPaymentServiceTest` already uses a
-  `"cus_..."`-prefixed value (grepped, zero exceptions). The table has one row per parent/coach with a
-  Stripe customer, well within this project's own established tolerance for an `ACCESS EXCLUSIVE`-locking
-  `ALTER TABLE ... ADD CONSTRAINT` at current size (the same tolerance `V94`/`V99`'s own migration comments
-  already document for sibling payment tables).
+  `"cus_..."`-prefixed value (grepped, zero exceptions). **Story-review Finding 1 (see "Review Findings"
+  below) found that this table's actual current row count in any live environment was never independently
+  verified, and the migration history citation originally used to argue size-based safety didn't actually
+  support that claim.** Rather than assert a number nobody checked, AC3 now uses Postgres's standard
+  low-risk pattern for adding a `CHECK` constraint to a populated table regardless of its actual size —
+  `ADD CONSTRAINT ... NOT VALID` (a brief `ACCESS EXCLUSIVE` lock, no full-table scan) followed by a
+  separate `VALIDATE CONSTRAINT` migration (a much lighter `SHARE UPDATE EXCLUSIVE` lock that doesn't block
+  concurrent writes).
 
 **Examined and deliberately not picked up, beyond the already-thin span's own excluded set:**
 `skillars-3-4`'s "`verifyIsParty` has no admin bypass path — no admin role exists yet; revisit when admin
@@ -219,22 +223,42 @@ was left alone rather than padded into this story to hit a size target.
      stay green) to confirm no regression to the happy path from the added annotation.
 
 3. **AC3 — Add a format-guard `CHECK` constraint on `payment.stripe_customers.stripe_customer_id`.**
-   - New file: `src/main/resources/db/migration/V100__stripe_customer_id_format_guard.sql` (V99 is the
-     current highest migration).
+   - New files: `src/main/resources/db/migration/V100__stripe_customer_id_format_guard.sql` and
+     `V101__stripe_customer_id_format_guard_validate.sql` (V99 is the current highest migration). Split
+     into two migrations, each its own Flyway transaction, per story-review Finding 1: folding both
+     statements into one migration/transaction would hold V100's `ACCESS EXCLUSIVE` lock for the full
+     duration of V101's validation scan, defeating the point of using `NOT VALID` at all.
      ```sql
+     -- V100__stripe_customer_id_format_guard.sql
      -- Defence-in-depth format guard, mirroring this project's established convention of validating
      -- external-provider-sourced string columns at the DB boundary. Real Stripe API responses always
      -- prefix customer ids "cus_" (StripePaymentGateway.createStripeCustomer writes the Stripe SDK
      -- Customer object's own .getId() verbatim, never an app-constructed string), so this only catches a
      -- misconfigured/placeholder value written directly, not a live Stripe response shape.
+     -- Added NOT VALID: registers the constraint for all new/future writes immediately via a brief
+     -- ACCESS EXCLUSIVE lock, with no full-table scan of existing rows — this table's actual current row
+     -- count in any live environment was never independently verified (story-review Finding 1), so the
+     -- scan is deferred to V101's separate, lighter-locking migration instead of asserted safe here.
      ALTER TABLE payment.stripe_customers
-         ADD CONSTRAINT chk_stripe_customer_id_format CHECK (stripe_customer_id LIKE 'cus_%');
+         ADD CONSTRAINT chk_stripe_customer_id_format CHECK (stripe_customer_id LIKE 'cus_%') NOT VALID;
+     ```
+     ```sql
+     -- V101__stripe_customer_id_format_guard_validate.sql
+     -- Validates the NOT VALID constraint added in V100 against every existing row, under a SHARE UPDATE
+     -- EXCLUSIVE lock that does not block concurrent reads/writes — deliberately a separate migration
+     -- (separate transaction) from V100, so V100's brief ACCESS EXCLUSIVE lock is not held for this
+     -- scan's duration.
+     ALTER TABLE payment.stripe_customers
+         VALIDATE CONSTRAINT chk_stripe_customer_id_format;
      ```
    - **Why this is safe to add now, not merely "safe in theory"**: verified every current write site
      (`StripePaymentGateway.createStripeCustomer:166`) and every test fixture across
      `SessionPackPaymentResourceIT`, `PackPriceLockedOnPurchaseTest`, `CaptureReservationIT`,
      `StripePaymentGatewayTest`, `SessionPackPaymentServiceTest` already uses a `"cus_..."`-prefixed value
-     — this migration adds no new failure mode to any existing code path or test.
+     — this migration adds no new failure mode to any existing code path or test. The `NOT VALID`/
+     `VALIDATE CONSTRAINT` split additionally makes this safe independent of the table's actual row count
+     in any environment, sidestepping the question story-review Finding 1 raised rather than resting on an
+     unverified size claim.
    - **Why an unescaped `LIKE 'cus_%'` (not a stricter regex or an escaped literal underscore)**: matches
      the source ledger item's own exact suggested text verbatim; this project has no existing `LIKE`
      pattern anywhere in its migrations to establish an escaping convention, and an unescaped `_` (SQL's
@@ -331,7 +355,9 @@ was left alone rather than padded into this story to hit a size target.
   - [ ] 2.2 Confirm no existing report-generation test regresses (targeted run per AC2's Test coverage
     note — check for an existing `ReportGenerationServiceTest`/`PerformanceReportResourceIT` first).
 - [ ] Task 3: `stripe_customer_id` format guard (AC: #3)
-  - [ ] 3.1 Add `V100__stripe_customer_id_format_guard.sql`, per AC3's snippet.
+  - [ ] 3.1 Add `V100__stripe_customer_id_format_guard.sql` (`NOT VALID`) and
+    `V101__stripe_customer_id_format_guard_validate.sql` (`VALIDATE CONSTRAINT`) as two separate
+    migrations, per AC3's snippet and story-review Finding 1.
   - [ ] 3.2 Add `StripeCustomerRepositoryIT.java` (new file), per AC3's snippet.
   - [ ] 3.3 Update `docs/testing/test-data-isolation.md`'s fixture registry table and claimed-prefix list
     to add `9640000001`–`9640000002` / `StripeCustomerRepositoryIT`.
@@ -340,6 +366,32 @@ was left alone rather than padded into this story to hit a size target.
     confirm no regression.
 - [ ] Task 4: Ledger hygiene (AC: #4) — flip the three `PICKED UP` tags applied at story creation to
   `CLOSED` once AC1/AC2/AC3 land, per AC4.
+
+### Review Findings
+
+Pre-implementation story review (`_bmad-output/implementation-artifacts/story-review.md`) of this story's
+draft against live code, 2026-08-22. Every AC1/AC2/AC3 code citation, method signature, line number, table
+schema, and test-fixture claim was independently re-verified and matched live code exactly, except one.
+
+- [x] [Review][Fix] **Applied:** AC3's original text justified an unconditional `ALTER TABLE ... ADD
+  CONSTRAINT` (an `ACCESS EXCLUSIVE`-locking, full-table-scanning operation) by citing `V94`/`V99`'s
+  migration comments as documenting an "established tolerance" for this at current table size. Both
+  citations were independently checked and neither actually says that: `V94`'s comment only explains why
+  reusing a constraint name is safe and why a value fits a column's `VARCHAR` width; `V99` isn't even an
+  `ALTER TABLE` (it's a single-row `INSERT`) and its comment is about a hand-assigned-PK collision hazard.
+  A full search of every migration file for any discussion of `ACCESS EXCLUSIVE` locking, table size, or
+  row count found none — the "established tolerance" didn't exist in this codebase, and
+  `payment.stripe_customers`'s actual current row count in any live environment was never independently
+  verified. Fixed by adopting the reviewer's recommendation (b): split AC3's migration into
+  `V100__stripe_customer_id_format_guard.sql` (`ADD CONSTRAINT ... NOT VALID`, a brief `ACCESS EXCLUSIVE`
+  lock with no table scan) and `V101__stripe_customer_id_format_guard_validate.sql` (`VALIDATE CONSTRAINT`,
+  a lighter `SHARE UPDATE EXCLUSIVE` lock that doesn't block concurrent writes), as two separate Flyway
+  migrations/transactions so `V100`'s lock is not held for `V101`'s scan duration. This makes AC3 safe
+  regardless of the table's actual size in any environment, sidestepping the unverified claim rather than
+  requiring a production row-count check before merging (recommendation (a), not pursued — no production DB
+  access available at story-review time). AC1 and AC2 had zero findings; see "Everything else independently
+  re-verified as accurate" in `story-review.md` for the full list of what was checked, including several
+  things this story didn't even originally claim to verify.
 
 ## Dev Notes
 
@@ -362,6 +414,12 @@ was left alone rather than padded into this story to hit a size target.
 - **AC3's migration only guards new/future writes** — like `skillars-deferred-18`'s AC4 precedent (IANA
   timezone validation), no audit of existing `stripe_customers` rows is run. Not needed here: every
   current row was written by the one code path already confirmed `cus_`-prefixed.
+- **AC3 ships as two migration files, not one** (`V100` = `ADD CONSTRAINT ... NOT VALID`, `V101` =
+  `VALIDATE CONSTRAINT`), per story-review Finding 1 — this project's migration history doesn't actually
+  document a verified-safe row count for `stripe_customers`, so the split makes the constraint's addition
+  safe regardless of the table's actual size in any environment, instead of resting on an unverified size
+  claim. Do not merge these back into a single `ALTER TABLE` statement or a single migration file/transaction
+  — doing so would hold `V100`'s `ACCESS EXCLUSIVE` lock for `V101`'s full validation-scan duration.
 - **No frontend changes in this story.** All three ACs are backend-only (one service method each, one new
   migration, two new/extended test files).
 - Per `docs/validation-strategy.md`, run targeted verification only — do not run a full `mvn verify`
@@ -376,7 +434,9 @@ was left alone rather than padded into this story to hit a size target.
   new static import (AC1).
 - `src/main/java/com/softropic/skillars/platform/development/service/ReportGenerationService.java` —
   `generateReport` gains one annotation, two new imports (AC2).
-- `src/main/resources/db/migration/V100__stripe_customer_id_format_guard.sql` — new file (AC3).
+- `src/main/resources/db/migration/V100__stripe_customer_id_format_guard.sql` and
+  `V101__stripe_customer_id_format_guard_validate.sql` — two new files, `NOT VALID` add + separate
+  `VALIDATE CONSTRAINT`, per story-review Finding 1 (AC3).
 - `src/test/java/com/softropic/skillars/platform/payment/repo/StripeCustomerRepositoryIT.java` — new file
   (AC3).
 - `docs/testing/test-data-isolation.md` — fixture registry updated with the new `9640` block (AC3).
@@ -417,6 +477,8 @@ was left alone rather than padded into this story to hit a size target.
   — the `AbstractIntegrationTest`-based payment-repository IT pattern AC3's new test file mirrors]
 - [Source: `docs/testing/test-data-isolation.md` — fixture id registry, free-block list AC3 claims from]
 - [Source: `docs/validation-strategy.md` — targeted-test-only validation policy]
+- [Source: `_bmad-output/implementation-artifacts/story-review.md` — pre-implementation story review;
+  Finding 1, resolved, drove AC3's `NOT VALID`/`VALIDATE CONSTRAINT` migration split]
 
 ## Dev Agent Record
 
@@ -441,3 +503,4 @@ _To be filled in by the dev agent._
 | Date | Change |
 |---|---|
 | 2026-08-22 | Story created via story-creation process, bundling three items re-mined from `deferred-work.md`'s middle span (2026-06-19 through 2026-06-30 — Stories 5.1-5.6, 6.1-6.6, 7.1-7.5, 8.1-8.4, 10.1-10.4, 11.1-11.3), the one large section this ledger's own audits have repeatedly flagged as "not re-checked" by any prior `skillars-deferred-*` story-creation pass. AC1 closes the S3-orphan half of `skillars-5-5` D5 (the DB-row half was already closed by earlier unannotated work) — GDPR erasure was silently leaving every player's performance-report PDFs in S3 forever. AC2 closes `skillars-5-5` D4 — rate-limits report generation using this project's existing `@RateLimited` mechanism, already proven at 6 other call sites. AC3 closes `skillars-7-2` Group 1 D6 — adds a format-guard `CHECK` constraint on `stripe_customer_id`, verified safe against every current write site and test fixture. AC4 is ledger hygiene for all three. Considered and explicitly not picked up: `skillars-3-4`'s stale "no admin role exists yet" admin-bypass item (now reachable in principle since Epic 10 shipped admin roles, but the actual fix needs a security-posture decision); `skillars-6-5` W8 (needs a new reconciliation job, bigger than a bounded fix); `skillars-10-2`'s unbounded strikes list (explicitly tagged low-risk by its own text). |
+| 2026-08-22 | story-review adjustments applied, status remains ready-for-dev. `story-review.md` filed 1 finding against the draft (Medium), fixed. Finding 1: AC3's original safety argument for an unconditional `ALTER TABLE ... ADD CONSTRAINT` cited `V94`/`V99` as documenting an "established tolerance" for `ACCESS EXCLUSIVE` locking at this table's size — both citations independently re-checked and neither actually supports that claim, and no migration in this project's history discusses lock duration or row-count tolerance at all; the table's actual current row count in any live environment was never independently verified. Per the finding's recommendation (b), fixed by splitting AC3's migration into two files/transactions — `V100` (`ADD CONSTRAINT ... NOT VALID`, brief `ACCESS EXCLUSIVE` lock, no scan) and `V101` (`VALIDATE CONSTRAINT`, lighter `SHARE UPDATE EXCLUSIVE` lock) — making the constraint's addition safe regardless of actual table size, rather than pursuing recommendation (a) (verifying a live row count, not possible at story-review time with no production DB access). AC1 and AC2, and every other AC3 claim, were independently re-verified as accurate — no changes needed there. |
