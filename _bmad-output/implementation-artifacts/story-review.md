@@ -1,133 +1,82 @@
-# Story Review: skillars-deferred-53
+# Story Review: Deferred-54 (Pack Deduction Failure Path Unit Coverage)
 
-Reviewed: `skillars-deferred-53-concurrency-race-test-determinism-and-hardcoded-currency-configuration.md`
-(Status at review time: `ready-for-dev`, Dev Agent Record empty, all task checkboxes unchecked.)
+Reviewed: `_bmad-output/implementation-artifacts/skillars-deferred-54-pack-deduction-failure-path-unit-coverage.md`
+Method: every factual claim (line numbers, method signatures, control flow, existing test behavior) was
+re-verified against the live files it cites — `PaymentLifecycleService.java`, `PackSessionService.java`,
+`CreditRoutingTest.java`, `BookingPaymentPersistenceService.java`, `BatchAcceptPaymentIT.java`, and
+`deferred-work.md` — not taken on the story's word.
 
-## Method
+## Verdict
 
-Every factual claim in the story was re-verified against the live repository rather than trusted from the
-story text: read `BookingServiceConcurrencyIT.java` in full, `BookingService.java`'s `createBookingRequest`
-and `acceptBooking` (including every query issued before the coach-row lock, to check for an earlier
-lock-wait whose SQL text could false-trigger the new polling helper), `CoachProfileRepository.java`,
-`CoachProfile.java`'s `@Table` mapping, `StripePaymentGateway.java`, `StripePaymentGatewayTest.java` in
-full, `ConfigService.java`, every `platform_config`-seeding migration (`V20`, `V90`–`V93`) to check the
-migration-style claim, `SharedContainers.java` and `AbstractIntegrationTest.java` (DB role, container
-topology), `TestConfig.java` and every payment-module IT that references `PaymentGateway`
-(`CaptureReservationIT`, `PaymentWebhookIdempotencyIT`, `SessionPackPaymentResourceIT`,
-`StripeOnboardingResourceIT`) to check whether any of them actually exercise the real
-`StripePaymentGateway` bean, `pom.xml`'s surefire/failsafe configuration, and `deferred-work.md` at all
-three cited line numbers plus the new AC2 entry. AC1/AC2's core race-test analysis, AC3's currency-hardcoding
-analysis, and AC4's ledger-tagging state all check out exactly as described — **no false positives are
-reported below for those premises.** The findings below are real gaps in the story's execution detail, not
-restatements of the story's own already-correct analysis.
+No defects found. The story's technical claims all check out, the proposed test snippet compiles and
+correctly exercises the branch it targets, and the AC2 ledger-hygiene state matches what's actually in
+`deferred-work.md`. One minor completeness suggestion below (non-blocking).
 
----
+## Claims verified accurate
 
-## Finding 1 (Medium) — AC3's new migration omits `ON CONFLICT (key) DO NOTHING`, contradicting the story's own instruction to mirror V93's style
+- `PaymentLifecycleService.java:162-175` (`handlePackBasedBooking`) catches exactly `PaymentGatewayException`
+  from `packSessionService.deductSession(purchaseId)` and calls `persistenceService.persistPaymentFailure(...)`
+  with `BigDecimal.ZERO` as the reversal amount, then `return`s — matches the story's description and the
+  proposed test's assertions line for line.
+- `PackSessionService.deductSession(UUID)` (`PackSessionService.java:51-61`) is `void` and throws
+  `PaymentGatewayException` from two sites (`payment.packNotFound`, `payment.packExhausted`) — the story's
+  `doThrow(...).when(...)` guidance is correct; `when(...).thenThrow(...)` would not compile here.
+- `CreditRoutingTest.java` import block (`:1-35`) has no `org.mockito.Mockito.doThrow` static import today —
+  the story correctly flags this as a required addition.
+- `persistPaymentFailure`'s real signature (`BookingPaymentPersistenceService.java:207-209`) is
+  `(UUID bookingId, BigDecimal creditToReverse, Long parentId, String parentEmail, String coachDisplayName,
+  Instant requestedStartTime, String canonicalTimezone)` — exactly 7 params, matching the proposed test's
+  7-matcher `verify(...)` call arg-for-arg (type and position).
+- `persistPaymentSuccess`'s real signature (`BookingPaymentPersistenceService.java:178-181`) has 10 params —
+  matching the proposed `never()` verification's 10 `any()` matchers, and consistent with how every other
+  test in the file already verifies it (e.g. `duplicateEvent_idempotencyNoOp`).
+- Placement instruction ("immediately after `packBasedBooking_noStripeNoCreditConsulted`") is accurate:
+  that test spans `:147-161` in the live file, and `stripeDecline_chargesCaptureFails_callsPersistFailureWithZeroReversal`
+  (the test AC1 says it mirrors) spans `:163-181` — both citations are exact.
+- `@Mock BookingPaymentPersistenceService persistenceService` is present at `CreditRoutingTest.java:50` and
+  wired via `@InjectMocks` — the "no new mock infrastructure needed" claim, which is what makes D21's
+  original "requires new mock infrastructure" blocker stale, is correct.
+- No naming collision: no method named `packBasedBooking_deductSessionFails_callsPersistFailureWithZeroReversal`
+  (or similar) already exists in `CreditRoutingTest.java`.
+- `deferred-work.md:1119` (D21) is tagged `` `[PICKED UP by skillars-deferred-54 AC1]` `` exactly as the story
+  states, confirming AC2's starting state is accurate.
+- The "deliberately not picked up" D20 claim — that neither `lastPaymentIntentId` nor `stripePaymentMethodId`
+  appear anywhere in `CashOutService.java`/`CashOutServiceTest.java` — was independently re-grepped and
+  confirmed: zero hits for both names in either file.
+- `BatchAcceptPaymentIT.acceptAll_packDeductionFails_bookingReachesDeclined` (`:116-126`) exists exactly as
+  cited and does exercise a pack-deduction failure at the batch level.
+- Trace through `onBookingAccepted` with the proposed test's setup confirms the exception path is reached
+  as described: `isSettled`/`hasReservation` both read the `lenient()`-stubbed empty `Optional` from
+  `setUp()`, `event.getSessionPackPurchaseId() != null` routes into `handlePackBasedBooking`, and the mock's
+  `doThrow` fires exactly where the catch block expects it. No stubbing-strictness (`MockitoExtension`
+  `STRICT_STUBS`) issue: the new test's own stub is consumed by the call it's meant to trigger.
 
-**What's wrong:** AC3's SQL snippet for `V99__payment_currency_config.sql` is a bare `INSERT ... VALUES (604, ...)` with no conflict clause. But every `platform_config` seed migration since this pattern was established — `V90`, `V91`, and `V93` (the exact migration this story cites as "the most recent prior seed" to match "column list/style") — ends in `ON CONFLICT (key) DO NOTHING;`. `V93`'s own migration comment spells out why this is not decorative:
+## Non-blocking observation (not a defect, not requested as a fix)
 
-> "The id MUST be free. `main.platform_config.id` is PRIMARY KEY with no sequence (V20:8) — ids are
-> hand-assigned — and the ON CONFLICT target below is `key`, a DIFFERENT unique constraint
-> (`uq_platform_config_key`, V20:9). An id collision therefore raises a PK violation the ON CONFLICT
-> (key) clause never sees, failing Flyway on every database that has run V91."
+**The "batch-path equivalent" is not byte-for-byte the same failure-handling code, even though the story
+never claims it is.** The batch path's pack loop (`PaymentLifecycleService.java:247-267`) catches the
+*broader* `Exception` (not just `PaymentGatewayException`) and calls `persistenceService.declineBatchBooking(...)`,
+not `persistPaymentFailure(...)`. The story's language — "batch-path equivalent of this exact failure is
+already covered... this story closes the single-booking-path gap to parity with the batch path, at the unit
+level" — is accurate as written (parity of *coverage*, not parity of *mechanism*), but a future reader
+skimming quickly could misread "parity with the batch path" as implying the two code paths converge on the
+same persistence call. They don't. No change requested — the story's actual AC1 text and test snippet
+correctly target `persistPaymentFailure`, matching the real single-booking code path.
 
-AC3's instruction says to match V93's "exact column list/style," and does copy the column list and the
-`NOW()` convention, but drops the one clause V93 itself explains is load-bearing for migration safety.
+## Minor completeness suggestion (optional, non-blocking)
 
-**Why it matters:** this is a real, verified deviation from an established, explicitly-documented project
-convention, not a stylistic nit — every other seed of this table in the last several migrations does this on
-purpose. Following AC3's snippet literally reintroduces the exact failure mode V93 was written to guard
-against for `platform.payment.currency`'s row.
+The proposed test omits `verify(packSessionService).deductSession(packId);`, even though its direct sibling
+success test (`packBasedBooking_noStripeNoCreditConsulted`) includes that same verification. This isn't a
+correctness gap — the stubbed `doThrow` firing is itself proof the mock was invoked, and the mirrored
+`stripeDecline_...` failure test the story cites as AC1's template also omits verifying its own triggering
+call (`chargeAndCapture`) for the same reason — so omitting it is actually *consistent* with the pattern
+being mirrored. Flagging only as an optional add for symmetry with the pack success test specifically, not
+as something AC1 needs to change.
 
-**Recommendation:** append `ON CONFLICT (key) DO NOTHING;` to AC3's migration snippet, matching `V90`/
-`V91`/`V93` exactly.
+## Scope check
 
----
-
-## Finding 2 (Medium) — Task 3.4's IT-level "no wiring regression" check names an IT that, like every other payment-module IT, does not exercise the real `StripePaymentGateway`
-
-**What's wrong:** Task 3.4 says: "Run `mvn -o integration-test -Dit.test=PaymentWebhookIdempotencyIT` (or
-whichever payment-module IT actually exercises `chargeAndCapture` end to end — verify which one during
-implementation rather than assuming) to confirm no wiring regression from the new config key." The premise —
-that *some* IT exercises the real `StripePaymentGateway.chargeAndCapture()` — does not hold anywhere in this
-codebase:
-
-- `TestConfig.java:94-98` declares `@Primary @Bean PaymentGateway paymentGateway() { return new
-  StubPaymentGateway(); }`. Every `*IT` class extends `AbstractIntegrationTest`, which `@Import`s
-  `TestConfig` — so `StubPaymentGateway` is the `PaymentGateway` bean everywhere in the IT suite by
-  construction; the real `@Service StripePaymentGateway` bean exists in the context but is never the one
-  autowired behind the `PaymentGateway` interface.
-- `PaymentWebhookIdempotencyIT` itself — the story's own named candidate — confirms this in its own code
-  comment: `"First event: Case C (zero credit, full Stripe charge via StubPaymentGateway)"`. It never touches
-  the real class.
-- `CaptureReservationIT` (`BasePaymentIT`'s most payment-focused subclass) uses `@MockitoSpyBean
-  PaymentGateway paymentGateway` — a spy wrapping the same `StubPaymentGateway` `@Primary` bean, stubbed via
-  `doReturn(...).when(paymentGateway).chargeAndCapture(...)`. Its own Javadoc even name-checks
-  `StripePaymentGateway` while testing the interface, not the implementation.
-- `SessionPackPaymentResourceIT` fully replaces `PaymentGateway` with `@MockitoBean PaymentGateway
-  paymentGateway` (a pure mock).
-- A repo-wide grep for any test wiring the real bean (`new StripePaymentGateway`, a
-  `StripePaymentGateway`-typed field, or a `@Qualifier` selecting it) returns zero hits outside the pure
-  Mockito unit test `StripePaymentGatewayTest`.
-
-**Why it matters:** no integration test in this suite can currently prove "no wiring regression" for the
-`.setCurrency(configService.getString(...))` change, because none of them route through the code that would
-call it. The task's parenthetical hedge ("verify which one... rather than assuming") correctly anticipates
-that the named IT might be wrong, but doesn't anticipate that *no* IT is right — a dev could spend time
-hunting for a nonexistent target, or worse, run `PaymentWebhookIdempotencyIT`/`CaptureReservationIT`, see
-green, and believe the currency wiring was IT-verified when it was not (both exercise the stub).
-
-**Recommendation:** drop the IT-level verification instruction, or replace it with an explicit statement
-that no existing IT exercises the real gateway and that `StripePaymentGatewayTest`'s AC3 unit test (task 3.3)
-is the only verification this change gets — which is an accurate and sufficient description of what AC3
-actually delivers, just not what Task 3.4 currently claims.
-
----
-
-## Finding 3 (Low-Medium) — AC1's own "run it 3-5 times" instruction names the wrong Maven goal, contradicting the story's own IT-execution gotcha and Task 1.3
-
-**What's wrong:** AC1's Test Coverage paragraph says: "this file has no `@RepeatedTest` convention to reuse;
-a manual repeated `mvn -o test` invocation is sufficient, no new annotation needed." But
-`BookingServiceConcurrencyIT` is an `*IT` class, and this story's own Dev Notes state the opposite two
-sections later: "`*IT` classes run under `maven-failsafe-plugin`, bound to `integration-test`/`verify`,
-**not** `mvn test`. Use `mvn -o integration-test -Dit.test=<ClassName>`." Task 1.3, two paragraphs above AC1's
-prose, already gets this right (`mvn -o integration-test -Dit.test=BookingServiceConcurrencyIT`).
-`pom.xml`'s `maven-surefire-plugin` block has no custom `<includes>`, so default Surefire include patterns
-apply (`**/*Test.java` and similar) — `*IT.java` files are excluded by convention and picked up only by
-Failsafe's `integration-test`/`verify` goals.
-
-**Why it matters:** `mvn -o test`, run as literally instructed, will not execute `BookingServiceConcurrencyIT`
-at all and will still report `BUILD SUCCESS`. A dev following AC1's literal repeated-run instruction to
-"build confidence the flakiness class is actually closed" could run this five times, see green five times,
-and have verified nothing — the one check this AC exists to motivate.
-
-**Recommendation:** fix AC1's Test Coverage paragraph to say `mvn -o integration-test
--Dit.test=BookingServiceConcurrencyIT#createBookingRequest_coachSuspendedAfterUnlockedRead_isRejectedWithCoachUnavailable`
-(or the class-level form), matching Task 1.3 and the Dev Notes gotcha it otherwise correctly states
-elsewhere in the same story.
-
----
-
-## Summary
-
-| # | Severity | Area | One-line issue |
-|---|----------|------|-----------------|
-| 1 | Medium | AC3 / migration | `V99` snippet omits `ON CONFLICT (key) DO NOTHING`, breaking the exact V93 convention AC3 says to mirror |
-| 2 | Medium | Task 3.4 | No IT in the repo exercises the real `StripePaymentGateway` — the named/implied "end to end" IT check is unfindable, not just mis-named |
-| 3 | Low-Medium | AC1 test plan | "`mvn -o test`" for a repeated manual run of an `*IT` class contradicts the story's own IT-execution gotcha and Task 1.3's correct command |
-
-AC1/AC2's race-condition analysis (confirmed: `findByIdForUpdate` is the first and only lock-acquiring call
-in both `createBookingRequest` and `acceptBooking` before the coach row lock is released, so the new
-`pg_stat_activity`-polling helper cannot false-trigger on an earlier, unrelated lock wait), the
-`pg_stat_activity` mechanism itself (confirmed safe against transaction MVCC snapshots, and confirmed both
-threads share the same Postgres superuser role — `postgres`, per `SharedContainers.java` — so the restricted
-per-role visibility Postgres applies to `pg_stat_activity.query`/`wait_event_type` for other roles' backends
-never applies here), the `jakarta.persistence.lock.timeout`-has-no-effect context cited for why the booking
-thread blocks indefinitely, AC3's currency-hardcoding analysis (`StripePaymentGateway.java:48` confirmed the
-only `.setCurrency(...)` call site in the file), the migration id availability (`604` confirmed free; `603`
-confirmed the current max), `StripePaymentGatewayTest`'s `stubCoachAndCommission()` mandatory-stub reasoning
-(confirmed: all four existing `chargeAndCapture` tests reach the `setCurrency` line unconditionally before
-any early-exception path, so the new stub cannot introduce an `UnnecessaryStubbingException`), and AC4's
-ledger-tagging state (`deferred-work.md:1107`, `:1193`, and the new `:1691` entry all confirmed tagged
-exactly as the story claims) were all independently re-verified and are accurate — no changes needed there.
+Confirmed this story makes no production code claims that don't hold: `handlePackBasedBooking`'s catch
+branch was re-read directly and does exactly what AC1's Dev Notes assert, with no other exception type or
+branch in that method needing coverage. The single try/catch in `handlePackBasedBooking` is the entire
+failure surface D21 describes — there is no partial-success or secondary-failure state within this method
+that the proposed single test would miss.
