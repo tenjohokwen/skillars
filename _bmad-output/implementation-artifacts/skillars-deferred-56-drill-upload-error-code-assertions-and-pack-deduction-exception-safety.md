@@ -11,7 +11,8 @@ assert that code in the response body, and `PaymentLifecycleService.handlePackBa
 `PaymentGatewayException` (log it, record a payment failure, return cleanly) instead of only the latter,
 so that a future regression in either spot is actually caught by its existing safety net rather than
 passing green by coincidence, and a future change to `deductSession`'s throw contract can no longer crash
-an `AFTER_COMMIT` event listener uncaught.
+an `AFTER_COMMIT` event listener uncaught (though, per story review, its recovery write is not guaranteed to
+survive every scenario that reaches the widened catch — see AC2's "Known residual risk" note).
 
 ### Why this story exists
 
@@ -117,17 +118,35 @@ a live bug.
      uses: chain `.isInstanceOf(...)` with a `.satisfies(e -> { HttpClientErrorException ex = (...) e; ... })`
      block asserting on `ex.getResponseBodyAsString()`. No new imports are needed —
      `HttpClientErrorException`, `assertThat`, and `assertThatThrownBy` are already imported in this file.
-   - **1a. `initiateUpload_scoutCoach_returns403WithFeatureGatedCode` (`:155-172`).** Current shape:
+   - **1a. `initiateUpload_scoutCoach_returns403WithFeatureGatedCode` (`:155-172`).** **Fixture bug found
+     during story review, must be fixed first**: this test authenticates as `SCOUT_EMAIL` but posts to
+     `coachDrillId`, which `setUp()` creates as `insertDrill(coachDrillId, "Coach Test Drill", "COACH",
+     instrCoachId, "ACTIVE")` (`:87-88`) — owned by `instrCoachId`, not `scoutCoachId`.
+     `DrillUploadService.initiateUpload` checks drill ownership *before* the feature gate
+     (`DrillUploadService.java:61-65`), so as currently wired this test would throw
+     `OperationNotAllowedException(DRILL_NOT_OWNED)`, not `FeatureGatedException`, before
+     `checkDrillUploadGate` is ever reached — both map to HTTP 403, which is why today's status-only
+     assertion passes coincidentally, but asserting `errorKey = "security.featureGated"` against this
+     fixture would fail with `DRILL_NOT_OWNED` in the body instead. Add a scout-owned drill fixture first:
+     in `setUp()`, alongside the existing `coachDrillId`/`otherCoachDrillId` inserts:
+     ```java
+     scoutCoachDrillId = UUID.randomUUID();
+     insertDrill(scoutCoachDrillId, "Scout Test Drill", "COACH", scoutCoachId, "ACTIVE");
+     ```
+     (new `private UUID scoutCoachDrillId;` field alongside the existing `coachDrillId`/`otherCoachDrillId`
+     fields), and extend `tearDown()`'s existing cleanup statements (`:107-116`) to also include
+     `scoutCoachDrillId` in each `DELETE ... WHERE drill_id IN (...)`/`WHERE ... coach_id IN (...)` list
+     alongside `coachDrillId`/`otherCoachDrillId`. Current test shape:
      ```java
      assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
          baseUrl() + DRILLS_BASE + "/" + coachDrillId + "/video/initiate",
          HttpMethod.POST, payload, authenticatedHeaders(cookies), Map.class
      )).isInstanceOf(HttpClientErrorException.Forbidden.class);
      ```
-     Change to:
+     Change to (note: points at the new `scoutCoachDrillId`, not `coachDrillId`):
      ```java
      assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
-         baseUrl() + DRILLS_BASE + "/" + coachDrillId + "/video/initiate",
+         baseUrl() + DRILLS_BASE + "/" + scoutCoachDrillId + "/video/initiate",
          HttpMethod.POST, payload, authenticatedHeaders(cookies), Map.class
      ))
          .isInstanceOf(HttpClientErrorException.Forbidden.class)
@@ -140,7 +159,10 @@ a live bug.
      The `security.featureGated` errorKey is confirmed at `SessionApiAdvice`-adjacent mapping —
      specifically `ApiAdvice.java:326-331`'s `@ExceptionHandler(FeatureGatedException.class)` handler, which
      `DrillUploadService.checkDrillUploadGate` reaches via `throw new FeatureGatedException("drill_video_upload",
-     resolveMinUploadTier())` (`DrillUploadService.java:144`) when a `SCOUT`-tier coach hits this endpoint.
+     resolveMinUploadTier())` (`DrillUploadService.java:144`) when a `SCOUT`-tier coach hits this endpoint —
+     reachable now that the fixture's drill is actually owned by the authenticated scout coach, so the
+     ownership check at `DrillUploadService.java:61-65` passes and `checkDrillUploadGate` is actually
+     exercised.
    - **1b. `initiateUpload_fileSizeTooLarge_returns422WithConstraintViolatedCode` (`:270-287`).** Current
      shape asserts only `.isInstanceOf(HttpClientErrorException.UnprocessableEntity.class)`. Add the same
      `.satisfies(...)` shape, asserting `"\"errorKey\":\"video.constraintViolated\""`. Trace: an oversized
@@ -222,6 +244,29 @@ a live bug.
    - **What this does NOT change**: the behavior for `PaymentGatewayException` itself is identical — same
      branch, same `persistPaymentFailure` call, same return. This AC only adds coverage for the
      previously-uncaught case; it does not alter any currently-tested behavior.
+   - **Known residual risk (story review, not fixed by this AC — documented per this project's convention
+     of surfacing rather than silently shipping unverified defensive code)**: `deductSession` is
+     `@Transactional` and joins the same physical transaction as `onBookingAccepted`'s enclosing
+     `@Transactional(propagation = Propagation.REQUIRES_NEW)` `AFTER_COMMIT` listener
+     (`PaymentLifecycleService.java:138-139`), rather than starting its own. Under Spring's default rollback
+     rule, an unchecked exception propagating out of a *participating* (non-new) `@Transactional` method
+     marks that shared transaction rollback-only at the AOP boundary, before the exception ever reaches this
+     method's `catch` block. `persistenceService.persistPaymentFailure(...)` — also `@Transactional`,
+     default `REQUIRED` — joins that same now-rollback-only transaction; its writes will likely still
+     execute against Postgres, but when the outer `REQUIRES_NEW` transaction reaches its own commit point,
+     Spring rolls the whole thing back instead, silently discarding the failure record this catch branch
+     exists to guarantee. This mechanism is **not introduced by this AC** — it already applies identically
+     to the pre-existing `PaymentGatewayException` branch — but has caused no observed harm there only
+     because both of `deductSession`'s current `PaymentGatewayException` throw sites fire before any DB
+     write. AC2 is the first change built around a scenario (`.save(purchase)` failing) where a write may
+     already be in flight when the exception hits, making this mechanism consequential for the first time.
+     The one new test this AC adds uses a `@Mock`-ed `persistenceService`
+     (`CreditRoutingTest.java:49`), so it can only prove the right method is *called* with the right
+     arguments — it cannot observe whether that call's write survives a real Spring transaction commit, and
+     no test at any level in this story closes that gap. A real fix (a `*IT`-level test forcing a genuine
+     `DataAccessException` inside the actual `AFTER_COMMIT`/`REQUIRES_NEW` flow, and/or a redesign of how
+     failure recording survives a rollback-only transaction) is out of scope for this small, mechanical
+     hardening story and is left as a fresh `deferred-work.md` item once this AC ships (see AC3).
    - **Test coverage**: `src/test/java/com/softropic/skillars/platform/payment/service/CreditRoutingTest.java`.
      Add one new test directly below the existing `packBasedBooking_deductSessionFails_callsPersistFailureWithZeroReversal`
      (`:164-179`), mirroring it exactly with the exception type swapped:
@@ -272,15 +317,23 @@ a live bug.
    actually land — one commit, matching the code:
    - Once AC1 ships: flip line 762's tag to `` `[CLOSED by skillars-deferred-56 AC1]` `` with a one-line
      closure note naming all three tests fixed.
-   - Once AC2 ships: flip the line-~1702 tag to `` `[CLOSED by skillars-deferred-56 AC2]` `` the same way.
+   - Once AC2 ships: flip the line-~1702 tag to `` `[CLOSED by skillars-deferred-56 AC2]` `` the same way,
+     and additionally file a **new** `deferred-work.md` item (not `[PICKED UP]`, just a fresh untagged
+     bullet) capturing AC2's "Known residual risk" note verbatim in summary: the widened catch's
+     `persistPaymentFailure` recovery write is not guaranteed to survive Spring's rollback-only marking on
+     the shared `REQUIRES_NEW` transaction when the triggering exception fires after a DB write was already
+     attempted inside `deductSession` — needs either a real `*IT`-level test or a design decision on how
+     failure recording should survive a rollback-only transaction.
    - **If a partial implementation lands**, flip only the tag for the AC that actually shipped — leave the
      other at `PICKED UP`. The ledger must never claim a still-unfixed item is `CLOSED`.
 
 ## Tasks / Subtasks
 
 - [ ] Task 1: `DrillUploadResourceIT` error-code assertions (AC: #1)
-  - [ ] 1.1 Add the `.satisfies(...)` block to `initiateUpload_scoutCoach_returns403WithFeatureGatedCode`,
-    per AC1a's snippet.
+  - [ ] 1.1 Add the `scoutCoachDrillId` fixture to `setUp()`/`tearDown()` and the `.satisfies(...)` block to
+    `initiateUpload_scoutCoach_returns403WithFeatureGatedCode`, pointing it at `scoutCoachDrillId` instead
+    of `coachDrillId`, per AC1a's snippet (story-review Finding 1: the original `coachDrillId` fixture is
+    owned by `instrCoachId`, so the ownership check fires before the feature gate does).
   - [ ] 1.2 Add the `.satisfies(...)` block to
     `initiateUpload_fileSizeTooLarge_returns422WithConstraintViolatedCode`, per AC1b.
   - [ ] 1.3 Add the `.satisfies(...)` block to `initiateUpload_durationTooLong_returns422WithConstraintViolatedCode`,
@@ -293,7 +346,7 @@ a live bug.
     to `CreditRoutingTest.java`, per AC2's snippet.
   - [ ] 2.3 Run `mvn -o test -Dtest=CreditRoutingTest` and confirm all tests green (existing plus the new one).
 - [ ] Task 3: Ledger hygiene (AC: #3) — flip the two `PICKED UP` tags applied at story creation to `CLOSED`
-  once AC1/AC2 land, per AC3.
+  once AC1/AC2 land, and file the new rollback-only residual-risk item once AC2 ships, per AC3.
 
 ## Dev Notes
 
@@ -316,13 +369,20 @@ a live bug.
   reasoning. If a future pass finds this AC's own tag but the code was never actually touched, that is a
   signal the story was abandoned mid-flight, not that the item is closed.
 - **No frontend changes in this story.** Both ACs are backend-only (test code + one production method).
+- **AC1a requires a new fixture, not just an assertion**: `DrillUploadResourceIT`'s existing `coachDrillId`
+  is owned by `instrCoachId`, not `scoutCoachId` — asserting `security.featureGated` against it would fail
+  the build (ownership check fires first, per `DrillUploadService.java:61-65`). AC1a's snippet now includes
+  the required `scoutCoachDrillId` fixture in `setUp()`/`tearDown()`; do not skip it.
+- **AC2 prevents a crash but does not guarantee its recovery write survives** — see AC2's "Known residual
+  risk" note. This is a known, accepted gap for this story's scope, not an oversight.
 - Per `docs/validation-strategy.md`, run targeted verification only — do not run a full `mvn verify` unless
   targeted verification proves insufficient.
 
 ### Project Structure Notes
 
-- `src/test/java/com/softropic/skillars/platform/session/api/DrillUploadResourceIT.java` — three existing
-  tests gain a `.satisfies(...)` block each, no new imports needed (AC1).
+- `src/test/java/com/softropic/skillars/platform/session/api/DrillUploadResourceIT.java` — new
+  `scoutCoachDrillId` field + `setUp()`/`tearDown()` fixture wiring, three existing tests gain a
+  `.satisfies(...)` block each, no new imports needed (AC1).
 - `src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java` —
   `handlePackBasedBooking`'s catch clause widened, log call gains the exception argument (AC2). No new
   imports.
@@ -382,3 +442,4 @@ _To be filled by dev agent._
 | Date | Change |
 |---|---|
 | 2026-08-22 | Story created via story-creation process, bundling two items re-mined from `deferred-work.md`: one from its most-recently-active tail (post-`skillars-deferred-49`), one from a previously-never-revisited old section (2026-06-17), after the tail alone was confirmed to hold only a single fresh candidate. AC1 closes a test-assertion gap in `DrillUploadResourceIT` (`skillars-4-3`'s own code review, W7) — bundled with two previously-untracked sibling tests carrying the identical gap, found while fixing W7 itself. AC2 closes `skillars-deferred-54`'s own deferred finding (`handlePackBasedBooking`'s narrow catch clause) — previously investigated and explicitly left un-annotated by `skillars-deferred-55`'s own creation on reachability grounds; picked up this pass on different grounds (small, mechanical, theme-consistent defensive hardening, not a reachability change — see "Why this story exists" for the full reasoning). AC3 is ledger hygiene for both. Five additional stale items found and tagged during the re-mine (none picked up as an AC): `refresh_alreadyUsedToken`'s entirely-commented-out test (line 863), `restore-from-snapshot.sh`'s deletion (line 964), the `BookingExpiredEvent`/`BookingReminderEvent`/`BookingConfirmedEvent` builder already existing (line 1141), a project-wide `.distinct()` audit closing out the `GdprExportService` item definitively (line 1687), and a `getConversations()` messaging-module fix already shipped unannotated (`skillars-8-2` D1/D2, embedded audit prose, not independently tagged). Two items considered and explicitly not picked up: `skillars-10-1 patches`' D1/D2 (test-fixture-only risk; intentional spec asymmetry). |
+| 2026-08-22 | story-review adjustments applied, status remains ready-for-dev. `story-review.md` filed 2 findings against the draft, both fixed. Finding 1/High: AC1a's fixture bug — `initiateUpload_scoutCoach_returns403WithFeatureGatedCode` posted to `coachDrillId`, owned by `instrCoachId`, so `DrillUploadService`'s ownership check would fire before the feature gate, making AC1a's specified `errorKey` assertion fail (actual body `DRILL_NOT_OWNED`, not `security.featureGated`) rather than stay green — added a new `scoutCoachDrillId` fixture (owned by `scoutCoachId`) to `setUp()`/`tearDown()` and repointed the test at it, per Finding 1's recommendation. Finding 2/Medium: AC2's widened `RuntimeException` catch may not survive its own motivating scenario — Spring marks the shared `REQUIRES_NEW` transaction rollback-only at the AOP boundary when `deductSession` (itself `@Transactional`, participating not new) throws, before the `catch` block runs, so `persistPaymentFailure`'s recovery write can be silently discarded on commit; the story's own new test uses a mocked `persistenceService` and cannot observe this. Per Finding 2's recommendation (b), documented as a known, accepted residual risk in AC2's own text and Dev Notes rather than expanding this small hardening story's scope into a real `*IT`-level transactional test — AC3 now also files a fresh (untagged) `deferred-work.md` item for this risk once AC2 ships, so it isn't lost. Both findings independently re-verified against live code (`DrillUploadResourceIT.java`, `DrillUploadService.java:61-65`, `PackSessionService.java:51-61`, `PaymentLifecycleService.java:138-139,224-229`, `BookingPaymentPersistenceService.java:206-207`) before applying. Everything else in the draft (AC1b/AC1c fixtures, errorKey serialization shape, AC2's import-removal hedge, AC2's test snippet compiling cleanly, AC3's ledger-tag state) was independently re-verified as accurate — no changes needed there. |
