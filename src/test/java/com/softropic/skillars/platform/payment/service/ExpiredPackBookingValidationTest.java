@@ -22,6 +22,8 @@ import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepositor
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import jakarta.persistence.EntityManager;
@@ -43,6 +45,8 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 /**
@@ -72,6 +76,10 @@ class ExpiredPackBookingValidationTest {
     // before the overlap check; a mock keeps that a no-op here. The real re-read is proven against a
     // live database in BookingServiceConcurrencyIT.
     @Mock EntityManager entityManager;
+    // Deferred-62: createBookingRequest wraps the pessimistic-lock read in a bounded retry; a mock
+    // makes that a passthrough here, which is fine — the real bounded-wait/retry behaviour is proven
+    // against a live database in BookingServiceConcurrencyIT.
+    @Mock PessimisticLockRetryer lockRetryer;
 
     @InjectMocks BookingService bookingService;
 
@@ -79,6 +87,12 @@ class ExpiredPackBookingValidationTest {
     private static final Long PLAYER_ID = 8002L;
     private static final UUID COACH_ID = UUID.randomUUID();
     private static final UUID EXPIRED_PACK_ID = UUID.randomUUID();
+
+    @BeforeEach
+    void setUp() {
+        lenient().when(lockRetryer.withBoundedRetry(any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
+    }
 
     @Test
     void createBookingRequest_expiredPackProvided_throws() {
