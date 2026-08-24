@@ -49,7 +49,7 @@ creation pass — no dev-story code change needed for any of these:**
 - `## Deferred from: code review of skillars-2-4-contact-detail-sanitization-ux (2026-06-13)` (duplicate
   i18n key `auth.coach.bioSanitizationWarning`, tagged `[PICKED UP by skillars-deferred-42 AC3]`) —
   **STALE, already closed.** `grep -rn "bioSanitizationWarning" src/frontend/src/i18n/` returns zero
-  hits in any of the four locale bundles; only the surviving `contactDetailWarning` key remains,
+  hits in any of the three locale bundles; only the surviving `contactDetailWarning` key remains,
   confirmed present in `en-US`, `de-DE` and `fr-FR`.
 - `## Deferred from: code review of skillars-1-3-coach-account-registration-email-verification Group B
   (2026-06-11)` D8 (`SecureRandom` re-instantiated per `generateOtp()` call, tagged `[PICKED UP by
@@ -183,8 +183,9 @@ of inferring it from `windows.get(0)`.**
   - `BookingService.createBookingRequest` (`:221`, the method's own internal call) — pass `req.coachId()`.
   - `RescheduleService.requestReschedule` (`:116`) — pass `booking.getCoachId()` (the same value already
     used to fetch `windows` two lines above).
-  - `RescheduleService.acceptReschedule` (`:230`) — pass `coach.getId()` (the locked `CoachProfile`
-    already in scope from this method's pessimistic-lock block).
+  - `RescheduleService.acceptReschedule` (`:230`) — pass `coach.getId()` (the same value already used
+    to fetch `windows` two lines above — this method locks a separate variable, `lockedCoach`, not
+    `coach` itself, but an entity's id is invariant regardless of which reference reads it).
   - `BookingBatchService.createBatch` (`:147-148`) — pass `req.coachId()` (the same value already used
     to fetch `windows` once for the whole batch, before the per-slot loop).
   - `BookingDuplicationService.duplicateNextWeek` (`:79`) — pass `coach.getId()` (the locked
@@ -271,7 +272,7 @@ siblings) rather than trusting the line numbers if the file has moved by impleme
 
 **Mockito arity note (Task 3.2).** `any()` matchers in a `when(...)` stub are positional and must equal
 the real method's argument count exactly — Mockito does not pad short matcher lists. Missing the fourth
-`any()` on any of the ~15 mock call sites listed in Task 3.2 does not fail loudly at compile time (the
+`any()` on any of the 19 mock call sites listed in Task 3.2 does not fail loudly at compile time (the
 call still compiles against the four-arg method as long as the matcher count is wrong at the *Mockito*
 level, not the Java level) — it fails at runtime with `InvalidUseOfMatchersException` ("3 matchers
 expected, 4 recorded") the moment the suite runs. Rely on Task 3.3's full test run, not just a successful
@@ -287,10 +288,15 @@ No new files. Four existing service classes touched (`BookingService.java`, `Res
 ### References
 
 - `_bmad-output/implementation-artifacts/deferred-work.md` — the fifteen items this story's creation
-  pass verified (fourteen closed as STALE directly in that file, one carried forward as this story's
-  AC1). See that file's own `## Deferred from: code review of skillars-deferred-59-...` section for the
-  AC1 item's original text, and the fourteen sections named inline above for each STALE closure's
-  original text and its new `[CLOSED by skillars-deferred-60 story creation]` annotation.
+  pass verified (one carried forward as this story's AC1; fourteen closed). This story's creation
+  commit (`1e77d9d`) tagged all fourteen `[STALE — verified against current code by
+  skillars-deferred-60 story creation, ...]` in place, matching the format this file already uses for
+  `skillars-deferred-56`'s equivalent closures. A subsequent pruning pass on that same file (this
+  branch, later commit) then deleted all fourteen bullets outright, per the file's own stated "items
+  are deleted outright once closed" convention — their original text is preserved both in that pruning
+  commit's git history and inline in this story's own "Why this story exists" section above, so nothing
+  is lost. See that file's own `## Deferred from: code review of skillars-deferred-59-...` section for
+  the still-open AC1 item's original text.
 - `skillars-deferred-59-radar-composite-overflow-guard-...md` — the immediately-prior story in this
   series; this story's AC1 is its own code review's one open finding.
 
