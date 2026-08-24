@@ -1,6 +1,6 @@
 # Story Deferred-59: Radar Composite Overflow Guard, Drill-Video-Ref Persist Fix, Availability-Timezone Diagnostics & SSH Firewall Rule Hygiene
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -532,37 +532,53 @@ acceptable operational risk, not a bounded code patch.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Radar composite overflow guard (AC: #1)
-  - [ ] 1.1 Replace the three `(int) types.get(X)[1]` casts in `RadarCompositeCalculationService`'s
+- [x] Task 1: Radar composite overflow guard (AC: #1)
+  - [x] 1.1 Replace the three `(int) types.get(X)[1]` casts in `RadarCompositeCalculationService`'s
     `onRadarEntrySubmitted` with `Math.toIntExact(Math.round(types.get(X)[1]))`.
-  - [ ] 1.2 Add/update a unit test proving the overflow guard, per AC1's Test Coverage guidance.
-  - [ ] 1.3 Run the affected test class; confirm green.
-- [ ] Task 2: `DrillVideoRef` persist-not-merge fix (AC: #2)
-  - [ ] 2.1 Implement `Persistable<UUID>` on `DrillVideoRef`, per AC2's snippet.
-  - [ ] 2.2 Confirm no call site needs updating (`getDrillId()`/`setDrillId(...)` usage unchanged).
-  - [ ] 2.3 Add `DrillVideoRefTest` (new-instance/`isNew()`/`markNotNew()` unit coverage).
-  - [ ] 2.4 Run the existing drill-clone test/IT coverage plus the new unit test; confirm green.
-- [ ] Task 3: Availability-timezone diagnostic log (AC: #3)
-  - [ ] 3.1 Add the `validWindowsEvaluated` counter and summary `WARN` to
+  - [x] 1.2 Add/update a unit test proving the overflow guard, per AC1's Test Coverage guidance.
+  - [x] 1.3 Run the affected test class; confirm green.
+- [x] Task 2: `DrillVideoRef` persist-not-merge fix (AC: #2)
+  - [x] 2.1 Implement `Persistable<UUID>` on `DrillVideoRef`, per AC2's snippet.
+  - [x] 2.2 Confirm no call site needs updating (`getDrillId()`/`setDrillId(...)` usage unchanged).
+  - [x] 2.3 Add `DrillVideoRefTest` (new-instance/`isNew()`/`markNotNew()` unit coverage).
+  - [x] 2.4 Run the existing drill-clone test/IT coverage plus the new unit test; confirm green.
+- [x] Task 3: Availability-timezone diagnostic log (AC: #3)
+  - [x] 3.1 Add the `validWindowsEvaluated` counter and summary `WARN` to
     `BookingService.isSlotWithinAvailabilityWindow`, per AC3's snippet.
-  - [ ] 3.2 Add a `BookingServiceTest` case asserting the new WARN fires via a `ListAppender`, per AC3.
-  - [ ] 3.3 Run `mvn -o test -Dtest=BookingServiceTest`; confirm green.
-- [ ] Task 4: `PaymentMethodCard.vue` mount/unmount race guard (AC: #4)
-  - [ ] 4.1 Add the `mountGeneration` counter and checks to `mountCardElement`/`unmountCardElement`, per
+  - [x] 3.2 Add a `BookingServiceTest` case asserting the new WARN fires via a `ListAppender`, per AC3.
+  - [x] 3.3 Run `mvn -o test -Dtest=BookingServiceTest`; confirm green.
+- [x] Task 4: `PaymentMethodCard.vue` mount/unmount race guard (AC: #4)
+  - [x] 4.1 Add the `mountGeneration` counter and checks to `mountCardElement`/`unmountCardElement`, per
     AC4's snippet.
-  - [ ] 4.2 Manually verify via dev server per AC4's Test Coverage guidance (no automated frontend test
-    harness exists in this repo).
-- [ ] Task 5: `apply-firewall.sh` SSH rule accumulation fix (AC: #5)
-  - [ ] 5.1 Confirm the `hcloud firewall replace-rules --rules-file` JSON envelope shape (docs/CLI help —
+  - [x] 4.2 Manually verify via dev server per AC4's Test Coverage guidance (no automated frontend test
+    harness exists in this repo). See Dev Agent Record for what verification was actually possible in this
+    environment.
+- [x] Task 5: `apply-firewall.sh` SSH rule accumulation fix (AC: #5)
+  - [x] 5.1 Confirm the `hcloud firewall replace-rules --rules-file` JSON envelope shape (docs/CLI help —
     no live API access in this environment); adjust the heredoc in AC5's snippet if it differs from the
-    assumed bare-array shape.
-  - [ ] 5.2 Replace the `delete-rule` block and the three separate `add-rule` calls with the single atomic
+    assumed bare-array shape. `hcloud` CLI is not installed in this environment — could not be verified
+    live; implemented with the documented bare-JSON-array assumption per the AC's own fallback guidance.
+    See Dev Agent Record.
+  - [x] 5.2 Replace the `delete-rule` block and the three separate `add-rule` calls with the single atomic
     `replace-rules` call, per AC5's snippet.
-  - [ ] 5.3 Run `shellcheck deploy/firewall/apply-firewall.sh`; confirm clean.
-- [ ] Task 6: Ledger hygiene (AC: #6, implicit) — flip the `PICKED UP` tags applied at story creation to
+  - [x] 5.3 Run `shellcheck deploy/firewall/apply-firewall.sh`; confirm clean.
+- [x] Task 6: Ledger hygiene (AC: #6, implicit) — flip the `PICKED UP` tags applied at story creation to
   `CLOSED` once each AC actually lands, one closure note per AC, following the exact convention
   `skillars-deferred-58` AC3 established (only flip tags for ACs that actually shipped if a partial
   implementation lands).
+
+### Review Findings
+
+Code review (Blind Hunter + Edge Case Hunter + Acceptance Auditor). 0 decision-needed, 6 patch (all applied
+below), 1 defer, 10 dismissed as noise/false-positive/already-addressed by this story's own AC rationale.
+
+- [x] [Review][Patch] AC3's new test doesn't assert the window-count value, only coach id [`BookingServiceTest.java`] — fixed, existing test now also asserts `.contains("1 availability window(s)")`.
+- [x] [Review][Patch] `DrillVideoRef`'s `@Setter` leaks a public `setIsNew(boolean)` footgun [`DrillVideoRef.java`] — fixed, `@Setter(AccessLevel.NONE)` added to the `isNew` field.
+- [x] [Review][Patch] `RadarCompositeCalculationService`'s overflow guard copy-pasted 3x, no helper [`RadarCompositeCalculationService.java:70,74,78`] — fixed, extracted to a private `toSafeIntCount(double)` helper.
+- [x] [Review][Patch] Overflow test covers only the OBJECTIVE branch; no boundary-positive test at exactly `Integer.MAX_VALUE` [`RadarCompositeCalculatorTest.java`] — fixed, added MATCH_OBSERVATION/COACH_EVALUATION overflow tests plus one exactly-MAX_VALUE boundary-positive test.
+- [x] [Review][Patch] No negative-case tests for the new summary WARN (empty windows; mixed valid/invalid windows) [`BookingServiceTest.java`] — fixed, added `isSlotWithinAvailabilityWindow_emptyWindowList_doesNotLogSummaryWarn` and `isSlotWithinAvailabilityWindow_mixedValidAndInvalidTimezoneWindows_doesNotLogSummaryWarn`.
+- [x] [Review][Patch] `apply-firewall.sh` interpolates `SSH_ALLOWLIST_IP` unvalidated into the JSON heredoc — no IP-format check before use [`deploy/firewall/apply-firewall.sh:34`] — fixed, added a bare-IPv4 regex validation before `SSH_CIDR` is derived; `shellcheck` clean.
+- [x] [Review][Defer] `isSlotWithinAvailabilityWindow`'s new summary WARN assumes a single-coach window list (`windows.get(0).getCoachId()`) [`BookingService.java`] — deferred, pre-existing-style latent assumption. Verified all 5 current call sites (`BookingService`, `RescheduleService` ×2, `BookingDuplicationService`, `BookingBatchService`) fetch `windows` via `coachAvailabilityWindowRepository.findByCoachId(...)`, so a mixed-coach list is unreachable today; nothing in the method signature enforces this, so a future caller passing a merged list would log a misleading coach id.
 
 ## Dev Notes
 
@@ -651,9 +667,112 @@ acceptable operational risk, not a bounded code patch.
   in place, AC5's corrected-fix precedent found during story review]
 - [Source: `docs/validation-strategy.md` — targeted-test-only validation policy]
 
+## Dev Agent Record
+
+### Agent Model Used
+
+Claude Sonnet 5 (claude-sonnet-5)
+
+### Debug Log References
+
+- `mvn -o test -Dtest=RadarCompositeCalculatorTest` — 7/7 green, including the new
+  `onRadarEntrySubmitted_sessionCountOverflow_throwsAndLogsInsteadOfWrapping` test (RED-confirmed against
+  the pre-fix cast: overflowing count 2147483648 wrapped to `-2147483648` then further arithmetic produced
+  `2147483647`, invoking `upsertComposite` instead of throwing).
+- `mvn -o test -Dtest=DrillVideoRefTest` — 3/3 green (new file; RED-confirmed as a compile failure against
+  the pre-fix entity, since `isNew()`/`markNotNew()`/`getId()` didn't exist yet).
+- `mvn -o test -Dtest=DrillLibraryServiceTest` — 13/13 green, no regression.
+- `mvn -o integration-test -Dit.test=DrillLibraryResourceIT` — 11/11 green, confirming the clone-drill flow
+  end to end against a real Postgres Testcontainer with the `Persistable<UUID>` fix in place.
+- `mvn -o test -Dtest=BookingServiceTest` — 31/31 green, including the new
+  `isSlotWithinAvailabilityWindow_everyWindowHasInvalidTimezone_logsDistinctSummaryWarn` test (RED-confirmed:
+  the pre-fix method returned `false` with no distinguishing summary WARN, only the existing per-window
+  WARN).
+- `mvn -o test -Dtest=RadarCompositeCalculatorTest,DrillVideoRefTest,DrillLibraryServiceTest,BookingServiceTest`
+  — 54/54 green, combined targeted regression across every touched backend test class.
+- `npx eslint src/components/payment/PaymentMethodCard.vue` (in `src/frontend`) — clean.
+- `shellcheck deploy/firewall/apply-firewall.sh` — clean.
+- Per `docs/validation-strategy.md`, `mvn verify` was not run; the full suite runs in GitHub CI.
+
+### Completion Notes List
+
+- **AC1**: Replaced all three `(int) types.get(X)[1]` narrowing casts in
+  `RadarCompositeCalculationService.onRadarEntrySubmitted` with
+  `Math.toIntExact(Math.round(types.get(X)[1]))`, per the story's exact snippet. New unit test seeds a
+  synthetic row with a count beyond `Integer.MAX_VALUE` and asserts (via a Logback `ListAppender` on the
+  service's logger) that `compositeRepository.upsertComposite` is never invoked and the existing
+  absorbing-catch block logs at ERROR — proving the overflow now throws/logs rather than silently wraps.
+- **AC2**: `DrillVideoRef` now implements `Persistable<UUID>` with a `@Transient boolean isNew = true`
+  field flipped to `false` by a combined `@PostPersist`/`@PostLoad` `markNotNew()` callback, exactly per the
+  story's snippet — a genuinely new pattern for this codebase (confirmed via `grep -rln "implements
+  Persistable" src/main`, zero prior hits). Confirmed via `grep -rn "\.getDrillId()\|\.setDrillId("` that no
+  call site needed updating — `getDrillId()`/`setDrillId(...)` (Lombok) are unchanged; only the new
+  `getId()` is added, used internally by Spring Data. New `DrillVideoRefTest` (same-package plain JUnit,
+  mirroring `CoachMediaItemTest`'s pattern) covers `isNew()`'s default-true state and its flip via
+  `markNotNew()`. `DrillLibraryResourceIT`'s existing clone-drill coverage (11/11) confirms no behavioral
+  regression to the entity's public contract.
+- **AC3**: `BookingService.isSlotWithinAvailabilityWindow` now tracks a `validWindowsEvaluated` counter and,
+  only when the method is about to return `false` with at least one window present and zero valid
+  timezones among them, emits one additional summary WARN naming the coach id and window count — scoped to
+  only the admin-visible-flag half of the ledger item's two suggested fixes, not a new wire error code (an
+  API contract change out of scope for this bundled fix-story). New `BookingServiceTest` case seeds a window
+  with `canonicalTimezone = "not-a-zone"` and asserts, via a `ListAppender`, that the new WARN fires with the
+  expected coach id and count — confirmed there was no prior direct test coverage of this package-private
+  method (`grep -n "isSlotWithinAvailabilityWindow" BookingServiceTest.java` returned zero hits before this
+  change).
+- **AC4**: Added a module-scoped `mountGeneration` counter to `PaymentMethodCard.vue`, incremented on every
+  `showForm` toggle and checked after each `await` point inside `mountCardElement` before it does anything
+  observable, plus a bump inside `unmountCardElement` — mirroring `booking.store.js`'s
+  `loadCoachBookingRequests` supersession-guard shape (`skillars-deferred-38` AC1) exactly per the story's
+  snippet. No `AbortController` used, matching this project's established precedent of rejecting that
+  approach for this exact race shape. `npx eslint` clean. **Verification caveat**: this repo has no
+  automated frontend test harness (standing gap); the story's own guidance calls for a live dev-server pass
+  (rapid toggle + throttled network + console check). Spinning up the full stack (Postgres, backend, a live
+  Stripe test publishable key, an authenticated coach session) was not practical in this implementation
+  environment, so this AC was verified by careful code reading plus ESLint only, not a live browser pass —
+  the diff is minimal and mechanical, directly mirroring an already-shipped, already-verified pattern in the
+  same codebase.
+- **AC5**: Replaced `apply-firewall.sh`'s three-call `delete-rule` block plus three separate `add-rule`
+  calls with a single atomic `hcloud firewall replace-rules --rules-file <file>` call, converging the
+  create-fresh and update-existing branches onto one code path, per the story's story-review-corrected
+  snippet (delete-and-recreate was rejected during story review for opening a zero-firewall exposure
+  window; `replace-rules` operates on the existing firewall in place with no such gap). `hcloud` CLI is not
+  installed in this implementation environment, so the `--rules-file` JSON envelope shape (assumed bare
+  array, per the CLI's own flag description) could not be confirmed against a live install — flagged here
+  per the AC's own instruction, for confirmation via `hcloud firewall replace-rules --help` before this
+  script's next real run. `shellcheck` is clean.
+- **AC6 (ledger hygiene)**: All five `deferred-work.md` items this story picked up (W8/DEF6 → AC1, D2 → AC2,
+  the availability-timezone item → AC3, the `PaymentMethodCard.vue` item → AC4, the firewall-script item →
+  AC5) flipped from `[PICKED UP by skillars-deferred-59 ACn]` to `[CLOSED by skillars-deferred-59 ACn]`,
+  each with a one-line closure note describing the actual fix landed.
+
+### File List
+
+- `src/main/java/com/softropic/skillars/platform/development/service/RadarCompositeCalculationService.java`
+  — AC1: three narrowing-cast call sites changed to `Math.toIntExact(Math.round(...))`.
+- `src/test/java/com/softropic/skillars/platform/development/service/RadarCompositeCalculatorTest.java` —
+  AC1: new `onRadarEntrySubmitted_sessionCountOverflow_throwsAndLogsInsteadOfWrapping` test.
+- `src/main/java/com/softropic/skillars/platform/session/repo/DrillVideoRef.java` — AC2: implements
+  `Persistable<UUID>`, new `@Transient isNew` field, new `getId()`/`markNotNew()`.
+- `src/test/java/com/softropic/skillars/platform/session/repo/DrillVideoRefTest.java` — AC2: new file.
+- `src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java` — AC3:
+  `isSlotWithinAvailabilityWindow` gains a `validWindowsEvaluated` counter and one new summary WARN.
+- `src/test/java/com/softropic/skillars/platform/booking/service/BookingServiceTest.java` — AC3: new
+  `isSlotWithinAvailabilityWindow_everyWindowHasInvalidTimezone_logsDistinctSummaryWarn` test with a
+  `ListAppender` log assertion.
+- `src/frontend/src/components/payment/PaymentMethodCard.vue` — AC4: `mountGeneration` counter added to
+  `mountCardElement`/`unmountCardElement`.
+- `deploy/firewall/apply-firewall.sh` — AC5: per-rule `delete-rule`/`add-rule` calls replaced with one
+  atomic `hcloud firewall replace-rules` call.
+- `_bmad-output/implementation-artifacts/deferred-work.md` — AC6: five `PICKED UP`→`CLOSED` tag flips (lines
+  570, 677, 681, 775, 823, 1016 as of story creation — see the file's current content for exact line
+  numbers after these edits).
+
 ## Change Log
 
 | Date | Change |
 |---|---|
 | 2026-08-24 | Story created via story-creation process, deliberately re-mining `deferred-work.md`'s ENTIRE history (not just the recent tail, per the user's request for a larger bundle) after confirming the recent tail (post-`skillars-deferred-40`) is already thin — nearly every remaining item there is closed, picked up, or explicitly needs a product/design decision. Five items survived live re-verification against the current tree, each independent and low-risk: AC1 (radar composite session-count overflow guard, `RadarCompositeCalculationService`), AC2 (`DrillVideoRef` persist-not-merge via `Persistable<UUID>`), AC3 (availability-timezone diagnostic WARN log, `BookingService`), AC4 (payment-method-card mount/unmount race guard, frontend), AC5 (SSH firewall allowlist rule accumulation fix, deploy script). One candidate item (`SessionPackPurchase.expiresAt` mutability) was found during re-verification to have no safe fix — `updatable = false` would break three legitimate call sites that write it — and was dropped rather than implemented incorrectly. Considered and explicitly not picked up: the `jakarta.persistence.lock.timeout`-has-no-effect-on-Postgres question (needs an architecture decision, not a patch); `DisputeService`'s dormant `FROZEN`-filter gap; the video-bandwidth dedup-rule question; `isSlotWithinAvailabilityWindow`'s midnight-crossing limitation (explicitly out of scope per its own story's Dev Notes); `BookingDuplicationService`'s DST-shift-on-168-hour-offset item (non-mechanical calendar-math fix); roughly a dozen further deploy/infrastructure items, this project's own established lowest-priority category, most needing either live infrastructure access this environment lacks or an operational-risk-acceptance decision beyond a bounded code patch. |
 | 2026-08-24 | Story-review adjustments applied, status remains ready-for-dev. `story-review.md` filed 3 findings against the draft, all fixed. Finding 1/Medium-High: AC5's original delete-and-recreate fix left the server with zero cloud firewall protection between `hcloud firewall delete` and re-attachment — a broader, unweighed exposure trade against the narrow bug it fixed, and one that would also silently discard any hand-added rule and change the firewall's Hetzner-assigned ID. Replaced with `hcloud firewall replace-rules --rules-file <file> <firewall>`, confirmed to exist and to atomically replace a firewall's rule set in place (verified against `hetznercloud/cli`'s own reference docs) — no detach, no exposure window, no per-run CIDR memory needed; this also let the create-branch and update-branch converge on one code path. AC5's Task 5.1 changed from "confirm delete-on-attached-firewall behavior" (now moot) to "confirm the `--rules-file` JSON envelope shape," since that shape wasn't verified against a live `hcloud` install in this environment. Finding 2/Low: AC1's rationale said the absorbing catch block logs at WARN; corrected to ERROR, matching `RadarCompositeCalculationService.java:89-92` exactly. Finding 3/Low: AC3's test-coverage claim said `BookingServiceTest` already has direct unit coverage of `isSlotWithinAvailabilityWindow` and handed the implementer a grep to confirm exact test names; that grep returns zero matches — there was never direct coverage, only indirect coverage through `createBookingRequest(...)`. Corrected so the implementer isn't sent looking for tests that don't exist. |
+| 2026-08-24 | Dev-story implementation complete, status review. All 5 ACs shipped, each RED-then-GREEN except AC4/AC5 (no automated test infra / no live CLI, per their own Dev Notes constraints). AC1: `RadarCompositeCalculationService`'s three narrowing casts hardened with `Math.toIntExact(Math.round(...))`; new overflow unit test, 7/7 green. AC2: `DrillVideoRef` now implements `Persistable<UUID>`, closing the wasteful merge-instead-of-persist gap; new `DrillVideoRefTest` (3/3) plus `DrillLibraryResourceIT` (11/11) green. AC3: `BookingService.isSlotWithinAvailabilityWindow` gains a summary WARN for the all-invalid-timezone case; new `BookingServiceTest` case, 31/31 green. AC4: `PaymentMethodCard.vue` gains a `mountGeneration` supersession-guard counter mirroring `booking.store.js`'s established pattern; ESLint clean, live dev-server pass not practical in this environment (documented caveat — Stripe test key + full running stack not available), verified by code reading instead. AC5: `apply-firewall.sh`'s per-rule delete/add replaced with one atomic `hcloud firewall replace-rules` call; `shellcheck` clean, `--rules-file` envelope shape unverified live (`hcloud` CLI not installed here, per the AC's own documented fallback). AC6: all 5 `deferred-work.md` ledger tags flipped `PICKED UP`→`CLOSED` with closure notes. Combined targeted regression (`RadarCompositeCalculatorTest`+`DrillVideoRefTest`+`DrillLibraryServiceTest`+`BookingServiceTest`) 54/54 green; `mvn verify` not run per `docs/validation-strategy.md`. |
+| 2026-08-24 | Post-implementation code review complete, status done. Blind Hunter + Edge Case Hunter + Acceptance Auditor. 0 decision-needed, 6 patch (all applied), 1 defer, 10 dismissed as noise/false-positive/already-addressed by this story's own AC rationale. Patches: (1) AC3's test now also asserts the window-count in the summary WARN, not just coach id; (2) `DrillVideoRef`'s `isNew` field gained `@Setter(AccessLevel.NONE)`, closing a public-footgun setter Lombok had generated; (3) `RadarCompositeCalculationService`'s three copy-pasted `Math.toIntExact(Math.round(...))` casts extracted to a private `toSafeIntCount(double)` helper; (4) added MATCH_OBSERVATION/COACH_EVALUATION overflow-regression tests plus one exactly-`Integer.MAX_VALUE` boundary-positive test, closing a coverage gap where only the OBJECTIVE branch had regression coverage; (5) added two negative-case tests for the AC3 summary WARN (empty window list; one valid + one invalid window) proving it stays silent outside the all-invalid case; (6) `apply-firewall.sh` gained a bare-IPv4 regex validation on `SSH_ALLOWLIST_IP` before it's interpolated into the `replace-rules` JSON heredoc, closing a JSON-injection-shaped input-validation gap both Blind Hunter and Edge Case Hunter independently found. 1 item deferred to `deferred-work.md`: AC3's new summary WARN assumes a single-coach `windows` list (`windows.get(0).getCoachId()`), unreachable today since all 5 current call sites fetch windows via `findByCoachId(...)`, but not enforced by the method signature. 10 dismissed, notably 2 confirmed false positives from Blind Hunter's lack of project context (no error handling on `replace-rules` — false, `set -euo pipefail` already aborts the script on failure; an EXIT trap clobbering a pre-existing one — false, no other trap exists in the script) and the `DrillVideoRef` persist-first-semantics-vs-other-callers concern (already ruled out — confirmed the *only* `.save()` call site in the codebase, always freshly constructed). Full re-verification: `RadarCompositeCalculatorTest` 10/10, `BookingServiceTest` 33/33, `DrillVideoRefTest` 3/3, `DrillLibraryServiceTest` 13/13 — all green; `shellcheck` clean. |

@@ -1,5 +1,9 @@
 package com.softropic.skillars.platform.booking.service;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.softropic.skillars.platform.booking.contract.BookingAcceptedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent;
 import com.softropic.skillars.platform.booking.contract.BookingError;
@@ -39,6 +43,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEvent;
 import org.springframework.context.ApplicationEventPublisher;
 
@@ -320,6 +325,87 @@ class BookingServiceTest {
 
         assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
             .isInstanceOf(OperationNotAllowedException.class);
+    }
+
+    @Test
+    void isSlotWithinAvailabilityWindow_everyWindowHasInvalidTimezone_logsDistinctSummaryWarn() {
+        CoachAvailabilityWindow badWindow = makeCoveringWindow(COACH_ID);
+        badWindow.setCanonicalTimezone("not-a-zone");
+        List<CoachAvailabilityWindow> windows = List.of(badWindow);
+
+        Instant start = Instant.now();
+        Instant end = start.plusSeconds(3600);
+
+        Logger serviceLogger = (Logger) LoggerFactory.getLogger(BookingService.class);
+        ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
+        logCapture.start();
+        serviceLogger.addAppender(logCapture);
+        boolean result;
+        try {
+            result = bookingService.isSlotWithinAvailabilityWindow(start, end, windows);
+        } finally {
+            serviceLogger.detachAppender(logCapture);
+        }
+
+        assertThat(result).isFalse();
+        assertThat(logCapture.list)
+            .as("must emit a distinct summary WARN for the all-windows-invalid-timezone case")
+            .anySatisfy(event -> {
+                assertThat(event.getLevel()).isEqualTo(Level.WARN);
+                assertThat(event.getFormattedMessage())
+                    .contains(COACH_ID.toString())
+                    .contains("1 availability window(s)")
+                    .contains("none had a valid timezone");
+            });
+    }
+
+    @Test
+    void isSlotWithinAvailabilityWindow_emptyWindowList_doesNotLogSummaryWarn() {
+        List<CoachAvailabilityWindow> windows = List.of();
+
+        Instant start = Instant.now();
+        Instant end = start.plusSeconds(3600);
+
+        Logger serviceLogger = (Logger) LoggerFactory.getLogger(BookingService.class);
+        ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
+        logCapture.start();
+        serviceLogger.addAppender(logCapture);
+        boolean result;
+        try {
+            result = bookingService.isSlotWithinAvailabilityWindow(start, end, windows);
+        } finally {
+            serviceLogger.detachAppender(logCapture);
+        }
+
+        assertThat(result).isFalse();
+        assertThat(logCapture.list)
+            .as("an empty window list has no coach id to report and must not emit the summary WARN")
+            .noneSatisfy(event -> assertThat(event.getFormattedMessage()).contains("none had a valid timezone"));
+    }
+
+    @Test
+    void isSlotWithinAvailabilityWindow_mixedValidAndInvalidTimezoneWindows_doesNotLogSummaryWarn() {
+        CoachAvailabilityWindow validWindow = makeCoveringWindow(COACH_ID);
+        CoachAvailabilityWindow badWindow = makeCoveringWindow(COACH_ID);
+        badWindow.setCanonicalTimezone("not-a-zone");
+        List<CoachAvailabilityWindow> windows = List.of(validWindow, badWindow);
+
+        Instant start = Instant.now();
+        Instant end = start.plusSeconds(3600);
+
+        Logger serviceLogger = (Logger) LoggerFactory.getLogger(BookingService.class);
+        ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
+        logCapture.start();
+        serviceLogger.addAppender(logCapture);
+        try {
+            bookingService.isSlotWithinAvailabilityWindow(start, end, windows);
+        } finally {
+            serviceLogger.detachAppender(logCapture);
+        }
+
+        assertThat(logCapture.list)
+            .as("at least one valid-timezone window means this is not the all-invalid case")
+            .noneSatisfy(event -> assertThat(event.getFormattedMessage()).contains("none had a valid timezone"));
     }
 
     @Test

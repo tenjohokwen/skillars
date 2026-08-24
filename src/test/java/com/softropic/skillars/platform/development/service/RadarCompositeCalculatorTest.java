@@ -1,5 +1,9 @@
 package com.softropic.skillars.platform.development.service;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.softropic.skillars.platform.development.contract.AssessmentType;
 import com.softropic.skillars.platform.development.contract.RadarEntrySubmittedEvent;
 import com.softropic.skillars.platform.development.repo.PlayerRadarBaselineRepository;
@@ -11,6 +15,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -22,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -156,5 +162,85 @@ class RadarCompositeCalculatorTest {
         service.onRadarEntrySubmitted(new RadarEntrySubmittedEvent(PLAYER_ID, PARENT_ID, Set.of("PAC")));
 
         verify(compositeRepository).upsertComposite(eq(PLAYER_ID), eq("PAC"), any(), eq(3), eq(2));
+    }
+
+    @Test
+    void onRadarEntrySubmitted_sessionCountOverflow_throwsAndLogsInsteadOfWrapping() {
+        // row[3] originates as a native-query long count; seed it beyond Integer.MAX_VALUE so the
+        // narrowing cast to totalCount would silently wrap to a negative value if left unguarded.
+        long overflowingCount = Integer.MAX_VALUE + 1L;
+        List<Object[]> rows = new ArrayList<>();
+        rows.add(new Object[]{"PAC", "OBJECTIVE", 80.0, overflowingCount});
+        when(radarRepository.findAggregatesByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
+            .thenReturn(rows);
+        when(radarRepository.findDistinctCoachCountsByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
+            .thenReturn(List.<Object[]>of(new Object[]{"PAC", 1L}));
+
+        Logger serviceLogger = (Logger) LoggerFactory.getLogger(RadarCompositeCalculationService.class);
+        ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
+        logCapture.start();
+        serviceLogger.addAppender(logCapture);
+        try {
+            service.onRadarEntrySubmitted(new RadarEntrySubmittedEvent(PLAYER_ID, PARENT_ID, Set.of("PAC")));
+        } finally {
+            serviceLogger.detachAppender(logCapture);
+        }
+
+        verify(compositeRepository, never()).upsertComposite(any(), any(), any(), anyInt(), anyInt());
+        assertThat(logCapture.list)
+            .as("overflow must surface as the existing absorbing-catch ERROR log, not a silent wrap")
+            .anySatisfy(event -> {
+                assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+                assertThat(event.getFormattedMessage()).contains("Composite recalculation failed");
+            });
+    }
+
+    @Test
+    void onRadarEntrySubmitted_matchObservationCountOverflow_throwsAndLogsInsteadOfWrapping() {
+        // Same overflow guard, MATCH_OBSERVATION branch — the three narrowing casts share one helper
+        // method, but each call site is independently regression-locked here.
+        long overflowingCount = Integer.MAX_VALUE + 1L;
+        List<Object[]> rows = new ArrayList<>();
+        rows.add(new Object[]{"PAC", "MATCH_OBSERVATION", 70.0, overflowingCount});
+        when(radarRepository.findAggregatesByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
+            .thenReturn(rows);
+        when(radarRepository.findDistinctCoachCountsByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
+            .thenReturn(List.<Object[]>of(new Object[]{"PAC", 1L}));
+
+        service.onRadarEntrySubmitted(new RadarEntrySubmittedEvent(PLAYER_ID, PARENT_ID, Set.of("PAC")));
+
+        verify(compositeRepository, never()).upsertComposite(any(), any(), any(), anyInt(), anyInt());
+    }
+
+    @Test
+    void onRadarEntrySubmitted_coachEvaluationCountOverflow_throwsAndLogsInsteadOfWrapping() {
+        // Same overflow guard, COACH_EVALUATION branch.
+        long overflowingCount = Integer.MAX_VALUE + 1L;
+        List<Object[]> rows = new ArrayList<>();
+        rows.add(new Object[]{"PAC", "COACH_EVALUATION", 60.0, overflowingCount});
+        when(radarRepository.findAggregatesByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
+            .thenReturn(rows);
+        when(radarRepository.findDistinctCoachCountsByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
+            .thenReturn(List.<Object[]>of(new Object[]{"PAC", 1L}));
+
+        service.onRadarEntrySubmitted(new RadarEntrySubmittedEvent(PLAYER_ID, PARENT_ID, Set.of("PAC")));
+
+        verify(compositeRepository, never()).upsertComposite(any(), any(), any(), anyInt(), anyInt());
+    }
+
+    @Test
+    void onRadarEntrySubmitted_sessionCountExactlyMaxValue_stillSucceeds() {
+        // Boundary-positive case: a count of exactly Integer.MAX_VALUE must NOT throw — only counts
+        // beyond it should trip the overflow guard.
+        List<Object[]> rows = new ArrayList<>();
+        rows.add(new Object[]{"PAC", "OBJECTIVE", 80.0, (long) Integer.MAX_VALUE});
+        when(radarRepository.findAggregatesByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
+            .thenReturn(rows);
+        when(radarRepository.findDistinctCoachCountsByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
+            .thenReturn(List.<Object[]>of(new Object[]{"PAC", 1L}));
+
+        service.onRadarEntrySubmitted(new RadarEntrySubmittedEvent(PLAYER_ID, PARENT_ID, Set.of("PAC")));
+
+        verify(compositeRepository).upsertComposite(eq(PLAYER_ID), eq("PAC"), any(), eq(Integer.MAX_VALUE), eq(1));
     }
 }

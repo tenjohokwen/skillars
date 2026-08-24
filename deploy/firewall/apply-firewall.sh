@@ -26,6 +26,11 @@ if [ -z "${SSH_ALLOWLIST_IP:-}" ]; then
   exit 1
 fi
 
+if ! [[ "${SSH_ALLOWLIST_IP}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+  echo "ERROR: SSH_ALLOWLIST_IP must be a bare IPv4 address (e.g. 203.0.113.10), got: '${SSH_ALLOWLIST_IP}'" >&2
+  exit 1
+fi
+
 if ! command -v hcloud &>/dev/null; then
   echo "ERROR: hcloud CLI not found. Install with: brew install hcloud" >&2
   exit 1
@@ -34,46 +39,41 @@ fi
 SSH_CIDR="${SSH_ALLOWLIST_IP}/32"
 echo "[firewall] SSH access will be restricted to: ${SSH_CIDR}"
 
-# ── Create or update firewall ─────────────────────
-if hcloud firewall list -o columns=name | grep -qx "${FIREWALL_NAME}"; then
-  echo "[firewall] Firewall '${FIREWALL_NAME}' already exists — updating rules..."
-
-  # Delete all existing rules first to prevent duplicates
-  hcloud firewall delete-rule "${FIREWALL_NAME}" \
-    --direction in --protocol tcp --port 80  --source-ips 0.0.0.0/0 --source-ips ::/0 2>/dev/null || true
-  hcloud firewall delete-rule "${FIREWALL_NAME}" \
-    --direction in --protocol tcp --port 443 --source-ips 0.0.0.0/0 --source-ips ::/0 2>/dev/null || true
-  hcloud firewall delete-rule "${FIREWALL_NAME}" \
-    --direction in --protocol tcp --port 22  --source-ips 0.0.0.0/0 2>/dev/null || true
-else
+# ── Create firewall if it doesn't exist ───────────
+if ! hcloud firewall list -o columns=name | grep -qx "${FIREWALL_NAME}"; then
   echo "[firewall] Creating firewall '${FIREWALL_NAME}'..."
   hcloud firewall create --name "${FIREWALL_NAME}"
 fi
 
-echo "[firewall] Applying firewall rules..."
+echo "[firewall] Applying firewall rules (atomic replace — no per-rule delete/add, no stale CIDR guessing)..."
 
-# Inbound TCP 80 — public HTTP
-hcloud firewall add-rule "${FIREWALL_NAME}" \
-  --direction in \
-  --protocol tcp \
-  --port 80 \
-  --source-ips 0.0.0.0/0 \
-  --source-ips ::/0
+RULES_FILE="$(mktemp)"
+trap 'rm -f "${RULES_FILE}"' EXIT
 
-# Inbound TCP 443 — public HTTPS
-hcloud firewall add-rule "${FIREWALL_NAME}" \
-  --direction in \
-  --protocol tcp \
-  --port 443 \
-  --source-ips 0.0.0.0/0 \
-  --source-ips ::/0
+cat > "${RULES_FILE}" <<RULES_EOF
+[
+  {
+    "direction": "in",
+    "protocol": "tcp",
+    "port": "80",
+    "source_ips": ["0.0.0.0/0", "::/0"]
+  },
+  {
+    "direction": "in",
+    "protocol": "tcp",
+    "port": "443",
+    "source_ips": ["0.0.0.0/0", "::/0"]
+  },
+  {
+    "direction": "in",
+    "protocol": "tcp",
+    "port": "22",
+    "source_ips": ["${SSH_CIDR}"]
+  }
+]
+RULES_EOF
 
-# Inbound TCP 22 — SSH restricted to allowlisted IP only
-hcloud firewall add-rule "${FIREWALL_NAME}" \
-  --direction in \
-  --protocol tcp \
-  --port 22 \
-  --source-ips "${SSH_CIDR}"
+hcloud firewall replace-rules --rules-file "${RULES_FILE}" "${FIREWALL_NAME}"
 
 echo "[firewall] Rules applied: TCP 80 (all), TCP 443 (all), TCP 22 (${SSH_CIDR})"
 

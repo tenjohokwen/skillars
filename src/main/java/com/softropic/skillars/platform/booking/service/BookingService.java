@@ -826,6 +826,7 @@ public class BookingService {
      */
     boolean isSlotWithinAvailabilityWindow(Instant startTime, Instant endTime,
                                            List<CoachAvailabilityWindow> windows) {
+        int validWindowsEvaluated = 0;
         for (CoachAvailabilityWindow w : windows) {
             ZoneId zoneId;
             try {
@@ -835,6 +836,7 @@ public class BookingService {
                     w.getId(), w.getCanonicalTimezone());
                 continue;
             }
+            validWindowsEvaluated++;
 
             ZonedDateTime startZdt = startTime.atZone(zoneId);
             ZonedDateTime endZdt = endTime.atZone(zoneId);
@@ -849,6 +851,11 @@ public class BookingService {
                 && !endZdt.isAfter(windowEnd)) {
                 return true;
             }
+        }
+        if (!windows.isEmpty() && validWindowsEvaluated == 0) {
+            log.warn("Coach {} has {} availability window(s) but none had a valid timezone — "
+                    + "slot check cannot succeed against any window",
+                windows.get(0).getCoachId(), windows.size());
         }
         return false;
     }

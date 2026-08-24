@@ -67,15 +67,15 @@ public class RadarCompositeCalculationService {
 
                 if (types.containsKey(AssessmentType.OBJECTIVE)) {
                     composite  += types.get(AssessmentType.OBJECTIVE)[0] * WEIGHT_OBJECTIVE.doubleValue();
-                    totalCount += (int) types.get(AssessmentType.OBJECTIVE)[1];
+                    totalCount += toSafeIntCount(types.get(AssessmentType.OBJECTIVE)[1]);
                 }
                 if (types.containsKey(AssessmentType.MATCH_OBSERVATION)) {
                     composite  += types.get(AssessmentType.MATCH_OBSERVATION)[0] * WEIGHT_MATCH_OBS.doubleValue();
-                    totalCount += (int) types.get(AssessmentType.MATCH_OBSERVATION)[1];
+                    totalCount += toSafeIntCount(types.get(AssessmentType.MATCH_OBSERVATION)[1]);
                 }
                 if (types.containsKey(AssessmentType.COACH_EVALUATION)) {
                     composite  += types.get(AssessmentType.COACH_EVALUATION)[0] * WEIGHT_COACH_EVAL.doubleValue();
-                    totalCount += (int) types.get(AssessmentType.COACH_EVALUATION)[1];
+                    totalCount += toSafeIntCount(types.get(AssessmentType.COACH_EVALUATION)[1]);
                 }
 
                 BigDecimal compositeScore = BigDecimal.valueOf(composite)
@@ -90,5 +90,13 @@ public class RadarCompositeCalculationService {
             log.error("Composite recalculation failed for player={} skills={} — composite is now stale",
                 playerId, skills, e);
         }
+    }
+
+    /**
+     * Recovers the exact integral count a native-query {@code long} was cast to {@code double} for
+     * aggregation, narrowing it back to {@code int} with an overflow guard instead of silently wrapping.
+     */
+    private static int toSafeIntCount(double count) {
+        return Math.toIntExact(Math.round(count));
     }
 }
