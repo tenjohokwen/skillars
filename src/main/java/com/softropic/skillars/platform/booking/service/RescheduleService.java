@@ -113,7 +113,7 @@ public class RescheduleService {
         // booking request is already blocked, even though the original booking was legitimate
         // when made. Reuses BookingService's own package-private helper rather than a second copy.
         List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachId(booking.getCoachId());
-        if (!bookingService.isSlotWithinAvailabilityWindow(req.proposedStartTime(), req.proposedEndTime(), windows)) {
+        if (!bookingService.isSlotWithinAvailabilityWindow(req.proposedStartTime(), req.proposedEndTime(), windows, booking.getCoachId())) {
             throw new OperationNotAllowedException(
                 "Proposed slot is not within coach availability",
                 Map.of("proposed start time", req.proposedStartTime(), "proposed end time", req.proposedEndTime()),
@@ -227,7 +227,7 @@ public class RescheduleService {
         // slot also happens to be free — matches this method's existing check ordering, where each
         // earlier check gates the next rather than running independently.
         List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachId(coach.getId());
-        if (!bookingService.isSlotWithinAvailabilityWindow(req.getProposedStartTime(), req.getProposedEndTime(), windows)) {
+        if (!bookingService.isSlotWithinAvailabilityWindow(req.getProposedStartTime(), req.getProposedEndTime(), windows, coach.getId())) {
             throw new OperationNotAllowedException(
                 "Proposed slot is not within coach availability",
                 Map.of("submitted coach id", coach.getId(), "proposed start time", req.getProposedStartTime(),

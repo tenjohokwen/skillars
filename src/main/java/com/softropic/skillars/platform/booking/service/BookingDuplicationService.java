@@ -76,7 +76,7 @@ public class BookingDuplicationService {
         // no longer repeat-next-week into a time they don't currently work, even if the original
         // booking was legitimate when made. Reuses BookingService's own package-private helper.
         List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachId(coach.getId());
-        if (!bookingService.isSlotWithinAvailabilityWindow(newStart, newEnd, windows)) {
+        if (!bookingService.isSlotWithinAvailabilityWindow(newStart, newEnd, windows, coach.getId())) {
             throw new OperationNotAllowedException(
                 "Proposed slot is not within coach availability",
                 Map.of("proposed start time", newStart, "proposed end time", newEnd),

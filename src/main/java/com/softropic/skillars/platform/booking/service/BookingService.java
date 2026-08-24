@@ -218,7 +218,7 @@ public class BookingService {
         }
 
         List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachId(req.coachId());
-        if (!isSlotWithinAvailabilityWindow(req.requestedStartTime(), req.requestedEndTime(), windows)) {
+        if (!isSlotWithinAvailabilityWindow(req.requestedStartTime(), req.requestedEndTime(), windows, req.coachId())) {
             throw new OperationNotAllowedException("Requested slot is not within coach availability",
                 Map.of("requested start time", req.requestedStartTime(), "requested end time", req.requestedEndTime()),
                 BookingError.SLOT_OUTSIDE_AVAILABILITY);
@@ -823,9 +823,14 @@ public class BookingService {
      * Package-private, not private: {@code BookingBatchService} calls this exact method rather than
      * carrying a second copy (UAT.2 AC4) — same rationale as {@code ACTIVE_SLOT_STATUSES}. A copy
      * would drift from this one's cross-midnight anchoring and invalid-timezone handling.
+     *
+     * {@code coachId} is passed explicitly (Deferred-60) rather than inferred from
+     * {@code windows.get(0)} — every current caller already has it from the query it used to fetch
+     * {@code windows}, and inferring it assumed a single-coach list that nothing in the signature
+     * enforced.
      */
     boolean isSlotWithinAvailabilityWindow(Instant startTime, Instant endTime,
-                                           List<CoachAvailabilityWindow> windows) {
+                                           List<CoachAvailabilityWindow> windows, UUID coachId) {
         int validWindowsEvaluated = 0;
         for (CoachAvailabilityWindow w : windows) {
             ZoneId zoneId;
@@ -855,7 +860,7 @@ public class BookingService {
         if (!windows.isEmpty() && validWindowsEvaluated == 0) {
             log.warn("Coach {} has {} availability window(s) but none had a valid timezone — "
                     + "slot check cannot succeed against any window",
-                windows.get(0).getCoachId(), windows.size());
+                coachId, windows.size());
         }
         return false;
     }

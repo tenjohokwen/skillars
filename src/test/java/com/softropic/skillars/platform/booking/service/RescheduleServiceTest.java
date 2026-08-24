@@ -88,7 +88,7 @@ class RescheduleServiceTest {
     @Test
     void requestReschedule_parentOwnsBooking_confirmedStatus_createsRequest() {
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(true);
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
         when(rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(BOOKING_ID, "PENDING"))
             .thenReturn(Optional.empty());
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
@@ -100,7 +100,7 @@ class RescheduleServiceTest {
 
         // Deferred-50 AC3: verify the actual proposed times were passed, not (for example) the
         // booking's original requestedStartTime/requestedEndTime — an argument-swap regression.
-        verify(bookingService).isSlotWithinAvailabilityWindow(eq(proposedStart), eq(proposedEnd), any());
+        verify(bookingService).isSlotWithinAvailabilityWindow(eq(proposedStart), eq(proposedEnd), any(), any());
         verify(rescheduleRepo).save(any(BookingRescheduleRequest.class));
         ArgumentCaptor<RescheduleRequestedEvent> captor = ArgumentCaptor.forClass(RescheduleRequestedEvent.class);
         verify(eventPublisher).publishEvent(captor.capture());
@@ -123,7 +123,7 @@ class RescheduleServiceTest {
         confirmedBooking.setRequestedEndTime(legacyStart.plus(3, ChronoUnit.HOURS));
 
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(true);
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
         when(rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(BOOKING_ID, "PENDING"))
             .thenReturn(Optional.empty());
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
@@ -221,7 +221,7 @@ class RescheduleServiceTest {
     @Test
     void requestReschedule_slotOutsideAvailabilityWindow_throwsSlotOutsideAvailability() {
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(false);
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(false);
 
         Instant proposedStart = Instant.now().plus(3, ChronoUnit.DAYS);
         assertThatThrownBy(() -> service.requestReschedule(BOOKING_ID, PARENT_ID,
@@ -236,7 +236,7 @@ class RescheduleServiceTest {
     @Test
     void requestReschedule_slotWithinAvailabilityWindow_createsRequest() {
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(true);
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
         when(rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(BOOKING_ID, "PENDING"))
             .thenReturn(Optional.empty());
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
@@ -252,7 +252,7 @@ class RescheduleServiceTest {
     @Test
     void requestReschedule_pendingAlreadyExists_throws() {
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(true);
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
         BookingRescheduleRequest existing = new BookingRescheduleRequest();
         when(rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(BOOKING_ID, "PENDING"))
             .thenReturn(Optional.of(existing));
@@ -270,7 +270,7 @@ class RescheduleServiceTest {
     @Test
     void acceptReschedule_coachOwnsBooking_updatesTimesAndStatus() {
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(true);
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
 
         Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
@@ -295,7 +295,7 @@ class RescheduleServiceTest {
 
         // Deferred-50 AC3: verify the actual proposed times were passed, not (for example) the
         // booking's original requestedStartTime/requestedEndTime — an argument-swap regression.
-        verify(bookingService).isSlotWithinAvailabilityWindow(eq(proposedStart), eq(proposedEnd), any());
+        verify(bookingService).isSlotWithinAvailabilityWindow(eq(proposedStart), eq(proposedEnd), any(), any());
         assertThat(confirmedBooking.getRequestedStartTime()).isEqualTo(proposedStart);
         assertThat(confirmedBooking.getRequestedEndTime()).isEqualTo(proposedEnd);
         assertThat(pending.getStatus()).isEqualTo("ACCEPTED");
@@ -308,7 +308,7 @@ class RescheduleServiceTest {
     @Test
     void acceptReschedule_proposedSlotOverlapsAnotherBooking_throwsSlotUnavailable() {
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(true);
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
 
         Instant originalStart = confirmedBooking.getRequestedStartTime();
@@ -363,7 +363,7 @@ class RescheduleServiceTest {
         when(rescheduleRepo.findById(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
         when(rescheduleRepo.findByIdForUpdate(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
         when(coachProfileRepository.findByIdForUpdate(coach.getId())).thenReturn(Optional.of(coach));
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(false);
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(false);
 
         assertThatThrownBy(() -> service.acceptReschedule(BOOKING_ID, RESCHEDULE_ID, COACH_USER_ID))
             .isInstanceOf(OperationNotAllowedException.class)

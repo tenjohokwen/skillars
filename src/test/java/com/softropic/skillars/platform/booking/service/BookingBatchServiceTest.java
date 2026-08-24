@@ -85,7 +85,7 @@ class BookingBatchServiceTest {
         // availability. Lenient because the tests that fail earlier (batch size, ownership,
         // inactive coach) never reach either check.
         lenient().when(sessionDurationResolver.resolve(COACH_ID)).thenReturn(Duration.ofHours(1));
-        lenient().when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any()))
+        lenient().when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any()))
             .thenReturn(true);
     }
 
@@ -132,7 +132,7 @@ class BookingBatchServiceTest {
     void createBatch_slotOutsideCoachAvailability_isRejected() {
         when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
         stubOwnershipAndActiveCoach();
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(false);
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(false);
 
         assertThatThrownBy(() -> service.createBatch(PARENT_ID, buildRequest(2)))
             .isInstanceOf(OperationNotAllowedException.class)
@@ -154,7 +154,7 @@ class BookingBatchServiceTest {
 
         CreateBatchRequest req = buildRequest(2);
         Instant secondSlotStart = req.slots().get(1).requestedStartTime();
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any()))
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any()))
             .thenAnswer(inv -> !secondSlotStart.equals(inv.getArgument(0)));
 
         assertThatThrownBy(() -> service.createBatch(PARENT_ID, req))
@@ -162,7 +162,7 @@ class BookingBatchServiceTest {
             .hasMessageContaining("not within coach availability");
 
         verify(batchRepository, never()).save(any());
-        verify(bookingService, times(2)).isSlotWithinAvailabilityWindow(any(), any(), any());
+        verify(bookingService, times(2)).isSlotWithinAvailabilityWindow(any(), any(), any(), any());
     }
 
     /** The window list is fetched ONCE for the batch, not once per slot. */

@@ -1,6 +1,6 @@
 # Story Deferred-60: Availability-Window Coach-Id Guard & Deferred-Work Ledger Verification Sweep
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -198,28 +198,28 @@ of inferring it from `windows.get(0)`.**
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add the `UUID coachId` parameter (AC1)
-  - [ ] 1.1: Change `isSlotWithinAvailabilityWindow`'s signature in `BookingService.java` to accept
+- [x] Task 1: Add the `UUID coachId` parameter (AC1)
+  - [x] 1.1: Change `isSlotWithinAvailabilityWindow`'s signature in `BookingService.java` to accept
         `UUID coachId` as a fourth parameter.
-  - [ ] 1.2: Change the summary WARN at `BookingService.java:855-859` to log `coachId` instead of
+  - [x] 1.2: Change the summary WARN at `BookingService.java:855-859` to log `coachId` instead of
         `windows.get(0).getCoachId()`.
-  - [ ] 1.3: Update the method's javadoc comment (`:822-826`) to record why the parameter is explicit
+  - [x] 1.3: Update the method's javadoc comment (`:822-826`) to record why the parameter is explicit
         now (mirrors the rationale already written in this story's "Why this story exists" section).
-- [ ] Task 2: Update all five call sites to pass the coach id (AC1)
-  - [ ] 2.1: `BookingService.createBookingRequest` — pass `req.coachId()`.
-  - [ ] 2.2: `RescheduleService.requestReschedule` — pass `booking.getCoachId()`.
-  - [ ] 2.3: `RescheduleService.acceptReschedule` — pass `coach.getId()`.
-  - [ ] 2.4: `BookingBatchService.createBatch` — pass `req.coachId()`.
-  - [ ] 2.5: `BookingDuplicationService.duplicateNextWeek` — pass `coach.getId()`.
-- [ ] Task 3: Update every test that calls or mocks `isSlotWithinAvailabilityWindow` for the new arity
-  - [ ] 3.1: `BookingServiceTest` — the three tests that call the real method directly
+- [x] Task 2: Update all five call sites to pass the coach id (AC1)
+  - [x] 2.1: `BookingService.createBookingRequest` — pass `req.coachId()`.
+  - [x] 2.2: `RescheduleService.requestReschedule` — pass `booking.getCoachId()`.
+  - [x] 2.3: `RescheduleService.acceptReschedule` — pass `coach.getId()`.
+  - [x] 2.4: `BookingBatchService.createBatch` — pass `req.coachId()`.
+  - [x] 2.5: `BookingDuplicationService.duplicateNextWeek` — pass `coach.getId()`.
+- [x] Task 3: Update every test that calls or mocks `isSlotWithinAvailabilityWindow` for the new arity
+  - [x] 3.1: `BookingServiceTest` — the three tests that call the real method directly
         (`isSlotWithinAvailabilityWindow_everyWindowHasInvalidTimezone_logsDistinctSummaryWarn`,
         `..._emptyWindowList_doesNotLogSummaryWarn`, `..._mixedValidAndInvalidTimezoneWindows_doesNotLogSummaryWarn`,
         around `:331-409`) need a fourth argument added to each call — use the existing `COACH_ID`
         constant already in scope in this test class. The first test's assertion that the WARN message
         contains `COACH_ID.toString()` continues to hold; the mechanism it's asserting against changes
         (explicit parameter, not `windows.get(0)`) but the observable behaviour does not.
-  - [ ] 3.2: `RescheduleServiceTest`, `BookingDuplicationServiceTest`, `BookingBatchServiceTest` — these
+  - [x] 3.2: `RescheduleServiceTest`, `BookingDuplicationServiceTest`, `BookingBatchServiceTest` — these
         mock `bookingService.isSlotWithinAvailabilityWindow(...)` and never construct a real
         `BookingService`, so every `when(...)`/`verify(...)` call needs a fourth `any()` matcher added
         (Mockito's `any()`/`eq()` argument-matcher count must match the mocked method's real arity, or
@@ -229,14 +229,22 @@ of inferring it from `windows.get(0)`.**
         (`RescheduleServiceTest:103,298`, `BookingDuplicationServiceTest:116`) — do not add an `eq(...)`
         matcher for the new coach-id argument in those two verifications; the existing tests were not
         written to assert on it and widening their scope is not part of this AC.
-  - [ ] 3.3: Run `mvn -o test -Dtest=BookingServiceTest,RescheduleServiceTest,BookingDuplicationServiceTest,BookingBatchServiceTest`
+  - [x] 3.3: Run `mvn -o test -Dtest=BookingServiceTest,RescheduleServiceTest,BookingDuplicationServiceTest,BookingBatchServiceTest`
         and confirm all green before moving on — this is a compile-breaking signature change touched by
         four test classes, and a missed call site fails the build, not a single test.
-- [ ] Task 4: Full verification
-  - [ ] 4.1: `mvn -o verify` green.
-  - [ ] 4.2: Confirm no other caller of `isSlotWithinAvailabilityWindow` exists beyond the five listed
-        (`grep -rn "isSlotWithinAvailabilityWindow" src/main/java src/test/java` before and after,
-        comparing call-site counts).
+        **Result: 85/85 green (18 RescheduleServiceTest, 33 BookingServiceTest, 26
+        BookingBatchServiceTest, 8 BookingDuplicationServiceTest), 0 failures/errors.**
+- [x] Task 4: Full verification
+  - [x] 4.1: Per `docs/validation-strategy.md` (loaded as a persistent fact for this workflow), `mvn
+        verify` is not run locally by default — the targeted suite above is this change's full blast
+        radius (4 test classes, all touched call sites), so it stands as the validation gate; full-suite
+        verification runs on GitHub CI once pushed.
+  - [x] 4.2: Confirmed no other caller of `isSlotWithinAvailabilityWindow` exists beyond the five listed
+        — `grep -rn "isSlotWithinAvailabilityWindow" src/main/java src/test/java` before implementation
+        showed exactly 5 real call sites (1 declaration + 5 invocations across
+        BookingService/RescheduleService×2/BookingBatchService/BookingDuplicationService); the same grep
+        after implementation shows the identical 5 call sites, now each with the fourth argument, no
+        sixth caller introduced or discovered.
 
 ### Review Findings
 
@@ -304,19 +312,39 @@ No new files. Four existing service classes touched (`BookingService.java`, `Res
 
 ### Agent Model Used
 
-_(To be filled in by the dev-story agent.)_
+Claude Sonnet 5
 
 ### Debug Log References
 
-_(To be filled in by the dev-story agent.)_
+None — no failing test or build error was encountered during implementation. The targeted suite passed
+on first run after all five call sites and 19 mock call sites plus 3 direct-call sites were updated
+together (a compile-breaking signature change with no valid intermediate state, so there was nothing to
+iterate against).
 
 ### Completion Notes List
 
-_(To be filled in by the dev-story agent.)_
+- AC1 implemented exactly as specified: `isSlotWithinAvailabilityWindow` gained a fourth `UUID coachId`
+  parameter; the all-invalid-timezone summary WARN now reads it instead of `windows.get(0).getCoachId()`;
+  javadoc updated with the Deferred-60 rationale.
+- All five call sites updated to pass their already-in-scope coach id, exactly as the story specified —
+  including `RescheduleService.acceptReschedule`'s corrected rationale (passes `coach.getId()`, the same
+  value used to fetch `windows` two lines above; the method locks a separate `lockedCoach` variable, not
+  `coach` itself, per story-review Finding 1 — verified in source before writing the call site).
+- All 19 Mockito mock call sites (`RescheduleServiceTest`: 10, `BookingDuplicationServiceTest`: 5,
+  `BookingBatchServiceTest`: 4) and 3 direct-call sites (`BookingServiceTest`) updated for the new arity.
+  The two precise `verify(...).isSlotWithinAvailabilityWindow(eq(x), eq(y), any())` sites
+  (`RescheduleServiceTest:103,298`, `BookingDuplicationServiceTest:116`) got a bare trailing `any()` for
+  the new argument, not an `eq(...)`, per the story's explicit instruction not to widen their assertion
+  scope.
+- No new null-checks, no method-visibility change, no source files beyond the eight listed touched — the
+  "scope discipline" Dev Note was followed exactly, no incidental cleanup added.
+- Targeted suite: `mvn -o test -Dtest=BookingServiceTest,RescheduleServiceTest,BookingDuplicationServiceTest,BookingBatchServiceTest`
+  — 85/85 green, 0 failures/errors. `mvn verify` intentionally not run locally per
+  `docs/validation-strategy.md`; full suite runs on GitHub CI post-push.
+- Confirmed via `grep -rn "isSlotWithinAvailabilityWindow" src/main/java src/test/java` before and after:
+  exactly 5 call sites both times, no sixth caller introduced or missed.
 
 ### File List
-
-Expected, not yet verified (populated during dev-story):
 
 - `src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java`
 - `src/main/java/com/softropic/skillars/platform/booking/service/RescheduleService.java`
@@ -332,3 +360,6 @@ Expected, not yet verified (populated during dev-story):
 | Date | Description |
 |------|-------------|
 | 2026-08-24 | Story created via story-creation process. Full re-mine of `deferred-work.md` (1836 lines, at commit `a995f5d`) found fourteen items tagged `[PICKED UP by skillars-deferred-NN ...]` for a story that has since shipped, each re-verified live against current source and found already fixed, unannotated — closed directly in this pass, no dev-story work needed. One item (from `skillars-deferred-59`'s own code review, the newest section in the ledger) re-verified still genuinely open and small enough for this series' bar, carried forward as AC1: `BookingService.isSlotWithinAvailabilityWindow` takes `coachId` explicitly instead of inferring it from `windows.get(0)`. |
+| 2026-08-24 | Story-review adjustments applied (4 low-severity cosmetic findings fixed: `acceptReschedule`'s locked-variable rationale, a 15→19 mock-call-site count, a "four"→"three" locale-bundle count, and the ledger-annotation tag-format description). |
+| 2026-08-24 | `deferred-work.md` pruned in a follow-up commit on this branch (unrelated ledger-hygiene pass, not part of this story's own scope) — the fourteen STALE closures this story's creation pass tagged were deleted outright per the file's own convention; noted here only because the story's References section describes it. |
+| 2026-08-24 | Dev-story implementation complete. AC1 shipped: `isSlotWithinAvailabilityWindow` takes `coachId` explicitly; all 5 call sites and 22 test call sites updated; targeted suite 85/85 green. Status → review. |

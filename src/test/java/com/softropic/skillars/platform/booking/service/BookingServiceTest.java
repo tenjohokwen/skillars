@@ -342,7 +342,7 @@ class BookingServiceTest {
         serviceLogger.addAppender(logCapture);
         boolean result;
         try {
-            result = bookingService.isSlotWithinAvailabilityWindow(start, end, windows);
+            result = bookingService.isSlotWithinAvailabilityWindow(start, end, windows, COACH_ID);
         } finally {
             serviceLogger.detachAppender(logCapture);
         }
@@ -372,7 +372,7 @@ class BookingServiceTest {
         serviceLogger.addAppender(logCapture);
         boolean result;
         try {
-            result = bookingService.isSlotWithinAvailabilityWindow(start, end, windows);
+            result = bookingService.isSlotWithinAvailabilityWindow(start, end, windows, COACH_ID);
         } finally {
             serviceLogger.detachAppender(logCapture);
         }
@@ -398,7 +398,7 @@ class BookingServiceTest {
         logCapture.start();
         serviceLogger.addAppender(logCapture);
         try {
-            bookingService.isSlotWithinAvailabilityWindow(start, end, windows);
+            bookingService.isSlotWithinAvailabilityWindow(start, end, windows, COACH_ID);
         } finally {
             serviceLogger.detachAppender(logCapture);
         }

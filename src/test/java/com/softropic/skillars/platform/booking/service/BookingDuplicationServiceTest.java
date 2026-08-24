@@ -86,7 +86,7 @@ class BookingDuplicationServiceTest {
         when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(true);
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
         when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any())).thenReturn(List.of());
         when(packSessionService.findActivePackId(PLAYER_ID, COACH_ID)).thenReturn(activePackId);
 
@@ -113,7 +113,7 @@ class BookingDuplicationServiceTest {
         Instant expectedEnd = expectedStart.plus(1, ChronoUnit.HOURS);
         // Deferred-50 AC3: verify the actual duplicated-slot times were passed, not (for example)
         // the original booking's pre-duplication times — an argument-swap regression.
-        verify(bookingService).isSlotWithinAvailabilityWindow(eq(expectedStart), eq(expectedEnd), any());
+        verify(bookingService).isSlotWithinAvailabilityWindow(eq(expectedStart), eq(expectedEnd), any(), any());
         assertThat(saved.getRequestedStartTime()).isEqualTo(expectedStart);
         assertThat(saved.getCoachId()).isEqualTo(COACH_ID);
         assertThat(saved.getPlayerId()).isEqualTo(PLAYER_ID);
@@ -175,7 +175,7 @@ class BookingDuplicationServiceTest {
         when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(true);
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
         when(packSessionService.findActivePackId(PLAYER_ID, COACH_ID)).thenThrow(
             new OperationNotAllowedException(
                 "No effective session credits available for this coach", SecurityError.MISSING_RIGHTS));
@@ -195,7 +195,7 @@ class BookingDuplicationServiceTest {
         when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(false);
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(false);
 
         assertThatThrownBy(() -> service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID))
             .isInstanceOf(OperationNotAllowedException.class)
@@ -216,7 +216,7 @@ class BookingDuplicationServiceTest {
         when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(true);
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
         when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any()))
             .thenReturn(List.of(new Booking()));
 

@@ -145,7 +145,7 @@ public class BookingBatchService {
             // called directly rather than copied — a second copy would drift from its cross-midnight
             // anchoring and invalid-timezone handling.
             if (!bookingService.isSlotWithinAvailabilityWindow(
-                    slot.requestedStartTime(), slot.requestedEndTime(), windows)) {
+                    slot.requestedStartTime(), slot.requestedEndTime(), windows, req.coachId())) {
                 throw new OperationNotAllowedException(
                     "Requested slot is not within coach availability",
                     Map.of("requested start time", slot.requestedStartTime(),
