@@ -138,8 +138,9 @@ acceptable operational risk, not a bounded code patch.
      `CoachProfileService`'s `strikeCount` cast) of hardening a narrowing cast without changing any
      reachable behavior at current scale. `@Async`/`AFTER_COMMIT`-listener exceptions are already caught and
      logged by this method's own `catch (Exception e)` block (`:89-92`), so an `ArithmeticException` here
-     surfaces as the existing "composite recalculation failed... composite is now stale" WARN log rather
-     than a new unhandled-exception path.
+     surfaces as the existing "composite recalculation failed... composite is now stale" **ERROR** log
+     (`log.error(...)`, not `log.warn(...)` — verified against `RadarCompositeCalculationService.java:89-92`)
+     rather than a new unhandled-exception path.
    - **Test coverage.** No existing unit test file covers this service (`grep -rln
      "RadarCompositeCalculationService" src/test` — confirm at implementation time; if a test file exists,
      add a case seeding a synthetic `Object[]` row with `row[3]` set beyond `Integer.MAX_VALUE` and asserting
@@ -323,10 +324,14 @@ acceptable operational risk, not a bounded code patch.
      can now distinguish a coach-data-quality problem from ordinary booking traffic, which the item's own
      title cites as the actual operational gap ("misleading 403" — misleading to whoever is debugging it, not
      to the parent's UX).
-   - **Test coverage.** `BookingServiceTest` already has unit coverage calling
-     `isSlotWithinAvailabilityWindow` directly (confirm exact existing test names at implementation time via
-     `grep -n "isSlotWithinAvailabilityWindow" src/test/java/com/softropic/skillars/platform/booking/service/BookingServiceTest.java`).
-     Add a new case seeding one or more windows with an unparseable `canonicalTimezone`
+   - **Test coverage.** There is no existing test that calls `isSlotWithinAvailabilityWindow` directly — the
+     method is package-private and today's coverage only exercises it indirectly through
+     `createBookingRequest(...)` with mocked `CoachAvailabilityWindowRepository` results (e.g.
+     `createBookingRequest_slotOutsideAvailabilityWindows_throwsOperationNotAllowedException` at
+     `BookingServiceTest.java:310`); running `grep -n "isSlotWithinAvailabilityWindow"
+     src/test/java/com/softropic/skillars/platform/booking/service/BookingServiceTest.java` confirms zero
+     direct hits — there was never direct coverage of this method to begin with, not a case of coverage having
+     moved or been renamed. Add a new case seeding one or more windows with an unparseable `canonicalTimezone`
      (e.g. `"not-a-zone"`) and asserting, via a Logback `ListAppender` attached to `BookingService`'s logger
      (mirroring `skillars-deferred-36` AC1's established pattern for asserting on a specific log line), that
      the new summary WARN fires with the expected coach id and window count — not just that the method
@@ -439,39 +444,91 @@ acceptable operational risk, not a bounded code patch.
      they are not part of this bug — only the port-22 delete-rule call is wrong, because the CIDR it targets
      (`${SSH_CIDR}` from a *previous* run) is exactly the one value this script cannot know without tracking
      state between invocations.
-   - Replace the fragile "guess and delete the old rule" approach with **delete-and-recreate the whole
-     firewall**, which needs no memory of the previous run's CIDR at all — the firewall is a cheap,
-     fully-declarative resource (three rules, one attachment) and this script already regenerates every rule
-     from scratch immediately after this block regardless of branch taken:
+   - **Story-review correction (was: delete-and-recreate the whole firewall).** The original draft of this AC
+     proposed `hcloud firewall delete` + `hcloud firewall create` to sidestep needing the previous CIDR.
+     Story review flagged this as a real regression: between `delete` and the point later in the script where
+     `apply-to-server` re-attaches the freshly-created firewall, the server has **no cloud-level firewall at
+     all** — every port reachable from the internet (not just SSH), not merely the narrow, real bug this AC
+     is fixing (a stale SSH CIDR *widening* SSH access to two IPs). That tradeoff — a narrow bug for a broader,
+     if brief, one — was never named or weighed in the original draft. Delete-and-recreate also silently
+     discards any rule an operator added by hand outside this script, and gives the firewall a new
+     Hetzner-assigned ID.
+   - **Corrected fix: replace the firewall's rule set atomically, in place, via `hcloud firewall
+     replace-rules`.** Confirmed real via the CLI's own reference docs
+     (`hetznercloud/cli`'s `docs/reference/manual/hcloud_firewall_replace-rules.md`): `hcloud firewall
+     replace-rules --rules-file <file> <firewall>` "replaces all rules from a Firewall using a file as the
+     source" — it operates on the *existing* firewall object, never detaches it from the server, and never
+     creates a window with no firewall at all. This closes the exact same gap the original fix targeted (no
+     per-run knowledge of the prior CIDR needed — the whole rule set is simply replaced every run) without the
+     exposure window, without discarding unrelated firewall settings, without a new firewall ID, and without
+     needing any investigation into attached-firewall-delete semantics. This also lets the create-branch and
+     update-branch converge: an empty freshly-created firewall and an existing one both end up with exactly
+     the same 3-rule set from one code path.
      ```bash
-     if hcloud firewall list -o columns=name | grep -qx "${FIREWALL_NAME}"; then
-       echo "[firewall] Firewall '${FIREWALL_NAME}' already exists — deleting and recreating to avoid stale rule accumulation..."
-       hcloud firewall delete "${FIREWALL_NAME}"
+     # ── Create firewall if it doesn't exist ───────────
+     if ! hcloud firewall list -o columns=name | grep -qx "${FIREWALL_NAME}"; then
+       echo "[firewall] Creating firewall '${FIREWALL_NAME}'..."
+       hcloud firewall create --name "${FIREWALL_NAME}"
      fi
-     echo "[firewall] Creating firewall '${FIREWALL_NAME}'..."
-     hcloud firewall create --name "${FIREWALL_NAME}"
+
+     echo "[firewall] Applying firewall rules (atomic replace — no per-rule delete/add, no stale CIDR guessing)..."
+
+     RULES_FILE="$(mktemp)"
+     trap 'rm -f "${RULES_FILE}"' EXIT
+
+     cat > "${RULES_FILE}" <<RULES_EOF
+     [
+       {
+         "direction": "in",
+         "protocol": "tcp",
+         "port": "80",
+         "source_ips": ["0.0.0.0/0", "::/0"]
+       },
+       {
+         "direction": "in",
+         "protocol": "tcp",
+         "port": "443",
+         "source_ips": ["0.0.0.0/0", "::/0"]
+       },
+       {
+         "direction": "in",
+         "protocol": "tcp",
+         "port": "22",
+         "source_ips": ["${SSH_CIDR}"]
+       }
+     ]
+     RULES_EOF
+
+     hcloud firewall replace-rules --rules-file "${RULES_FILE}" "${FIREWALL_NAME}"
      ```
-     **Before implementing, confirm `hcloud firewall delete`'s exact behavior for an in-use (attached)
-     firewall** — the CLI may require detaching from the server first, or may cascade-detach automatically;
-     run `hcloud firewall delete --help` (or check the installed CLI's man page/docs) in the actual
-     deployment environment to confirm, since this repo has no live Hetzner API access to test against. If
-     `delete` refuses on an attached firewall, detach first via `hcloud firewall remove-from-server` (or
-     equivalent for the API version in use) before the delete, then the existing "Attach to server" block
-     later in the script (unchanged) reattaches it after the fresh rules are applied.
+     This removes the entire three-call `delete-rule` block and the three separate `add-rule` calls further
+     down the script (lines 55-76 in the current file) — `replace-rules` alone now produces the final rule set
+     for both the create-fresh and update-existing paths. The `trap` ensures the temp rules file is cleaned up
+     even if `replace-rules` fails, matching `set -euo pipefail`'s existing fail-fast posture.
+   - **Before implementing, confirm the exact `--rules-file` JSON envelope shape** — the shown structure (a
+     bare JSON array of rule objects, field names `direction`/`protocol`/`port`/`source_ips` per the Hetzner
+     Cloud API's firewall rule schema) is sourced from the CLI's own flag description ("JSON file... with
+     structure matching the Hetzner Cloud API firewall specification") but was not verified against a live
+     `hcloud` install in this environment (the CLI isn't available here). Run `hcloud firewall replace-rules
+     --help` in the actual deployment environment before implementing — if the expected shape differs (e.g. an
+     object wrapping a `rules` key rather than a bare array), adjust the heredoc accordingly; the flag's own
+     `--help` output and/or a `hcloud firewall describe <firewall> -o json`'s existing `rules` array shape
+     (which the same schema should round-trip) are the fastest ways to confirm.
    - **Why not track the previous CIDR in a state file instead**: that would add a new persistence
      requirement (a file on the operator's local machine, per this script's own header comment "Run from
-     your LOCAL machine") for a script that is otherwise fully stateless and idempotent by design — recreate
-     is simpler, matches the script's existing "regenerate everything on every run" philosophy, and has no
-     failure mode where a stale/corrupted state file causes a wrong deletion.
+     your LOCAL machine") for a script that is otherwise fully stateless and idempotent by design —
+     `replace-rules` is simpler, matches the script's existing "regenerate everything on every run"
+     philosophy, and — unlike the delete-and-recreate alternative story review rejected — has no exposure
+     window and no failure mode where a stale/corrupted state file causes a wrong deletion.
    - **Test coverage.** No CI or automated test exercises this script (confirmed — it targets a real
      Hetzner Cloud account, matching this ledger's own repeatedly-recorded "no production DB/Cloud API access
      in this environment" limitation for every prior deploy-script fix). Verify with `shellcheck
      deploy/firewall/apply-firewall.sh` (must stay clean, matching this project's other backup/restore
-     scripts' established bar) and a careful manual read confirming the script still creates identical final
+     scripts' established bar) and a careful manual read confirming the script still produces identical final
      rules (TCP 80 all, TCP 443 all, TCP 22 restricted to the new CIDR) on both the create-fresh and
      update-existing paths. A live run against a real Hetzner test account, if available to whoever
      implements this, is the only way to fully close the loop — note in the Dev Agent Record whether one was
-     possible.
+     possible, and confirm there whether the `--rules-file` envelope shape assumption above held.
 
 ## Tasks / Subtasks
 
@@ -496,10 +553,11 @@ acceptable operational risk, not a bounded code patch.
   - [ ] 4.2 Manually verify via dev server per AC4's Test Coverage guidance (no automated frontend test
     harness exists in this repo).
 - [ ] Task 5: `apply-firewall.sh` SSH rule accumulation fix (AC: #5)
-  - [ ] 5.1 Confirm `hcloud firewall delete`'s behavior on an attached firewall (docs/CLI help — no live
-    API access in this environment).
-  - [ ] 5.2 Replace the per-rule `delete-rule` guesses with delete-and-recreate, per AC5's snippet, adding a
-    detach step first only if 5.1 shows it's required.
+  - [ ] 5.1 Confirm the `hcloud firewall replace-rules --rules-file` JSON envelope shape (docs/CLI help —
+    no live API access in this environment); adjust the heredoc in AC5's snippet if it differs from the
+    assumed bare-array shape.
+  - [ ] 5.2 Replace the `delete-rule` block and the three separate `add-rule` calls with the single atomic
+    `replace-rules` call, per AC5's snippet.
   - [ ] 5.3 Run `shellcheck deploy/firewall/apply-firewall.sh`; confirm clean.
 - [ ] Task 6: Ledger hygiene (AC: #6, implicit) — flip the `PICKED UP` tags applied at story creation to
   `CLOSED` once each AC actually lands, one closure note per AC, following the exact convention
@@ -546,8 +604,8 @@ acceptable operational risk, not a bounded code patch.
   with a `ListAppender` assertion (AC3).
 - `src/frontend/src/components/payment/PaymentMethodCard.vue` — `mountGeneration` counter added to
   `mountCardElement`/`unmountCardElement` (AC4).
-- `deploy/firewall/apply-firewall.sh` — update-branch rewritten from per-rule delete guesses to
-  delete-and-recreate (AC5).
+- `deploy/firewall/apply-firewall.sh` — per-rule `delete-rule` guesses and the three separate `add-rule`
+  calls both replaced with one atomic `hcloud firewall replace-rules` call (AC5).
 - `_bmad-output/implementation-artifacts/deferred-work.md` — five `PICKED UP`→`CLOSED` tag flips once their
   ACs land (Task 6).
 - No frontend build/lint config changes; no new npm dependencies.
@@ -588,6 +646,9 @@ acceptable operational risk, not a bounded code patch.
 - [Source: `src/frontend/src/stores/booking.store.js` (`loadCoachBookingRequests`,
   `skillars-deferred-38` AC1) — AC4's generation-counter supersession-guard precedent]
 - [Source: `deploy/firewall/apply-firewall.sh` — AC5's full target file, current shape]
+- [Source: `hetznercloud/cli`'s `docs/reference/manual/hcloud_firewall_replace-rules.md` — confirms `hcloud
+  firewall replace-rules --rules-file <file> <firewall>` exists and atomically replaces a firewall's rule set
+  in place, AC5's corrected-fix precedent found during story review]
 - [Source: `docs/validation-strategy.md` — targeted-test-only validation policy]
 
 ## Change Log
@@ -595,3 +656,4 @@ acceptable operational risk, not a bounded code patch.
 | Date | Change |
 |---|---|
 | 2026-08-24 | Story created via story-creation process, deliberately re-mining `deferred-work.md`'s ENTIRE history (not just the recent tail, per the user's request for a larger bundle) after confirming the recent tail (post-`skillars-deferred-40`) is already thin — nearly every remaining item there is closed, picked up, or explicitly needs a product/design decision. Five items survived live re-verification against the current tree, each independent and low-risk: AC1 (radar composite session-count overflow guard, `RadarCompositeCalculationService`), AC2 (`DrillVideoRef` persist-not-merge via `Persistable<UUID>`), AC3 (availability-timezone diagnostic WARN log, `BookingService`), AC4 (payment-method-card mount/unmount race guard, frontend), AC5 (SSH firewall allowlist rule accumulation fix, deploy script). One candidate item (`SessionPackPurchase.expiresAt` mutability) was found during re-verification to have no safe fix — `updatable = false` would break three legitimate call sites that write it — and was dropped rather than implemented incorrectly. Considered and explicitly not picked up: the `jakarta.persistence.lock.timeout`-has-no-effect-on-Postgres question (needs an architecture decision, not a patch); `DisputeService`'s dormant `FROZEN`-filter gap; the video-bandwidth dedup-rule question; `isSlotWithinAvailabilityWindow`'s midnight-crossing limitation (explicitly out of scope per its own story's Dev Notes); `BookingDuplicationService`'s DST-shift-on-168-hour-offset item (non-mechanical calendar-math fix); roughly a dozen further deploy/infrastructure items, this project's own established lowest-priority category, most needing either live infrastructure access this environment lacks or an operational-risk-acceptance decision beyond a bounded code patch. |
+| 2026-08-24 | Story-review adjustments applied, status remains ready-for-dev. `story-review.md` filed 3 findings against the draft, all fixed. Finding 1/Medium-High: AC5's original delete-and-recreate fix left the server with zero cloud firewall protection between `hcloud firewall delete` and re-attachment — a broader, unweighed exposure trade against the narrow bug it fixed, and one that would also silently discard any hand-added rule and change the firewall's Hetzner-assigned ID. Replaced with `hcloud firewall replace-rules --rules-file <file> <firewall>`, confirmed to exist and to atomically replace a firewall's rule set in place (verified against `hetznercloud/cli`'s own reference docs) — no detach, no exposure window, no per-run CIDR memory needed; this also let the create-branch and update-branch converge on one code path. AC5's Task 5.1 changed from "confirm delete-on-attached-firewall behavior" (now moot) to "confirm the `--rules-file` JSON envelope shape," since that shape wasn't verified against a live `hcloud` install in this environment. Finding 2/Low: AC1's rationale said the absorbing catch block logs at WARN; corrected to ERROR, matching `RadarCompositeCalculationService.java:89-92` exactly. Finding 3/Low: AC3's test-coverage claim said `BookingServiceTest` already has direct unit coverage of `isSlotWithinAvailabilityWindow` and handed the implementer a grep to confirm exact test names; that grep returns zero matches — there was never direct coverage, only indirect coverage through `createBookingRequest(...)`. Corrected so the implementer isn't sent looking for tests that don't exist. |
