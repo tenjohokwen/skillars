@@ -7,6 +7,7 @@ import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.DuplicateBookingProposedEvent;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
@@ -68,6 +69,13 @@ public class BookingDuplicationService {
             entityManager.refresh(coach, LockModeType.PESSIMISTIC_WRITE);
             return null;
         });
+
+        // Deferred-63 AC2: mirrors acceptReschedule's identical check on its identical lock pattern —
+        // a coach suspended since the original booking completed must not be able to duplicate it.
+        if (coach.getStatus() == CoachProfileStatus.SUSPENDED) {
+            throw new OperationNotAllowedException("Coach is suspended",
+                Map.of("submitted coach id", coach.getId()), BookingError.COACH_UNAVAILABLE);
+        }
 
         Instant newStart = original.getRequestedStartTime().plus(7, ChronoUnit.DAYS);
         Instant newEnd = original.getRequestedEndTime().plus(7, ChronoUnit.DAYS);

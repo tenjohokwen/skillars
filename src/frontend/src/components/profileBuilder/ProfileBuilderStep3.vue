@@ -110,13 +110,25 @@ const form = reactive({
 // A fixed list rather than free-typed minutes: chk_coach_pricing_session_duration (V93) rejects
 // anything outside 15..240, and that rejection would surface as a generic step-error toast.
 const DURATION_CHOICES = [30, 45, 60, 90, 120]
-const durationOptions = computed(() => [
-  { value: null, label: t('auth.coach.step3SessionDurationDefault') },
-  ...DURATION_CHOICES.map(minutes => ({
-    value: minutes,
-    label: t('auth.coach.step3SessionDurationMinutes', { minutes }),
-  })),
-])
+// Deferred-63 AC7: this screen is create-only today (form.sessionDurationMinutes always starts
+// null), so an out-of-list value is unreachable through this UI — but a direct API call could still
+// leave a coach's saved value outside DURATION_CHOICES. Defensive hardening only: if that ever
+// happens, show the real value as its own synthetic option instead of rendering the select as
+// unselected/reset, matching this project's other reachable-only-via-non-UI-path guards.
+const durationOptions = computed(() => {
+  const options = [
+    { value: null, label: t('auth.coach.step3SessionDurationDefault') },
+    ...DURATION_CHOICES.map(minutes => ({
+      value: minutes,
+      label: t('auth.coach.step3SessionDurationMinutes', { minutes }),
+    })),
+  ]
+  const current = form.sessionDurationMinutes
+  if (current != null && !DURATION_CHOICES.includes(current)) {
+    options.push({ value: current, label: String(current) })
+  }
+  return options
+})
 
 function addPack() {
   form.sessionPacks.push({ sessionCount: null, totalPrice: null, label: '' })

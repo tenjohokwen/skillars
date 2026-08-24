@@ -20,7 +20,10 @@ import com.softropic.skillars.platform.admin.repo.DisputeRepository;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.config.service.ConfigService;
+import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
+import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.payment.contract.BookingPaymentStatus;
 import com.softropic.skillars.platform.payment.repo.BookingPayment;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
 import com.softropic.skillars.platform.payment.repo.CoachCancellationHistoryRepository;
@@ -72,8 +75,25 @@ public class DisputeService {
         Booking booking = bookingRepository.findById(bookingId)
             .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "Booking"));
 
-        boolean statusEligible = ELIGIBLE_STATUSES.contains(booking.getStatus());
+        // Deferred-63 AC5: a coach may raise their own dispute on a booking (e.g. contesting a
+        // NO_SHOW_COACH claim), not only the parent/player. booking.getCoachId() is the coach
+        // *profile* UUID, not a user id, so this needs the same profile-to-user-id hop
+        // getAdminDisputeDetail already does. Symmetric first-raise right only: the existing
+        // findOpenByBookingId check below still blocks a second dispute on the same booking
+        // regardless of who raises it first.
         boolean ownerEligible = raisedBy.equals(booking.getParentId()) || raisedBy.equals(booking.getPlayerId());
+        if (!ownerEligible) {
+            // Code review (2026-08-25): a suspended coach must not be able to raise a dispute either —
+            // mirrors BookingDuplicationService.duplicateNextWeek's identical SUSPENDED guard (AC2).
+            // Looked up lazily, only when the caller isn't already the parent/player, to avoid an
+            // unconditional DB round-trip on the common (non-coach) path.
+            ownerEligible = coachProfileRepository.findById(booking.getCoachId())
+                .filter(cp -> cp.getStatus() != CoachProfileStatus.SUSPENDED)
+                .map(CoachProfile::getUserId)
+                .map(raisedBy::equals)
+                .orElse(false);
+        }
+        boolean statusEligible = ELIGIBLE_STATUSES.contains(booking.getStatus());
         if (!statusEligible || !ownerEligible) {
             throw new OperationNotAllowedException(
                 "Not eligible to raise dispute for this booking", DisputeError.NOT_ELIGIBLE);
@@ -166,9 +186,16 @@ public class DisputeService {
         Booking booking = bookingRepository.findById(dispute.getBookingId())
             .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "Booking"));
 
-        Optional<BookingPayment> paymentOpt = bookingPaymentRepository.findById(dispute.getBookingId())
-            .filter(bp -> "CAPTURED".equals(bp.getStatus()));
-        BigDecimal sessionPrice = paymentOpt
+        Optional<BookingPayment> paymentLookup = bookingPaymentRepository.findById(dispute.getBookingId());
+        paymentLookup
+            .filter(bp -> !BookingPaymentStatus.CAPTURED.equals(bp.getStatus()))
+            .ifPresent(bp -> log.warn(
+                "Dispute resolution proceeding with sessionPrice=0: BookingPayment status={} (not CAPTURED) "
+                    + "for disputeId={} bookingId={} — automated credit/refund is not possible for a "
+                    + "non-CAPTURED payment until non-CAPTURED handling is designed",
+                bp.getStatus(), disputeId, dispute.getBookingId()));
+        BigDecimal sessionPrice = paymentLookup
+            .filter(bp -> BookingPaymentStatus.CAPTURED.equals(bp.getStatus()))
             .map(p -> p.getCreditDebited().add(p.getStripeCharged()))
             .orElse(BigDecimal.ZERO);
 

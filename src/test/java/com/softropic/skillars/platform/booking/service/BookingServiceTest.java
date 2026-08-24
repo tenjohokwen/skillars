@@ -896,6 +896,41 @@ class BookingServiceTest {
             .isInstanceOf(BookingStateTransitionException.class);
     }
 
+    // ---- recordNoShowCoach tests (Deferred-63 AC4) ----
+
+    @Test
+    void recordNoShowCoach_beforeScheduledStartTime_throwsNoShowTooEarly() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING");
+        booking.setRequestedStartTime(Instant.now().plusSeconds(3600));
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.recordNoShowCoach(booking.getId(), PARENT_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.NO_SHOW_TOO_EARLY));
+
+        verify(bookingRepository, never()).save(any(Booking.class));
+        verify(eventPublisher, never()).publishEvent(any(com.softropic.skillars.platform.booking.contract.CoachNoShowEvent.class));
+    }
+
+    @Test
+    void recordNoShowCoach_afterScheduledStartTime_transitionsAndPublishesEvent() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING");
+        booking.setRequestedStartTime(Instant.now().minusSeconds(3600));
+        booking.setRequestedEndTime(Instant.now().minusSeconds(1800));
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("40.00"))));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+
+        bookingService.recordNoShowCoach(booking.getId(), PARENT_ID);
+
+        assertThat(booking.getStatus()).isEqualTo("NO_SHOW_COACH");
+        verify(eventPublisher).publishEvent(any(com.softropic.skillars.platform.booking.contract.CoachNoShowEvent.class));
+    }
+
     // ---- helpers ----
 
     private PlayerProfile makePlayer(Long id, Long parentId) {

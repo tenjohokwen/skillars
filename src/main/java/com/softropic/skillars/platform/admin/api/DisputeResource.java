@@ -70,12 +70,18 @@ public class DisputeResource {
         }
     }
 
-    // Returns "PARENT" or "PLAYER" based on granted authorities; fallback is "PLAYER".
+    // Returns "PARENT", "COACH", or "PLAYER" based on granted authorities; fallback is "PLAYER".
     private String resolveCurrentRole() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth != null && auth.getAuthorities().stream()
                 .anyMatch(a -> a.getAuthority().equals("ROLE_PARENT"))) {
             return "PARENT";
+        }
+        // Deferred-63 AC5: without this branch, a coach calling POST /api/disputes fell through to
+        // the PLAYER fallback and had their own dispute mis-recorded with raisedByRole = "PLAYER".
+        if (auth != null && auth.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_COACH"))) {
+            return "COACH";
         }
         return "PLAYER";
     }

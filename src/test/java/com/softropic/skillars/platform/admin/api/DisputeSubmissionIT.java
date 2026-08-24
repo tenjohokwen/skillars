@@ -288,6 +288,57 @@ class DisputeSubmissionIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void raiseDispute_coach_eligible_returns201WithCoachRole() {
+        // Deferred-63 AC5: symmetric first-raise right — the coach owns this booking (via
+        // coachProfileId → COACH_USER_ID) and no dispute exists on it yet, so raiseDispute's
+        // widened ownerEligible check must let the coach through, and resolveCurrentRole()'s new
+        // COACH branch must record the correct raisedByRole (not the PLAYER fallback).
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + DISPUTES_BASE,
+            HttpMethod.POST,
+            Map.of("bookingId", bookingId.toString(), "reason", "OTHER", "details", "Coach: disputing this booking"),
+            authenticatedHeaders(coachCookies),
+            Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(response.getBody()).containsKey("disputeId");
+
+        String disputeId = (String) response.getBody().get("disputeId");
+        String raisedByRole = jdbcTemplate.queryForObject(
+            "SELECT raised_by_role FROM admin.disputes WHERE id = ?::uuid", String.class, disputeId);
+        assertThat(raisedByRole).isEqualTo("COACH");
+    }
+
+    @Test
+    void raiseDispute_coach_bookingAlreadyDisputedByParent_returns409() {
+        // Deferred-63 AC5 (story-review Finding 1): the widened eligibility is raise-only, not a
+        // contest mechanism — a coach still cannot raise a second dispute once the parent already
+        // has one open on the same booking.
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        httpTestClient.makeHttpRequest(
+            baseUrl() + DISPUTES_BASE,
+            HttpMethod.POST,
+            Map.of("bookingId", bookingId.toString(), "reason", "COACH_NO_SHOW", "details", "Parent filed first"),
+            authenticatedHeaders(parentCookies),
+            Map.class);
+
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + DISPUTES_BASE,
+            HttpMethod.POST,
+            Map.of("bookingId", bookingId.toString(), "reason", "OTHER", "details", "Coach: trying to contest"),
+            authenticatedHeaders(coachCookies),
+            Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(ex.getResponseBodyAsString()).contains("disputes.alreadyRaised");
+            });
+    }
+
+    @Test
     void getDispute_playerOwned_returns200() {
         String playerCookies = loginAndGetCookies(PLAYER_EMAIL);
         ResponseEntity<Map> createResp = httpTestClient.makeHttpRequest(

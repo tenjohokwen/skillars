@@ -21,4 +21,11 @@ public interface PlaybackTokenRepository extends JpaRepository<PlaybackToken, UU
            "WHERE t.viewerId = :viewerId AND t.revokedAt IS NOT NULL AND t.revokedAt > :windowStart")
     boolean hasRecentRevocation(@Param("viewerId") String viewerId,
                                 @Param("windowStart") Instant windowStart);
+
+    @Query("SELECT COUNT(t) > 0 FROM PlaybackToken t " +
+           "WHERE t.viewerId = :viewerId AND t.videoId = :videoId " +
+           "AND t.revokedAt IS NULL AND t.expiresAt > :now")
+    boolean existsActiveForViewerAndVideo(@Param("viewerId") String viewerId,
+                                          @Param("videoId") UUID videoId,
+                                          @Param("now") Instant now);
 }

@@ -1,12 +1,18 @@
 package com.softropic.skillars.platform.payment.service;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachReliabilityStrikeRepository;
 import com.softropic.skillars.platform.payment.contract.AdminFinanceOverviewDto;
 import com.softropic.skillars.platform.payment.contract.RevenueSummaryDto;
+import com.softropic.skillars.platform.payment.repo.BookingPayment;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
 import com.softropic.skillars.platform.payment.repo.ParentCreditLedger;
 import com.softropic.skillars.platform.payment.repo.ParentCreditLedgerRepository;
@@ -19,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -158,6 +165,75 @@ class RevenueReportingServiceTest {
 
         assertThatThrownBy(() -> service.getParentReceipt(wrongParentId, bookingId))
             .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void coachReceipt_frozenPayment_logsDistinguishingWarnAndReturns404() {
+        UUID bookingId = UUID.randomUUID();
+        Booking booking = new Booking();
+        booking.setId(bookingId);
+        booking.setCoachId(coachId);
+        when(bookingRepository.findByIdAndCoachId(bookingId, coachId)).thenReturn(Optional.of(booking));
+        BookingPayment payment = new BookingPayment();
+        payment.setBookingId(bookingId);
+        payment.setStatus("FROZEN");
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(payment));
+
+        Logger serviceLogger = (Logger) LoggerFactory.getLogger(RevenueReportingService.class);
+        ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
+        logCapture.start();
+        serviceLogger.addAppender(logCapture);
+        try {
+            assertThatThrownBy(() -> service.getCoachReceipt(coachId, bookingId))
+                .isInstanceOf(ResourceNotFoundException.class);
+        } finally {
+            serviceLogger.detachAppender(logCapture);
+        }
+
+        assertThat(logCapture.list)
+            .as("must warn distinctly, naming the actual non-CAPTURED status found, before the 404")
+            .anySatisfy(event -> {
+                assertThat(event.getLevel()).isEqualTo(Level.WARN);
+                assertThat(event.getFormattedMessage())
+                    .contains("FROZEN")
+                    .contains(bookingId.toString())
+                    .contains(coachId.toString());
+            });
+    }
+
+    @Test
+    void parentReceipt_chargeFailedPayment_logsDistinguishingWarnAndReturns404() {
+        Long parentId = 55L;
+        UUID bookingId = UUID.randomUUID();
+        Booking booking = new Booking();
+        booking.setId(bookingId);
+        booking.setParentId(parentId);
+        when(bookingRepository.findByIdAndParentId(bookingId, parentId)).thenReturn(Optional.of(booking));
+        BookingPayment payment = new BookingPayment();
+        payment.setBookingId(bookingId);
+        payment.setStatus("CHARGE_FAILED");
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(payment));
+
+        Logger serviceLogger = (Logger) LoggerFactory.getLogger(RevenueReportingService.class);
+        ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
+        logCapture.start();
+        serviceLogger.addAppender(logCapture);
+        try {
+            assertThatThrownBy(() -> service.getParentReceipt(parentId, bookingId))
+                .isInstanceOf(ResourceNotFoundException.class);
+        } finally {
+            serviceLogger.detachAppender(logCapture);
+        }
+
+        assertThat(logCapture.list)
+            .as("must warn distinctly, naming the actual non-CAPTURED status found, before the 404")
+            .anySatisfy(event -> {
+                assertThat(event.getLevel()).isEqualTo(Level.WARN);
+                assertThat(event.getFormattedMessage())
+                    .contains("CHARGE_FAILED")
+                    .contains(bookingId.toString())
+                    .contains(parentId.toString());
+            });
     }
 
     // ── Admin overview ───────────────────────────────────────────

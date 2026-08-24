@@ -749,6 +749,14 @@ public class BookingService {
         if (!Objects.equals(booking.getParentId(), parentUserId)) {
             throw new OperationNotAllowedException("Parent does not own this booking", SecurityError.MISSING_RIGHTS);
         }
+        // Deferred-63 AC4: without this, a parent could report a no-show before the session's own
+        // scheduled start time — before there was anything to fail to show up to — and still trigger
+        // the same automatic full-refund + coach-strike consequence a genuine no-show gets.
+        if (Instant.now().isBefore(booking.getRequestedStartTime())) {
+            throw new OperationNotAllowedException(
+                "Cannot report a no-show before the booking's scheduled start time",
+                Map.of("requested start time", booking.getRequestedStartTime()), BookingError.NO_SHOW_TOO_EARLY);
+        }
         BigDecimal sessionPrice = resolveSessionPrice(booking);
         String parentEmail = resolveEmail(parentUserId, bookingId);
 

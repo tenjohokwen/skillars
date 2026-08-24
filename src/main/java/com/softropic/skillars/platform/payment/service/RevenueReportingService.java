@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachReliabilityStrikeRepository;
 import com.softropic.skillars.platform.payment.contract.AdminFinanceOverviewDto;
+import com.softropic.skillars.platform.payment.contract.BookingPaymentStatus;
 import com.softropic.skillars.platform.payment.contract.CoachRevenueAdminDto;
 import com.softropic.skillars.platform.payment.contract.CreditStatementEntryDto;
 import com.softropic.skillars.platform.payment.contract.ParentReceiptDto;
@@ -41,6 +42,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -146,8 +148,15 @@ public class RevenueReportingService {
         // UAT.3 AC1: a booking_payments row may now exist BEFORE the money moves. Rendering a
         // receipt from a CAPTURE_PENDING row would show a coach income that may never be taken.
         // Anything non-CAPTURED keeps today's 404.
-        BookingPayment payment = bookingPaymentRepository.findById(bookingId)
-            .filter(bp -> "CAPTURED".equals(bp.getStatus()))
+        Optional<BookingPayment> coachPaymentLookup = bookingPaymentRepository.findById(bookingId);
+        coachPaymentLookup
+            .filter(bp -> !BookingPaymentStatus.CAPTURED.equals(bp.getStatus()))
+            .ifPresent(bp -> log.warn(
+                "Coach receipt requested for bookingId={} coachId={} but BookingPayment status={} "
+                    + "(not CAPTURED) — returning 404, same as a missing payment record",
+                bookingId, coachId, bp.getStatus()));
+        BookingPayment payment = coachPaymentLookup
+            .filter(bp -> BookingPaymentStatus.CAPTURED.equals(bp.getStatus()))
             .orElseThrow(() -> new ResourceNotFoundException("Booking payment not found", "booking_payment"));
 
         PlayerProfile player = playerProfileRepository.findById(booking.getPlayerId()).orElse(null);
@@ -178,8 +187,15 @@ public class RevenueReportingService {
             .orElseThrow(() -> new AccessDeniedException("Access denied to booking receipt"));
 
         // UAT.3 AC1: see getCoachReceipt — a pre-capture row must not render as a paid receipt.
-        BookingPayment payment = bookingPaymentRepository.findById(bookingId)
-            .filter(bp -> "CAPTURED".equals(bp.getStatus()))
+        Optional<BookingPayment> parentPaymentLookup = bookingPaymentRepository.findById(bookingId);
+        parentPaymentLookup
+            .filter(bp -> !BookingPaymentStatus.CAPTURED.equals(bp.getStatus()))
+            .ifPresent(bp -> log.warn(
+                "Parent receipt requested for bookingId={} parentId={} but BookingPayment status={} "
+                    + "(not CAPTURED) — returning 404, same as a missing payment record",
+                bookingId, parentId, bp.getStatus()));
+        BookingPayment payment = parentPaymentLookup
+            .filter(bp -> BookingPaymentStatus.CAPTURED.equals(bp.getStatus()))
             .orElseThrow(() -> new ResourceNotFoundException("Booking payment not found", "booking_payment"));
 
         PlayerProfile player = playerProfileRepository.findById(booking.getPlayerId()).orElse(null);

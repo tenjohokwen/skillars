@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.DuplicateBookingProposedEvent;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
@@ -154,6 +155,24 @@ class BookingDuplicationServiceTest {
 
         assertThatThrownBy(() -> service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID))
             .isInstanceOf(ResourceNotFoundException.class);
+
+        verify(bookingRepository, never()).save(any());
+    }
+
+    /** Deferred-63 AC2: mirrors acceptReschedule's existing SUSPENDED check on its identical lock pattern. */
+    @Test
+    void duplicateNextWeek_suspendedCoach_throwsCoachUnavailable() {
+        when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        // entityManager.refresh(coach, ...) is a no-op mock — mutate coach directly to stand in for
+        // the locked, refreshed row's real state, matching this file's existing lock-mock convention.
+        coach.setStatus(CoachProfileStatus.SUSPENDED);
+
+        assertThatThrownBy(() -> service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.COACH_UNAVAILABLE));
 
         verify(bookingRepository, never()).save(any());
     }
