@@ -105,12 +105,16 @@ public class PessimisticLockRetryer {
     }
 
     /**
-     * Randomizes the actual sleep duration within [50%, 100%] of the computed backoff so that two
+     * Randomizes the actual sleep duration within [75%, 100%] of the computed backoff so that two
      * threads contending for the same row, which start retrying at nearly the same moment, don't
      * keep landing back-to-back on the same deterministic schedule and re-colliding every round.
+     * Floor kept relatively high (not the more usual 50%): with the default 8-attempt budget, a
+     * lower floor lets the worst-case jittered total wait dip below ~2s, which
+     * BookingServiceConcurrencyIT's fixed 2s "should succeed" contention holds could then
+     * occasionally outlast, surfacing a flaky give-up instead of the retry resolving.
      */
     private long jitter(long backoffMillis) {
-        double factor = 0.5 + ThreadLocalRandom.current().nextDouble() * 0.5;
+        double factor = 0.75 + ThreadLocalRandom.current().nextDouble() * 0.25;
         return Math.max(1, (long) (backoffMillis * factor));
     }
 
