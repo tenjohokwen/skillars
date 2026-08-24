@@ -203,7 +203,7 @@ public class BookingPaymentPersistenceService {
             .build());
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void persistPaymentFailure(UUID bookingId, BigDecimal creditToReverse,
                                        Long parentId, String parentEmail, String coachDisplayName,
                                        Instant requestedStartTime, String canonicalTimezone) {

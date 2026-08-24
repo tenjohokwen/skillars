@@ -33,6 +33,8 @@ import com.softropic.skillars.platform.marketplace.repo.CoachSubscription;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscriptionRepository;
 import com.softropic.skillars.platform.marketplace.repo.SessionPack;
 import com.softropic.skillars.platform.marketplace.repo.SessionPackRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -72,6 +74,7 @@ public class CoachProfileService {
     private final CoachMediaItemRepository coachMediaItemRepository;
     private final CoachCapabilityService coachCapabilityService;
     private final CoachReliabilityStrikeRepository coachReliabilityStrikeRepository;
+    private final EntityManager entityManager;
 
     /**
      * The timezones the profile builder is allowed to offer a coach.
@@ -228,6 +231,15 @@ public class CoachProfileService {
             throw new MarketplaceException("marketplace.stepOutOfOrder", "Complete Step 3 before submitting Step 4");
         }
         validateAvailabilityWindows(req.windows());
+
+        // Deferred-58 AC2: serializes this rewrite against RescheduleService.acceptReschedule's and
+        // BookingDuplicationService.duplicateNextWeek's own coach-row lock, so a concurrent
+        // accept/duplicate-next-week validated against these windows can no longer race a rewrite of
+        // them mid-transaction.
+        coachProfileRepository.findByIdForUpdate(profile.getId())
+            .orElseThrow(() -> new MarketplaceException("marketplace.profileNotFound",
+                "Coach profile not found for userId=" + userId));
+        entityManager.refresh(profile, LockModeType.PESSIMISTIC_WRITE);
 
         coachAvailabilityWindowRepository.deleteByCoachId(profile.getId());
         List<CoachAvailabilityWindow> windows = req.windows().stream().map(w -> {

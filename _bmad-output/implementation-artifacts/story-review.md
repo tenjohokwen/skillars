@@ -1,137 +1,213 @@
-# Story Review: Deferred-57 — GDPR Report-File Cleanup, Report-Generation Rate Limiting & Stripe Customer ID Format Guard
+# Story Review: Deferred-58 — Coach-Availability Write-Lock Consistency & Pack-Deduction Failure-Record Transactional Safety
 
-Senior-dev audit of `skillars-deferred-57-gdpr-report-file-cleanup-report-generation-rate-limiting-and-stripe-customer-id-format-guard.md`
+Senior-dev audit of `skillars-deferred-58-coach-availability-write-lock-consistency-and-pack-deduction-failure-record-transactional-safety.md`
 (status `ready-for-dev`) against live code, before implementation. Every claim below was independently
-re-verified against the actual production/test files and `deferred-work.md`/`docs/` citations — nothing here
-is taken on the story's word alone.
-
-This story is unusually well-verified: every AC1/AC2/AC3 code citation, method signature, line number, table
-schema, and test-fixture claim I checked matched live code exactly (see the "Everything else verified accurate"
-section for the full list of what was independently confirmed, including several things the story didn't even
-claim to check). One substantive finding survived that level of scrutiny.
+re-verified against the actual production/test files this story cites — nothing here is taken on the
+story's word alone. The story's core diagnosis for both AC1 and AC2 is correct and its proposed
+production-code changes are sound; every substantive finding below is in the **test-design guidance**,
+not the fix itself.
 
 ---
 
-## Finding 1 (Medium) — AC3's "safe to add now" argument cites two migrations that don't actually document what it claims they document; the real safety question (current row count / lock duration on a live production table) is never actually answered
+## Finding 1 (High) — AC1's suggested test technique ("hold a conflicting lock") cannot produce the failure it's meant to prove; this exact codebase already documents why, and a much simpler proven alternative sits one file away
 
-**What's wrong:** AC3's own text justifies adding an unconditional `ALTER TABLE payment.stripe_customers ADD
-CONSTRAINT ... CHECK (...)` (which takes a Postgres `ACCESS EXCLUSIVE` lock and validates every existing row
-before committing) with: *"The table has one row per parent/coach with a Stripe customer, well within this
-project's own established tolerance for an `ACCESS EXCLUSIVE`-locking `ALTER TABLE ... ADD CONSTRAINT` at
-current size (the same tolerance `V94`/`V99`'s own migration comments already document for sibling payment
-tables)."*
+**What's wrong:** AC1's Test Coverage section instructs: *"have the test's transaction hold a conflicting
+lock... to force a real, non-mocked persistence failure from `deductSession`'s `.save(purchase)`
+(`PackSessionService.java:59`)"* and points at `BookingServiceConcurrencyIT`'s lock-contention pattern as
+the model to reuse.
 
-Checked both cited files directly:
-- `V94__booking_payment_capture_pending.sql` does perform a comparable `ALTER TABLE ... DROP CONSTRAINT
-  chk_bp_status, ADD CONSTRAINT chk_bp_status CHECK (...)` — but its actual comment only explains why the
-  constraint *name* is safe to reuse and why `'CAPTURE_PENDING'` fits the column's `VARCHAR(16)` width. It says
-  nothing about table size, row count, or lock-duration tolerance.
-- `V99__payment_currency_config.sql` isn't even the same *kind* of operation — it's a single-row `INSERT INTO
-  main.platform_config`, not an `ALTER TABLE` on a live data table at all, and takes nothing like an `ACCESS
-  EXCLUSIVE` lock. Its comment is entirely about a hand-assigned-PK id-collision hazard, unrelated to locking
-  or table size.
+`SessionPackPurchaseLockContentionIT` — the class that already investigated exactly this lock
+(`SessionPackPurchaseRepository.findByIdForUpdate`, the same `@Lock(PESSIMISTIC_WRITE)` +
+`jakarta.persistence.lock.timeout` shape `deductSession` uses) — documents in its own class Javadoc that
+this technique cannot work at all:
 
-A broader search of every migration file in `src/main/resources/db/migration/` for any actual discussion of
-`ACCESS EXCLUSIVE` locking, table size, row count, or lock-duration tolerance (multiple phrasings tried) found
-**zero files** containing such a discussion — not V94, not V99, not anywhere else in the migration history.
-The "established tolerance" this citation claims to point to does not exist in this codebase.
+> *"Investigation during this story found that Hibernate's `PostgreSQLDialect` only special-cases the
+> `NO_WAIT`/`SKIP_LOCKED` sentinels in `withTimeout(...)` — any finite `jakarta.persistence.lock.timeout`
+> value, including this repository's and its three siblings', falls through unchanged and has no effect
+> on Postgres. Confirmed empirically: a contended `findByIdForUpdate` call blocked for the full duration a
+> competing lock was held (tested up to 12s) and then completed normally, with no
+> `PessimisticLockingFailureException` ever raised."*
 
-**Why it matters:** this migration will run against whatever real `payment.stripe_customers` table exists in
-every environment the migration deploys to — not just the local/CI test database, where the row count is
-trivially small by construction. The story's actual safety argument for *existing data* rests entirely on
-"one row per parent/coach... well within established tolerance," backed by a citation that, on inspection,
-doesn't support that claim. Unlike AC1 and AC2 (where every load-bearing claim I checked held up exactly), this
-is the one place in the story where a safety argument for a production-affecting operation is asserted rather
-than actually demonstrated. This doesn't mean the migration *is* unsafe — plausibly the table really is small
-today, matching the story's description — but the story doesn't currently establish that with anything more
-solid than an inaccurate citation, for the one AC in this story that touches a live, unconditional schema lock
-on a payment table.
+So "hold a conflicting lock" against `deductSession`'s `findByIdForUpdate` doesn't throw a
+`PessimisticLockingFailureException` (or any exception) at all — the calling thread just **blocks until
+the competing transaction releases the lock**, then proceeds normally with no persistence failure to
+observe. Even setting that aside, the technique's own stated target — a failure "from `.save(purchase)`
+at line 59" — was never reachable this way in the first place: a lock held on the row would block *before*
+`.save()`, at the earlier locked `SELECT` (line 53), not at the save call the AC names.
 
-**Recommendation:** either (a) verify the actual current row count of `payment.stripe_customers` in whatever
-environment(s) this migration will run against before merging, and cite that number directly instead of the
-V94/V99 citation, or (b) sidestep the question entirely using Postgres's standard low-risk pattern for adding a
-constraint to a populated table: `ADD CONSTRAINT ... CHECK (...) NOT VALID`, followed by a separate `VALIDATE
-CONSTRAINT` statement — `NOT VALID` takes only a brief `ACCESS EXCLUSIVE` lock to register the constraint
-(applies to all new/future writes immediately) without an immediate full-table scan, and `VALIDATE CONSTRAINT`
-can then run with a much lighter `SHARE UPDATE EXCLUSIVE` lock that doesn't block concurrent writes. Either
-fix is small; the constraint's `CHECK (stripe_customer_id LIKE 'cus_%')` expression itself doesn't need to
-change.
+**A working alternative already exists in this exact test suite.** `CaptureReservationIT` — the class this
+story itself half-suggests reusing ("check for an existing IT class covering
+`handlePackBasedBooking`'s... path first") — already uses `@MockitoSpyBean PaymentGateway paymentGateway`
+to spy on a real Spring bean inside a real transactional flow and force a genuine exception with
+`doThrow(...)`. Applying the identical, already-proven pattern to
+`SessionPackPurchaseRepository`/`PackSessionService` (`@MockitoSpyBean SessionPackPurchaseRepository
+sessionPackPurchaseRepository; ... doThrow(new DataIntegrityViolationException("simulated")).when(spy)
+.save(any());`) would deterministically force a real `DataAccessException` at exactly the `.save(purchase)`
+call the AC names, inside the real `AFTER_COMMIT`/`REQUIRES_NEW` flow, with zero threads, zero timing
+races, and zero dependency on a lock-timeout mechanism this codebase has already proven does not exist on
+Postgres.
+
+**Confirmed while checking this: no existing IT class currently exercises `onBookingAccepted`'s pack-based
+branch at all** — `CaptureReservationIT.acceptedEvent(bookingId)` builds every `BookingAcceptedEvent` with
+`sessionPackPurchaseId = null` (verified against the constructor's actual parameter order in
+`BookingAcceptedEvent.java:21-22`), so every existing test in that class routes through
+`handleCreditBasedBooking`, never `handlePackBasedBooking`. The story's own "`PaymentLifecycleServiceIT`?
+— check first" hedge was warranted: no such class exists (confirmed by search). `CaptureReservationIT` is
+still the right home for the new test — it already carries the necessary Spring context and the
+`@MockitoSpyBean` pattern to copy, and reusing it avoids standing up a second context (this project has an
+enforced CI context-count ceiling — `CaptureReservationIT`'s own comment at `:391-393` notes a prior
+context-ceiling trip from exactly this kind of avoidable duplication, deferred-19 AC3).
+
+**Why it matters:** as written, a dev following AC1's Test Coverage guidance literally would either try to
+force a lock-timeout that this codebase has already proven doesn't fire on Postgres (producing a hung/very
+slow test, not a failing one), or spend real time rediscovering that fact from scratch before landing on
+the spy-based approach — which was sitting in the very file the AC points at as a candidate host.
+
+**Recommendation:** rewrite AC1's Test Coverage guidance to specify `@MockitoSpyBean` +
+`doThrow(new DataIntegrityViolationException(...))` on `SessionPackPurchaseRepository.save(...)` (or on
+`PackSessionService.deductSession` itself), added to `CaptureReservationIT`, mirroring its existing
+`paymentGateway` spy exactly. Drop the lock-contention suggestion entirely — it is not a slower path to the
+same proof, it is a path that does not reach the proof at all.
+
+---
+
+## Finding 2 (Medium) — AC2's suggested concurrency-test design has the lock-holder and lock-waiter roles backwards relative to how `awaitAnotherSessionBlockedOnCoachProfileLock` and its two existing usages actually work
+
+**What's wrong:** Task 2.4 / AC2's Test Coverage section says: *"start a `saveStep4` call in one thread,
+hold its transaction open past the lock acquisition (same latch-based staging those two existing tests
+use)... reusing `awaitAnotherSessionBlockedOnCoachProfileLock`."* This describes `saveStep4` (the
+production method under test) as the thread that **holds** the lock while pausing mid-transaction.
+
+Read literally, this is not achievable. `awaitAnotherSessionBlockedOnCoachProfileLock` (`:407`) is a
+**private test method** that polls `pg_locks` via `jdbcTemplate` against the *calling thread's own current
+transaction* (`pg_current_xact_id()`). In both existing usages (`:245-278`, `:330-361`), it is called from
+*inside a `transactionTemplate.execute(...)` block that the test itself opened* — a raw-SQL thread the
+test fully controls, which takes a `SELECT ... FOR UPDATE` on `coach_profiles`, flips a column, then calls
+this helper before committing. There is no way to call this private test-class method from inside
+`CoachProfileService.saveStep4`'s own `@Transactional` execution — that would require adding a test-only
+hook into production code, which nothing in the story proposes.
+
+In both existing tests, the roles are the **opposite** of what AC2 describes: a raw-SQL thread is the lock
+**holder** (and the one that calls the helper, from its own transaction), while the **real service method**
+under test (`createBookingRequest`/`acceptBooking`) is the thread that blocks on the lock and is then
+asserted to observe fresh, not stale, state once released.
+
+**Why it matters:** a dev following this instruction literally has no way to implement it — `saveStep4`
+cannot be made to pause mid-transaction and call a private test helper without modifying production code
+to add a test seam that doesn't exist today. This would cost real implementation time before the dev
+independently arrives at the actual working shape.
+
+**Recommendation:** mirror the existing tests' actual structure, not the story's description of it: a
+raw-SQL thread takes `SELECT ... FOR UPDATE` on the target coach's row (as both existing tests already do),
+signals a latch, waits on `awaitAnotherSessionBlockedOnCoachProfileLock`, then commits; a second thread
+calls the real `saveStep4(...)` (or `duplicateNextWeek(...)`) and is asserted to block until the first
+thread's commit, then to observe/write correctly. Proving `saveStep4`'s new lock blocks against a raw
+`SELECT ... FOR UPDATE` is sufficient evidence that it shares the same row lock the two existing readers
+already prove they block against — Postgres row locks are symmetric regardless of which query path
+acquires them, so this doesn't need saveStep4 and duplicateNextWeek to literally contend against each
+other in the same test to establish that they now would.
+
+---
+
+## Finding 3 (Low) — Task 2.3 never states that `BookingDuplicationServiceTest` needs a new `@Mock EntityManager` field and a corresponding constructor-argument update, without which the file will not compile once AC2 lands
+
+**What's wrong:** AC2 adds a new `private final EntityManager entityManager` field to
+`BookingDuplicationService`, which (via this class's `@RequiredArgsConstructor`) adds a new 8th
+constructor parameter. `BookingDuplicationServiceTest.setUp()` currently constructs the service with the
+existing 7-argument constructor (confirmed: `new BookingDuplicationService(bookingService,
+bookingRepository, coachProfileRepository, userRepository, packSessionService, eventPublisher,
+coachAvailabilityWindowRepository)`, no `entityManager`). Task 2.3 only says to "stub
+`coachProfileRepository.findByIdForUpdate(coach.getId())`" — it never says to add a `@Mock EntityManager
+entityManager` field to the test class or to pass it into the constructor call. Without both, the test
+file will not compile at all once AC2's field lands, regardless of any stubbing.
+
+The one place this is even implied is an aside deep in AC2's Dev Notes, describing `RescheduleServiceTest`'s
+*pre-existing* setup for context ("note `entityManager.refresh(...)` needs no stubbing... `RescheduleServiceTest`'s
+own `@Mock EntityManager entityManager` field, injected into the constructor the same way, already relies
+on Mockito's default no-op") — this explains an existing pattern rather than instructing the dev to
+replicate it in the file actually being changed.
+
+**Why it matters:** this is a compile error, not a subtle logic gap, so it will be caught immediately — but
+the story's own Task list and Project Structure Notes (which do enumerate "gains a new `EntityManager`
+field" for the two production files) omit the one test-file change that is strictly required, not optional,
+for those production changes to compile against their existing unit test.
+
+**Recommendation:** add an explicit Task 2.3 sub-step: add `@Mock private EntityManager entityManager;` to
+`BookingDuplicationServiceTest` and add it as the 8th argument to the `new BookingDuplicationService(...)`
+call in `setUp()`, mirroring `RescheduleServiceTest`'s identical field exactly.
+
+---
+
+## Minor wording nit, non-blocking
+
+AC1's rationale says *"both catch branches in `PaymentLifecycleService.handlePackBasedBooking` (`:162-177`)
+call this same method"* — `handlePackBasedBooking` has exactly **one** `catch (RuntimeException e)` clause,
+not two; that single clause now absorbs both the pre-existing `PaymentGatewayException` case and the
+newly-widened general-`RuntimeException` case (per `deferred-56` AC2's widening), rather than being two
+separate branches. Doesn't affect the correctness of AC1's actual proposed fix (`REQUIRES_NEW` on
+`persistPaymentFailure`), which is unconditional on how many catch clauses call it.
 
 ---
 
 ## Everything else independently re-verified as accurate, no changes needed
 
-**AC1 (GDPR erasure S3 cleanup):**
-- `GdprErasureService.erase(...)` is `@Transactional(propagation = REQUIRES_NEW)`; `deletePlayerDevelopmentData`
-  is a private method called from within it — confirmed at the exact cited lines (export-zip S3-delete pattern
-  at `:129-138`, `deletePlayerDevelopmentData` at `:185`).
-- `PerformanceReportRepository.findByPlayerIdOrderByGeneratedAtDesc` and `.deleteAllByPlayerId` both exist
-  exactly as described; `PerformanceReport.getStorageKey()` exists via the class-level Lombok `@Getter`.
-- `FileStorageService.deleteRawBytes(storageKey)` is confirmed to be the *exact* method and key format already
-  used elsewhere in `ReportGenerationService` itself (its own orphan-PDF-cleanup path on a failed DB insert,
-  `ReportGenerationService.java:144-148`, uses the identical `"reports/" + UUID + "/report.pdf"` key shape) —
-  this independently confirms AC1's proposed call uses the right API with the right key format, beyond what the
-  story itself cited.
-- The erasure-runs-synchronously claim was independently re-traced end to end (not just taken from the cited
-  test's comment): `GdprResource.requestErasure` → `GdprRequestService.requestErasure` (`@Transactional`,
-  publishes `GdprErasureRequestedEvent`) → `GdprEventListener.onErasureRequested`
-  (`@TransactionalEventListener(AFTER_COMMIT)`, **no** `@Async`) → `GdprErasureService.erase(...)`. Since the
-  listener isn't `@Async`, Spring invokes it synchronously on the same request thread immediately after commit,
-  before the controller method returns — the 202 response genuinely cannot be sent until `erase()` (and thus
-  the new S3-delete loop) has run. The cited test's comment (`erase_deactivatesUser_oldSessionRejected`,
-  "Erasure runs synchronously via AFTER_COMMIT listener") matches this independently-traced mechanism exactly.
-- `GdprErasureIT`'s fixture claims (`@MockitoBean FileStorageService`, `PLAYER_ID = 9210_000_003L`,
-  `coachProfileId`, `PLAYER_EMAIL`, `ERASURE_URL`) all confirmed present exactly as cited. The new test's raw
-  `INSERT INTO development.performance_reports` statement supplies every `NOT NULL` column except `version`,
-  which has a DB-level `DEFAULT 1` (`V52__pdf_report_timeline.sql:11`) — no insert failure risk. The table has
-  no `player_id`/`coach_id` foreign keys, so the test's fixture values need no pre-existing parent rows beyond
-  what `setUp()` already creates.
+**AC1 (transactional safety):**
+- `persistPaymentFailure`'s current `@Transactional` (default `REQUIRED`) at `BookingPaymentPersistenceService.java:206-207`
+  confirmed exactly as cited, as are its two sibling `REQUIRES_NEW` methods at `:72` (`reserveCapture`) and
+  `:279` (`declineBatchBooking`) — `Propagation` is already imported for this file, no new import needed.
+- `PackSessionService.deductSession` (`:51-61`) confirmed plain `@Transactional` (`REQUIRED`), and
+  `PaymentLifecycleService.onBookingAccepted` (`:138-139`) confirmed
+  `@Transactional(propagation = Propagation.REQUIRES_NEW)` + `@TransactionalEventListener(AFTER_COMMIT)` —
+  `deductSession` genuinely joins `onBookingAccepted`'s physical transaction rather than starting its own,
+  exactly as claimed. Spring's rollback-only-on-participating-transaction mechanism, as described, is
+  accurate.
+- `handlePackBasedBooking` (`:162-181`) confirmed to call `persistenceService.persistPaymentFailure(...)`
+  from its one catch clause; `handleCreditBasedBooking`'s separate `PaymentGatewayException` catch (`:213-218`)
+  is the other of the two call sites named in the story's References section — both confirmed to call the
+  same method AC1 fixes.
+- `CreditRoutingTest`'s existing AC2 test (`packBasedBooking_deductSessionFailsWithNonPaymentGatewayException_callsPersistFailureWithZeroReversal`)
+  confirmed to use `@Mock BookingPaymentPersistenceService persistenceService` — correctly cannot observe
+  real commit/rollback behavior, exactly as the story states.
 
-**AC2 (rate limiting):**
-- `@RateLimited`'s actual field shape (`key()`, `capacity() default 5`, `duration() default 1`, `unit() default
-  MINUTES`) matches the story's proposed usage exactly; `generateReport` is confirmed at line 92 (matching the
-  cited "91-92"), with exactly one call site (`PerformanceReportResource.java:35`, an external bean call
-  through the Spring proxy — no self-invocation risk that would bypass the AOP aspect).
-- Checked whether `@Transactional` + `@RateLimited` on the same method is actually already-proven, not just
-  plausible: all three registration classes the story cites apply `@Transactional` at the **class** level, so
-  every one of their `@RateLimited` methods (`registerCoach`, `resendVerificationEmail`, etc.) already carries
-  both annotations simultaneously today — this exact combination is already live in production, not a novel
-  pairing this story would be first to test.
-- Checked whether IP-keyed rate limiting (the only keying `RateLimitingAspect.getClientIdentifier()` supports)
-  has ever been applied to an *authenticated* endpoint before, since report-generation is authenticated (unlike
-  the registration flows, which are necessarily pre-account/IP-only): confirmed yes —
-  `AccountManagementFacade.changeEmail`'s `@RateLimited(key = "change_email", ...)` sits behind
-  `ProfileResource`'s class-level `@PreAuthorize(HAS_ANY_ROLE)`, so IP-keyed limiting on an authenticated,
-  per-user action is already an established, shipped pattern, not something novel AC2 would be first to try.
-- `ReportGenerationServiceTest` exists (no `PerformanceReportResourceIT`), confirmed a pure
-  `@ExtendWith(MockitoExtension.class)` unit test with no Spring context — adding a annotation with zero
-  compile-time behavior has no way to regress it.
-- (Minor, non-blocking: the story says `@RateLimited` is "already applied at 6 call sites across
-  CoachRegistrationService/PlayerRegistrationService/ParentRegistrationService" — those three files actually
-  total 7 call sites (2+2+3), and the mechanism is used at 15 call sites platform-wide once
-  `AccountManagementFacade`/`SmsRegistrationStrategy`/`EmailRegistrationStrategy` are included. Doesn't affect
-  AC2's correctness — the broader count only reinforces that the mechanism is even more established than the
-  story states.)
+**AC2 (write-lock consistency):**
+- `RescheduleService.acceptReschedule`'s existing lock pattern confirmed exactly as cited:
+  `findByIdForUpdate` at `:208`, `entityManager.refresh(lockedCoach, PESSIMISTIC_WRITE)` at `:215`, and the
+  unlocked `coachAvailabilityWindowRepository.findByCoachId(coach.getId())` read at `:229`, one line after
+  the lock is taken and released to program flow.
+- `BookingDuplicationService.duplicateNextWeek` (`:42-88`) confirmed to never lock the coach row today —
+  `findByUserId` at `:45` is a plain read, and both the availability check (`:67-68`) and overlap check
+  (`:80-83`) run unlocked.
+- `CoachProfileService.saveStep4` (`:225-245`) confirmed to have no lock at all before its
+  `deleteByCoachId`+`saveAll` rewrite, and the class has no `EntityManager` field or import today — the
+  story's proposed field addition is correctly scoped.
+- `CoachProfileRepository.findByIdForUpdate` (`:28-34`) confirmed to exist exactly as cited:
+  `@Lock(PESSIMISTIC_WRITE)` + a `jakarta.persistence.lock.timeout` query hint + the JPQL query — the same
+  shape `SessionPackPurchaseRepository`'s sibling method uses (relevant to Finding 1 above).
+- Lock-ordering checked across all three methods that will hold the coach-profile lock post-fix
+  (`acceptReschedule`, `duplicateNextWeek`, `saveStep4`): `acceptReschedule` is the only one that takes a
+  second lock (reschedule-request, always before coach — documented at `:181-184` and never taken in the
+  reverse order anywhere), while `duplicateNextWeek` and `saveStep4` each take only the single coach-profile
+  lock. No new deadlock cycle is introduced by this change.
+- `BookingDuplicationServiceTest`'s 7 existing tests confirmed: exactly 5 of them
+  (`..._createsNewRequestedBookingAdvancedBy7DaysAndCarriesOverPack`, `..._noCreditsAvailable_throws`,
+  `..._slotOutsideAvailabilityWindow_throwsSlotOutsideAvailability`, `..._overlapsAnotherBooking_throwsSlotUnavailable`,
+  `..._proposedTimePast_throws`) reach past the `"COMPLETED"` check and the story's proposed lock insertion
+  point, and would need the new `findByIdForUpdate` stub; the other 2
+  (`..._wrongCoach_throws403`, `..._notCompletedStatus_throws`) fail before reaching it and need no change —
+  matching the story's "every existing test fixture that reaches past" framing exactly, including for the
+  proposed-time-past test, whose fixture status remains `COMPLETED` even though its ultimate assertion is
+  about the past-time check further down.
+- `RescheduleServiceTest`'s `@Mock EntityManager entityManager` field (`:48`) and its
+  `coachProfileRepository.findByIdForUpdate(coach.getId())` stubbing pattern confirmed present at exactly
+  `:288`, `:324`, `:365` as cited.
+- `CoachProfileBuilderIT` confirmed to exist (API-level IT, real Spring beans) — adding the new
+  `EntityManager` constructor dependency to `CoachProfileService` needs no test-file change there, since
+  Spring autowires the real bean; the story's claim of "no existing unit test to update" for this class is
+  accurate.
+- All three `deferred-work.md` `[PICKED UP by skillars-deferred-58 ACn]` tags confirmed present with wording
+  matching the story's own description: the `story review of skillars-deferred-56` item (AC1), and the
+  `code review of skillars-deferred-49` and `code review of skillars-deferred-50` items (both AC2).
 
-**AC3 (format guard), beyond the locking-safety citation above:**
-- `stripe_customers`' actual table definition (`V62__session_payment_credit_wallet.sql:30-37`) matches exactly:
-  `parent_id BIGINT PRIMARY KEY`, `stripe_customer_id VARCHAR NOT NULL`, no existing `CHECK`, and — checked —
-  no later migration ever touches this table, and it has **no foreign key** on `parent_id`, so the new IT
-  test's fixture insert (`parentId = 9_640_000_001L`, no real parent row) cannot hit an FK violation.
-- The story names one write-site citation (`StripePaymentGateway.createStripeCustomer:166`, the Stripe API call
-  that produces the id) but the actual DB-persisting call sites are three, across two files
-  (`SessionPackPaymentResource.java:151,171`, `SessionPackPaymentService.java:213`) — traced all three
-  independently and confirmed every one sources its value from `paymentGateway.createStripeCustomer(...)`,
-  which only ever returns a real Stripe SDK id or throws (no placeholder/fallback path exists in production).
-  Also checked two test files the story doesn't cite at all — `StubPaymentGateway` (used by other ITs in place
-  of the real gateway) returns `"cus_stub_" + parentId`, and `CashOutServiceTest` is a pure Mockito unit test
-  with no real DB access — both confirmed to pose no regression risk to the new constraint either.
-- `docs/testing/test-data-isolation.md`'s `9640` block is confirmed genuinely free (present only in the "Free
-  blocks" list, not in the "claimed four-digit prefixes" list). `V100` is confirmed the next free migration
-  number (`V99` is the current highest).
-- `StripeCustomer`'s entity fields (`parentId`, `stripeCustomerId`, `createdAt` with a `@PrePersist` default)
-  and `StripeCustomerRepository extends JpaRepository<StripeCustomer, Long>` match the new test snippet
-  exactly; `saveAndFlush`/`deleteById` are both inherited, no custom repository methods needed.
-- All three `[PICKED UP by skillars-deferred-57 ACn]` ledger tags (lines 622, 656, 657) confirmed present with
-  wording matching the story's own description exactly, including AC1's re-scoping note (DB-row half already
-  closed by earlier unannotated work, only the S3-orphan half is new).
+**Considered-and-excluded items, spot-checked:** `DisputeService`'s dormant `FROZEN`-filter gap confirmed
+still dormant (`BookingPaymentStatus.FROZEN` genuinely unwritten anywhere in `src/main/java`, per a fresh
+grep); the video-bandwidth and DRY-duplication exclusions match their own cited source text.

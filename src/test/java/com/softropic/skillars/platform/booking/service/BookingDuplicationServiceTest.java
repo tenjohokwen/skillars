@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.booking.service;
 
+import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.DuplicateBookingProposedEvent;
 import com.softropic.skillars.platform.booking.repo.Booking;
@@ -12,6 +13,7 @@ import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -41,6 +43,7 @@ class BookingDuplicationServiceTest {
     @Mock private PackSessionService packSessionService;
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
+    @Mock private EntityManager entityManager;
 
     private BookingDuplicationService service;
 
@@ -57,7 +60,8 @@ class BookingDuplicationServiceTest {
     void setUp() {
         service = new BookingDuplicationService(
             bookingService, bookingRepository, coachProfileRepository,
-            userRepository, packSessionService, eventPublisher, coachAvailabilityWindowRepository
+            userRepository, packSessionService, eventPublisher, coachAvailabilityWindowRepository,
+            entityManager
         );
 
         Instant past = Instant.now().minus(8, ChronoUnit.DAYS);
@@ -81,6 +85,7 @@ class BookingDuplicationServiceTest {
         UUID activePackId = UUID.randomUUID();
         when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(true);
         when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any())).thenReturn(List.of());
         when(packSessionService.findActivePackId(PLAYER_ID, COACH_ID)).thenReturn(activePackId);
@@ -136,6 +141,19 @@ class BookingDuplicationServiceTest {
         verify(bookingRepository, never()).save(any());
     }
 
+    /** Review-Deferred-58: coach profile deleted/missing between the ownership check and the new lock. */
+    @Test
+    void duplicateNextWeek_coachProfileMissingAtLockTime_throwsResourceNotFoundException() {
+        when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID))
+            .isInstanceOf(ResourceNotFoundException.class);
+
+        verify(bookingRepository, never()).save(any());
+    }
+
     @Test
     void duplicateNextWeek_notCompletedStatus_throws() {
         completedBooking.setStatus("CONFIRMED");
@@ -156,6 +174,7 @@ class BookingDuplicationServiceTest {
 
         when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(true);
         when(packSessionService.findActivePackId(PLAYER_ID, COACH_ID)).thenThrow(
             new OperationNotAllowedException(
@@ -175,6 +194,7 @@ class BookingDuplicationServiceTest {
 
         when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(false);
 
         assertThatThrownBy(() -> service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID))
@@ -195,6 +215,7 @@ class BookingDuplicationServiceTest {
 
         when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any())).thenReturn(true);
         when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any()))
             .thenReturn(List.of(new Booking()));
@@ -223,6 +244,7 @@ class BookingDuplicationServiceTest {
 
         when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
 
         assertThatThrownBy(() -> service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID))
             .isInstanceOf(OperationNotAllowedException.class)

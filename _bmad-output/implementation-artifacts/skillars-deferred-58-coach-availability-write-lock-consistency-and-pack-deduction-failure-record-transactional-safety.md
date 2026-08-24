@@ -1,6 +1,6 @@
 # Story Deferred-58: Coach-Availability Write-Lock Consistency & Pack-Deduction Failure-Record Transactional Safety
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -103,24 +103,43 @@ explicitly needs "a full design review" per its own text, not a mechanical fix.
      independently — the established fix shape this exact codebase already uses for the identical class of
      problem (`skillars-deferred-12`: "settling each booking in its own `REQUIRES_NEW` `TransactionTemplate`").
      This also fixes the pre-existing `PaymentGatewayException` branch's identical latent gap (same call,
-     same method), not just AC2's new `RuntimeException` branch — both catch branches in
-     `PaymentLifecycleService.handlePackBasedBooking` (`:162-177`) call this same method.
+     same method), not just AC2's new `RuntimeException` branch — `handlePackBasedBooking`'s single
+     `catch (RuntimeException e)` clause (`:162-177`) now absorbs both the pre-existing
+     `PaymentGatewayException` case and the newly-widened general-`RuntimeException` case, and calls this
+     same method either way.
    - **Test coverage — must be a real transaction, not a mock.** `CreditRoutingTest`'s existing AC2 test
      (`packBasedBooking_deductSessionFailsWithNonPaymentGatewayException_callsPersistFailureWithZeroReversal`)
      uses a `@Mock`-ed `persistenceService` and cannot observe commit/rollback behavior — do not extend it
-     for this AC. Add a new IT-level test that forces a genuine `DataAccessException` inside the real
-     `AFTER_COMMIT`/`REQUIRES_NEW` flow and asserts the failure record actually persists. The most direct
-     way to force a real, non-mocked persistence failure from `deductSession`'s `.save(purchase)`
-     (`PackSessionService.java:59`) without touching production code: seed a `SessionPackPurchase` row,
-     then have the test's transaction hold a conflicting lock or use a fault-injection point already
-     established elsewhere in this codebase's concurrency ITs (see `BookingServiceConcurrencyIT`'s pattern
-     of using a genuine second thread + `CountDownLatch`/`pg_locks` polling rather than a mock). If no
-     existing IT class already exercises `onBookingAccepted`'s pack-based path end-to-end
-     (`PaymentLifecycleServiceIT`? — check first), add the test to whichever IT class already covers
-     `handlePackBasedBooking`'s happy/failure path, or create a small new one colocated with the payment
-     service ITs. The test must prove: (a) a `BookingPayment` failure row exists after the call returns,
-     with the correct `bookingId`, despite (b) the pack-deduction transaction itself having rolled back.
-     Run the new/extended IT class and confirm green, plus `mvn -o test -Dtest=CreditRoutingTest` to
+     for this AC. Add a new test that forces a genuine `DataAccessException` inside the real
+     `AFTER_COMMIT`/`REQUIRES_NEW` flow and asserts the failure record actually persists.
+     **Do not use a conflicting-lock/lock-timeout technique to force this failure.**
+     `SessionPackPurchaseLockContentionIT`'s own class Javadoc documents that Hibernate's
+     `PostgreSQLDialect` only special-cases the `NO_WAIT`/`SKIP_LOCKED` sentinels in `withTimeout(...)` —
+     any finite `jakarta.persistence.lock.timeout` value, including `SessionPackPurchaseRepository
+     .findByIdForUpdate`'s (the same repository `deductSession` uses), falls through unchanged and has no
+     effect on Postgres: a contended call simply blocks until the lock is released, then proceeds
+     normally, with no `PessimisticLockingFailureException` or any other exception ever raised. A lock
+     held on the row would also block *before* `.save()` even runs (at the earlier locked `SELECT`), not
+     at the `.save(purchase)` call this AC targets, so this technique cannot reach the failure point at
+     all, independent of the timeout issue.
+     Instead, mirror the pattern `CaptureReservationIT` already uses for `PaymentGateway`
+     (`@MockitoSpyBean PaymentGateway paymentGateway` + `doThrow(...)` on a real Spring bean inside a real
+     transactional flow): add `@MockitoSpyBean SessionPackPurchaseRepository sessionPackPurchaseRepository`
+     and `doThrow(new DataIntegrityViolationException("simulated")).when(spy).save(any())` to force a real
+     `DataAccessException` at exactly the `.save(purchase)` call in `PackSessionService.deductSession`
+     (`:59`), with zero threads, zero timing races, and no dependency on lock-timeout behavior.
+     No existing IT class currently exercises `onBookingAccepted`'s pack-based branch at all —
+     `CaptureReservationIT.acceptedEvent(bookingId)` builds every `BookingAcceptedEvent` with
+     `sessionPackPurchaseId = null` (`BookingAcceptedEvent.java:21-22`), so every existing test in that
+     class routes through `handleCreditBasedBooking`, never `handlePackBasedBooking`. No
+     `PaymentLifecycleServiceIT` or similar class exists either (confirmed by search) — add the new test to
+     `CaptureReservationIT` itself rather than creating a new IT class: it already carries the necessary
+     Spring context and the `@MockitoSpyBean` pattern to copy, and reusing it avoids standing up a second
+     test context (this project has an enforced CI context-count ceiling — see `CaptureReservationIT`'s own
+     comment at `:391-393` on a prior context-ceiling trip from exactly this kind of avoidable duplication,
+     `deferred-19` AC3). The test must prove: (a) a `BookingPayment` failure row exists after the call
+     returns, with the correct `bookingId`, despite (b) the pack-deduction transaction itself having rolled
+     back. Run `CaptureReservationIT` and confirm green, plus `mvn -o test -Dtest=CreditRoutingTest` to
      confirm no regression to the existing mocked unit tests.
 
 2. **AC2 — Lock the coach-profile row in `CoachProfileService.saveStep4` before rewriting availability
@@ -202,7 +221,12 @@ explicitly needs "a full design review" per its own text, not a mechanical fix.
    - **Test coverage — existing unit tests must be updated, plus one new concurrency proof.**
      `BookingDuplicationServiceTest` currently stubs `coachProfileRepository.findByUserId(...)` for every
      test but never `findByIdForUpdate(...)` — once this AC lands, every existing test that reaches past
-     the `"COMPLETED"` status check will hit `orElseThrow` on an unstubbed `Optional.empty()` and fail. Add
+     the `"COMPLETED"` status check will hit `orElseThrow` on an unstubbed `Optional.empty()` and fail.
+     First, add a `@Mock private EntityManager entityManager;` field to `BookingDuplicationServiceTest` and
+     pass it as the new 8th argument to the `new BookingDuplicationService(...)` call in `setUp()`
+     (mirroring `RescheduleServiceTest`'s identical field exactly) — without this the test class will not
+     compile at all once AC2's `EntityManager` constructor parameter lands, regardless of any stubbing.
+     Then add
      `when(coachProfileRepository.findByIdForUpdate(coach.getId())).thenReturn(Optional.of(coach))` to
      every existing test fixture setup that reaches that point (mirror `RescheduleServiceTest`'s identical
      stubbing pattern at lines 288/324/365, and note `entityManager.refresh(...)` needs no stubbing — it is
@@ -214,10 +238,18 @@ explicitly needs "a full design review" per its own text, not a mechanical fix.
      regression to the single-request case. Then add one new concurrency test to
      `src/test/java/com/softropic/skillars/platform/booking/service/BookingServiceConcurrencyIT.java`,
      reusing its existing `awaitAnotherSessionBlockedOnCoachProfileLock(Duration)` helper (`:407`) exactly
-     as its two existing usages do (`:263`, `:346`) — start a `saveStep4` call in one thread, hold its
-     transaction open past the lock acquisition (same latch-based staging those two existing tests use),
-     then from the main thread confirm a concurrent `duplicateNextWeek` (or `acceptReschedule`) call blocks
-     on the coach-profile lock rather than proceeding with stale window data. Run
+     as its two existing usages do (`:245-278`, `:330-361`) — **mirror those two existing tests' actual
+     structure, not a `saveStep4`-holds-the-lock description**: a raw-SQL thread (via
+     `transactionTemplate.execute(...)`) takes `SELECT ... FOR UPDATE` on the target coach's row, signals a
+     latch, calls `awaitAnotherSessionBlockedOnCoachProfileLock` from inside its own transaction, then
+     commits; a second thread calls the real `saveStep4(...)` (or `duplicateNextWeek(...)`) and is asserted
+     to block until the first thread's commit, then to observe/write correctly. (`saveStep4` cannot itself
+     call `awaitAnotherSessionBlockedOnCoachProfileLock` — it is a private test-class method polling the
+     *calling thread's own* transaction via `pg_current_xact_id()`, and calling it from inside
+     `saveStep4`'s own `@Transactional` execution would require adding a test-only hook to production code.
+     Proving `saveStep4` blocks against a raw `SELECT ... FOR UPDATE` is sufficient evidence that it shares
+     the same row lock the two existing readers already prove they block against — Postgres row locks are
+     symmetric regardless of which query path acquires them.) Run
      `mvn -o test -Dtest=BookingDuplicationServiceTest` and
      `mvn -o integration-test -Dit.test=BookingServiceConcurrencyIT,CoachProfileBuilderIT` and confirm all
      green.
@@ -249,28 +281,53 @@ explicitly needs "a full design review" per its own text, not a mechanical fix.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Pack-deduction failure-record transactional safety (AC: #1)
-  - [ ] 1.1 Change `BookingPaymentPersistenceService.persistPaymentFailure` from `@Transactional` to
+- [x] Task 1: Pack-deduction failure-record transactional safety (AC: #1)
+  - [x] 1.1 Change `BookingPaymentPersistenceService.persistPaymentFailure` from `@Transactional` to
     `@Transactional(propagation = Propagation.REQUIRES_NEW)`.
-  - [ ] 1.2 Add a real (non-mocked) transactional test proving a `deductSession` persistence failure still
-    leaves a failure record after the outer transaction rolls back — per AC1's Test coverage guidance,
-    check for an existing IT class covering `handlePackBasedBooking`'s full flow before creating a new one.
-  - [ ] 1.3 Run the new/extended IT class and `mvn -o test -Dtest=CreditRoutingTest`; confirm all green.
-- [ ] Task 2: Coach-profile write-lock consistency (AC: #2)
-  - [ ] 2.1 Add the `EntityManager` field + locked re-read to `CoachProfileService.saveStep4`, per AC2's
+  - [x] 1.2 Add a real (non-mocked) test to `CaptureReservationIT`, using `@MockitoSpyBean
+    SessionPackPurchaseRepository` + `doThrow(new DataIntegrityViolationException(...)).when(spy).save(any())`
+    (mirroring that class's existing `paymentGateway` spy), proving a `deductSession` persistence failure
+    still leaves a failure record after the outer transaction rolls back — per AC1's Test coverage
+    guidance. Do not use a conflicting-lock/lock-timeout technique.
+  - [x] 1.3 Run `CaptureReservationIT` and `mvn -o test -Dtest=CreditRoutingTest`; confirm all green.
+- [x] Task 2: Coach-profile write-lock consistency (AC: #2)
+  - [x] 2.1 Add the `EntityManager` field + locked re-read to `CoachProfileService.saveStep4`, per AC2's
     snippet.
-  - [ ] 2.2 Add the `EntityManager` field + locked re-read to `BookingDuplicationService.duplicateNextWeek`,
+  - [x] 2.2 Add the `EntityManager` field + locked re-read to `BookingDuplicationService.duplicateNextWeek`,
     per AC2's snippet.
-  - [ ] 2.3 Update every existing `BookingDuplicationServiceTest` fixture that reaches past the
+  - [x] 2.3 Add a `@Mock private EntityManager entityManager;` field to `BookingDuplicationServiceTest` and
+    pass it as the 8th constructor argument in `setUp()` (required for the test class to compile once AC2's
+    `EntityManager` field lands), then update every existing test fixture that reaches past the
     `"COMPLETED"` status check to stub `coachProfileRepository.findByIdForUpdate(coach.getId())`.
-  - [ ] 2.4 Add one new concurrency test to `BookingServiceConcurrencyIT`, reusing
-    `awaitAnotherSessionBlockedOnCoachProfileLock`, proving `saveStep4` and a concurrent
-    `duplicateNextWeek`/`acceptReschedule` call now serialize on the coach-profile lock.
-  - [ ] 2.5 Run `mvn -o test -Dtest=BookingDuplicationServiceTest` and
+  - [x] 2.4 Add one new concurrency test to `BookingServiceConcurrencyIT`, reusing
+    `awaitAnotherSessionBlockedOnCoachProfileLock` the same way its two existing usages do (a raw-SQL
+    `SELECT ... FOR UPDATE` thread is the lock holder that calls the helper; the real `saveStep4`/
+    `duplicateNextWeek`/`acceptReschedule` call is the thread that blocks on it), proving `saveStep4` now
+    shares the same coach-profile row lock the existing readers already prove they block against.
+  - [x] 2.5 Run `mvn -o test -Dtest=BookingDuplicationServiceTest` and
     `mvn -o integration-test -Dit.test=BookingServiceConcurrencyIT,CoachProfileBuilderIT`; confirm all
     green.
-- [ ] Task 3: Ledger hygiene (AC: #3) — flip the `PICKED UP` tags applied at story creation (lines 1735,
+- [x] Task 3: Ledger hygiene (AC: #3) — flip the `PICKED UP` tags applied at story creation (lines 1735,
   1634, 1640) to `CLOSED` once AC1/AC2 land, per AC3.
+
+### Review Findings
+
+Post-implementation code review (2026-08-24), three parallel layers (Blind Hunter, Edge Case Hunter,
+Acceptance Auditor) against the uncommitted diff. Acceptance Auditor: zero violations — AC1, AC2, and AC3
+all independently verified to match the story's target shapes exactly, including test structure and the
+ledger tag flips. All five `mvn` commands the Dev Agent Record cites as green were independently re-run
+during this review and reproduced the exact same counts (`CaptureReservationIT` 8/8,
+`CreditRoutingTest` 11/11, `BookingDuplicationServiceTest` 7/7, `CoachProfileBuilderIT` 31/31,
+`BookingServiceConcurrencyIT`+`CoachProfileBuilderIT` combined 36/36 — all `BUILD SUCCESS`).
+
+- [x] [Review][Patch] `BookingDuplicationService.duplicateNextWeek`'s new `findByIdForUpdate().orElseThrow(...)` not-found branch has zero test coverage [`src/test/java/com/softropic/skillars/platform/booking/service/BookingDuplicationServiceTest.java`] — fixed: added `duplicateNextWeek_coachProfileMissingAtLockTime_throwsResourceNotFoundException`, `mvn -o test -Dtest=BookingDuplicationServiceTest` 8/8 green
+- [x] [Review][Defer] `duplicateNextWeek` never re-checks `CoachProfileStatus.SUSPENDED` after its new locked refresh, unlike `acceptReschedule`'s identical lock pattern [`src/main/java/com/softropic/skillars/platform/booking/service/BookingDuplicationService.java:63-65`] — deferred, pre-existing (AC2 explicitly excluded new business rules; `duplicateNextWeek` never checked `SUSPENDED` before this diff either)
+- [x] [Review][Defer] `saveStep4` never re-checks `CoachProfileStatus.SUSPENDED` after its new locked refresh, unlike `acceptReschedule`'s identical lock pattern [`src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java:239-242`] — deferred, pre-existing (AC2 explicitly excluded new business rules; `saveStep4` never checked `SUSPENDED` before this diff either)
+- [x] [Review][Defer] `persistPaymentFailure`'s new `REQUIRES_NEW` doubles DB-connection-pool pressure per payment failure (two concurrent physical transactions instead of one) [`src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java:206-207`] — deferred, pre-existing tradeoff (same pattern already accepted for this class's two sibling `REQUIRES_NEW` methods, `reserveCapture` and `declineBatchBooking`)
+- [x] [Review][Defer] Lock-ordering safety across the three coach-profile-lock-acquiring methods (`acceptReschedule`, `duplicateNextWeek`, `saveStep4`) is documented in prose only, not enforced by any code invariant or test — deferred, pre-existing convention (broad architectural concern spanning all three methods, not introduced by this diff)
+- [x] [Review][Defer] `deferred-work.md`/`sprint-status.yaml` accumulate indefinitely via ever-longer single lines (one line already exceeds 40,000 characters) — deferred, pre-existing project-wide convention, not specific to this diff
+
+**Dismissed as noise/false-positive/already-addressed (10):** redundant `findByIdForUpdate`+`refresh` double round-trip in both AC2 call sites (matches `RescheduleService.acceptReschedule`'s established `deferred-15` pattern exactly, deliberate per story Dev Notes); `REQUIRES_NEW` applied without auditing every caller's atomicity expectations (both call sites are the same failure-logging use case; independent persistence is the explicit point of AC1); `entityManager.refresh` assumes an unverified managed-entity invariant (matches the working established pattern, no evidence of an actual issue); possible missing `ResourceNotFoundException` import in `BookingDuplicationService` (verified false positive — already imported and used at lines 49/64); new concurrency test proves `saveStep4` blocks against a raw lock rather than a real caller-vs-caller contention (explicitly justified in the story's own Postgres-lock-symmetry rationale, confirmed accurate by the Acceptance Auditor); `CaptureReservationIT`'s new test calls `onBookingAccepted` directly rather than through the `AFTER_COMMIT` event-listener dispatch (out of scope for AC1 — `REQUIRES_NEW` proxy behavior is identical either way, and listener wiring is a separate concern); the new `doThrow(...).save(any())` spy stub is unconditionally broad (matches this same file's existing `paymentGateway` spy convention); `story-review.md` was edited in the same diff as the implementation (process observation, not a code issue — matches this project's established story-review lifecycle); the new lock doesn't address `duplicateNextWeek`'s pre-existing overlap-check TOCTOU race (misreads scope — that race already has V87's exclusion constraint as a commit-time backstop, per the diff's own comment); Dev Agent Record test-pass counts were unverified self-reported prose (independently re-run during this review — all five commands reproduced the exact claimed counts).
 
 ## Dev Notes
 
@@ -313,9 +370,11 @@ explicitly needs "a full design review" per its own text, not a mechanical fix.
 - `src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java` —
   `persistPaymentFailure`'s `@Transactional` gains `propagation = Propagation.REQUIRES_NEW` (AC1). No new
   imports (`Propagation` already imported for this class's two existing `REQUIRES_NEW` methods).
-- A new or extended IT-level test class proving AC1's transactional-survivability fix (exact class TBD by
-  the dev agent — check for an existing IT covering `PaymentLifecycleService.onBookingAccepted`'s
-  pack-based path first) (AC1).
+- `src/test/java/com/softropic/skillars/platform/payment/service/CaptureReservationIT.java` — new test
+  proving AC1's transactional-survivability fix, using `@MockitoSpyBean SessionPackPurchaseRepository` +
+  `doThrow(...)` on `.save(...)`, mirroring this class's existing `paymentGateway` spy (AC1). No existing
+  IT class exercises `onBookingAccepted`'s pack-based path today, so this is a genuinely new test in an
+  existing class, not an extension of prior pack-based coverage.
 - `src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java` — new
   `EntityManager` field, two new imports, `saveStep4` gains a locked re-read before its
   delete/insert (AC2).
@@ -323,8 +382,9 @@ explicitly needs "a full design review" per its own text, not a mechanical fix.
   `EntityManager` field, two new imports, `duplicateNextWeek` gains a locked re-read before its
   availability/overlap checks (AC2).
 - `src/test/java/com/softropic/skillars/platform/booking/service/BookingDuplicationServiceTest.java` —
-  every existing test fixture that reaches past the `"COMPLETED"` check gains a
-  `findByIdForUpdate` stub (AC2).
+  gains a new `@Mock EntityManager entityManager` field and an 8th constructor argument (required for the
+  class to compile against AC2's new production field), and every existing test fixture that reaches past
+  the `"COMPLETED"` check gains a `findByIdForUpdate` stub (AC2).
 - `src/test/java/com/softropic/skillars/platform/booking/service/BookingServiceConcurrencyIT.java` — one
   new concurrency test reusing the existing `awaitAnotherSessionBlockedOnCoachProfileLock` helper (AC2).
 - `_bmad-output/implementation-artifacts/deferred-work.md` — two `PICKED UP`→`CLOSED` tag flips (AC3).
@@ -342,10 +402,23 @@ explicitly needs "a full design review" per its own text, not a mechanical fix.
   from: code review of skillars-deferred-50-duplicate-next-week-overlap-guard-reschedule-ordinary-hours-coverage-and-availability-test-hardening
   (2026-08-21)` — this story's AC2 source (BookingDuplicationService half)]
 - [Source: `src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java:162-177`
-  — `handlePackBasedBooking`, the caller whose catch branches both depend on AC1's fix]
+  — `handlePackBasedBooking`'s single `catch (RuntimeException e)` clause, which depends on AC1's fix]
 - [Source: `src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java:51-61` —
   `deductSession`, the plain-`@Transactional` method whose failure marks the shared transaction
   rollback-only]
+- [Source: `src/test/java/com/softropic/skillars/platform/payment/service/CaptureReservationIT.java` — the
+  `@MockitoSpyBean PaymentGateway paymentGateway`/`doThrow(...)` pattern AC1's new test mirrors for
+  `SessionPackPurchaseRepository`; also confirms (via `acceptedEvent(bookingId)`'s
+  `sessionPackPurchaseId = null`) that no existing test in this class exercises the pack-based branch, and
+  its own comment at `:391-393` on a prior CI context-count ceiling trip is why AC1's new test is added
+  here rather than in a new IT class]
+- [Source: `src/main/java/com/softropic/skillars/platform/booking/contract/BookingAcceptedEvent.java:21-22`
+  — confirms `sessionPackPurchaseId`'s constructor position, used to verify `CaptureReservationIT`'s
+  existing tests never populate it]
+- [Source: `src/test/java/com/softropic/skillars/platform/payment/service/SessionPackPurchaseLockContentionIT.java`
+  — class Javadoc documenting that Hibernate's `PostgreSQLDialect` does not honor a finite
+  `jakarta.persistence.lock.timeout` on Postgres, the reason AC1's Test Coverage guidance rules out a
+  conflicting-lock technique]
 - [Source: `src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java:72,206-207,279`
   — `persistPaymentFailure`, AC1's target, and its two sibling `REQUIRES_NEW` methods this AC's fix mirrors]
 - [Source: `src/main/java/com/softropic/skillars/platform/booking/service/RescheduleService.java:208-215,229`
@@ -359,32 +432,95 @@ explicitly needs "a full design review" per its own text, not a mechanical fix.
   — `findByIdForUpdate`, the shared locking query both AC2 call sites reuse]
 - [Source: `src/test/java/com/softropic/skillars/platform/booking/service/RescheduleServiceTest.java:48,66,288,324,365`
   — the existing `@Mock EntityManager` + `findByIdForUpdate` stubbing pattern AC2's test updates mirror]
-- [Source: `src/test/java/com/softropic/skillars/platform/booking/service/BookingServiceConcurrencyIT.java:263,346,407`
-  — the existing `awaitAnotherSessionBlockedOnCoachProfileLock` helper AC2's new concurrency test reuses]
+- [Source: `src/test/java/com/softropic/skillars/platform/booking/service/BookingServiceConcurrencyIT.java:245-278,330-361,407`
+  — the existing `awaitAnotherSessionBlockedOnCoachProfileLock` helper (`:407`) and its two existing
+  usages, both structured as a raw-SQL lock-holder thread calling the helper from its own transaction
+  while the real service method under test is the thread that blocks — the structure AC2's new
+  concurrency test must mirror]
 - [Source: `src/test/java/com/softropic/skillars/platform/booking/service/BookingDuplicationServiceTest.java`
-  — existing unit tests AC2 must update with the new lock stub]
+  — existing unit tests AC2 must update with a new `@Mock EntityManager` field, an 8th constructor
+  argument, and the new lock stub]
 - [Source: `docs/validation-strategy.md` — targeted-test-only validation policy]
 
 ## Dev Agent Record
 
 ### Agent Model Used
 
-_Not yet started._
+Claude Sonnet 5 (claude-sonnet-5)
 
 ### Debug Log References
 
-_Not yet started._
+- `mvn -o test -Dtest=CaptureReservationIT` — 8/8 green, including the new
+  `packDeductionFailsWithGenuinePersistenceException_failureRecordSurvivesRollbackOnlyTransaction` test.
+- `mvn -o test -Dtest=CreditRoutingTest` — 11/11 green, no regression to the existing mocked catch-branch
+  coverage.
+- `mvn -o test -Dtest=BookingDuplicationServiceTest` — 7/7 green after the `EntityManager` mock/constructor
+  update and the 5 new `findByIdForUpdate` stubs.
+- `mvn -o integration-test -Dit.test=CoachProfileBuilderIT` — 31/31 green (run standalone first, then again
+  combined with the concurrency IT below).
+- `mvn -o integration-test -Dit.test=BookingServiceConcurrencyIT` — 5/5 green, including the new
+  `saveStep4_coachRowLockedByAnotherSession_blocksUntilReleasedThenWritesCorrectly` test.
+- `mvn -o integration-test -Dit.test=BookingServiceConcurrencyIT,CoachProfileBuilderIT` — 36/36 green
+  (combined run per Task 2.5).
 
 ### Completion Notes List
 
-_Not yet started._
+- **AC1**: Changed `BookingPaymentPersistenceService.persistPaymentFailure` to
+  `@Transactional(propagation = Propagation.REQUIRES_NEW)`. Added a new real-transaction test to
+  `CaptureReservationIT` using `@MockitoSpyBean SessionPackPurchaseRepository` +
+  `doThrow(new DataIntegrityViolationException(...)).when(spy).save(any())`, per AC1's Test Coverage
+  guidance (no lock-timeout technique used). Confirmed empirically (not just by design) that calling
+  `onBookingAccepted` directly throws `UnexpectedRollbackException` once its own physical transaction
+  discovers `deductSession`'s earlier rollback-only marking at commit time — but only *after*
+  `persistPaymentFailure`'s independent `REQUIRES_NEW` transaction has already committed the failure
+  row. The test asserts both: the call throws `UnexpectedRollbackException`, and the `CHARGE_FAILED` row
+  survives it (remaining_sessions also confirmed rolled back to its pre-deduction value).
+- **AC2**: Added `EntityManager` field + `findByIdForUpdate`+`refresh(..., PESSIMISTIC_WRITE)` locked
+  re-read to `CoachProfileService.saveStep4` (before its delete/insert) and to
+  `BookingDuplicationService.duplicateNextWeek` (after the `"COMPLETED"` status check, before
+  `newStart`/`newEnd`), mirroring `RescheduleService.acceptReschedule`'s existing pattern exactly, per
+  AC2's snippets. Updated `BookingDuplicationServiceTest`: added `@Mock EntityManager entityManager`,
+  passed it as the 8th constructor argument, and stubbed `findByIdForUpdate` on the 5 existing tests that
+  reach past the `"COMPLETED"` check (the other 2 fail earlier and need no stub). Added a new concurrency
+  test to `BookingServiceConcurrencyIT` — a raw-SQL `SELECT ... FOR UPDATE` thread is the lock holder
+  that calls `awaitAnotherSessionBlockedOnCoachProfileLock` from its own transaction; the real
+  `saveStep4` call is the thread that blocks and is asserted to complete only after the lock is released,
+  then to have written correctly — matching the story review's corrected roles, not the original AC text's
+  (already-superseded) description.
+- **AC3**: Flipped all three `deferred-work.md` tags (`persistPaymentFailure` rollback-only item at line
+  1735; `acceptReschedule`'s unlocked-read item at line 1634; `duplicateNextWeek`'s TOCTOU item at line
+  1640) from `PICKED UP by skillars-deferred-58 ACn` to `CLOSED by skillars-deferred-58 ACn`, each with a
+  one-line closure note describing the actual fix landed.
 
 ### File List
 
-_Not yet started._
+- `src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java` —
+  AC1: `persistPaymentFailure`'s `@Transactional` propagation changed to `REQUIRES_NEW`.
+- `src/test/java/com/softropic/skillars/platform/payment/service/CaptureReservationIT.java` — AC1: new
+  `@MockitoSpyBean SessionPackPurchaseRepository` field, `insertTestPackPurchase` fixture helper, and the
+  new `packDeductionFailsWithGenuinePersistenceException_failureRecordSurvivesRollbackOnlyTransaction`
+  test.
+- `src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java` — AC2: new
+  `EntityManager` field/imports, `saveStep4` gains a locked re-read before its delete/insert.
+- `src/main/java/com/softropic/skillars/platform/booking/service/BookingDuplicationService.java` — AC2: new
+  `EntityManager` field/imports, `duplicateNextWeek` gains a locked re-read before its availability/overlap
+  checks.
+- `src/test/java/com/softropic/skillars/platform/booking/service/BookingDuplicationServiceTest.java` — AC2:
+  new `@Mock EntityManager entityManager` field, 8th constructor argument, `findByIdForUpdate` stubs added
+  to the 5 tests that reach past the `"COMPLETED"` check. Post-implementation review: new
+  `duplicateNextWeek_coachProfileMissingAtLockTime_throwsResourceNotFoundException` test covering the new
+  `findByIdForUpdate().orElseThrow(...)` not-found branch.
+- `src/test/java/com/softropic/skillars/platform/booking/service/BookingServiceConcurrencyIT.java` — AC2:
+  new `CoachProfileService` autowired field, new
+  `saveStep4_coachRowLockedByAnotherSession_blocksUntilReleasedThenWritesCorrectly` concurrency test.
+- `_bmad-output/implementation-artifacts/deferred-work.md` — AC3: three `PICKED UP`→`CLOSED` tag flips
+  (lines 1634, 1640, 1735).
 
 ## Change Log
 
 | Date | Change |
 |---|---|
 | 2026-08-23 | Story created via story-creation process, bundling two items re-mined from `deferred-work.md`'s most recently active tail (`skillars-deferred-45` through `-57`). AC1 closes the `story review of skillars-deferred-56` item — `persistPaymentFailure` joins its caller's transaction, so a real `deductSession` persistence failure would silently lose its own failure record to a rollback-only commit, the exact scenario the catch branch exists to guard against. AC2 closes two related items from `deferred-49`'s and `deferred-50`'s code reviews — `CoachProfileService.saveStep4` never locks the coach-profile row before rewriting availability windows, so `RescheduleService.acceptReschedule`'s existing lock (and a new one added to `BookingDuplicationService.duplicateNextWeek`) had/have nothing to serialize against. AC3 is ledger hygiene for both. Considered and explicitly not picked up: `DisputeService`'s dormant `FROZEN`-filter gap (needs a coordinated design decision spanning two services); `playerStore.js`'s missing test coverage (no frontend test harness exists in this repo, a standing gap left in place by four prior stories); the 3-call-site validation-logic DRY duplication (matches this project's own established anti-abstraction convention); the video-bandwidth dedup-rule question (explicitly needs a full design review per its own text). |
+| 2026-08-24 | Pre-implementation senior-dev review (`story-review.md`) applied. AC1's Test Coverage guidance rewritten: dropped the "hold a conflicting lock" technique, which `SessionPackPurchaseLockContentionIT`'s own class Javadoc proves cannot produce a `PessimisticLockingFailureException` on this codebase's Postgres/Hibernate combination (finite `jakarta.persistence.lock.timeout` values are silently ignored) and which, even setting that aside, would block before `.save()` rather than at it; replaced with the already-proven `@MockitoSpyBean`+`doThrow(...)` pattern `CaptureReservationIT` already uses for `PaymentGateway`, applied to `SessionPackPurchaseRepository`, added to that same IT class (confirmed no existing IT exercises the pack-based branch, and `CaptureReservationIT` already carries the needed Spring context, avoiding a CI context-count ceiling trip). AC2's Test Coverage guidance corrected: the concurrency test's lock-holder/lock-waiter roles were backwards relative to how `awaitAnotherSessionBlockedOnCoachProfileLock` and its two existing usages actually work (a raw-SQL thread is the lock holder that calls the private test helper from its own transaction; the real service method under test is the thread that blocks) — `saveStep4` cannot itself call that private helper without a test-only hook into production code. Added an explicit Task 2.3 sub-step (and corresponding Test Coverage/Project Structure Notes text) requiring a new `@Mock EntityManager entityManager` field plus an 8th constructor argument in `BookingDuplicationServiceTest`, without which the class will not compile once AC2's new `EntityManager` constructor parameter lands. Fixed a minor wording inaccuracy describing `handlePackBasedBooking` as having two catch branches when it has one. No changes to either AC's underlying production-code fix, which the review confirmed correct as originally written. |
+| 2026-08-24 | Dev-story implementation complete, status review. AC1: `persistPaymentFailure` switched to `REQUIRES_NEW`, proven with a new real-transaction `CaptureReservationIT` test forcing a genuine `DataIntegrityViolationException` via a repository spy — confirmed empirically that the outer `onBookingAccepted` call throws `UnexpectedRollbackException` (expected Spring behavior once a participating transaction is marked rollback-only) while the failure record still survives via the independent `REQUIRES_NEW` commit. AC2: `saveStep4` and `duplicateNextWeek` both gained the `findByIdForUpdate`+`refresh(PESSIMISTIC_WRITE)` lock mirroring `acceptReschedule`; `BookingDuplicationServiceTest` updated with the new `EntityManager` mock/constructor arg and 5 new lock stubs; a new `BookingServiceConcurrencyIT` test proves `saveStep4` now blocks against the same coach-profile row lock the existing readers do. AC3: all three ledger tags flipped from `PICKED UP` to `CLOSED`. All targeted tests green: `CaptureReservationIT` (8/8), `CreditRoutingTest` (11/11), `BookingDuplicationServiceTest` (7/7), `BookingServiceConcurrencyIT`+`CoachProfileBuilderIT` combined (36/36). Full `mvn verify` not run per `docs/validation-strategy.md`. |
+| 2026-08-24 | Post-implementation code review (Blind Hunter + Edge Case Hunter + Acceptance Auditor). Acceptance Auditor: zero violations, all three ACs verified to match the story's target shapes exactly. All five Dev Agent Record `mvn` commands independently re-run and reproduced identical counts. 1 patch, 5 deferred, 10 dismissed (see Review Findings below). Patch applied: added `duplicateNextWeek_coachProfileMissingAtLockTime_throwsResourceNotFoundException` to `BookingDuplicationServiceTest`, covering the new `findByIdForUpdate().orElseThrow(...)` not-found branch that previously had zero test coverage — `mvn -o test -Dtest=BookingDuplicationServiceTest` 8/8 green. 5 deferred items (missing post-lock `SUSPENDED` re-checks in `duplicateNextWeek`/`saveStep4`, `REQUIRES_NEW` connection-pool pressure, prose-only lock-ordering safety, unbounded ledger-file growth) appended to `deferred-work.md` under a new `code review of skillars-deferred-58...` section. |

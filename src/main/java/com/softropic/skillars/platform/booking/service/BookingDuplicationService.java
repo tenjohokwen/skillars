@@ -13,6 +13,8 @@ import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.service.PackSessionService;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.UserRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -37,6 +39,7 @@ public class BookingDuplicationService {
     private final PackSessionService packSessionService;
     private final ApplicationEventPublisher eventPublisher;
     private final CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
+    private final EntityManager entityManager;
 
     @Transactional
     public UUID duplicateNextWeek(UUID originalBookingId, Long coachUserId) {
@@ -52,6 +55,14 @@ public class BookingDuplicationService {
             throw new OperationNotAllowedException(
                 "Can only duplicate a COMPLETED booking", SecurityError.MISSING_RIGHTS);
         }
+
+        // Deferred-58 AC2: acceptReschedule already takes this same lock before its own availability
+        // re-check; duplicateNextWeek never did, so a concurrent saveStep4 rewrite of this coach's windows
+        // was never serialized against this method's read of them (or against its overlap check, which
+        // otherwise only has V87's exclusion constraint as a commit-time backstop).
+        coachProfileRepository.findByIdForUpdate(coach.getId())
+            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+        entityManager.refresh(coach, LockModeType.PESSIMISTIC_WRITE);
 
         Instant newStart = original.getRequestedStartTime().plus(7, ChronoUnit.DAYS);
         Instant newEnd = original.getRequestedEndTime().plus(7, ChronoUnit.DAYS);
