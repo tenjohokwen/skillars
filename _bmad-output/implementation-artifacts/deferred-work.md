@@ -30,9 +30,13 @@ non-blank line matches the pre-prune file's non-tagged content, in order, with n
 28 `## Deferred from:`/`###` section headers that had zero items left after their tagged bullets were
 removed were deleted along with them, since an empty section serves no purpose. `[PICKED UP by ...]`
 bullets (claimed by a story, not yet shipped), `[DISMISSED ...]` bullets, decision-needed items, and every
-untagged open item were left completely untouched, including their full original text — nothing in this
-pass re-verified or re-judged any open item, it only removed items already closed by a prior pass.
-File size: 1854 → ~1502 lines. **Not touched:** the content of every other `## Last audit:` section in
+untagged open item were left untouched, including their full original text, with one exception: a
+section-header's non-bullet intro paragraph is deleted along with it when every bullet under that header
+is tagged (one instance — the old `## Deferred from: code review of skillars-deferred-28-...` header's
+"review-layer coverage was incomplete" process footnote, whose own three bullets were all `[CLOSED by
+...]`-tagged and removed, collapsing the section per this pass's own stated rule). Nothing in this pass
+re-verified or re-judged any open item, it only removed items already closed by a prior pass.
+File size: 1854 → 1523 lines (exact). **Not touched:** the content of every other `## Last audit:` section in
 this file (each is a narrative record of its own audit, not itself a set of taggable items — confirmed
 none contain a `[CLOSED` or `[STALE` tag) and every item this pass didn't already find carrying one of
 those two tags. Full removed text remains recoverable from git history of this file, per this file's own

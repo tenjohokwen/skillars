@@ -1,6 +1,6 @@
 # Story Deferred-60: Availability-Window Coach-Id Guard & Deferred-Work Ledger Verification Sweep
 
-Status: review
+Status: done
 
 ## Story
 
@@ -248,7 +248,39 @@ of inferring it from `windows.get(0)`.**
 
 ### Review Findings
 
-_(Populated by code-review / story-review passes after implementation.)_
+Reviewed via `/bmad-code-review` against `master...HEAD` (12 files, +560/-492) with the story file as spec
+context. Three parallel layers ran (Blind Hunter, Edge Case Hunter, Acceptance Auditor) and returned 14 raw
+findings; 12 were dismissed after independent re-verification (mostly restatements of deliberate scope
+decisions already documented in this story's own Dev Notes — no coachId/windows validation, no `eq(...)`
+matcher on the new arg — plus one false-positive claim of ledger content loss that cross-commit history
+verification disproved). AC1's Java changes (`BookingService`/`RescheduleService`/`BookingBatchService`/
+`BookingDuplicationService` + their 4 test classes) came back clean from all three layers — the two
+surviving findings are both confined to `deferred-work.md`'s pruning-pass audit note, not the shipped code.
+
+- [x] [Review][Patch] Pruning-pass audit note states an approximate final line count next to an exact tag
+      breakdown [`_bmad-output/implementation-artifacts/deferred-work.md:35`] — "175 total — 136 `[CLOSED]`,
+      39 `[STALE]`" is precise, but the same sentence gives "File size: 1854 → ~1502 lines" with a tilde.
+      The actual post-prune line count is exactly 1523 (`git show badfcb0:.../deferred-work.md | wc -l`),
+      not ~1502 — off by 21 lines from even the approximation. Fix: replace "~1502" with the exact "1523".
+      **Resolved:** replaced "~1502" with the exact "1523" in the audit note.
+- [x] [Review][Patch] Pruning-pass audit note's "left completely untouched" claim is contradicted by one
+      deleted line [`_bmad-output/implementation-artifacts/deferred-work.md:20-36`, deleted content was
+      under the old `## Deferred from: code review of skillars-deferred-28-...` header] — the note says
+      untagged content was "left completely untouched, including their full original text," but when that
+      section's two bullets (both `[CLOSED by skillars-deferred-29 AC3]`/`AC4`) were removed and the header
+      was deleted for being empty (per the note's own stated "empty headers are deleted too" rule), an
+      untagged standalone sentence directly under that header — a caveat noting the deferred-28 review run
+      had two layers die on an API session limit — was collaterally deleted with it. The sentence's content
+      has no ongoing value (a stale process footnote from an already-fully-shipped review cycle), so
+      restoring it isn't warranted, but the audit note's absolute claim should be softened to acknowledge
+      this one exception rather than asserting zero untagged content was touched.
+      **Resolved:** independently re-verified against `git show 64c22ca:.../deferred-work.md` (the
+      pre-prune commit) — confirmed the deleted section had exactly three bullets, all `[CLOSED by ...]`-
+      tagged, and one untagged process-footnote sentence directly under the header. Softened the audit
+      note's claim from "left completely untouched" to "left untouched... with one exception," naming the
+      collapsed section and its footnote explicitly. Not restored, per the finding's own recommendation —
+      the content was a stale process note with no ongoing value, still fully recoverable from commit
+      `64c22ca`'s git history per this file's own first rule.
 
 ## Dev Notes
 
@@ -363,3 +395,4 @@ iterate against).
 | 2026-08-24 | Story-review adjustments applied (4 low-severity cosmetic findings fixed: `acceptReschedule`'s locked-variable rationale, a 15→19 mock-call-site count, a "four"→"three" locale-bundle count, and the ledger-annotation tag-format description). |
 | 2026-08-24 | `deferred-work.md` pruned in a follow-up commit on this branch (unrelated ledger-hygiene pass, not part of this story's own scope) — the fourteen STALE closures this story's creation pass tagged were deleted outright per the file's own convention; noted here only because the story's References section describes it. |
 | 2026-08-24 | Dev-story implementation complete. AC1 shipped: `isSlotWithinAvailabilityWindow` takes `coachId` explicitly; all 5 call sites and 22 test call sites updated; targeted suite 85/85 green. Status → review. |
+| 2026-08-24 | Code review (`/bmad-code-review` via Blind Hunter + Edge Case Hunter + Acceptance Auditor) complete: 14 raw findings, 12 dismissed as restatements of documented scope decisions or a disproven false positive; 2 Patch findings, both confined to `deferred-work.md`'s pruning-pass audit note (not the shipped code, which came back clean from all three layers) — an approximate line count corrected to the exact 1523, and the audit note's "left completely untouched" claim softened to acknowledge one section-header intro paragraph collaterally deleted alongside its all-tagged bullets. Both fixed and independently re-verified against pre-prune git history before applying. Status → done. |
