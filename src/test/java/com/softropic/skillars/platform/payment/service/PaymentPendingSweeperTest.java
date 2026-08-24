@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.payment.service;
 
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.booking.contract.BookingDeclinedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingEvent;
 import com.softropic.skillars.platform.booking.contract.TransitionContext;
@@ -60,6 +61,7 @@ class PaymentPendingSweeperTest {
     @Mock UserRepository userRepository;
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock TransactionTemplate transactionTemplate;
+    @Mock PessimisticLockRetryer lockRetryer;
 
     private PaymentPendingSweeper sweeper;
 
@@ -67,8 +69,10 @@ class PaymentPendingSweeperTest {
     void setUp() {
         sweeper = new PaymentPendingSweeper(bookingRepository, bookingPaymentRepository, bookingService,
             configService, coachProfileRepository, userRepository, eventPublisher, transactionTemplate,
-            new SimpleMeterRegistry());
+            new SimpleMeterRegistry(), lockRetryer);
 
+        lenient().when(lockRetryer.withBoundedRetry(any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
         lenient().when(configService.getBoundedLong(eq(PaymentPendingSweeper.GRACE_MINUTES_KEY),
             anyLong(), anyLong(), anyLong())).thenReturn(120L);
         lenient().when(transactionTemplate.execute(any())).thenAnswer(inv -> {

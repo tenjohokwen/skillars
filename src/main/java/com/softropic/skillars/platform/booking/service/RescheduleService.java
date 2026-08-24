@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.booking.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.BookingStatus;
@@ -65,6 +66,7 @@ public class RescheduleService {
     // JPQL and returns an already-managed instance untouched. BookingService injects one the same way.
     private final EntityManager entityManager;
     private final CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
+    private final PessimisticLockRetryer lockRetryer;
 
     @Transactional
     public void requestReschedule(UUID bookingId, Long parentUserId, CreateRescheduleRequest req) {
@@ -189,9 +191,12 @@ public class RescheduleService {
         // and writes ACCEPTED over the coach's decline. The refresh is what makes the re-read real —
         // findByIdForUpdate is JPQL and the row is already managed from the findById above, so
         // without it Hibernate takes the lock but hands back the same stale instance.
-        BookingRescheduleRequest lockedReq = rescheduleRepo.findByIdForUpdate(rescheduleId)
-            .orElseThrow(() -> new ResourceNotFoundException("Reschedule request not found", "reschedule_request"));
-        entityManager.refresh(lockedReq, LockModeType.PESSIMISTIC_WRITE);
+        BookingRescheduleRequest lockedReq = lockRetryer.withBoundedRetry(() -> {
+            BookingRescheduleRequest r = rescheduleRepo.findByIdForUpdate(rescheduleId)
+                .orElseThrow(() -> new ResourceNotFoundException("Reschedule request not found", "reschedule_request"));
+            entityManager.refresh(r, LockModeType.PESSIMISTIC_WRITE);
+            return r;
+        });
         if (!"PENDING".equals(lockedReq.getStatus())) {
             throw new OperationNotAllowedException(
                 "Reschedule request is not in PENDING status", BookingError.RESCHEDULE_NOT_PENDING);
@@ -205,14 +210,17 @@ public class RescheduleService {
         // coach so two concurrent reschedules for the same coach serialise, then check the
         // PROPOSED window (not the current one). excludeBookingId is mandatory: this booking is
         // itself in an active status and would otherwise match itself.
-        CoachProfile lockedCoach = coachProfileRepository.findByIdForUpdate(coach.getId())
-            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
-        // Deferred-15 AC4. The refresh is required, not defensive: findByIdForUpdate is JPQL and this
-        // row is already managed from the findByUserId above, so Hibernate takes the DB lock but
-        // returns the existing instance with its in-memory state intact — reading getStatus() off it
-        // without this would re-check the stale value and could never fire. Same reasoning as
-        // BookingService.createBookingRequest.
-        entityManager.refresh(lockedCoach, LockModeType.PESSIMISTIC_WRITE);
+        CoachProfile lockedCoach = lockRetryer.withBoundedRetry(() -> {
+            CoachProfile c = coachProfileRepository.findByIdForUpdate(coach.getId())
+                .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+            // Deferred-15 AC4. The refresh is required, not defensive: findByIdForUpdate is JPQL and this
+            // row is already managed from the findByUserId above, so Hibernate takes the DB lock but
+            // returns the existing instance with its in-memory state intact — reading getStatus() off it
+            // without this would re-check the stale value and could never fire. Same reasoning as
+            // BookingService.createBookingRequest.
+            entityManager.refresh(c, LockModeType.PESSIMISTIC_WRITE);
+            return c;
+        });
         if (lockedCoach.getStatus() == CoachProfileStatus.SUSPENDED) {
             throw new OperationNotAllowedException("Coach is suspended",
                 Map.of("submitted coach id", coach.getId()), BookingError.COACH_UNAVAILABLE);
@@ -275,8 +283,8 @@ public class RescheduleService {
         // Deferred-15 AC3: locked read, so this and acceptReschedule are mutually exclusive rather
         // than both reading PENDING and both writing. This is the only lock this method takes —
         // see the ordering note in acceptReschedule before adding another.
-        BookingRescheduleRequest req = rescheduleRepo.findByIdForUpdate(rescheduleId)
-            .orElseThrow(() -> new ResourceNotFoundException("Reschedule request not found", "reschedule_request"));
+        BookingRescheduleRequest req = lockRetryer.withBoundedRetry(() -> rescheduleRepo.findByIdForUpdate(rescheduleId)
+            .orElseThrow(() -> new ResourceNotFoundException("Reschedule request not found", "reschedule_request")));
         if (!req.getBookingId().equals(bookingId)) {
             throw new ResourceNotFoundException("Reschedule request not found", "reschedule_request");
         }

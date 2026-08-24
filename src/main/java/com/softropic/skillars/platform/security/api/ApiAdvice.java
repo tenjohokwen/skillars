@@ -572,9 +572,10 @@ public class ApiAdvice {
     }
 
     /**
-     * Handles pessimistic lock wait timeouts (e.g. CoachProfileRepository.findByIdForUpdate's
-     * bounded lock.timeout hint) — under heavy contention this fails fast with a clean 409
-     * instead of the request thread blocking indefinitely or a raw 500.
+     * Handles pessimistic lock contention that outlasts a bounded retry (e.g.
+     * CoachProfileRepository.findByIdForUpdate's NO_WAIT lock, retried a bounded number of times by
+     * PessimisticLockRetryer — see skillars-deferred-62) — this fails with a clean 409 instead of
+     * the request thread blocking indefinitely or a raw 500.
      */
     @ExceptionHandler(org.springframework.dao.PessimisticLockingFailureException.class)
     @ResponseStatus(HttpStatus.CONFLICT)

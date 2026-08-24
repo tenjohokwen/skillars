@@ -7,6 +7,7 @@ import com.softropic.skillars.platform.booking.contract.TransitionContext;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.service.BookingService;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
@@ -90,6 +91,7 @@ public class PaymentPendingSweeper {
     private final ApplicationEventPublisher eventPublisher;
     private final TransactionTemplate transactionTemplate;
     private final MeterRegistry meterRegistry;
+    private final PessimisticLockRetryer lockRetryer;
 
     // lockAtMostFor is deliberately 2x the fixedDelay, not equal to it: with both at 15 minutes a run
     // that merely reached its own next tick would have its lock expire mid-execution and a second
@@ -136,7 +138,7 @@ public class PaymentPendingSweeper {
         // money moved" over a booking whose charge may already have reached Stripe, which is the
         // exact harm this class refuses to risk. Taking the same booking-row lock reserveCapture
         // takes serialises the two: whichever wins, the loser observes the winner's committed state.
-        Booking booking = bookingRepository.findByIdForUpdate(bookingId).orElse(null);
+        Booking booking = lockRetryer.withBoundedRetry(() -> bookingRepository.findByIdForUpdate(bookingId).orElse(null));
         if (booking == null) return;
         // The row may have settled between the select above and this transaction opening.
         if (!"PAYMENT_PENDING".equals(booking.getStatus())) return;

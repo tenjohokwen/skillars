@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.booking.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.DuplicateBookingProposedEvent;
 import com.softropic.skillars.platform.booking.repo.Booking;
@@ -44,6 +45,7 @@ class BookingDuplicationServiceTest {
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
     @Mock private EntityManager entityManager;
+    @Mock private PessimisticLockRetryer lockRetryer;
 
     private BookingDuplicationService service;
 
@@ -61,8 +63,10 @@ class BookingDuplicationServiceTest {
         service = new BookingDuplicationService(
             bookingService, bookingRepository, coachProfileRepository,
             userRepository, packSessionService, eventPublisher, coachAvailabilityWindowRepository,
-            entityManager
+            entityManager, lockRetryer
         );
+        lenient().when(lockRetryer.withBoundedRetry(any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
 
         Instant past = Instant.now().minus(8, ChronoUnit.DAYS);
         completedBooking = new Booking();

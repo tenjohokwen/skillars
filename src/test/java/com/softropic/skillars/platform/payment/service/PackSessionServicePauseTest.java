@@ -5,6 +5,7 @@ import com.softropic.skillars.platform.booking.contract.PackPausedEvent;
 import com.softropic.skillars.platform.booking.contract.PauseConflictResponse;
 import com.softropic.skillars.platform.booking.contract.PausePackRequest;
 import com.softropic.skillars.platform.booking.repo.Booking;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.platform.config.service.ConfigService;
@@ -15,6 +16,7 @@ import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepositor
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -33,6 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -48,8 +51,15 @@ class PackSessionServicePauseTest {
     @Mock ConfigService configService;
     @Mock CoachProfileRepository coachProfileRepository;
     @Mock UserRepository userRepository;
+    @Mock PessimisticLockRetryer lockRetryer;
 
     @InjectMocks PackSessionService packSessionService;
+
+    @BeforeEach
+    void setUpLockRetryer() {
+        lenient().when(lockRetryer.withBoundedRetry(any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
+    }
 
     private static final Long PARENT_ID = 9001L;
     private static final Long PLAYER_ID = 9002L;

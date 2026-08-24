@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.booking.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.DuplicateBookingProposedEvent;
@@ -40,6 +41,7 @@ public class BookingDuplicationService {
     private final ApplicationEventPublisher eventPublisher;
     private final CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
     private final EntityManager entityManager;
+    private final PessimisticLockRetryer lockRetryer;
 
     @Transactional
     public UUID duplicateNextWeek(UUID originalBookingId, Long coachUserId) {
@@ -60,9 +62,12 @@ public class BookingDuplicationService {
         // re-check; duplicateNextWeek never did, so a concurrent saveStep4 rewrite of this coach's windows
         // was never serialized against this method's read of them (or against its overlap check, which
         // otherwise only has V87's exclusion constraint as a commit-time backstop).
-        coachProfileRepository.findByIdForUpdate(coach.getId())
-            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
-        entityManager.refresh(coach, LockModeType.PESSIMISTIC_WRITE);
+        lockRetryer.withBoundedRetry(() -> {
+            coachProfileRepository.findByIdForUpdate(coach.getId())
+                .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+            entityManager.refresh(coach, LockModeType.PESSIMISTIC_WRITE);
+            return null;
+        });
 
         Instant newStart = original.getRequestedStartTime().plus(7, ChronoUnit.DAYS);
         Instant newEnd = original.getRequestedEndTime().plus(7, ChronoUnit.DAYS);

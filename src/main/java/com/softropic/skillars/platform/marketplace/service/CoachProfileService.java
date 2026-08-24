@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.marketplace.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer;
 import com.softropic.skillars.platform.marketplace.contract.CoachMediaItemDto;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileDto;
@@ -75,6 +76,7 @@ public class CoachProfileService {
     private final CoachCapabilityService coachCapabilityService;
     private final CoachReliabilityStrikeRepository coachReliabilityStrikeRepository;
     private final EntityManager entityManager;
+    private final PessimisticLockRetryer lockRetryer;
 
     /**
      * The timezones the profile builder is allowed to offer a coach.
@@ -236,10 +238,13 @@ public class CoachProfileService {
         // BookingDuplicationService.duplicateNextWeek's own coach-row lock, so a concurrent
         // accept/duplicate-next-week validated against these windows can no longer race a rewrite of
         // them mid-transaction.
-        coachProfileRepository.findByIdForUpdate(profile.getId())
-            .orElseThrow(() -> new MarketplaceException("marketplace.profileNotFound",
-                "Coach profile not found for userId=" + userId));
-        entityManager.refresh(profile, LockModeType.PESSIMISTIC_WRITE);
+        lockRetryer.withBoundedRetry(() -> {
+            coachProfileRepository.findByIdForUpdate(profile.getId())
+                .orElseThrow(() -> new MarketplaceException("marketplace.profileNotFound",
+                    "Coach profile not found for userId=" + userId));
+            entityManager.refresh(profile, LockModeType.PESSIMISTIC_WRITE);
+            return null;
+        });
 
         coachAvailabilityWindowRepository.deleteByCoachId(profile.getId());
         List<CoachAvailabilityWindow> windows = req.windows().stream().map(w -> {

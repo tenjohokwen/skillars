@@ -9,6 +9,7 @@ import com.softropic.skillars.platform.booking.contract.TransitionContext;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.service.BookingService;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.payment.contract.BookingPaymentStatus;
 import com.softropic.skillars.platform.payment.repo.BookingPayment;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
@@ -40,6 +41,7 @@ public class BookingPaymentPersistenceService {
     private final BookingService bookingService;
     private final ApplicationEventPublisher eventPublisher;
     private final MeterRegistry meterRegistry;
+    private final PessimisticLockRetryer lockRetryer;
 
     /**
      * UAT.3 AC1. Writes a CAPTURE_PENDING {@code booking_payments} row BEFORE the caller contacts
@@ -72,7 +74,7 @@ public class BookingPaymentPersistenceService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public CaptureReservation reserveCapture(UUID bookingId, BigDecimal intendedCredit,
                                              BigDecimal intendedStripe, UUID batchId) {
-        Booking booking = bookingRepository.findByIdForUpdate(bookingId).orElse(null);
+        Booking booking = lockRetryer.withBoundedRetry(() -> bookingRepository.findByIdForUpdate(bookingId).orElse(null));
         if (booking == null) {
             return CaptureReservation.BOOKING_NOT_PENDING;
         }

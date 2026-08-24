@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.payment.service;
 
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.platform.config.service.ConfigService;
@@ -8,6 +9,7 @@ import com.softropic.skillars.platform.payment.repo.SessionPackPurchase;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.UserRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -23,6 +25,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -37,8 +40,15 @@ class PackSessionServiceParityTest {
     @Mock ConfigService configService;
     @Mock CoachProfileRepository coachProfileRepository;
     @Mock UserRepository userRepository;
+    @Mock PessimisticLockRetryer lockRetryer;
 
     @InjectMocks PackSessionService service;
+
+    @BeforeEach
+    void setUpLockRetryer() {
+        lenient().when(lockRetryer.withBoundedRetry(any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
+    }
 
     private static final Long PLAYER_ID = 8001L;
     private static final UUID COACH_ID = UUID.randomUUID();

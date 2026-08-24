@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.booking.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.CreateRescheduleRequest;
 import com.softropic.skillars.platform.booking.contract.RescheduleAcceptedEvent;
@@ -47,6 +48,7 @@ class RescheduleServiceTest {
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private jakarta.persistence.EntityManager entityManager;
     @Mock private CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
+    @Mock private PessimisticLockRetryer lockRetryer;
 
     private RescheduleService service;
 
@@ -63,8 +65,10 @@ class RescheduleServiceTest {
     void setUp() {
         service = new RescheduleService(
             bookingService, bookingRepository, rescheduleRepo, coachProfileRepository, userRepository,
-            eventPublisher, entityManager, coachAvailabilityWindowRepository
+            eventPublisher, entityManager, coachAvailabilityWindowRepository, lockRetryer
         );
+        lenient().when(lockRetryer.withBoundedRetry(any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
 
         confirmedBooking = new Booking();
         confirmedBooking.setParentId(PARENT_ID);
