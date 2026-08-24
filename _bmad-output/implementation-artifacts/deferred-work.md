@@ -567,7 +567,7 @@ the story text first, then implemented as corrected:
 
 ## Deferred from: code review of skillars-deferred-11-stripe-card-collection (2026-08-04)
 - `PackSessionServiceParityTest` mocks `findActivePacks` to already return ordered results and only asserts `packs.get(0)` — doesn't exercise the real repository `ORDER BY`, so a regression to actual query ordering wouldn't be caught. [`src/test/java/com/softropic/skillars/platform/payment/service/PackSessionServiceParityTest.java`] `[CLOSED by skillars-deferred-27 AC1]` Added `SessionPackPurchaseRepositoryIT` (new file), extending `AbstractIntegrationTest`: seeds a real `CoachProfile`/`SessionPackTier` (FK-required) and two `SessionPackPurchase` rows with explicitly different `createdAt`, then asserts `findActivePacks` returns the older row first — exercising the real `ORDER BY p.createdAt ASC` against Postgres. `PackSessionServiceParityTest` left unchanged. (Code review 2026-08-17: as first written this test seeded the older row **first**, so physical heap order already matched the asserted order and the test would have stayed green with the `ORDER BY` deleted — i.e. it did not actually close this item. Reproduced empirically against `postgres:17-alpine`. Fixed in review by reversing the seed order so insertion order contradicts the expected result order, plus an added guard asserting the two `createdAt` values really did differ after save. The `ORDER BY` is now load-bearing.)
-- `PaymentMethodCard.vue`'s `watch(showForm)` has no in-flight guard against rapid toggle races between async `mountCardElement()` and sync `unmountCardElement()` — low-probability, self-heals on the next full remount. [`PaymentMethodCard.vue:124-127`]
+- `PaymentMethodCard.vue`'s `watch(showForm)` has no in-flight guard against rapid toggle races between async `mountCardElement()` and sync `unmountCardElement()` — low-probability, self-heals on the next full remount. [`PaymentMethodCard.vue:124-127`] `[PICKED UP by skillars-deferred-59 AC4]`
 - `PaymentMethodCard.vue`'s `stripeUnavailable` state has no retry affordance short of a full page reload — AC2 only requires the unavailable message + disabled submit, which is satisfied; a retry action would be a UX enhancement beyond spec scope. [`PaymentMethodCard.vue:86-106`]
 - No frontend tests (Vitest/Vue Test Utils) were added for `PaymentMethodCard.vue` or the new `payment.store.js` actions (`fetchStripeConfig`, `fetchSavedPaymentMethod`) — real coverage gap on a component with non-trivial lifecycle logic. [`PaymentMethodCard.vue`, `payment.store.js`]
 
@@ -674,11 +674,11 @@ the story text first, then implemented as corrected:
 - W4: Skill deactivation silently drops baseline from display — `findAllByActiveTrueOrderByDisplayOrderAsc` excludes inactive skills; baseline re-appears on reactivation [`RadarDisplayService.java:39`]
 - W5: IT `assertThat(minimumSessionCount).isEqualTo(5L)` hardcodes config value — low risk with Testcontainers; `ON CONFLICT DO NOTHING` in V51 migration [`RadarDisplayResourceIT.java:333`]
 - W7: `IMPROVEMENT_THRESHOLD = 3.0` hardcoded — exactly-3-point improvement classified as "no improvement"; explicitly accepted in spec dev notes; configurable in a future story [`DevelopmentCorrelationService.java:33`]
-- W8: `(int)` cast on `totalCount` in `RadarCompositeCalculationService` — pre-existing silent overflow for very high entry counts; not introduced in this diff (see DEF6) [`RadarCompositeCalculationService.java`]
+- W8: `(int)` cast on `totalCount` in `RadarCompositeCalculationService` — pre-existing silent overflow for very high entry counts; not introduced in this diff (see DEF6) [`RadarCompositeCalculationService.java`] `[PICKED UP by skillars-deferred-59 AC1]`
 - W9: `SkillsRadarChartSpec.js` tests cannot run — vitest / `@vue/test-utils` not installed; explicitly accepted in story completion notes; frontend test-runner setup is a separate initiative
 
 ## Deferred from: code review of skillars-5-3-skills-radar-assessment-entry-multi-coach-cumulation — Pass 2 (2026-06-19)
-- DEF6: `entry_count` long→double→int narrowing in composite calculator — count from native SQL is cast double→int; silently overflows above Integer.MAX_VALUE; irrelevant at current volumes [`RadarCompositeCalculationService.java:61-69`]
+- DEF6: `entry_count` long→double→int narrowing in composite calculator — count from native SQL is cast double→int; silently overflows above Integer.MAX_VALUE; irrelevant at current volumes [`RadarCompositeCalculationService.java:61-69`] `[PICKED UP by skillars-deferred-59 AC1]`
 - DEF6: Orphaned `player_radar_composites` rows on player deletion — `player_id` column has no FK to `player_profiles`; deleted player leaves stale composite rows; pre-existing no-FK pattern across the development module [`player_radar_composites`, `V50__radar_assessment_entries.sql`]
 - DEF7: Async composite silently stales on failure — `@Async` listener swallows all exceptions (logged only); no retry/dead-letter queue; composite frozen at prior value until next submission triggers recomputation; accepted per story dev notes [`RadarCompositeCalculationService.java:onRadarEntrySubmitted`]
 
@@ -772,7 +772,7 @@ the story text first, then implemented as corrected:
 
 ## Deferred from: external code review of skillars-4-1-drill-library-foundation (2026-06-17)
 - D1: `resolveMinEnabledTier` returns `"NONE"` when all gate config keys are false — misleading required-tier in `FeatureGatedException`; low-probability misconfiguration edge case [`DrillLibraryService.java:103-110`] `[CLOSED by skillars-deferred-22 AC3]`
-- D2: `DrillVideoRef.save()` issues merge (SELECT + INSERT) instead of persist (INSERT-only) — extra SELECT on clone ref insert; no data corruption in normal flow; fix with `Persistable<UUID>` implementation when performance becomes a concern [`DrillLibraryService.java:82`]
+- D2: `DrillVideoRef.save()` issues merge (SELECT + INSERT) instead of persist (INSERT-only) — extra SELECT on clone ref insert; no data corruption in normal flow; fix with `Persistable<UUID>` implementation when performance becomes a concern [`DrillLibraryService.java:82`] `[PICKED UP by skillars-deferred-59 AC2]`
 
 ## Deferred from: code review of skillars-4-1-drill-library-foundation (2026-06-17)
 - D1: `session` schema name is a PostgreSQL non-reserved keyword — works on all tested PG versions; renaming after migration is written would require a destructive V40 migration [`V38__session_module_init.sql`]
@@ -820,7 +820,7 @@ the story text first, then implemented as corrected:
 ## Deferred from: code review of skillars-3-3-booking-request-approval-workflow Group B (2026-06-15)
 - No duplicate-booking guard for same slot — multiple REQUESTED bookings for same player/coach/timeslot are possible; credit soft-reservation handles the economic constraint; add a unique partial index on (player_id, coach_id, requested_start_time) WHERE status IN (...) in a future scheduling-conflicts story [BookingService.java:createBookingRequest, V31 migration]
 - N+1 player name + credit queries in `getParentBookings` — already tracked from Group A
-- All availability windows have invalid timezone → misleading 403; add a distinct error code or admin-visible flag when no valid windows exist vs. slot outside valid windows [BookingService.java:isSlotWithinAvailabilityWindow]
+- All availability windows have invalid timezone → misleading 403; add a distinct error code or admin-visible flag when no valid windows exist vs. slot outside valid windows [BookingService.java:isSlotWithinAvailabilityWindow] `[PICKED UP by skillars-deferred-59 AC3]`
 - Midnight-crossing sessions fail/pass incorrectly in availability window check because endZdt.toLocalTime() wraps past midnight; add explicit day-boundary guard when requestedEnd < requestedStart (in LocalTime) [BookingService.java:228-232]
 - DST transition can shift booking time by 1h relative to window boundary; acceptable for current scope; revisit when timezone management (Story 3.5) is implemented [BookingService.java:isSlotWithinAvailabilityWindow]
 - `w.getDayOfWeek()` vs JS 0-based day format — verify that the availability-windows frontend sends ISO 1-7 (not JS 0-6); pre-existing from Story 3.1 [BookingService.java:230, CreateWindowRequest.java]
@@ -1013,7 +1013,7 @@ the story text first, then implemented as corrected:
 - `bantime=3600s` in fail2ban is a minimal starter value — inadequate for production. 1-hour bans are bypassed by slow-rate botnets. Pre-existing Story 1.1 config [deploy/provision.sh].
 - No rollback / disaster-recovery documentation — explicitly out of scope for Story 1.5; belongs to Epic 3 (Stories 3.2 and 3.4).
 - git clone root (`/opt/skillars`) contains the volume data subdirectory (`/opt/skillars/data`) — `git clean` could interact with data dirs if `.gitignore` coverage lapses. Pre-existing architecture.
-- `apply-firewall.sh` accumulates old SSH allowlist rules when re-run with a different `SSH_ALLOWLIST_IP` — delete step targets `0.0.0.0/0` source, not the previously-set specific CIDR. Pre-existing script bug from Story 1.1 [deploy/firewall/apply-firewall.sh].
+- `apply-firewall.sh` accumulates old SSH allowlist rules when re-run with a different `SSH_ALLOWLIST_IP` — delete step targets `0.0.0.0/0` source, not the previously-set specific CIDR. Pre-existing script bug from Story 1.1 [deploy/firewall/apply-firewall.sh]. `[PICKED UP by skillars-deferred-59 AC5]`
 
 ## Deferred from: code review of deploy-1-4-security-hardening (2026-06-03)
 - `err()` writes to stderr — lost in stdout-only log capture; if callers redirect stdout to a log file, error messages won't appear in it [deploy/provision.sh].
