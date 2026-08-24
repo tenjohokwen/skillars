@@ -27,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -136,5 +137,82 @@ class PlaybackServiceTest {
         playbackService.authorizePlayback(videoId, viewerId);
 
         verify(quotaService, never()).incrementBandwidthUsedBytes(anyString(), anyLong());
+    }
+
+    // ── Deferred-63 AC3: bandwidth dedup per viewer+video+time-bucket ─────────────
+
+    @Test
+    void authorizePlayback_activeTokenExistsForSameViewerAndVideo_skipsBandwidthChargeButStillAuthorizes() {
+        UUID videoId = UUID.randomUUID();
+        String viewerId = "viewer-1";
+        String ownerId = "owner-1";
+        long storageBytes = 123_456L;
+
+        Video video = new Video();
+        video.setOwnerId(ownerId);
+        video.setOperationalState(OperationalState.READY);
+        video.setAccessState(AccessState.ACTIVE);
+        video.setProviderAssetId("bunny-asset-1");
+        video.setStorageBytes(storageBytes);
+
+        PlaybackToken savedToken = new PlaybackToken();
+        savedToken.setId(UUID.randomUUID());
+        savedToken.setVideoId(videoId);
+        savedToken.setViewerId(viewerId);
+        savedToken.setExpiresAt(Instant.now().plusSeconds(900));
+
+        when(configService.getLong("platform.video.playback.signed_url_ttl_minutes", 120L)).thenReturn(120L);
+        when(configService.getBoolean("platform.video.playback.ip_binding_enabled", false)).thenReturn(false);
+        when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
+        when(videoProviderAdapter.generatePlaybackUrl(anyString(), any(PlaybackTokenClaims.class)))
+            .thenReturn(new SignedPlaybackUrl("https://cdn/playlist.m3u8?token=test", Instant.now().plusSeconds(900)));
+        when(playbackTokenRepository.existsActiveForViewerAndVideo(eq(viewerId), eq(videoId), any(Instant.class)))
+            .thenReturn(true);
+        when(playbackTokenRepository.save(any(PlaybackToken.class))).thenReturn(savedToken);
+
+        var response = playbackService.authorizePlayback(videoId, viewerId);
+
+        assertThat(response.token()).isNotBlank();
+        verify(quotaService, never()).incrementBandwidthUsedBytes(anyString(), anyLong());
+        // Dedup only skips the bandwidth charge — playback is still authorized and a fresh token issued.
+        verify(playbackTokenRepository).save(any(PlaybackToken.class));
+    }
+
+    @Test
+    void authorizePlayback_noActiveTokenForThisViewerAndVideo_chargesBandwidthNormally() {
+        // Covers both "a distinct viewer of the same video still charges independently" and
+        // "charging resumes once the prior token has expired/been revoked" — both collapse to the
+        // repository query returning false, exactly what it is designed to do once no token is both
+        // active (unexpired, unrevoked) and owned by this specific viewer+video pair.
+        UUID videoId = UUID.randomUUID();
+        String viewerId = "viewer-2";
+        String ownerId = "owner-1";
+        long storageBytes = 55_000L;
+
+        Video video = new Video();
+        video.setOwnerId(ownerId);
+        video.setOperationalState(OperationalState.READY);
+        video.setAccessState(AccessState.ACTIVE);
+        video.setProviderAssetId("bunny-asset-1");
+        video.setStorageBytes(storageBytes);
+
+        PlaybackToken savedToken = new PlaybackToken();
+        savedToken.setId(UUID.randomUUID());
+        savedToken.setVideoId(videoId);
+        savedToken.setViewerId(viewerId);
+        savedToken.setExpiresAt(Instant.now().plusSeconds(900));
+
+        when(configService.getLong("platform.video.playback.signed_url_ttl_minutes", 120L)).thenReturn(120L);
+        when(configService.getBoolean("platform.video.playback.ip_binding_enabled", false)).thenReturn(false);
+        when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
+        when(videoProviderAdapter.generatePlaybackUrl(anyString(), any(PlaybackTokenClaims.class)))
+            .thenReturn(new SignedPlaybackUrl("https://cdn/playlist.m3u8?token=test", Instant.now().plusSeconds(900)));
+        when(playbackTokenRepository.existsActiveForViewerAndVideo(eq(viewerId), eq(videoId), any(Instant.class)))
+            .thenReturn(false);
+        when(playbackTokenRepository.save(any(PlaybackToken.class))).thenReturn(savedToken);
+
+        playbackService.authorizePlayback(videoId, viewerId);
+
+        verify(quotaService).incrementBandwidthUsedBytes(ownerId, storageBytes);
     }
 }

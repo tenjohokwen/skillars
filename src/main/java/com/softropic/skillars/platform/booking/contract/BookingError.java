@@ -38,7 +38,8 @@ public enum BookingError implements ErrorCode {
     BATCH_NONE_ACCEPTED,
     BOOKING_NOT_RESCHEDULABLE,
     RESCHEDULE_ALREADY_PENDING,
-    RESCHEDULE_NOT_PENDING;
+    RESCHEDULE_NOT_PENDING,
+    NO_SHOW_TOO_EARLY;
 
     @Override
     public String getErrorCode() {
@@ -54,6 +55,7 @@ public enum BookingError implements ErrorCode {
             case BOOKING_NOT_RESCHEDULABLE -> "booking.notReschedulable";
             case RESCHEDULE_ALREADY_PENDING -> "booking.rescheduleAlreadyPending";
             case RESCHEDULE_NOT_PENDING    -> "booking.rescheduleNotPending";
+            case NO_SHOW_TOO_EARLY         -> "booking.noShowTooEarly";
         };
     }
 }

@@ -112,11 +112,17 @@ public class PlaybackService {
             // API "Get Video Statistics" response has no bandwidth field). Approximate: charge the
             // video's own file size to its owner — the same owner storage_used_bytes already charges
             // for hosting cost, not the viewer — once per successful playback authorization.
+            // Deferred-63 AC3: dedup per viewer+video+time-bucket, tied to the token TTL just computed
+            // above — a re-authorization while a prior token for the same viewer+video is still active
+            // is the same viewing session, so it must not re-charge; once that token expires or is
+            // revoked, the next authorization charges again.
             // Isolated in its own try/catch: this is internal bookkeeping only, and the signed playback
             // URL above has already been issued by the provider — a transient bandwidth-tracking failure
             // (e.g. a DB error) must not deny an otherwise-legitimate playback.
             Long storageBytes = video.getStorageBytes();
-            if (storageBytes != null && storageBytes > 0) {
+            boolean alreadyChargedThisSession =
+                playbackTokenRepository.existsActiveForViewerAndVideo(viewerId, videoId, Instant.now());
+            if (storageBytes != null && storageBytes > 0 && !alreadyChargedThisSession) {
                 try {
                     quotaService.incrementBandwidthUsedBytes(video.getOwnerId(), storageBytes);
                 } catch (Exception ex) {
