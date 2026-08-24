@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.booking.service;
 
 import com.softropic.skillars.infrastructure.exception.ApplicationException;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.booking.contract.ActorRole;
 import com.softropic.skillars.platform.booking.contract.BatchAcceptResult;
@@ -66,6 +67,7 @@ public class BookingBatchService {
     private final SessionDurationResolver sessionDurationResolver;
     private final CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
     private final PlatformTransactionManager transactionManager;
+    private final PessimisticLockRetryer lockRetryer;
 
     /**
      * REQUIRES_NEW per booking, mirroring {@code PaymentLifecycleService.perBookingTx}. A failure in
@@ -375,8 +377,8 @@ public class BookingBatchService {
      * match itself and mask the real state-transition error.
      */
     private void acceptOneBooking(Booking booking, UUID coachId, Long coachUserId) {
-        CoachProfile lockedCoach = coachProfileRepository.findByIdForUpdate(coachId)
-            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+        CoachProfile lockedCoach = lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(coachId)
+            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile")));
         // Deferred-15 AC4. No entityManager.refresh here, unlike the other two accept paths: this
         // method runs inside a REQUIRES_NEW transaction with its own persistence context, so the
         // coach row is not already managed and the locked read genuinely returns fresh state. (On

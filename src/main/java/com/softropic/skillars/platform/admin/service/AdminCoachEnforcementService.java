@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.admin.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.admin.contract.AdminActionType;
 import com.softropic.skillars.platform.admin.contract.CoachCancellationHistoryEntryDto;
 import com.softropic.skillars.platform.admin.contract.CoachEnforcementListItemDto;
@@ -67,6 +68,7 @@ public class AdminCoachEnforcementService {
     private final ReliabilityStrikeService reliabilityStrikeService;
     private final ConfigService configService;
     private final ApplicationEventPublisher eventPublisher;
+    private final PessimisticLockRetryer lockRetryer;
 
     @Transactional(readOnly = true)
     public CoachEnforcementProfileDto getEnforcementProfile(UUID coachId) {
@@ -102,8 +104,8 @@ public class AdminCoachEnforcementService {
         // row lock — but two writers serialise only when BOTH take it. With a plain findById the
         // suspension could read, write and commit entirely inside the window an accept path holds
         // its lock, making that lock decorative.
-        CoachProfile coach = coachProfileRepository.findByIdForUpdate(coachId)
-            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+        CoachProfile coach = lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(coachId)
+            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile")));
 
         if (coach.getStatus() == CoachProfileStatus.SUSPENDED) {
             return;

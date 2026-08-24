@@ -25,11 +25,15 @@ public interface CoachProfileRepository
 
     boolean existsByUserId(Long userId);
 
-    // Bounded lock wait (review patch): without this, contention on a popular coach's row blocks
-    // the requesting thread indefinitely instead of failing cleanly — see ApiAdvice's
-    // PessimisticLockingFailureException handler for the resulting 409 mapping.
+    // skillars-deferred-62: jakarta.persistence.lock.timeout has no effect on Postgres for any finite
+    // value — Hibernate's PostgreSQLDialect only special-cases NO_WAIT (0) and SKIP_LOCKED (-2). "0"
+    // here means NO_WAIT: contention fails immediately with PessimisticLockingFailureException rather
+    // than blocking. Every one of this method's 7 call sites wraps it in PessimisticLockRetryer,
+    // which retries that failure from a JDBC savepoint with a short backoff (~3.2s budget across 8
+    // attempts) so a brief, legitimate overlap between two requests still succeeds — contention that
+    // outlasts the budget surfaces as ApiAdvice's PessimisticLockingFailureException handler's 409.
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "5000"))
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "0"))
     @Query("SELECT c FROM CoachProfile c WHERE c.id = :id")
     Optional<CoachProfile> findByIdForUpdate(@Param("id") UUID id);
 

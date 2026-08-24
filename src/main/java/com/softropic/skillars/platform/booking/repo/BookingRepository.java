@@ -185,10 +185,11 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     // much later, in separate transactions, so @Version cannot serialise them — a cancel could
     // commit inside the window between a Stripe capture and the row that records it. Both now take
     // this lock and re-read under it. Annotation stack copied from
-    // BookingRescheduleRequestRepository.findByIdForUpdate, including the bounded lock wait —
-    // without it, contention blocks the caller indefinitely instead of surfacing as ApiAdvice's 409.
+    // BookingRescheduleRequestRepository.findByIdForUpdate, including the NO_WAIT +
+    // PessimisticLockRetryer bounded-retry pair (skillars-deferred-62) — see
+    // CoachProfileRepository.findByIdForUpdate's comment for the full mechanism.
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "5000"))
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "0"))
     @Query("SELECT b FROM Booking b WHERE b.id = :id")
     Optional<Booking> findByIdForUpdate(@Param("id") UUID id);
 }

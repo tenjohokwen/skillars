@@ -9,6 +9,7 @@ How the integration-test suite is wired, why it is wired that way, and what you 
 | [Why inheritance, not `@Import(TestConfig.class)`](why-inheritance-over-import.md) | Why ~130 test classes moved from copy-pasted annotation headers to a shared base class, what it cost us not to, and the honest case against the choice. **Start here.** |
 | [Container architecture](container-architecture.md) | Why PostgreSQL/Redis/MinIO are JVM-static and deliberately *not* Spring beans. Read before touching `TestConfig`. |
 | [Test data isolation](test-data-isolation.md) | How each test gets a clean database, which tables must never be truncated and why, and the fixture-id registry. |
+| [Pessimistic lock retry](../persistence/pessimistic-lock-retry.md) | Staging a concurrency test against a `NO_WAIT`-locked repository — including why polling `pg_locks` for a "blocked" session no longer works as a staging technique now that contention fails fast instead of blocking. |
 
 ---
 

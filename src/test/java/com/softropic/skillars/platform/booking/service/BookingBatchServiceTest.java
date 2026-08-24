@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.booking.service;
 
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.booking.contract.BatchAcceptResult;
 import com.softropic.skillars.platform.booking.contract.BatchBookingAcceptedEvent;
 import com.softropic.skillars.platform.booking.contract.BatchBookingCreatedResponse;
@@ -69,6 +70,7 @@ class BookingBatchServiceTest {
     @Mock CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
     @Mock PlatformTransactionManager transactionManager;
     @Mock TransactionStatus transactionStatus;
+    @Mock PessimisticLockRetryer lockRetryer;
 
     @InjectMocks BookingBatchService service;
 
@@ -81,6 +83,8 @@ class BookingBatchServiceTest {
     void initTemplates() {
         lenient().when(transactionManager.getTransaction(any())).thenReturn(transactionStatus);
         service.initTransactionTemplates();
+        lenient().when(lockRetryer.withBoundedRetry(any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
         // UAT.2 AC4: every buildRequest() slot is exactly one hour and inside the coach's
         // availability. Lenient because the tests that fail earlier (batch size, ownership,
         // inactive coach) never reach either check.

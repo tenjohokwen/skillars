@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.payment.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.contract.SavedPaymentMethodResponse;
@@ -14,6 +15,7 @@ import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.stripe.model.PaymentMethod;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -30,6 +32,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -44,8 +47,15 @@ class SessionPackPaymentServiceTest {
     @Mock PlayerProfileRepository playerProfileRepository;
     @Mock PaymentGateway paymentGateway;
     @Mock StripeClient stripeClient;
+    @Mock PessimisticLockRetryer lockRetryer;
 
     @InjectMocks SessionPackPaymentService sessionPackPaymentService;
+
+    @BeforeEach
+    void setUpLockRetryer() {
+        lenient().when(lockRetryer.withBoundedRetry(any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
+    }
 
     private static final Long PARENT_ID = 8001L;
     private static final Long PLAYER_ID = 8002L;

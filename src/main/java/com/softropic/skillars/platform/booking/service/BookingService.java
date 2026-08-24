@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.booking.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.booking.contract.ActorRole;
 import com.softropic.skillars.platform.booking.contract.BookingError;
@@ -124,6 +125,7 @@ public class BookingService {
     // PaymentGateway.
     private final BookingPaymentRepository bookingPaymentRepository;
     private final EntityManager entityManager;
+    private final PessimisticLockRetryer lockRetryer;
 
     // Package-private, not private: AvailabilityService reuses this exact status set to exclude
     // already-booked slots from the availability calendar (Deferred-18 AC1) — same rationale as
@@ -230,13 +232,16 @@ public class BookingService {
         // read at the top of this method and the lock being granted would otherwise still let the
         // booking through. orElseThrow guards against the lock silently no-op'ing if the coach row
         // vanished mid-request.
-        CoachProfile lockedCoach = coachProfileRepository.findByIdForUpdate(req.coachId())
-            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
-        // The explicit refresh is required, not defensive: findByIdForUpdate is a JPQL query and the
-        // same row is already managed from the findById above, so Hibernate takes the DB lock but
-        // returns the existing instance without overwriting its in-memory state. Reading getStatus()
-        // off lockedCoach without this would re-check the same stale value and could never fire.
-        entityManager.refresh(lockedCoach, LockModeType.PESSIMISTIC_WRITE);
+        CoachProfile lockedCoach = lockRetryer.withBoundedRetry(() -> {
+            CoachProfile c = coachProfileRepository.findByIdForUpdate(req.coachId())
+                .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+            // The explicit refresh is required, not defensive: findByIdForUpdate is a JPQL query and the
+            // same row is already managed from the findById above, so Hibernate takes the DB lock but
+            // returns the existing instance without overwriting its in-memory state. Reading getStatus()
+            // off lockedCoach without this would re-check the same stale value and could never fire.
+            entityManager.refresh(c, LockModeType.PESSIMISTIC_WRITE);
+            return c;
+        });
         if (lockedCoach.getStatus() == CoachProfileStatus.SUSPENDED) {
             throw new OperationNotAllowedException("Coach is suspended", metaData, BookingError.COACH_UNAVAILABLE);
         }
@@ -320,16 +325,19 @@ public class BookingService {
 
         // AC 3: re-check for a slot conflict that may have appeared since this booking was
         // REQUESTED (e.g. the coach already accepted a different overlapping request).
-        CoachProfile lockedCoach = coachProfileRepository.findByIdForUpdate(coach.getId())
-            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
-        // Deferred-15 AC4: a suspended coach must not be able to accept work. The refresh is
-        // required, not defensive — this row is already managed from the findByUserId above, so the
-        // JPQL locked read returns that instance without overwriting its in-memory state and the
-        // check could never fire. Identical reasoning to createBookingRequest:203-207. Note the
-        // second-order effect this closes: suspendCoach only cancels REQUESTED bookings, so a
-        // booking accepted inside its window moves to PAYMENT_PENDING and survives with a
-        // suspended coach, invisible to that sweep.
-        entityManager.refresh(lockedCoach, LockModeType.PESSIMISTIC_WRITE);
+        CoachProfile lockedCoach = lockRetryer.withBoundedRetry(() -> {
+            CoachProfile c = coachProfileRepository.findByIdForUpdate(coach.getId())
+                .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+            // Deferred-15 AC4: a suspended coach must not be able to accept work. The refresh is
+            // required, not defensive — this row is already managed from the findByUserId above, so the
+            // JPQL locked read returns that instance without overwriting its in-memory state and the
+            // check could never fire. Identical reasoning to createBookingRequest:203-207. Note the
+            // second-order effect this closes: suspendCoach only cancels REQUESTED bookings, so a
+            // booking accepted inside its window moves to PAYMENT_PENDING and survives with a
+            // suspended coach, invisible to that sweep.
+            entityManager.refresh(c, LockModeType.PESSIMISTIC_WRITE);
+            return c;
+        });
         if (lockedCoach.getStatus() == CoachProfileStatus.SUSPENDED) {
             throw new OperationNotAllowedException("Coach is suspended",
                 Map.of("submitted coach id", coach.getId()), BookingError.COACH_UNAVAILABLE);
@@ -634,8 +642,8 @@ public class BookingService {
         if (!Objects.equals(unlocked.getParentId(), parentUserId)) {
             throw new OperationNotAllowedException("Parent does not own this booking", SecurityError.MISSING_RIGHTS);
         }
-        Booking booking = bookingRepository.findByIdForUpdate(bookingId)
-            .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking"));
+        Booking booking = lockRetryer.withBoundedRetry(() -> bookingRepository.findByIdForUpdate(bookingId)
+            .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking")));
         long hoursBeforeSession = ChronoUnit.HOURS.between(Instant.now(), booking.getRequestedStartTime());
         // Deferred-12 AC4: money only ever leaves the parent (credit debit / pack unit deduction)
         // once payment has been captured, i.e. from CONFIRMED onwards. Everything else — notably

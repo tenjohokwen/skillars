@@ -53,6 +53,17 @@ class BookingServiceConcurrencyIT extends AbstractIntegrationTest {
 
     private static final String WINDOW_TZ = "Europe/Berlin";
 
+    /**
+     * How long the lock-holding thread in the three tests below keeps the coach_profiles row
+     * locked before releasing it. skillars-deferred-62 made findByIdForUpdate NO_WAIT, so a
+     * NOWAIT collision leaves no pg_locks "waiting" trace to poll for any more — this fixed hold
+     * replaces that polling. Must comfortably outlast the contending thread's wake-from-latch and
+     * first-attempt latency under CI load (so its first attempt is guaranteed to collide), while
+     * staying well inside PessimisticLockRetryer's ~3.2s default retry budget (so the contending
+     * thread's retry succeeds afterward rather than exhausting its budget and surfacing a 409).
+     */
+    private static final long COACH_LOCK_HOLD_MILLIS = 2000;
+
     private UUID coachProfileId;
     private Instant slotStart;
     private Instant slotEnd;
@@ -261,18 +272,17 @@ class BookingServiceConcurrencyIT extends AbstractIntegrationTest {
                         "UPDATE marketplace.coach_profiles SET status = 'SUSPENDED' WHERE id = ?",
                         coachProfileId);
                     suspensionStagedAndLockHeld.countDown();
-                    // Hold the lock until the booking thread is genuinely blocked on
-                    // findByIdForUpdate, not for a fixed guessed duration.
+                    // See COACH_LOCK_HOLD_MILLIS's javadoc: this fixed hold takes the place of the
+                    // pg_locks polling this test used before NO_WAIT, guaranteeing the booking
+                    // thread's first attempt collides while this transaction is still open and
+                    // uncommitted — exactly the window a missing/broken lock would let slip through
+                    // with a stale (pre-SUSPENDED) read.
                     try {
-                        awaitAnotherSessionBlockedOnCoachProfileLock(Duration.ofSeconds(10));
+                        Thread.sleep(COACH_LOCK_HOLD_MILLIS);
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
-                        // Do not silently fall through to commit: an interrupt here means the block was
-                        // never confirmed, so releasing the lock now would reintroduce the exact
-                        // non-determinism this helper exists to eliminate.
-                        throw new AssertionError("Interrupted before observing the booking thread "
-                            + "genuinely blocked on the coach_profiles lock — results below are not "
-                            + "trustworthy.", e);
+                        throw new AssertionError("Interrupted while holding the coach_profiles lock — "
+                            + "results below are not trustworthy.", e);
                     }
                     return null;
                 });
@@ -282,14 +292,19 @@ class BookingServiceConcurrencyIT extends AbstractIntegrationTest {
         });
 
         AtomicReference<Throwable> bookingOutcome = new AtomicReference<>();
+        AtomicReference<Instant> bookingCallStartedAt = new AtomicReference<>();
+        AtomicReference<Instant> bookingCallEndedAt = new AtomicReference<>();
         Future<?> booker = executor.submit(() -> {
             try {
                 suspensionStagedAndLockHeld.await(10, TimeUnit.SECONDS);
+                bookingCallStartedAt.set(Instant.now());
                 bookingService.createBookingRequest(PARENT_ID_1, req);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             } catch (Throwable t) {
                 bookingOutcome.set(t);
+            } finally {
+                bookingCallEndedAt.set(Instant.now());
             }
         });
 
@@ -300,6 +315,13 @@ class BookingServiceConcurrencyIT extends AbstractIntegrationTest {
         if (suspenderFailure.get() != null) {
             throw new AssertionError("Suspending thread failed", suspenderFailure.get());
         }
+
+        assertThat(Duration.between(bookingCallStartedAt.get(), bookingCallEndedAt.get()))
+            .as("must have taken close to the full lock-hold duration via NO_WAIT retry, not just "
+                + "some incidental delay — a near-instant or barely-delayed outcome would mean the "
+                + "booking thread never actually contended for the coach-profile lock, making this "
+                + "test's proof worthless")
+            .isGreaterThanOrEqualTo(Duration.ofMillis(COACH_LOCK_HOLD_MILLIS - 300));
 
         assertThat(bookingOutcome.get())
             .as("Booking must be rejected once the locked re-read sees the SUSPENDED coach")
@@ -346,16 +368,15 @@ class BookingServiceConcurrencyIT extends AbstractIntegrationTest {
                     jdbcTemplate.update(
                         "UPDATE marketplace.coach_profiles SET status = 'SUSPENDED' WHERE id = ?", coachProfileId);
                     suspensionStagedAndLockHeld.countDown();
+                    // See COACH_LOCK_HOLD_MILLIS's javadoc, and the identical comment in
+                    // createBookingRequest_coachSuspendedAfterUnlockedRead_isRejectedWithCoachUnavailable
+                    // above.
                     try {
-                        awaitAnotherSessionBlockedOnCoachProfileLock(Duration.ofSeconds(10));
+                        Thread.sleep(COACH_LOCK_HOLD_MILLIS);
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
-                        // Do not silently fall through to commit: an interrupt here means the block was
-                        // never confirmed, so releasing the lock now would reintroduce the exact
-                        // non-determinism this helper exists to eliminate.
-                        throw new AssertionError("Interrupted before observing the accepting thread "
-                            + "genuinely blocked on the coach_profiles lock — results below are not "
-                            + "trustworthy.", e);
+                        throw new AssertionError("Interrupted while holding the coach_profiles lock — "
+                            + "results below are not trustworthy.", e);
                     }
                     return null;
                 });
@@ -364,14 +385,19 @@ class BookingServiceConcurrencyIT extends AbstractIntegrationTest {
             }
         });
 
+        AtomicReference<Instant> acceptCallStartedAt = new AtomicReference<>();
+        AtomicReference<Instant> acceptCallEndedAt = new AtomicReference<>();
         Future<?> accepter = executor.submit(() -> {
             try {
                 suspensionStagedAndLockHeld.await(10, TimeUnit.SECONDS);
+                acceptCallStartedAt.set(Instant.now());
                 bookingService.acceptBooking(booking.getId(), COACH_USER_ID);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             } catch (Throwable t) {
                 acceptOutcome.set(t);
+            } finally {
+                acceptCallEndedAt.set(Instant.now());
             }
         });
 
@@ -382,6 +408,13 @@ class BookingServiceConcurrencyIT extends AbstractIntegrationTest {
         if (suspenderFailure.get() != null) {
             throw new AssertionError("Suspending thread failed", suspenderFailure.get());
         }
+
+        assertThat(Duration.between(acceptCallStartedAt.get(), acceptCallEndedAt.get()))
+            .as("must have taken close to the full lock-hold duration via NO_WAIT retry, not just "
+                + "some incidental delay — a near-instant or barely-delayed outcome would mean the "
+                + "accepting thread never actually contended for the coach-profile lock, making this "
+                + "test's proof worthless")
+            .isGreaterThanOrEqualTo(Duration.ofMillis(COACH_LOCK_HOLD_MILLIS - 300));
 
         assertThat(acceptOutcome.get())
             .as("the accept must fail once the locked re-read sees the SUSPENDED coach")
@@ -399,12 +432,17 @@ class BookingServiceConcurrencyIT extends AbstractIntegrationTest {
      * coach-profile row lock {@code RescheduleService.acceptReschedule} and
      * {@code BookingDuplicationService.duplicateNextWeek} already take when reading these windows.
      * Same staging as the two suspend tests above: a raw-SQL thread takes {@code SELECT ... FOR
-     * UPDATE} on the coach row and holds it until the real {@code saveStep4} call is genuinely
-     * parked on the same lock, then commits. {@code saveStep4} cannot itself call the private
-     * {@code awaitAnotherSessionBlockedOnCoachProfileLock} helper — that would require a test-only
-     * hook into production code — but Postgres row locks are symmetric regardless of which query
-     * path acquires them, so proving {@code saveStep4} blocks against this raw lock is sufficient
-     * evidence that it now shares it with the two existing readers proven above.
+     * UPDATE} on the coach row and holds it for a fixed duration, then commits. Postgres row locks
+     * are symmetric regardless of which query path acquires them, so proving {@code saveStep4}
+     * contends for this raw lock is sufficient evidence that it now shares it with the two existing
+     * readers proven above.
+     *
+     * <p>skillars-deferred-62: {@code findByIdForUpdate} is now {@code NO_WAIT} plus a bounded retry
+     * ({@link com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer}), so there is
+     * no genuine DB-level block to poll pg_locks for any more — a NOWAIT failure leaves no trace
+     * there. The fixed hold below comfortably outlasts the time it takes {@code saveStep4} to wake
+     * from its latch and issue its first (necessarily contended) attempt, and is comfortably inside
+     * the retry budget so the eventual retry succeeds rather than exhausting it into a 409.
      */
     @Test
     void saveStep4_coachRowLockedByAnotherSession_blocksUntilReleasedThenWritesCorrectly() throws Exception {
@@ -421,15 +459,13 @@ class BookingServiceConcurrencyIT extends AbstractIntegrationTest {
                         "SELECT status FROM marketplace.coach_profiles WHERE id = ? FOR UPDATE",
                         String.class, coachProfileId);
                     lockHeld.countDown();
+                    // See COACH_LOCK_HOLD_MILLIS's javadoc.
                     try {
-                        awaitAnotherSessionBlockedOnCoachProfileLock(Duration.ofSeconds(10));
+                        Thread.sleep(COACH_LOCK_HOLD_MILLIS);
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
-                        // Do not silently fall through to commit: an interrupt here means the block was
-                        // never confirmed, so releasing the lock now would reintroduce the exact
-                        // non-determinism this helper exists to eliminate.
-                        throw new AssertionError("Interrupted before observing saveStep4 genuinely "
-                            + "blocked on the coach_profiles lock — results below are not trustworthy.", e);
+                        throw new AssertionError("Interrupted while holding the coach_profiles lock — "
+                            + "results below are not trustworthy.", e);
                     }
                     return null;
                 });
@@ -476,43 +512,6 @@ class BookingServiceConcurrencyIT extends AbstractIntegrationTest {
         assertThat(writtenDays)
             .as("the rewrite must still land correctly once the lock is acquired")
             .containsExactly((short) 1);
-    }
-
-    /**
-     * Polls pg_locks until another backend is observed waiting (granted = false) on this session's own
-     * current transaction id, or fails the test if that never happens within the timeout. Deterministic
-     * replacement for a fixed-duration sleep guess — a {@code SELECT ... FOR UPDATE} blocked on a row
-     * this transaction holds does not take a distinct row-level entry in pg_locks; Postgres implements
-     * it as the blocked backend waiting on THIS transaction's xid to complete (locktype = 'transactionid'),
-     * which is exactly what this query targets. pg_locks is a system view reflecting all backends
-     * instance-wide, so polling it from inside this thread's own open transaction (via the same
-     * jdbcTemplate bean already used for the staging UPDATE two lines above) is safe: it is not subject
-     * to this transaction's MVCC row-data snapshot. (An earlier version of this helper matched on
-     * pg_stat_activity.query ILIKE '%coach_profiles%' instead — that field does not reliably reflect the
-     * blocked statement's text while the backend is parked waiting, so it never matched; pg_locks'
-     * blocked-on-our-xid check is the correct, textbook mechanism and has no such ambiguity.)
-     */
-    private void awaitAnotherSessionBlockedOnCoachProfileLock(Duration timeout) throws InterruptedException {
-        Instant deadline = Instant.now().plus(timeout);
-        while (Instant.now().isBefore(deadline)) {
-            Integer blockedCount = jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM pg_locks waiting " +
-                "WHERE waiting.locktype = 'transactionid' AND waiting.granted = false " +
-                "AND waiting.pid != pg_backend_pid() " +
-                "AND waiting.transactionid = pg_current_xact_id()::text::xid " +
-                "AND EXISTS (" +
-                "  SELECT 1 FROM pg_locks rel" +
-                "  WHERE rel.pid = waiting.pid AND rel.relation = 'marketplace.coach_profiles'::regclass" +
-                ")",
-                Integer.class);
-            if (blockedCount != null && blockedCount > 0) {
-                return;
-            }
-            Thread.sleep(50);
-        }
-        throw new AssertionError("No other session was observed blocked on the coach_profiles row lock "
-            + "within " + timeout + " — this test's staging assumption failed, results below are not "
-            + "trustworthy.");
     }
 
     private Booking seedRequestedBooking(long parentId, long playerId, Instant start, Instant end) {

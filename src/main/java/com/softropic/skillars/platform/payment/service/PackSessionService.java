@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.payment.service;
 
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.booking.contract.BatchRuleViolationException;
 import com.softropic.skillars.platform.booking.contract.ConflictingBookingItem;
@@ -47,11 +48,12 @@ public class PackSessionService {
     private final ConfigService configService;
     private final CoachProfileRepository coachProfileRepository;
     private final UserRepository userRepository;
+    private final PessimisticLockRetryer lockRetryer;
 
     @Transactional
     public void deductSession(UUID purchaseId) {
-        SessionPackPurchase purchase = sessionPackPurchaseRepository.findByIdForUpdate(purchaseId)
-            .orElseThrow(() -> new PaymentGatewayException("payment.packNotFound"));
+        SessionPackPurchase purchase = lockRetryer.withBoundedRetry(() -> sessionPackPurchaseRepository.findByIdForUpdate(purchaseId)
+            .orElseThrow(() -> new PaymentGatewayException("payment.packNotFound")));
 
         if (purchase.getRemainingSessions() <= 0) {
             throw new PaymentGatewayException("payment.packExhausted");
@@ -70,8 +72,8 @@ public class PackSessionService {
 
     @Transactional
     public void restoreSession(UUID purchaseId) {
-        SessionPackPurchase purchase = sessionPackPurchaseRepository.findByIdForUpdate(purchaseId)
-            .orElseThrow(() -> new PaymentGatewayException("payment.packNotFound"));
+        SessionPackPurchase purchase = lockRetryer.withBoundedRetry(() -> sessionPackPurchaseRepository.findByIdForUpdate(purchaseId)
+            .orElseThrow(() -> new PaymentGatewayException("payment.packNotFound")));
         purchase.setRemainingSessions(purchase.getRemainingSessions() + 1);
         sessionPackPurchaseRepository.save(purchase);
         log.info("Session restored to pack: purchaseId={}", purchaseId);
@@ -109,8 +111,8 @@ public class PackSessionService {
 
     @Transactional
     public PauseConflictResponse pausePack(Long parentId, UUID purchaseId, PausePackRequest req) {
-        SessionPackPurchase purchase = sessionPackPurchaseRepository.findByIdForUpdate(purchaseId)
-            .orElseThrow(() -> new PaymentGatewayException("payment.packNotFound"));
+        SessionPackPurchase purchase = lockRetryer.withBoundedRetry(() -> sessionPackPurchaseRepository.findByIdForUpdate(purchaseId)
+            .orElseThrow(() -> new PaymentGatewayException("payment.packNotFound")));
         if (!Objects.equals(purchase.getParentId(), parentId)) {
             throw new OperationNotAllowedException("Parent does not own this session pack", SecurityError.MISSING_RIGHTS);
         }

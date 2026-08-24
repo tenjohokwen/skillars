@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.payment.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
@@ -47,6 +48,7 @@ public class SessionPackPaymentService {
     private final PlayerProfileRepository playerProfileRepository;
     private final PaymentGateway paymentGateway;
     private final StripeClient stripeClient;
+    private final PessimisticLockRetryer lockRetryer;
 
     public SessionPackPurchaseResponse purchasePack(Long parentId, UUID packTierId, Long playerId, String paymentMethodId) {
         playerProfileRepository.findByIdAndParentId(playerId, parentId)
@@ -101,8 +103,8 @@ public class SessionPackPaymentService {
         CoachProfile coach = coachProfileRepository.findByUserId(coachUserId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
 
-        SessionPackPurchase purchase = sessionPackPurchaseRepository.findByIdForUpdate(purchaseId)
-            .orElseThrow(() -> new ResourceNotFoundException("Session pack purchase not found", "session_pack_purchase"));
+        SessionPackPurchase purchase = lockRetryer.withBoundedRetry(() -> sessionPackPurchaseRepository.findByIdForUpdate(purchaseId)
+            .orElseThrow(() -> new ResourceNotFoundException("Session pack purchase not found", "session_pack_purchase")));
 
         if (!purchase.getCoachId().equals(coach.getId())) {
             throw new OperationNotAllowedException("Coach does not own this session pack", SecurityError.MISSING_RIGHTS);

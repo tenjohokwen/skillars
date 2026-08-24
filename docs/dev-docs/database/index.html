@@ -195,6 +195,16 @@
 
     <h2>Gotchas</h2>
     <div class="callout warn">
+      <p><strong><code>jakarta.persistence.lock.timeout</code> is a no-op on this Postgres/Hibernate combination.</strong>
+      Hibernate's <code>PostgreSQLDialect.withTimeout(...)</code> only special-cases <code>NO_WAIT</code> (value
+      <code>0</code>) and <code>SKIP_LOCKED</code> (value <code>-2</code>) — any finite millisecond value falls
+      through unchanged, so a <code>@Lock(PESSIMISTIC_WRITE)</code> query with that hint blocks indefinitely under
+      contention, not for the hinted duration. If you need a bounded pessimistic-lock wait, use
+      <code>NO_WAIT</code> plus <code>PessimisticLockRetryer</code> — see
+      <a href="../../persistence/pessimistic-lock-retry.md">docs/persistence/pessimistic-lock-retry.md</a> for why
+      and how.</p>
+    </div>
+    <div class="callout warn">
       <p><strong>Never edit a migration that has been applied anywhere.</strong> Flyway checksums every applied
       file; editing one fails validation on the next startup. The tenant-removal edit to <code>V07</code> was
       only permissible because no persistent environment existed. Add a new migration instead.</p>
@@ -227,6 +237,7 @@
       <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a> — <code>main.shedlock</code> and the jobs that read the config keys seeded by migrations.</li>
       <li><a href="../config/index.html">Config</a> — <code>main.platform_config</code> and its refresh cache.</li>
       <li><a href="../../testing/readme.md">docs/testing/</a> — how the integration suite provisions its Postgres container and resets state between tests.</li>
+      <li><a href="../../persistence/readme.md">docs/persistence/</a> — pessimistic locking on Postgres: why <code>jakarta.persistence.lock.timeout</code> is a no-op here, and <code>PessimisticLockRetryer</code>'s bounded-retry design.</li>
       <li><a href="../../deployment/backup-restore.md">docs/deployment/backup-restore.md</a> — backup and restore procedure.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>

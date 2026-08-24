@@ -16,7 +16,7 @@ import java.util.UUID;
 public interface SessionPackPurchaseRepository extends JpaRepository<SessionPackPurchase, UUID> {
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "5000"))
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "0"))
     @Query("SELECT p FROM SessionPackPurchase p WHERE p.purchaseId = :id")
     Optional<SessionPackPurchase> findByIdForUpdate(@Param("id") UUID id);
 

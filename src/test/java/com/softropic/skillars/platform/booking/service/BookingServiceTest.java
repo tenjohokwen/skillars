@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.booking.service;
 
 import ch.qos.logback.classic.Level;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
@@ -92,6 +93,7 @@ class BookingServiceTest {
     // EntityManager.refresh. A mock makes that a no-op here, which is fine — the real behaviour is
     // proven by BookingServiceConcurrencyIT against a live database, as the AC requires.
     @Mock private EntityManager entityManager;
+    @Mock private PessimisticLockRetryer lockRetryer;
 
     @Spy
     private BookingStateMachine bookingStateMachine = new BookingStateMachine();
@@ -106,6 +108,8 @@ class BookingServiceTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(lockRetryer.withBoundedRetry(any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
         // UAT.2 AC3: every create-path fixture in this class books exactly one hour, which is the
         // platform default. Lenient because the tests that fail before reaching the duration check
         // (unknown player, wrong parent, suspended coach, reversed range) never call it.
