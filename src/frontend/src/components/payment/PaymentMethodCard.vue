@@ -108,10 +108,15 @@ async function ensureStripeReady() {
   return true
 }
 
+let mountGeneration = 0
+
 async function mountCardElement() {
+  const generation = ++mountGeneration
   const ready = await ensureStripeReady()
+  if (generation !== mountGeneration) return
   if (!ready) return
   await nextTick()
+  if (generation !== mountGeneration) return
   if (!cardElementRef.value || cardElement) return
   try {
     cardElement = elements.create('card')
@@ -124,6 +129,7 @@ async function mountCardElement() {
 }
 
 function unmountCardElement() {
+  mountGeneration++
   cardElement?.unmount()
   cardElement = null
   elementsReady.value = false
