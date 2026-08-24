@@ -6,6 +6,8 @@ import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.CreateBookingRequest;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep4Request;
+import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -19,6 +21,7 @@ import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
@@ -38,6 +41,7 @@ class BookingServiceConcurrencyIT extends AbstractIntegrationTest {
 
     @Autowired private BookingService bookingService;
     @Autowired private BookingRepository bookingRepository;
+    @Autowired private CoachProfileService coachProfileService;
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
 
@@ -388,6 +392,90 @@ class BookingServiceConcurrencyIT extends AbstractIntegrationTest {
             .as("a booking accepted here would rest in PAYMENT_PENDING, which suspendCoach's "
                 + "REQUESTED-only cancellation sweep never sees")
             .isEqualTo("REQUESTED");
+    }
+
+    /**
+     * Deferred-58 AC2: {@code CoachProfileService.saveStep4} must now serialize against the same
+     * coach-profile row lock {@code RescheduleService.acceptReschedule} and
+     * {@code BookingDuplicationService.duplicateNextWeek} already take when reading these windows.
+     * Same staging as the two suspend tests above: a raw-SQL thread takes {@code SELECT ... FOR
+     * UPDATE} on the coach row and holds it until the real {@code saveStep4} call is genuinely
+     * parked on the same lock, then commits. {@code saveStep4} cannot itself call the private
+     * {@code awaitAnotherSessionBlockedOnCoachProfileLock} helper — that would require a test-only
+     * hook into production code — but Postgres row locks are symmetric regardless of which query
+     * path acquires them, so proving {@code saveStep4} blocks against this raw lock is sufficient
+     * evidence that it now shares it with the two existing readers proven above.
+     */
+    @Test
+    void saveStep4_coachRowLockedByAnotherSession_blocksUntilReleasedThenWritesCorrectly() throws Exception {
+        CountDownLatch lockHeld = new CountDownLatch(1);
+        AtomicReference<Throwable> lockerFailure = new AtomicReference<>();
+        AtomicReference<Instant> lockReleasedAt = new AtomicReference<>();
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        Future<?> locker = executor.submit(() -> {
+            try {
+                transactionTemplate.execute(status -> {
+                    jdbcTemplate.queryForObject(
+                        "SELECT status FROM marketplace.coach_profiles WHERE id = ? FOR UPDATE",
+                        String.class, coachProfileId);
+                    lockHeld.countDown();
+                    try {
+                        awaitAnotherSessionBlockedOnCoachProfileLock(Duration.ofSeconds(10));
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        // Do not silently fall through to commit: an interrupt here means the block was
+                        // never confirmed, so releasing the lock now would reintroduce the exact
+                        // non-determinism this helper exists to eliminate.
+                        throw new AssertionError("Interrupted before observing saveStep4 genuinely "
+                            + "blocked on the coach_profiles lock — results below are not trustworthy.", e);
+                    }
+                    return null;
+                });
+                lockReleasedAt.set(Instant.now());
+            } catch (Throwable t) {
+                lockerFailure.set(t);
+            }
+        });
+
+        AtomicReference<Instant> saveStep4CompletedAt = new AtomicReference<>();
+        AtomicReference<Throwable> saverFailure = new AtomicReference<>();
+        Future<?> saver = executor.submit(() -> {
+            try {
+                lockHeld.await(10, TimeUnit.SECONDS);
+                ProfileBuilderStep4Request req = new ProfileBuilderStep4Request(List.of(
+                    new ProfileBuilderStep4Request.AvailabilityWindowRequest(
+                        (short) 1, LocalTime.of(9, 0), LocalTime.of(17, 0), WINDOW_TZ)));
+                coachProfileService.saveStep4(COACH_USER_ID, req);
+                saveStep4CompletedAt.set(Instant.now());
+            } catch (Throwable t) {
+                saverFailure.set(t);
+            }
+        });
+
+        locker.get(30, TimeUnit.SECONDS);
+        saver.get(30, TimeUnit.SECONDS);
+        executor.shutdown();
+
+        if (lockerFailure.get() != null) {
+            throw new AssertionError("Locking thread failed", lockerFailure.get());
+        }
+        if (saverFailure.get() != null) {
+            throw new AssertionError("saveStep4 failed", saverFailure.get());
+        }
+
+        assertThat(saveStep4CompletedAt.get())
+            .as("saveStep4 must not complete until the raw SELECT ... FOR UPDATE lock is released — "
+                + "proving it now contends for the same coach-profile row lock the existing readers do")
+            .isAfterOrEqualTo(lockReleasedAt.get());
+
+        List<Short> writtenDays = jdbcTemplate.queryForList(
+            "SELECT day_of_week FROM marketplace.coach_availability_windows WHERE coach_id = ?",
+            Short.class, coachProfileId);
+        assertThat(writtenDays)
+            .as("the rewrite must still land correctly once the lock is acquired")
+            .containsExactly((short) 1);
     }
 
     /**

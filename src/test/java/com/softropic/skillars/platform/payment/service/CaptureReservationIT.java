@@ -7,6 +7,7 @@ import com.softropic.skillars.platform.payment.BasePaymentIT;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
+import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
 import com.softropic.skillars.platform.payment.repo.StripeCustomer;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 
@@ -14,9 +15,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.transaction.UnexpectedRollbackException;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
@@ -72,6 +75,11 @@ class CaptureReservationIT extends BasePaymentIT {
     // being asserted is whether Stripe was reached at all.
     @MockitoSpyBean PaymentGateway paymentGateway;
 
+    // Deferred-58 AC1: a spy on the real bean lets doThrow(...) force a genuine DataAccessException
+    // at the exact .save(purchase) call inside PackSessionService.deductSession, inside a real
+    // transactional flow — a mock cannot fail a real Spring commit.
+    @MockitoSpyBean SessionPackPurchaseRepository sessionPackPurchaseRepository;
+
     private UUID coachId;
 
     @BeforeEach
@@ -120,6 +128,67 @@ class CaptureReservationIT extends BasePaymentIT {
         List<String> rows = jdbcTemplate.queryForList(
             "SELECT status FROM payment.booking_payments WHERE booking_id = ?", String.class, bookingId);
         return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    /** Mirrors SessionPackPurchaseLockContentionIT's fixture, seeded under this class's own parent/player. */
+    private UUID insertTestPackPurchase(UUID forCoachId, int remainingSessions) {
+        UUID tierId = UUID.randomUUID();
+        UUID purchaseId = UUID.randomUUID();
+        Instant expiresAt = Instant.now().plus(30, ChronoUnit.DAYS);
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO payment.session_pack_tiers "
+                + "(pack_tier_id, coach_id, label, session_count, total_price, price_per_session, is_active, version, created_at) "
+                + "VALUES (?, ?, '5-Pack', 5, 150.00, 30.00, true, 0, now())",
+                tierId, forCoachId);
+            jdbcTemplate.update(
+                "INSERT INTO payment.session_pack_purchases "
+                + "(purchase_id, parent_id, player_id, coach_id, pack_tier_id, price_per_session, remaining_sessions, expires_at, version, created_at) "
+                + "VALUES (?, ?, ?, ?, ?, 30.00, ?, ?, 0, now())",
+                purchaseId, PARENT_ID, PLAYER_ID, forCoachId, tierId, remainingSessions, Timestamp.from(expiresAt));
+            return null;
+        });
+        return purchaseId;
+    }
+
+    // ── Deferred-58 AC1: persistPaymentFailure survives a rollback-only transaction ──
+
+    /**
+     * Deferred-58 AC1. {@code deductSession} is plain {@code @Transactional} (REQUIRED), so it
+     * joins {@code onBookingAccepted}'s own {@code REQUIRES_NEW} physical transaction rather than
+     * starting its own. A real persistence failure there (forced here via a spy on
+     * {@code SessionPackPurchaseRepository.save}, mirroring the {@code paymentGateway} spy above)
+     * marks that shared transaction rollback-only at the AOP boundary before
+     * {@code handlePackBasedBooking}'s catch block ever runs — so without AC1's fix,
+     * {@code persistPaymentFailure}'s own writes would join the same doomed transaction and be
+     * discarded when it rolls back. Because the doomed transaction is a genuinely new one (opened
+     * by {@code onBookingAccepted} itself, not a participant), Spring rolls it back for real and
+     * throws {@link UnexpectedRollbackException} once the method returns — but only after
+     * {@code persistPaymentFailure}'s {@code REQUIRES_NEW} transaction has already suspended it and
+     * committed independently. The failure record surviving that thrown exception is the proof.
+     */
+    @Test
+    void packDeductionFailsWithGenuinePersistenceException_failureRecordSurvivesRollbackOnlyTransaction() {
+        UUID bookingId = seedPendingBooking(72);
+        UUID purchaseId = insertTestPackPurchase(coachId, 5);
+
+        doThrow(new DataIntegrityViolationException("simulated"))
+            .when(sessionPackPurchaseRepository).save(any());
+
+        assertThatThrownBy(() -> paymentLifecycleService.onBookingAccepted(new BookingAcceptedEvent(
+            this, bookingId, PARENT_ID, coachId, SESSION_PRICE, purchaseId,
+            "capture_parent@test.com", "Capture Coach",
+            Instant.now().plus(72, ChronoUnit.HOURS), "UTC")))
+            .isInstanceOf(UnexpectedRollbackException.class);
+
+        assertThat(paymentStatusOf(bookingId))
+            .as("persistPaymentFailure's REQUIRES_NEW write must survive the caller's rollback")
+            .isEqualTo("CHARGE_FAILED");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT remaining_sessions FROM payment.session_pack_purchases WHERE purchase_id = ?",
+            Integer.class, purchaseId))
+            .as("deductSession's own decrement must have rolled back with its doomed transaction")
+            .isEqualTo(5);
     }
 
     // ── AC2 ordering 1: the cancel commits first ──
