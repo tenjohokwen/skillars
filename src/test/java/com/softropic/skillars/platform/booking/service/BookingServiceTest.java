@@ -47,6 +47,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEvent;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.OptimisticLockingFailureException;
 
 import jakarta.persistence.EntityManager;
 
@@ -548,6 +549,25 @@ class BookingServiceTest {
         verify(eventPublisher).publishEvent(any(BookingAcceptedEvent.class));
     }
 
+    @Test
+    void acceptBooking_concurrentModification_throwsRetryableException() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of());
+        when(bookingRepository.save(any(Booking.class))).thenThrow(new OptimisticLockingFailureException("test"));
+
+        assertThatThrownBy(() -> bookingService.acceptBooking(booking.getId(), COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasCauseInstanceOf(OptimisticLockingFailureException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.CONCURRENT_MODIFICATION));
+    }
+
     /**
      * Deferred-15 AC4, review follow-up. The equivalent check in BookingBatchService and
      * RescheduleService each got a fast mock-based test; this one was reachable only through the
@@ -996,6 +1016,78 @@ class BookingServiceTest {
             .isInstanceOf(BookingStateTransitionException.class);
     }
 
+    @Test
+    void declineBooking_concurrentModification_throwsRetryableException() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.save(any(Booking.class))).thenThrow(new OptimisticLockingFailureException("test"));
+
+        assertThatThrownBy(() -> bookingService.declineBooking(booking.getId(), COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasCauseInstanceOf(OptimisticLockingFailureException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.CONCURRENT_MODIFICATION));
+    }
+
+    // ---- cancelBookingAsCoach tests ----
+
+    @Test
+    void cancelBookingAsCoach_concurrentModification_throwsRetryableException() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING");
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenThrow(new OptimisticLockingFailureException("test"));
+
+        assertThatThrownBy(() -> bookingService.cancelBookingAsCoach(booking.getId(), COACH_USER_ID, "MUTUAL_AGREEMENT"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasCauseInstanceOf(OptimisticLockingFailureException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.CONCURRENT_MODIFICATION));
+    }
+
+    // ---- recordNoShowPlayer tests ----
+
+    @Test
+    void recordNoShowPlayer_concurrentModification_throwsRetryableException() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING");
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenThrow(new OptimisticLockingFailureException("test"));
+
+        assertThatThrownBy(() -> bookingService.recordNoShowPlayer(booking.getId(), COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasCauseInstanceOf(OptimisticLockingFailureException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.CONCURRENT_MODIFICATION));
+    }
+
+    // ---- cancelDueToPause tests ----
+
+    @Test
+    void cancelDueToPause_concurrentModification_throwsRetryableException() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.save(any(Booking.class))).thenThrow(new OptimisticLockingFailureException("test"));
+
+        assertThatThrownBy(() -> bookingService.cancelDueToPause(booking.getId(), COACH_ID, PARENT_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasCauseInstanceOf(OptimisticLockingFailureException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.CONCURRENT_MODIFICATION));
+    }
+
     // ---- recordNoShowCoach tests (Deferred-63 AC4) ----
 
     @Test
@@ -1029,6 +1121,24 @@ class BookingServiceTest {
 
         assertThat(booking.getStatus()).isEqualTo("NO_SHOW_COACH");
         verify(eventPublisher).publishEvent(any(com.softropic.skillars.platform.booking.contract.CoachNoShowEvent.class));
+    }
+
+    @Test
+    void recordNoShowCoach_concurrentModification_throwsRetryableException() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING");
+        booking.setRequestedStartTime(Instant.now().minusSeconds(3600));
+        booking.setRequestedEndTime(Instant.now().minusSeconds(1800));
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("40.00"))));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenThrow(new OptimisticLockingFailureException("test"));
+
+        assertThatThrownBy(() -> bookingService.recordNoShowCoach(booking.getId(), PARENT_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasCauseInstanceOf(OptimisticLockingFailureException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.CONCURRENT_MODIFICATION));
     }
 
     // ---- helpers ----

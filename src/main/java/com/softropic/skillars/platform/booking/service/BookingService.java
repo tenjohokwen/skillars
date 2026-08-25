@@ -53,6 +53,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -356,7 +357,11 @@ public class BookingService {
         }
 
         TransitionContext ctx = new TransitionContext(ActorRole.COACH, coachUserId);
-        acceptAndInitiatePayment(bookingId, ctx);
+        try {
+            acceptAndInitiatePayment(bookingId, ctx);
+        } catch (OptimisticLockingFailureException e) {
+            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+        }
 
         Booking updated = getBookingOrThrow(bookingId);
         BigDecimal sessionPrice = resolveSessionPrice(updated);
@@ -417,7 +422,11 @@ public class BookingService {
         }
 
         TransitionContext ctx = new TransitionContext(ActorRole.COACH, coachUserId);
-        transition(bookingId, BookingEvent.DECLINE, ctx);
+        try {
+            transition(bookingId, BookingEvent.DECLINE, ctx);
+        } catch (OptimisticLockingFailureException e) {
+            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+        }
 
         eventPublisher.publishEvent(new BookingDeclinedEvent(
             this, bookingId, booking.getParentId(),
@@ -595,7 +604,11 @@ public class BookingService {
         if (!Objects.equals(booking.getParentId(), parentId) || !Objects.equals(booking.getCoachId(), coachId)) {
             throw new OperationNotAllowedException("Booking does not belong to this parent/pack", SecurityError.MISSING_RIGHTS);
         }
-        transition(bookingId, BookingEvent.CANCEL_DUE_TO_PAUSE, new TransitionContext(ActorRole.SYSTEM, null));
+        try {
+            transition(bookingId, BookingEvent.CANCEL_DUE_TO_PAUSE, new TransitionContext(ActorRole.SYSTEM, null));
+        } catch (OptimisticLockingFailureException e) {
+            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+        }
         CoachProfile coach = coachProfileRepository.findById(coachId).orElse(null);
         String coachEmail = coach != null ? resolveEmail(coach.getUserId(), bookingId) : "";
         String coachDisplayName = coach != null ? coach.getDisplayName() : "Coach";
@@ -719,11 +732,14 @@ public class BookingService {
                 .orElse(false);
         }
 
-        transition(bookingId, BookingEvent.CANCEL_COACH, new TransitionContext(ActorRole.COACH, coachUserId));
-
         String resolvedReason = cancelReason != null ? cancelReason : "OTHER_UNEXCUSED";
-        booking.setCancelReason(resolvedReason);
-        bookingRepository.save(booking);
+        try {
+            transition(bookingId, BookingEvent.CANCEL_COACH, new TransitionContext(ActorRole.COACH, coachUserId));
+            booking.setCancelReason(resolvedReason);
+            bookingRepository.save(booking);
+        } catch (OptimisticLockingFailureException e) {
+            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+        }
 
         eventPublisher.publishEvent(new BookingCancelledByCoachEvent(
             this, bookingId, booking.getParentId(), booking.getCoachId(),
@@ -743,7 +759,11 @@ public class BookingService {
         }
         String coachEmail = resolveCoachEmail(booking.getCoachId(), bookingId);
 
-        transition(bookingId, BookingEvent.NO_SHOW_PLAYER, new TransitionContext(ActorRole.COACH, coachUserId));
+        try {
+            transition(bookingId, BookingEvent.NO_SHOW_PLAYER, new TransitionContext(ActorRole.COACH, coachUserId));
+        } catch (OptimisticLockingFailureException e) {
+            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+        }
 
         eventPublisher.publishEvent(new PlayerNoShowEvent(
             this, bookingId, booking.getParentId(), booking.getCoachId(),
@@ -775,7 +795,11 @@ public class BookingService {
                 .orElse(false);
         }
 
-        transition(bookingId, BookingEvent.NO_SHOW_COACH, new TransitionContext(ActorRole.PARENT, parentUserId));
+        try {
+            transition(bookingId, BookingEvent.NO_SHOW_COACH, new TransitionContext(ActorRole.PARENT, parentUserId));
+        } catch (OptimisticLockingFailureException e) {
+            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+        }
 
         eventPublisher.publishEvent(new CoachNoShowEvent(
             this, bookingId, parentUserId, booking.getCoachId(),

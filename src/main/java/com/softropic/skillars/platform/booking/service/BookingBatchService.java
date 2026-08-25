@@ -33,6 +33,7 @@ import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -358,6 +359,9 @@ public class BookingBatchService {
         }
         if (e instanceof BookingStateTransitionException bste) {
             return bste.getErrorCode();
+        }
+        if (e instanceof OptimisticLockingFailureException) {
+            return BookingError.CONCURRENT_MODIFICATION.getErrorCode();
         }
         return "generic.unknown";
     }
