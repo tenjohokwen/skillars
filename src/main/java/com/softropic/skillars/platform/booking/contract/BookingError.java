@@ -26,6 +26,14 @@ import com.softropic.skillars.infrastructure.exception.ErrorCode;
  * <p>Note these still surface as HTTP 403: {@code ApiAdvice.operationDeniedHandler} maps
  * {@code OperationNotAllowedException} to {@code FORBIDDEN} unconditionally, independent of the code
  * carried. Splitting the code changes the {@code errorKey} and the message, not the status.
+ *
+ * <p>{@code CONCURRENT_MODIFICATION} (added by {@code skillars-deferred-67}) differs from the splits
+ * above in *kind*, not just *source*: it does not split an existing authorization throw into a more
+ * specific one — it replaces a genuine authorization code ({@code SecurityError.MISSING_RIGHTS}) that
+ * was being reused for a non-authorization case (a concurrent-write race) across all seven
+ * {@code OptimisticLockingFailureException} catches in {@code BookingCompletionService}. HTTP status is
+ * unaffected either way — {@code ApiAdvice.operationDeniedHandler} still maps
+ * {@code OperationNotAllowedException} to 403 unconditionally, same as the note above.
  */
 public enum BookingError implements ErrorCode {
     COACH_UNAVAILABLE,
@@ -39,7 +47,8 @@ public enum BookingError implements ErrorCode {
     BOOKING_NOT_RESCHEDULABLE,
     RESCHEDULE_ALREADY_PENDING,
     RESCHEDULE_NOT_PENDING,
-    NO_SHOW_TOO_EARLY;
+    NO_SHOW_TOO_EARLY,
+    CONCURRENT_MODIFICATION;
 
     @Override
     public String getErrorCode() {
@@ -56,6 +65,7 @@ public enum BookingError implements ErrorCode {
             case RESCHEDULE_ALREADY_PENDING -> "booking.rescheduleAlreadyPending";
             case RESCHEDULE_NOT_PENDING    -> "booking.rescheduleNotPending";
             case NO_SHOW_TOO_EARLY         -> "booking.noShowTooEarly";
+            case CONCURRENT_MODIFICATION   -> "booking.concurrentModification";
         };
     }
 }
