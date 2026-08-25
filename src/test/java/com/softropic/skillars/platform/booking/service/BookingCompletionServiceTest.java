@@ -26,6 +26,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.OptimisticLockingFailureException;
 
 import java.time.Instant;
 import java.util.List;
@@ -186,5 +187,39 @@ class BookingCompletionServiceTest {
         service.initiateQuickComplete(BOOKING_ID, COACH_USER_ID);
 
         verify(bookingService).transition(eq(BOOKING_ID), eq(BookingEvent.COMPLETE_PENDING), any(TransitionContext.class));
+    }
+
+    @Test
+    void startSession_concurrentModification_throwsRetryableException() {
+        booking.setStatus(BookingStatus.UPCOMING.name());
+        doThrow(new OptimisticLockingFailureException("stale version"))
+            .when(bookingService).transition(eq(BOOKING_ID), eq(BookingEvent.START), any(TransitionContext.class));
+
+        assertThatThrownBy(() -> service.startSession(BOOKING_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasCauseInstanceOf(OptimisticLockingFailureException.class);
+    }
+
+    @Test
+    void initiateQuickComplete_concurrentModification_throwsRetryableException() {
+        booking.setStatus(BookingStatus.UPCOMING.name());
+        doThrow(new OptimisticLockingFailureException("stale version"))
+            .when(bookingService).transition(eq(BOOKING_ID), eq(BookingEvent.COMPLETE_PENDING), any(TransitionContext.class));
+
+        assertThatThrownBy(() -> service.initiateQuickComplete(BOOKING_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasCauseInstanceOf(OptimisticLockingFailureException.class);
+    }
+
+    @Test
+    void submitWrapUp_liveMode_concurrentModification_throwsRetryableException() {
+        when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, null, List.of(), "LIVE");
+        doThrow(new OptimisticLockingFailureException("stale version"))
+            .when(bookingService).transition(eq(BOOKING_ID), eq(BookingEvent.QUICK_COMPLETE), any(TransitionContext.class));
+
+        assertThatThrownBy(() -> service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasCauseInstanceOf(OptimisticLockingFailureException.class);
     }
 }
