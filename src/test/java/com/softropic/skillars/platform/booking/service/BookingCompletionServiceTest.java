@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.booking.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
+import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.BookingEvent;
 import com.softropic.skillars.platform.booking.contract.BookingStateTransitionException;
 import com.softropic.skillars.platform.booking.contract.BookingStatus;
@@ -197,7 +198,8 @@ class BookingCompletionServiceTest {
 
         assertThatThrownBy(() -> service.startSession(BOOKING_ID, COACH_USER_ID))
             .isInstanceOf(OperationNotAllowedException.class)
-            .hasCauseInstanceOf(OptimisticLockingFailureException.class);
+            .hasCauseInstanceOf(OptimisticLockingFailureException.class)
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode()).isEqualTo(BookingError.CONCURRENT_MODIFICATION);
     }
 
     @Test
@@ -208,11 +210,13 @@ class BookingCompletionServiceTest {
 
         assertThatThrownBy(() -> service.initiateQuickComplete(BOOKING_ID, COACH_USER_ID))
             .isInstanceOf(OperationNotAllowedException.class)
-            .hasCauseInstanceOf(OptimisticLockingFailureException.class);
+            .hasCauseInstanceOf(OptimisticLockingFailureException.class)
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode()).isEqualTo(BookingError.CONCURRENT_MODIFICATION);
     }
 
     @Test
     void submitWrapUp_liveMode_concurrentModification_throwsRetryableException() {
+        booking.setStatus(BookingStatus.COMPLETED_PENDING_CONFIRMATION.name());
         when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
         WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, null, List.of(), "LIVE");
         doThrow(new OptimisticLockingFailureException("stale version"))
@@ -220,6 +224,55 @@ class BookingCompletionServiceTest {
 
         assertThatThrownBy(() -> service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req))
             .isInstanceOf(OperationNotAllowedException.class)
-            .hasCauseInstanceOf(OptimisticLockingFailureException.class);
+            .hasCauseInstanceOf(OptimisticLockingFailureException.class)
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode()).isEqualTo(BookingError.CONCURRENT_MODIFICATION);
+    }
+
+    @Test
+    void endSession_concurrentModification_throwsRetryableException() {
+        booking.setStatus(BookingStatus.IN_PROGRESS.name());
+        doThrow(new OptimisticLockingFailureException("stale version"))
+            .when(bookingService).transition(eq(BOOKING_ID), eq(BookingEvent.COMPLETE_PENDING), any(TransitionContext.class));
+
+        assertThatThrownBy(() -> service.endSession(BOOKING_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasCauseInstanceOf(OptimisticLockingFailureException.class)
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode()).isEqualTo(BookingError.CONCURRENT_MODIFICATION);
+    }
+
+    @Test
+    void pauseSession_concurrentModification_throwsRetryableException() {
+        booking.setStatus(BookingStatus.IN_PROGRESS.name());
+        doThrow(new OptimisticLockingFailureException("stale version"))
+            .when(bookingService).transition(eq(BOOKING_ID), eq(BookingEvent.PAUSE), any(TransitionContext.class));
+
+        assertThatThrownBy(() -> service.pauseSession(BOOKING_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasCauseInstanceOf(OptimisticLockingFailureException.class)
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode()).isEqualTo(BookingError.CONCURRENT_MODIFICATION);
+    }
+
+    @Test
+    void resumeSession_concurrentModification_throwsRetryableException() {
+        booking.setStatus(BookingStatus.PAUSED.name());
+        doThrow(new OptimisticLockingFailureException("stale version"))
+            .when(bookingService).transition(eq(BOOKING_ID), eq(BookingEvent.RESUME), any(TransitionContext.class));
+
+        assertThatThrownBy(() -> service.resumeSession(BOOKING_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasCauseInstanceOf(OptimisticLockingFailureException.class)
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode()).isEqualTo(BookingError.CONCURRENT_MODIFICATION);
+    }
+
+    @Test
+    void confirmCompletion_concurrentModification_throwsRetryableException() {
+        booking.setStatus(BookingStatus.COMPLETED_PENDING_CONFIRMATION.name());
+        doThrow(new OptimisticLockingFailureException("stale version"))
+            .when(bookingService).transition(eq(BOOKING_ID), eq(BookingEvent.COMPLETE), any(TransitionContext.class));
+
+        assertThatThrownBy(() -> service.confirmCompletion(BOOKING_ID, PARENT_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasCauseInstanceOf(OptimisticLockingFailureException.class)
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode()).isEqualTo(BookingError.CONCURRENT_MODIFICATION);
     }
 }

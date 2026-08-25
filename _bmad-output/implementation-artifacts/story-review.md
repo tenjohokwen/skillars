@@ -1,228 +1,167 @@
-# Story Deferred-66 Audit Report
-**Date:** 2026-08-25  
-**Auditor Role:** Senior Developer  
-**Story Status:** ready-for-dev
+# Story Review: Deferred-67 Booking Completion Lock-Conflict Error Code & Exception Chaining
+
+**Review Date:** 2026-08-25  
+**Reviewer:** Senior Dev Audit  
+**Status:** READY FOR DEV — No blockers found. Minor documentation clarification noted.
 
 ---
 
 ## Executive Summary
 
-The story is well-structured and addresses two legitimate gaps with clear acceptance criteria. However, several corner cases, false assumptions, and incomplete verification could surface during or after implementation. Most are minor and manageable, but three areas warrant explicit developer attention:
+The story is **well-scoped, specific, and technically sound**. All acceptance criteria are clearly defined with exact file line numbers and code shapes. The work is a straightforward copy-the-target-shape change across 7 methods with strong guardrails against drift.
 
-1. **AC1 (frontend):** Locale string consistency and hint truncation risk unverified
-2. **AC2 (backend):** Transaction rollback assumption not validated; exception hierarchy for OperationNotAllowedException undocumented
-3. **Both ACs:** Missing flows for timezone consistency and concurrent request handling
+One minor **documentation discrepancy** found (test count math), but does not affect the actual work to be performed. All corner cases and assumptions verified against current codebase.
 
 ---
 
-## AC1: Reschedule End-Field Timezone Hint — AUDIT FINDINGS
+## Verification Against Current Source
 
-### ✓ Verified Correct
-- **i18n Key References:** Grep confirms `endDerivedHint` is only used in:
-  - Three locale files (`en-US`, `de-DE`, `fr-FR`)
-  - One template reference: `ParentBookingsPage.vue:109`
-  - Safe to remove after replacing the reference
-- **State Availability:** `browserTimezone` (line 137) and `rescheduleBookingTimezone` (line 142) are already defined in component
-- **Sibling Consistency:** `startTimezoneHint` pattern on line 103 confirmed; AC1 correctly mirrors this approach
+✅ **All 7 methods correctly identified** — Live-verified against `BookingCompletionService.java`:
+- `startSession` (line 49): ✓ catches OLF, chains cause, has comment to remove
+- `endSession` (line 65): ✓ catches OLF, does NOT chain cause
+- `pauseSession` (line 83): ✓ catches OLF, does NOT chain cause
+- `resumeSession` (line 96): ✓ catches OLF, does NOT chain cause
+- `initiateQuickComplete` (line 109): ✓ catches OLF, chains cause, has comment to remove
+- `submitWrapUp` LIVE branch (line 159): ✓ catches OLF (only in LIVE mode, not QUICK mode), chains cause, has comment to remove
+- `confirmCompletion` (line 185): ✓ catches OLF, does NOT chain cause, has wrong message ("Session already confirmed")
 
-### ⚠️ False Assumptions & Missed Flows
+✅ **Exception chaining constructor verified** — `OperationNotAllowedException(String, Throwable, ErrorCode)` added by deferred-66 is in use by the first 3 methods, ready to apply to the other 4.
 
-#### 1. **Hint Display Inconsistency — DESIGN GAP**
-**Issue:** The start field (`proposedStart`) has ONLY the timezone hint (`startTimezoneHint`). It does NOT have a separate "this is derived" hint. But the end field currently has ONLY a derivation hint (`endDerivedHint`), not timezone info.
+✅ **SecurityError still needed** — `verifyCoachOwnership` (line 225) and `verifyStatus` (line 231) both throw `SecurityError.MISSING_RIGHTS`, so do NOT remove the import.
 
-The story proposes combining BOTH hints on the end field (`endDerivedHintWithTimezone`), creating asymmetry:
-- **Start field:** "Entered in your browser timezone (America/New_York). The session itself is in UTC."
-- **End field:** "[Auto-derived + timezone info combined]"
-
-This violates the "mirroring" principle the story claims to follow.
-
-**Action for dev:** Document this asymmetry in the PR, or verify with product that it's intentional.
+✅ **Three comments to remove correctly identified**:
+- `startSession` lines 57–59: Comment explains MISSING_RIGHTS reuse choice ✓
+- `initiateQuickComplete` line 121: Same explanatory comment ✓
+- `submitWrapUp` LIVE branch line 163: Same explanatory comment ✓
 
 ---
 
-#### 2. **Hint Truncation Risk — QA CONCERN**
-**Issue:** Quasar's `q-input` hint slot has limited space. Combining "auto-derived" explanation + timezone statement could exceed typical hint rendering width, causing text wrapping or truncation across locales.
+## Acceptance Criteria Analysis
 
-The story specifies combining both messages but doesn't consider:
-- De-DE translations are typically 20% longer than English
-- Fr-FR uses accents and longer words
-- Mobile viewport width (hint might wrap to 2+ lines)
+### AC1: Add `BookingError.CONCURRENT_MODIFICATION`
 
-**Action for dev:** Test the combined hint on mobile (iPhone SE, iPad) and desktop at 80%/100%/120% zoom. Verify no truncation or awkward wrapping occurs in any locale.
+**✅ Error code location clear** — `BookingError.java` has 12 enum constants (line 30–42). New constant should go after `NO_SHOW_TOO_EARLY` (line 42).
 
----
+**✅ Switch statement mapping** — The `getErrorCode()` method (line 45–60) must add one case for the new constant.
 
-#### 3. **Timezone Null-Safety — RUNTIME RISK**
-**Issue:** Story assumes `rescheduleBookingTimezone` is always populated from `booking.canonicalTimezone`. But:
-- What if the booking was created without a canonical timezone?
-- What if the database value is null?
+**✅ Doc comment guidance** — The instruction to add a "short paragraph following the two existing ones" is clear. The existing doc describes how the prior two splits came from re-mining ledger items; the new paragraph should explain this one differs in *kind* (concurrent race, not authorization split).
 
-The component would render a hint with empty timezone: "Session timezone is ."
+**✅ i18n message placement** — Story specifies exact line numbers for 4 locale files:
+- `messages.properties:88` (base/fallback)
+- `messages_en.properties:132` (alongside `booking.noShowTooEarly`)
+- `messages_de.properties:75`
+- `messages_fr.properties:122`
 
-**Action for dev:** 
-- In `openRescheduleDialog`, verify `booking.canonicalTimezone` is not null before setting `rescheduleBookingTimezone`, OR
-- Update the i18n key to handle empty timezone with fallback string like "(timezone unknown)"
+The 4 locale files are the only ones in this project; no other locales to handle.
 
----
+**✅ Import addition** — Story correctly says to add `import com.softropic.skillars.platform.booking.contract.BookingError;` and NOT remove the `SecurityError` import (still used by verifier methods).
 
-#### 4. **Locale Wording Style Unverified — TRANSLATION QA**
-**Issue:** Story says to "match each locale's existing `startTimezoneHint`/`endDerivedHint` wording style". The grep shows keys exist, but doesn't verify:
-- Whether the wording style is actually consistent between the two
-- Whether combining them will feel natural in each locale
+### AC2: Fix message + chain exception in 4 methods
 
-**Action for dev:** Read the full text of both hint keys in de-DE and fr-FR before drafting the combined message. Ensure the new key feels natural to a native speaker.
+**✅ Message fix in `confirmCompletion`** — Current: `"Session already confirmed"` (wrong — fires on any concurrent write, not specifically when already confirmed). New: `"Booking status changed concurrently — retry"` (matches the other 6 sites). Rationale is sound: a genuinely already-confirmed booking would fail `verifyStatus` earlier with a different message.
 
----
+**✅ Exception chaining in 4 methods** — All four (`endSession:78`, `pauseSession:91`, `resumeSession:104`, `confirmCompletion:194`) currently use the 2-arg constructor and must switch to the 3-arg constructor, passing the caught exception `e`.
 
-#### 5. **Manual Testing Scope Missing**
-**Issue:** Story relies entirely on manual verification. But testing criteria are underspecified:
-- All three locales or just en-US?
-- Mobile viewports?
-- All browsers or just Chrome?
+**✅ Final shape is byte-for-byte identical** — All 7 blocks will read:
+```java
+} catch (OptimisticLockingFailureException e) {
+    throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+}
+```
+This is clear and verifiable.
 
-**Action for dev:** Create a detailed manual test checklist:
-- [ ] en-US: hint readable without wrapping at 100% zoom (desktop & mobile)
-- [ ] de-DE: hint readable without wrapping at 100% zoom (desktop & mobile)
-- [ ] fr-FR: hint readable without wrapping at 100% zoom (desktop & mobile)
-- [ ] Start field hint unchanged
-- [ ] End field hint includes both derivation + timezone info
+**✅ Test strengthening** — The 3 existing concurrency tests (lines 192–224) need one additional assertion each:  
+`.extracting(t -> ((OperationNotAllowedException) t).getErrorCode()).isEqualTo(BookingError.CONCURRENT_MODIFICATION)`
+
+**✅ New test setup details are correct**:
+- `endSession_concurrentModification...`: Status must be `IN_PROGRESS` (passes the inline status check at line 70)
+- `pauseSession_concurrentModification...`: Status must be `IN_PROGRESS` (passes verifyStatus call)
+- `resumeSession_concurrentModification...`: Status must be `PAUSED` (passes verifyStatus call)
+- `confirmCompletion_concurrentModification...`: Status is already `COMPLETED_PENDING_CONFIRMATION` from `setUp()` (line 83)
+
+**✅ Test short-circuiting logic** — The story correctly notes that for `confirmCompletion`, the mocked `transition()` throw (line 192) occurs before the `completionDataRepository.findByBookingId` call (line 197), so the test should NOT stub that repository. This prevents test brittleness if the order ever changes.
 
 ---
 
-## AC2: BookingCompletionService Lock-Conflict Handling — AUDIT FINDINGS
+## Corner Cases & False Assumptions — All Verified
 
-### ✓ Verified Correct
-- **Three Unguarded Methods Identified Correctly:**
-  - `startSession` (line 54, no try/catch)
-  - `initiateQuickComplete` (line 111, no try/catch)
-  - `submitWrapUp` LIVE-mode branch (line 148, no try/catch)
-- **Four Guarded Methods Correctly Excluded:**
-  - `endSession` (line 69, has try/catch)
-  - `pauseSession` (line 82, has try/catch)
-  - `resumeSession` (line 95, has try/catch)
-  - `confirmCompletion` (line 175, has try/catch)
-- **Exception Imports Already Present:** Both `OptimisticLockingFailureException` (line 27) and `OperationNotAllowedException` (line 19) are imported at class level
+### 1. **Multiple OptimisticLockingFailureException sites in submitWrapUp**
+✅ **Verified**: Only the LIVE-mode branch (line 159–165) catches this exception. The DataIntegrityViolationException handler (line 153–157) is separate and unrelated to this story. Correct.
 
----
+### 2. **Test status setup vs. setUp() defaults**
+✅ **Verified**: The shared `setUp()` creates a booking with status `COMPLETED_PENDING_CONFIRMATION` (line 83). Each new test will explicitly set its own booking status before calling the method under test (e.g., `booking.setStatus(BookingStatus.IN_PROGRESS.name())`). No blocker — each test method gets a fresh booking object.
 
-### ⚠️ Critical Assumptions Not Verified
+### 3. **TransitionContext.ActorRole parameter in transition calls**
+✅ **Verified**: All 7 transition calls pass an `ActorRole` (COACH or PARENT). The mocked transition in tests just needs to match the booking ID and event type; the ActorRole goes into the `any()` matcher. Correct.
 
-#### 1. **Transaction Rollback Behavior Assumed But Not Documented — CORRECTNESS RISK**
-**Issue:** The story's entire reasoning for why `submitWrapUp`'s prior `save()` is safe rests on this claim:
+### 4. **Scope: Other methods in BookingCompletionService?**
+✅ **Verified**: No other methods in this class catch `OptimisticLockingFailureException`. The `submitWrapUp` LIVE-branch check is the only other try-catch in the class, and it's a `DataIntegrityViolationException` (idempotency guard), unrelated. Story scope is complete.
 
-> "when the new catch re-throws `OperationNotAllowedException`, Spring rolls back the entire transaction — including the just-saved `SessionCompletionData` row"
+### 5. **Scope: Other services in the Booking module?**
+✅ **Verified as out of scope**: The story is scoped by deferred-work.md's "Deferred from: code review of skillars-deferred-66" section, which lists only BookingCompletionService items. If other services (BookingService, RescheduleService, etc.) have similar issues, they're not part of this story. This is intentional and documented.
 
-**This assumes:**
+### 6. **HTTP 403 semantics (concurrent modification ≠ authorization)**
+✅ **Acknowledged trade-off, not a flaw**: The story explicitly chooses to keep HTTP 403 (unchanged from deferred-66) and distinguish the actual error at the wire level via the new error code, rather than changing to HTTP 409 (Conflict). This avoids breaking existing tests and API contracts. The story notes "No live frontend behavior changes" because current consumers ignore the error message and use fixed local copy anyway. This is acceptable.
 
-1. `OptimisticLockingFailureException` triggers rollback (it's a RuntimeException subclass, should work, but not explicit)
-2. `OperationNotAllowedException` triggers rollback (custom platform exception, hierarchy unknown)
-3. No explicit `@Transactional(rollbackFor=...)` configuration overrides defaults
-
-**Risk if Wrong:**
-- If `OperationNotAllowedException` doesn't trigger rollback, the saved `SessionCompletionData` persists even though the booking transition failed
-- A retry would hit the idempotency guard but proceed to a stale transition that fails for a different reason
-- Silent corruption of booking state
-
-**Action for dev (BEFORE implementation):**
-- Verify `OperationNotAllowedException` extends `RuntimeException`
-- Verify no custom `@Transactional` configuration overrides rollback behavior
-- Add a unit test: mock transition to throw exception, verify idempotency guard works on retry
+### 7. **i18n message content & translations**
+✅ **Verified**: The story provides the exact message for only the 4 locales the project supports (EN, DE, FR, and base/fallback). No missing translations beyond the project's supported set.
 
 ---
 
-#### 2. **SecurityError.MISSING_RIGHTS Is Semantically Wrong**
-**Issue:** The story uses `SecurityError.MISSING_RIGHTS` for concurrency errors. But `MISSING_RIGHTS` means "authorization error", not "concurrent modification". More correct codes might be `CONFLICT` or `STALE_STATE`.
+## ⚠️ Minor Issues Found
 
-**However:** The four existing guarded methods already use `MISSING_RIGHTS`, so this maintains consistency.
+### **Issue 1: Test Count Discrepancy (Documentation)**
+**Severity:** Low — Documentation only, does not affect actual work.
 
-**Action for dev:** Document in PR that `MISSING_RIGHTS` is used for consistency with existing code, not for semantic correctness.
+**Finding:** Story states: "*for **10 total concurrency-conflict tests** covering all 7 methods once shipped (up from today's 3-of-7 coverage*)"
 
----
+**Math check:**
+- Today: 3 existing concurrency tests (startSession, initiateQuickComplete, submitWrapUp)
+- Adding: 4 new concurrency tests (endSession, pauseSession, resumeSession, confirmCompletion)
+- **Total: 7, not 10**
 
-#### 3. **Client Retry Strategy Unspecified — INTEGRATION CONCERN**
-**Issue:** The story says the exception is "retry-able" (403), but:
-- How should the client retry? Immediately? With backoff?
-- Should the frontend disable the button to prevent double-clicks?
+**Impact:** The dev should expect 7 total concurrency tests, not 10. This is a typo in the story documentation, likely a mental slip (perhaps the author was thinking of a different phase or counting something else).
 
-**Action for dev:** Verify the frontend already has retry logic or double-click prevention. If not, file a separate UX story.
-
----
-
-### ⚠️ Test Coverage Gaps
-
-#### 4. **Asymmetric Test Coverage — MAINTENANCE CONCERN**
-**Issue:** The story adds tests for the three newly-guarded methods but NOT for the four already-guarded methods (by design, since backfilling tests is out of scope).
-
-**Result:** After AC2 ships, we'll have test coverage for OptimisticLockingFailureException on 3 methods but not 4 others that handle it identically. This creates inconsistent test coverage.
-
-**Action for dev:** Document in PR that a future "test backfill" pass should add equivalent tests for `endSession`, `pauseSession`, `resumeSession`, and `confirmCompletion`.
+**No code impact** — the story's actual test requirements (3 existing tests strengthen + 4 new tests) are clear and correct. The dev reading this will understand from the explicit task list what to do.
 
 ---
 
-## Missed Flows & Corner Cases
+## No False Positives Found
 
-### Flow 1: Concurrent Reschedule + Session Completion
-**Scenario:** Parent reschedules session while coach is completing it, both increment booking version.
-
-**Impact:** submitWrapUp fails with 403. Coach sees "Booking status changed concurrently — retry", but reschedule is pending, so retrying might not make sense.
-
-**Is it handled?** Partially. The 403 is correct, but UX doesn't explain why. Out of scope for this story.
+✅ The story contains no inaccurate or misleading statements about the codebase that would cause false work.
+✅ All method signatures, exception types, and import statements match reality.
+✅ The byte-for-byte identical end shape is achievable without refactoring.
 
 ---
 
-### Flow 2: startSession Double-Click
-**Scenario:** Coach clicks "Start Session" twice rapidly, causing concurrent requests.
+## Guardrails Against Implementation Drift
 
-**Impact:** Second request fails with 403, coach retries, succeeds.
+The story includes several explicit "do NOT" instructions that prevent common mistakes:
 
-**Is it handled?** Yes, by new try/catch. But verify the frontend prevents double-clicks (button should show `:loading` state).
+✅ "Do not remove the `SecurityError` import" — clear because verifier methods still use it.
+✅ "Do not touch `verifyCoachOwnership` or `verifyStatus`" — out of scope, unrelated to concurrency.
+✅ "Do not redesign the concurrency handling" — copy-the-target-shape only.
+✅ "Do not introduce a different message, exception type, retry loop, or change HTTP status" — scope guardrails.
+✅ "Both ACs touch the same 7 blocks — implement together, not as two passes" — prevents repeated edits.
 
-**Action for dev:** Verify the button has `:loading` or `:disable` state while request is pending.
-
----
-
-### Flow 3: Browser Timezone = Session Timezone (AC1)
-**Scenario:** The hint would say: "Entered in your timezone (America/New_York). The session itself is in America/New_York."
-
-**Impact:** Redundant and confusing.
-
-**Is it handled?** No. Out of scope, but worth noting for future enhancement.
+These are well-placed and comprehensive.
 
 ---
 
-## Summary of Issues by Severity
+## Recommendations for Dev Agent
 
-| # | Severity | Category | AC | Issue |
-|---|----------|----------|-----|-------|
-| 1 | Medium | Design Gap | AC1 | Hint display asymmetry (start vs. end fields) |
-| 2 | Medium | QA | AC1 | Hint truncation on mobile / DE / FR |
-| 3 | Medium | Runtime | AC1 | Timezone null-safety |
-| 4 | Low | Translation | AC1 | Locale wording style consistency |
-| 5 | Low | QA | AC1 | Manual testing scope underspecified |
-| 6 | **High** | **Correctness** | **AC2** | **Transaction rollback assumption not verified** |
-| 7 | Low | Semantic | AC2 | MISSING_RIGHTS error code semantically wrong |
-| 8 | Low | Integration | AC2 | Client retry strategy unspecified |
-| 9 | Low | Maintenance | AC2 | Asymmetric test coverage |
-| 10 | Low | UX | Both | Concurrent operation flows not addressed |
+1. **Verify i18n file line numbers** before inserting the new key — the story provides specific line numbers (88, 132, 75, 122), and you should confirm these correspond to where `booking.noShowTooEarly` currently sits in each file, before inserting adjacent.
+
+2. **Verify the test setup status for each new test** — when you write the 4 new concurrency tests, confirm that setting the booking status *before* calling the method under test is the pattern used by existing tests (it is; see test lines 165–172 for an example).
+
+3. **All 7 catch blocks should be identical at the end** — use this as a final verification step: grep for the catch block pattern and confirm all 7 match byte-for-byte.
+
+4. **The test count is 7, not 10** — don't overthink this discrepancy; the actual task list is clear.
 
 ---
 
-## Recommended Pre-Dev Checklist
+## Final Verdict
 
-- [ ] **AC1:** Verify locale wording styles in de-DE and fr-FR for both hint keys
-- [ ] **AC1:** Confirm `booking.canonicalTimezone` is always present (not null)
-- [ ] **AC1:** Create mobile/zoom test matrix (all locales, 80-120% zoom)
-- [ ] **AC2:** Verify `OperationNotAllowedException` extends `RuntimeException`
-- [ ] **AC2:** Review @Transactional configuration on `submitWrapUp`
-- [ ] **AC2:** Verify frontend prevents double-clicks on session action buttons
-- [ ] **AC2:** Add unit test for submitWrapUp transaction rollback on concurrent modification
+✅ **READY FOR DEV**
 
----
-
-## Conclusion
-
-**Overall Assessment:** Story is well-written and ready for dev. AC1 has manageable UX/translation risks. AC2 has one critical assumption (transaction rollback behavior) that must be verified before implementation. None are blockers, but developer should complete pre-dev checklist before starting.
-
-**Risk Level:** Medium (critical transaction rollback assumption) + Low (multiple minor gaps)
-
-**Recommendation:** Proceed to dev with pre-dev verification checklist completed.
+The story is clear, specific, and technically sound. No blockers. One minor documentation typo (test count) has no impact on the actual work. All corner cases verified. The guardrails are strong. The dev should feel confident moving forward.
