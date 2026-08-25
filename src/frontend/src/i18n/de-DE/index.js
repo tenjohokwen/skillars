@@ -425,8 +425,8 @@ export default {
       startTimezoneHint:
         'Eingabe in Ihrer Browser-Zeitzone ({browser}). Die Sitzung selbst findet in {session} statt.',
       proposedEnd: 'Neues Sitzungsende',
-      endDerivedHint:
-        'Wird automatisch gesetzt — eine Verlegung behält die ursprüngliche Dauer bei.',
+      endDerivedHintWithTimezone:
+        'Wird automatisch gesetzt — eine Verlegung behält die ursprüngliche Dauer bei. Angezeigt in Ihrer Browser-Zeitzone ({browser}); die Sitzung selbst findet in {session} statt.',
       endDerivedLengthUnavailable:
         'Die Zeiten dieser Buchung konnten nicht gelesen werden, daher kann keine neue Zeit vorgeschlagen werden. Bitte kontaktiere den Support.',
       submit: 'Anfrage senden',

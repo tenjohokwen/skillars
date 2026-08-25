@@ -884,7 +884,8 @@ export default {
       startTimezoneHint:
         'Entered in your browser timezone ({browser}). The session itself is in {session}.',
       proposedEnd: 'New session end',
-      endDerivedHint: 'Set automatically — a reschedule keeps the session’s original length.',
+      endDerivedHintWithTimezone:
+        'Set automatically — a reschedule keeps the session’s original length. Shown in your browser timezone ({browser}); the session itself is in {session}.',
       endDerivedLengthUnavailable:
         'This booking’s times could not be read, so a new time cannot be proposed. Please contact support.',
       submit: 'Send request',

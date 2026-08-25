@@ -1165,7 +1165,8 @@ export default {
       startTimezoneHint:
         'Saisi dans le fuseau horaire de votre navigateur ({browser}). La séance elle-même est dans {session}.',
       proposedEnd: 'Nouvelle fin de séance',
-      endDerivedHint: 'Défini automatiquement — un report conserve la durée initiale de la séance.',
+      endDerivedHintWithTimezone:
+        'Défini automatiquement — un report conserve la durée initiale de la séance. Affiché dans le fuseau horaire de votre navigateur ({browser}) ; la séance elle-même est dans {session}.',
       endDerivedLengthUnavailable:
         "Les horaires de cette réservation n'ont pas pu être lus ; impossible de proposer un nouvel horaire. Veuillez contacter le support.",
       submit: 'Envoyer la demande',

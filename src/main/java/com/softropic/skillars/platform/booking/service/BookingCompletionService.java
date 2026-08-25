@@ -51,7 +51,14 @@ public class BookingCompletionService {
         Booking booking = bookingService.getBookingOrThrow(bookingId);
         verifyCoachOwnership(booking, coach);
         verifyStatus(booking, BookingStatus.UPCOMING);
-        bookingService.transition(bookingId, BookingEvent.START, new TransitionContext(ActorRole.COACH, coachUserId));
+        try {
+            bookingService.transition(bookingId, BookingEvent.START, new TransitionContext(ActorRole.COACH, coachUserId));
+        } catch (OptimisticLockingFailureException e) {
+            // MISSING_RIGHTS mirrors endSession/pauseSession/resumeSession/confirmCompletion's existing
+            // choice for this exact conflict shape — a caller cannot currently distinguish "not allowed"
+            // from "retry me" error codes, so this is the established code for both.
+            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, SecurityError.MISSING_RIGHTS);
+        }
     }
 
     @Transactional
@@ -108,7 +115,12 @@ public class BookingCompletionService {
             throw new OperationNotAllowedException(
                 "Quick Complete requires an UPCOMING booking", SecurityError.MISSING_RIGHTS);
         }
-        bookingService.transition(bookingId, BookingEvent.COMPLETE_PENDING, new TransitionContext(ActorRole.COACH, coachUserId));
+        try {
+            bookingService.transition(bookingId, BookingEvent.COMPLETE_PENDING, new TransitionContext(ActorRole.COACH, coachUserId));
+        } catch (OptimisticLockingFailureException e) {
+            // See startSession's identical catch above for why MISSING_RIGHTS is the established code here.
+            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, SecurityError.MISSING_RIGHTS);
+        }
     }
 
     @Transactional
@@ -145,7 +157,12 @@ public class BookingCompletionService {
         }
 
         if ("LIVE".equals(req.mode())) {
-            bookingService.transition(bookingId, BookingEvent.QUICK_COMPLETE, new TransitionContext(ActorRole.COACH, coachUserId));
+            try {
+                bookingService.transition(bookingId, BookingEvent.QUICK_COMPLETE, new TransitionContext(ActorRole.COACH, coachUserId));
+            } catch (OptimisticLockingFailureException e) {
+                // See startSession's identical catch above for why MISSING_RIGHTS is the established code here.
+                throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, SecurityError.MISSING_RIGHTS);
+            }
             eventPublisher.publishEvent(new BookingCompletedEvent(
                 this, bookingId, booking.getCoachId(), booking.getPlayerId(), booking.getParentId(),
                 scd.isPlayerAttended(), req.effortRating(), req.focusRating(), req.techniqueRating(),

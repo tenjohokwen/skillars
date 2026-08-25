@@ -12,6 +12,10 @@ public class OperationNotAllowedException extends AuthorizationException {
         super(message, errorCode);
     }
 
+    public OperationNotAllowedException(String message, Throwable cause, ErrorCode errorCode) {
+        super(message, cause, errorCode);
+    }
+
     public OperationNotAllowedException(String msg, Map<String, Object> logContext, ErrorCode errorCode) {
         super(msg, logContext, errorCode);
     }

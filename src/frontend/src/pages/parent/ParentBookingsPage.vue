@@ -105,8 +105,8 @@
                original length (a move, not a resize). Two freely-editable inputs where the second
                must exactly equal the first plus that length is a trap the parent cannot see. -->
           <q-input :model-value="rescheduleProposedEnd" type="datetime-local" readonly
-                   :label="t('booking.reschedule.proposedEnd')" class="q-mt-sm"
-                   :hint="t('booking.reschedule.endDerivedHint')" />
+                   :label="t('booking.reschedule.proposedEnd')" class="q-mt-sm q-mb-lg"
+                   :hint="t('booking.reschedule.endDerivedHintWithTimezone', { browser: browserTimezone, session: rescheduleBookingTimezone })" />
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat :label="t('common.cancel')" v-close-popup />
