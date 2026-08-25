@@ -1,242 +1,219 @@
-# Story Review: skillars-deferred-63-product-directed-fairness-and-consistency-fixes
+# Story Review: skillars-deferred-64-suspended-lock-consistency-late-cancel-conversion-and-config-safety-fixes
 
-Reviewer: senior-dev audit (pre-implementation), 2026-08-24. Scope: does the story as written
-actually deliver what each AC claims, against the current state of the codebase (not the state
-assumed when the story was written). Every finding below was verified by reading the actual
-current source, not inferred from the story text alone. Findings that couldn't be confirmed
-against real code were dropped rather than included as speculation.
+Reviewed against the current tree on `product-directed-fairness-and-consistency-fixes`
+(HEAD `b918486`). Every finding below was verified directly against source (file/line citations
+given); nothing here is speculative or restates a risk the story itself already calls out and
+accepts. Items the story already flags and consciously accepts (e.g. AC3's coarser-than-per-viewer
+lock, AC1's cross-module import direction as claimed) are only revisited where direct source
+inspection shows the story's own supporting claim is factually wrong, not merely "worth
+double-checking."
 
 ## Summary
 
-Five substantive findings. Two (#1, #4) mean an AC as literally specified will not deliver the
-outcome its own rationale claims. One (#2) is a real concurrency gap that undercuts an explicit
-"gaming-resistant" claim in the AC text. One (#3) is a scope inconsistency worth a product call
-before implementation, not after. One (#5) is a ledger-traceability error that would cause AC8 to
-incorrectly retire an unrelated, still-unanswered product question. Everything else in the story —
-line citations, "unreachable via UI" claims, migration numbering, i18n file coverage, state-machine
-transition claims — was checked against the current codebase and holds up.
+| # | AC | Severity | Finding |
+|---|----|----------|---------|
+| 1 | AC4 | **High** | Coaches stop receiving any cancellation email once a late cancel converts to `CoachNoShowEvent` — a real, silent notification regression |
+| 2 | AC1 | **High** | `CoachProfileServiceTest.java`, named as "the existing test file to extend," does not exist anywhere in the tree |
+| 3 | AC6 | **High** | "No admin UI or endpoint writes to `main.platform_config`" is false — a live, admin-authorized `PUT /api/config/values/{key}` endpoint does exactly that today |
+| 4 | AC4 | Medium | Auto-converting an ordinary late cancel into a no-show issues an unearned, uncontestable reliability strike without the parent ever attesting to a no-show |
+| 5 | AC3 | Medium | The claimed "lock held only briefly, not for the whole call" trade-off is technically wrong given how `PessimisticLockRetryer` + `@Transactional` actually hold Postgres row locks |
+| 6 | AC1 | Low | "Does not introduce a new module dependency direction" is inaccurate — this is the first `marketplace → booking` import in the codebase |
+| 7 | AC5 | Low | Phase 1 and the proposed Phase 2 lookup are described as different queries; they are the same repository method |
 
 ---
 
-## Finding 1 — AC5 doesn't actually let a coach contest an existing dispute (HIGH confidence, HIGH value)
+## 1. AC4 — Coach loses all notification on a late-cancel-turned-no-show (High)
 
-**Claim in story:** "A coach can raise a dispute on their own booking, not only the parent/player,"
-motivated by e.g. "a coach can dispute a no-show claim raised against them."
+**Claim in story:** AC4 says the late-cancel branch should "run exactly what `recordNoShowCoach`
+... already does," firing `CoachNoShowEvent` instead of the ordinary `CANCEL_PARENT` transition/event,
+and lists test cases for the state transition and refund gating — but never considers what happens
+to the *coach's* notification.
 
-**What the code actually does:** `DisputeService.raiseDispute` (`DisputeService.java:65-101`) widens
-`ownerEligible`, but unconditionally still calls, after the eligibility checks:
+**What's actually true:**
+- Today, an ordinary late cancel fires `BookingCancelledByParentEvent`, and
+  `BookingEmailListener.onBookingCancelledByParent` (`BookingEmailListener.java:339-354`) emails the
+  coach via `event.getCoachEmail()`.
+- `CoachNoShowEvent` (`CoachNoShowEvent.java:9-46`) has **no `coachEmail` field at all** — it only
+  carries `parentEmail`.
+- Its only listener, `BookingEmailListener.onCoachNoShow` (`:383-`), emails the **parent**
+  (`event.getParentEmail()`), confirming their own refund. No coach-facing listener for
+  `CoachNoShowEvent` exists anywhere (`CancellationRefundService.onCoachNoShow` only issues the
+  refund/strike; no notification).
 
+**Consequence:** once AC4 ships, a coach whose booking is cancelled late by the parent goes from
+*always receiving* a "booking cancelled by parent" email today to *receiving nothing at all* —
+not that the booking ended, not that a no-show strike was just recorded against their reliability
+record. This is a concrete, verifiable regression in coach communication, entirely a side effect of
+reusing `CoachNoShowEvent` verbatim as AC4 instructs. It should be called out as a required part of
+AC4 (either add a coach-facing notification for this path, or extend `CoachNoShowEvent`/its listener
+to also email the coach), not left implicit.
+
+---
+
+## 2. AC1 — Referenced test file does not exist (High)
+
+**Claim in story (Dev Notes):** "Existing test files to extend (do not create new ones for these
+classes): `CoachProfileServiceTest.java` (`platform.marketplace.service`, AC1) ..."
+
+**Verified:** `find src/test/java -iname "*CoachProfile*"` returns only
+`CoachProfileResourceIT.java` and `CoachProfileBuilderIT.java` — no `CoachProfileServiceTest.java`
+exists anywhere in the tree, and no test file in the repo references `CoachProfileService` as a unit
+under test with mocks. `saveStep4`'s existing coverage (`saveStep4_validRequest_returns200`,
+`saveStep4_noWindows_returns400`, etc.) all live in `CoachProfileBuilderIT.java:421-`, an
+integration test (`extends AbstractIntegrationTest`), not a unit test.
+
+**Why it matters:** combined with the Dev Notes' explicit "do not create new ones for these classes"
+instruction, a dev following the story literally would either go looking for a file that isn't
+there, or skip adding AC1's `SUSPENDED`-guard test coverage because the named home doesn't exist.
+The correct instruction is to extend `CoachProfileBuilderIT.java` (or explicitly authorize creating
+a new unit test class), matching the IT-style precedent AC6's Dev Notes already use for a
+migration-only AC.
+
+---
+
+## 3. AC6 — "No endpoint writes to platform_config" is false (High)
+
+**Claim in story:** "there is no admin UI or endpoint that writes to `main.platform_config` today
+(confirmed by grep: no controller references `PlatformConfigRepository.save`) — so the only
+realistic mis-write vector is a future migration."
+
+**Verified:** `ConfigResource.java:36-42` exposes:
 ```java
-disputeRepository.findOpenByBookingId(bookingId).ifPresent(d -> {
-    throw new ResponseStatusException(HttpStatus.CONFLICT, "disputes.alreadyRaised");
-});
+@PutMapping("/values/{key}")
+@PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+public ResponseEntity<ConfigValueResponse> updateValue(@PathVariable String key, @Valid @RequestBody UpdateConfigRequest request) {
+    return ResponseEntity.ok(configService.updateConfig(key, request.value()));
+}
 ```
+`ConfigService.updateConfig` (`ConfigService.java:165-173`) calls `configRepository.save(entity)`
+directly. `UpdateConfigRequest` (`UpdateConfigRequest.java`) only enforces `@NotBlank` — no format
+check. So today, any admin-authenticated caller can `PUT /api/config/values/platform.payment.currency`
+with an arbitrary non-blank string (`'EUR'`, `'euro'`, `'123'`) and it writes straight through. The
+grep the story cites is narrowly true (the *controller* doesn't call `.save()` directly — the
+*service* it calls does), but the substantive claim — that no live write path exists — is false.
 
-`findOpenByBookingId` (`DisputeRepository.java:12-18`) is a plain `bookingId` lookup with no
-`raisedBy` filter — it returns *any* open dispute on the booking, regardless of who raised it. So:
-if a parent has already filed a `Dispute` on a booking (e.g. `SESSION_QUALITY`, `UNAUTHORISED_CHARGE`
-— both already-valid reasons), the coach's newly-unlocked ability to raise their own dispute on that
-same booking 409s immediately with `disputes.alreadyRaised`. The coach cannot "contest" it through
-this endpoint at all.
+**Impact on the fix itself:** none — the DB `CHECK` constraint AC6 adds will correctly reject a
+malformed value written through this endpoint too, and `ApiAdvice.integrityViolationHandler`
+(`ApiAdvice.java:155-173`) already generically catches `DataIntegrityViolationException` and returns
+a sanitized 400 (constraint name isn't in `CONSTRAINT_MAPPINGS`, so it falls back to
+`"generic.dataError"`) rather than a raw 500. So the constraint is not broken by this.
 
-Separately, even in the cases where the coach's call *would* succeed (no prior `Dispute` row exists —
-which is actually the common case for a `NO_SHOW_COACH` claim, since `recordNoShowCoach` transitions
-the booking status directly and creates no `Dispute` row), the coach still cannot read the dispute a
-parent already filed: `getDispute` (`DisputeService.java:107-120`) 403s unless
-`dispute.getRaisedBy().equals(requesterId)`. There is no admin-detail-equivalent view a non-raiser can
-reach. So even where AC5's widened `ownerEligible` check would pass, a coach has no way to see the
-substance of a dispute they didn't personally file, to respond to it with any specifics.
-
-**Net effect:** AC5 delivers "a coach may open their own, first, independent dispute on a booking with
-no existing open dispute" — not "a coach can contest/rebut a dispute a parent already raised." The
-story's own framing ("so that ... a coach's ability to contest a dispute", the AC5 prose citing
-"dispute a no-show claim raised against them") oversells what ships. AC8's ledger note ("there is
-still no coach-side rebuttal before an automatic no-show refund fires") acknowledges a *related*
-gap but doesn't mention this specific conflict/visibility mechanism, so a reader would reasonably
-believe AC5 alone gets a coach partway there. It doesn't, for the case where a parent has already
-filed a formal dispute.
-
-**Recommendation:** Either scope AC5 explicitly to "first dispute wins, symmetric raise-only right,
-no contest capability" (accurate but should be stated, not implied), or extend `findOpenByBookingId`
-in this same AC to permit a second, opposite-side dispute per booking (which has its own design
-questions — do two open disputes on one booking need to be resolved together? does the DTO/admin UI
-support that?). Flag for product either way before implementation, since this changes what AC5
-is actually worth building.
+**What's missing:** because the story's own risk framing assumes no live write path, AC6's test plan
+("a lightweight migration test or manual `flyway migrate` check ... is sufficient") never exercises
+this real, admin-reachable path. Recommend adding one test that PUTs an invalid currency value
+through `ConfigResource` post-migration and asserts a clean 4xx, and correcting the rationale text.
 
 ---
 
-## Finding 2 — AC3's dedup check has no locking, so its own "cannot inflate the charge" claim is false under concurrency (MEDIUM-HIGH confidence)
+## 4. AC4 — Reliability strike issued without the parent's attestation (Medium)
 
-**Claim in story:** "This is gaming-resistant... a viewer repeatedly re-triggering re-authorization
-within one token's lifetime cannot inflate the charge."
+`recordNoShowCoach` is a deliberate action the parent must choose to invoke — it's effectively an
+attestation that the coach didn't show up. AC4 makes an *ordinary* `cancelBookingAsParent` call late
+enough after start time silently produce the identical consequence — full refund **and** a
+`COACH_NO_SHOW` reliability strike (`ReliabilityStrikeService.issue`, `ReliabilityStrikeService.java:33-`)
+— with no signal from the caller that they're accusing the coach of anything, and no code-level way
+to distinguish "parent apologetically cancelling 10 minutes late" from "coach genuinely never
+showed." Strikes accumulate on a rolling 30-day window and can automatically force a coach to
+`REDUCED` visibility or `PENDING_REVIEW` (same file, threshold checks). Per this same story's own
+AC7 ledger note, there is still no contest mechanism for a strike/dispute a parent raises
+("first-raiser-wins stays final"). A coach who was present and ready can now accumulate an unearned,
+uncontestable strike purely because the parent used "cancel" instead of "report no-show" after the
+start-time boundary passed.
 
-**What the code actually does:** `authorizePlayback` (`PlaybackService.java:53-160`) is a plain
-`@Transactional` method (default `REQUIRED` propagation, no pessimistic lock). The AC3 design is:
-query `PlaybackTokenRepository` for an existing non-revoked, non-expired token for
-`(viewerId, videoId)` before charging; skip the charge if found. `playback_tokens`
-(`V17__playback_tokens.sql`) has only a non-unique index on `(viewer_id, revoked_at)` — no unique
-constraint or exclusion constraint backs the dedup rule at the database level, unlike the pattern this
-codebase uses elsewhere for exactly this class of problem (e.g. `PessimisticLockRetryer` +
-`findByIdForUpdate` in `BookingDuplicationService`/`RescheduleService`/`CoachProfileService.saveStep4`
-for coach-row serialization; V87's exclusion constraint as a commit-time backstop for booking
-overlaps).
-
-Two concurrent `authorizePlayback` calls for the same `(viewerId, videoId)` — e.g. two browser tabs,
-or a client retry racing the original request — will both execute the "does an active token already
-exist" check before either has committed its own new `PlaybackToken` row. Both see "no active token,"
-both proceed to `quotaService.incrementBandwidthUsedBytes`, both charge. This is exactly the
-"re-triggering re-authorization to inflate... usage" scenario the AC's own rationale claims is closed.
-
-**Note on severity:** the practical blast radius is small (double-charging bandwidth quota by one
-extra `storageBytes` per race, not a money-movement or double-booking bug), and Task 3.3's test list
-only covers the *sequential* case (re-auth within TTL doesn't double-charge), so a green test suite
-would not surface this. Worth a decision: accept as a known, low-stakes gap (and correct the "cannot
-inflate" claim to say so), or add a lock/`SELECT ... FOR UPDATE` scoped by `(viewer_id, video_id)`
-before the exists-check, mirroring this codebase's established pattern elsewhere.
+This may well still be the right call — but the interaction with the strike-accumulation and
+visibility-reduction machinery doesn't appear to have been surfaced during the story's decision
+round, and is worth one explicit confirmation given the story's own "fairness" framing, rather than
+folding it silently into the existing "leave first-raiser-wins as-is" decision (which was about
+booking disputes, not the strike system).
 
 ---
 
-## Finding 3 — AC1 fixes the silent-zero bug for `FROZEN` only, leaving the same bug live for `CAPTURE_PENDING` and `CHARGE_FAILED` (MEDIUM confidence, worth a product call)
+## 5. AC3 — Lock-duration trade-off claim is technically inaccurate (Medium)
 
-**Claim in story:** AC1 distinguishes a dormant `FROZEN` payment from a legitimately-zero
-`sessionPrice`, because the existing `CAPTURED`-only filter folds "every non-`CAPTURED` status" into
-the same silent zero.
+**Claim in story:** "the lock is held only for the short check-and-conditional-increment window, not
+the whole `authorizePlayback` call (the provider URL generation and token save happen after the
+lock's effective scope ends)."
 
-**What's true:** `BookingPaymentStatus` (`BookingPaymentStatus.java`) defines exactly four statuses:
-`CAPTURE_PENDING`, `CAPTURED`, `CHARGE_FAILED`, `FROZEN`. `FROZEN` is genuinely dormant — grep
-confirms no code path in `src/main/java` ever sets it, matching the story's own investigation. But
-`CAPTURE_PENDING` and `CHARGE_FAILED` are *not* dormant — both are live, actively-written statuses
-(`BookingPaymentPersistenceService.java:102,219,287`, `PaymentPendingSweeper.java:163`), part of the
-UAT.3 async-capture design where a `booking_payments` row can exist before money has actually moved,
-or after a capture attempt has definitively failed. `RevenueReportingService.getCoachReceipt`'s own
-comment acknowledges this directly: "a `booking_payments` row may now exist BEFORE the money moves."
+**Verified:** `PessimisticLockRetryer.withBoundedRetry` (`PessimisticLockRetryer.java:83-105`)
+explicitly documents and implements running the locked read "inside the caller's current
+transaction" via JDBC savepoints — it never opens or commits a transaction of its own. Combined with
+`authorizePlayback` being a single `@Transactional` method (`PlaybackService.java:54`), the Postgres
+row lock taken via `findByIdForUpdate` is held until that transaction commits or rolls back at the
+end of the method — not released the moment the Java code moves past the exists-check/charge block.
+That means the lock remains held through the `PlaybackToken` INSERT (`:145-149`) and, for the
+owner-viewing-their-own-video branch, a second call to `videoProviderAdapter.generateDownloadUrl`
+(`:137-142`) — i.e. genuinely "for the whole rest of the call," not a short window.
 
-If a booking with a lingering `CAPTURE_PENDING` row (per `PaymentLifecycleService`'s own docs, this
-can persist when "a prior attempt died mid-capture" and needs manual reconciliation) or a
-`CHARGE_FAILED` row ever reaches a dispute-eligible status (`COMPLETED`, `CANCELLED*`, `NO_SHOW_*`),
-`resolveDispute`/`getCoachReceipt`/`getParentReceipt` hit the exact same silent-`sessionPrice=0`
-trap AC1 is fixing for `FROZEN` — except the existing generic warning text ("pack-based or missing
-payment record") stays just as misleading for these two statuses as it currently is for `FROZEN`,
-because AC1 as scoped only special-cases `FROZEN`.
-
-**Recommendation:** Either broaden AC1's distinguishing check to "any `BookingPayment` row exists
-with a non-`CAPTURED` status" (naming the actual status in the WARN, not hardcoding `FROZEN`-only
-logic) — which is a small, mechanical widening of the same fix, not new design — or get an explicit
-product sign-off that `CAPTURE_PENDING`/`CHARGE_FAILED` reaching a disputable booking is considered
-unreachable/acceptable-as-is, the same way `FROZEN`'s dormancy was explicitly investigated and
-recorded. Right now the story investigated only one of the three non-`CAPTURED` cases before scoping
-the fix.
+This doesn't necessarily invalidate accepting a coarser, per-video lock (that part is a reasonable,
+explicitly-flagged trade-off) — but the specific supporting argument used to justify it is wrong, and
+`authorizePlayback` is a much hotter, per-play-request path than the occasional per-user writes AC1/
+AC2 pattern this is borrowed from. Worth confirming under concurrent-viewer load (or reordering so
+the token save happens outside the locked section, or genuinely narrowing the lock via a nested
+transaction) before relying on "briefly" as the risk assessment.
 
 ---
 
-## Finding 4 — AC6 silently defeats an existing, explicit frontend Step 4 timezone picker (HIGH confidence, HIGH value)
+## 6. AC1 — "No new module dependency direction" is inaccurate (Low)
 
-**Claim in story (Dev Notes):** "confirm during implementation whether the frontend even exposes a
-per-window timezone picker distinct from the profile-level one — if it doesn't, there is nothing to
-note beyond the code comment this AC already asks for."
+**Claim in story:** "`BookingError` is already a cross-module-safe contract type (imported directly
+by `BookingDuplicationService`), so importing it here does not introduce a new module dependency
+direction that doesn't already exist elsewhere in this codebase."
 
-**What's actually there:** It does exist, prominently.
-`src/frontend/src/components/profileBuilder/ProfileBuilderStep4.vue:66-68` renders its own
-`TimezoneSelect` under a dedicated "Timezone" section, with helper copy (`step4TimezoneHelper`,
-present in all three locale bundles) that reads: **"Windows above are interpreted in this
-timezone."** It defaults to whatever Step 1 chose (`store.selectedTimezone`) but is fully editable,
-and the component's own code comment is explicit that this is deliberate: changing it to auto-sync
-from the store "would silently overwrite a per-window zone the coach had deliberately chosen here."
-The submitted payload applies this one value to every window
-(`ProfileBuilderStep4.vue:137-142`).
+**Verified:** `BookingDuplicationService` lives in `platform.booking.service` — it importing
+`platform.booking.contract.BookingError` is booking depending on its own contract package, not
+evidence of any cross-module precedent. Grepping the whole `platform.marketplace` package for any
+existing import of `platform.booking.*` returns nothing — today the dependency direction between
+these two packages is exclusively `booking → marketplace` (`RescheduleService`,
+`BookingDuplicationService` both depend on `marketplace.CoachProfileRepository`/`CoachProfileStatus`).
+AC1 would be the **first-ever `marketplace → booking` import**, not a continuation of an existing
+pattern.
 
-AC6's backend change makes `saveStep4` ignore this value entirely and force
-`profile.getCanonicalTimezone()` instead. After AC6 ships as scoped, a coach who deliberately picks a
-different timezone on this screen — which the UI's own helper text invites them to do — has that
-choice silently discarded server-side with no client-side signal. The screen's copy ("Windows above
-are interpreted in this timezone") becomes actively false the moment the coach's Step 4 selection
-differs from their Step 1 selection. This is worse than the pre-fix state: before, the divergence was
-a backend data-consistency bug invisible to the coach; after, it's a UI element that visibly lies
-about what it does.
-
-The story's own scope boundary ("Leave the wire contract... in place unchanged... avoiding a frontend
-contract change this story does not need to make") is reasonable *if* the picker doesn't exist or is
-inert — but the Dev Notes' own conditional ("if it doesn't [exist], there is nothing to note") shows
-the story never actually resolved this before scoping the AC, and the answer is the branch the story
-didn't plan for.
-
-**Recommendation:** This needs an explicit decision before implementation, not a "confirm during
-implementation" deferral: either (a) also update `ProfileBuilderStep4.vue` to drop the picker (or
-replace it with read-only display of the profile's timezone + a "change it in Step 1" link) as part
-of this same story, since shipping AC6 without it produces a materially misleading screen, or (b)
-scope AC6 down to "backfill migration only, no `saveStep4` behavior change" until a frontend fix can
-be bundled. Silently accepting the current Dev Notes framing as written will ship a UI regression.
+There's no build-level module boundary here (single Maven module, no ArchUnit/checkstyle
+import-control rule found) so this won't break compilation — but the claim itself is wrong, and the
+dev should treat this as "we are deliberately accepting a new reverse package dependency for
+byte-for-byte error-code consistency," not "this direction already exists elsewhere."
 
 ---
 
-## Finding 5 — AC8's ledger closure for AC4 references the wrong item, and would incorrectly retire an unanswered product question (HIGH confidence)
+## 7. AC5 — Phase 1/Phase 2 lookup description is misleading (Low, no functional impact)
 
-**Claim in story (AC8):** "AC4's `## Deferred from: skillars-deferred-30 story creation and review`
--era late-parent-cancel/no-show product question... to `[CLOSED by skillars-deferred-63 AC4]`."
+**Claim in story:** Phase 2 should use "the existing `findFirstByVideoIdOrderByCreatedAtDesc(videoId)`
+... already status-agnostic, unlike the PENDING-filtered lookup Phase 1 uses for its own different
+purpose."
 
-**What's actually in `deferred-work.md`:** The item AC4 is presumably referring to (its text matches
-almost exactly) is filed under a *different* heading, `## Deferred from:
-skillars-deferred-28-booking-error-messaging-subscription-coverage-and-media-timestamp-test story
-creation (2026-08-17)` (line 1311), not `skillars-deferred-30`. That's a citation error the story's
-own hedge ("verify the exact current section heading... at implementation time") anticipates and
-should catch — but there's a bigger problem underneath it than a wrong heading.
-
-The actual ledger item's product question is: **"should a parent cancelling a booking after its
-session start time has already passed settle as a coach no-show instead of an ordinary
-`CANCEL_PARENT`?"** — i.e., should `BookingService.cancelBookingAsParent` auto-convert a late cancel
-into a `NO_SHOW_COACH` event. That question is about the **cancel** path.
-
-AC4, as actually specified and implemented, adds a guard to `recordNoShowCoach` — a *different*,
-already-existing endpoint where a parent explicitly and separately reports a no-show — rejecting a
-claim made before `requestedStartTime`. This is a legitimate, well-scoped fix for a real gap (a
-parent could report "coach didn't show" before the session was even due to start), but it does not
-touch `cancelBookingAsParent` at all, and does not answer the ledger item's actual question (should a
-late *cancellation* auto-become a no-show). The `deferred-work.md` entry already carries a
-`[PICKED UP by skillars-deferred-63 AC4 (time guard only; IN_PROGRESS extension explicitly
-declined)]` annotation as of story-creation time, which itself already conflates the two — but "time
-guard only" describes AC4's actual fix (on `recordNoShowCoach`), not a resolution of the ledger
-item's actual cancel-vs-no-show question.
-
-If AC8 is executed as written, whoever closes the ledger will mark the "should late-cancel become a
-no-show" product question `[CLOSED by skillars-deferred-63 AC4]` — but that question was never
-decided or implemented. It will silently vanish from the backlog, indistinguishable from an item that
-was actually resolved, even though `cancelBookingAsParent`'s unconditional-transition behavior
-(`BookingService.java:611-661`) is completely unchanged by this story.
-
-**Recommendation:** Before executing AC8, split this into two ledger actions: (1) file a *new* item
-(or note under the existing one) for the specific gap AC4 actually closes — premature
-`recordNoShowCoach` claims — and mark that closed; (2) leave the original "late `CANCEL_PARENT` →
-auto no-show?" product question open under its correct `skillars-deferred-28` heading, since it
-remains genuinely undecided.
+**Verified:** Phase 1's current code (`AdminVideoService.java:67-68`) calls the **exact same**
+`uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)` and only applies
+`.filter(s -> s.getStatus() == PENDING)` afterward in Java — there is no separate,
+PENDING-filtered repository query. This doesn't change what Phase 2 should do (call the same method,
+skip the filter), so it has no functional impact, but the wording could lead a dev to believe two
+distinct queries are involved when there's only one.
 
 ---
 
 ## Items checked and found accurate (no finding)
 
-To keep this review honest about what *isn't* a problem, these specific claims in the story were
-independently verified against current source and hold up:
-
-- AC1: `FROZEN` is genuinely dormant — no write site anywhere in `src/main/java`. `resolveDispute`'s
-  existing `log.warn` is genuinely `FULL_CREDIT`-branch-only, confirmed at
-  `DisputeService.java:182`.
-- AC2: `CoachProfileStatus.SUSPENDED` exists as claimed; `RescheduleService.acceptReschedule`'s
-  precedent check (`RescheduleService.java:219-222`) matches the story's description exactly, same
-  `BookingError.COACH_UNAVAILABLE` code.
-- AC4: the `NO_SHOW_COACH` transition is only reachable from `UPCOMING`
-  (`BookingStateMachine.java:48`), not `IN_PROGRESS` — confirms both the core bug claim and the
-  correctness of the "out of scope" `IN_PROGRESS` boundary. `recordNoShowCoach` has exactly one
-  caller in Java (`CancellationResource.java:53`, parent-only) and zero frontend call sites beyond
-  the unused API wrapper — confirmed by grep.
-- AC5: `booking.getCoachId()` is genuinely a `CoachProfile` UUID requiring the profile hop described;
-  `ELIGIBLE_STATUSES`/`VALID_REASONS` genuinely need no change; `DisputeResource.resolveCurrentRole()`
-  genuinely hardcodes `PARENT`/`PLAYER` with no `COACH` branch today.
-- AC6: `AvailabilityService.updateWindow` genuinely never touches `canonicalTimezone` (confirmed —
-  only `dayOfWeek`/`startTime`/`endTime` are set); `AvailabilityService.addWindow` already correctly
-  sources it from `profile.getCanonicalTimezone()`, so `saveStep4` is genuinely the only write site
-  needing the fix. `V101` is genuinely the latest migration, so `V102` is correctly the next id.
-- AC7: `sessionDurationMinutes` genuinely appears in exactly one frontend file; the profile-builder
-  flow genuinely never hydrates an existing value (`form.sessionDurationMinutes` starts `null` and
-  there's no fetch-and-populate path) — the "unreachable via UI" claim holds.
-- i18n: all four bundles (`messages.properties`, `messages_en/_de/_fr.properties`) carry an identical
-  14-entry `booking.*` key set today, so the new `booking.noShowTooEarly` key genuinely needs adding
-  to all four with no pre-existing divergence to account for.
+For completeness, these specific claims were spot-verified against source and hold up:
+- AC1/AC2/AC3's shared "locked-read-then-refresh" precedent in `RescheduleService.acceptReschedule`
+  (`:213-227`) and `BookingDuplicationService.duplicateNextWeek` (`:66-78`).
+- AC2's core claim: `cancelBookingAsParent`'s `findByIdForUpdate` call returns the same
+  already-loaded, unrefreshed managed instance (Hibernate identity map) — genuinely a stale-read bug.
+- AC3's `VideoRepository`/`CoachProfileRepository.findByIdForUpdate` NO_WAIT + `@QueryHints` pattern
+  match exactly; no existing single-row blocking lock on `Video` exists today (all current Video
+  locks are `FOR UPDATE SKIP LOCKED` batch queries), so no new deadlock-ordering risk.
+- AC4's state-machine gap: `BookingStateMachine`'s `CONFIRMED` row genuinely lacks `NO_SHOW_COACH`
+  (`BookingStateMachine.java:39-44`); `EVENT_ROLES` already permits `PARENT` to fire it (`:98`); no
+  other code path assumes `NO_SHOW_COACH` is unreachable from `CONFIRMED` (grepped).
+- AC5's core bug and fix shape: `findFirstByVideoIdOrderByCreatedAtDesc` is genuinely status-agnostic
+  (`UploadSessionRepository.java:14`); `quotaProvider.release` is genuinely idempotent by contract
+  and by implementation (`QuotaService.release`, atomic `ACTIVE → RELEASED` UPDATE), so no additional
+  locking is needed around the retry-safety gate despite the check-then-act shape resembling AC3's.
+- AC6's precedent match (`V100`/`V101`'s `NOT VALID` + `VALIDATE CONSTRAINT` pair) and the seeded
+  `'eur'` value satisfying the proposed `^[a-z]{3}$` regex.
+- Spot-checked 7 of the 11 AC7 "already fixed" closures (`SessionPackPaymentService`,
+  `ConfigService.getBoolean`'s `MISCONFIGURED_COUNTER`, `PlayerHomeRedirectPage.vue`,
+  `playerStore.resetSelfPlayerId`/`fetchSelfPlayerId`, `isSlotWithinAvailabilityWindow`'s explicit
+  `coachId` param, `PlayerRegistrationResourceIT`'s OTP coverage, `AdminQueueIT`'s E2E chain test,
+  `BookingServiceTest`'s `@InjectMocks`) — all confirmed accurate against current source.
+- Migration IDs: V103 is confirmed the latest migration on disk, so V104/V105/V106 are free as of
+  this review (still worth a final check immediately before writing the files, as the story itself
+  says).

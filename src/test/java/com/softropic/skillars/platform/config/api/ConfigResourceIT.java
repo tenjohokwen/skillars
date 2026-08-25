@@ -231,6 +231,28 @@ class ConfigResourceIT extends AbstractIntegrationTest {
         assertThat(getResponse.getBody().value()).isEqualTo("0.10");
     }
 
+    /**
+     * Deferred-64 AC6: platform.payment.currency's new chk_payment_currency_format DB constraint
+     * guards the live admin write path, not just a hypothetical future migration —
+     * ConfigResource.updateValue/ConfigService.updateConfig write this key through with no format
+     * validation of their own. A malformed value must now surface as a clean 4xx via ApiAdvice's
+     * generic DataIntegrityViolationException handler, not a raw 500.
+     */
+    @Test
+    void putPaymentCurrency_malformedValue_returns4xxNotRaw500() {
+        String url = "http://localhost:" + port + "/api/config/values/platform.payment.currency";
+
+        UpdateConfigRequest updateRequest = new UpdateConfigRequest("EUR");
+
+        assertThatThrownBy(() -> restTemplate.exchange(
+                url, HttpMethod.PUT,
+                new HttpEntity<>(updateRequest, adminHeaders),
+                ConfigValueResponse.class))
+                .isInstanceOf(HttpClientErrorException.class)
+                .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
+                        .isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
     @Test
     void putAsNonAdmin_returns403() {
         String url = "http://localhost:" + port + "/api/config/values/platform.commission_rate";

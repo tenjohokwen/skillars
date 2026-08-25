@@ -43,6 +43,9 @@ public class UploadSession {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
+    @Column(name = "quota_released_at")
+    private Instant quotaReleasedAt;
+
     @PrePersist
     void onCreate() {
         this.createdAt = Instant.now();

@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.video.service;
 
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.video.PlaybackTokenClaims;
 import com.softropic.skillars.infrastructure.video.SignedPlaybackUrl;
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
@@ -11,6 +12,7 @@ import com.softropic.skillars.platform.video.repo.PlaybackToken;
 import com.softropic.skillars.platform.video.repo.PlaybackTokenRepository;
 import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -37,6 +39,8 @@ class PlaybackRevocationWindowUnitTest {
     @Mock VideoMetrics videoMetrics;
     @Mock ConfigService configService;
     @Mock QuotaService quotaService;
+    @Mock PessimisticLockRetryer lockRetryer;
+    @Mock EntityManager entityManager;
 
     PlaybackService playbackService;
 
@@ -50,8 +54,10 @@ class PlaybackRevocationWindowUnitTest {
 
         when(configService.getLong("platform.video.playback.signed_url_ttl_minutes", 120L)).thenReturn(120L);
         when(configService.getBoolean("platform.video.playback.ip_binding_enabled", false)).thenReturn(false);
+        when(lockRetryer.withBoundedRetry(any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
 
-        playbackService = new PlaybackService(videoRepository, playbackTokenRepository, videoProviderAdapter, properties, videoMetrics, configService, quotaService);
+        playbackService = new PlaybackService(videoRepository, playbackTokenRepository, videoProviderAdapter, properties, videoMetrics, configService, quotaService, lockRetryer, entityManager);
     }
 
     @Test
@@ -72,6 +78,7 @@ class PlaybackRevocationWindowUnitTest {
         savedToken.setExpiresAt(Instant.now().plusSeconds(900));
 
         when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
+        when(videoRepository.findByIdForUpdate(videoId)).thenReturn(Optional.of(video));
         when(videoProviderAdapter.generatePlaybackUrl(anyString(), any(PlaybackTokenClaims.class)))
             .thenReturn(new SignedPlaybackUrl("https://cdn/playlist.m3u8?token=test", Instant.now().plusSeconds(900)));
         when(playbackTokenRepository.save(any(PlaybackToken.class))).thenReturn(savedToken);
