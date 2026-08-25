@@ -24,6 +24,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.OptimisticLockingFailureException;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -307,6 +308,35 @@ class RescheduleServiceTest {
         ArgumentCaptor<RescheduleAcceptedEvent> captor = ArgumentCaptor.forClass(RescheduleAcceptedEvent.class);
         verify(eventPublisher).publishEvent(captor.capture());
         assertThat(captor.getValue().getNewStartTime()).isEqualTo(proposedStart);
+    }
+
+    @Test
+    void acceptReschedule_concurrentModification_throwsRetryableException() {
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+
+        Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        Instant proposedEnd = proposedStart.plus(1, ChronoUnit.HOURS);
+        BookingRescheduleRequest pending = new BookingRescheduleRequest();
+        pending.setBookingId(BOOKING_ID);
+        pending.setStatus("PENDING");
+        pending.setProposedStartTime(proposedStart);
+        pending.setProposedEndTime(proposedEnd);
+        when(rescheduleRepo.findById(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+        when(rescheduleRepo.findByIdForUpdate(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+        when(coachProfileRepository.findByIdForUpdate(coach.getId())).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(
+            coach.getId(), proposedStart, proposedEnd,
+            BookingService.ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED, BOOKING_ID))
+            .thenReturn(List.of());
+        when(bookingRepository.save(any(Booking.class))).thenThrow(new OptimisticLockingFailureException("test"));
+
+        assertThatThrownBy(() -> service.acceptReschedule(BOOKING_ID, RESCHEDULE_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasCauseInstanceOf(OptimisticLockingFailureException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.CONCURRENT_MODIFICATION));
     }
 
     @Test

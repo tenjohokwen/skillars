@@ -30,6 +30,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
@@ -645,6 +646,57 @@ class BookingBatchServiceTest {
                 .isEqualTo("generic.unknown")
                 .doesNotContain(corrupted.getId().toString())
                 .doesNotContain("FOOBAR");
+        });
+    }
+
+    @Test
+    void acceptAll_oneBookingRacesConcurrentModification_returnsConcurrentModificationCode() {
+        BookingBatch batch = new BookingBatch();
+        batch.setId(BATCH_ID);
+        batch.setCoachId(COACH_ID);
+        batch.setParentId(PARENT_ID);
+        batch.setStatus("PENDING");
+        batch.setTotalAmount(BigDecimal.ZERO);
+        when(batchRepository.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+
+        CoachProfile coach = buildActiveCoach();
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+
+        Instant okSlot = Instant.now().plus(4, ChronoUnit.DAYS);
+        Booking ok = new Booking();
+        ok.setId(UUID.randomUUID());
+        ok.setStatus("REQUESTED");
+        ok.setRequestedStartTime(okSlot);
+        ok.setRequestedEndTime(okSlot.plus(1, ChronoUnit.HOURS));
+
+        Instant racedSlot = Instant.now().plus(3, ChronoUnit.DAYS);
+        Booking raced = new Booking();
+        raced.setId(UUID.randomUUID());
+        raced.setStatus("REQUESTED");
+        raced.setRequestedStartTime(racedSlot);
+        raced.setRequestedEndTime(racedSlot.plus(1, ChronoUnit.HOURS));
+        when(bookingRepository.findByBatchIdAndStatus(BATCH_ID, "REQUESTED"))
+            .thenReturn(List.of(ok, raced));
+
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(), any(), any(), any()))
+            .thenReturn(List.of());
+
+        doNothing().when(bookingService).acceptAndInitiatePayment(eq(ok.getId()), any());
+        doThrow(new OptimisticLockingFailureException("test"))
+            .when(bookingService).acceptAndInitiatePayment(eq(raced.getId()), any());
+
+        when(bookingRepository.findByBatchId(BATCH_ID)).thenReturn(List.of(ok, raced));
+        when(batchRepository.save(any())).thenReturn(batch);
+        when(userRepository.findById(any())).thenReturn(Optional.empty());
+
+        List<BatchAcceptResult> results = service.acceptAll(BATCH_ID, COACH_USER_ID);
+
+        assertThat(results).hasSize(2);
+        assertThat(results).anySatisfy(r -> {
+            assertThat(r.bookingId()).isEqualTo(raced.getId());
+            assertThat(r.accepted()).isFalse();
+            assertThat(r.errorKey()).isEqualTo(BookingError.CONCURRENT_MODIFICATION.getErrorCode());
         });
     }
 

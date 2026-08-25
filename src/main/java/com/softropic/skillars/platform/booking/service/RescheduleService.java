@@ -25,6 +25,7 @@ import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -256,7 +257,11 @@ public class RescheduleService {
 
         booking.setRequestedStartTime(req.getProposedStartTime());
         booking.setRequestedEndTime(req.getProposedEndTime());
-        bookingRepository.save(booking);
+        try {
+            bookingRepository.save(booking);
+        } catch (OptimisticLockingFailureException e) {
+            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+        }
         req.setStatus("ACCEPTED");
         rescheduleRepo.save(req);
 
