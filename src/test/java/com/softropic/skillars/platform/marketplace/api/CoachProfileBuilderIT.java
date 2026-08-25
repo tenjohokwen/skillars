@@ -217,6 +217,24 @@ class CoachProfileBuilderIT extends AbstractIntegrationTest {
             });
     }
 
+    // AC2 (skillars-deferred-65): @IanaTimezone now rejects DST-blind fixed offsets, not just
+    // outright garbage — "+01:00" parses fine under ZoneId.of but is not a real IANA region id.
+    @Test
+    void saveStep1_fixedOffsetTimezone_returns400() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/1",
+            HttpMethod.PUT,
+            step1Payload("John Coach", "Bio", "Berlin", "Mitte", List.of("English"), "+01:00"),
+            authenticatedHeaders(cookies),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
     @Test
     void saveStep1_invalidTimezone_germanAcceptLanguage_returns400WithGermanResolvedMessage() {
         String cookies = loginAndGetCookies(COACH_EMAIL);
@@ -508,6 +526,28 @@ class CoachProfileBuilderIT extends AbstractIntegrationTest {
                     .doesNotContain("{validation.timezone.invalid}")
                     .doesNotContain("validation.timezone.invalid|");
             });
+    }
+
+    // AC2 (skillars-deferred-65): @IanaTimezone now rejects DST-blind fixed offsets, not just
+    // outright garbage — "+01:00" parses fine under ZoneId.of but is not a real IANA region id.
+    @Test
+    void saveStep4_fixedOffsetWindowTimezone_returns400() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies);
+        saveStep2(cookies);
+        saveStep3(cookies);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/4",
+            HttpMethod.PUT,
+            Map.of("windows", List.of(Map.of("dayOfWeek", 1, "startTime", "09:00:00", "endTime", "11:00:00",
+                "canonicalTimezone", "+01:00"))),
+            authenticatedHeaders(cookies),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST));
     }
 
     // Proves the `@Valid` cascade added by this story actually runs — before it, nothing nested

@@ -60,20 +60,22 @@ public class AvailabilityService {
 
         List<CoachAvailabilityWindow> windows = windowRepository.findByCoachId(coachId);
 
-        String timezone = windows.isEmpty() ? "UTC" : windows.get(0).getCanonicalTimezone();
-        if (timezone == null || timezone.isBlank()) timezone = "UTC";
-
-        // Deferred-17 AC4: the zone the client displays slots in must be the same column the
-        // booking's own canonicalTimezone comes from (coach_profiles, see BookingService), so it
-        // is read here from the coach profile. This is deliberately NOT the `timezone` variable
-        // above: that one comes from coach_availability_windows, a separate and independently
-        // writable column, and only feeds this method's internal slot-computation zone.
+        // Deferred-17 AC4 / skillars-deferred-65 AC3: the zone driving week-scoping bounds is the
+        // coach profile's own canonical_timezone — the same column the booking's own
+        // canonicalTimezone comes from (coach_profiles, see BookingService) and the same value the
+        // response's own canonicalTimezone field already reports. This used to instead read
+        // windows.get(0).getCanonicalTimezone(), an arbitrary pick off an unordered list
+        // (CoachAvailabilityWindowRepository.findByCoachId issues no ORDER BY): two identical
+        // requests for a coach with windows in multiple timezones could return different week
+        // boundaries and a different blocks set purely from row-order luck. Per-window timezone
+        // divergence remains a deliberate feature (skillars-deferred-63/-64) — this only changes
+        // which value drives the *outer* week-scoping bounds, not per-window slot computation below.
         String coachTimezone = profile.getCanonicalTimezone();
         if (coachTimezone == null || coachTimezone.isBlank()) coachTimezone = "UTC";
 
         ZoneId zoneId;
         try {
-            zoneId = ZoneId.of(timezone);
+            zoneId = ZoneId.of(coachTimezone);
         } catch (DateTimeException e) {
             zoneId = ZoneId.of("UTC");
         }

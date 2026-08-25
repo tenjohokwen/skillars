@@ -72,18 +72,19 @@ class PackSessionServiceParityTest {
 
     @Test
     void getActivePackId_activePackExists_returnsFirstResultFromFindActivePacks() {
-        // findActivePacks is queried ORDER BY createdAt ASC — the repository, not this method,
-        // is responsible for oldest-first ordering; this method just takes the first result.
-        UUID oldestId = UUID.randomUUID();
-        SessionPackPurchase older = purchase(2);
-        older.setPurchaseId(oldestId);
-        SessionPackPurchase newer = purchase(5);
+        // findActivePacks is queried ORDER BY expiresAt ASC, createdAt DESC — the repository, not
+        // this method, is responsible for soonest-expiring-first ordering; this method just takes
+        // the first result.
+        UUID expectedId = UUID.randomUUID();
+        SessionPackPurchase firstPack = purchase(2);
+        firstPack.setPurchaseId(expectedId);
+        SessionPackPurchase secondPack = purchase(5);
         when(sessionPackPurchaseRepository.findActivePacks(any(Long.class), any(UUID.class), any(Instant.class)))
-            .thenReturn(List.of(older, newer));
+            .thenReturn(List.of(firstPack, secondPack));
 
         UUID result = service.getActivePackId(PLAYER_ID, COACH_ID);
 
-        assertThat(result).isEqualTo(oldestId);
+        assertThat(result).isEqualTo(expectedId);
     }
 
     @Test
@@ -116,16 +117,16 @@ class PackSessionServiceParityTest {
 
     @Test
     void findActivePackId_activePackExists_returnsFirstResultFromFindActivePacks() {
-        UUID oldestId = UUID.randomUUID();
-        SessionPackPurchase older = purchase(2);
-        older.setPurchaseId(oldestId);
-        SessionPackPurchase newer = purchase(5);
+        UUID expectedId = UUID.randomUUID();
+        SessionPackPurchase firstPack = purchase(2);
+        firstPack.setPurchaseId(expectedId);
+        SessionPackPurchase secondPack = purchase(5);
         when(sessionPackPurchaseRepository.findActivePacks(any(Long.class), any(UUID.class), any(Instant.class)))
-            .thenReturn(List.of(older, newer));
+            .thenReturn(List.of(firstPack, secondPack));
 
         UUID result = service.findActivePackId(PLAYER_ID, COACH_ID);
 
-        assertThat(result).isEqualTo(oldestId);
+        assertThat(result).isEqualTo(expectedId);
     }
 
     @Test
