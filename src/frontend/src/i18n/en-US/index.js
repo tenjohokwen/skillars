@@ -881,6 +881,8 @@ export default {
       requestChange: 'Request Change',
       dialogTitle: 'Propose a new time',
       proposedStart: 'New session start',
+      startTimezoneHint:
+        'Entered in your browser timezone ({browser}). The session itself is in {session}.',
       proposedEnd: 'New session end',
       endDerivedHint: 'Set automatically — a reschedule keeps the session’s original length.',
       endDerivedLengthUnavailable:

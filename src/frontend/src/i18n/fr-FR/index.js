@@ -1162,6 +1162,8 @@ export default {
       requestChange: 'Demander un changement',
       dialogTitle: 'Proposer un nouvel horaire',
       proposedStart: 'Nouveau début de séance',
+      startTimezoneHint:
+        'Saisi dans le fuseau horaire de votre navigateur ({browser}). La séance elle-même est dans {session}.',
       proposedEnd: 'Nouvelle fin de séance',
       endDerivedHint: 'Défini automatiquement — un report conserve la durée initiale de la séance.',
       endDerivedLengthUnavailable:

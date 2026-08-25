@@ -114,9 +114,13 @@ public class CoachProfileService {
      * region-form UTC zone, and a coach genuinely operating on UTC needs somewhere to land.
      * Result on JDK 17: 486 options, every one of which passes {@code @IanaTimezone}.
      *
-     * <p>This is a <em>display</em> filter only. {@code IanaTimezoneValidator} stays permissive on
-     * purpose (2026-08-07 decision), so a coach whose zone was stored as {@code Navajo} or
-     * {@code +01:00} before this shipped keeps working everywhere else in the system.
+     * <p>This is a <em>display</em> filter only. {@code IanaTimezoneValidator} was permissive on
+     * purpose (2026-08-07 decision) and has since been tightened to require genuine IANA region-id
+     * membership (2026-08-25 decision, skillars-deferred-65 AC2) — every option this method offers
+     * already satisfies that stricter check, so the tightening changes nothing here. A coach whose
+     * zone was stored as {@code Navajo} or {@code +01:00} before either decision keeps working
+     * everywhere else in the system; that pre-existing value is never revalidated except on a fresh
+     * write through this picker.
      */
     public List<String> getSupportedTimezones() {
         return Stream.concat(

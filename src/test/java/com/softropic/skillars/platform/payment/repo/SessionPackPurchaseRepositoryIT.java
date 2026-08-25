@@ -17,9 +17,10 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-// AC1 (skillars-deferred-27): PackSessionServiceParityTest mocks findActivePacks to already return
-// ordered results and never exercises the real ORDER BY p.createdAt ASC clause
-// (SessionPackPurchaseRepository.java:37-46) against a real database. This IT proves that ordering.
+// AC1 (skillars-deferred-27, reordered by skillars-deferred-65 AC1): PackSessionServiceParityTest
+// mocks findActivePacks to already return ordered results and never exercises the real
+// ORDER BY p.expiresAt ASC, p.createdAt DESC clause (SessionPackPurchaseRepository.java:36-45)
+// against a real database. This IT proves that ordering.
 class SessionPackPurchaseRepositoryIT extends AbstractIntegrationTest {
 
     // Fixture id range 9620000001-9620000004, claimed in docs/testing/test-data-isolation.md.
@@ -46,7 +47,7 @@ class SessionPackPurchaseRepositoryIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void findActivePacks_returnsOldestCreatedAtFirst() {
+    void findActivePacks_returnsSoonestExpiringFirst() {
         long coachUserId = COACH_USER_ID;
         seedCoachUser(coachUserId);
 
@@ -67,47 +68,107 @@ class SessionPackPurchaseRepositoryIT extends AbstractIntegrationTest {
         Long playerId = PLAYER_ID;
         Instant now = Instant.now();
 
-        // Insertion order is deliberately the REVERSE of the expected result order. Each save() commits
-        // its own transaction (SimpleJpaRepository.save is @Transactional, this class has no ambient
-        // transaction), so physical heap order is newer-then-older. A seq scan over these two rows
-        // therefore returns newer-first, and only ORDER BY p.createdAt ASC can produce the asserted
-        // older-first result — drop the ORDER BY from the query and this test fails, which is the whole
-        // point of it. Do not "tidy" this by seeding the older pack first.
-        SessionPackPurchase newerPack = new SessionPackPurchase();
-        newerPack.setParentId(1L);
-        newerPack.setPlayerId(playerId);
-        newerPack.setCoachId(coach.getId());
-        newerPack.setPackTierId(tier.getPackTierId());
-        newerPack.setPricePerSession(new BigDecimal("10.00"));
-        newerPack.setRemainingSessions(5);
-        newerPack.setExpiresAt(now.plusSeconds(86_400));
-        newerPack.setCreatedAt(now);
-        sessionPackPurchaseRepository.save(newerPack);
+        // createdAt and expiresAt are deliberately INVERTED relative to each other: the pack created
+        // first has the LATER expiresAt, and the pack created second has the SOONER expiresAt. This
+        // means ORDER BY p.createdAt ASC (the old clause) and ORDER BY p.expiresAt ASC (the new one)
+        // disagree on the result order — only the new clause can produce the asserted
+        // soonest-expiring-first result. Do not "tidy" this by aligning the two timestamps.
+        SessionPackPurchase laterExpiringPack = new SessionPackPurchase();
+        laterExpiringPack.setParentId(1L);
+        laterExpiringPack.setPlayerId(playerId);
+        laterExpiringPack.setCoachId(coach.getId());
+        laterExpiringPack.setPackTierId(tier.getPackTierId());
+        laterExpiringPack.setPricePerSession(new BigDecimal("10.00"));
+        laterExpiringPack.setRemainingSessions(5);
+        laterExpiringPack.setExpiresAt(now.plusSeconds(86_400 * 10));
+        laterExpiringPack.setCreatedAt(now.minus(Duration.ofDays(2)));
+        sessionPackPurchaseRepository.save(laterExpiringPack);
 
-        SessionPackPurchase olderPack = new SessionPackPurchase();
-        olderPack.setParentId(1L);
-        olderPack.setPlayerId(playerId);
-        olderPack.setCoachId(coach.getId());
-        olderPack.setPackTierId(tier.getPackTierId());
-        olderPack.setPricePerSession(new BigDecimal("10.00"));
-        olderPack.setRemainingSessions(5);
-        olderPack.setExpiresAt(now.plusSeconds(86_400));
-        olderPack.setCreatedAt(now.minus(Duration.ofDays(2)));
-        sessionPackPurchaseRepository.save(olderPack);
+        SessionPackPurchase soonerExpiringPack = new SessionPackPurchase();
+        soonerExpiringPack.setParentId(1L);
+        soonerExpiringPack.setPlayerId(playerId);
+        soonerExpiringPack.setCoachId(coach.getId());
+        soonerExpiringPack.setPackTierId(tier.getPackTierId());
+        soonerExpiringPack.setPricePerSession(new BigDecimal("10.00"));
+        soonerExpiringPack.setRemainingSessions(5);
+        soonerExpiringPack.setExpiresAt(now.plusSeconds(86_400));
+        soonerExpiringPack.setCreatedAt(now);
+        sessionPackPurchaseRepository.save(soonerExpiringPack);
 
-        // Guard the premise: if @PrePersist or a DB default ever overwrote the explicit createdAt values,
-        // the ordering assertion below would pass or fail for the wrong reason.
-        assertThat(olderPack.getCreatedAt()).isBefore(newerPack.getCreatedAt());
+        // Guard the premise: if @PrePersist or a DB default ever overwrote the explicit createdAt
+        // values, the ordering assertion below would pass or fail for the wrong reason.
+        assertThat(laterExpiringPack.getCreatedAt()).isBefore(soonerExpiringPack.getCreatedAt());
+        assertThat(soonerExpiringPack.getExpiresAt()).isBefore(laterExpiringPack.getExpiresAt());
 
         List<SessionPackPurchase> activePacks =
             sessionPackPurchaseRepository.findActivePacks(playerId, coach.getId(), Instant.now());
 
         assertThat(activePacks).hasSize(2);
-        assertThat(activePacks.get(0).getPurchaseId()).isEqualTo(olderPack.getPurchaseId());
-        assertThat(activePacks.get(1).getPurchaseId()).isEqualTo(newerPack.getPurchaseId());
+        assertThat(activePacks.get(0).getPurchaseId()).isEqualTo(soonerExpiringPack.getPurchaseId());
+        assertThat(activePacks.get(1).getPurchaseId()).isEqualTo(laterExpiringPack.getPurchaseId());
     }
 
-    // AC5 (skillars-deferred-29): findActivePacks_returnsOldestCreatedAtFirst above only proves
+    // Story-review finding (skillars-deferred-65 AC1): two active packs can share an identical
+    // expiresAt with no ordering guarantee among tied rows without a secondary sort key. Proves the
+    // p.createdAt DESC secondary key — the primary ordering test above never exercises it, since its
+    // two rows have distinct expiresAt values.
+    @Test
+    void findActivePacks_tiedExpiresAt_returnsNewestCreatedFirst() {
+        long coachUserId = COACH_USER_ID;
+        seedCoachUser(coachUserId);
+
+        CoachProfile coach = new CoachProfile();
+        coach.setUserId(coachUserId);
+        coach.setDisplayName("Coach Tiebreak Test");
+        coach.setCanonicalTimezone("Europe/Berlin");
+        coach = coachProfileRepository.save(coach);
+
+        SessionPackTier tier = new SessionPackTier();
+        tier.setCoachId(coach.getId());
+        tier.setLabel("Standard Pack");
+        tier.setSessionCount(10);
+        tier.setTotalPrice(new BigDecimal("100.00"));
+        tier.setPricePerSession(new BigDecimal("10.00"));
+        tier = sessionPackTierRepository.save(tier);
+
+        Long playerId = PLAYER_ID;
+        Instant now = Instant.now();
+        Instant sharedExpiresAt = now.plusSeconds(86_400);
+
+        SessionPackPurchase olderCreatedPack = new SessionPackPurchase();
+        olderCreatedPack.setParentId(1L);
+        olderCreatedPack.setPlayerId(playerId);
+        olderCreatedPack.setCoachId(coach.getId());
+        olderCreatedPack.setPackTierId(tier.getPackTierId());
+        olderCreatedPack.setPricePerSession(new BigDecimal("10.00"));
+        olderCreatedPack.setRemainingSessions(5);
+        olderCreatedPack.setExpiresAt(sharedExpiresAt);
+        olderCreatedPack.setCreatedAt(now.minus(Duration.ofDays(2)));
+        sessionPackPurchaseRepository.save(olderCreatedPack);
+
+        SessionPackPurchase newerCreatedPack = new SessionPackPurchase();
+        newerCreatedPack.setParentId(1L);
+        newerCreatedPack.setPlayerId(playerId);
+        newerCreatedPack.setCoachId(coach.getId());
+        newerCreatedPack.setPackTierId(tier.getPackTierId());
+        newerCreatedPack.setPricePerSession(new BigDecimal("10.00"));
+        newerCreatedPack.setRemainingSessions(5);
+        newerCreatedPack.setExpiresAt(sharedExpiresAt);
+        newerCreatedPack.setCreatedAt(now);
+        sessionPackPurchaseRepository.save(newerCreatedPack);
+
+        assertThat(olderCreatedPack.getExpiresAt()).isEqualTo(newerCreatedPack.getExpiresAt());
+        assertThat(olderCreatedPack.getCreatedAt()).isBefore(newerCreatedPack.getCreatedAt());
+
+        List<SessionPackPurchase> activePacks =
+            sessionPackPurchaseRepository.findActivePacks(playerId, coach.getId(), Instant.now());
+
+        assertThat(activePacks).hasSize(2);
+        assertThat(activePacks.get(0).getPurchaseId()).isEqualTo(newerCreatedPack.getPurchaseId());
+        assertThat(activePacks.get(1).getPurchaseId()).isEqualTo(olderCreatedPack.getPurchaseId());
+    }
+
+    // AC5 (skillars-deferred-29): findActivePacks_returnsSoonestExpiringFirst above only proves
     // ordering — both its rows sit at comfortable mid-range values on every other predicate, so
     // remainingSessions > 0, expiresAt > :now, the pausedUntil OR-clause, and the playerId match could
     // all be deleted from the JPQL without failing it. This test seeds one negative row per predicate

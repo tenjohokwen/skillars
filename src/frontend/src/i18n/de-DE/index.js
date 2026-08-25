@@ -422,6 +422,8 @@ export default {
       requestChange: 'Änderung anfragen',
       dialogTitle: 'Neue Zeit vorschlagen',
       proposedStart: 'Neuer Sitzungsbeginn',
+      startTimezoneHint:
+        'Eingabe in Ihrer Browser-Zeitzone ({browser}). Die Sitzung selbst findet in {session} statt.',
       proposedEnd: 'Neues Sitzungsende',
       endDerivedHint:
         'Wird automatisch gesetzt — eine Verlegung behält die ursprüngliche Dauer bei.',

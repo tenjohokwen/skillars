@@ -33,12 +33,19 @@ public interface SessionPackPurchaseRepository extends JpaRepository<SessionPack
     @Query("SELECT p FROM SessionPackPurchase p WHERE p.expiresAt < :now AND p.expiredNotifiedAt IS NULL AND p.remainingSessions > 0")
     List<SessionPackPurchase> findExpiredNotYetNotified(@Param("now") Instant now);
 
+    // Deferred-65 AC1: soonest-expiring pack first, matching what the frontend already displays as
+    // "current" (SessionPackPurchasePage.vue/ParentPlayerPortalPage.vue). createdAt DESC is a
+    // secondary tiebreak for packs sharing an identical expiresAt — it mirrors the frontend's own
+    // tiebreak (reduce() over a createdAt-DESC-ordered list keeps the first-encountered, i.e.
+    // newest-created, element on a tie), so a tie resolves to the same pack on both sides.
+    // purchaseId ASC is a final, purely-deterministic tertiary key for the (vanishingly unlikely)
+    // case of packs tied on both expiresAt and createdAt.
     @Query("""
         SELECT p FROM SessionPackPurchase p
         WHERE p.playerId = :playerId AND p.coachId = :coachId
           AND p.remainingSessions > 0 AND p.expiresAt > :now
           AND (p.pausedUntil IS NULL OR p.pausedUntil <= :now)
-        ORDER BY p.createdAt ASC
+        ORDER BY p.expiresAt ASC, p.createdAt DESC, p.purchaseId ASC
         """)
     List<SessionPackPurchase> findActivePacks(@Param("playerId") Long playerId,
                                               @Param("coachId") UUID coachId,

@@ -98,7 +98,9 @@
         </q-card-section>
         <q-card-section>
           <q-input v-model="rescheduleProposedStart" type="datetime-local"
-                   :label="t('booking.reschedule.proposedStart')" />
+                   :label="t('booking.reschedule.proposedStart')"
+                   class="q-mb-lg"
+                   :hint="t('booking.reschedule.startTimezoneHint', { browser: browserTimezone, session: rescheduleBookingTimezone })" />
           <!-- Read-only and derived: the backend requires a reschedule to keep the session's
                original length (a move, not a resize). Two freely-editable inputs where the second
                must exactly equal the first plus that length is a trap the parent cannot see. -->
@@ -137,6 +139,7 @@ const confirmingId = ref(null)
 
 const rescheduleDialogOpen = ref(false)
 const rescheduleBookingId = ref(null)
+const rescheduleBookingTimezone = ref('')
 const rescheduleProposedStart = ref('')
 // Length of the booking being rescheduled, in milliseconds. The proposed end is always derived
 // from it, never typed.
@@ -187,6 +190,7 @@ function openRescheduleDialog(booking) {
   }
 
   rescheduleBookingId.value = booking.id
+  rescheduleBookingTimezone.value = booking.canonicalTimezone
   rescheduleProposedStart.value = ''
   rescheduleDurationMs.value = durationMs
   rescheduleDialogOpen.value = true
