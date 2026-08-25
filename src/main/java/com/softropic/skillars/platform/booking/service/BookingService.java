@@ -644,6 +644,10 @@ public class BookingService {
         }
         Booking booking = lockRetryer.withBoundedRetry(() -> bookingRepository.findByIdForUpdate(bookingId)
             .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking")));
+        // Deferred-64 AC2: findByIdForUpdate returns the same managed instance already loaded by
+        // getBookingOrThrow above (Hibernate's persistence-context identity map), so without this
+        // refresh the "locked" read never actually re-reads the row FOR UPDATE just acquired.
+        entityManager.refresh(booking, LockModeType.PESSIMISTIC_WRITE);
         long hoursBeforeSession = ChronoUnit.HOURS.between(Instant.now(), booking.getRequestedStartTime());
         // Deferred-12 AC4: money only ever leaves the parent (credit debit / pack unit deduction)
         // once payment has been captured, i.e. from CONFIRMED onwards. Everything else — notably
@@ -668,8 +672,12 @@ public class BookingService {
 
         boolean paymentWasCaptured = statusBeforeCancel == BookingStatus.CONFIRMED
             || statusBeforeCancel == BookingStatus.UPCOMING;
+        // Deferred-64 AC4: a parent cancellation arriving after the booking's own start time has
+        // already passed is refund-eligible too — refund-only, no coach reliability strike, no
+        // BookingStateMachine/event-type change. Stays entirely on the ordinary CANCEL_PARENT path.
         boolean refundEligible = paymentWasCaptured
-            && booking.getRequestedStartTime().isAfter(Instant.now().plus(24, ChronoUnit.HOURS));
+            && (booking.getRequestedStartTime().isAfter(Instant.now().plus(24, ChronoUnit.HOURS))
+                || Instant.now().isAfter(booking.getRequestedStartTime()));
         BigDecimal sessionPrice = resolveSessionPrice(booking);
         String parentEmail = resolveEmail(parentUserId, bookingId);
         String coachEmail = resolveCoachEmail(booking.getCoachId(), bookingId);

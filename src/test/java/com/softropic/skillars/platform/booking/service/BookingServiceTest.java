@@ -829,6 +829,106 @@ class BookingServiceTest {
         assertThat(capturedParentCancellation().isRefundEligible()).isTrue();
     }
 
+    /**
+     * Deferred-64 AC4: a cancel arriving after the booking's own start time is refund-eligible,
+     * even though it arrives far less than 24h before that time (it is, in fact, already past) —
+     * this was previously silently no-refund because a past instant can never be >24h in the
+     * future. Refund-only: no BookingStateMachine change, no ReliabilityStrikeService interaction
+     * — BookingService has no dependency on that service at all, so none is possible from this
+     * path.
+     */
+    @Test
+    void cancelBookingAsParent_confirmedBookingPastStartTime_becomesRefundEligible() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");
+        booking.setRequestedStartTime(Instant.now().minus(1, java.time.temporal.ChronoUnit.HOURS));
+        booking.setRequestedEndTime(Instant.now().minus(30, java.time.temporal.ChronoUnit.MINUTES));
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        bookingService.cancelBookingAsParent(booking.getId(), PARENT_ID);
+
+        assertThat(booking.getStatus()).isEqualTo("CANCELLED_PARENT");
+        assertThat(capturedParentCancellation().isRefundEligible()).isTrue();
+    }
+
+    /** Deferred-64 AC4: same widening, UPCOMING status (the other paymentWasCaptured member). */
+    @Test
+    void cancelBookingAsParent_upcomingBookingPastStartTime_becomesRefundEligible() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING");
+        booking.setRequestedStartTime(Instant.now().minus(1, java.time.temporal.ChronoUnit.HOURS));
+        booking.setRequestedEndTime(Instant.now().minus(30, java.time.temporal.ChronoUnit.MINUTES));
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        bookingService.cancelBookingAsParent(booking.getId(), PARENT_ID);
+
+        assertThat(booking.getStatus()).isEqualTo("CANCELLED_PARENT");
+        assertThat(capturedParentCancellation().isRefundEligible()).isTrue();
+    }
+
+    /**
+     * Regression guard: the widening must not turn every near-term cancel into a refund. A booking
+     * that starts in 2 hours (less than 24h out) but has NOT started yet stays no-refund, exactly
+     * as before this AC.
+     */
+    @Test
+    void cancelBookingAsParent_confirmedBookingLessThan24hOutButNotYetStarted_staysNotRefundEligible() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");
+        booking.setRequestedStartTime(Instant.now().plus(2, java.time.temporal.ChronoUnit.HOURS));
+        booking.setRequestedEndTime(Instant.now().plus(3, java.time.temporal.ChronoUnit.HOURS));
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        bookingService.cancelBookingAsParent(booking.getId(), PARENT_ID);
+
+        assertThat(booking.getStatus()).isEqualTo("CANCELLED_PARENT");
+        assertThat(capturedParentCancellation().isRefundEligible()).isFalse();
+    }
+
+    /**
+     * Deferred-64 AC4: paymentWasCaptured still gates the whole expression regardless of timing —
+     * a booking whose payment never captured stays refund-ineligible even once its start time has
+     * passed.
+     */
+    @Test
+    void cancelBookingAsParent_paymentPendingBookingPastStartTime_staysNotRefundEligible() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "PAYMENT_PENDING");
+        booking.setRequestedStartTime(Instant.now().minus(1, java.time.temporal.ChronoUnit.HOURS));
+        booking.setRequestedEndTime(Instant.now().minus(30, java.time.temporal.ChronoUnit.MINUTES));
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingPaymentRepository.findById(booking.getId())).thenReturn(Optional.empty());
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        bookingService.cancelBookingAsParent(booking.getId(), PARENT_ID);
+
+        assertThat(booking.getStatus()).isEqualTo("CANCELLED_PARENT");
+        assertThat(capturedParentCancellation().isRefundEligible()).isFalse();
+    }
+
     private BookingCancelledByParentEvent capturedParentCancellation() {
         // Must be an ApplicationEvent captor, not Object: BookingCancelledByParentEvent extends
         // ApplicationEvent, so the production call binds to publishEvent(ApplicationEvent) and a

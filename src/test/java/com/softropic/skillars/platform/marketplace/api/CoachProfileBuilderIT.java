@@ -455,6 +455,32 @@ class CoachProfileBuilderIT extends AbstractIntegrationTest {
             .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
     }
 
+    @Test
+    void saveStep4_suspendedCoach_returns403() {
+        // Deferred-64 AC1: saveStep4 gains the same SUSPENDED guard its two sibling coach-row-lock
+        // methods (RescheduleService.acceptReschedule, BookingDuplicationService.duplicateNextWeek)
+        // already have.
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies);
+        saveStep2(cookies);
+        saveStep3(cookies);
+
+        transactionTemplate.execute(status -> jdbcTemplate.update(
+            "UPDATE marketplace.coach_profiles SET status = 'SUSPENDED' WHERE user_id = ?", COACH_ID));
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/4",
+            HttpMethod.PUT,
+            Map.of("windows", List.of(Map.of("dayOfWeek", 1, "startTime", "09:00:00", "endTime", "11:00:00",
+                "canonicalTimezone", "Europe/Berlin"))),
+            authenticatedHeaders(cookies),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
+                .isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
     // ----- AC4 (Deferred-18): @Valid cascade + IANA timezone validation on Step 4 windows -----
 
     @Test

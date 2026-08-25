@@ -1,11 +1,15 @@
 package com.softropic.skillars.platform.video.repo;
 
 import com.softropic.skillars.platform.video.contract.OperationalState;
+import jakarta.persistence.LockModeType;
+import jakarta.persistence.QueryHint;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,6 +22,15 @@ import java.util.UUID;
 public interface VideoRepository extends JpaRepository<Video, UUID> {
 
     Optional<Video> findByProviderAssetId(String providerAssetId);
+
+    // Deferred-64 AC3: mirrors CoachProfileRepository.findByIdForUpdate exactly — NO_WAIT (0) is
+    // the only lock.timeout value Hibernate's PostgreSQLDialect special-cases, so every call site
+    // wraps this in PessimisticLockRetryer, which retries the resulting failure from a JDBC
+    // savepoint with a short backoff.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "0"))
+    @Query("SELECT v FROM Video v WHERE v.id = :id")
+    Optional<Video> findByIdForUpdate(@Param("id") UUID id);
 
     @Query(value = """
         SELECT * FROM main.videos

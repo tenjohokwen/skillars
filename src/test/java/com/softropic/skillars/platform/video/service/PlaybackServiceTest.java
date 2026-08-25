@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.video.service;
 
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.video.PlaybackTokenClaims;
 import com.softropic.skillars.infrastructure.video.SignedPlaybackUrl;
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
@@ -12,6 +13,7 @@ import com.softropic.skillars.platform.video.repo.PlaybackToken;
 import com.softropic.skillars.platform.video.repo.PlaybackTokenRepository;
 import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -28,6 +30,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -43,6 +46,8 @@ class PlaybackServiceTest {
     @Mock VideoMetrics videoMetrics;
     @Mock ConfigService configService;
     @Mock QuotaService quotaService;
+    @Mock PessimisticLockRetryer lockRetryer;
+    @Mock EntityManager entityManager;
 
     PlaybackService playbackService;
 
@@ -52,7 +57,13 @@ class PlaybackServiceTest {
         properties.getPlayback().setRevocationWindowHours(0);
         properties.getPlayback().setSigningSecret("dGVzdC1wbGF5YmFjay1zaWduaW5nLXNlY3JldC0zMi1ieXRlcyEh");
 
-        playbackService = new PlaybackService(videoRepository, playbackTokenRepository, videoProviderAdapter, properties, videoMetrics, configService, quotaService);
+        // Deferred-64 AC3: withBoundedRetry's Supplier is executed for real, mirroring every other
+        // lockRetryer stub in this codebase — entityManager.refresh is a no-op mock, same reasoning
+        // as BookingServiceTest/RescheduleServiceTest's own entityManager mock.
+        lenient().when(lockRetryer.withBoundedRetry(any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
+
+        playbackService = new PlaybackService(videoRepository, playbackTokenRepository, videoProviderAdapter, properties, videoMetrics, configService, quotaService, lockRetryer, entityManager);
     }
 
     @Test
@@ -78,6 +89,7 @@ class PlaybackServiceTest {
         when(configService.getLong("platform.video.playback.signed_url_ttl_minutes", 120L)).thenReturn(120L);
         when(configService.getBoolean("platform.video.playback.ip_binding_enabled", false)).thenReturn(false);
         when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
+        when(videoRepository.findByIdForUpdate(videoId)).thenReturn(Optional.of(video));
         when(videoProviderAdapter.generatePlaybackUrl(anyString(), any(PlaybackTokenClaims.class)))
             .thenReturn(new SignedPlaybackUrl("https://cdn/playlist.m3u8?token=test", Instant.now().plusSeconds(900)));
         when(playbackTokenRepository.save(any(PlaybackToken.class))).thenReturn(savedToken);
@@ -130,6 +142,7 @@ class PlaybackServiceTest {
         when(configService.getLong("platform.video.playback.signed_url_ttl_minutes", 120L)).thenReturn(120L);
         when(configService.getBoolean("platform.video.playback.ip_binding_enabled", false)).thenReturn(false);
         when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
+        when(videoRepository.findByIdForUpdate(videoId)).thenReturn(Optional.of(video));
         when(videoProviderAdapter.generatePlaybackUrl(anyString(), any(PlaybackTokenClaims.class)))
             .thenReturn(new SignedPlaybackUrl("https://cdn/playlist.m3u8?token=test", Instant.now().plusSeconds(900)));
         when(playbackTokenRepository.save(any(PlaybackToken.class))).thenReturn(savedToken);
@@ -164,6 +177,7 @@ class PlaybackServiceTest {
         when(configService.getLong("platform.video.playback.signed_url_ttl_minutes", 120L)).thenReturn(120L);
         when(configService.getBoolean("platform.video.playback.ip_binding_enabled", false)).thenReturn(false);
         when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
+        when(videoRepository.findByIdForUpdate(videoId)).thenReturn(Optional.of(video));
         when(videoProviderAdapter.generatePlaybackUrl(anyString(), any(PlaybackTokenClaims.class)))
             .thenReturn(new SignedPlaybackUrl("https://cdn/playlist.m3u8?token=test", Instant.now().plusSeconds(900)));
         when(playbackTokenRepository.existsActiveForViewerAndVideo(eq(viewerId), eq(videoId), any(Instant.class)))
@@ -205,6 +219,7 @@ class PlaybackServiceTest {
         when(configService.getLong("platform.video.playback.signed_url_ttl_minutes", 120L)).thenReturn(120L);
         when(configService.getBoolean("platform.video.playback.ip_binding_enabled", false)).thenReturn(false);
         when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
+        when(videoRepository.findByIdForUpdate(videoId)).thenReturn(Optional.of(video));
         when(videoProviderAdapter.generatePlaybackUrl(anyString(), any(PlaybackTokenClaims.class)))
             .thenReturn(new SignedPlaybackUrl("https://cdn/playlist.m3u8?token=test", Instant.now().plusSeconds(900)));
         when(playbackTokenRepository.existsActiveForViewerAndVideo(eq(viewerId), eq(videoId), any(Instant.class)))

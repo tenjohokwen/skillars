@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.marketplace.service;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer;
+import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.marketplace.contract.CoachMediaItemDto;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileDto;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileNotFoundException;
@@ -34,6 +35,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachSubscription;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscriptionRepository;
 import com.softropic.skillars.platform.marketplace.repo.SessionPack;
 import com.softropic.skillars.platform.marketplace.repo.SessionPackRepository;
+import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
@@ -245,6 +247,14 @@ public class CoachProfileService {
             entityManager.refresh(profile, LockModeType.PESSIMISTIC_WRITE);
             return null;
         });
+
+        // Deferred-64 AC1: mirrors RescheduleService.acceptReschedule's and
+        // BookingDuplicationService.duplicateNextWeek's identical check on their identical lock
+        // pattern — a coach suspended since Step 3 must not be able to rewrite their availability.
+        if (profile.getStatus() == CoachProfileStatus.SUSPENDED) {
+            throw new OperationNotAllowedException("Coach is suspended",
+                Map.of("submitted coach id", profile.getId()), BookingError.COACH_UNAVAILABLE);
+        }
 
         coachAvailabilityWindowRepository.deleteByCoachId(profile.getId());
         List<CoachAvailabilityWindow> windows = req.windows().stream().map(w -> {

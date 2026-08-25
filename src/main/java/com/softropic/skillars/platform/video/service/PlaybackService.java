@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.video.service;
 
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.video.PlaybackTokenClaims;
 import com.softropic.skillars.infrastructure.video.SignedPlaybackUrl;
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
@@ -12,6 +13,8 @@ import com.softropic.skillars.platform.video.contract.VideoType;
 import com.softropic.skillars.platform.video.contract.exception.PlaybackDeniedException;
 import com.softropic.skillars.platform.video.contract.exception.VideoNotFoundException;
 import jakarta.annotation.Nullable;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import com.softropic.skillars.platform.video.repo.PlaybackToken;
 import com.softropic.skillars.platform.video.repo.PlaybackTokenRepository;
 import com.softropic.skillars.platform.video.repo.Video;
@@ -44,6 +47,8 @@ public class PlaybackService {
     private final VideoMetrics videoMetrics;
     private final ConfigService configService;
     private final QuotaService quotaService;
+    private final PessimisticLockRetryer lockRetryer;
+    private final EntityManager entityManager;
 
     @Transactional
     public PlaybackAuthorizationResponse authorizePlayback(UUID videoId, String viewerId, @Nullable String clientIp) {
@@ -119,6 +124,17 @@ public class PlaybackService {
             // Isolated in its own try/catch: this is internal bookkeeping only, and the signed playback
             // URL above has already been issued by the provider — a transient bandwidth-tracking failure
             // (e.g. a DB error) must not deny an otherwise-legitimate playback.
+            // Deferred-64 AC3: serializes the exists-check + conditional charge below against any
+            // other concurrent authorization of this same video, closing the check-then-act race
+            // skillars-deferred-63 AC3 explicitly deferred. Coarser than per-viewer, matching this
+            // codebase's existing coarse-grained coach-row-lock precedent. Held for the rest of this
+            // @Transactional method (findByIdForUpdate is JPQL and video is already managed from the
+            // unlocked findById above, so the refresh is required, not defensive — same reasoning as
+            // every other lockRetryer call site in this codebase).
+            lockRetryer.withBoundedRetry(() -> videoRepository.findByIdForUpdate(videoId)
+                .orElseThrow(() -> new VideoNotFoundException(videoId)));
+            entityManager.refresh(video, LockModeType.PESSIMISTIC_WRITE);
+
             Long storageBytes = video.getStorageBytes();
             boolean alreadyChargedThisSession =
                 playbackTokenRepository.existsActiveForViewerAndVideo(viewerId, videoId, Instant.now());

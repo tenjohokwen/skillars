@@ -58,26 +58,40 @@ public class AdminVideoService {
             // Phase 1 (atomic): set DELETED + mark any PENDING session EXPIRED. No quotaProvider call
             // inside this transaction, so a release() failure can no longer roll back the
             // DELETED/EXPIRED writes.
-            UploadSession expiredSession = transactionTemplate.execute(status -> {
+            transactionTemplate.execute(status -> {
                 Video v = videoRepository.findById(videoId)
                         .orElseThrow(() -> new VideoNotFoundException(videoId));
                 v.setOperationalState(OperationalState.DELETED);
                 videoRepository.save(v);
 
-                return uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)
+                uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)
                         .filter(s -> s.getStatus() == UploadSessionStatus.PENDING)
-                        .map(s -> {
+                        .ifPresent(s -> {
                             s.setStatus(UploadSessionStatus.EXPIRED);
                             uploadSessionRepository.save(s);
-                            return s;
-                        })
-                        .orElse(null);
+                        });
+                return null;
             });
 
             // Phase 2: release quota OUTSIDE any transaction — same pattern as VideoService.failTranscoding.
-            if (expiredSession != null && expiredSession.getReservationHandle() != null) {
-                quotaProvider.release(expiredSession.getReservationHandle());
-            } else if (expiredSession != null) {
+            // Deferred-64 AC5: looked up via the SAME repository method Phase 1 already calls, but
+            // without Phase 1's PENDING filter, so a session Phase 1 already flipped to EXPIRED on an
+            // earlier call is still found here. Gated on quotaReleasedAt == null so a repeat call for
+            // an already-DELETED video is retry-safe: it re-attempts the release exactly when it
+            // previously failed or was never attempted, and never re-releases a session already marked.
+            UploadSession session = uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)
+                    .orElse(null);
+            if (session != null && session.getReservationHandle() != null && session.getQuotaReleasedAt() == null) {
+                try {
+                    quotaProvider.release(session.getReservationHandle());
+                    session.setQuotaReleasedAt(java.time.Instant.now());
+                    uploadSessionRepository.save(session);
+                } catch (RuntimeException ex) {
+                    log.error("Quota release failed for videoId={} reservationHandle={} — retriable on next delete call",
+                        videoId, session.getReservationHandle(), ex);
+                    throw ex;
+                }
+            } else if (session != null && session.getReservationHandle() == null) {
                 log.warn("No reservation handle found for videoId={} during admin delete — quota not released", videoId);
             }
 
