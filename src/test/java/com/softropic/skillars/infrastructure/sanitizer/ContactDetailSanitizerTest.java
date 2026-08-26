@@ -52,4 +52,50 @@ class ContactDetailSanitizerTest {
         assertThat(result.sanitized()).doesNotContain("+49");
         assertThat(result.wasModified()).isTrue();
     }
+
+    // ---- skillars-deferred-72 AC2: phone-regex false-positive regressions ----
+
+    @Test
+    void sanitize_yearRange_isNotRedacted() {
+        String clean = "I coach ages 8-14 years old, available 2020-2026";
+        var result = sanitizer.sanitize(clean);
+        assertThat(result.sanitized()).isEqualTo(clean);
+        assertThat(result.wasModified()).isFalse();
+    }
+
+    @Test
+    void sanitize_timeRange_isNotRedacted() {
+        String clean = "Available Mon-Fri 09.00-17.00";
+        var result = sanitizer.sanitize(clean);
+        assertThat(result.sanitized()).isEqualTo(clean);
+        assertThat(result.wasModified()).isFalse();
+    }
+
+    @Test
+    void sanitize_licenseNumber_isNotRedacted() {
+        String clean = "My coaching license number is 2023-04-15-001";
+        var result = sanitizer.sanitize(clean);
+        assertThat(result.sanitized()).isEqualTo(clean);
+        assertThat(result.wasModified()).isFalse();
+    }
+
+    @Test
+    void sanitize_referenceId_isNotRedacted() {
+        String clean = "Reference ID: 100-200-300";
+        var result = sanitizer.sanitize(clean);
+        assertThat(result.sanitized()).isEqualTo(clean);
+        assertThat(result.wasModified()).isFalse();
+    }
+
+    /**
+     * Proves the 5+-digit-run filter checks each MATCHED CANDIDATE for an unbroken run, not the
+     * whole candidate for being one unbroken run — a grouped domestic-style number is still redacted
+     * even though the surrounding text has spaces, as long as one group alone clears the threshold.
+     */
+    @Test
+    void sanitize_groupedDomesticNumberWithFiveDigitGroup_isRedacted() {
+        var result = sanitizer.sanitize("Call 030 123456 for questions");
+        assertThat(result.sanitized()).contains("[contact details removed]");
+        assertThat(result.wasModified()).isTrue();
+    }
 }

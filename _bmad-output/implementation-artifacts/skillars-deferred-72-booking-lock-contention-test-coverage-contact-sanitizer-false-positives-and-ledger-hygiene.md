@@ -1,6 +1,6 @@
 # Story Deferred-72: Booking Lock-Contention Test Coverage, Contact-Sanitizer False-Positive Fix, Batch Availability-Staleness Guard, Coach-Action Error-Handling Gaps & Ledger Hygiene
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -481,7 +481,7 @@ text — line numbers shift, do not trust them without re-grepping first):
 
 ## Tasks / Subtasks
 
-- [ ] AC1: Add two new imports to `BookingServiceConcurrencyIT.java`
+- [x] AC1: Add two new imports to `BookingServiceConcurrencyIT.java`
       (`PessimisticLockingFailureException`, `ExecutionException`, `TimeoutException` as needed). Add
       `cancelBookingAsParent_briefContentionOnBookingRow_succeedsAfterBoundedRetry` and
       `cancelBookingAsParent_prolongedContentionOnBookingRow_failsWithBoundedPessimisticLockingFailure`,
@@ -490,7 +490,7 @@ text — line numbers shift, do not trust them without re-grepping first):
       `saveStep4_coachRowLockedByAnotherSession_prolongedContentionFailsWithBoundedPessimisticLockingFailure`,
       the missing prolonged-contention half for `CoachProfileRepository`. Append the AC1 ledger-closure tag
       to `deferred-work.md`. Run `mvn -o test -Dtest=BookingServiceConcurrencyIT` — all tests green.
-- [ ] AC2: Replace `ContactDetailSanitizer`'s unconditional phone `replaceAll` with the filtered
+- [x] AC2: Replace `ContactDetailSanitizer`'s unconditional phone `replaceAll` with the filtered
       `redactPhoneLikeSequences` method (5+-digit-run filter) per the exact code above. Add the new
       `PHONE_DIGIT_RUN` pattern constant. Add four false-positive-regression tests plus one grouped-number
       true-positive test to `ContactDetailSanitizerTest.java`; confirm the two existing phone tests still
@@ -502,19 +502,18 @@ text — line numbers shift, do not trust them without re-grepping first):
 - [x] AC4: Close the two live error-handling gaps in `CoachCommandCenterPage.vue` (already implemented
       during story creation — see AC4's own "Status" note; nothing left to do here beyond `npx eslint` if
       re-verifying).
-- [ ] AC5: Apply all seven `deferred-work.md` closure edits specified above (AC3's and AC4's own ledger
+- [x] AC5: Apply all seven `deferred-work.md` closure edits specified above (AC3's and AC4's own ledger
       notes are already applied — confirm, do not duplicate).
-- [ ] Run the full targeted test sweep for every touched test class (AC1, AC2 — AC3/AC4's own tests
+- [x] Run the full targeted test sweep for every touched test class (AC1, AC2 — AC3/AC4's own tests
       already pass, see their Testing subsections); confirm no regressions. Do not run `mvn verify`
       locally — GitHub CI is the sole full-verification gate (`docs/validation-strategy.md`).
 
 ## Dev Notes
 
-- **AC3 and AC4 are already implemented, tested, and lint-clean** (see each AC's own "Status" note) —
-  they were picked up interactively by the project owner after this story's initial draft (which had
-  silently deferred both) was corrected; investigating them to answer responsibly produced working code
-  directly, not just a design. **AC1, AC2, and AC5 remain to be implemented** by a `dev-story` pass in the
-  usual way. Do not re-implement AC3/AC4 — verify their tests still pass, then move on.
+- **All five ACs are implemented, tested, and lint-clean.** AC3/AC4 were implemented during this story's
+  own creation-correction pass (picked up interactively by the project owner after the initial draft had
+  silently deferred both); AC1/AC2/AC5 were implemented in the follow-up `dev-story` pass. See the Dev
+  Agent Record's Completion Notes for what was done and verified in each pass.
 - AC2's fix was validated computationally during story creation (a throwaway `Pattern.compile` harness run
   against all six inputs — four false positives, two true positives, per AC2's own "Current behavior"
   section) before being specified here, not just reasoned about abstractly. The exact code block in AC2 is
@@ -534,25 +533,19 @@ text — line numbers shift, do not trust them without re-grepping first):
 ### Project Structure Notes
 
 - `src/test/java/com/softropic/skillars/platform/booking/service/BookingServiceConcurrencyIT.java` — AC1
-  (three new `@Test` methods, two new imports). **Not yet implemented.**
+  (three new `@Test` methods, one new fixture helper, three new imports).
 - `src/main/java/com/softropic/skillars/infrastructure/sanitizer/ContactDetailSanitizer.java` — AC2.
-  **Not yet implemented.**
 - `src/test/java/com/softropic/skillars/infrastructure/sanitizer/ContactDetailSanitizerTest.java` — AC2
-  (five new tests). **Not yet implemented.**
+  (five new tests).
 - `src/main/java/com/softropic/skillars/platform/booking/contract/CreateBatchRequest.java` — AC3.
-  **Already implemented.**
 - `src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java` — AC3.
-  **Already implemented.**
 - `src/test/java/com/softropic/skillars/platform/booking/service/BookingBatchServiceTest.java` — AC3 (two
-  new tests). **Already implemented.**
-- `src/frontend/src/stores/booking.store.js` — AC3 (`submitBatch` payload). **Already implemented.**
+  new tests).
+- `src/frontend/src/stores/booking.store.js` — AC3 (`submitBatch` payload).
 - `src/frontend/src/pages/parent/BookingRequestPage.vue` — AC3 (`submitBatchRequest` error branch).
-  **Already implemented.**
 - `src/frontend/src/pages/coach/CoachCommandCenterPage.vue` — AC4 (both handlers + button bindings).
-  **Already implemented.**
-- `_bmad-output/implementation-artifacts/deferred-work.md` — AC1 (1 closure, not yet applied), AC2 (2
-  closures, not yet applied), AC3 (1 partial-address note, already applied), AC4 (1 closure note, already
-  applied), AC5 (7 closures, not yet applied).
+- `_bmad-output/implementation-artifacts/deferred-work.md` — AC1 (1 closure), AC2 (2 closures), AC3 (1
+  partial-address note), AC4 (1 closure note), AC5 (7 closures).
 
 ### References
 
@@ -570,42 +563,72 @@ text — line numbers shift, do not trust them without re-grepping first):
 
 ### Agent Model Used
 
-claude-sonnet-5 (Claude Code) — partial implementation during story-creation correction (AC3, AC4 only).
-AC1, AC2, AC5 remain for a `dev-story` pass.
+claude-sonnet-5 (Claude Code). AC3/AC4 implemented during story-creation correction; AC1/AC2/AC5
+implemented in a follow-up `dev-story` pass. All five ACs complete.
 
 ### Debug Log References
 
-None — no failures encountered. AC3/AC4 targeted test runs passed on first execution after
-implementation.
+None — no failures encountered across either pass. Every targeted test run passed on first execution
+after implementation.
 
 ### Completion Notes List
 
-- **AC3 implemented and tested.** `CreateBatchRequest` gained an optional `availabilitySignature` field;
-  `BookingBatchService.createBatch` gained the staleness check immediately after its initial `windows`
-  fetch, reusing `AvailabilityService.computeAvailabilitySignature`/`BookingError.AVAILABILITY_CHANGED`
-  unchanged from `skillars-deferred-71`. `booking.store.js`'s `submitBatch` reads its own
-  `availabilitySignature` ref (no caller-side change needed at `BookingRequestPage.vue`'s call site).
-  `submitBatchRequest`'s catch block gained the `booking.availabilityChanged` branch. Six existing
-  positional `CreateBatchRequest` constructor calls in `BookingBatchServiceTest.java` needed a trailing
-  `null` for the new record component (mechanical, behavior-preserving — a `null` signature skips the
-  staleness check, matching AC2's own backward-compatibility design from `skillars-deferred-71`). Two new
-  tests added (`createBatch_matchingAvailabilitySignature_succeeds`,
-  `createBatch_staleAvailabilitySignature_throwsAvailabilityChangedBeforePersisting`). `mvn -o test
-  -Dtest=BookingBatchServiceTest` 30/30 green. `npx eslint` clean on `booking.store.js` and
-  `BookingRequestPage.vue`. Ledger note applied (partial-address, not closure — see AC3 step 5).
-- **AC4 implemented.** `handleStartSession`/`handleQuickComplete` in `CoachCommandCenterPage.vue` gained
-  scoped loading refs (`startingSessionId`/`quickCompletingId`), `try`/`catch`/`finally` with a toast on
-  failure (reusing the existing generic `booking.completion.actionError` i18n key — no new key needed),
-  and `:loading`/`:disable` bindings on both buttons. No automated test added — this repo has no frontend
-  test infrastructure (standing, repeatedly-documented gap); verified by direct code reading. `npx eslint`
-  clean on `CoachCommandCenterPage.vue`. Ledger closure note applied (for the two live cases only — see
+- **AC3 implemented and tested** (story-creation correction pass). `CreateBatchRequest` gained an
+  optional `availabilitySignature` field; `BookingBatchService.createBatch` gained the staleness check
+  immediately after its initial `windows` fetch, reusing
+  `AvailabilityService.computeAvailabilitySignature`/`BookingError.AVAILABILITY_CHANGED` unchanged from
+  `skillars-deferred-71`. `booking.store.js`'s `submitBatch` reads its own `availabilitySignature` ref (no
+  caller-side change needed at `BookingRequestPage.vue`'s call site). `submitBatchRequest`'s catch block
+  gained the `booking.availabilityChanged` branch. Six existing positional `CreateBatchRequest`
+  constructor calls in `BookingBatchServiceTest.java` needed a trailing `null` for the new record
+  component (mechanical, behavior-preserving). Two new tests added
+  (`createBatch_matchingAvailabilitySignature_succeeds`,
+  `createBatch_staleAvailabilitySignature_throwsAvailabilityChangedBeforePersisting`). Ledger note applied
+  (partial-address, not closure — see AC3 step 5).
+- **AC4 implemented** (story-creation correction pass). `handleStartSession`/`handleQuickComplete` in
+  `CoachCommandCenterPage.vue` gained scoped loading refs (`startingSessionId`/`quickCompletingId`),
+  `try`/`catch`/`finally` with a toast on failure (reusing the existing generic
+  `booking.completion.actionError` i18n key), and `:loading`/`:disable` bindings on both buttons. No
+  automated test added — this repo has no frontend test infrastructure (standing, repeatedly-documented
+  gap); verified by direct code reading. Ledger closure note applied (for the two live cases only — see
   AC4 step 4).
-- **AC1, AC2, AC5 not yet implemented** — remain exactly as specified in their own sections above, ready
-  for a `dev-story` pass.
+- **AC1 implemented and tested** (`dev-story` pass). Added `PessimisticLockingFailureException`/
+  `ExecutionException`/`TimeoutException` imports plus three new `@Test` methods to
+  `BookingServiceConcurrencyIT.java`:
+  `cancelBookingAsParent_briefContentionOnBookingRow_succeedsAfterBoundedRetry`,
+  `cancelBookingAsParent_prolongedContentionOnBookingRow_failsWithBoundedPessimisticLockingFailure` (a new
+  `seedConfirmedBookingFarInFuture` fixture helper — CONFIRMED status, 72h-future start, avoiding both the
+  `PAYMENT_PENDING`-only `CAPTURE_PENDING` guard and any refund-eligibility edge case), and
+  `saveStep4_coachRowLockedByAnotherSession_prolongedContentionFailsWithBoundedPessimisticLockingFailure`
+  (the missing prolonged-contention half for `CoachProfileRepository` — its "not partially applied"
+  assertion captures the pre-existing window list from `setUp()`'s own fixture before the contention and
+  compares against it after, rather than assuming an empty table, since `setUp()` already seeds one
+  window). All three mirror `RescheduleServiceConcurrencyIT`'s exact brief/prolonged shape and assertion
+  style. `mvn -o test -Dtest=BookingServiceConcurrencyIT` 8/8 green (5 existing + 3 new), real Postgres via
+  Testcontainers. Ledger closure tag applied.
+- **AC2 implemented and tested** (`dev-story` pass). `ContactDetailSanitizer` gained the
+  `PHONE_DIGIT_RUN` pattern constant and `redactPhoneLikeSequences` filtered-substitution method exactly
+  per spec — matched byte-for-byte against the story's own code block, independently re-verified
+  computationally before applying (all four false positives no longer match, both existing true positives
+  still do). Five new tests added to `ContactDetailSanitizerTest.java` (four false-positive regressions
+  plus the grouped-domestic-number true-positive case, independently re-verified via a throwaway harness
+  that the `"030 123456"` candidate's embedded 6-digit run clears the filter). `mvn -o test
+  -Dtest=ContactDetailSanitizerTest` 11/11 green (6 existing + 5 new). Both ledger closure tags applied.
+- **AC5 implemented** (`dev-story` pass). All seven ledger items individually re-verified against live
+  source before applying (not trusted from the story's own text) — all seven confirmed accurate on
+  re-check: `effectiveCredits` has zero hits in `src/main/java`; all five named
+  `AvailabilityServiceTest.java` test methods exist; `RescheduleService.acceptRescheduleShared`'s
+  "cheap early-out" comment and locked re-read exist as described; `WeeklyCalendar.vue`'s `getBlockStyle`
+  (315-line file, `:171-194`) already guards `endMin <= startMin`; `VerificationBadge.vue` renders the
+  per-tier `q-tooltip`; `SessionPackTracker.vue` (91 lines) carries no savings-math fields. All seven
+  closure tags applied.
+- **Full targeted sweep run at the end**: `mvn -o test
+  -Dtest=BookingServiceConcurrencyIT,ContactDetailSanitizerTest,BookingBatchServiceTest` — 49/49 green.
+  `npx eslint` clean on all touched frontend files. `mvn verify` not run locally per
+  `docs/validation-strategy.md`.
 
 ### File List
 
-**Already implemented (AC3, AC4):**
 - `src/main/java/com/softropic/skillars/platform/booking/contract/CreateBatchRequest.java` — AC3.
 - `src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java` — AC3.
 - `src/test/java/com/softropic/skillars/platform/booking/service/BookingBatchServiceTest.java` — AC3 (two
@@ -613,11 +636,13 @@ implementation.
 - `src/frontend/src/stores/booking.store.js` — AC3.
 - `src/frontend/src/pages/parent/BookingRequestPage.vue` — AC3.
 - `src/frontend/src/pages/coach/CoachCommandCenterPage.vue` — AC4.
-- `_bmad-output/implementation-artifacts/deferred-work.md` — AC3 (1 partial-address note), AC4 (1 closure
-  note).
-
-**Not yet implemented (AC1, AC2, AC5)** — see each AC's own section and the Project Structure Notes above
-for the full list of files a `dev-story` pass will still need to touch.
+- `src/test/java/com/softropic/skillars/platform/booking/service/BookingServiceConcurrencyIT.java` — AC1
+  (three new `@Test` methods, one new fixture helper, three new imports).
+- `src/main/java/com/softropic/skillars/infrastructure/sanitizer/ContactDetailSanitizer.java` — AC2.
+- `src/test/java/com/softropic/skillars/infrastructure/sanitizer/ContactDetailSanitizerTest.java` — AC2
+  (five new tests).
+- `_bmad-output/implementation-artifacts/deferred-work.md` — AC1 (1 closure), AC2 (2 closures), AC3 (1
+  partial-address note), AC4 (1 closure note), AC5 (7 closures).
 
 ## Change Log
 
@@ -655,3 +680,15 @@ for the full list of files a `dev-story` pass will still need to touch.
   infrastructure for a problem now reduced to zero live instances. AC1, AC2, and AC5 remain unimplemented,
   ready for a `dev-story` pass in the usual way. Full detail, including exact current-source excerpts and
   exact replacement code for every AC, is in the story file above.
+- 2026-08-26: `dev-story` implementation complete, status ready-for-dev → review. AC1: three new
+  concurrency tests added to `BookingServiceConcurrencyIT.java`, mirroring
+  `RescheduleServiceConcurrencyIT`'s exact brief/prolonged shape; `mvn -o test
+  -Dtest=BookingServiceConcurrencyIT` 8/8 green (real Postgres via Testcontainers). AC2:
+  `ContactDetailSanitizer`'s phone-regex fix applied exactly per spec, independently re-verified
+  computationally before applying; five new tests, `mvn -o test -Dtest=ContactDetailSanitizerTest` 11/11
+  green. AC5: all seven ledger items individually re-verified against live source before applying (all
+  confirmed accurate). Final sweep: `mvn -o test
+  -Dtest=BookingServiceConcurrencyIT,ContactDetailSanitizerTest,BookingBatchServiceTest` 49/49 green;
+  `npx eslint` clean on every touched frontend file. `mvn verify` not run locally per
+  `docs/validation-strategy.md`. All five ACs (AC3/AC4 from the earlier correction pass, AC1/AC2/AC5 from
+  this pass) now complete. Full detail in the Dev Agent Record's Completion Notes above.
