@@ -412,6 +412,43 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
         assertThat(response.getBody()).isEmpty();
     }
 
+    // skillars-deferred-74 W4: getDrillSuggestions' limit param had no upper bound.
+    @Test
+    void getDrillSuggestions_limitAboveMax_returns400() {
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/session/" + bookingId + "/drills/suggestions?limit=11",
+            HttpMethod.GET, null, authenticatedHeaders(coachCookies), List.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    @Test
+    void getDrillSuggestions_limitBelowMin_returns400() {
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/session/" + bookingId + "/drills/suggestions?limit=0",
+            HttpMethod.GET, null, authenticatedHeaders(coachCookies), List.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    @Test
+    void getDrillSuggestions_limitAtMax_returns200() {
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        ResponseEntity<List> response = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/session/" + bookingId + "/drills/suggestions?limit=10",
+            HttpMethod.GET, null, authenticatedHeaders(coachCookies), List.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
     // ---- helpers ----
 
     private void insertUpcomingBooking(UUID id) {
