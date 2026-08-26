@@ -110,11 +110,11 @@ public class CoachSearchService {
     }
 
     private Sort buildSort(String sortBy) {
-        // price sort is applied in Java after enrichment (perSessionPrice lives in a separate table)
-        // ACTIVE coaches sort before REDUCED within any other sort criteria
+        // price sort is applied in Java after enrichment (perSessionPrice lives in a separate table),
+        // so "price" and the default both order by displayName at the DB level — ACTIVE coaches sort
+        // before REDUCED within either.
         Sort statusSort = Sort.by(Sort.Order.asc("status"));
         return switch (StringUtils.hasText(sortBy) ? sortBy : "displayName") {
-            case "price"  -> statusSort.and(Sort.by(Sort.Direction.ASC,  "displayName"));
             case "rating" -> statusSort.and(Sort.by(Sort.Order.desc("averageRating").nullsLast()));
             default       -> statusSort.and(Sort.by(Sort.Direction.ASC,  "displayName"));
         };

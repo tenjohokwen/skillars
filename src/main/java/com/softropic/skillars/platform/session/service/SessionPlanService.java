@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.session.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingSnapshot;
 import com.softropic.skillars.platform.booking.service.BookingQueryService;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
@@ -24,8 +25,12 @@ import com.softropic.skillars.platform.session.repo.SessionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.util.Comparator;
 import java.util.List;
@@ -137,6 +142,22 @@ public class SessionPlanService {
 
         Session saved = sessionRepository.save(session);
         return buildResponse(saved, metaMap, toResponseMap(drills));
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @Async
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void handleBookingCompleted(BookingCompletedEvent event) {
+        sessionRepository.findByBookingId(event.getBookingId()).ifPresentOrElse(session -> {
+            if (!"COMPLETED".equals(session.getStatus())) {
+                session.setStatus("COMPLETED");
+                try {
+                    sessionRepository.save(session);
+                } catch (DataIntegrityViolationException e) {
+                    log.warn("Failed to transition session {} to COMPLETED for booking {} — concurrent modification or constraint violation", session.getId(), event.getBookingId(), e);
+                }
+            }
+        }, () -> log.debug("No session plan found for completed booking {} — nothing to transition", event.getBookingId()));
     }
 
     @Transactional(readOnly = true)

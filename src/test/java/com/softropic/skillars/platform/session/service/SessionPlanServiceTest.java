@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.session.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingSnapshot;
 import com.softropic.skillars.platform.booking.service.BookingQueryService;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
@@ -21,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -33,6 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -259,5 +262,71 @@ class SessionPlanServiceTest {
         assertThatThrownBy(() -> service.getSession(sessionId, COACH_USER_ID))
             .isInstanceOf(ResourceNotFoundException.class);
         verify(drillRepository, times(0)).findAllById(any());
+    }
+
+    // ── handleBookingCompleted ─────────────────────────────────────────────
+
+    @Test
+    void handleBookingCompleted_draftSessionFound_transitionsToCompletedAndSaves() {
+        Session existing = new Session();
+        existing.setId(UUID.randomUUID());
+        existing.setBookingId(BOOKING_ID);
+        existing.setStatus("DRAFT");
+        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(existing));
+
+        BookingCompletedEvent event = new BookingCompletedEvent(this, BOOKING_ID, COACH_ID, 500L,
+            null, true, 3, 3, 3, List.of());
+
+        service.handleBookingCompleted(event);
+
+        assertThat(existing.getStatus()).isEqualTo("COMPLETED");
+        verify(sessionRepository, times(1)).save(existing);
+    }
+
+    @Test
+    void handleBookingCompleted_noSessionForBooking_noOp() {
+        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.empty());
+
+        BookingCompletedEvent event = new BookingCompletedEvent(this, BOOKING_ID, COACH_ID, 500L,
+            null, true, 3, 3, 3, List.of());
+
+        service.handleBookingCompleted(event);
+
+        verify(sessionRepository, never()).save(any(Session.class));
+    }
+
+    @Test
+    void handleBookingCompleted_alreadyCompleted_noRedundantSave() {
+        Session existing = new Session();
+        existing.setId(UUID.randomUUID());
+        existing.setBookingId(BOOKING_ID);
+        existing.setStatus("COMPLETED");
+        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(existing));
+
+        BookingCompletedEvent event = new BookingCompletedEvent(this, BOOKING_ID, COACH_ID, 500L,
+            null, true, 3, 3, 3, List.of());
+
+        service.handleBookingCompleted(event);
+
+        assertThat(existing.getStatus()).isEqualTo("COMPLETED");
+        verify(sessionRepository, never()).save(any(Session.class));
+    }
+
+    @Test
+    void handleBookingCompleted_saveThrowsDataIntegrityViolation_isCaughtAndDoesNotPropagate() {
+        Session existing = new Session();
+        existing.setId(UUID.randomUUID());
+        existing.setBookingId(BOOKING_ID);
+        existing.setStatus("DRAFT");
+        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(existing));
+        doThrow(new DataIntegrityViolationException("constraint violation"))
+            .when(sessionRepository).save(existing);
+
+        BookingCompletedEvent event = new BookingCompletedEvent(this, BOOKING_ID, COACH_ID, 500L,
+            null, true, 3, 3, 3, List.of());
+
+        service.handleBookingCompleted(event);
+
+        verify(sessionRepository, times(1)).save(existing);
     }
 }
