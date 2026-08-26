@@ -13,6 +13,7 @@ import com.softropic.skillars.platform.security.contract.exception.OperationNotA
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -24,14 +25,17 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -512,6 +516,189 @@ class BookingServiceConcurrencyIT extends AbstractIntegrationTest {
         assertThat(writtenDays)
             .as("the rewrite must still land correctly once the lock is acquired")
             .containsExactly((short) 1);
+    }
+
+    /**
+     * skillars-deferred-72 AC1: {@code BookingRepository.findByIdForUpdate}'s one call site,
+     * {@code BookingService.cancelBookingAsParent}, had zero dedicated concurrency IT — mirrors
+     * {@code RescheduleServiceConcurrencyIT}'s exact two-test brief/prolonged shape, contending
+     * directly on a booking row via a raw {@code SELECT ... FOR UPDATE}.
+     */
+    @Test
+    void cancelBookingAsParent_briefContentionOnBookingRow_succeedsAfterBoundedRetry() throws Exception {
+        Booking booking = seedConfirmedBookingFarInFuture();
+        long holdMillis = 1200;
+        CountDownLatch lockHeld = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> holder = pool.submit(() -> transactionTemplate.execute(status -> {
+                jdbcTemplate.query(
+                    "SELECT id FROM booking.bookings WHERE id = ? FOR UPDATE",
+                    rs -> { }, booking.getId());
+                lockHeld.countDown();
+                try {
+                    Thread.sleep(holdMillis);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return null;
+            }));
+
+            assertThat(lockHeld.await(5, TimeUnit.SECONDS)).as("holder must acquire the lock first").isTrue();
+
+            Instant start = Instant.now();
+            Future<?> contender = pool.submit(() -> {
+                bookingService.cancelBookingAsParent(booking.getId(), PARENT_ID_1);
+                return null;
+            });
+            contender.get(20, TimeUnit.SECONDS);
+            long elapsedMillis = Duration.between(start, Instant.now()).toMillis();
+            holder.get(15, TimeUnit.SECONDS);
+
+            assertThat(elapsedMillis)
+                .as("must have actually waited out the brief contention via retry, not skipped it")
+                .isGreaterThanOrEqualTo(holdMillis - 200);
+
+            String status = jdbcTemplate.queryForObject(
+                "SELECT status FROM booking.bookings WHERE id = ?", String.class, booking.getId());
+            assertThat(status)
+                .as("brief contention must not turn into a lost cancel or a surfaced failure")
+                .isEqualTo("CANCELLED_PARENT");
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void cancelBookingAsParent_prolongedContentionOnBookingRow_failsWithBoundedPessimisticLockingFailure() throws Exception {
+        Booking booking = seedConfirmedBookingFarInFuture();
+        long holdMillis = 8000;
+        CountDownLatch lockHeld = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> holder = pool.submit(() -> transactionTemplate.execute(status -> {
+                jdbcTemplate.query(
+                    "SELECT id FROM booking.bookings WHERE id = ? FOR UPDATE",
+                    rs -> { }, booking.getId());
+                lockHeld.countDown();
+                try {
+                    Thread.sleep(holdMillis);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return null;
+            }));
+
+            assertThat(lockHeld.await(5, TimeUnit.SECONDS)).as("holder must acquire the lock first").isTrue();
+
+            Instant start = Instant.now();
+            Future<?> contender = pool.submit(() -> {
+                bookingService.cancelBookingAsParent(booking.getId(), PARENT_ID_1);
+                return null;
+            });
+
+            assertThatContenderFailsWithPessimisticLockingFailure(contender);
+            long elapsedMillis = Duration.between(start, Instant.now()).toMillis();
+            holder.get(15, TimeUnit.SECONDS);
+
+            assertThat(elapsedMillis)
+                .as("retry budget exhaustion must be bounded, well under the %dms hold time", holdMillis)
+                .isLessThan(4500);
+
+            String status = jdbcTemplate.queryForObject(
+                "SELECT status FROM booking.bookings WHERE id = ?", String.class, booking.getId());
+            assertThat(status)
+                .as("the failed attempt must not have partially applied the cancellation")
+                .isEqualTo("CONFIRMED");
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    /**
+     * skillars-deferred-72 AC1: the missing prolonged-contention half for
+     * {@code CoachProfileRepository} — {@code saveStep4_coachRowLockedByAnotherSession_
+     * blocksUntilReleasedThenWritesCorrectly} above only proves the brief-contention case.
+     */
+    @Test
+    void saveStep4_coachRowLockedByAnotherSession_prolongedContentionFailsWithBoundedPessimisticLockingFailure() throws Exception {
+        // setUp() already seeds one window for this coach (see the class-level fixture) — capture it
+        // before the contention so the "not partially applied" assertion below checks against the
+        // real pre-existing state, not an assumed-empty table.
+        List<Short> daysBeforeAttempt = jdbcTemplate.queryForList(
+            "SELECT day_of_week FROM marketplace.coach_availability_windows WHERE coach_id = ?",
+            Short.class, coachProfileId);
+
+        long holdMillis = 8000;
+        CountDownLatch lockHeld = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> holder = pool.submit(() -> transactionTemplate.execute(status -> {
+                jdbcTemplate.queryForObject(
+                    "SELECT status FROM marketplace.coach_profiles WHERE id = ? FOR UPDATE",
+                    String.class, coachProfileId);
+                lockHeld.countDown();
+                try {
+                    Thread.sleep(holdMillis);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return null;
+            }));
+
+            assertThat(lockHeld.await(5, TimeUnit.SECONDS)).as("holder must acquire the lock first").isTrue();
+
+            Instant start = Instant.now();
+            Future<?> contender = pool.submit(() -> {
+                ProfileBuilderStep4Request req = new ProfileBuilderStep4Request(List.of(
+                    new ProfileBuilderStep4Request.AvailabilityWindowRequest(
+                        (short) 1, LocalTime.of(9, 0), LocalTime.of(17, 0), WINDOW_TZ)));
+                coachProfileService.saveStep4(COACH_USER_ID, req);
+                return null;
+            });
+
+            assertThatContenderFailsWithPessimisticLockingFailure(contender);
+            long elapsedMillis = Duration.between(start, Instant.now()).toMillis();
+            holder.get(15, TimeUnit.SECONDS);
+
+            assertThat(elapsedMillis)
+                .as("retry budget exhaustion must be bounded, well under the %dms hold time", holdMillis)
+                .isLessThan(4500);
+
+            List<Short> daysAfterAttempt = jdbcTemplate.queryForList(
+                "SELECT day_of_week FROM marketplace.coach_availability_windows WHERE coach_id = ?",
+                Short.class, coachProfileId);
+            assertThat(daysAfterAttempt)
+                .as("the failed attempt must not have partially applied the rewrite")
+                .isEqualTo(daysBeforeAttempt);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    private void assertThatContenderFailsWithPessimisticLockingFailure(Future<?> contender)
+            throws InterruptedException, TimeoutException {
+        try {
+            contender.get(20, TimeUnit.SECONDS);
+            throw new AssertionError("expected the contending call to fail with PessimisticLockingFailureException");
+        } catch (ExecutionException e) {
+            assertThat(e.getCause()).isInstanceOf(PessimisticLockingFailureException.class);
+        }
+    }
+
+    private Booking seedConfirmedBookingFarInFuture() {
+        Instant start = Instant.now().plus(72, ChronoUnit.HOURS);
+        return transactionTemplate.execute(status -> {
+            Booking booking = new Booking();
+            booking.setParentId(PARENT_ID_1);
+            booking.setPlayerId(PLAYER_ID_1);
+            booking.setCoachId(coachProfileId);
+            booking.setRequestedStartTime(start);
+            booking.setRequestedEndTime(start.plus(1, ChronoUnit.HOURS));
+            booking.setCanonicalTimezone(WINDOW_TZ);
+            booking.setStatus("CONFIRMED");
+            return bookingRepository.save(booking);
+        });
     }
 
     private Booking seedRequestedBooking(long parentId, long playerId, Instant start, Instant end) {

@@ -14,5 +14,6 @@ public record CreateBatchRequest(
     @NotNull UUID coachId,
     @NotNull Long playerId,
     @NotEmpty @Size(min = 1, max = 10) List<@Valid BatchSlot> slots,
-    @NotNull @DecimalMin("0.00") BigDecimal totalAmount
+    @NotNull @DecimalMin("0.00") BigDecimal totalAmount,
+    String availabilitySignature
 ) {}
