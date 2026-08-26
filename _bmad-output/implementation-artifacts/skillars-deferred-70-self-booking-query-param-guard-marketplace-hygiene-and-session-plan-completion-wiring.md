@@ -1,6 +1,6 @@
 # Story Deferred-70: Self-Booking Query-Param Guard, Marketplace Hygiene & Session-Plan Completion Wiring
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -377,32 +377,46 @@ Apply these `deferred-work.md` updates:
 
 ## Tasks / Subtasks
 
-- [ ] AC1: Gate `BookingRequestPage.vue`'s `playerId` computed property's query-param branch behind
+- [x] AC1: Gate `BookingRequestPage.vue`'s `playerId` computed property's query-param branch behind
       `!authStore.isPlayer`. Also drop the `!route.query.playerId` condition from `onMounted`'s
       `selfPlayerId` fetch guard (story-review finding — the computed's new logic needs `selfPlayerId`
       fetched unconditionally for a self-booking player, not only when no query param is present).
       Verify via direct code reading (no frontend test infra exists); `npx eslint` clean on the touched
       file.
-- [ ] AC2: Collapse `CoachSearchService.buildSort`'s dead-identical `"price"`/`default` switch arms into
+- [x] AC2: Collapse `CoachSearchService.buildSort`'s dead-identical `"price"`/`default` switch arms into
       one, preserving the existing explanatory comment. Confirm the correct existing test class name
       covering `buildSort`/search-sort behavior (do not assume `CoachSearchServiceTest` without
       checking) and run it to confirm no regression.
-- [ ] AC3: Add `V107__coach_pricing_session_duration_not_valid.sql` and
+- [x] AC3: Add `V107__coach_pricing_session_duration_not_valid.sql` and
       `V108__coach_pricing_session_duration_validate.sql` (confirm next free `V` numbers at
       implementation time), splitting `chk_coach_pricing_session_duration` into `DROP` + re-`ADD ...
       NOT VALID` then `VALIDATE CONSTRAINT`. Confirm no existing test asserts on constraint-add timing;
       run whichever existing test(s) cover coach-pricing session-duration validation.
-- [ ] AC4: Add `SessionPlanService.handleBookingCompleted(BookingCompletedEvent)` —
+- [x] AC4: Add `SessionPlanService.handleBookingCompleted(BookingCompletedEvent)` —
       `@TransactionalEventListener(phase = AFTER_COMMIT) @Async`, transitions a found, non-`COMPLETED`
       session plan to `COMPLETED` and saves it; no-ops (with a debug log) if no session plan exists for
       the booking. Add tests to `SessionPlanServiceTest.java`: found-and-transitions,
       not-found-no-op, already-COMPLETED-no-redundant-save.
-- [ ] AC5: Apply the three `deferred-work.md` ledger updates specified above (close gallery-reorder item;
+- [x] AC5: Apply the three `deferred-work.md` ledger updates specified above (close gallery-reorder item;
       cross-reference-close D8's superseded half; re-file the `getPublicProfile` round-trip item with
       corrected framing, left open).
-- [ ] Run the full targeted test sweep for every touched test class (backend) plus `npx eslint` on every
+- [x] Run the full targeted test sweep for every touched test class (backend) plus `npx eslint` on every
       touched frontend file; confirm no regressions. Do not run `mvn verify` locally — GitHub CI is the
       sole full-verification gate (`docs/validation-strategy.md`).
+
+## Review Findings
+
+- [x] [Review][Patch] NaN coercion from query param [src/frontend/src/pages/parent/BookingRequestPage.vue:246] — `Number(route.query.playerId)` coerces invalid input like `?playerId=abc` to `NaN`, which bypasses the numeric validation in `canSubmit`. The computed property returns `NaN` (truthy in the && check at line 246), but the submit button's `!!playerId.value` check treats `NaN` as falsy. This asymmetry allows malformed playerId to leak into downstream code like `goToPurchase()` (line 470). **Fix:** validate that the Number coercion succeeded (result is not NaN and is positive) before returning it in the computed property.
+  - **Resolved:** the query-param branch now parses into a local `parsed` var and only returns it when `Number.isFinite(parsed) && parsed > 0`; otherwise it falls through to the existing `playerStore.activePlayerId` fallback, matching how a missing/absent query param already behaved. Verified by direct code reading; `npx eslint` clean.
+
+- [x] [Review][Patch] @Async exception swallowing in handleBookingCompleted [src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java:147] — The listener lacks a try-catch block around `sessionRepository.save()`. If the save fails, the exception is logged silently (via @Async's default exception handler), and the session remains in DRAFT while its booking is COMPLETED, creating a dangling state with no retry or alert. **Fix:** wrap the save operation in a try-catch block (pattern: mirror HomeworkAssignmentService lines 81–86) to log and handle known race conditions gracefully (e.g., concurrent modifications, constraint violations).
+  - **Resolved:** `sessionRepository.save(session)` wrapped in a try/catch for `DataIntegrityViolationException`, logged via `log.warn` with the session id, booking id, and exception — mirrors `HomeworkAssignmentService`'s own `DataIntegrityViolationException` catch convention (specific exception type, not generic `Exception`, per project rules). New unit test `handleBookingCompleted_saveThrowsDataIntegrityViolation_isCaughtAndDoesNotPropagate` added to `SessionPlanServiceTest.java`, asserting the exception does not propagate out of the listener. All 10 `SessionPlanServiceTest` tests pass.
+
+- [x] [Review][Defer] Test coverage gaps — concurrent listener execution and exception scenarios not tested — deferred, out-of-scope for this story. Would require new integration test infrastructure (e.g., SessionCompletionResourceIT or sessionCompleted concurrency IT), per step 4's own guidance.
+
+- [x] [Review][Defer] VALIDATE CONSTRAINT documentation accuracy (V108 comment) — comment claims "does not block concurrent reads/writes," but PostgreSQL VALIDATE CONSTRAINT takes SHARE UPDATE EXCLUSIVE lock (blocks writes). Documentation should clarify; migration logic is sound but ops team may misplan deployment windows. Deferred as documentation-only, low-impact.
+
+- [x] [Review][Defer] Event parameter null-check defensiveness — defensive null-check on `event` parameter in handleBookingCompleted would be good practice, but Spring guarantees event is non-null in listener invocation. Pre-existing pattern across codebase; acceptable.
 
 ## Dev Notes
 
@@ -450,19 +464,75 @@ Apply these `deferred-work.md` updates:
 
 ### Agent Model Used
 
-_To be filled in by the dev agent._
+claude-sonnet-5
 
 ### Debug Log References
 
-_To be filled in by the dev agent._
+- `mvn -o compile` — clean after AC2 (`CoachSearchService.buildSort` collapse); exit 0.
+- `mvn -o test -Dtest=CoachProfileBuilderIT` — 34/34 pass after AC3 migration split (V107/V108).
+- `mvn -o test -Dtest=SessionPlanServiceTest` — first run after AC4 failed to even compile-load: Spring
+  context bean creation for `sessionPlanService` threw `BeanInitializationException` /
+  `IllegalStateException`: "`@TransactionalEventListener` method must not be annotated with
+  `@Transactional` unless when declared as `REQUIRES_NEW` or `NOT_SUPPORTED`" — `SessionPlanService`
+  carries a class-level `@Transactional` that the story's spec code (copied verbatim from
+  `HomeworkAssignmentService`, which has no class-level `@Transactional`) did not account for. Fixed by
+  adding an explicit `@Transactional(propagation = Propagation.REQUIRES_NEW)` on
+  `handleBookingCompleted` itself, overriding the class-level default — correct here regardless, since
+  `AFTER_COMMIT` means the originating transaction has already ended and a fresh one is needed either
+  way. Re-ran `mvn -o test -Dtest=SessionPlanServiceTest,CoachProfileBuilderIT` — 9/9 and 34/34 pass,
+  full Spring context loads cleanly.
+- `npx eslint src/pages/parent/BookingRequestPage.vue` — clean, run twice (after AC1, and again as the
+  final sweep).
 
 ### Completion Notes List
 
-_To be filled in by the dev agent._
+- AC1: `BookingRequestPage.vue`'s `playerId` computed property's query-param branch gated behind
+  `!authStore.isPlayer`; `onMounted`'s `selfPlayerId` fetch guard's `!route.query.playerId` condition
+  dropped per the story-review finding, so a self-booking player now always gets `selfPlayerId` fetched
+  regardless of a stray query param. Verified by direct code reading; `npx eslint` clean.
+- AC2: `CoachSearchService.buildSort`'s dead-identical `"price"`/`default` switch arms collapsed into
+  one, explanatory comment preserved and reworded to cover both. No test class exists that covers
+  `buildSort`/sort behavior specifically (confirmed via repo-wide grep — no `CoachSearchServiceTest` or
+  equivalent); `mvn -o compile` confirms no compile regression.
+- AC3: Added `V107__coach_pricing_session_duration_not_valid.sql` (DROP + re-ADD `NOT VALID`) and
+  `V108__coach_pricing_session_duration_validate.sql` (`VALIDATE CONSTRAINT`), confirmed as the next
+  free migration numbers after `V106`. `CoachProfileBuilderIT` (the existing IT covering coach-pricing
+  session-duration boundary values 15/240 and NULL) — 34/34 pass, confirming identical constraint
+  semantics before and after the split.
+- AC4: Added `SessionPlanService.handleBookingCompleted(BookingCompletedEvent)`, mirroring
+  `HomeworkAssignmentService`'s existing listener idiom exactly (`@TransactionalEventListener(AFTER_COMMIT)
+  @Async`), plus an explicit `@Transactional(REQUIRES_NEW)` required by `SessionPlanService`'s
+  class-level `@Transactional` (see Debug Log). Added 3 unit tests to `SessionPlanServiceTest.java`:
+  found-and-transitions, not-found-no-op, already-COMPLETED-no-redundant-save — all pass. No existing IT
+  (`SessionCompletionResourceIT`) already asserts on `HomeworkAssignmentService`'s side effects, so per
+  the story's own guidance, unit coverage only was built — no new end-to-end infrastructure added.
+- AC5: All three `deferred-work.md` ledger edits were found already applied at story-creation time
+  (committed in `ff0576f`) — verified the gallery-reorder close and `getPublicProfile` re-file bullets
+  match the spec text verbatim, and the D8 cross-reference-close bullet carries equivalent (slightly
+  more explicitly attributed) wording. No further edits needed.
+- ✅ Resolved review finding [Patch]: NaN coercion from `?playerId=` query param in
+  `BookingRequestPage.vue` — `playerId` computed now validates `Number.isFinite(parsed) && parsed > 0`
+  before returning the parsed value, falling through to `playerStore.activePlayerId` otherwise. `npx
+  eslint` clean.
+- ✅ Resolved review finding [Patch]: `@Async` exception swallowing in
+  `SessionPlanService.handleBookingCompleted` — `sessionRepository.save(session)` now wrapped in a
+  try/catch for `DataIntegrityViolationException`, logged via `log.warn`, mirroring
+  `HomeworkAssignmentService`'s own catch convention. New test
+  `handleBookingCompleted_saveThrowsDataIntegrityViolation_isCaughtAndDoesNotPropagate` added;
+  `SessionPlanServiceTest` now 10/10.
 
 ### File List
 
-_To be filled in by the dev agent._
+- `src/frontend/src/pages/parent/BookingRequestPage.vue` (AC1)
+- `src/main/java/com/softropic/skillars/platform/marketplace/service/CoachSearchService.java` (AC2)
+- `src/main/resources/db/migration/V107__coach_pricing_session_duration_not_valid.sql` (new, AC3)
+- `src/main/resources/db/migration/V108__coach_pricing_session_duration_validate.sql` (new, AC3)
+- `src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java` (AC4)
+- `src/test/java/com/softropic/skillars/platform/session/service/SessionPlanServiceTest.java` (AC4 tests)
+
+(AC5's `_bmad-output/implementation-artifacts/deferred-work.md` edits were already applied at
+story-creation time, commit `ff0576f` — verified, not re-touched this session; not listed above since
+no change was made to it in this session.)
 
 ## Change Log
 
@@ -495,3 +565,27 @@ _To be filled in by the dev agent._
   coach-chosen "meaningful non-terminal state" exists to protect, and the review's own suggested
   narrower `"DRAFT"`-only guard would have been a regression (it would strand `SAVED` plans forever).
   The originally-specified `!"COMPLETED".equals(...)` guard is confirmed correct, unchanged.
+- 2026-08-26: dev-story implementation complete, status ready-for-dev → review. AC1–AC3 and AC5 applied
+  exactly as specified (AC5's ledger edits were found already applied at story-creation time and
+  verified rather than re-applied). AC4 required one deviation from the spec code, found via a failed
+  targeted test run, not anticipated at story-creation: `SessionPlanService` carries a class-level
+  `@Transactional` that `HomeworkAssignmentService` (the pattern AC4 mirrors) does not have, and Spring
+  rejects a `@TransactionalEventListener` method inheriting a plain `@Transactional` — it must be
+  `REQUIRES_NEW` or `NOT_SUPPORTED`. Fixed by adding an explicit
+  `@Transactional(propagation = Propagation.REQUIRES_NEW)` on `handleBookingCompleted` itself, which is
+  correct independent of the bug fix too: `AFTER_COMMIT` means the originating transaction has already
+  ended, so a fresh transaction is needed regardless. All targeted backend tests
+  (`SessionPlanServiceTest` 9/9, `CoachProfileBuilderIT` 34/34) and `npx eslint` pass; full Spring
+  context loads cleanly. `mvn verify` not run locally per `docs/validation-strategy.md` — GitHub CI is
+  the sole full-verification gate.
+- 2026-08-26: code review complete ("Review Findings" section), 2 `[Review][Patch]` items resolved, 3
+  `[Review][Defer]` items deferred (already marked, no action needed this round). Patch 1:
+  `BookingRequestPage.vue`'s `playerId` computed property's query-param branch now validates
+  `Number.isFinite(parsed) && parsed > 0` before returning the parsed value, closing a gap where a
+  malformed `?playerId=abc` coerced to `NaN` and could leak into `goToPurchase()`'s URL construction —
+  falls through to the existing `playerStore.activePlayerId` fallback otherwise. Patch 2:
+  `SessionPlanService.handleBookingCompleted`'s `sessionRepository.save(session)` now wrapped in a
+  try/catch for `DataIntegrityViolationException`, logged via `log.warn`, mirroring
+  `HomeworkAssignmentService`'s own catch convention, instead of relying on `@Async`'s default silent
+  exception handling. `SessionPlanServiceTest` gained one new test for the caught-exception path (10/10
+  total); `CoachProfileBuilderIT` unaffected (34/34); `npx eslint` clean on the touched frontend file.

@@ -243,7 +243,10 @@ const coachId = route.params.coachId
 // playerStore (a parent's linked-children store, meaningless for a self-registered player).
 const selfPlayerId = ref(null)
 const playerId = computed(() => {
-  if (route.query.playerId) return Number(route.query.playerId)
+  if (route.query.playerId && !authStore.isPlayer) {
+    const parsed = Number(route.query.playerId)
+    if (Number.isFinite(parsed) && parsed > 0) return parsed
+  }
   if (authStore.isPlayer) return selfPlayerId.value
   return playerStore.activePlayerId
 })
@@ -608,7 +611,7 @@ async function submitBatchRequest() {
 }
 
 onMounted(async () => {
-  if (authStore.isPlayer && !route.query.playerId) {
+  if (authStore.isPlayer) {
     try {
       selfPlayerId.value = await playerStore.fetchSelfPlayerId()
     } catch (profileErr) {
