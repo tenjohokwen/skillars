@@ -9,12 +9,15 @@ import com.softropic.skillars.platform.session.repo.SessionRepository;
 import com.softropic.skillars.platform.session.service.DrillSuggestionService;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -32,6 +35,7 @@ import java.util.UUID;
 @RequestMapping("/api/bookings")
 @RequiredArgsConstructor
 @Slf4j
+@Validated
 public class SessionCompletionResource {
 
     private final BookingCompletionService bookingCompletionService;
@@ -97,7 +101,7 @@ public class SessionCompletionResource {
     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
     public ResponseEntity<List<DrillResponse>> getDrillSuggestions(
             @PathVariable UUID bookingId,
-            @RequestParam(defaultValue = "2") int limit) {
+            @RequestParam(defaultValue = "2") @Min(1) @Max(10) int limit) {
         return sessionRepository.findByBookingId(bookingId)
             .map(session -> ResponseEntity.ok(drillSuggestionService.suggest(session.getId(), currentUserId(), limit)))
             .orElseGet(() -> ResponseEntity.ok(List.of()));
