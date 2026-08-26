@@ -14,6 +14,7 @@ import com.softropic.skillars.platform.booking.repo.BookingBatchRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
+import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
@@ -126,6 +127,56 @@ class BookingBatchServiceTest {
         verify(eventPublisher).publishEvent(any(BatchBookingRequestedEvent.class));
     }
 
+    // ---- skillars-deferred-72 AC4: batch-level availability-staleness guard ----
+
+    @Test
+    void createBatch_matchingAvailabilitySignature_succeeds() {
+        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        stubOwnershipAndActiveCoach();
+
+        CoachAvailabilityWindow window = new CoachAvailabilityWindow();
+        window.setId(UUID.randomUUID());
+        window.setCoachId(COACH_ID);
+        window.setDayOfWeek((short) 1);
+        window.setStartTime(java.time.LocalTime.of(0, 0));
+        window.setEndTime(java.time.LocalTime.of(23, 59));
+        window.setCanonicalTimezone("UTC");
+        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+
+        BookingBatch savedBatch = new BookingBatch();
+        savedBatch.setId(BATCH_ID);
+        when(batchRepository.save(any())).thenReturn(savedBatch);
+        when(bookingRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(userRepository.findById(any())).thenReturn(Optional.empty());
+
+        String currentSignature =
+            AvailabilityService.computeAvailabilitySignature(List.of(window), Duration.ofHours(1));
+        CreateBatchRequest base = buildRequest(2);
+        CreateBatchRequest req = new CreateBatchRequest(base.coachId(), base.playerId(), base.slots(),
+            base.totalAmount(), currentSignature);
+
+        assertThat(service.createBatch(PARENT_ID, req).bookingCount()).isEqualTo(2);
+        verify(batchRepository).save(any(BookingBatch.class));
+    }
+
+    @Test
+    void createBatch_staleAvailabilitySignature_throwsAvailabilityChangedBeforePersisting() {
+        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        stubOwnershipAndActiveCoach();
+
+        CreateBatchRequest base = buildRequest(2);
+        CreateBatchRequest req = new CreateBatchRequest(base.coachId(), base.playerId(), base.slots(),
+            base.totalAmount(), "a-stale-signature-that-cannot-match");
+
+        assertThatThrownBy(() -> service.createBatch(PARENT_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(ex -> assertThat(((OperationNotAllowedException) ex).getErrorCode())
+                .isEqualTo(BookingError.AVAILABILITY_CHANGED));
+
+        verify(batchRepository, never()).save(any());
+        verify(bookingRepository, never()).save(any());
+    }
+
     // ---- UAT.2 AC4: the three checks the batch path never had ----
 
     /**
@@ -223,7 +274,7 @@ class BookingBatchServiceTest {
         CreateBatchRequest req = new CreateBatchRequest(COACH_ID, PLAYER_ID, List.of(
             new BatchSlot(base, base.plus(1, ChronoUnit.HOURS)),
             new BatchSlot(base.plus(2, ChronoUnit.HOURS), base.plus(5, ChronoUnit.HOURS))
-        ), BigDecimal.ZERO);
+        ), BigDecimal.ZERO, null);
 
         assertThatThrownBy(() -> service.createBatch(PARENT_ID, req))
             .isInstanceOf(OperationNotAllowedException.class)
@@ -246,7 +297,7 @@ class BookingBatchServiceTest {
         CreateBatchRequest req = new CreateBatchRequest(COACH_ID, PLAYER_ID, List.of(
             new BatchSlot(base, base.plus(60, ChronoUnit.MINUTES)),
             new BatchSlot(base.plus(30, ChronoUnit.MINUTES), base.plus(90, ChronoUnit.MINUTES))
-        ), BigDecimal.ZERO);
+        ), BigDecimal.ZERO, null);
 
         assertThatThrownBy(() -> service.createBatch(PARENT_ID, req))
             .isInstanceOf(BatchRuleViolationException.class)
@@ -883,6 +934,6 @@ class BookingBatchServiceTest {
             Instant start = base.plus(i, ChronoUnit.HOURS);
             slots.add(new BatchSlot(start, start.plus(1, ChronoUnit.HOURS)));
         }
-        return new CreateBatchRequest(COACH_ID, PLAYER_ID, slots, BigDecimal.ZERO);
+        return new CreateBatchRequest(COACH_ID, PLAYER_ID, slots, BigDecimal.ZERO, null);
     }
 }

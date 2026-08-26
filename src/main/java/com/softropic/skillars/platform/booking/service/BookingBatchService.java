@@ -128,6 +128,21 @@ public class BookingBatchService {
         List<CoachAvailabilityWindow> windows =
             coachAvailabilityWindowRepository.findByCoachId(req.coachId());
 
+        // skillars-deferred-72 AC4: mirrors BookingService.createBookingRequest's single-slot
+        // staleness guard (skillars-deferred-71 AC2) — a batch has exactly one coachId for its whole
+        // basket (req.coachId() above), so the same GET-vs-POST signature applies unchanged. This
+        // does NOT close the separate, deeper write-side TOCTOU window between the fresh re-check
+        // below and the actual commit (no @Version/lock support exists on CoachAvailabilityWindow) —
+        // that remains its own open ledger item, same as it does for single-booking creation.
+        if (req.availabilitySignature() != null) {
+            String currentSignature = AvailabilityService.computeAvailabilitySignature(windows, requiredDuration);
+            if (!currentSignature.equals(req.availabilitySignature())) {
+                throw new OperationNotAllowedException(
+                    "Coach availability changed since this view was loaded — please refresh",
+                    Map.of("coach id", req.coachId()), BookingError.AVAILABILITY_CHANGED);
+            }
+        }
+
         for (BatchSlot slot : req.slots()) {
             if (!slot.requestedStartTime().isAfter(Instant.now())) {
                 throw new OperationNotAllowedException("Requested start time must be in the future", BookingError.START_TIME_IN_PAST);

@@ -83,6 +83,8 @@
                 unelevated
                 class="start-session-btn q-mt-xs"
                 :label="t('booking.schedule.startSession')"
+                :loading="startingSessionId === booking.bookingId"
+                :disable="startingSessionId !== null || quickCompletingId !== null"
                 @click="handleStartSession(booking)"
               />
               <q-btn
@@ -90,6 +92,8 @@
                 flat dense size="sm"
                 :label="t('booking.completion.quickComplete')"
                 class="q-mt-xs"
+                :loading="quickCompletingId === booking.bookingId"
+                :disable="startingSessionId !== null || quickCompletingId !== null"
                 @click="handleQuickComplete(booking)"
               />
               <q-btn
@@ -231,6 +235,8 @@ const isLiveMode = ref(true)
 const activeBookingStatus = ref('IN_PROGRESS')
 const duplicatingId = ref(null)
 const rescheduleActionId = ref(null)
+const startingSessionId = ref(null)
+const quickCompletingId = ref(null)
 
 const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
 const coachRescheduleDialogOpen = ref(false)
@@ -393,24 +399,38 @@ function generateSlotLink() {
 }
 
 async function handleStartSession(booking) {
-  await bookingStore.handleStartSession(booking.bookingId)
-  activeBookingId.value = String(booking.bookingId)
-  activePlayerName.value = booking.playerName
-  activeSessionStart.value = booking.requestedStartTime
-  activePlayerId.value = booking.playerId
-  isLiveMode.value = true
-  activeBookingStatus.value = 'IN_PROGRESS'
-  startSessionSse(booking.bookingId)
-  showActiveSession.value = true
+  startingSessionId.value = booking.bookingId
+  try {
+    await bookingStore.handleStartSession(booking.bookingId)
+    activeBookingId.value = String(booking.bookingId)
+    activePlayerName.value = booking.playerName
+    activeSessionStart.value = booking.requestedStartTime
+    activePlayerId.value = booking.playerId
+    isLiveMode.value = true
+    activeBookingStatus.value = 'IN_PROGRESS'
+    startSessionSse(booking.bookingId)
+    showActiveSession.value = true
+  } catch {
+    $q.notify({ message: t('booking.completion.actionError'), type: 'negative' })
+  } finally {
+    startingSessionId.value = null
+  }
 }
 
 async function handleQuickComplete(booking) {
-  await bookingStore.handleInitiateQuickComplete(booking.bookingId)
-  activeBookingId.value = String(booking.bookingId)
-  activePlayerName.value = booking.playerName
-  activePlayerId.value = booking.playerId
-  isLiveMode.value = false
-  showWrapUp.value = true
+  quickCompletingId.value = booking.bookingId
+  try {
+    await bookingStore.handleInitiateQuickComplete(booking.bookingId)
+    activeBookingId.value = String(booking.bookingId)
+    activePlayerName.value = booking.playerName
+    activePlayerId.value = booking.playerId
+    isLiveMode.value = false
+    showWrapUp.value = true
+  } catch {
+    $q.notify({ message: t('booking.completion.actionError'), type: 'negative' })
+  } finally {
+    quickCompletingId.value = null
+  }
 }
 
 function onSessionEnded() {

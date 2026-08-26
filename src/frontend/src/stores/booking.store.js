@@ -537,6 +537,7 @@ export const useBookingStore = defineStore('booking', () => {
           requestedEndTime: s.endDatetime,
         })),
         totalAmount,
+        availabilitySignature: availabilitySignature.value,
       })
       clearBatchBasket()
       return res
