@@ -91,6 +91,41 @@ Do not change the two other branches — the parent-viewing-a-linked-child path 
 for a parent) and the parent-default-active-player fallback (`playerStore.activePlayerId`) are both
 correct today and out of scope.
 
+**Story-review finding, resolved by this fix requiring one more change** (`story-review.md`, "AC1 —
+Edge Case with Null/Missing `selfPlayerId`"): investigating the reviewer's concern found a real, concrete
+gap the fix above does not close by itself. `onMounted` (`:610-622`) only fetches `selfPlayerId` when
+**both** `authStore.isPlayer` **and** `!route.query.playerId` hold:
+
+```js
+onMounted(async () => {
+  if (authStore.isPlayer && !route.query.playerId) {
+    try {
+      selfPlayerId.value = await playerStore.fetchSelfPlayerId()
+    } catch (profileErr) { ... }
+  }
+  ...
+```
+
+Once the `playerId` computed above always uses `selfPlayerId.value` for a self-booking player
+regardless of the query string, this `onMounted` guard becomes wrong: a self-booking player who lands
+on the page **with** a stray `?playerId=...` present would never have `selfPlayerId` fetched at all,
+leaving `playerId.value` resolve to `null` — exactly the null/undefined scenario the reviewer flagged,
+now traced to its actual mechanism rather than a vague "race condition." **Fix this too, in the same
+AC**: drop the query-param condition from the `onMounted` guard so it fetches unconditionally for any
+self-booking player, matching the computed property's new unconditional-for-players logic:
+
+```js
+onMounted(async () => {
+  if (authStore.isPlayer) {
+    try {
+      selfPlayerId.value = await playerStore.fetchSelfPlayerId()
+    } catch (profileErr) { ... }
+  }
+  ...
+```
+
+No other line in that `try`/`catch` block changes.
+
 **Testing:** No frontend test infrastructure exists in this repo (standing, repeatedly-documented gap —
 do not introduce one as part of this story). Verify by direct code reading post-fix and `npx eslint`
 clean on the touched file; no automated regression test is expected or required for this file, matching
@@ -282,6 +317,28 @@ in principle be re-delivered (event-replay, retry) — re-setting an already-`CO
 `COMPLETED` again is harmless either way, but the guard avoids an unnecessary write, matching
 `HomeworkAssignmentService`'s own idempotency-by-existence-check convention for the same event.
 
+**Story-review finding, resolved by direct source verification — no product decision needed**
+(`story-review.md`, "AC4 — Implicit Assumption About Valid States"): the reviewer asked whether
+`Session.status` has valid values beyond `DRAFT`/`COMPLETED` that a coach might explicitly set and
+that the broad `!"COMPLETED".equals(...)` guard would wrongly overwrite, suggesting a narrower
+`"DRAFT".equals(...)`-only guard as a possible alternative. Checked directly against the request
+contract, not assumed:
+`src/main/java/com/softropic/skillars/platform/session/contract/UpdateSessionPlanRequest.java` declares
+`@Pattern(regexp = "DRAFT|SAVED") String status` — the **only** two values `updateSession` will ever
+accept from the frontend (a `PATCH` sending anything else fails Jakarta Validation at the controller
+boundary before reaching the service). The frontend itself (`sessionBuilder.store.js:129`) independently
+only ever sends `status` when it is one of `['DRAFT', 'SAVED']`. Combined with `createSession` always
+setting the literal `"DRAFT"`, this exhaustively confirms `Session.status`'s full value space today is
+exactly `{DRAFT, SAVED, COMPLETED}` — there is no third coach-chosen "meaningful non-terminal state"
+(no `IN_PROGRESS`/`PAUSED`/etc. exists for a *session plan*; that terminology belongs to `Booking.status`,
+a different entity, which the concern's phrasing appears to have been guarding against by analogy, not
+by an actual `Session.status` value). **The originally-specified guard is therefore correct as written
+and must not be narrowed**: a narrower `"DRAFT".equals(...)`-only guard, as the review's question 3
+floated, would be a real regression — it would silently strand every `SAVED` session plan (a coach who
+saved but never re-opened it before the booking completed) at `SAVED` forever, never reaching
+`COMPLETED`, since `SAVED` is a real, reachable, non-`DRAFT`, non-`COMPLETED` state today. Keep
+`!"COMPLETED".equals(session.getStatus())` exactly as specified above.
+
 **Interaction with `updateSession`'s existing lock:** `updateSession` (`:119-123`) already throws
 `SessionErrorCode.SESSION_PLAN_LOCKED` if `"COMPLETED".equals(session.getStatus())` — once this AC
 ships, that guard becomes reachable via the new automatic path too (not just a hypothetical manual
@@ -321,8 +378,11 @@ Apply these `deferred-work.md` updates:
 ## Tasks / Subtasks
 
 - [ ] AC1: Gate `BookingRequestPage.vue`'s `playerId` computed property's query-param branch behind
-      `!authStore.isPlayer`. Verify via direct code reading (no frontend test infra exists); `npx eslint`
-      clean on the touched file.
+      `!authStore.isPlayer`. Also drop the `!route.query.playerId` condition from `onMounted`'s
+      `selfPlayerId` fetch guard (story-review finding — the computed's new logic needs `selfPlayerId`
+      fetched unconditionally for a self-booking player, not only when no query param is present).
+      Verify via direct code reading (no frontend test infra exists); `npx eslint` clean on the touched
+      file.
 - [ ] AC2: Collapse `CoachSearchService.buildSort`'s dead-identical `"price"`/`default` switch arms into
       one, preserving the existing explanatory comment. Confirm the correct existing test class name
       covering `buildSort`/search-sort behavior (do not assume `CoachSearchServiceTest` without
@@ -424,3 +484,14 @@ _To be filled in by the dev agent._
   — no reorder feature exists anywhere in current code) and cross-reference-closes one item whose "still
   open" tag was stale (superseded by a later DECIDED note recorded under a different heading one day
   later).
+- 2026-08-26: story-review complete (`story-review.md`), status remains ready-for-dev — no blocking
+  issues, both findings resolved without needing a product decision. AC1 (Low concern — `selfPlayerId`
+  null/race risk): investigation found the reviewer's instinct correct but traced it to a concrete
+  mechanism rather than a vague race — `onMounted`'s `selfPlayerId` fetch was still gated on
+  `!route.query.playerId`, which the AC1 fix's new computed-property logic makes wrong; AC1 now also
+  drops that condition from the fetch guard. AC4 (Moderate concern — session-state assumption):
+  `UpdateSessionPlanRequest.status()`'s `@Pattern(regexp = "DRAFT|SAVED")` (checked directly, not
+  assumed) proves `Session.status`'s full value space is exactly `{DRAFT, SAVED, COMPLETED}` — no
+  coach-chosen "meaningful non-terminal state" exists to protect, and the review's own suggested
+  narrower `"DRAFT"`-only guard would have been a regression (it would strand `SAVED` plans forever).
+  The originally-specified `!"COMPLETED".equals(...)` guard is confirmed correct, unchanged.
