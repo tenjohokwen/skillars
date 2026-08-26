@@ -601,7 +601,7 @@ async function submitBatchRequest() {
       $q.notify({ message: t('booking.errors.slotOutsideAvailability'), type: 'negative' })
     } else if (errorKey === 'booking.availabilityChanged') {
       // Mirrors submit()'s single-booking branch (skillars-deferred-71 AC2) — same wire code, same
-      // refetch-then-toast shape, now also reachable from the batch path (skillars-deferred-72 AC4).
+      // refetch-then-toast shape, now also reachable from the batch path (skillars-deferred-72 AC3).
       $q.notify({ type: 'negative', message: t('booking.errors.availabilityChanged') })
       await bookingStore.loadAvailability(coachId, bookingStore.weekStart)
     } else if (errorKey === 'booking.sessionCrossesMidnight') {

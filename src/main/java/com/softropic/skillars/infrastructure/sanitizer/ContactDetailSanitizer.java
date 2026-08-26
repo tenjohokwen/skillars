@@ -13,7 +13,7 @@ public class ContactDetailSanitizer {
     private static final Pattern PHONE_PATTERN =
         Pattern.compile("(?:\\+?[\\d][\\d\\s\\-().]{6,14}[\\d])");
     // Real phone numbers carry at least one unbroken run of 5+ digits (an area/subscriber block) even
-    // when grouped with spaces — "+44 7911 123456" has runs of 4 and 6; "+49 30 12345678" has an
+    // when grouped with spaces — "+44 7911 123456" has runs of 2, 4, and 6; "+49 30 12345678" has an
     // 8-digit run. Date ranges, time ranges, and reference/license numbers (e.g. "2020-2026",
     // "09.00-17.00", "2023-04-15-001") break into runs no longer than 4 digits, since each dash/dot-
     // separated segment is itself a short date/time/id component, not a phone subscriber block.

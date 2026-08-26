@@ -1,6 +1,6 @@
 # Story Deferred-72: Booking Lock-Contention Test Coverage, Contact-Sanitizer False-Positive Fix, Batch Availability-Staleness Guard, Coach-Action Error-Handling Gaps & Ledger Hygiene
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -692,3 +692,93 @@ after implementation.
   `npx eslint` clean on every touched frontend file. `mvn verify` not run locally per
   `docs/validation-strategy.md`. All five ACs (AC3/AC4 from the earlier correction pass, AC1/AC2/AC5 from
   this pass) now complete. Full detail in the Dev Agent Record's Completion Notes above.
+
+## Review Findings
+
+Every finding below was independently re-verified against live source before being fixed or dismissed —
+none were applied on faith. 2 fixed, 7 dismissed (verified false positives or matches to established,
+already-shipped precedent).
+
+- [x] [Review][Patch] **FIXED.** AC3 misattribution in code comment — the cited line range (`:875-876`)
+      didn't exist in the current file (671 lines total, stale citation), but the underlying finding was
+      real at the actual location: `BookingRequestPage.vue:604`'s comment said "(skillars-deferred-72
+      AC4)" for code that is part of AC3 (batch availability staleness — `submitBatchRequest`'s new
+      `booking.availabilityChanged` branch), not AC4 (the unrelated `CoachCommandCenterPage.vue`
+      error-handling fix). Corrected to "AC3".
+- [ ] [Review][Patch] **DISMISSED (verified false positive).** Regex threshold lacks generalizability —
+      the cited example, "LICENSE-123456", was tested directly against `PHONE_PATTERN`: it produces
+      **zero matches**, because `PHONE_PATTERN` requires every character between the leading/trailing
+      digit to be `[\d\s\-().]` — letters aren't in that class, so "LICENSE-123456" was never a redaction
+      candidate before or after this fix, and the new digit-run filter never even runs against it. The
+      6-test validation set was sufficient for what the filter actually gates: the class of inputs
+      `PHONE_PATTERN` can match at all, not arbitrary alphanumeric strings it can't.
+- [x] [Review][Patch] **FIXED.** Incomplete phone-filter comment documentation — verified: the comment's
+      claim "+44 7911 123456 has runs of 4 and 6" omitted the leading `"44"` from `"+44"`, itself a
+      2-digit run (independently re-verified via a throwaway harness: actual runs are `[2, 4, 6]`).
+      Corrected the comment in `ContactDetailSanitizer.java` to say "runs of 2, 4, and 6".
+- [ ] [Review][Patch] **DISMISSED (matches established precedent).** Timing assertions too tight in lock
+      tests — the exact values (1200ms brief hold, 8000ms prolonged hold, <4500ms bound) are not new: they
+      are copied verbatim from `RescheduleServiceConcurrencyIT`'s already-shipped, already-merged tests
+      (`skillars-deferred-69` AC9), per this story's own explicit instruction to mirror that file's exact
+      shape. Not a new CI-stability risk introduced by this story — if these values are flaky, that risk
+      already exists in already-merged code and is a pre-existing, not new, concern.
+- [ ] [Review][Patch] **DISMISSED (matches established precedent).** Lock release timing unspecified in
+      test spec — the background-thread lock-hold/release shape (raw JDBC `SELECT ... FOR UPDATE` inside
+      `transactionTemplate.execute`, `Thread.sleep`, implicit commit-on-return) is copied verbatim from
+      `RescheduleServiceConcurrencyIT`'s and the pre-existing `saveStep4_...blocksUntilReleasedThen
+      WritesCorrectly` test's own established pattern in the same file — not a new, undocumented mechanism.
+- [ ] [Review][Patch] **DISMISSED (verified false positive).** Null safety on optional
+      `CreateBatchRequest` field — `req` is bound via Spring MVC's `@RequestBody @Valid CreateBatchRequest
+      req` (Jackson deserialization from a validated JSON body); Spring's own request-binding machinery
+      rejects a genuinely absent/malformed body before the controller method — and therefore this service
+      method — is ever invoked. Identical, already-shipped pattern exists in
+      `BookingService.createBookingRequest` (`skillars-deferred-71` AC2) with no incident.
+- [ ] [Review][Patch] **DISMISSED (matches established pattern, no concrete failure mode).** Inconsistent
+      UI state on partial mutation failure — the cited "ref assignment throws" scenario has no concrete
+      trigger: plain Vue `ref.value = ...` assignments do not throw. Checked the one call in the `try`
+      block that theoretically could (`startSessionSse`'s `new EventSource(...)`) — it's constructed from
+      `booking.bookingId`, always a well-formed UUID from a real row, not a realistic failure mode. This
+      exact "sequential ref assignments, no atomicity guard" shape is the established pattern used by
+      every sibling handler in the same file (e.g. `handleAcceptReschedule`, `handleRepeatNextWeek`) — not
+      something this story introduced.
+- [ ] [Review][Patch] **DISMISSED (verified false positive — misunderstands Jackson binding).** Backward
+      incompatibility in record deserialization — `CreateBatchRequest` is a plain record with no
+      `@JsonCreator`/custom deserializer; Spring's default Jackson binding for `@RequestBody` matches JSON
+      properties to record components **by name**, not by positional arity. A JSON payload omitting
+      `availabilitySignature` simply binds that component to `null` — there is no "5-element vs. 6-element
+      payload" failure mode. (The real, mechanical consequence of adding a record component — Java's
+      *positional* canonical constructor breaking existing call sites — applies only to in-repo test code,
+      not external clients, and was already handled: three existing test call sites were updated with a
+      trailing `null`.)
+- [ ] [Review][Patch] **DISMISSED (matches established pattern, no concrete failure mode).** Missing
+      defensive null checks on booking object — `booking` comes from `v-for="booking in
+      (bookingsByDay[dayIndex - 1] ?? [])"`, the same well-formed backend response array every other
+      handler in this file already reads unguarded (e.g. `handleAcceptReschedule` reads
+      `booking.bookingId`/`booking.pendingReschedule.id`, `handleRepeatNextWeek` reads
+      `booking.bookingId`, both pre-existing and unchanged by this story). Not a new gap this story
+      introduced.
+- [ ] [Review][Patch] **DISMISSED (verified false positive).** Unguarded `coachId` reference in error
+      handler — `coachId` is a top-level `const coachId = route.params.coachId` (line 241), already used
+      unguarded at the very top of `submitBatchRequest` (the `bookingStore.submitBatch(coachId, ...)`
+      call, several lines before this story's new catch branch is ever reached). If `coachId` were
+      undefined, the function would already have failed upstream of this story's change — not a new risk.
+
+## Change Log (continued)
+
+- 2026-08-26: code review follow-up applied, status review → done. 9 [Review][Patch] findings, all
+  individually re-verified against live source before acting (none applied on faith, matching this
+  project's established convention). 2 confirmed real and fixed: a misattributed AC number in a code
+  comment (`BookingRequestPage.vue`, said "AC4" for AC3 code — the review's own cited line range was stale,
+  the actual location and defect were re-found directly), and an inaccurate digit-run count in
+  `ContactDetailSanitizer.java`'s explanatory comment (said "runs of 4 and 6", actual is "2, 4, and 6" —
+  independently re-verified via a throwaway harness before correcting). 7 dismissed after direct
+  verification: a claimed regex-generalizability gap disproven by testing the cited example against
+  `PHONE_PATTERN` directly (zero matches — letters aren't in the pattern's character class, so it was
+  never a candidate); two timing/lock-shape "concerns" that are verbatim-identical to already-shipped
+  `RescheduleServiceConcurrencyIT` code, not new risk; a `CreateBatchRequest` null-safety claim disproven
+  by Spring's own request-binding guarantees, mirroring `skillars-deferred-71`'s identical already-shipped
+  pattern; a record-deserialization "backward incompatibility" claim that misunderstands Jackson's
+  name-based (not positional) JSON binding for `@RequestBody`; and two "missing defensive checks" claims
+  in `CoachCommandCenterPage.vue` matching the established unguarded-access pattern every sibling handler
+  in the same file already uses. `mvn -o test -Dtest=ContactDetailSanitizerTest` 11/11 green post-fix;
+  `npx eslint` clean on `BookingRequestPage.vue`. Full detail in the Review Findings section above.
