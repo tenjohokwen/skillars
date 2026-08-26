@@ -183,9 +183,35 @@ class BookingBatchServiceTest {
 
         service.createBatch(PARENT_ID, buildRequest(10));
 
-        verify(coachAvailabilityWindowRepository, times(1)).findByCoachId(COACH_ID);
-        verify(sessionDurationResolver, times(1)).resolve(COACH_ID);
+        // skillars-deferred-69 AC7: now resolved twice total (once up front, once again immediately
+        // before persist, to narrow the staleness window) — still O(1) in the slot count, not O(n),
+        // which is the invariant this test's name pins. Was verify(times(1)) before AC7.
+        verify(coachAvailabilityWindowRepository, times(2)).findByCoachId(COACH_ID);
+        verify(sessionDurationResolver, times(2)).resolve(COACH_ID);
         verify(bookingRepository, times(10)).save(any(Booking.class));
+    }
+
+    /**
+     * skillars-deferred-69 AC7: a coach edit landing between the initial resolve and the persist
+     * point (simulated here by the second isSlotWithinAvailabilityWindow call returning false, where
+     * the first — the initial pass — returned true) must abort the whole batch, and no booking or
+     * batch row may be written.
+     */
+    @Test
+    void createBatch_availabilityNarrowsBetweenInitialResolveAndPersist_abortsWholeBatch() {
+        when(configService.getLong("booking.batch.maxSize")).thenReturn(10L);
+        stubOwnershipAndActiveCoach();
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any()))
+            .thenReturn(true, false);
+
+        assertThatThrownBy(() -> service.createBatch(PARENT_ID, buildRequest(1)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.SLOT_OUTSIDE_AVAILABILITY));
+
+        verify(coachAvailabilityWindowRepository, times(2)).findByCoachId(COACH_ID);
+        verify(batchRepository, never()).save(any());
+        verify(bookingRepository, never()).save(any());
     }
 
     @Test
@@ -368,6 +394,8 @@ class BookingBatchServiceTest {
         batch.setStatus("PENDING");
         batch.setTotalAmount(BigDecimal.ZERO);
         when(batchRepository.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+        // skillars-deferred-69 AC6: acceptAll's trailing transaction now takes the locked read.
+        when(batchRepository.findByIdForUpdate(BATCH_ID)).thenReturn(Optional.of(batch));
 
         CoachProfile coach = buildActiveCoach();
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
@@ -425,7 +453,8 @@ class BookingBatchServiceTest {
 
         BookingBatch batch = new BookingBatch();
         batch.setId(BATCH_ID);
-        when(batchRepository.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+        // skillars-deferred-69 AC6: updateBatchStatusFromBooking now takes the locked read too.
+        when(batchRepository.findByIdForUpdate(BATCH_ID)).thenReturn(Optional.of(batch));
 
         service.updateBatchStatusFromBooking(BATCH_ID);
 
@@ -441,7 +470,8 @@ class BookingBatchServiceTest {
 
         BookingBatch batch = new BookingBatch();
         batch.setId(BATCH_ID);
-        when(batchRepository.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+        // skillars-deferred-69 AC6: updateBatchStatusFromBooking now takes the locked read too.
+        when(batchRepository.findByIdForUpdate(BATCH_ID)).thenReturn(Optional.of(batch));
 
         service.updateBatchStatusFromBooking(BATCH_ID);
 
@@ -456,7 +486,8 @@ class BookingBatchServiceTest {
 
         BookingBatch batch = new BookingBatch();
         batch.setId(BATCH_ID);
-        when(batchRepository.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+        // skillars-deferred-69 AC6: updateBatchStatusFromBooking now takes the locked read too.
+        when(batchRepository.findByIdForUpdate(BATCH_ID)).thenReturn(Optional.of(batch));
 
         service.updateBatchStatusFromBooking(BATCH_ID);
 
@@ -491,6 +522,8 @@ class BookingBatchServiceTest {
         batch.setStatus("PENDING");
         batch.setTotalAmount(BigDecimal.ZERO);
         when(batchRepository.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+        // skillars-deferred-69 AC6: acceptAll's trailing transaction now takes the locked read.
+        when(batchRepository.findByIdForUpdate(BATCH_ID)).thenReturn(Optional.of(batch));
 
         CoachProfile coach = buildActiveCoach();
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
@@ -532,6 +565,8 @@ class BookingBatchServiceTest {
         batch.setStatus("PENDING");
         batch.setTotalAmount(BigDecimal.ZERO);
         when(batchRepository.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+        // skillars-deferred-69 AC6: acceptAll's trailing transaction now takes the locked read.
+        when(batchRepository.findByIdForUpdate(BATCH_ID)).thenReturn(Optional.of(batch));
 
         CoachProfile coach = buildActiveCoach();
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
@@ -594,6 +629,8 @@ class BookingBatchServiceTest {
         batch.setStatus("PENDING");
         batch.setTotalAmount(BigDecimal.ZERO);
         when(batchRepository.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+        // skillars-deferred-69 AC6: acceptAll's trailing transaction now takes the locked read.
+        when(batchRepository.findByIdForUpdate(BATCH_ID)).thenReturn(Optional.of(batch));
 
         CoachProfile coach = buildActiveCoach();
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
@@ -658,6 +695,8 @@ class BookingBatchServiceTest {
         batch.setStatus("PENDING");
         batch.setTotalAmount(BigDecimal.ZERO);
         when(batchRepository.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+        // skillars-deferred-69 AC6: acceptAll's trailing transaction now takes the locked read.
+        when(batchRepository.findByIdForUpdate(BATCH_ID)).thenReturn(Optional.of(batch));
 
         CoachProfile coach = buildActiveCoach();
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
@@ -765,7 +804,8 @@ class BookingBatchServiceTest {
         requested.setRequestedEndTime(slot.plus(1, ChronoUnit.HOURS));
         when(bookingRepository.findByBatchIdAndStatus(BATCH_ID, "REQUESTED")).thenReturn(List.of(requested));
         // Every per-booking accept dies on the slot-collision guard inside acceptOneBooking, and the
-        // loop's catch swallows it — acceptedIds ends up empty.
+        // loop's catch swallows it — acceptedIds ends up empty. Never reaches acceptAll's trailing
+        // transaction, so no findByIdForUpdate stub is needed here (skillars-deferred-69 AC6).
         when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any()))
             .thenReturn(List.of(bookingInStatus("CONFIRMED")));
 

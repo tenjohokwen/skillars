@@ -10,6 +10,7 @@ import {
   createBookingRequest,
   acceptBooking,
   declineBooking,
+  cancelBooking,
   getParentBookings,
   getCoachBookingRequests,
   getBookingById,
@@ -25,6 +26,9 @@ import {
   requestReschedule,
   acceptReschedule,
   declineReschedule,
+  requestRescheduleAsCoach,
+  acceptRescheduleAsParent,
+  declineRescheduleAsParent,
   duplicateNextWeek,
   createBatch,
   acceptAllBatch,
@@ -146,8 +150,6 @@ export const useBookingStore = defineStore('booking', () => {
   const parentScheduleError = ref(null)
 
   const activeSessionBookingId = ref(null)
-  const completionLoading = ref(false)
-  const completionError = ref(null)
 
   const creditsForCoach = computed(
     () => (coachId) =>
@@ -420,150 +422,70 @@ export const useBookingStore = defineStore('booking', () => {
   }
 
   async function handleStartSession(bookingId) {
-    completionLoading.value = true
-    completionError.value = null
-    try {
-      await startSession(bookingId)
-      activeSessionBookingId.value = bookingId
-    } catch (e) {
-      completionError.value = e
-      throw e
-    } finally {
-      completionLoading.value = false
-    }
+    await startSession(bookingId)
+    activeSessionBookingId.value = bookingId
   }
 
   async function handleEndSession(bookingId) {
-    completionLoading.value = true
-    completionError.value = null
-    try {
-      await endSession(bookingId)
-    } catch (e) {
-      completionError.value = e
-      throw e
-    } finally {
-      completionLoading.value = false
-    }
+    await endSession(bookingId)
   }
 
   async function handlePauseSession(bookingId) {
-    completionLoading.value = true
-    completionError.value = null
-    try {
-      await pauseSession(bookingId)
-    } catch (e) {
-      completionError.value = e
-      throw e
-    } finally {
-      completionLoading.value = false
-    }
+    await pauseSession(bookingId)
   }
 
   async function handleResumeSession(bookingId) {
-    completionLoading.value = true
-    completionError.value = null
-    try {
-      await resumeSession(bookingId)
-    } catch (e) {
-      completionError.value = e
-      throw e
-    } finally {
-      completionLoading.value = false
-    }
+    await resumeSession(bookingId)
   }
 
   async function handleSubmitWrapUp(bookingId, wrapUpData) {
-    completionLoading.value = true
-    completionError.value = null
-    try {
-      await submitWrapUp(bookingId, wrapUpData)
-      activeSessionBookingId.value = null
-    } catch (e) {
-      completionError.value = e
-      throw e
-    } finally {
-      completionLoading.value = false
-    }
+    await submitWrapUp(bookingId, wrapUpData)
+    activeSessionBookingId.value = null
   }
 
   async function handleInitiateQuickComplete(bookingId) {
-    completionLoading.value = true
-    completionError.value = null
-    try {
-      await initiateQuickComplete(bookingId)
-    } catch (e) {
-      completionError.value = e
-      throw e
-    } finally {
-      completionLoading.value = false
-    }
+    await initiateQuickComplete(bookingId)
   }
 
   async function handleConfirmCompletion(bookingId) {
-    completionLoading.value = true
-    completionError.value = null
-    try {
-      await confirmCompletion(bookingId)
-      await loadParentBookings()
-    } catch (e) {
-      completionError.value = e
-      throw e
-    } finally {
-      completionLoading.value = false
-    }
+    await confirmCompletion(bookingId)
+    await loadParentBookings()
+  }
+
+  async function handleCancelBooking(bookingId) {
+    await cancelBooking(bookingId)
+    await loadParentBookings()
   }
 
   async function handleRequestReschedule(bookingId, data) {
-    completionLoading.value = true
-    completionError.value = null
-    try {
-      await requestReschedule(bookingId, data)
-      await loadParentBookings()
-    } catch (e) {
-      completionError.value = e
-      throw e
-    } finally {
-      completionLoading.value = false
-    }
+    await requestReschedule(bookingId, data)
+    await loadParentBookings()
   }
 
   async function handleAcceptReschedule(bookingId, rescheduleId) {
-    completionLoading.value = true
-    completionError.value = null
-    try {
-      await acceptReschedule(bookingId, rescheduleId)
-    } catch (e) {
-      completionError.value = e
-      throw e
-    } finally {
-      completionLoading.value = false
-    }
+    await acceptReschedule(bookingId, rescheduleId)
   }
 
   async function handleDeclineReschedule(bookingId, rescheduleId) {
-    completionLoading.value = true
-    completionError.value = null
-    try {
-      await declineReschedule(bookingId, rescheduleId)
-    } catch (e) {
-      completionError.value = e
-      throw e
-    } finally {
-      completionLoading.value = false
-    }
+    await declineReschedule(bookingId, rescheduleId)
+  }
+
+  async function handleRequestRescheduleAsCoach(bookingId, data) {
+    await requestRescheduleAsCoach(bookingId, data)
+  }
+
+  async function handleAcceptRescheduleAsParent(bookingId, rescheduleId) {
+    await acceptRescheduleAsParent(bookingId, rescheduleId)
+    await loadParentBookings()
+  }
+
+  async function handleDeclineRescheduleAsParent(bookingId, rescheduleId) {
+    await declineRescheduleAsParent(bookingId, rescheduleId)
+    await loadParentBookings()
   }
 
   async function handleDuplicateNextWeek(bookingId) {
-    completionLoading.value = true
-    completionError.value = null
-    try {
-      await duplicateNextWeek(bookingId)
-    } catch (e) {
-      completionError.value = e
-      throw e
-    } finally {
-      completionLoading.value = false
-    }
+    await duplicateNextWeek(bookingId)
   }
 
   function addSlotToBasket(slot) {
@@ -693,8 +615,6 @@ export const useBookingStore = defineStore('booking', () => {
     loadCoachSchedule,
     loadParentSchedule,
     activeSessionBookingId,
-    completionLoading,
-    completionError,
     handleStartSession,
     handleEndSession,
     handlePauseSession,
@@ -702,9 +622,13 @@ export const useBookingStore = defineStore('booking', () => {
     handleSubmitWrapUp,
     handleInitiateQuickComplete,
     handleConfirmCompletion,
+    handleCancelBooking,
     handleRequestReschedule,
     handleAcceptReschedule,
     handleDeclineReschedule,
+    handleRequestRescheduleAsCoach,
+    handleAcceptRescheduleAsParent,
+    handleDeclineRescheduleAsParent,
     handleDuplicateNextWeek,
     addSlotToBasket,
     removeSlotFromBasket,

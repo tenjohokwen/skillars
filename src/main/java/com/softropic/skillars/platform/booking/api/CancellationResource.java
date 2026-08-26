@@ -26,7 +26,7 @@ public class CancellationResource {
     private final SecurityUtil securityUtil;
 
     @PostMapping("/{id}/cancel")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<Void> cancelBooking(@PathVariable UUID id) {
         bookingService.cancelBookingAsParent(id, currentParentId());
         return ResponseEntity.noContent().build();
@@ -48,7 +48,7 @@ public class CancellationResource {
     }
 
     @PostMapping("/{id}/no-show-coach")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<Void> recordNoShowCoach(@PathVariable UUID id) {
         bookingService.recordNoShowCoach(id, currentParentId());
         return ResponseEntity.noContent().build();

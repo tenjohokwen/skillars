@@ -899,6 +899,17 @@ export default {
       declined: 'Reschedule declined',
       acceptFailed: 'Could not accept reschedule. Please try again.',
       declineFailed: 'Could not decline reschedule. Please try again.',
+      proposeNewTime: 'Propose New Time',
+    },
+    cancel: {
+      cta: 'Cancel',
+      dialogTitle: 'Cancel this session?',
+      dialogBody:
+        'This will cancel the session. Depending on how close it is to the scheduled time, it may not be eligible for a refund.',
+      confirm: 'Cancel session',
+      success: 'Session cancelled',
+      paymentInProgress: 'A payment for this session is already in progress. Please try again shortly.',
+      failed: 'Could not cancel this session. Please try again.',
     },
     batch: {
       enterBatchMode: 'Multi-select',
@@ -926,6 +937,7 @@ export default {
       startTimeInPast: 'That time has already passed. Pick a later slot.',
       invalidTimeRange: 'The session end time must be after its start time.',
       slotOutsideAvailability: "That time is outside this coach's available hours.",
+      sessionCrossesMidnight: 'A session cannot cross midnight.',
       batchAlreadyProcessed: 'These requests have already been handled.',
       batchNoneAccepted: 'None of the sessions in this request could be accepted.',
       notReschedulable: 'This session can no longer be rescheduled.',

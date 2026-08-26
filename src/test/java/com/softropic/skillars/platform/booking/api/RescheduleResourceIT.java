@@ -123,10 +123,11 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
             );
 
             // Deferred-49 AC1: wide-open availability, every day of week, so every existing test's
-            // day-agnostic Instant.now().plus(N, DAYS) proposal keeps landing inside SOME window
-            // regardless of when CI runs. Narrowing to a single day/hour range would make those
-            // existing tests flaky by construction — see the story's own fixture note. Seeded only
-            // for coachProfileId; no test in this file proposes a reschedule against coachProfile2Id.
+            // day-agnostic proposal (via safeProposedStart, skillars-deferred-69 AC2) keeps landing
+            // inside SOME window regardless of when CI runs. Narrowing to a single day/hour range
+            // would make those existing tests flaky by construction — see the story's own fixture
+            // note. Seeded only for coachProfileId; no test in this file proposes a reschedule
+            // against coachProfile2Id.
             for (short dayOfWeek = 1; dayOfWeek <= 7; dayOfWeek++) {
                 jdbcTemplate.update(
                     "INSERT INTO marketplace.coach_availability_windows " +
@@ -197,7 +198,7 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
                 "(purchase_id, parent_id, player_id, coach_id, pack_tier_id, price_per_session, remaining_sessions, expires_at, version, created_at) " +
                 "VALUES (?, ?, ?, ?, ?, 30.00, 5, ?, 0, now())",
                 UUID.randomUUID(), PARENT_ID, PLAYER_ID, coachProfileId, packTierId,
-                Timestamp.from(Instant.now().plus(180, ChronoUnit.DAYS))
+                Timestamp.from(safeProposedStart(180))
             );
 
             insertConfirmedBooking(bookingId);
@@ -205,13 +206,30 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
         });
     }
 
+    /**
+     * skillars-deferred-69 AC2: replaces every {@code Instant.now().plus(N, ChronoUnit.DAYS)} call
+     * site in this file. That pattern preserves the exact current wall-clock time-of-day — any CI run
+     * where "now" converted to {@code Europe/Berlin} falls roughly between 23:00 and 24:00 pushed
+     * {@code proposedEnd} past midnight Berlin time, which (after AC1) now throws
+     * {@code SESSION_CROSSES_MIDNIGHT} deterministically instead of the flaky silent-false this
+     * fixture's every-day window used to mask it as. Anchoring to a fixed, safe local hour (10:00)
+     * instead keeps every proposal well inside the fixture's 00:00:00-23:59:59 window regardless of
+     * when CI runs.
+     */
+    private Instant safeProposedStart(int daysAhead) {
+        return ZonedDateTime.now(ZoneId.of("Europe/Berlin"))
+            .plusDays(daysAhead)
+            .truncatedTo(ChronoUnit.DAYS)
+            .withHour(10)
+            .toInstant();
+    }
 
     // ---- Tests ----
 
     @Test
     void requestReschedule_asParentWithConfirmedBooking_returns204AndCreatesRecord() {
         String parentCookies = loginAndGetCookies(PARENT_EMAIL);
-        Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        Instant proposedStart = safeProposedStart(5);
         Instant proposedEnd   = proposedStart.plus(1, ChronoUnit.HOURS);
 
         ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
@@ -230,7 +248,7 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
 
     @Test
     void requestReschedule_unauthenticated_returns401() {
-        Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        Instant proposedStart = safeProposedStart(5);
         Instant proposedEnd   = proposedStart.plus(1, ChronoUnit.HOURS);
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
@@ -267,7 +285,7 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
         });
 
         String playerCookies = loginAndGetCookies(selfPlayerEmail);
-        Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        Instant proposedStart = safeProposedStart(5);
         Instant proposedEnd   = proposedStart.plus(1, ChronoUnit.HOURS);
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
@@ -316,7 +334,7 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
     @Test
     void requestReschedule_asCoach_returns403() {
         String coachCookies = loginAndGetCookies(COACH_EMAIL);
-        Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        Instant proposedStart = safeProposedStart(5);
         Instant proposedEnd   = proposedStart.plus(1, ChronoUnit.HOURS);
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
@@ -345,7 +363,7 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
         });
         try {
             String otherCookies = loginAndGetCookies(otherParentEmail);
-            Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
+            Instant proposedStart = safeProposedStart(5);
 
             assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
                 baseUrl() + "/api/bookings/" + bookingId + "/reschedule",
@@ -402,7 +420,7 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
     void acceptReschedule_proposedSlotTakenByAnotherBooking_returns403AndLeavesBookingUnchanged() {
         UUID rescheduleId = insertPendingReschedule();
         // insertPendingReschedule proposes now+7d for 1h — occupy exactly that window.
-        Instant proposed = Instant.now().plus(7, ChronoUnit.DAYS);
+        Instant proposed = safeProposedStart(7);
         UUID blockerId = UUID.randomUUID();
         transactionTemplate.execute(s -> {
             jdbcTemplate.update(
@@ -471,7 +489,7 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
     void requestReschedule_bookingNotInReschedulableStatus_returns403WithNotReschedulableKey() {
         setBookingStatus("COMPLETED");
         String parentCookies = loginAndGetCookies(PARENT_EMAIL);
-        Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        Instant proposedStart = safeProposedStart(5);
         Instant proposedEnd   = proposedStart.plus(1, ChronoUnit.HOURS);
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
@@ -554,7 +572,7 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
     @Test
     void requestReschedule_proposedEndBeforeStart_returns403WithInvalidTimeRangeKey() {
         String parentCookies = loginAndGetCookies(PARENT_EMAIL);
-        Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        Instant proposedStart = safeProposedStart(5);
         Instant proposedEnd = proposedStart.minus(30, ChronoUnit.MINUTES);
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
@@ -581,7 +599,7 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
     @Test
     void requestReschedule_proposedDurationDiffersFromOriginal_returns403WithInvalidSessionDurationKey() {
         String parentCookies = loginAndGetCookies(PARENT_EMAIL);
-        Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        Instant proposedStart = safeProposedStart(5);
         Instant proposedEnd = proposedStart.plus(2, ChronoUnit.HOURS);
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
@@ -601,16 +619,17 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
     }
 
     /**
-     * Deferred-49 AC1 (story-review.md Finding 3): a "far enough in the future" proposal cannot
-     * trigger this rejection under this file's own wide-open, every-day-of-week fixture — every
-     * calendar day has full 00:00:00-23:59:59 coverage, so any ordinary same-day proposal lands
-     * inside SOME window. The only way to fail the check is a proposal whose end crosses past
-     * 23:59:59 on the START's own calendar date, since isSlotWithinAvailabilityWindow anchors
-     * windowEnd to the start date only (BookingService.java:844) — the next day's window is never
-     * matched because day-of-week is compared against the START's day-of-week, not the end's.
+     * Deferred-49 AC1 (story-review.md Finding 3), superseded by skillars-deferred-69 AC1: a "far
+     * enough in the future" proposal cannot trigger a rejection under this file's own wide-open,
+     * every-day-of-week fixture — every calendar day has full 00:00:00-23:59:59 coverage, so any
+     * ordinary same-day proposal lands inside SOME window. The only way to fail is a proposal whose
+     * end crosses past 23:59:59 on the START's own calendar date. Before AC1, that fell through to a
+     * generic {@code SLOT_OUTSIDE_AVAILABILITY} (the flagship bug this story fixes); after AC1,
+     * {@code isSlotWithinAvailabilityWindow} throws {@code SESSION_CROSSES_MIDNIGHT} directly for
+     * this exact case instead.
      */
     @Test
-    void requestReschedule_slotOutsideAvailabilityWindow_returns403WithSlotOutsideAvailabilityKey() {
+    void requestReschedule_sessionCrossesMidnight_returns403WithSessionCrossesMidnightKey() {
         String parentCookies = loginAndGetCookies(PARENT_EMAIL);
         ZonedDateTime lateNightStart = ZonedDateTime.now(ZoneId.of("Europe/Berlin")).plusDays(5)
             .withHour(23).withMinute(30).withSecond(0).withNano(0);
@@ -628,7 +647,7 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
                 HttpClientErrorException ex = (HttpClientErrorException) e;
                 assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
                 assertThat(ex.getResponseBodyAsString())
-                    .contains("\"errorKey\":\"booking.slotOutsideAvailability\"");
+                    .contains("\"errorKey\":\"booking.sessionCrossesMidnight\"");
             });
     }
 
@@ -671,7 +690,7 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
     void requestReschedule_pendingRequestAlreadyExists_returns403WithRescheduleAlreadyPendingKey() {
         insertPendingReschedule();
         String parentCookies = loginAndGetCookies(PARENT_EMAIL);
-        Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        Instant proposedStart = safeProposedStart(5);
         Instant proposedEnd = proposedStart.plus(1, ChronoUnit.HOURS);
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
@@ -698,7 +717,7 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
     @Test
     void acceptReschedule_requestAlreadyDeclined_returns403WithRescheduleNotPendingKey() {
         UUID rescheduleId = insertReschedule("DECLINED",
-            Instant.now().plus(7, ChronoUnit.DAYS), Instant.now().plus(7, ChronoUnit.DAYS).plus(1, ChronoUnit.HOURS));
+            safeProposedStart(7), safeProposedStart(7).plus(1, ChronoUnit.HOURS));
         String coachCookies = loginAndGetCookies(COACH_EMAIL);
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
@@ -831,7 +850,7 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
      */
     @Test
     void acceptReschedule_declineCommitsWhileAcceptWaitsOnTheLock_acceptFailsAndDeclineStands() throws Exception {
-        Instant proposedStart = Instant.now().plus(9, ChronoUnit.DAYS);
+        Instant proposedStart = safeProposedStart(9);
         Instant proposedEnd = proposedStart.plus(1, ChronoUnit.HOURS);
         UUID rescheduleId = UUID.randomUUID();
         transactionTemplate.execute(status -> {
@@ -936,7 +955,7 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
      */
     @Test
     void declineReschedule_acceptCommitsWhileDeclineWaitsOnTheLock_declineFailsAndAcceptStands() throws Exception {
-        Instant proposedStart = Instant.now().plus(11, ChronoUnit.DAYS);
+        Instant proposedStart = safeProposedStart(11);
         Instant proposedEnd = proposedStart.plus(1, ChronoUnit.HOURS);
         UUID rescheduleId = UUID.randomUUID();
         transactionTemplate.execute(status -> {
@@ -1004,7 +1023,7 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
     }
 
     private void insertConfirmedBooking(UUID id) {
-        Instant futureStart = Instant.now().plus(2, ChronoUnit.DAYS);
+        Instant futureStart = safeProposedStart(2);
         jdbcTemplate.update(
             "INSERT INTO booking.bookings " +
             "(id, parent_id, player_id, coach_id, requested_start_time, requested_end_time, " +
@@ -1018,7 +1037,7 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
 
     private UUID insertPendingReschedule() {
         UUID id = UUID.randomUUID();
-        Instant proposed = Instant.now().plus(7, ChronoUnit.DAYS);
+        Instant proposed = safeProposedStart(7);
         transactionTemplate.execute(s -> {
             jdbcTemplate.update(
                 "INSERT INTO booking.booking_reschedule_requests " +

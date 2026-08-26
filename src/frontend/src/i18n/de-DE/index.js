@@ -440,6 +440,17 @@ export default {
       declined: 'Verschiebung abgelehnt',
       acceptFailed: 'Verschiebung konnte nicht angenommen werden. Bitte erneut versuchen.',
       declineFailed: 'Verschiebung konnte nicht abgelehnt werden. Bitte erneut versuchen.',
+      proposeNewTime: 'Neue Zeit vorschlagen',
+    },
+    cancel: {
+      cta: 'Stornieren',
+      dialogTitle: 'Diese Sitzung stornieren?',
+      dialogBody:
+        'Dadurch wird die Sitzung storniert. Je nachdem, wie nah der geplante Termin ist, besteht eventuell kein Anspruch auf Rückerstattung.',
+      confirm: 'Sitzung stornieren',
+      success: 'Sitzung storniert',
+      paymentInProgress: 'Für diese Sitzung läuft bereits eine Zahlung. Bitte versuchen Sie es in Kürze erneut.',
+      failed: 'Diese Sitzung konnte nicht storniert werden. Bitte erneut versuchen.',
     },
     batch: {
       enterBatchMode: 'Mehrfachauswahl',
@@ -469,6 +480,7 @@ export default {
       startTimeInPast: 'Dieser Zeitpunkt liegt bereits in der Vergangenheit. Bitte wählen Sie einen späteren Termin.',
       invalidTimeRange: 'Das Ende der Sitzung muss nach ihrem Beginn liegen.',
       slotOutsideAvailability: 'Dieser Zeitpunkt liegt außerhalb der verfügbaren Zeiten dieses Coaches.',
+      sessionCrossesMidnight: 'Eine Sitzung darf nicht über Mitternacht hinausgehen.',
       batchAlreadyProcessed: 'Diese Anfragen wurden bereits bearbeitet.',
       batchNoneAccepted: 'Keine der Sitzungen in dieser Anfrage konnte angenommen werden.',
       notReschedulable: 'Diese Sitzung kann nicht mehr verschoben werden.',

@@ -135,26 +135,7 @@ public class BookingBatchService {
             if (!slot.requestedEndTime().isAfter(slot.requestedStartTime())) {
                 throw new OperationNotAllowedException("Requested end time must be after start time", BookingError.INVALID_TIME_RANGE);
             }
-            Duration slotDuration =
-                Duration.between(slot.requestedStartTime(), slot.requestedEndTime());
-            if (!slotDuration.equals(requiredDuration)) {
-                throw new OperationNotAllowedException(
-                    "Requested session length does not match this coach's session length",
-                    Map.of("requested minutes", slotDuration.toMinutes(),
-                        "required minutes", requiredDuration.toMinutes()),
-                    BookingError.INVALID_SESSION_DURATION);
-            }
-            // The availability-window check this path has never had. BookingService's method is
-            // called directly rather than copied — a second copy would drift from its cross-midnight
-            // anchoring and invalid-timezone handling.
-            if (!bookingService.isSlotWithinAvailabilityWindow(
-                    slot.requestedStartTime(), slot.requestedEndTime(), windows, req.coachId())) {
-                throw new OperationNotAllowedException(
-                    "Requested slot is not within coach availability",
-                    Map.of("requested start time", slot.requestedStartTime(),
-                        "requested end time", slot.requestedEndTime()),
-                    BookingError.SLOT_OUTSIDE_AVAILABILITY);
-            }
+            validateSlotDurationAndAvailability(slot, requiredDuration, windows, req.coachId());
         }
 
         long distinctStartTimes = req.slots().stream()
@@ -184,6 +165,25 @@ public class BookingBatchService {
                     .isBefore(sortedSlots.get(i - 1).requestedEndTime())) {
                 throw new BatchRuleViolationException("booking.overlappingSlots");
             }
+        }
+
+        // skillars-deferred-69 AC7: narrows (does not eliminate) the read-then-write staleness
+        // window between the initial resolve above and this persist point — a coach edit landing in
+        // between was previously invisible to this request. Re-fetches and re-runs the same
+        // duration+availability validation against fresh values, inside this same transaction,
+        // immediately before the batch/booking rows are written. If any slot now fails, the whole
+        // batch aborts (no partial writes above this point yet). This does NOT close the window
+        // entirely: CoachAvailabilityWindow/CoachAvailabilityBlock carry no @Version and no
+        // locked-read method exists for them anywhere in the codebase, so a coach edit landing
+        // between this re-check and the actual commit below remains unseen. Full elimination would
+        // require lock support on CoachAvailabilityWindow, which doesn't exist and is out of this
+        // story's scope — see acceptAll's own doc comment above for this codebase's precedent of
+        // being explicit about a fix's actual limits rather than overselling it.
+        Duration freshRequiredDuration = sessionDurationResolver.resolve(req.coachId());
+        List<CoachAvailabilityWindow> freshWindows =
+            coachAvailabilityWindowRepository.findByCoachId(req.coachId());
+        for (BatchSlot slot : req.slots()) {
+            validateSlotDurationAndAvailability(slot, freshRequiredDuration, freshWindows, req.coachId());
         }
 
         BookingBatch batch = new BookingBatch();
@@ -222,6 +222,35 @@ public class BookingBatchService {
             batch.getId(), parentId, req.coachId(), req.slots().size());
 
         return new BatchBookingCreatedResponse(batch.getId(), req.slots().size());
+    }
+
+    /**
+     * Duration-match + availability-window validation for a single slot, called twice by
+     * {@link #createBatch} (skillars-deferred-69 AC7): once against the initially-resolved
+     * {@code requiredDuration}/{@code windows}, and again immediately before persisting against
+     * freshly re-fetched values, to narrow (not eliminate) the staleness window between the two.
+     * {@code isSlotWithinAvailabilityWindow} is called directly rather than copied — a second copy
+     * would drift from its cross-midnight anchoring and invalid-timezone handling.
+     */
+    private void validateSlotDurationAndAvailability(BatchSlot slot, Duration requiredDuration,
+                                                       List<CoachAvailabilityWindow> windows, UUID coachId) {
+        Duration slotDuration =
+            Duration.between(slot.requestedStartTime(), slot.requestedEndTime());
+        if (!slotDuration.equals(requiredDuration)) {
+            throw new OperationNotAllowedException(
+                "Requested session length does not match this coach's session length",
+                Map.of("requested minutes", slotDuration.toMinutes(),
+                    "required minutes", requiredDuration.toMinutes()),
+                BookingError.INVALID_SESSION_DURATION);
+        }
+        if (!bookingService.isSlotWithinAvailabilityWindow(
+                slot.requestedStartTime(), slot.requestedEndTime(), windows, coachId)) {
+            throw new OperationNotAllowedException(
+                "Requested slot is not within coach availability",
+                Map.of("requested start time", slot.requestedStartTime(),
+                    "requested end time", slot.requestedEndTime()),
+                BookingError.SLOT_OUTSIDE_AVAILABILITY);
+        }
     }
 
     /**
@@ -326,8 +355,16 @@ public class BookingBatchService {
         // two writers can no longer disagree. The bookings must be re-read here for the same reason
         // the batch is: `requestedBookings` belongs to the enclosing persistence context and
         // predates the per-booking commits.
+        //
+        // skillars-deferred-69 AC6: findByIdForUpdate (not findById) locks the row against
+        // updateBatchStatusFromBooking's own writer below — both read-compute-write this same
+        // status with no lock between them otherwise, a last-writer-wins race. No entityManager
+        // .refresh needed: `fresh` is read inside this trailing transaction's own fresh persistence
+        // context (deliberately named to distinguish it from the enclosing transaction's already-
+        // managed `batch`), same reasoning acceptOneBooking's own comment documents above for why it
+        // skips the refresh.
         trailingTx.executeWithoutResult(tx ->
-            batchRepository.findById(batchId).ifPresent(fresh -> {
+            lockRetryer.withBoundedRetry(() -> batchRepository.findByIdForUpdate(batchId)).ifPresent(fresh -> {
                 fresh.setStatus(computeBatchStatus(bookingRepository.findByBatchId(batchId)));
                 batchRepository.save(fresh);
                 eventPublisher.publishEvent(new BatchBookingAcceptedEvent(
@@ -426,7 +463,10 @@ public class BookingBatchService {
 
         String newStatus = computeBatchStatus(allBookings);
 
-        batchRepository.findById(batchId).ifPresent(batch -> {
+        // skillars-deferred-69 AC6: locked read, same as acceptAll's trailing transaction above —
+        // this method's own REQUIRES_NEW transaction gives it a fresh persistence context, so (like
+        // acceptOneBooking) no entityManager.refresh is needed here either.
+        lockRetryer.withBoundedRetry(() -> batchRepository.findByIdForUpdate(batchId)).ifPresent(batch -> {
             batch.setStatus(newStatus);
             batchRepository.save(batch);
             log.info("Batch status updated: batchId={} newStatus={}", batchId, newStatus);
