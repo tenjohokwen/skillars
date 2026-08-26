@@ -787,4 +787,67 @@ class AvailabilityServiceTest {
             .set(field(CoachAvailabilityBlock::getEndDatetime), end)
             .create();
     }
+
+    // ----- computeAvailabilitySignature tests (AC2) -----
+
+    @Test
+    void computeAvailabilitySignature_sameWindowsAndDuration_producesIdenticalSignature() {
+        UUID coachId = UUID.randomUUID();
+        CoachAvailabilityWindow window = makeWindow(UUID.randomUUID(), coachId);
+
+        String first = AvailabilityService.computeAvailabilitySignature(List.of(window), ONE_HOUR);
+        String second = AvailabilityService.computeAvailabilitySignature(List.of(window), ONE_HOUR);
+
+        assertThat(first).isEqualTo(second);
+    }
+
+    @Test
+    void computeAvailabilitySignature_changedWindowTime_producesDifferentSignature() {
+        UUID coachId = UUID.randomUUID();
+        CoachAvailabilityWindow window = makeWindow(UUID.randomUUID(), coachId);
+        String baseline = AvailabilityService.computeAvailabilitySignature(List.of(window), ONE_HOUR);
+
+        CoachAvailabilityWindow changed = makeWindow(window.getId(), coachId);
+        changed.setStartTime(window.getStartTime().plusMinutes(15));
+        String withChangedTime = AvailabilityService.computeAvailabilitySignature(List.of(changed), ONE_HOUR);
+
+        assertThat(withChangedTime).isNotEqualTo(baseline);
+    }
+
+    @Test
+    void computeAvailabilitySignature_addedWindow_producesDifferentSignature() {
+        UUID coachId = UUID.randomUUID();
+        CoachAvailabilityWindow window = makeWindow(UUID.randomUUID(), coachId);
+        String baseline = AvailabilityService.computeAvailabilitySignature(List.of(window), ONE_HOUR);
+
+        CoachAvailabilityWindow addedWindow = makeWindow(UUID.randomUUID(), coachId);
+        String withAddedWindow =
+            AvailabilityService.computeAvailabilitySignature(List.of(window, addedWindow), ONE_HOUR);
+
+        assertThat(withAddedWindow).isNotEqualTo(baseline);
+    }
+
+    @Test
+    void computeAvailabilitySignature_removedWindow_producesDifferentSignature() {
+        UUID coachId = UUID.randomUUID();
+        CoachAvailabilityWindow window1 = makeWindow(UUID.randomUUID(), coachId);
+        CoachAvailabilityWindow window2 = makeWindow(UUID.randomUUID(), coachId);
+        String baseline = AvailabilityService.computeAvailabilitySignature(List.of(window1, window2), ONE_HOUR);
+
+        String withWindowRemoved = AvailabilityService.computeAvailabilitySignature(List.of(window1), ONE_HOUR);
+
+        assertThat(withWindowRemoved).isNotEqualTo(baseline);
+    }
+
+    @Test
+    void computeAvailabilitySignature_changedDuration_producesDifferentSignature() {
+        UUID coachId = UUID.randomUUID();
+        CoachAvailabilityWindow window = makeWindow(UUID.randomUUID(), coachId);
+        String baseline = AvailabilityService.computeAvailabilitySignature(List.of(window), ONE_HOUR);
+
+        String withChangedDuration =
+            AvailabilityService.computeAvailabilitySignature(List.of(window), Duration.ofMinutes(90));
+
+        assertThat(withChangedDuration).isNotEqualTo(baseline);
+    }
 }

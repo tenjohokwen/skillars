@@ -3,9 +3,11 @@ package com.softropic.skillars.platform.booking.api;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.booking.contract.BookingResponse;
+import com.softropic.skillars.platform.booking.contract.BookingStatus;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.platform.booking.service.BookingSseService;
+import com.softropic.skillars.platform.booking.service.BookingStateMachine;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.security.contract.Principal;
@@ -35,6 +37,7 @@ public class BookingEventResource {
 
     private final BookingService bookingService;
     private final BookingSseService bookingSseService;
+    private final BookingStateMachine bookingStateMachine;
     private final CoachProfileRepository coachProfileRepository;
     private final SecurityUtil securityUtil;
 
@@ -45,7 +48,10 @@ public class BookingEventResource {
         Booking booking = bookingService.getBookingOrThrow(id);
         verifyIsParty(booking, actorUserId);
 
-        SseEmitter emitter = bookingSseService.subscribe(id, booking.getStatus());
+        BookingStatus currentStatus = BookingStatus.valueOf(booking.getStatus());
+        SseEmitter emitter = bookingStateMachine.isTerminal(currentStatus)
+            ? bookingSseService.subscribeTerminal(booking.getStatus())
+            : bookingSseService.subscribe(id, booking.getStatus());
         return ResponseEntity.ok()
             .contentType(MediaType.TEXT_EVENT_STREAM)
             .body(emitter);

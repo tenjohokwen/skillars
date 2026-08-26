@@ -60,7 +60,8 @@ public enum BookingError implements ErrorCode {
     NO_SHOW_TOO_EARLY,
     CONCURRENT_MODIFICATION,
     SESSION_CROSSES_MIDNIGHT,
-    CANNOT_RESPOND_TO_OWN_PROPOSAL;
+    CANNOT_RESPOND_TO_OWN_PROPOSAL,
+    AVAILABILITY_CHANGED;
 
     @Override
     public String getErrorCode() {
@@ -80,6 +81,7 @@ public enum BookingError implements ErrorCode {
             case CONCURRENT_MODIFICATION   -> "booking.concurrentModification";
             case SESSION_CROSSES_MIDNIGHT  -> "booking.sessionCrossesMidnight";
             case CANNOT_RESPOND_TO_OWN_PROPOSAL -> "booking.cannotRespondToOwnProposal";
+            case AVAILABILITY_CHANGED      -> "booking.availabilityChanged";
         };
     }
 }

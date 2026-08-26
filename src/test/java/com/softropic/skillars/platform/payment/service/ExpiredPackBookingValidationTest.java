@@ -113,7 +113,7 @@ class ExpiredPackBookingValidationTest {
         when(sessionPackPurchaseRepository.findById(EXPIRED_PACK_ID)).thenReturn(Optional.of(expiredPack));
 
         CreateBookingRequest req = new CreateBookingRequest(
-            COACH_ID, PLAYER_ID, start, end, null, EXPIRED_PACK_ID);
+            COACH_ID, PLAYER_ID, start, end, null, EXPIRED_PACK_ID, null);
 
         assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
             .isInstanceOf(PaymentGatewayException.class)
@@ -141,7 +141,7 @@ class ExpiredPackBookingValidationTest {
         when(sessionPackPurchaseRepository.findById(EXPIRED_PACK_ID)).thenReturn(Optional.of(foreignExpiredPack));
 
         CreateBookingRequest req = new CreateBookingRequest(
-            COACH_ID, PLAYER_ID, start, end, null, EXPIRED_PACK_ID);
+            COACH_ID, PLAYER_ID, start, end, null, EXPIRED_PACK_ID, null);
 
         assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
             .isInstanceOf(OperationNotAllowedException.class)
@@ -165,7 +165,7 @@ class ExpiredPackBookingValidationTest {
         when(sessionPackPurchaseRepository.findById(validPackId)).thenReturn(Optional.of(validPack));
 
         CreateBookingRequest req = new CreateBookingRequest(
-            COACH_ID, PLAYER_ID, start, end, null, validPackId);
+            COACH_ID, PLAYER_ID, start, end, null, validPackId, null);
 
         // A valid non-expired pack with correct ownership must not throw any pack validation exception
         try {
@@ -195,7 +195,7 @@ class ExpiredPackBookingValidationTest {
         when(sessionPackPurchaseRepository.findById(packId)).thenReturn(Optional.of(pack));
 
         CreateBookingRequest req = new CreateBookingRequest(
-            COACH_ID, PLAYER_ID, start, end, null, packId);
+            COACH_ID, PLAYER_ID, start, end, null, packId, null);
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
             () -> bookingService.createBookingRequest(PARENT_ID, req))
@@ -219,7 +219,7 @@ class ExpiredPackBookingValidationTest {
         when(sessionPackPurchaseRepository.findById(packId)).thenReturn(Optional.of(pack));
 
         CreateBookingRequest req = new CreateBookingRequest(
-            COACH_ID, PLAYER_ID, start, end, null, packId);
+            COACH_ID, PLAYER_ID, start, end, null, packId, null);
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
             () -> bookingService.createBookingRequest(PARENT_ID, req))
@@ -243,7 +243,7 @@ class ExpiredPackBookingValidationTest {
         when(sessionPackPurchaseRepository.findById(packId)).thenReturn(Optional.of(pack));
 
         CreateBookingRequest req = new CreateBookingRequest(
-            COACH_ID, PLAYER_ID, start, end, null, packId);
+            COACH_ID, PLAYER_ID, start, end, null, packId, null);
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
             () -> bookingService.createBookingRequest(PARENT_ID, req))

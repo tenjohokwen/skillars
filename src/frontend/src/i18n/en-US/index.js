@@ -938,6 +938,7 @@ export default {
       invalidTimeRange: 'The session end time must be after its start time.',
       slotOutsideAvailability: "That time is outside this coach's available hours.",
       sessionCrossesMidnight: 'A session cannot cross midnight.',
+      availabilityChanged: "This coach's availability changed since you loaded this page. Please pick a new time.",
       batchAlreadyProcessed: 'These requests have already been handled.',
       batchNoneAccepted: 'None of the sessions in this request could be accepted.',
       notReschedulable: 'This session can no longer be rescheduled.',

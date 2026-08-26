@@ -234,6 +234,91 @@ class BookingServiceTest {
             .isInstanceOf(OperationNotAllowedException.class);
     }
 
+    // ---- AC2: availability-staleness guard ----
+
+    @Test
+    void createBookingRequest_nullAvailabilitySignature_succeedsUnchanged() {
+        PlayerProfile player = makePlayer(PLAYER_ID, PARENT_ID);
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        CoachAvailabilityWindow window = makeCoveringWindow(COACH_ID);
+        Booking savedBooking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of());
+        when(bookingRepository.save(any(Booking.class))).thenReturn(savedBooking);
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+
+        // makeValidRequest's underlying record leaves availabilitySignature null — callers not yet
+        // sending it must be unaffected.
+        CreateBookingRequest req = makeValidRequest(COACH_ID, PLAYER_ID, window);
+        BookingResponse response = bookingService.createBookingRequest(PARENT_ID, req);
+
+        assertThat(response).isNotNull();
+        verify(bookingRepository).save(any(Booking.class));
+    }
+
+    @Test
+    void createBookingRequest_matchingAvailabilitySignature_succeeds() {
+        PlayerProfile player = makePlayer(PLAYER_ID, PARENT_ID);
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        CoachAvailabilityWindow window = makeCoveringWindow(COACH_ID);
+        Booking savedBooking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of());
+        when(bookingRepository.save(any(Booking.class))).thenReturn(savedBooking);
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+
+        String currentSignature =
+            AvailabilityService.computeAvailabilitySignature(List.of(window), Duration.ofHours(1));
+        CreateBookingRequest base = makeValidRequest(COACH_ID, PLAYER_ID, window);
+        CreateBookingRequest req = new CreateBookingRequest(base.coachId(), base.playerId(),
+            base.requestedStartTime(), base.requestedEndTime(), base.notes(), base.sessionPackPurchaseId(),
+            currentSignature);
+
+        BookingResponse response = bookingService.createBookingRequest(PARENT_ID, req);
+
+        assertThat(response).isNotNull();
+        verify(bookingRepository).save(any(Booking.class));
+    }
+
+    @Test
+    void createBookingRequest_staleAvailabilitySignature_throwsAvailabilityChangedBeforeWindowCheck() {
+        PlayerProfile player = makePlayer(PLAYER_ID, PARENT_ID);
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        // A window that DOES cover the requested slot — proves the staleness check fires before
+        // (and independent of) the window-fit check, not as a side effect of an otherwise-invalid slot.
+        CoachAvailabilityWindow window = makeCoveringWindow(COACH_ID);
+
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+
+        CreateBookingRequest base = makeValidRequest(COACH_ID, PLAYER_ID, window);
+        CreateBookingRequest req = new CreateBookingRequest(base.coachId(), base.playerId(),
+            base.requestedStartTime(), base.requestedEndTime(), base.notes(), base.sessionPackPurchaseId(),
+            "a-stale-signature-that-cannot-match");
+
+        assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(ex -> assertThat(((OperationNotAllowedException) ex).getErrorCode())
+                .isEqualTo(BookingError.AVAILABILITY_CHANGED));
+        // Never reaches the pessimistic-lock/overlap-check machinery downstream of the window-fit check.
+        verify(coachProfileRepository, never()).findByIdForUpdate(COACH_ID);
+        verify(bookingRepository, never()).save(any(Booking.class));
+    }
+
     // ---- UAT.5 AC1: self-registered adult PLAYER can book for themselves ----
 
     /**
@@ -514,7 +599,7 @@ class BookingServiceTest {
 
         CreateBookingRequest req = new CreateBookingRequest(
             COACH_ID, PLAYER_ID, slotStart.toInstant(), slotStart.plusHours(1).toInstant(),
-            "test notes", null);
+            "test notes", null, null);
 
         assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
             .isInstanceOf(OperationNotAllowedException.class)
@@ -536,7 +621,7 @@ class BookingServiceTest {
         Instant pastTime = Instant.now().minusSeconds(3600);
         CreateBookingRequest req = new CreateBookingRequest(
             COACH_ID, PLAYER_ID, pastTime, pastTime.plusSeconds(3600),
-            null, null
+            null, null, null
         );
 
         assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
@@ -556,7 +641,7 @@ class BookingServiceTest {
         ZonedDateTime slotStart = ZonedDateTime.now(ZoneId.of("Europe/Berlin"))
             .plusDays(1).withHour(9).withMinute(0).withSecond(0).withNano(0);
         CreateBookingRequest req = new CreateBookingRequest(
-            COACH_ID, PLAYER_ID, slotStart.toInstant(), slotStart.plusHours(8).toInstant(), null, null);
+            COACH_ID, PLAYER_ID, slotStart.toInstant(), slotStart.plusHours(8).toInstant(), null, null, null);
 
         assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
             .isInstanceOf(OperationNotAllowedException.class)
@@ -574,7 +659,7 @@ class BookingServiceTest {
         ZonedDateTime slotStart = ZonedDateTime.now(ZoneId.of("Europe/Berlin"))
             .plusDays(1).withHour(10).withMinute(0).withSecond(0).withNano(0);
         CreateBookingRequest req = new CreateBookingRequest(
-            COACH_ID, PLAYER_ID, slotStart.toInstant(), slotStart.plusMinutes(30).toInstant(), null, null);
+            COACH_ID, PLAYER_ID, slotStart.toInstant(), slotStart.plusMinutes(30).toInstant(), null, null, null);
 
         assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
             .isInstanceOf(OperationNotAllowedException.class)
@@ -604,7 +689,7 @@ class BookingServiceTest {
             .plusDays(1).withHour(10).withMinute(0).withSecond(0).withNano(0);
 
         assertThat(bookingService.createBookingRequest(PARENT_ID, new CreateBookingRequest(
-            COACH_ID, PLAYER_ID, slotStart.toInstant(), slotStart.plusMinutes(90).toInstant(), null, null)))
+            COACH_ID, PLAYER_ID, slotStart.toInstant(), slotStart.plusMinutes(90).toInstant(), null, null, null)))
             .isNotNull();
     }
 
@@ -622,7 +707,7 @@ class BookingServiceTest {
             .plusDays(1).withHour(10).withMinute(0).withSecond(0).withNano(0);
 
         assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, new CreateBookingRequest(
-            COACH_ID, PLAYER_ID, slotStart.toInstant(), slotStart.plusMinutes(60).toInstant(), null, null)))
+            COACH_ID, PLAYER_ID, slotStart.toInstant(), slotStart.plusMinutes(60).toInstant(), null, null, null)))
             .isInstanceOf(OperationNotAllowedException.class)
             .hasMessageContaining("session length");
     }
@@ -1317,7 +1402,7 @@ class BookingServiceTest {
             .withHour(10).withMinute(0).withSecond(0).withNano(0);
         Instant start = slotStart.toInstant();
         Instant end = slotStart.plusHours(1).toInstant();
-        return new CreateBookingRequest(coachId, playerId, start, end, "test notes", null);
+        return new CreateBookingRequest(coachId, playerId, start, end, "test notes", null, null);
     }
 
     private Booking makeBooking(Long parentId, Long playerId, UUID coachId, String status) {

@@ -99,4 +99,8 @@ public class BookingStateMachine {
         }
         return target;
     }
+
+    public boolean isTerminal(BookingStatus status) {
+        return !TRANSITIONS.containsKey(status);
+    }
 }

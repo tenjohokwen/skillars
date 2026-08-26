@@ -6,5 +6,6 @@ public record CoachAvailabilityResponse(
     List<AvailabilityWindowResponse> windows,
     List<AvailabilityBlockResponse> blocks,
     List<AvailableSlotResponse> computedSlots,
-    String canonicalTimezone
+    String canonicalTimezone,
+    String availabilitySignature
 ) {}

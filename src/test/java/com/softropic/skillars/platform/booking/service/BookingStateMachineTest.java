@@ -9,6 +9,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import java.util.Arrays;
+import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static com.softropic.skillars.platform.booking.contract.BookingEvent.ACCEPT;
@@ -136,5 +139,47 @@ class BookingStateMachineTest {
     void completedPendingConfirmation_QUICK_COMPLETE_reachesCompleted() {
         BookingStatus result = stateMachine.targetStatus(COMPLETED_PENDING_CONFIRMATION, QUICK_COMPLETE);
         assertThat(result).isEqualTo(COMPLETED);
+    }
+
+    @ParameterizedTest
+    @MethodSource("terminalStatuses")
+    void isTerminal_terminalStatus_returnsTrue(BookingStatus status) {
+        assertThat(stateMachine.isTerminal(status)).isTrue();
+    }
+
+    static Stream<BookingStatus> terminalStatuses() {
+        return Stream.of(DECLINED, CANCELLED_COACH, CANCELLED_PARENT, BookingStatus.CANCELLED,
+            BookingStatus.NO_SHOW_PLAYER, BookingStatus.NO_SHOW_COACH, REFUNDED);
+    }
+
+    @Test
+    void isTerminal_COMPLETED_returnsFalse() {
+        assertThat(stateMachine.isTerminal(COMPLETED)).isFalse();
+    }
+
+    @Test
+    void isTerminal_UPCOMING_returnsFalse() {
+        assertThat(stateMachine.isTerminal(UPCOMING)).isFalse();
+    }
+
+    /**
+     * Mirrors {@code src/frontend/src/stores/booking.store.js}'s {@code TERMINAL_BOOKING_STATUSES}
+     * Set — the two must stay in sync, or {@code useBookingSse} will keep a live subscription open on
+     * a status this class now treats as terminal (or self-close on one that no longer is). Deliberately
+     * hardcoded rather than computed from the frontend file: if a future status is added here without
+     * updating that Set, this test fails and forces the fix, rather than the two silently drifting.
+     */
+    @Test
+    void isTerminal_fullTerminalSet_matchesFrontendTerminalBookingStatuses() {
+        Set<String> frontendTerminalBookingStatuses = Set.of(
+            "DECLINED", "CANCELLED", "CANCELLED_PARENT", "CANCELLED_COACH",
+            "NO_SHOW_PLAYER", "NO_SHOW_COACH", "REFUNDED");
+
+        Set<String> backendTerminalStatuses = Arrays.stream(BookingStatus.values())
+            .filter(stateMachine::isTerminal)
+            .map(Enum::name)
+            .collect(Collectors.toSet());
+
+        assertThat(backendTerminalStatuses).isEqualTo(frontendTerminalBookingStatuses);
     }
 }

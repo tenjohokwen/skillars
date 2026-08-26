@@ -5,9 +5,19 @@
 <script setup>
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useBookingSse, TERMINAL_BOOKING_STATUSES } from 'src/stores/booking.store'
 
-const props = defineProps({ status: { type: String, required: true } })
+const props = defineProps({
+  status: { type: String, required: true },
+  bookingId: { type: String, default: null },
+})
 const { t } = useI18n()
+
+const sse = props.bookingId && !TERMINAL_BOOKING_STATUSES.has(props.status)
+  ? useBookingSse(props.bookingId)
+  : null
+
+const liveStatus = computed(() => sse ? (sse.status.value ?? props.status) : props.status)
 
 const statusMap = {
   REQUESTED: { key: 'booking.requests.statusRequested', cls: 'chip--warning' },
@@ -31,11 +41,11 @@ const statusMap = {
 }
 
 const label = computed(() => {
-  const entry = statusMap[props.status]
-  return entry ? t(entry.key) : props.status
+  const entry = statusMap[liveStatus.value]
+  return entry ? t(entry.key) : liveStatus.value
 })
 
-const chipClass = computed(() => statusMap[props.status]?.cls ?? 'chip--neutral')
+const chipClass = computed(() => statusMap[liveStatus.value]?.cls ?? 'chip--neutral')
 </script>
 
 <style scoped>

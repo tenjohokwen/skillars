@@ -485,6 +485,7 @@ async function submit() {
       requestedEndTime: selectedSlot.value.endDatetime,
       notes: notes.value || null,
       sessionPackPurchaseId: selectedPackId.value,
+      availabilitySignature: bookingStore.availabilitySignature,
     })
     succeeded = true
   } catch (err) {
@@ -514,6 +515,9 @@ async function submit() {
       $q.notify({ type: 'negative', message: t('booking.errors.invalidTimeRange') })
     } else if (errorKey === 'booking.slotOutsideAvailability') {
       $q.notify({ type: 'negative', message: t('booking.errors.slotOutsideAvailability') })
+    } else if (errorKey === 'booking.availabilityChanged') {
+      $q.notify({ type: 'negative', message: t('booking.errors.availabilityChanged') })
+      await bookingStore.loadAvailability(coachId, bookingStore.weekStart)
     } else if (errorKey === 'booking.sessionCrossesMidnight') {
       $q.notify({ type: 'negative', message: t('booking.errors.sessionCrossesMidnight') })
     } else if (errorKey === 'MISSING_RIGHTS') {
