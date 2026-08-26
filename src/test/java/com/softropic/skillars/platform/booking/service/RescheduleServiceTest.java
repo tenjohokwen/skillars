@@ -5,7 +5,9 @@ import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.CreateRescheduleRequest;
 import com.softropic.skillars.platform.booking.contract.RescheduleAcceptedEvent;
+import com.softropic.skillars.platform.booking.contract.RescheduleDeclinedByParentEvent;
 import com.softropic.skillars.platform.booking.contract.RescheduleDeclinedEvent;
+import com.softropic.skillars.platform.booking.contract.RescheduleRequestedByCoachEvent;
 import com.softropic.skillars.platform.booking.contract.RescheduleRequestedEvent;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
@@ -21,6 +23,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
@@ -518,6 +521,234 @@ class RescheduleServiceTest {
             .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
                 .isEqualTo(BookingError.COACH_UNAVAILABLE));
 
+        verify(rescheduleRepo, never()).save(any());
+    }
+
+    /**
+     * skillars-deferred-69 AC8: call-order assertion pinning the documented lock order (reschedule
+     * request row before coach profile row, RescheduleService.java's own comment ahead of the locked
+     * re-reads) — not a concurrency/deadlock reproduction, since nothing in this codebase actually
+     * contends among the three methods the original ledger item named (confirmed during story
+     * research: BookingDuplicationService.duplicateNextWeek and CoachProfileService.saveStep4 each
+     * take exactly one lock, the coach-profile row only — there is nothing to deadlock against
+     * today). This guards the convention so a future editor adding a second lock elsewhere is caught
+     * if they get the order wrong.
+     */
+    @Test
+    void acceptReschedule_lockAcquisitionOrder_rescheduleRequestBeforeCoachProfile() {
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+
+        Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        Instant proposedEnd = proposedStart.plus(1, ChronoUnit.HOURS);
+        BookingRescheduleRequest pending = new BookingRescheduleRequest();
+        pending.setBookingId(BOOKING_ID);
+        pending.setStatus("PENDING");
+        pending.setProposedStartTime(proposedStart);
+        pending.setProposedEndTime(proposedEnd);
+        when(rescheduleRepo.findById(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+        when(rescheduleRepo.findByIdForUpdate(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+        when(rescheduleRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(coachProfileRepository.findByIdForUpdate(coach.getId())).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(
+            coach.getId(), proposedStart, proposedEnd,
+            BookingService.ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED, BOOKING_ID))
+            .thenReturn(List.of());
+
+        service.acceptReschedule(BOOKING_ID, RESCHEDULE_ID, COACH_USER_ID);
+
+        InOrder order = inOrder(rescheduleRepo, coachProfileRepository);
+        order.verify(rescheduleRepo).findByIdForUpdate(RESCHEDULE_ID);
+        order.verify(coachProfileRepository).findByIdForUpdate(coach.getId());
+    }
+
+    // ---- skillars-deferred-69 AC5: coach-initiated reschedule ----
+
+    @Test
+    void requestRescheduleAsCoach_coachOwnsBooking_createsRequestAndPublishesEvent() {
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
+        when(rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(BOOKING_ID, "PENDING"))
+            .thenReturn(Optional.empty());
+        when(rescheduleRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        Instant proposedStart = Instant.now().plus(3, ChronoUnit.DAYS);
+        Instant proposedEnd = proposedStart.plus(1, ChronoUnit.HOURS);
+        service.requestRescheduleAsCoach(BOOKING_ID, COACH_USER_ID, new CreateRescheduleRequest(proposedStart, proposedEnd));
+
+        ArgumentCaptor<BookingRescheduleRequest> savedCaptor = ArgumentCaptor.forClass(BookingRescheduleRequest.class);
+        verify(rescheduleRepo).save(savedCaptor.capture());
+        assertThat(savedCaptor.getValue().getProposedBy()).isEqualTo("COACH");
+
+        ArgumentCaptor<RescheduleRequestedByCoachEvent> captor = ArgumentCaptor.forClass(RescheduleRequestedByCoachEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().getBookingId()).isEqualTo(BOOKING_ID);
+        assertThat(captor.getValue().getProposedStartTime()).isEqualTo(proposedStart);
+        assertThat(captor.getValue().getCoachDisplayName()).isEqualTo("Test Coach");
+    }
+
+    @Test
+    void requestRescheduleAsCoach_wrongCoach_throws() {
+        Booking booking = new Booking();
+        booking.setCoachId(UUID.randomUUID());
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(booking);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+
+        assertThatThrownBy(() -> service.requestRescheduleAsCoach(BOOKING_ID, COACH_USER_ID,
+            new CreateRescheduleRequest(Instant.now().plus(1, ChronoUnit.DAYS), Instant.now().plus(1, ChronoUnit.DAYS).plus(1, ChronoUnit.HOURS))))
+            .isInstanceOf(OperationNotAllowedException.class);
+
+        verify(rescheduleRepo, never()).save(any());
+    }
+
+    /** A coach cannot accept their own coach-initiated proposal through the coach-only accept endpoint. */
+    @Test
+    void acceptReschedule_coachProposedOwnProposal_throwsCannotRespondToOwnProposal() {
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+
+        BookingRescheduleRequest pending = new BookingRescheduleRequest();
+        pending.setBookingId(BOOKING_ID);
+        pending.setStatus("PENDING");
+        pending.setProposedBy("COACH");
+        when(rescheduleRepo.findById(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+
+        assertThatThrownBy(() -> service.acceptReschedule(BOOKING_ID, RESCHEDULE_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.CANNOT_RESPOND_TO_OWN_PROPOSAL));
+
+        verify(rescheduleRepo, never()).save(any());
+    }
+
+    /** A coach cannot decline their own coach-initiated proposal through the coach-only decline endpoint. */
+    @Test
+    void declineReschedule_coachProposedOwnProposal_throwsCannotRespondToOwnProposal() {
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+
+        BookingRescheduleRequest pending = new BookingRescheduleRequest();
+        pending.setBookingId(BOOKING_ID);
+        pending.setStatus("PENDING");
+        pending.setProposedBy("COACH");
+        when(rescheduleRepo.findByIdForUpdate(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+
+        assertThatThrownBy(() -> service.declineReschedule(BOOKING_ID, RESCHEDULE_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.CANNOT_RESPOND_TO_OWN_PROPOSAL));
+
+        assertThat(pending.getStatus()).isEqualTo("PENDING");
+        verify(rescheduleRepo, never()).save(any());
+    }
+
+    @Test
+    void acceptRescheduleAsParent_parentOwnsBooking_updatesTimesAndStatus() {
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
+
+        Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        Instant proposedEnd = proposedStart.plus(1, ChronoUnit.HOURS);
+        BookingRescheduleRequest pending = new BookingRescheduleRequest();
+        pending.setBookingId(BOOKING_ID);
+        pending.setStatus("PENDING");
+        pending.setProposedBy("COACH");
+        pending.setProposedStartTime(proposedStart);
+        pending.setProposedEndTime(proposedEnd);
+        when(rescheduleRepo.findById(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+        when(rescheduleRepo.findByIdForUpdate(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+        when(rescheduleRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(coachProfileRepository.findByIdForUpdate(coach.getId())).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(
+            coach.getId(), proposedStart, proposedEnd,
+            BookingService.ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED, BOOKING_ID))
+            .thenReturn(List.of());
+
+        service.acceptRescheduleAsParent(BOOKING_ID, RESCHEDULE_ID, PARENT_ID);
+
+        assertThat(confirmedBooking.getRequestedStartTime()).isEqualTo(proposedStart);
+        assertThat(confirmedBooking.getRequestedEndTime()).isEqualTo(proposedEnd);
+        assertThat(pending.getStatus()).isEqualTo("ACCEPTED");
+
+        ArgumentCaptor<RescheduleAcceptedEvent> captor = ArgumentCaptor.forClass(RescheduleAcceptedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().getNewStartTime()).isEqualTo(proposedStart);
+    }
+
+    @Test
+    void acceptRescheduleAsParent_wrongParent_throws() {
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+
+        assertThatThrownBy(() -> service.acceptRescheduleAsParent(BOOKING_ID, RESCHEDULE_ID, 999L))
+            .isInstanceOf(OperationNotAllowedException.class);
+
+        verify(rescheduleRepo, never()).save(any());
+    }
+
+    /** A parent cannot accept their own parent-initiated proposal through the new parent-accept endpoint. */
+    @Test
+    void acceptRescheduleAsParent_parentProposedOwnProposal_throwsCannotRespondToOwnProposal() {
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+
+        BookingRescheduleRequest pending = new BookingRescheduleRequest();
+        pending.setBookingId(BOOKING_ID);
+        pending.setStatus("PENDING");
+        pending.setProposedBy("PARENT");
+        when(rescheduleRepo.findById(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+
+        assertThatThrownBy(() -> service.acceptRescheduleAsParent(BOOKING_ID, RESCHEDULE_ID, PARENT_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.CANNOT_RESPOND_TO_OWN_PROPOSAL));
+
+        verify(rescheduleRepo, never()).save(any());
+    }
+
+    @Test
+    void declineRescheduleAsParent_parentOwnsBooking_setsDeclined() {
+        Instant originalStart = confirmedBooking.getRequestedStartTime();
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+
+        BookingRescheduleRequest pending = new BookingRescheduleRequest();
+        pending.setBookingId(BOOKING_ID);
+        pending.setStatus("PENDING");
+        pending.setProposedBy("COACH");
+        when(rescheduleRepo.findByIdForUpdate(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+        when(rescheduleRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        service.declineRescheduleAsParent(BOOKING_ID, RESCHEDULE_ID, PARENT_ID);
+
+        assertThat(pending.getStatus()).isEqualTo("DECLINED");
+        assertThat(confirmedBooking.getRequestedStartTime()).isEqualTo(originalStart);
+
+        ArgumentCaptor<RescheduleDeclinedByParentEvent> captor = ArgumentCaptor.forClass(RescheduleDeclinedByParentEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().getBookingId()).isEqualTo(BOOKING_ID);
+    }
+
+    /** A parent cannot decline their own parent-initiated proposal through the new parent-decline endpoint. */
+    @Test
+    void declineRescheduleAsParent_parentProposedOwnProposal_throwsCannotRespondToOwnProposal() {
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+
+        BookingRescheduleRequest pending = new BookingRescheduleRequest();
+        pending.setBookingId(BOOKING_ID);
+        pending.setStatus("PENDING");
+        pending.setProposedBy("PARENT");
+        when(rescheduleRepo.findByIdForUpdate(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+
+        assertThatThrownBy(() -> service.declineRescheduleAsParent(BOOKING_ID, RESCHEDULE_ID, PARENT_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.CANNOT_RESPOND_TO_OWN_PROPOSAL));
+
+        assertThat(pending.getStatus()).isEqualTo("PENDING");
         verify(rescheduleRepo, never()).save(any());
     }
 }

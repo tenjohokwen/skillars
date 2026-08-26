@@ -30,7 +30,7 @@ public class RescheduleResource {
     private final SecurityUtil securityUtil;
 
     @PostMapping("/{id}/reschedule")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<Void> requestReschedule(@PathVariable UUID id,
                                                    @Valid @RequestBody CreateRescheduleRequest req) {
         rescheduleService.requestReschedule(id, currentUserId(), req);
@@ -50,6 +50,27 @@ public class RescheduleResource {
     public ResponseEntity<Void> declineReschedule(@PathVariable UUID id,
                                                    @PathVariable UUID rescheduleId) {
         rescheduleService.declineReschedule(id, rescheduleId, currentUserId());
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/{id}/reschedule/coach")
+    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+    public ResponseEntity<Void> requestRescheduleAsCoach(@PathVariable UUID id, @Valid @RequestBody CreateRescheduleRequest req) {
+        rescheduleService.requestRescheduleAsCoach(id, currentUserId(), req);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PutMapping("/{id}/reschedule/{rescheduleId}/accept-parent")
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
+    public ResponseEntity<Void> acceptRescheduleAsParent(@PathVariable UUID id, @PathVariable UUID rescheduleId) {
+        rescheduleService.acceptRescheduleAsParent(id, rescheduleId, currentUserId());
+        return ResponseEntity.noContent().build();
+    }
+
+    @PutMapping("/{id}/reschedule/{rescheduleId}/decline-parent")
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
+    public ResponseEntity<Void> declineRescheduleAsParent(@PathVariable UUID id, @PathVariable UUID rescheduleId) {
+        rescheduleService.declineRescheduleAsParent(id, rescheduleId, currentUserId());
         return ResponseEntity.noContent().build();
     }
 

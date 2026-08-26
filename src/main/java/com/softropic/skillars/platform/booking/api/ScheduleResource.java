@@ -68,7 +68,7 @@ public class ScheduleResource {
     }
 
     @GetMapping("/parents/me/schedule")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<ParentScheduleResponse> getParentSchedule(@RequestParam Long playerId) {
         Long parentId = resolveCurrentUserId();
         return ResponseEntity.ok(bookingService.getParentPlayerSchedule(parentId, playerId));

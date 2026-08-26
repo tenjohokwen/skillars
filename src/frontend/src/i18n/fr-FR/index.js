@@ -1180,6 +1180,17 @@ export default {
       declined: 'Report refusé',
       acceptFailed: "Impossible d'accepter le report. Veuillez réessayer.",
       declineFailed: 'Impossible de refuser le report. Veuillez réessayer.',
+      proposeNewTime: 'Proposer un nouvel horaire',
+    },
+    cancel: {
+      cta: 'Annuler',
+      dialogTitle: 'Annuler cette séance ?',
+      dialogBody:
+        "Cela annulera la séance. Selon la proximité de l'horaire prévu, elle pourrait ne pas être éligible à un remboursement.",
+      confirm: 'Annuler la séance',
+      success: 'Séance annulée',
+      paymentInProgress: 'Un paiement pour cette séance est déjà en cours. Veuillez réessayer sous peu.',
+      failed: "Impossible d'annuler cette séance. Veuillez réessayer.",
     },
     batch: {
       enterBatchMode: 'Sélection multiple',
@@ -1208,6 +1219,7 @@ export default {
       startTimeInPast: 'Cet horaire est déjà passé. Veuillez choisir un créneau ultérieur.',
       invalidTimeRange: 'La fin de la séance doit être postérieure à son début.',
       slotOutsideAvailability: 'Cet horaire est en dehors des disponibilités de ce coach.',
+      sessionCrossesMidnight: "Une séance ne peut pas s'étendre au-delà de minuit.",
       batchAlreadyProcessed: 'Ces demandes ont déjà été traitées.',
       batchNoneAccepted:
         "Aucune des séances de cette demande n'a pu être acceptée.",

@@ -59,25 +59,51 @@
             <span class="text-strike">{{ formatDateTime(booking.requestedStartTime, booking.canonicalTimezone) }}</span>
             → {{ formatDateTime(booking.pendingReschedule.proposedStartTime, booking.canonicalTimezone) }}
           </div>
+          <!-- Accept/decline a coach-proposed reschedule (skillars-deferred-69 AC5) — only a coach
+               could ever be the one needing to respond before this story, so this indicator used to
+               render unconditionally with no actions. -->
+          <div v-if="booking.pendingReschedule?.proposedBy === 'COACH'" class="q-gutter-sm q-mt-xs">
+            <q-btn unelevated color="primary" size="sm" :label="t('booking.reschedule.accept')"
+                   :loading="respondingId === booking.id"
+                   @click="handleAcceptRescheduleAsParent(booking.id, booking.pendingReschedule.id)" />
+            <q-btn flat size="sm" :label="t('booking.reschedule.decline')"
+                   :loading="respondingId === booking.id"
+                   @click="handleDeclineRescheduleAsParent(booking.id, booking.pendingReschedule.id)" />
+          </div>
 
-          <!-- Request Change button — parent-only (UAT.5): reschedule stays @PreAuthorize
-               HAS_PARENT_ROLE, not widened by this story, so a player caller must not see a
-               button that 403s on click. -->
+          <!-- Request Change button — parent-or-self-booking-player (skillars-deferred-69 AC4:
+               widened from parent-only; RescheduleService.requestReschedule's ownership check is
+               self-booking-compatible). -->
           <q-btn
-            v-if="authStore.isParent && ['CONFIRMED', 'UPCOMING'].includes(booking.status) && !booking.pendingReschedule"
+            v-if="(authStore.isParent || authStore.isPlayer) && ['CONFIRMED', 'UPCOMING'].includes(booking.status) && !booking.pendingReschedule"
             flat dense size="sm"
             :label="t('booking.reschedule.requestChange')"
             :loading="reschedulingId === booking.id"
             @click="openRescheduleDialog(booking)"
             class="q-mt-xs self-start"
           />
+          <!-- Cancel button — parent-or-self-booking-player (skillars-deferred-69 AC3/AC4):
+               cancelBookingAsParent has no status whitelist of its own beyond ownership (it
+               transitions unconditionally; only refund eligibility is status-gated), so this uses
+               the same status set as Request-Change rather than a time-based guard that doesn't
+               exist server-side. -->
+          <q-btn
+            v-if="(authStore.isParent || authStore.isPlayer) && ['CONFIRMED', 'UPCOMING'].includes(booking.status)"
+            flat dense size="sm"
+            color="negative"
+            :label="t('booking.cancel.cta')"
+            :loading="cancelingId === booking.id"
+            @click="openCancelDialog(booking)"
+            class="q-mt-xs self-start"
+          />
         </q-item-section>
         <q-item-section side>
           <BookingStateChip :status="booking.status" />
-          <!-- Confirm Completion button — parent-only (UAT.5): session-completion confirm stays
-               @PreAuthorize HAS_PARENT_ROLE, not widened by this story. -->
+          <!-- Confirm Completion button — parent-or-self-booking-player (skillars-deferred-69 AC4:
+               widened from parent-only; BookingCompletionService.confirmCompletion's ownership check
+               is self-booking-compatible). -->
           <q-btn
-            v-if="authStore.isParent && booking.status === 'COMPLETED_PENDING_CONFIRMATION'"
+            v-if="(authStore.isParent || authStore.isPlayer) && booking.status === 'COMPLETED_PENDING_CONFIRMATION'"
             unelevated
             color="primary"
             size="sm"
@@ -113,6 +139,24 @@
           <q-btn unelevated color="primary"
                  :label="t('booking.reschedule.submit')"
                  @click="submitReschedule" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
+    <!-- Cancel confirmation dialog -->
+    <q-dialog v-model="cancelDialogOpen">
+      <q-card style="min-width: 320px">
+        <q-card-section>
+          <div class="text-h6">{{ t('booking.cancel.dialogTitle') }}</div>
+        </q-card-section>
+        <q-card-section>
+          {{ t('booking.cancel.dialogBody') }}
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat :label="t('common.cancel')" v-close-popup />
+          <q-btn unelevated color="primary"
+                 :label="t('booking.cancel.confirm')"
+                 @click="submitCancelBooking" />
         </q-card-actions>
       </q-card>
     </q-dialog>
@@ -161,6 +205,65 @@ function toDatetimeLocal(date) {
   )
 }
 const reschedulingId = ref(null)
+const respondingId = ref(null)
+const cancelingId = ref(null)
+const cancelDialogOpen = ref(false)
+const cancelBookingId = ref(null)
+
+function openCancelDialog(booking) {
+  cancelBookingId.value = booking.id
+  cancelDialogOpen.value = true
+}
+
+async function submitCancelBooking() {
+  cancelingId.value = cancelBookingId.value
+  try {
+    await bookingStore.handleCancelBooking(cancelBookingId.value)
+    cancelDialogOpen.value = false
+    $q.notify({ message: t('booking.cancel.success'), type: 'positive' })
+  } catch (err) {
+    const errorKey = err?.response?.data?.errorMsg?.errorKey
+    const message = err?.response?.data?.errorMsg?.message
+    // cancelBookingAsParent's payment-in-progress rejection is a raw ResponseStatusException, not an
+    // OperationNotAllowedException — ApiAdvice.responseStatusExceptionHandler hardcodes its errorKey
+    // to the generic "generic.requestError" (no i18n entry in any locale) and only carries the real
+    // reason ("booking.paymentInProgress") as the message text. errorKey alone cannot distinguish
+    // this rejection from any other ResponseStatusException, so branch on message for this one case.
+    if (errorKey === 'MISSING_RIGHTS') {
+      $q.notify({ message: t('booking.errors.requestNotAllowed'), type: 'negative' })
+    } else if (message === 'booking.paymentInProgress') {
+      $q.notify({ message: t('booking.cancel.paymentInProgress'), type: 'negative' })
+    } else {
+      $q.notify({ message: t('booking.cancel.failed'), type: 'negative' })
+    }
+  } finally {
+    cancelingId.value = null
+  }
+}
+
+async function handleAcceptRescheduleAsParent(bookingId, rescheduleId) {
+  respondingId.value = bookingId
+  try {
+    await bookingStore.handleAcceptRescheduleAsParent(bookingId, rescheduleId)
+    $q.notify({ message: t('booking.reschedule.accepted'), type: 'positive' })
+  } catch {
+    $q.notify({ message: t('booking.reschedule.acceptFailed'), type: 'negative' })
+  } finally {
+    respondingId.value = null
+  }
+}
+
+async function handleDeclineRescheduleAsParent(bookingId, rescheduleId) {
+  respondingId.value = bookingId
+  try {
+    await bookingStore.handleDeclineRescheduleAsParent(bookingId, rescheduleId)
+    $q.notify({ message: t('booking.reschedule.declined'), type: 'positive' })
+  } catch {
+    $q.notify({ message: t('booking.reschedule.declineFailed'), type: 'negative' })
+  } finally {
+    respondingId.value = null
+  }
+}
 
 async function handleConfirmCompletion(bookingId) {
   confirmingId.value = bookingId
@@ -226,6 +329,8 @@ async function submitReschedule() {
       $q.notify({ message: t('booking.errors.invalidTimeRange'), type: 'negative' })
     } else if (errorKey === 'booking.slotOutsideAvailability') {
       $q.notify({ message: t('booking.errors.slotOutsideAvailability'), type: 'negative' })
+    } else if (errorKey === 'booking.sessionCrossesMidnight') {
+      $q.notify({ message: t('booking.errors.sessionCrossesMidnight'), type: 'negative' })
     } else if (errorKey === 'booking.rescheduleAlreadyPending') {
       $q.notify({ message: t('booking.errors.rescheduleAlreadyPending'), type: 'negative' })
     } else if (errorKey === 'MISSING_RIGHTS') {

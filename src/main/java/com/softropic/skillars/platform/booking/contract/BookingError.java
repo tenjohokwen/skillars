@@ -34,6 +34,16 @@ import com.softropic.skillars.infrastructure.exception.ErrorCode;
  * {@code OptimisticLockingFailureException} catches in {@code BookingCompletionService}. HTTP status is
  * unaffected either way — {@code ApiAdvice.operationDeniedHandler} still maps
  * {@code OperationNotAllowedException} to 403 unconditionally, same as the note above.
+ *
+ * <p>{@code SESSION_CROSSES_MIDNIGHT} (added by {@code skillars-deferred-69}) is request-state
+ * validation, not authorization: {@code BookingService.isSlotWithinAvailabilityWindow} throws it when a
+ * session's end falls on a different calendar day than its start against an otherwise-matching
+ * availability window, since no window entry can ever be checked against a second calendar day.
+ *
+ * <p>{@code CANNOT_RESPOND_TO_OWN_PROPOSAL} (added by {@code skillars-deferred-69} AC5, alongside
+ * coach-initiated reschedule) guards {@code acceptReschedule}/{@code declineReschedule} and the new
+ * {@code acceptRescheduleAsParent}/{@code declineRescheduleAsParent}: whichever party proposed a
+ * reschedule cannot be the one to accept or decline it. Request-state validation, not authorization.
  */
 public enum BookingError implements ErrorCode {
     COACH_UNAVAILABLE,
@@ -48,7 +58,9 @@ public enum BookingError implements ErrorCode {
     RESCHEDULE_ALREADY_PENDING,
     RESCHEDULE_NOT_PENDING,
     NO_SHOW_TOO_EARLY,
-    CONCURRENT_MODIFICATION;
+    CONCURRENT_MODIFICATION,
+    SESSION_CROSSES_MIDNIGHT,
+    CANNOT_RESPOND_TO_OWN_PROPOSAL;
 
     @Override
     public String getErrorCode() {
@@ -66,6 +78,8 @@ public enum BookingError implements ErrorCode {
             case RESCHEDULE_NOT_PENDING    -> "booking.rescheduleNotPending";
             case NO_SHOW_TOO_EARLY         -> "booking.noShowTooEarly";
             case CONCURRENT_MODIFICATION   -> "booking.concurrentModification";
+            case SESSION_CROSSES_MIDNIGHT  -> "booking.sessionCrossesMidnight";
+            case CANNOT_RESPOND_TO_OWN_PROPOSAL -> "booking.cannotRespondToOwnProposal";
         };
     }
 }

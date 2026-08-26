@@ -574,8 +574,17 @@ public class BookingService {
     public ParentScheduleResponse getParentPlayerSchedule(Long parentId, Long playerId) {
         PlayerProfile player = playerProfileRepository.findById(playerId)
             .orElseThrow(() -> new ResourceNotFoundException("Player not found", "player_profile"));
-        if (!Objects.equals(player.getParentId(), parentId)) {
-            throw new ResourceNotFoundException("Player not found", "player_profile");
+        // skillars-deferred-69 AC4: a self-registered adult player has no parent (player.getParentId()
+        // == null) and calls this endpoint as themselves — mirrors createBookingRequest's own
+        // parentId-vs-userId branch (:170-176) rather than assuming every caller has a parent.
+        if (player.getParentId() != null) {
+            if (!Objects.equals(player.getParentId(), parentId)) {
+                throw new ResourceNotFoundException("Player not found", "player_profile");
+            }
+        } else {
+            if (!Objects.equals(player.getUserId(), parentId)) {
+                throw new ResourceNotFoundException("Player not found", "player_profile");
+            }
         }
 
         List<Booking> bookings = bookingRepository.findByParentIdAndPlayerIdAndStatusIn(
@@ -894,15 +903,23 @@ public class BookingService {
             ZonedDateTime startZdt = startTime.atZone(zoneId);
             ZonedDateTime endZdt = endTime.atZone(zoneId);
             // Anchor window boundaries to the session's start date in the coach's timezone.
-            // ZonedDateTime comparison handles cross-midnight sessions correctly without
-            // the date-equality guard that previously rejected all late-night sessions.
+            // A session whose end falls on a different calendar day than its start is rejected
+            // outright below, rather than matched against the next day's window — this method
+            // does not support sessions crossing midnight.
             ZonedDateTime windowStart = w.getStartTime().atDate(startZdt.toLocalDate()).atZone(zoneId);
             ZonedDateTime windowEnd   = w.getEndTime().atDate(startZdt.toLocalDate()).atZone(zoneId);
 
             if (w.getDayOfWeek() == (short) startZdt.getDayOfWeek().getValue()
-                && !startZdt.isBefore(windowStart)
-                && !endZdt.isAfter(windowEnd)) {
-                return true;
+                && !startZdt.isBefore(windowStart)) {
+                if (!endZdt.toLocalDate().equals(startZdt.toLocalDate())) {
+                    throw new OperationNotAllowedException(
+                        "A session cannot cross midnight",
+                        Map.of("start time", startTime, "end time", endTime, "coach id", coachId),
+                        BookingError.SESSION_CROSSES_MIDNIGHT);
+                }
+                if (!endZdt.isAfter(windowEnd)) {
+                    return true;
+                }
             }
         }
         if (!windows.isEmpty() && validWindowsEvaluated == 0) {

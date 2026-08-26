@@ -3,6 +3,8 @@ package com.softropic.skillars.platform.notification.infrastructure.listener;
 import com.softropic.skillars.platform.booking.contract.BookingConfirmedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingExpiredEvent;
 import com.softropic.skillars.platform.booking.contract.BookingReminderEvent;
+import com.softropic.skillars.platform.booking.contract.RescheduleDeclinedByParentEvent;
+import com.softropic.skillars.platform.booking.contract.RescheduleRequestedByCoachEvent;
 import com.softropic.skillars.platform.notification.contract.Envelope;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -102,6 +104,48 @@ class BookingEmailListenerTest {
 
         verify(publisher, times(1)).publishEvent(envelopeCaptor.capture());
         assertThat(envelopeCaptor.getValue().recipients().get(0).getEmail()).isEqualTo("parent@example.com");
+    }
+
+    @Test
+    void onRescheduleRequestedByCoach_blankParentEmail_skipsEnvelope() {
+        RescheduleRequestedByCoachEvent event = new RescheduleRequestedByCoachEvent(
+            this, UUID.randomUUID(), "", "Coach", Instant.now(), Instant.now(), "UTC");
+
+        listener.onRescheduleRequestedByCoach(event);
+
+        verify(publisher, never()).publishEvent(org.mockito.ArgumentMatchers.any(Envelope.class));
+    }
+
+    @Test
+    void onRescheduleRequestedByCoach_validParentEmail_publishesEnvelope() {
+        RescheduleRequestedByCoachEvent event = new RescheduleRequestedByCoachEvent(
+            this, UUID.randomUUID(), "parent@example.com", "Coach", Instant.now(), Instant.now(), "UTC");
+
+        listener.onRescheduleRequestedByCoach(event);
+
+        verify(publisher).publishEvent(envelopeCaptor.capture());
+        assertThat(envelopeCaptor.getValue().recipients().get(0).getEmail()).isEqualTo("parent@example.com");
+    }
+
+    @Test
+    void onRescheduleDeclinedByParent_blankCoachEmail_skipsEnvelope() {
+        RescheduleDeclinedByParentEvent event = new RescheduleDeclinedByParentEvent(
+            this, UUID.randomUUID(), "", "Parent", Instant.now(), "UTC");
+
+        listener.onRescheduleDeclinedByParent(event);
+
+        verify(publisher, never()).publishEvent(org.mockito.ArgumentMatchers.any(Envelope.class));
+    }
+
+    @Test
+    void onRescheduleDeclinedByParent_validCoachEmail_publishesEnvelope() {
+        RescheduleDeclinedByParentEvent event = new RescheduleDeclinedByParentEvent(
+            this, UUID.randomUUID(), "coach@example.com", "Parent", Instant.now(), "UTC");
+
+        listener.onRescheduleDeclinedByParent(event);
+
+        verify(publisher).publishEvent(envelopeCaptor.capture());
+        assertThat(envelopeCaptor.getValue().recipients().get(0).getEmail()).isEqualTo("coach@example.com");
     }
 
     @Test

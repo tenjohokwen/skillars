@@ -511,6 +511,8 @@ async function submit() {
       $q.notify({ type: 'negative', message: t('booking.errors.invalidTimeRange') })
     } else if (errorKey === 'booking.slotOutsideAvailability') {
       $q.notify({ type: 'negative', message: t('booking.errors.slotOutsideAvailability') })
+    } else if (errorKey === 'booking.sessionCrossesMidnight') {
+      $q.notify({ type: 'negative', message: t('booking.errors.sessionCrossesMidnight') })
     } else if (errorKey === 'MISSING_RIGHTS') {
       // Post-split, MISSING_RIGHTS carries exactly one user-facing meaning on this path: the caller
       // does not own the player profile or the session pack they submitted. The four validation
@@ -590,6 +592,8 @@ async function submitBatchRequest() {
       $q.notify({ message: t('booking.errors.invalidTimeRange'), type: 'negative' })
     } else if (errorKey === 'booking.slotOutsideAvailability') {
       $q.notify({ message: t('booking.errors.slotOutsideAvailability'), type: 'negative' })
+    } else if (errorKey === 'booking.sessionCrossesMidnight') {
+      $q.notify({ message: t('booking.errors.sessionCrossesMidnight'), type: 'negative' })
     } else if (errorKey === 'MISSING_RIGHTS') {
       $q.notify({ message: t('booking.errors.requestNotAllowed'), type: 'negative' })
     } else {

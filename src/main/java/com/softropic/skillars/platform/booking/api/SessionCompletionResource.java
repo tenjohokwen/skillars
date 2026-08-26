@@ -87,7 +87,7 @@ public class SessionCompletionResource {
     }
 
     @PutMapping("/{id}/confirm-completion")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<Void> confirmCompletion(@PathVariable UUID id) {
         bookingCompletionService.confirmCompletion(id, currentUserId());
         return ResponseEntity.noContent().build();

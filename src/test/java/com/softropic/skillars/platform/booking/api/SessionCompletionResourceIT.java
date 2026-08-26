@@ -251,15 +251,19 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
     }
 
     /**
-     * UAT.5 review finding: no regression test proved a self-registered PLAYER stays rejected on
-     * {@code /confirm-completion} even though it is a live, unconditionally-rendered "Confirm
-     * Completion" button on the exact page ({@code ParentBookingsPage.vue}) UAT.5's AC4 exposed to
-     * players. Reuses this class's existing context rather than a new WebMvcTest slice, which
-     * would add a distinct Spring context and risk tripping the CI context-count ceiling
-     * (deferred-19 AC3).
+     * UAT.5 review finding, superseded by skillars-deferred-69 AC4: this test used to prove a
+     * self-registered PLAYER stays rejected at the {@code @PreAuthorize} gate on
+     * {@code /confirm-completion} — deliberately correct at the time, since AC4 had not yet widened
+     * that gate from {@code HAS_PARENT_ROLE} to {@code HAS_PARENT_OR_PLAYER_ROLE}. Now that a
+     * self-booking player IS allowed through the gate, this player (who does not own THIS booking)
+     * is instead rejected by {@code BookingCompletionService.confirmCompletion}'s own ownership
+     * check, which throws {@code ResourceNotFoundException} (404), not an authorization exception —
+     * confirmed by direct read of that method. A self-booking player confirming their OWN booking's
+     * completion is exercised by the self-booking parity test suite; this test now proves the
+     * narrower "not this player's booking" case instead.
      */
     @Test
-    void confirmCompletion_selfRegisteredPlayer_returns403() {
+    void confirmCompletion_selfRegisteredPlayerDoesNotOwnBooking_returns404() {
         setBookingStatus("COMPLETED_PENDING_CONFIRMATION");
         insertCompletionData("QUICK");
         long selfPlayerUserId = 9600000004L;
@@ -280,7 +284,7 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
             HttpMethod.PUT, null, authenticatedHeaders(playerCookies), Void.class
         ))
             .isInstanceOf(HttpClientErrorException.class)
-            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
     }
 
     @Test

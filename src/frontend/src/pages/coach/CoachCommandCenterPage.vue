@@ -108,7 +108,10 @@
                   {{ t('booking.reschedule.proposed') }}
                   {{ slotLabel(booking.pendingReschedule.proposedStartTime, bookingStore.coachSchedule.coachTimezone) }}
                 </div>
-                <div class="row q-gutter-xs q-mt-xs">
+                <!-- skillars-deferred-69 AC5: a coach can no longer accept/decline their OWN
+                     proposal (the backend rejects it via CANNOT_RESPOND_TO_OWN_PROPOSAL) — gate
+                     the buttons so they don't even render for that case. -->
+                <div v-if="booking.pendingReschedule.proposedBy === 'PARENT'" class="row q-gutter-xs q-mt-xs">
                   <q-btn
                     flat dense size="sm" color="positive"
                     :label="t('booking.reschedule.accept')"
@@ -123,6 +126,13 @@
                   />
                 </div>
               </template>
+              <q-btn
+                v-else-if="['CONFIRMED', 'UPCOMING'].includes(booking.status)"
+                flat dense size="sm"
+                :label="t('booking.reschedule.proposeNewTime')"
+                class="q-mt-xs"
+                @click="openCoachRescheduleDialog(booking)"
+              />
             </div>
 
             <!-- Available windows without bookings -->
@@ -164,6 +174,32 @@
         </div>
       </div>
     </div>
+
+    <!-- Propose New Time dialog (skillars-deferred-69 AC5) -->
+    <q-dialog v-model="coachRescheduleDialogOpen">
+      <q-card style="min-width: 320px">
+        <q-card-section>
+          <div class="text-h6">{{ t('booking.reschedule.dialogTitle') }}</div>
+        </q-card-section>
+        <q-card-section>
+          <q-input v-model="coachRescheduleProposedStart" type="datetime-local"
+                   :label="t('booking.reschedule.proposedStart')"
+                   class="q-mb-lg"
+                   :hint="t('booking.reschedule.startTimezoneHint', { browser: browserTimezone, session: coachRescheduleTimezone })" />
+          <q-input :model-value="coachRescheduleProposedEnd" type="datetime-local" readonly
+                   :label="t('booking.reschedule.proposedEnd')" class="q-mt-sm q-mb-lg"
+                   :hint="t('booking.reschedule.endDerivedHintWithTimezone', { browser: browserTimezone, session: coachRescheduleTimezone })" />
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat :label="t('common.cancel')" v-close-popup />
+          <q-btn unelevated color="primary"
+                 :label="t('booking.reschedule.submit')"
+                 :loading="rescheduleActionId === coachRescheduleBookingId"
+                 :disable="rescheduleActionId === coachRescheduleBookingId"
+                 @click="submitCoachReschedule" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
 
@@ -195,6 +231,31 @@ const isLiveMode = ref(true)
 const activeBookingStatus = ref('IN_PROGRESS')
 const duplicatingId = ref(null)
 const rescheduleActionId = ref(null)
+
+const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+const coachRescheduleDialogOpen = ref(false)
+const coachRescheduleBookingId = ref(null)
+const coachRescheduleTimezone = ref('')
+const coachRescheduleProposedStart = ref('')
+// Length of the booking being rescheduled, in milliseconds. The proposed end is always derived
+// from it, never typed — mirrors ParentBookingsPage.vue's own reschedule dialog.
+const coachRescheduleDurationMs = ref(0)
+
+const coachRescheduleProposedEnd = computed(() => {
+  if (!coachRescheduleProposedStart.value || !coachRescheduleDurationMs.value) return ''
+  const start = new Date(coachRescheduleProposedStart.value)
+  if (Number.isNaN(start.getTime())) return ''
+  return toDatetimeLocal(new Date(start.getTime() + coachRescheduleDurationMs.value))
+})
+
+/** datetime-local wants local wall-clock `YYYY-MM-DDTHH:mm`, which toISOString (UTC) is not. */
+function toDatetimeLocal(date) {
+  const pad = n => String(n).padStart(2, '0')
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}`
+  )
+}
 
 let sessionEventSource = null
 
@@ -442,6 +503,67 @@ async function handleDeclineReschedule(booking) {
       $q.notify({ message: t('booking.reschedule.declineFailed'), type: 'negative' })
     }
     notifyIfScheduleStale(refreshed)
+  } finally {
+    rescheduleActionId.value = null
+  }
+}
+
+function openCoachRescheduleDialog(booking) {
+  // Carried from the booking itself, matching ParentBookingsPage.vue's openRescheduleDialog.
+  const start = new Date(booking.requestedStartTime)
+  const end = new Date(booking.requestedEndTime)
+  const durationMs =
+    Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) ? 0 : end.getTime() - start.getTime()
+
+  if (durationMs <= 0) {
+    $q.notify({ message: t('booking.reschedule.endDerivedLengthUnavailable'), type: 'negative' })
+    return
+  }
+
+  coachRescheduleBookingId.value = booking.bookingId
+  coachRescheduleTimezone.value = booking.canonicalTimezone
+  coachRescheduleProposedStart.value = ''
+  coachRescheduleDurationMs.value = durationMs
+  coachRescheduleDialogOpen.value = true
+}
+
+async function submitCoachReschedule() {
+  if (!coachRescheduleProposedStart.value || !coachRescheduleProposedEnd.value) {
+    $q.notify({ message: t('booking.reschedule.requestFailed'), type: 'negative' })
+    return
+  }
+  rescheduleActionId.value = coachRescheduleBookingId.value
+  try {
+    const data = {
+      proposedStartTime: new Date(coachRescheduleProposedStart.value).toISOString(),
+      proposedEndTime: new Date(coachRescheduleProposedEnd.value).toISOString(),
+    }
+    await bookingStore.handleRequestRescheduleAsCoach(coachRescheduleBookingId.value, data)
+    coachRescheduleDialogOpen.value = false
+    notifyIfScheduleStale(await bookingStore.loadCoachSchedule(selectedWeek.value))
+    $q.notify({ message: t('booking.reschedule.requestSent'), type: 'positive' })
+  } catch (err) {
+    const errorKey = err?.response?.data?.errorMsg?.errorKey
+    // Same error-key branching shape as ParentBookingsPage.vue's submitReschedule.
+    if (errorKey === 'booking.invalidSessionDuration') {
+      $q.notify({ message: t('booking.errors.invalidSessionDuration'), type: 'negative' })
+    } else if (errorKey === 'booking.notReschedulable') {
+      $q.notify({ message: t('booking.errors.notReschedulable'), type: 'negative' })
+    } else if (errorKey === 'booking.startTimeInPast') {
+      $q.notify({ message: t('booking.errors.startTimeInPast'), type: 'negative' })
+    } else if (errorKey === 'booking.invalidTimeRange') {
+      $q.notify({ message: t('booking.errors.invalidTimeRange'), type: 'negative' })
+    } else if (errorKey === 'booking.slotOutsideAvailability') {
+      $q.notify({ message: t('booking.errors.slotOutsideAvailability'), type: 'negative' })
+    } else if (errorKey === 'booking.sessionCrossesMidnight') {
+      $q.notify({ message: t('booking.errors.sessionCrossesMidnight'), type: 'negative' })
+    } else if (errorKey === 'booking.rescheduleAlreadyPending') {
+      $q.notify({ message: t('booking.errors.rescheduleAlreadyPending'), type: 'negative' })
+    } else if (errorKey === 'MISSING_RIGHTS') {
+      $q.notify({ message: t('booking.errors.requestNotAllowed'), type: 'negative' })
+    } else {
+      $q.notify({ message: t('booking.reschedule.requestFailed'), type: 'negative' })
+    }
   } finally {
     rescheduleActionId.value = null
   }

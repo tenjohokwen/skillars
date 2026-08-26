@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.booking.service;
 
 import ch.qos.logback.classic.Level;
+import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -302,6 +303,42 @@ class BookingServiceTest {
         verify(bookingRepository, never()).save(any(Booking.class));
     }
 
+    /**
+     * skillars-deferred-69 AC4: getParentPlayerSchedule's ownership check used to assume every caller
+     * has a parent (player.getParentId().equals(parentId)) — for a self-registered adult player,
+     * player.getParentId() is null, so that comparison could never succeed and the endpoint was
+     * unreachable for exactly the callers AC4's widened @PreAuthorize now lets through.
+     */
+    @Test
+    void getParentPlayerSchedule_selfRegisteredPlayer_succeeds() {
+        Long selfPlayerUserId = 500L;
+        PlayerProfile selfPlayer = makeSelfPlayer(PLAYER_ID, selfPlayerUserId);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(selfPlayer));
+        when(bookingRepository.findByParentIdAndPlayerIdAndStatusIn(eq(selfPlayerUserId), eq(PLAYER_ID), anyList()))
+            .thenReturn(List.of());
+
+        assertThat(bookingService.getParentPlayerSchedule(selfPlayerUserId, PLAYER_ID)).isNotNull();
+    }
+
+    @Test
+    void getParentPlayerSchedule_selfRegisteredPlayerUsesSomeoneElsesPlayerId_throwsResourceNotFound() {
+        PlayerProfile someoneElsesPlayer = makeSelfPlayer(PLAYER_ID, 999L);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(someoneElsesPlayer));
+
+        assertThatThrownBy(() -> bookingService.getParentPlayerSchedule(500L, PLAYER_ID))
+            .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void getParentPlayerSchedule_realParent_stillSucceeds() {
+        PlayerProfile player = makePlayer(PLAYER_ID, PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(bookingRepository.findByParentIdAndPlayerIdAndStatusIn(eq(PARENT_ID), eq(PLAYER_ID), anyList()))
+            .thenReturn(List.of());
+
+        assertThat(bookingService.getParentPlayerSchedule(PARENT_ID, PLAYER_ID)).isNotNull();
+    }
+
     @Test
     void createBookingRequest_coachInDraftStatus_throwsOperationNotAllowedException() {
         PlayerProfile player = makePlayer(PLAYER_ID, PARENT_ID);
@@ -411,6 +448,79 @@ class BookingServiceTest {
         assertThat(logCapture.list)
             .as("at least one valid-timezone window means this is not the all-invalid case")
             .noneSatisfy(event -> assertThat(event.getFormattedMessage()).contains("none had a valid timezone"));
+    }
+
+    @Test
+    void isSlotWithinAvailabilityWindow_sessionCrossesMidnightAgainstWideOpenEveryDayWindow_throwsSessionCrossesMidnight() {
+        // The flagship bug this AC fixes: even a coach's wide-open 00:00:00-23:59:59 window rejects a
+        // session whose end falls on the next calendar day, since windowStart/windowEnd are anchored to
+        // the session's own start date and no other window entry is ever tried.
+        ZonedDateTime slotStart = ZonedDateTime.now(ZoneId.of("Europe/Berlin"))
+            .plusDays(1).withHour(23).withMinute(30).withSecond(0).withNano(0);
+        CoachAvailabilityWindow wideOpenWindow = new CoachAvailabilityWindow();
+        wideOpenWindow.setCoachId(COACH_ID);
+        wideOpenWindow.setDayOfWeek((short) slotStart.getDayOfWeek().getValue());
+        wideOpenWindow.setStartTime(LocalTime.of(0, 0, 0));
+        wideOpenWindow.setEndTime(LocalTime.of(23, 59, 59));
+        wideOpenWindow.setCanonicalTimezone("Europe/Berlin");
+
+        Instant start = slotStart.toInstant();
+        Instant end = slotStart.plusHours(1).toInstant();
+
+        assertThatThrownBy(() ->
+            bookingService.isSlotWithinAvailabilityWindow(start, end, List.of(wideOpenWindow), COACH_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining("cannot cross midnight")
+            .extracting(ex -> ((OperationNotAllowedException) ex).getErrorCode())
+            .isEqualTo(BookingError.SESSION_CROSSES_MIDNIGHT);
+    }
+
+    @Test
+    void isSlotWithinAvailabilityWindow_sessionEndsExactlyAtMidnightSameCalendarDay_doesNotThrow() {
+        // toLocalDate() on an end time of exactly midnight the same day it started (i.e. duration
+        // ends before the day rolls over) must not be misclassified as crossing — sanity check for the
+        // toLocalDate() equality guard's boundary.
+        ZonedDateTime slotStart = ZonedDateTime.now(ZoneId.of("Europe/Berlin"))
+            .plusDays(1).withHour(10).withMinute(0).withSecond(0).withNano(0);
+        CoachAvailabilityWindow window = makeCoveringWindow(COACH_ID);
+        window.setDayOfWeek((short) slotStart.getDayOfWeek().getValue());
+
+        Instant start = slotStart.toInstant();
+        Instant end = slotStart.plusHours(1).toInstant();
+
+        boolean result = bookingService.isSlotWithinAvailabilityWindow(start, end, List.of(window), COACH_ID);
+
+        assertThat(result).isTrue();
+    }
+
+    @Test
+    void createBookingRequest_sessionCrossesMidnight_throwsSessionCrossesMidnight() {
+        PlayerProfile player = makePlayer(PLAYER_ID, PARENT_ID);
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+
+        ZonedDateTime slotStart = ZonedDateTime.now(ZoneId.of("Europe/Berlin"))
+            .plusDays(1).withHour(23).withMinute(30).withSecond(0).withNano(0);
+        CoachAvailabilityWindow wideOpenWindow = new CoachAvailabilityWindow();
+        wideOpenWindow.setCoachId(COACH_ID);
+        wideOpenWindow.setDayOfWeek((short) slotStart.getDayOfWeek().getValue());
+        wideOpenWindow.setStartTime(LocalTime.of(0, 0, 0));
+        wideOpenWindow.setEndTime(LocalTime.of(23, 59, 59));
+        wideOpenWindow.setCanonicalTimezone("Europe/Berlin");
+        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(wideOpenWindow));
+
+        CreateBookingRequest req = new CreateBookingRequest(
+            COACH_ID, PLAYER_ID, slotStart.toInstant(), slotStart.plusHours(1).toInstant(),
+            "test notes", null);
+
+        assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(ex -> ((OperationNotAllowedException) ex).getErrorCode())
+            .isEqualTo(BookingError.SESSION_CROSSES_MIDNIGHT);
+        verify(bookingRepository, never()).save(any(Booking.class));
     }
 
     @Test
