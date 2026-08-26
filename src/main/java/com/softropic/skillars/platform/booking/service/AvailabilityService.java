@@ -33,6 +33,7 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
@@ -222,7 +223,19 @@ public class AvailabilityService {
                 b.getId(), b.getStartDatetime(), b.getEndDatetime(), b.getReason()))
             .toList();
 
-        return new CoachAvailabilityResponse(windowResponses, blockResponses, computedSlots, coachTimezone);
+        return new CoachAvailabilityResponse(windowResponses, blockResponses, computedSlots, coachTimezone,
+            computeAvailabilitySignature(windows, slotLength));
+    }
+
+    static String computeAvailabilitySignature(List<CoachAvailabilityWindow> windows, Duration slotLength) {
+        StringBuilder sb = new StringBuilder();
+        windows.stream()
+            .sorted(Comparator.comparing(CoachAvailabilityWindow::getId))
+            .forEach(w -> sb.append(w.getId()).append(':').append(w.getDayOfWeek()).append(':')
+                .append(w.getStartTime()).append('-').append(w.getEndTime()).append(':')
+                .append(w.getCanonicalTimezone()).append(';'));
+        sb.append("duration=").append(slotLength.toMinutes());
+        return sb.toString();
     }
 
     @Transactional

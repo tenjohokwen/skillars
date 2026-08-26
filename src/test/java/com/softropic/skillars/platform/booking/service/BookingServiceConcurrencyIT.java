@@ -123,9 +123,9 @@ class BookingServiceConcurrencyIT extends AbstractIntegrationTest {
         // AC 2: two different parent/player pairs submit overlapping requests for the same
         // coach and same time range at nearly the same instant.
         CreateBookingRequest req1 = new CreateBookingRequest(
-            coachProfileId, PLAYER_ID_1, slotStart, slotEnd, null, null);
+            coachProfileId, PLAYER_ID_1, slotStart, slotEnd, null, null, null);
         CreateBookingRequest req2 = new CreateBookingRequest(
-            coachProfileId, PLAYER_ID_2, slotStart, slotEnd, null, null);
+            coachProfileId, PLAYER_ID_2, slotStart, slotEnd, null, null, null);
 
         CountDownLatch startLatch = new CountDownLatch(1);
         AtomicInteger successCount = new AtomicInteger(0);
@@ -255,7 +255,7 @@ class BookingServiceConcurrencyIT extends AbstractIntegrationTest {
     @Test
     void createBookingRequest_coachSuspendedAfterUnlockedRead_isRejectedWithCoachUnavailable() throws Exception {
         CreateBookingRequest req = new CreateBookingRequest(
-            coachProfileId, PLAYER_ID_1, slotStart, slotEnd, null, null);
+            coachProfileId, PLAYER_ID_1, slotStart, slotEnd, null, null, null);
 
         CountDownLatch suspensionStagedAndLockHeld = new CountDownLatch(1);
         AtomicReference<Throwable> suspenderFailure = new AtomicReference<>();

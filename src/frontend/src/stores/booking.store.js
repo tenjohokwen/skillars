@@ -39,6 +39,16 @@ import {
   pauseSessionPack,
 } from 'src/api/payment.api'
 
+// IMPORTANT: keep in sync with BookingStateMachine.TRANSITIONS on the backend — a status absent as a
+// key there has no outgoing transitions, i.e. is terminal. See
+// src/main/java/com/softropic/skillars/platform/booking/service/BookingStateMachine.java. If a future
+// status is added to that enum with no transitions out of it, add it here too, or this composable will
+// keep subscribing to it forever.
+export const TERMINAL_BOOKING_STATUSES = new Set([
+  'DECLINED', 'CANCELLED', 'CANCELLED_PARENT', 'CANCELLED_COACH',
+  'NO_SHOW_PLAYER', 'NO_SHOW_COACH', 'REFUNDED',
+])
+
 export function useBookingSse(bookingId) {
   const status = ref(null)
   const connectionState = ref('disconnected')
@@ -61,6 +71,10 @@ export function useBookingSse(bookingId) {
         pollingInterval = null
         connectionState.value = 'connected'
       }
+      if (TERMINAL_BOOKING_STATUSES.has(e.data)) {
+        es.close()
+        connectionState.value = 'disconnected'
+      }
     })
     es.onerror = () => {
       es.close()
@@ -70,6 +84,14 @@ export function useBookingSse(bookingId) {
         pollingInterval = setInterval(async () => {
           const r = await getBookingById(bookingId)
           status.value = r.status
+          if (TERMINAL_BOOKING_STATUSES.has(r.status)) {
+            // es is already closed/errored by this point (polling only starts after es.onerror), but
+            // close it explicitly rather than relying on that — defensive, not load-bearing.
+            es?.close()
+            clearInterval(pollingInterval)
+            pollingInterval = null
+            connectionState.value = 'disconnected'
+          }
         }, 2000)
       } else if (!pollingInterval) {
         connectionState.value = 'reconnecting'
@@ -103,6 +125,7 @@ export const useBookingStore = defineStore('booking', () => {
   const blocks = ref([])
   const computedSlots = ref([])
   const coachTimezone = ref(null)
+  const availabilitySignature = ref(null)
   const weekStart = ref(null)
   const loading = ref(false)
   const error = ref(null)
@@ -176,6 +199,7 @@ export const useBookingStore = defineStore('booking', () => {
     blocks.value = []
     computedSlots.value = []
     coachTimezone.value = null
+    availabilitySignature.value = null
     try {
       const ws = date ?? currentMonday()
       weekStart.value = ws
@@ -184,6 +208,7 @@ export const useBookingStore = defineStore('booking', () => {
       blocks.value = res.blocks ?? []
       computedSlots.value = res.computedSlots ?? []
       coachTimezone.value = res.canonicalTimezone ?? null
+      availabilitySignature.value = res.availabilitySignature ?? null
     } catch (e) {
       error.value = e
     } finally {
@@ -566,6 +591,7 @@ export const useBookingStore = defineStore('booking', () => {
     blocks,
     computedSlots,
     coachTimezone,
+    availabilitySignature,
     weekStart,
     loading,
     error,

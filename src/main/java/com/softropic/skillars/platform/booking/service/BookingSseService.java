@@ -18,8 +18,20 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public class BookingSseService {
 
     private static final long SSE_TIMEOUT_MS = 5 * 60 * 1000L;
+    private static final long TERMINAL_SUBSCRIBE_TIMEOUT_MS = 5 * 1000L;
 
     private final ConcurrentHashMap<UUID, CopyOnWriteArrayList<SseEmitter>> emitters = new ConcurrentHashMap<>();
+
+    public SseEmitter subscribeTerminal(String currentStatus) {
+        SseEmitter emitter = new SseEmitter(TERMINAL_SUBSCRIBE_TIMEOUT_MS);
+        try {
+            emitter.send(SseEmitter.event().name("status").data(currentStatus));
+        } catch (IOException e) {
+            log.warn("Failed to send status to SSE subscriber for an already-terminal booking", e);
+        }
+        emitter.complete();
+        return emitter;
+    }
 
     public SseEmitter subscribe(UUID bookingId, String currentStatus) {
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);

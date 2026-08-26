@@ -162,7 +162,7 @@ class PaymentPendingSweeperIT extends BasePaymentIT {
     @Test
     void strandedBookingHoldsTheSlot_untilItIsSwept() {
         seedStrandedBooking(seedPackPurchase(), 24 * 60);
-        CreateBookingRequest req = new CreateBookingRequest(coachId, PLAYER_ID, slotStart, slotEnd, null, null);
+        CreateBookingRequest req = new CreateBookingRequest(coachId, PLAYER_ID, slotStart, slotEnd, null, null, null);
 
         assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
             .isInstanceOf(OperationNotAllowedException.class)

@@ -14,7 +14,8 @@ public record CreateBookingRequest(
     @NotNull @Future Instant requestedStartTime,
     @NotNull Instant requestedEndTime,
     @Size(max = 500) String notes,
-    UUID sessionPackPurchaseId
+    UUID sessionPackPurchaseId,
+    String availabilitySignature
 ) {
 
     /**

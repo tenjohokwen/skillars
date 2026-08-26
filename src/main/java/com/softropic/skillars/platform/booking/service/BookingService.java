@@ -221,6 +221,14 @@ public class BookingService {
         }
 
         List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachId(req.coachId());
+        if (req.availabilitySignature() != null) {
+            String currentSignature = AvailabilityService.computeAvailabilitySignature(windows, requiredDuration);
+            if (!currentSignature.equals(req.availabilitySignature())) {
+                throw new OperationNotAllowedException(
+                    "Coach availability changed since this view was loaded — please refresh",
+                    Map.of("coach id", req.coachId()), BookingError.AVAILABILITY_CHANGED);
+            }
+        }
         if (!isSlotWithinAvailabilityWindow(req.requestedStartTime(), req.requestedEndTime(), windows, req.coachId())) {
             throw new OperationNotAllowedException("Requested slot is not within coach availability",
                 Map.of("requested start time", req.requestedStartTime(), "requested end time", req.requestedEndTime()),

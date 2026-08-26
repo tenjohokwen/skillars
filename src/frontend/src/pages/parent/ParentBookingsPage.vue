@@ -98,7 +98,7 @@
           />
         </q-item-section>
         <q-item-section side>
-          <BookingStateChip :status="booking.status" />
+          <BookingStateChip :status="booking.status" :booking-id="booking.id" />
           <!-- Confirm Completion button — parent-or-self-booking-player (skillars-deferred-69 AC4:
                widened from parent-only; BookingCompletionService.confirmCompletion's ownership check
                is self-booking-compatible). -->

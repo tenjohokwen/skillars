@@ -481,6 +481,7 @@ export default {
       invalidTimeRange: 'Das Ende der Sitzung muss nach ihrem Beginn liegen.',
       slotOutsideAvailability: 'Dieser Zeitpunkt liegt außerhalb der verfügbaren Zeiten dieses Coaches.',
       sessionCrossesMidnight: 'Eine Sitzung darf nicht über Mitternacht hinausgehen.',
+      availabilityChanged: 'Die Verfügbarkeit dieses Coaches hat sich seit dem Laden dieser Seite geändert. Bitte wählen Sie eine neue Zeit.',
       batchAlreadyProcessed: 'Diese Anfragen wurden bereits bearbeitet.',
       batchNoneAccepted: 'Keine der Sitzungen in dieser Anfrage konnte angenommen werden.',
       notReschedulable: 'Diese Sitzung kann nicht mehr verschoben werden.',

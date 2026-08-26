@@ -73,7 +73,7 @@
               :key="booking.bookingId"
               class="week-grid__booking-block"
             >
-              <BookingStateChip :status="booking.status" />
+              <BookingStateChip :status="booking.status" :booking-id="booking.bookingId" />
               <div class="text-caption">{{ booking.playerName }}</div>
               <div class="text-caption">
                 {{ slotLabel(booking.requestedStartTime, bookingStore.coachSchedule.coachTimezone) }}
