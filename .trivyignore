@@ -1,0 +1,13 @@
+# Temporary ignore — remove once Alpine publishes the patched openssl/libssl3/libcrypto3
+# build (3.5.8-r0) to the apk repo the eclipse-temurin:17-jre-alpine base image pulls from.
+#
+# The Dockerfile already runs `apk upgrade --no-cache` specifically to pick up fixed OS
+# packages before Trivy scans the built image (see the Dockerfile's own comment), but that
+# only helps once the fix is actually published upstream. As of 2026-08-26, Trivy's vulnerability
+# DB already lists a fix (3.5.8-r0) but Alpine 3.24's apk repo still only serves 3.5.7-r0 —
+# confirmed via two identical CI failures on skillars-deferred-69's PR #107, ~10 minutes apart,
+# both installed-version 3.5.7-r0. Added by skillars-deferred-70 story-creation with the project
+# owner's explicit sign-off (2026-08-26), scoped to this one CVE only, not a blanket suppression.
+#
+# openssl: OpenSSL: Denial of Service via unbounded memory growth in QUIC server
+CVE-2026-14456

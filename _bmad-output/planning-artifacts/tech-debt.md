@@ -57,3 +57,14 @@ Apply to both `onRescheduleAccepted` and `onBookingReminder`.
 The reschedule dialog's submit button (`@click="submitReschedule"`, ~line 141) and the cancel dialog's confirm button (`@click="submitCancelBooking"`, ~line 159) carry no `:loading`/`:disable` binding, even though both handlers already track a scoped ref around the call (`reschedulingId`/`cancelingId`, mirroring the pattern used everywhere else on this page). A user can double-click either button and fire duplicate requests before the first response returns.
 
 **Fix:** Add `:loading="reschedulingId === rescheduleBookingId"` / `:disable="..."` to the reschedule submit button, and the equivalent for `cancelingId` on the cancel confirm button — same pattern as the fix applied to `CoachCommandCenterPage.vue`'s propose-new-time dialog.
+
+---
+
+## TD-5: Temporary Trivy Ignore for CVE-2026-14456 (openssl, Alpine base image)
+
+**Source:** PR #107 (`skillars-deferred-69`) CI — two identical build failures ~10 minutes apart, project owner sign-off (2026-08-26) to add a temporary ignore rather than block the PR indefinitely
+**File:** `.trivyignore` (new), `.github/workflows/pr-build.yml` (added `trivyignores: .trivyignore` input)
+
+The `Scan image for vulnerabilities` CI step flags `libcrypto3`/`libssl3`/`openssl` `CVE-2026-14456` (HIGH) in the `eclipse-temurin:17-jre-alpine` base image. Trivy's vulnerability DB already lists a fix (`3.5.8-r0`), but Alpine 3.24's own `apk` repo was still only serving `3.5.7-r0` as of 2026-08-26 — the Dockerfile's existing `apk upgrade --no-cache` step (added for exactly this class of issue, see its own comment) can't pull a fix that hasn't been published upstream yet. Added `.trivyignore` (scoped to this one CVE, not a blanket suppression) plus the `trivyignores` input on the Trivy scan step to unblock the PR.
+
+**Fix:** Once Alpine publishes `openssl`/`libssl3`/`libcrypto3` `3.5.8-r0` (or later) for Alpine 3.24, remove the `CVE-2026-14456` line from `.trivyignore`. If `.trivyignore` becomes empty, also remove the `trivyignores: .trivyignore` line from `.github/workflows/pr-build.yml` and delete the file. Check by re-running the PR build's Trivy step on any subsequent PR — a clean scan (0 findings) with the ignore line removed confirms the fix has landed.
