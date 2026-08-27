@@ -7,6 +7,7 @@ import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
 import com.softropic.skillars.platform.development.repo.PlayerSkillStat;
 import com.softropic.skillars.platform.development.repo.SluRepository;
 import com.softropic.skillars.platform.security.SecurityIT;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
@@ -53,6 +54,18 @@ class SluCalculationServiceIT extends AbstractIntegrationTest {
     @MockitoBean
     VideoProviderAdapter videoProviderAdapter;
 
+    // player_skill_stats is append-only (no application-level delete path), so every test that
+    // legitimately writes rows for the shared TEST_PLAYER_ID must clean them up itself — otherwise
+    // countStats()'s global per-player count leaks across test methods and makes the "writesNoRows"
+    // assertions order-dependent on which tests happened to run first (JUnit 5's default ordering is
+    // deterministic per JVM but not declaration-order, and can differ between environments).
+    @AfterEach
+    void cleanUpSluRows() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update("DELETE FROM development.player_skill_stats WHERE player_id = ?", TEST_PLAYER_ID);
+            return null;
+        });
+    }
 
     @Test
     void onBookingCompleted_withStructuredSession_writesPlayerSkillStatRows() {
