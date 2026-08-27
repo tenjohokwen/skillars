@@ -45,6 +45,7 @@ public class SluCalculationService {
     private final SkillDefinitionRepository skillDefinitionRepository;
     private final ConfigService configService;
     private final SnapshotBatchWriter snapshotBatchWriter;
+    private final SluPersistenceRetrier sluPersistenceRetrier;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Async
@@ -174,7 +175,7 @@ public class SluCalculationService {
             return;
         }
 
-        sluRepository.saveAll(stats);
+        sluPersistenceRetrier.saveSluWithRetry(stats);
         log.info("SLU recorded: {} skill entries for session {} player {}",
             stats.size(), session.getId(), event.getPlayerId());
 

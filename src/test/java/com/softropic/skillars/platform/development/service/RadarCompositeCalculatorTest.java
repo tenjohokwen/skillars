@@ -4,11 +4,15 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.development.contract.AssessmentType;
 import com.softropic.skillars.platform.development.contract.RadarEntrySubmittedEvent;
 import com.softropic.skillars.platform.development.repo.PlayerRadarBaselineRepository;
 import com.softropic.skillars.platform.development.repo.PlayerRadarCompositeRepository;
 import com.softropic.skillars.platform.development.repo.RadarAssessmentRepository;
+import com.softropic.skillars.platform.security.repo.PlayerProfile;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -16,17 +20,21 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.slf4j.LoggerFactory;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -44,6 +52,18 @@ class RadarCompositeCalculatorTest {
     @Mock
     private PlayerRadarBaselineRepository baselineRepository;
 
+    @Mock
+    private PlayerProfileRepository playerProfileRepository;
+
+    @Mock
+    private PessimisticLockRetryer lockRetryer;
+
+    @Mock
+    private EntityManager entityManager;
+
+    @Mock
+    private RadarCompositeDlqService dlqService;
+
     private RadarCompositeCalculationService service;
 
     private static final Long PLAYER_ID = 9580000001L;
@@ -51,7 +71,17 @@ class RadarCompositeCalculatorTest {
 
     @BeforeEach
     void setUp() {
-        service = new RadarCompositeCalculationService(radarRepository, compositeRepository, baselineRepository);
+        service = new RadarCompositeCalculationService(radarRepository, compositeRepository, baselineRepository,
+            playerProfileRepository, lockRetryer, entityManager, dlqService);
+        // onRadarEntrySubmitted delegates to `self.recalculateComposite(...)` — in production this is
+        // an @Autowired @Lazy proxy reference; here it's wired directly to the same instance since
+        // there is no Spring context, matching this codebase's other self-field unit tests.
+        ReflectionTestUtils.setField(service, "self", service);
+
+        PlayerProfile playerProfile = new PlayerProfile();
+        lenient().when(playerProfileRepository.findByIdForUpdate(PLAYER_ID)).thenReturn(Optional.of(playerProfile));
+        lenient().when(lockRetryer.withBoundedRetry(org.mockito.ArgumentMatchers.<Supplier<PlayerProfile>>any()))
+            .thenAnswer(inv -> inv.getArgument(0, Supplier.class).get());
     }
 
     @Test
@@ -69,6 +99,46 @@ class RadarCompositeCalculatorTest {
         ArgumentCaptor<BigDecimal> scoreCaptor = ArgumentCaptor.forClass(BigDecimal.class);
         verify(compositeRepository).upsertComposite(eq(PLAYER_ID), eq("PAC"), scoreCaptor.capture(), eq(1), eq(1));
         assertThat(scoreCaptor.getValue()).isEqualByComparingTo("40.00");
+    }
+
+    @Test
+    void onRadarEntrySubmitted_acquiresPessimisticLockOnPlayerRowBeforeRecalculating() {
+        // Deferred-77 AC10 Phase 1: recalculateComposite must lock the player row (via
+        // PessimisticLockRetryer + findByIdForUpdate + explicit refresh) before reading aggregates,
+        // so two concurrent submissions for the same player serialize instead of last-writer-wins.
+        when(radarRepository.findAggregatesByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
+            .thenReturn(List.of());
+        when(radarRepository.findDistinctCoachCountsByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
+            .thenReturn(List.of());
+
+        service.onRadarEntrySubmitted(new RadarEntrySubmittedEvent(PLAYER_ID, PARENT_ID, Set.of("PAC")));
+
+        verify(lockRetryer).withBoundedRetry(org.mockito.ArgumentMatchers.<Supplier<Object>>any());
+        verify(playerProfileRepository).findByIdForUpdate(PLAYER_ID);
+        verify(entityManager).refresh(any(), eq(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE));
+    }
+
+    @Test
+    void onRadarEntrySubmitted_recalculationFails_emitsToDlqWithFailureLogged() {
+        RuntimeException failure = new RuntimeException("transient db error");
+        when(radarRepository.findAggregatesByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
+            .thenThrow(failure);
+
+        Logger serviceLogger = (Logger) LoggerFactory.getLogger(RadarCompositeCalculationService.class);
+        ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
+        logCapture.start();
+        serviceLogger.addAppender(logCapture);
+        try {
+            service.onRadarEntrySubmitted(new RadarEntrySubmittedEvent(PLAYER_ID, PARENT_ID, Set.of("PAC")));
+        } finally {
+            serviceLogger.detachAppender(logCapture);
+        }
+
+        verify(dlqService).emitFailedCompositeCalculation(PLAYER_ID, PARENT_ID, Set.of("PAC"), failure);
+        assertThat(logCapture.list).anySatisfy(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+            assertThat(event.getFormattedMessage()).contains("queued to DLQ");
+        });
     }
 
     @Test

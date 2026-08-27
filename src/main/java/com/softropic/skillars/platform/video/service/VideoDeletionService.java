@@ -167,7 +167,16 @@ public class VideoDeletionService {
             }
         } while (anyProgress);
 
-        videoQuotaRepository.resetBytesForOwner(ownerId);
+        // Deferred-77 AC12: quota reset must not run when any video failed to purge — an unconditional
+        // reset here would zero the quota row for storage the failed video(s) still occupy, and no
+        // retry path corrects it afterward (the failed ids aren't persisted anywhere).
+        if (failedIds.isEmpty()) {
+            videoQuotaRepository.resetBytesForOwner(ownerId);
+        } else {
+            log.warn("[VIDEO_ACCOUNT_DELETION_INCOMPLETE userId={} videosQueued={} failed={}] " +
+                "quota NOT reset — {} video(s) failed to purge, reconciliation needed",
+                ownerId, totalQueued, failedIds.size(), failedIds.size());
+        }
         log.info("[VIDEO_ACCOUNT_DELETION_COMPLETE userId={} videosQueued={} failed={}]", ownerId, totalQueued, failedIds.size());
     }
 

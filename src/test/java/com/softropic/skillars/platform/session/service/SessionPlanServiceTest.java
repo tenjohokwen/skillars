@@ -176,6 +176,43 @@ class SessionPlanServiceTest {
         verify(drillRepository, never()).findAllById(any());
     }
 
+    @Test
+    void createSession_bookingUpcoming_throws() {
+        when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
+        BookingSnapshot booking = new BookingSnapshot(BOOKING_ID, COACH_ID, 500L, "UPCOMING");
+        when(bookingQueryService.getBookingSnapshot(BOOKING_ID)).thenReturn(Optional.of(booking));
+
+        CreateSessionPlanRequest req = new CreateSessionPlanRequest(BOOKING_ID,
+            List.of(blockRequest(DRILL_ID_1)), List.of("PASSING"));
+
+        assertThatThrownBy(() -> service.createSession(req, COACH_USER_ID))
+            .isInstanceOf(com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException.class);
+        verify(sessionRepository, never()).save(any());
+    }
+
+    @Test
+    void createSession_bookingConfirmed_succeeds() {
+        when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
+        BookingSnapshot booking = new BookingSnapshot(BOOKING_ID, COACH_ID, 500L, "CONFIRMED");
+        when(bookingQueryService.getBookingSnapshot(BOOKING_ID)).thenReturn(Optional.of(booking));
+        when(sessionRepository.existsByBookingId(BOOKING_ID)).thenReturn(false);
+        stubDrillFetchAndDerivedResponses();
+        when(sessionRepository.save(any(Session.class))).thenAnswer(inv -> {
+            Session s = inv.getArgument(0);
+            s.setId(UUID.randomUUID());
+            s.setCreatedAt(Instant.now());
+            s.setUpdatedAt(Instant.now());
+            return s;
+        });
+
+        CreateSessionPlanRequest req = new CreateSessionPlanRequest(BOOKING_ID,
+            List.of(blockRequest(DRILL_ID_1, DRILL_ID_2)), List.of("PASSING"));
+
+        SessionPlanResponse response = service.createSession(req, COACH_USER_ID);
+
+        assertThat(response.bookingId()).isEqualTo(BOOKING_ID);
+    }
+
     // ── updateSession ──────────────────────────────────────────────────────
 
     @Test

@@ -1,7 +1,8 @@
 package com.softropic.skillars.platform.development.service;
 
 import com.softropic.skillars.platform.development.contract.PlayerTimelineEventType;
-import com.softropic.skillars.platform.development.contract.SkillRadarEntry;
+import com.softropic.skillars.platform.development.contract.ReportGeneratedEvent;
+import com.softropic.skillars.platform.development.contract.ReportStatus;
 import com.softropic.skillars.platform.development.repo.CoachBranding;
 import com.softropic.skillars.platform.development.repo.CoachBrandingRepository;
 import com.softropic.skillars.platform.development.repo.PerformanceReport;
@@ -39,11 +40,12 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -109,11 +111,12 @@ class ReportGenerationServiceTest {
         saved.setCoachId(COACH_ID);
         saved.setPlayerId(PLAYER_ID);
         saved.setGeneratedAt(Instant.now());
-        saved.setStorageKey("reports/test/report.pdf");
+        saved.setStatus(ReportStatus.PENDING_UPLOAD);
         saved.setNextSteps("Keep practicing dribbling.");
         when(reportRepository.saveAndFlush(any())).thenReturn(saved);
-        when(playerProfileService.getParentEmailByPlayerId(PLAYER_ID)).thenReturn("parent@test.com");
     }
+
+    // ---- generateReport (synchronous: authz, PDF build, PENDING_UPLOAD save, event publish) ----
 
     @Test
     void generateReport_scoutCoach_throwsFeatureGatedException() {
@@ -135,54 +138,24 @@ class ReportGenerationServiceTest {
     }
 
     @Test
-    void generateReport_instructorCoach_generatesPdf() {
+    void generateReport_instructorCoach_savesPendingUploadReportAndPublishesEvent() {
         stubGenerateReport(CoachSubscriptionTier.INSTRUCTOR);
 
         service.generateReport(COACH_USER_ID, PLAYER_ID, "Keep practicing dribbling.");
 
-        ArgumentCaptor<byte[]> bytesCaptor = ArgumentCaptor.forClass(byte[].class);
-        verify(fileStorageService).storeBytes(bytesCaptor.capture(), anyString(), eq("application/pdf"), anyString());
-        assertThat(bytesCaptor.getValue()).isNotEmpty();
-        assertThat(bytesCaptor.getValue().length).isGreaterThan(100);
-    }
+        ArgumentCaptor<PerformanceReport> reportCaptor = ArgumentCaptor.forClass(PerformanceReport.class);
+        verify(reportRepository).saveAndFlush(reportCaptor.capture());
+        assertThat(reportCaptor.getValue().getStatus()).isEqualTo(ReportStatus.PENDING_UPLOAD);
+        assertThat(reportCaptor.getValue().getStorageKey()).isNull();
 
-    @Test
-    void generateReport_savesReportAndWritesTimelineEvent() {
-        stubGenerateReport(CoachSubscriptionTier.INSTRUCTOR);
-
-        service.generateReport(COACH_USER_ID, PLAYER_ID, "Focus on passing.");
-
-        verify(reportRepository).saveAndFlush(any(PerformanceReport.class));
-        verify(timelineEventListener).writeTimelineEvent(
-            eq(PLAYER_ID), eq(PlayerTimelineEventType.PERFORMANCE_REPORT),
-            any(), eq("development"), any()
-        );
-    }
-
-    @Test
-    void generateReport_publishesParentNotificationEnvelope() {
-        stubGenerateReport(CoachSubscriptionTier.INSTRUCTOR);
-
-        service.generateReport(COACH_USER_ID, PLAYER_ID, "Work on shooting.");
-
-        ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
+        ArgumentCaptor<ReportGeneratedEvent> eventCaptor = ArgumentCaptor.forClass(ReportGeneratedEvent.class);
         verify(publisher).publishEvent(eventCaptor.capture());
-        assertThat(eventCaptor.getValue()).isInstanceOf(Envelope.class);
-        Envelope envelope = (Envelope) eventCaptor.getValue();
-        assertThat(envelope.emailTemplate()).isEqualTo(EmailTemplate.PERFORMANCE_REPORT_SHARED);
-    }
+        assertThat(eventCaptor.getValue().pdfBytes()).isNotEmpty();
+        assertThat(eventCaptor.getValue().pdfBytes().length).isGreaterThan(100);
+        assertThat(eventCaptor.getValue().playerId()).isEqualTo(PLAYER_ID);
 
-    @Test
-    void generateReport_emailContainsReportsPageUrl_notSignedUrl() {
-        stubGenerateReport(CoachSubscriptionTier.INSTRUCTOR);
-
-        service.generateReport(COACH_USER_ID, PLAYER_ID, "Great progress!");
-
-        ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
-        verify(publisher).publishEvent(eventCaptor.capture());
-        Envelope envelope = (Envelope) eventCaptor.getValue();
-        assertThat(envelope.data()).containsKey("reportsPageUrl");
-        assertThat(envelope.data()).doesNotContainKey("downloadUrl");
+        verify(fileStorageService, never()).storeBytes(any(), anyString(), anyString(), anyString());
+        verify(timelineEventListener, never()).writeTimelineEvent(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -199,9 +172,9 @@ class ReportGenerationServiceTest {
         // Should not throw — logo failure is caught and falls back to text header
         service.generateReport(COACH_USER_ID, PLAYER_ID, "Great session.");
 
-        ArgumentCaptor<byte[]> bytesCaptor = ArgumentCaptor.forClass(byte[].class);
-        verify(fileStorageService).storeBytes(bytesCaptor.capture(), anyString(), eq("application/pdf"), anyString());
-        assertThat(bytesCaptor.getValue()).isNotEmpty();
+        ArgumentCaptor<ReportGeneratedEvent> eventCaptor = ArgumentCaptor.forClass(ReportGeneratedEvent.class);
+        verify(publisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().pdfBytes()).isNotEmpty();
     }
 
     @Test
@@ -211,42 +184,72 @@ class ReportGenerationServiceTest {
 
         service.generateReport(COACH_USER_ID, PLAYER_ID, "Excellent improvement!");
 
-        ArgumentCaptor<byte[]> bytesCaptor = ArgumentCaptor.forClass(byte[].class);
-        verify(fileStorageService).storeBytes(bytesCaptor.capture(), anyString(), eq("application/pdf"), anyString());
-        assertThat(bytesCaptor.getValue()).isNotEmpty();
+        ArgumentCaptor<ReportGeneratedEvent> eventCaptor = ArgumentCaptor.forClass(ReportGeneratedEvent.class);
+        verify(publisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().pdfBytes()).isNotEmpty();
+    }
+
+    // ---- onReportGenerated (async post-commit: S3 upload, status flip, timeline, notify) ----
+
+    private ReportGeneratedEvent generatedEvent() {
+        return new ReportGeneratedEvent(UUID.randomUUID(), PLAYER_ID, "Test Coach", "Alex Player",
+            Instant.now(), "pdf-bytes".getBytes());
     }
 
     @Test
-    void generateReport_timelineWriteFailure_doesNotRollbackReport() {
-        stubGenerateReport(CoachSubscriptionTier.INSTRUCTOR);
+    void onReportGenerated_uploadSucceeds_marksReadyAndWritesTimelineAndNotifiesParent() {
+        ReportGeneratedEvent event = generatedEvent();
+        when(playerProfileService.getParentEmailByPlayerId(PLAYER_ID)).thenReturn("parent@test.com");
+
+        service.onReportGenerated(event);
+
+        verify(fileStorageService).storeBytes(eq(event.pdfBytes()), anyString(), eq("application/pdf"), anyString());
+        verify(reportRepository).updateStatusAndStorageKey(eq(event.reportId()), eq(ReportStatus.READY), anyString());
+        verify(timelineEventListener).writeTimelineEvent(
+            eq(PLAYER_ID), eq(PlayerTimelineEventType.PERFORMANCE_REPORT),
+            eq(event.reportId()), eq("development"), any());
+
+        ArgumentCaptor<Object> notifyCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(publisher).publishEvent(notifyCaptor.capture());
+        assertThat(notifyCaptor.getValue()).isInstanceOf(Envelope.class);
+        assertThat(((Envelope) notifyCaptor.getValue()).emailTemplate()).isEqualTo(EmailTemplate.PERFORMANCE_REPORT_SHARED);
+    }
+
+    @Test
+    void onReportGenerated_uploadFails_marksUploadFailedAndSkipsTimelineAndNotification() {
+        ReportGeneratedEvent event = generatedEvent();
+        doThrow(new RuntimeException("S3 unavailable")).when(fileStorageService)
+            .storeBytes(any(), anyString(), anyString(), anyString());
+
+        service.onReportGenerated(event);
+
+        verify(reportRepository).updateStatusAndStorageKey(event.reportId(), ReportStatus.UPLOAD_FAILED, null);
+        verify(timelineEventListener, never()).writeTimelineEvent(any(), any(), any(), any(), any());
+        verify(publisher, never()).publishEvent(any(Envelope.class));
+    }
+
+    @Test
+    void onReportGenerated_timelineWriteFailure_doesNotThrowAndStillNotifiesParent() {
+        ReportGeneratedEvent event = generatedEvent();
+        when(playerProfileService.getParentEmailByPlayerId(PLAYER_ID)).thenReturn("parent@test.com");
         doThrow(new RuntimeException("DB timeout")).when(timelineEventListener)
             .writeTimelineEvent(any(), any(), any(), any(), any());
 
-        // Must not propagate the exception
-        service.generateReport(COACH_USER_ID, PLAYER_ID, "Keep going.");
+        assertThatCode(() -> service.onReportGenerated(event)).doesNotThrowAnyException();
 
-        verify(reportRepository).saveAndFlush(any(PerformanceReport.class));
+        verify(reportRepository).updateStatusAndStorageKey(eq(event.reportId()), eq(ReportStatus.READY), anyString());
+        verify(publisher).publishEvent(any(Envelope.class));
     }
+
+    // ---- listReports (READY-only) ----
 
     @Test
     void listReports_callsSignedDownloadUrl() {
-        PerformanceReport r1 = new PerformanceReport();
-        r1.setId(UUID.randomUUID());
-        r1.setCoachId(COACH_ID);
-        r1.setPlayerId(PLAYER_ID);
-        r1.setGeneratedAt(Instant.now());
-        r1.setStorageKey("reports/r1/report.pdf");
-        r1.setNextSteps("test");
+        PerformanceReport r1 = readyReport(COACH_ID, "reports/r1/report.pdf");
+        PerformanceReport r2 = readyReport(COACH_ID, "reports/r2/report.pdf");
 
-        PerformanceReport r2 = new PerformanceReport();
-        r2.setId(UUID.randomUUID());
-        r2.setCoachId(COACH_ID);
-        r2.setPlayerId(PLAYER_ID);
-        r2.setGeneratedAt(Instant.now().minusSeconds(86400));
-        r2.setStorageKey("reports/r2/report.pdf");
-        r2.setNextSteps("test");
-
-        when(reportRepository.findByPlayerIdOrderByGeneratedAtDesc(PLAYER_ID)).thenReturn(List.of(r1, r2));
+        when(reportRepository.findByPlayerIdAndStatusOrderByGeneratedAtDesc(PLAYER_ID, ReportStatus.READY))
+            .thenReturn(List.of(r1, r2));
         when(coachProfileService.getDisplayNamesByIds(Set.of(COACH_ID)))
             .thenReturn(Map.of(COACH_ID, "Test Coach"));
         when(fileStorageService.signedDownloadUrl(anyString())).thenReturn("https://s3.example.com/signed");
@@ -261,11 +264,12 @@ class ReportGenerationServiceTest {
     void listReports_multipleReportsFromSameCoach_batchesNameLookup() {
         UUID sameCoachId = UUID.randomUUID();
         List<PerformanceReport> reports = List.of(
-            report(sameCoachId, "reports/1/report.pdf"),
-            report(sameCoachId, "reports/2/report.pdf"),
-            report(sameCoachId, "reports/3/report.pdf")
+            readyReport(sameCoachId, "reports/1/report.pdf"),
+            readyReport(sameCoachId, "reports/2/report.pdf"),
+            readyReport(sameCoachId, "reports/3/report.pdf")
         );
-        when(reportRepository.findByPlayerIdOrderByGeneratedAtDesc(PLAYER_ID)).thenReturn(reports);
+        when(reportRepository.findByPlayerIdAndStatusOrderByGeneratedAtDesc(PLAYER_ID, ReportStatus.READY))
+            .thenReturn(reports);
         when(coachProfileService.getDisplayNamesByIds(Set.of(sameCoachId)))
             .thenReturn(Map.of(sameCoachId, "Batch Coach"));
         when(fileStorageService.signedDownloadUrl(anyString())).thenReturn("https://s3.example.com/signed");
@@ -300,7 +304,7 @@ class ReportGenerationServiceTest {
         assertThat(captor.getValue().getBrandColour()).isEqualTo("#3B82F6");
     }
 
-    private PerformanceReport report(UUID coachId, String storageKey) {
+    private PerformanceReport readyReport(UUID coachId, String storageKey) {
         PerformanceReport r = new PerformanceReport();
         r.setId(UUID.randomUUID());
         r.setCoachId(coachId);
@@ -308,6 +312,7 @@ class ReportGenerationServiceTest {
         r.setGeneratedAt(Instant.now());
         r.setStorageKey(storageKey);
         r.setNextSteps("test");
+        r.setStatus(ReportStatus.READY);
         return r;
     }
 }

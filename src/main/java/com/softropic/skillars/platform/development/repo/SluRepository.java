@@ -41,6 +41,9 @@ public interface SluRepository extends JpaRepository<PlayerSkillStat, UUID> {
         """)
     BigDecimal sumTotalSluByPlayerId(@Param("playerId") Long playerId);
 
+    // No radar-assessment filtering needed here: RadarAssessmentService writes to
+    // development.radar_assessment_entries, a disjoint table from player_skill_stats — only
+    // SluCalculationService.onBookingCompleted writes rows here, and only for completed sessions.
     @Query(nativeQuery = true, value = """
         SELECT MAX(calculated_at)
         FROM development.player_skill_stats
