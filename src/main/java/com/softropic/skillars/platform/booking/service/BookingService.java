@@ -151,7 +151,14 @@ public class BookingService {
 
     private void transitionInternal(UUID bookingId, BookingEvent event, TransitionContext context, boolean publishEvent) {
         validateActorAuthorization(event, context);
-        Booking booking = getBookingOrThrow(bookingId);
+        // Deferred-77 AC14: @Version already prevents silent state corruption from a concurrent
+        // transition (losers get a clean OptimisticLockingFailureException at save time, caught at
+        // every call site) — this lock is a UX improvement, trading fail-fast-and-retry for
+        // blocking, not a correctness fix. Re-acquiring the same row lock across
+        // acceptAndInitiatePayment's two same-transaction calls is a no-op, not a deadlock risk.
+        Booking booking = lockRetryer.withBoundedRetry(() -> bookingRepository.findByIdForUpdate(bookingId)
+            .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking")));
+        entityManager.refresh(booking, LockModeType.PESSIMISTIC_WRITE);
         BookingStatus currentStatus = readStatusOrThrow(booking);
         bookingStateMachine.validate(currentStatus, event);
         BookingStatus newStatus = bookingStateMachine.targetStatus(currentStatus, event);

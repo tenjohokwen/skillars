@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.development.repo;
 
+import com.softropic.skillars.platform.development.contract.ReportStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -9,6 +10,8 @@ import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -31,7 +34,9 @@ public class PerformanceReport {
     @Column(name = "generated_at", nullable = false, updatable = false)
     private Instant generatedAt;
 
-    @Column(name = "storage_key", nullable = false, updatable = false, length = 500)
+    // Null while status=PENDING_UPLOAD — the async post-commit handler sets this once the PDF is
+    // actually in S3, only then flipping status to READY.
+    @Column(name = "storage_key", length = 500)
     private String storageKey;
 
     @Column(name = "next_steps", nullable = false, updatable = false, length = 500)
@@ -39,4 +44,8 @@ public class PerformanceReport {
 
     @Column(name = "version", nullable = false)
     private int version = 1;
+
+    @JdbcTypeCode(SqlTypes.NAMED_ENUM)
+    @Column(name = "status", nullable = false)
+    private ReportStatus status = ReportStatus.PENDING_UPLOAD;
 }

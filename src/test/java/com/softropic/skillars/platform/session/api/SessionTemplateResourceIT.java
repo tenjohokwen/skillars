@@ -55,6 +55,7 @@ class SessionTemplateResourceIT extends BaseSessionIT {
     private UUID confirmedBookingId;
     private UUID otherCoachBookingId;
     private UUID cancelledBookingId;
+    private UUID upcomingBookingId;
     private UUID drillId;
     private UUID sessionId;
 
@@ -99,6 +100,12 @@ class SessionTemplateResourceIT extends BaseSessionIT {
 
             cancelledBookingId = UUID.randomUUID();
             insertBooking(cancelledBookingId, instrCoachId, "CANCELLED");
+
+            // Different time slot from confirmedBookingId/cancelledBookingId — same coach, and
+            // UPCOMING participates in excl_bkg_coach_slot_overlap (V87), so reusing their slot
+            // would violate the exclusion constraint against the still-live confirmedBookingId.
+            upcomingBookingId = UUID.randomUUID();
+            insertBooking(upcomingBookingId, instrCoachId, "UPCOMING", 180000, 183600);
 
             // Create a saved session to use as template source
             sessionId = UUID.randomUUID();
@@ -398,6 +405,20 @@ class SessionTemplateResourceIT extends BaseSessionIT {
     }
 
     @Test
+    void deployTemplate_upcomingBooking_returns403SessionBookingNotOwned() {
+        String cookies = loginAndGetCookies(INSTR_EMAIL);
+        String templateId = createTemplateViaApi(cookies, sessionId, "Deploy Upcoming");
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + TEMPLATES_BASE + "/" + templateId + "/deploy?bookingId=" + upcomingBookingId,
+            HttpMethod.POST,
+            null,
+            authenticatedHeaders(cookies),
+            Map.class
+        )).isInstanceOf(HttpClientErrorException.Forbidden.class);
+    }
+
+    @Test
     void deployTemplate_duplicateBooking_returns403SessionAlreadyExists() {
         String cookies = loginAndGetCookies(INSTR_EMAIL);
         String templateId = createTemplateViaApi(cookies, sessionId, "Deploy Dup");
@@ -581,14 +602,18 @@ class SessionTemplateResourceIT extends BaseSessionIT {
     }
 
     private void insertBooking(UUID bookingId, UUID coachId, String status) {
+        insertBooking(bookingId, coachId, status, 86400, 90000);
+    }
+
+    private void insertBooking(UUID bookingId, UUID coachId, String status, long startOffsetSeconds, long endOffsetSeconds) {
         jdbcTemplate.update(
             "INSERT INTO booking.bookings (id, parent_id, player_id, coach_id, " +
             "requested_start_time, requested_end_time, status, canonical_timezone, " +
             "version, created_at, updated_at) " +
             "VALUES (?, 1, 1, ?, ?, ?, ?, 'Europe/London', 0, ?, ?)",
             bookingId, coachId,
-            Timestamp.from(Instant.now().plusSeconds(86400)),
-            Timestamp.from(Instant.now().plusSeconds(90000)),
+            Timestamp.from(Instant.now().plusSeconds(startOffsetSeconds)),
+            Timestamp.from(Instant.now().plusSeconds(endOffsetSeconds)),
             status,
             Timestamp.from(Instant.now()),
             Timestamp.from(Instant.now())

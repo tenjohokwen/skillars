@@ -134,7 +134,7 @@ public class SessionTemplateService {
 
         if (!isBookingPlannable(booking.status())) {
             throw new OperationNotAllowedException(
-                "Session plan can only be created for a confirmed or upcoming booking",
+                "Session plan can only be created for a confirmed booking",
                 SessionErrorCode.SESSION_BOOKING_NOT_OWNED);
         }
 
@@ -167,7 +167,15 @@ public class SessionTemplateService {
     }
 
     private boolean isBookingPlannable(String status) {
-        return "CONFIRMED".equals(status) || "UPCOMING".equals(status);
+        if ("CONFIRMED".equals(status)) {
+            return true;
+        }
+        if ("UPCOMING".equals(status)) {
+            log.warn("isBookingPlannable called with UPCOMING status; no session-plan creation window remains once a booking is UPCOMING");
+            return false;
+        }
+        log.warn("isBookingPlannable called with unexpected status: {}", status);
+        return false;
     }
 
     private UUID resolveCoachId(Long userId) {

@@ -5,6 +5,7 @@ import com.softropic.skillars.platform.development.repo.SluRepository;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.BadSqlGrammarException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,7 +18,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -39,12 +39,28 @@ public class SluContributionService {
             return List.of();
         }
 
+        // Convert coach_id once per distinct raw value — guards both the batch-lookup pass below and
+        // the DTO-building pass, instead of re-validating/re-parsing the same UUID twice per row.
+        Map<Object, UUID> coachIdByRawValue = new HashMap<>();
+        for (Object[] row : rows) {
+            Object raw = row[0];
+            if (raw == null || coachIdByRawValue.containsKey(raw)) continue;
+            if (!(raw instanceof UUID uuid)) {
+                throw new BadSqlGrammarException(
+                    "coach_id from query is not a valid UUID", "findCoachContributionsByPlayerId", null);
+            }
+            coachIdByRawValue.put(raw, uuid);
+        }
+
         // Batch coach name lookup — avoids N+1
-        Set<UUID> coachIds = rows.stream()
-            .filter(r -> r[0] != null)
-            .map(r -> UUID.fromString(r[0].toString()))
-            .collect(Collectors.toSet());
-        Map<UUID, String> displayNames = coachProfileService.getDisplayNamesByIds(coachIds);
+        Set<UUID> coachIds = Set.copyOf(coachIdByRawValue.values());
+        Map<UUID, String> displayNames;
+        try {
+            displayNames = coachProfileService.getDisplayNamesByIds(coachIds);
+        } catch (RuntimeException e) {
+            log.error("Failed to fetch coach display names for contribution calculation", e);
+            displayNames = new HashMap<>();
+        }
 
         // Group by skill_code, compute total SLU per skill, then % per coach
         Map<String, BigDecimal> skillTotals = new HashMap<>();
@@ -59,7 +75,7 @@ public class SluContributionService {
         List<CoachContributionDto> result = new ArrayList<>();
         for (Object[] row : rows) {
             if (row[0] == null || row[1] == null || row[2] == null) continue;
-            UUID coachId = UUID.fromString(row[0].toString());
+            UUID coachId = coachIdByRawValue.get(row[0]);
             String skillCode = (String) row[1];
             BigDecimal coachSlu = row[2] instanceof BigDecimal bd
                 ? bd : BigDecimal.valueOf(((Number) row[2]).doubleValue());

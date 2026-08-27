@@ -42,12 +42,12 @@ public class PlayerProfileService {
             .orElse(0);
     }
 
+    // Single-query JOIN — avoids the getParentIdByPlayerId + findById(parentId) TOCTOU gap and the
+    // findById(null) IllegalArgumentException self-registered adult players (parentId == null) used
+    // to hit; a missing/no-parent/deleted-parent player all fall through to no row here alike.
     @Transactional(readOnly = true)
     public String getParentEmailByPlayerId(Long playerId) {
-        Long parentId = getParentIdByPlayerId(playerId);
-        return userRepository.findById(parentId)
-            .map(u -> u.getEmail())
-            .orElse(null);
+        return playerProfileRepository.findParentEmailByPlayerId(playerId).orElse(null);
     }
 
     @Transactional(readOnly = true)

@@ -14,6 +14,8 @@ import com.softropic.skillars.platform.development.contract.CoachBrandingRequest
 import com.softropic.skillars.platform.development.contract.CoachBrandingResponse;
 import com.softropic.skillars.platform.development.contract.PerformanceReportResponse;
 import com.softropic.skillars.platform.development.contract.PlayerTimelineEventType;
+import com.softropic.skillars.platform.development.contract.ReportGeneratedEvent;
+import com.softropic.skillars.platform.development.contract.ReportStatus;
 import com.softropic.skillars.platform.development.contract.SkillRadarEntry;
 import com.softropic.skillars.platform.development.repo.CoachBranding;
 import com.softropic.skillars.platform.development.repo.CoachBrandingRepository;
@@ -40,9 +42,13 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.awt.Color;
 import java.io.ByteArrayOutputStream;
@@ -129,42 +135,57 @@ public class ReportGenerationService {
             throw new RuntimeException("PDF generation produced empty output");
         }
 
-        String storageKey = "reports/" + UUID.randomUUID() + "/report.pdf";
-        fileStorageService.storeBytes(pdfBytes, storageKey, "application/pdf",
-            "attachment; filename=\"performance-report.pdf\"");
-
+        // Deferred-77 AC2: the report row is saved PENDING_UPLOAD, with no storage_key yet — the S3
+        // upload (external I/O) moves to an async post-commit handler so it no longer holds this
+        // method's DB connection for its duration. listReports only ever returns READY reports, so a
+        // still-uploading or failed-upload row is never handed out as a signed URL to a PDF that
+        // doesn't exist.
         PerformanceReport report = new PerformanceReport();
         report.setCoachId(coachId);
         report.setPlayerId(playerId);
         report.setGeneratedAt(generatedAt);
-        report.setStorageKey(storageKey);
         report.setNextSteps(nextSteps);
         report.setVersion(1);
-        PerformanceReport persisted;
+        report.setStatus(ReportStatus.PENDING_UPLOAD);
+        PerformanceReport persisted = reportRepository.saveAndFlush(report);
+
+        publisher.publishEvent(new ReportGeneratedEvent(
+            persisted.getId(), playerId, coachName, playerName, generatedAt, pdfBytes));
+    }
+
+    /**
+     * Uploads the already-built PDF to S3 and, only once that succeeds, flips the report to READY,
+     * writes its timeline event, and notifies the parent — none of which should happen for a report
+     * whose PDF never made it to S3. On failure the report is marked UPLOAD_FAILED and stays hidden
+     * from listReports; there is currently no automatic retry (matches this story's scope).
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @Async
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void onReportGenerated(ReportGeneratedEvent event) {
+        String storageKey = "reports/" + UUID.randomUUID() + "/report.pdf";
         try {
-            persisted = reportRepository.saveAndFlush(report);
+            fileStorageService.storeBytes(event.pdfBytes(), storageKey, "application/pdf",
+                "attachment; filename=\"performance-report.pdf\"");
+            reportRepository.updateStatusAndStorageKey(event.reportId(), ReportStatus.READY, storageKey);
         } catch (Exception e) {
-            log.error("Failed to persist report record — cleaning up orphan PDF: key={}", storageKey, e);
-            try {
-                fileStorageService.deleteRawBytes(storageKey);
-            } catch (Exception ex) {
-                log.error("S3 orphan cleanup also failed: key={}", storageKey, ex);
-            }
-            throw e;
+            log.error("Failed to upload PDF for report {} — marking UPLOAD_FAILED", event.reportId(), e);
+            reportRepository.updateStatusAndStorageKey(event.reportId(), ReportStatus.UPLOAD_FAILED, null);
+            return;
         }
 
         try {
             timelineEventListener.writeTimelineEvent(
-                playerId, PlayerTimelineEventType.PERFORMANCE_REPORT,
-                persisted.getId(), "development",
-                Map.of("coachName", coachName, "reportId", persisted.getId().toString())
+                event.playerId(), PlayerTimelineEventType.PERFORMANCE_REPORT,
+                event.reportId(), "development",
+                Map.of("coachName", event.coachName(), "reportId", event.reportId().toString())
             );
         } catch (Exception e) {
             log.error("Failed to write PERFORMANCE_REPORT timeline event: playerId={}, reportId={}",
-                playerId, persisted.getId(), e);
+                event.playerId(), event.reportId(), e);
         }
 
-        notifyParent(playerId, playerName, coachName, report.getGeneratedAt());
+        notifyParent(event.playerId(), event.playerName(), event.coachName(), event.generatedAt());
     }
 
     public List<PerformanceReportResponse> listReports(Long playerId) {
@@ -173,7 +194,8 @@ public class ReportGenerationService {
             coachPlayerAuthorizationService.requireCoachPlayerRelationship(
                 securityUtil.getCurrentCoachUserId(), playerId);
         }
-        List<PerformanceReport> reports = reportRepository.findByPlayerIdOrderByGeneratedAtDesc(playerId);
+        List<PerformanceReport> reports =
+            reportRepository.findByPlayerIdAndStatusOrderByGeneratedAtDesc(playerId, ReportStatus.READY);
         Set<UUID> coachIds = reports.stream().map(PerformanceReport::getCoachId).collect(Collectors.toSet());
         Map<UUID, String> coachNames = coachProfileService.getDisplayNamesByIds(coachIds);
         return reports.stream()

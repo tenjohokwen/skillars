@@ -192,6 +192,10 @@ public class GdprErasureService {
         playerRadarCompositeRepository.deleteAllByPlayerId(playerId);
         radarAssessmentRepository.deleteAllByPlayerId(playerId);
         performanceReportRepository.findByPlayerIdOrderByGeneratedAtDesc(playerId).forEach(report -> {
+            // Deferred-77 AC2: a PENDING_UPLOAD/UPLOAD_FAILED report may have no storage_key yet.
+            if (report.getStorageKey() == null) {
+                return;
+            }
             try {
                 fileStorageService.deleteRawBytes(report.getStorageKey());
             } catch (Exception e) {

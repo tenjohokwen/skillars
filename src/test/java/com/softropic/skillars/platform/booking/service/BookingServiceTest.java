@@ -729,6 +729,7 @@ class BookingServiceTest {
         CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
 
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
@@ -750,6 +751,7 @@ class BookingServiceTest {
         CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
 
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
@@ -797,6 +799,7 @@ class BookingServiceTest {
         CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
 
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
@@ -836,6 +839,7 @@ class BookingServiceTest {
         CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
 
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         // Simulate the real query excluding the booking's own id: it would not appear here.
@@ -1165,6 +1169,7 @@ class BookingServiceTest {
         CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
 
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
@@ -1193,6 +1198,7 @@ class BookingServiceTest {
         CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
 
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
 
         assertThatThrownBy(() -> bookingService.declineBooking(booking.getId(), COACH_USER_ID))
@@ -1205,6 +1211,7 @@ class BookingServiceTest {
         CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
 
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
 
         assertThatThrownBy(() -> bookingService.declineBooking(booking.getId(), COACH_USER_ID))
@@ -1217,6 +1224,7 @@ class BookingServiceTest {
         CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
 
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(bookingRepository.save(any(Booking.class))).thenThrow(new OptimisticLockingFailureException("test"));
 
@@ -1235,6 +1243,7 @@ class BookingServiceTest {
         CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
 
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
@@ -1255,6 +1264,7 @@ class BookingServiceTest {
         CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
 
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
         when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
@@ -1274,6 +1284,7 @@ class BookingServiceTest {
         Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
 
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
         when(bookingRepository.save(any(Booking.class))).thenThrow(new OptimisticLockingFailureException("test"));
 
         assertThatThrownBy(() -> bookingService.cancelDueToPause(booking.getId(), COACH_ID, PARENT_ID))
@@ -1308,6 +1319,7 @@ class BookingServiceTest {
         booking.setRequestedEndTime(Instant.now().minusSeconds(1800));
 
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
         when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
         when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("40.00"))));
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
@@ -1325,6 +1337,7 @@ class BookingServiceTest {
         booking.setRequestedEndTime(Instant.now().minusSeconds(1800));
 
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
         when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("40.00"))));
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
         when(bookingRepository.save(any(Booking.class))).thenThrow(new OptimisticLockingFailureException("test"));

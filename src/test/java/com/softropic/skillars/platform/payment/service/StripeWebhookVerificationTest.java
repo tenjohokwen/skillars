@@ -163,7 +163,12 @@ class StripeWebhookVerificationTest {
         webhookService.processWebhook(payload, sigHeader);
 
         verify(subscriptionService, never()).handleSubscriptionWebhook(any(), any(), any());
-        assertThat(meterRegistry.find("subscription.payment.invoice_failed").counter()).isNull();
+        // initializeCounters() eagerly pre-registers this counter at 0 (standard Micrometer practice,
+        // so it appears on dashboards before its first increment) — it's always registered, just
+        // never incremented when there's no subscription to attribute the failure to.
+        Counter counter = meterRegistry.find("subscription.payment.invoice_failed").counter();
+        assertThat(counter).isNotNull();
+        assertThat(counter.count()).isEqualTo(0.0);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
