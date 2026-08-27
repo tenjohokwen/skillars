@@ -267,9 +267,7 @@ public void uploadPdfAndLogTimeline(UUID reportId, byte[] pdfBytes) {
 
 **Fix:**
 
-This is a two-phase fix:
-
-**Phase 1 (this story):** Add defensive guards
+**Phase 1:** Add pessimistic locking guard
 1. Add query-then-upsert lock (pessimistic write on player row):
    ```java
    @Transactional
@@ -280,12 +278,27 @@ This is a two-phase fix:
    ```
 2. Log composite calculation failures clearly for ops visibility.
 
-**Phase 2 (future story):** Infrastructure DLQ
-- Implement dead-letter queue for failed async composite calculations
-- Emit to Kafka or polling queue for replay
-- Out of scope for this story (infrastructure work)
+**Phase 2:** Implement dead-letter queue infrastructure
+1. Create Kafka topic `skillars.radar-composite-dlq` or polling queue table `async_task_dlq`
+2. Wrap `@Async` listener in try-catch; on failure, emit to DLQ:
+   ```java
+   @Async
+   @TransactionalEventListener(phase = AFTER_COMMIT)
+   public void onRadarEntrySubmitted(RadarEntrySubmittedEvent event) {
+       try {
+           recalculateComposite(event.getPlayerId());
+       } catch (Exception e) {
+           log.error("Composite calculation failed, emitting to DLQ", e);
+           dlqService.emitFailedCompositeCalculation(event.getPlayerId(), e);
+       }
+   }
+   ```
+3. Add DLQ consumer that replays failed calculations with exponential backoff
+4. Emit metric `radar.composite.dlq.count` for ops alerting
 
-**Testing:** Add IT verifying concurrent submissions serialize on player lock; verify failure logging.
+**Testing:** 
+- Phase 1: Add IT verifying concurrent submissions serialize on player lock; verify failure logging
+- Phase 2: Add IT verifying failed calculations emit to DLQ; verify replay succeeds
 
 ---
 
@@ -393,20 +406,28 @@ This is a two-phase fix:
 - Proactive future-proofing that may silently accept invalid state
 
 **Fix:**
-1. **Audit:** Confirm `UPCOMING` status is intentionally planned (check BookingStatus enum and all transition paths)
-2. **If intentional:** Document why and add a comment in the code
-3. **If not:** Remove the check or add an explicit guard:
+Add explicit guard against unexpected booking statuses:
    ```java
    public boolean isBookingPlannable(String status) {
-       Set<String> validStates = Set.of("ACTIVE", "PENDING", "CANCELLED");
-       if (!validStates.contains(status)) {
-           log.warn("Unexpected booking status for planning check: {}", status);
+       Set<String> supportedStates = Set.of("ACTIVE", "PENDING");
+       if ("UPCOMING".equals(status)) {
+           log.warn("isBookingPlannable called with UPCOMING status - no transition path exists yet");
+           return false; // Guard: reject unsupported status
        }
-       return validStates.contains(status);
+       if (!supportedStates.contains(status)) {
+           log.warn("Unexpected booking status for planning check: {}", status);
+           return false;
+       }
+       return true;
    }
    ```
 
-**Testing:** Add test documenting whether UPCOMING is expected; verify guard behavior if unsupported state passed.
+**Rationale:** `UPCOMING` status may be planned for future use but is not live yet. Explicit guard prevents silent acceptance of incomplete state transitions. If UPCOMING support is added later, this guard will need to be updated.
+
+**Testing:** 
+- Add test for UPCOMING status returning false with warning log
+- Verify ACTIVE/PENDING return true
+- Verify unknown statuses return false with warning
 
 ---
 
@@ -464,7 +485,8 @@ Apply the following tags to `deferred-work.md`:
 - [ ] AC7: Ensure SluCalculationService uses consistent timestamp for SLU rows and snapshots
 - [ ] AC8: Add @Retryable wrapper with exponential backoff for sluRepository.saveAll
 - [ ] AC9: Add FK with ON DELETE CASCADE from player_radar_composites to player_profiles (V113 migration)
-- [ ] AC10: Add pessimistic write lock to async composite calculation; log failures for ops visibility
+- [ ] AC10 Phase 1: Add pessimistic write lock to async composite calculation; log failures for ops visibility
+- [ ] AC10 Phase 2: Implement Kafka/queue DLQ for failed composite calculations; add replay consumer with exponential backoff
 - [ ] AC11: Refactor VideoAccessGuard to handle request-scoped cache safely in singleton; add test helpers
 - [ ] AC12: Restructure cascadeDeleteForAccount as single @Transactional block; add pre-delete quota audit
 - [ ] AC13: Add null check for providerAssetId in PlaybackService.authorizePlayback
@@ -477,13 +499,30 @@ Apply the following tags to `deferred-work.md`:
 ## Dev Notes
 
 - This story bundles 16 acceptance criteria across 4 modules (Deployment/SLU/Radar focus, plus small Booking/Video hardening)
-- **Highest-blast-radius changes:** AC2 (ReportGenerationService transaction restructuring) and AC14 (pessimistic lock on state machine)
-  - AC2 introduces async post-commit pattern; verify event listener error handling and eventual consistency
-  - AC14 adds database-level locking; verify no deadlock scenarios with other transaction patterns
-- **Schema changes:** AC9 requires V113 migration; re-verify max migration version before finalizing
-- **Cross-module coordination:** AC2 touches timeline (messaging domain) and S3 (infrastructure); ensure no integration surprises
-- Several ACs are fixes for race conditions (AC7, AC10, DEF3/4) or atomicity issues (AC12) — these should have explicit concurrency tests
-- AC15 (BookingStatus.UPCOMING) requires audit before implementation; it may be legitimately planned or inadvertent future-proofing
+
+**Approved Design Decisions:**
+- AC2: Async S3 I/O extraction APPROVED — S3 I/O will move to async post-commit handler with eventual-consistency error handling
+- AC10: Both Phase 1 and Phase 2 APPROVED — implement pessimistic lock guard AND Kafka/queue DLQ infrastructure for failed composites
+- AC15: Guard against UPCOMING status APPROVED — explicit false-return guard to prevent silent acceptance of unsupported state
+
+**Highest-blast-radius changes:** 
+- AC2 (ReportGenerationService async restructuring) — introduces async post-commit pattern; verify event listener error handling and eventual consistency
+- AC14 (pessimistic lock on state machine) — adds database-level locking; verify no deadlock scenarios
+- AC10 Phase 2 (DLQ infrastructure) — new infrastructure component; coordinate with ops on Kafka/queue topology
+
+**Schema changes:** 
+- AC9 requires V113 migration; re-verify max migration version before finalizing
+- AC10 Phase 2 may require new table if using polling queue instead of Kafka
+
+**Cross-module coordination:** 
+- AC2 touches timeline (messaging domain) and S3 (infrastructure); ensure no integration surprises
+- AC10 Phase 2 DLQ requires infrastructure discussion (Kafka vs polling table vs async task queue)
+
+**Testing priorities:**
+- AC2: Verify rollback behavior when S3 fails; verify timeline event only created on success
+- AC10: Concurrent composite calculation serialization (Phase 1); DLQ replay under failure (Phase 2)
+- AC12/AC14: Explicit concurrency tests with multiple parallel threads
+- AC15: Test UPCOMING status rejection explicitly
 
 ## Change Log
 
