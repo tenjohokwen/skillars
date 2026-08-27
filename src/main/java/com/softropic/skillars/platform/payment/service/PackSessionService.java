@@ -31,6 +31,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -82,6 +83,19 @@ public class PackSessionService {
     @Transactional(readOnly = true)
     public boolean hasActivePack(Long playerId, UUID coachId) {
         return !sessionPackPurchaseRepository.findActivePacks(playerId, coachId, Instant.now()).isEmpty();
+    }
+
+    // Story Deferred-75 AC6: batch equivalent of hasActivePack, replacing HomeworkAssignmentService
+    // .getLockerRoomDrills's per-coach N+1 loop with one query.
+    @Transactional(readOnly = true)
+    public Set<UUID> hasActivePackForAnyOf(Long playerId, Set<UUID> coachIds) {
+        if (coachIds.isEmpty()) return Set.of();
+        if (coachIds.size() > 1000) {
+            throw new IllegalArgumentException(
+                "coachIds Set size " + coachIds.size() + " exceeds maximum of 1000. " +
+                "Consider implementing chunked batch queries for large coach lists.");
+        }
+        return sessionPackPurchaseRepository.findCoachIdsWithActivePack(playerId, coachIds, Instant.now());
     }
 
     @Transactional(readOnly = true)

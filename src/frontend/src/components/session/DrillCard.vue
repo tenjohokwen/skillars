@@ -10,6 +10,7 @@
         playsinline
         class="drill-card__video"
         :src="drill.videoUrl"
+        @error="handleVideoError"
       />
       <div v-else-if="drill.hasVideo" class="drill-card__thumbnail">
         <q-icon name="play_circle" size="48px" class="drill-card__play-icon" />
@@ -63,8 +64,8 @@
         </li>
       </ul>
 
-      <!-- Tags (private drills only) -->
-      <div v-if="drill.libraryType === 'COACH'" class="drill-card__tags q-mt-sm">
+      <!-- Tags (private drills only, and not in the read-only locker-room view) -->
+      <div v-if="drill.libraryType === 'PRIVATE' && context !== 'locker-room'" class="drill-card__tags q-mt-sm">
         <q-chip
           v-for="tag in drill.tags"
           :key="tag"
@@ -172,11 +173,22 @@ const props = defineProps({
   context: { type: String, default: 'library' },
 })
 
-const emit = defineEmits(['open-detail', 'clone', 'edit-clone', 'add-to-session', 'assign'])
+const emit = defineEmits(['open-detail', 'clone', 'edit-clone', 'add-to-session', 'assign', 'video-error'])
 
 const { t } = useI18n()
 const $q = useQuasar()
 const sessionStore = useSessionStore()
+
+// Story Deferred-75 AC9: signed drill-video URLs expire after 2h server-side. On a native <video>
+// error (e.g. an expired URL), emit once so the parent — which owns the correct refresh action for
+// its own data source (sessionStore, builderStore, or homeworkStore, depending on context) — can
+// refetch. Guarded to fire at most once per mount to avoid a retry loop if the refetch doesn't help.
+const videoErrorEmitted = ref(false)
+function handleVideoError() {
+  if (videoErrorEmitted.value) return
+  videoErrorEmitted.value = true
+  emit('video-error')
+}
 
 // Reduced motion — reactive, updated when OS preference changes
 const prefersReducedMotion = ref(false)

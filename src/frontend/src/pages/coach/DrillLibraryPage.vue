@@ -94,6 +94,7 @@
           @open-detail="openDetail(drill)"
           @clone="handleClone"
           @edit-clone="handleEditClone"
+          @video-error="handleVideoError"
         />
       </div>
     </template>
@@ -147,6 +148,7 @@
       :drill="sessionStore.selectedDrill"
       :is-open="!!sessionStore.selectedDrill"
       @close="sessionStore.selectedDrill = null"
+      @video-error="handleVideoError"
     />
   </q-page>
 </template>
@@ -251,6 +253,14 @@ function applyFilters() {
 
 function openDetail(drill) {
   sessionStore.selectedDrill = drill
+}
+
+// Story Deferred-75 AC9: on a video playback error (e.g. an expired signed URL), refetch the
+// current tab's drill list to get a fresh URL. Calls fetchDrills directly rather than onTabChange,
+// which also resets search/filters — a background recovery refetch should not silently clear
+// whatever the coach was searching for.
+function handleVideoError() {
+  sessionStore.fetchDrills(selectedLibrary.value)
 }
 
 async function handleClone(drillId) {

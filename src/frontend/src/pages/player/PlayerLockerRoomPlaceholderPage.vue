@@ -29,6 +29,7 @@
               :drill="item.drill"
               context="locker-room"
               class="full-width"
+              @video-error="handleVideoError"
             />
             <div class="locker-room__completion-row row items-center q-mt-xs q-px-sm">
               <q-checkbox
@@ -81,6 +82,13 @@ async function handleMarkComplete(assignmentId) {
 }
 
 watch(playerId, val => { if (val) homeworkStore.fetchDrills(val) }, { immediate: true })
+
+// Story Deferred-75 AC9: on a video playback error (e.g. an expired signed URL), refetch this
+// player's homework drills to get a fresh URL. Unlike the coach-facing pages, this page's drills
+// come from homeworkStore (keyed by playerId), not sessionStore.
+function handleVideoError() {
+  if (playerId.value) homeworkStore.fetchDrills(playerId.value)
+}
 </script>
 
 <style lang="scss" scoped>

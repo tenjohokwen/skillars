@@ -341,6 +341,28 @@ class SessionTemplateResourceIT extends BaseSessionIT {
         )).isInstanceOf(HttpClientErrorException.Forbidden.class);
     }
 
+    @Test
+    void deleteTemplate_alreadyArchived_returns403() {
+        String cookies = loginAndGetCookies(INSTR_EMAIL);
+        String templateId = createTemplateViaApi(cookies, sessionId, "Double Delete");
+
+        httpTestClient.makeHttpRequest(
+            baseUrl() + TEMPLATES_BASE + "/" + templateId,
+            HttpMethod.DELETE,
+            null,
+            authenticatedHeaders(cookies),
+            Void.class
+        );
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + TEMPLATES_BASE + "/" + templateId,
+            HttpMethod.DELETE,
+            null,
+            authenticatedHeaders(cookies),
+            Void.class
+        )).isInstanceOf(HttpClientErrorException.Forbidden.class);
+    }
+
     // --- deployTemplate ---
 
     @Test

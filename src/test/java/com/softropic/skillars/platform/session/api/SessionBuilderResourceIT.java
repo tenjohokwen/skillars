@@ -199,6 +199,55 @@ class SessionBuilderResourceIT extends BaseSessionIT {
     }
 
     @Test
+    void createSession_unrecognizedDevelopmentFocus_returns400() {
+        String cookies = loginAndGetCookies(INSTR_EMAIL);
+        Map<String, Object> body = Map.of(
+            "bookingId", confirmedBookingId.toString(),
+            "blocks", List.of(Map.of(
+                "blockType", "WARM_UP",
+                "blockName", "Warm-Up",
+                "durationMinutes", 10,
+                "drills", List.of()
+            )),
+            "developmentFocus", List.of("technical", "not_a_real_focus_code")
+        );
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + SESSIONS_BASE,
+            HttpMethod.POST,
+            body,
+            authenticatedHeaders(cookies),
+            Map.class
+        )).isInstanceOf(HttpClientErrorException.BadRequest.class);
+    }
+
+    @Test
+    void createSession_allEightKnownFocusCodes_returns201() {
+        String cookies = loginAndGetCookies(INSTR_EMAIL);
+        Map<String, Object> body = Map.of(
+            "bookingId", confirmedBookingId.toString(),
+            "blocks", List.of(Map.of(
+                "blockType", "WARM_UP",
+                "blockName", "Warm-Up",
+                "durationMinutes", 10,
+                "drills", List.of()
+            )),
+            "developmentFocus", List.of("technical", "physical", "cognitive", "matchRealism",
+                "weakFoot", "set_pieces", "goalkeeping", "possession")
+        );
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + SESSIONS_BASE,
+            HttpMethod.POST,
+            body,
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+    }
+
+    @Test
     void createSession_31DrillBlock_returns400() {
         String cookies = loginAndGetCookies(INSTR_EMAIL);
         List<Map<String, Object>> tooManyDrills = java.util.stream.IntStream.range(0, 31)
@@ -328,7 +377,58 @@ class SessionBuilderResourceIT extends BaseSessionIT {
             updateBody,
             authenticatedHeaders(cookies),
             Map.class
-        )).isInstanceOf(HttpClientErrorException.Forbidden.class);
+        )).isInstanceOf(HttpClientErrorException.class)
+          .satisfies(e -> {
+              HttpClientErrorException ex = (HttpClientErrorException) e;
+              assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+              assertThat(ex.getResponseBodyAsString()).contains("\"errorKey\":\"SESSION_PLAN_LOCKED\"");
+          });
+    }
+
+    @Test
+    void updateSession_bookingCancelled_returns403WithHelpCodeSessionPlanLocked() {
+        String cookies = loginAndGetCookies(INSTR_EMAIL);
+        Map<String, Object> createBody = buildCreateRequest(confirmedBookingId, drillId);
+
+        ResponseEntity<Map> createResp = httpTestClient.makeHttpRequest(
+            baseUrl() + SESSIONS_BASE,
+            HttpMethod.POST,
+            createBody,
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+        String sessionId = (String) createResp.getBody().get("id");
+
+        // Session stays DRAFT — force the underlying booking to a terminal, non-completed status directly
+        // in DB (must use transactionTemplate — auto-commit is disabled app-wide)
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update("UPDATE booking.bookings SET status = 'CANCELLED_PARENT' WHERE id = ?",
+                confirmedBookingId);
+            return null;
+        });
+
+        Map<String, Object> updateBody = Map.of(
+            "blocks", List.of(Map.of(
+                "blockType", "WARM_UP",
+                "blockName", "Warm-Up",
+                "durationMinutes", 10,
+                "drills", List.of()
+            )),
+            "developmentFocus", List.of("technical")
+        );
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + SESSIONS_BASE + "/" + sessionId,
+            HttpMethod.PUT,
+            updateBody,
+            authenticatedHeaders(cookies),
+            Map.class
+        )).isInstanceOf(HttpClientErrorException.class)
+          .satisfies(e -> {
+              HttpClientErrorException ex = (HttpClientErrorException) e;
+              assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+              assertThat(ex.getResponseBodyAsString()).contains("\"errorKey\":\"SESSION_PLAN_LOCKED\"");
+          });
     }
 
     @Test

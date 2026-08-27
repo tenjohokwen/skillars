@@ -71,6 +71,20 @@ public class PessimisticLockRetryer {
             throw new IllegalStateException(
                 "app.locking.retry.backoff-multiplier must be >= 1.0, was " + backoffMultiplier);
         }
+
+        // Estimate worst-case total backoff budget (using jitter floor of 75%)
+        long worstCaseMs = 0;
+        long currentBackoff = initialBackoffMs;
+        for (int i = 0; i < maxAttempts - 1; i++) {
+            worstCaseMs += (long) (currentBackoff * 0.75);
+            currentBackoff = Math.min((long) (currentBackoff * backoffMultiplier), maxBackoffMs);
+        }
+        if (worstCaseMs > 30000) {  // 30 second limit
+            log.warn("PessimisticLockRetryer configured with worst-case backoff of ~{}ms ({}s). " +
+                    "Verify this aligns with application request timeout constraints. " +
+                    "Config: maxAttempts={}, initialBackoff={}ms, maxBackoff={}ms, multiplier={}",
+                worstCaseMs, worstCaseMs / 1000, maxAttempts, initialBackoffMs, maxBackoffMs, backoffMultiplier);
+        }
     }
 
     /**

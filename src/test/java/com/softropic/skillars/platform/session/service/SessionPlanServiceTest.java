@@ -4,6 +4,7 @@ import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException
 import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingSnapshot;
 import com.softropic.skillars.platform.booking.service.BookingQueryService;
+import com.softropic.skillars.platform.booking.service.BookingStateMachine;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.session.contract.CreateSessionPlanRequest;
 import com.softropic.skillars.platform.session.contract.DrillMetadata;
@@ -57,6 +58,7 @@ class SessionPlanServiceTest {
     @Mock private DrillLibraryService drillLibraryService;
     @Mock private SessionDnaCalculator dnaCalculator;
     @Mock private EquipmentListService equipmentListService;
+    private final BookingStateMachine bookingStateMachine = new BookingStateMachine();
 
     private SessionPlanService service;
 
@@ -69,7 +71,7 @@ class SessionPlanServiceTest {
     @BeforeEach
     void setUp() {
         service = new SessionPlanService(sessionRepository, drillRepository, bookingQueryService,
-            coachProfileService, drillLibraryService, dnaCalculator, equipmentListService);
+            coachProfileService, drillLibraryService, dnaCalculator, equipmentListService, bookingStateMachine);
     }
 
     private DrillMetadata metadata() {
@@ -189,6 +191,8 @@ class SessionPlanServiceTest {
         existing.setCreatedAt(Instant.now());
         existing.setUpdatedAt(Instant.now());
         when(sessionRepository.findById(sessionId)).thenReturn(Optional.of(existing));
+        when(bookingQueryService.getBookingSnapshot(BOOKING_ID))
+            .thenReturn(Optional.of(new BookingSnapshot(BOOKING_ID, COACH_ID, 500L, "CONFIRMED")));
         stubDrillFetchAndDerivedResponses();
         when(sessionRepository.save(any(Session.class))).thenAnswer(inv -> inv.getArgument(0));
 

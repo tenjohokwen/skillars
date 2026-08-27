@@ -71,6 +71,7 @@
             @close="selectedLibrary = 'PLATFORM'"
             @add-drill="addDrillToActiveBlock"
             @open-detail="openDrillDetail"
+            @video-error="fetchDrills"
           />
 
           <template v-else>
@@ -98,6 +99,7 @@
                 context="session-builder"
                 @open-detail="openDrillDetail(drill)"
                 @add-to-session="addDrillToActiveBlock(drill)"
+                @video-error="fetchDrills"
               />
             </div>
           </template>
@@ -199,6 +201,7 @@
       context="session-builder"
       @close="isDrillDetailOpen = false"
       @add-to-session="onAddToSession"
+      @video-error="fetchDrills"
     />
 
     <!-- Save as Template dialog -->

@@ -9,6 +9,7 @@
             controls
             :src="drill.videoUrl"
             class="drill-detail-panel__video"
+            @error="handleVideoError"
           />
           <div v-else class="drill-detail-panel__no-video text-center q-pa-md">
             <q-icon name="videocam_off" size="48px" class="q-mb-sm" />
@@ -90,8 +91,8 @@
           @click="emit('add-to-session', props.drill)"
         />
 
-        <!-- Upload section (COACH drills only, INSTRUCTOR+ tier) -->
-        <div v-if="props.drill.libraryType === 'COACH' && sessionStore.canUploadVideo === true"
+        <!-- Upload section (PRIVATE drills only, INSTRUCTOR+ tier) -->
+        <div v-if="props.drill.libraryType === 'PRIVATE' && sessionStore.canUploadVideo === true"
              class="detail-panel__upload q-mt-md">
           <template v-if="!props.drill.hasVideo">
             <q-file
@@ -154,6 +155,7 @@
                 controls
                 :src="drill.videoUrl"
                 class="drill-detail-panel__video"
+                @error="handleVideoError"
               />
               <div v-else class="drill-detail-panel__no-video text-center q-pa-md">
                 <q-icon name="videocam_off" size="48px" class="q-mb-sm" />
@@ -237,8 +239,8 @@
               @click="emit('add-to-session', props.drill)"
             />
 
-            <!-- Upload section (COACH drills only, INSTRUCTOR+ tier) -->
-            <div v-if="props.drill.libraryType === 'COACH' && sessionStore.canUploadVideo === true"
+            <!-- Upload section (PRIVATE drills only, INSTRUCTOR+ tier) -->
+            <div v-if="props.drill.libraryType === 'PRIVATE' && sessionStore.canUploadVideo === true"
                  class="detail-panel__upload q-mt-md">
               <template v-if="!props.drill.hasVideo">
                 <q-file
@@ -301,7 +303,7 @@ const props = defineProps({
   context: { type: String, default: null },
 })
 
-const emit = defineEmits(['close', 'add-to-session'])
+const emit = defineEmits(['close', 'add-to-session', 'video-error'])
 
 const $q = useQuasar()
 const { t } = useI18n()
@@ -312,6 +314,18 @@ const isMobile = computed(() => $q.screen.lt.sm)
 // Local ref avoids Quasar's sheet snapping back while the parent processes the close event
 const open = ref(props.isOpen)
 watch(() => props.isOpen, (val) => { open.value = val })
+
+// Story Deferred-75 AC9: this panel stays mounted and is reused for whichever drill is currently
+// selected (props.drill swaps without a remount) — so the once-per-mount emit guard must reset
+// whenever the displayed drill changes, or a video error on one drill would permanently suppress
+// recovery for every drill viewed afterward.
+const videoErrorEmitted = ref(false)
+watch(() => props.drill?.id, () => { videoErrorEmitted.value = false })
+function handleVideoError() {
+  if (videoErrorEmitted.value) return
+  videoErrorEmitted.value = true
+  emit('video-error')
+}
 
 const sluBreakdown = computed(() => {
   if (!props.drill?.metadata) return []
@@ -332,7 +346,7 @@ const uploadPercent = ref(0)
 let tusUpload = null
 
 onMounted(async () => {
-  if (props.drill?.libraryType === 'COACH') {
+  if (props.drill?.libraryType === 'PRIVATE') {
     await sessionStore.fetchVideoUploadEligibility()
   }
 })

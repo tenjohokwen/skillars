@@ -12,5 +12,5 @@ import java.util.UUID;
 public record CreateSessionPlanRequest(
     @NotNull UUID bookingId,
     @NotNull @Size(min = 1, max = 4) List<@Valid SessionBlockRequest> blocks,
-    @NotEmpty List<@NotBlank String> developmentFocus
+    @NotEmpty List<@NotBlank @ValidFocusCode String> developmentFocus
 ) {}

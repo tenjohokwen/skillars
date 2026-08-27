@@ -123,7 +123,7 @@ public class DrillLibraryService {
         Drill clone = new Drill();
         clone.setName(source.getName());
         clone.setDescription(source.getDescription());
-        clone.setLibraryType("COACH");
+        clone.setLibraryType("PRIVATE");
         clone.setOwnerCoachId(coachId);
         clone.setStatus("ACTIVE");
         clone.setMetadata(source.getMetadata());
@@ -150,7 +150,7 @@ public class DrillLibraryService {
         Drill drill = drillRepository.findById(drillId)
             .orElseThrow(() -> new ResourceNotFoundException("Drill not found", "drill"));
 
-        if (!"COACH".equals(drill.getLibraryType()) || !coachId.equals(drill.getOwnerCoachId())) {
+        if (!"PRIVATE".equals(drill.getLibraryType()) || !coachId.equals(drill.getOwnerCoachId())) {
             throw new OperationNotAllowedException("Cannot tag this drill", SessionErrorCode.SESSION_CANNOT_TAG_UNAUTHORIZED);
         }
 
@@ -169,7 +169,7 @@ public class DrillLibraryService {
         Drill drill = drillRepository.findById(drillId)
             .orElseThrow(() -> new ResourceNotFoundException("Drill not found", "drill"));
 
-        if (!"COACH".equals(drill.getLibraryType()) || !coachId.equals(drill.getOwnerCoachId())) {
+        if (!"PRIVATE".equals(drill.getLibraryType()) || !coachId.equals(drill.getOwnerCoachId())) {
             throw new OperationNotAllowedException("Cannot tag this drill", SessionErrorCode.SESSION_CANNOT_TAG_UNAUTHORIZED);
         }
 

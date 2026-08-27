@@ -28,6 +28,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -104,6 +105,10 @@ public class SessionTemplateService {
         SessionTemplate t = sessionTemplateRepository.findByIdAndCoachId(templateId, coachId)
             .orElseThrow(() -> new OperationNotAllowedException("Template not owned", SessionErrorCode.TEMPLATE_NOT_OWNED));
 
+        if ("ARCHIVED".equals(t.getStatus())) {
+            throw new OperationNotAllowedException("Template has been deleted", SessionErrorCode.TEMPLATE_NOT_OWNED);
+        }
+
         t.setStatus("ARCHIVED");
         sessionTemplateRepository.save(t);
     }
@@ -147,7 +152,7 @@ public class SessionTemplateService {
         session.setBookingId(bookingId);
         session.setCoachId(coachId);
         session.setPlayerId(booking.playerId());
-        session.setBlocks(t.getBlocks());
+        session.setBlocks(t.getBlocks() != null ? new ArrayList<>(t.getBlocks()) : new ArrayList<>());
         session.setSessionDna(t.getSessionDna());
         session.setEquipmentList(t.getEquipmentList());
         session.setDevelopmentFocus(t.getDevelopmentFocus());

@@ -36,6 +36,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.instancio.Select.field;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -113,6 +114,28 @@ class HomeworkAssignmentServiceTest {
     }
 
     @Test
+    void handleBookingCompleted_moreThanTwoHomeworkDrillIds_assignsOnlyFirstTwo() {
+        UUID bookingId = UUID.randomUUID();
+        UUID coachId = UUID.randomUUID();
+        Long playerId = 1001L;
+        UUID drillId1 = UUID.randomUUID();
+        UUID drillId2 = UUID.randomUUID();
+        UUID drillId3 = UUID.randomUUID();
+
+        BookingCompletedEvent event = new BookingCompletedEvent(this, bookingId, coachId, playerId,
+            2001L, true, 4, 4, 4, List.of(drillId1, drillId2, drillId3));
+
+        when(sessionRepository.findByBookingId(bookingId)).thenReturn(Optional.empty());
+        when(packSessionService.getActivePackId(playerId, coachId)).thenReturn(null);
+        when(homeworkAssignmentRepository.existsByBookingIdAndDrillId(any(), any())).thenReturn(false);
+
+        service.handleBookingCompleted(event);
+
+        verify(homeworkAssignmentRepository, times(2)).saveAndFlush(any(HomeworkAssignment.class));
+        verify(homeworkAssignmentRepository, never()).existsByBookingIdAndDrillId(bookingId, drillId3);
+    }
+
+    @Test
     void getLockerRoomDrills_activePackFilter_excludesExhaustedCoach() {
         Long playerId = 1001L;
         UUID activeCoachId = UUID.randomUUID();
@@ -124,8 +147,8 @@ class HomeworkAssignmentServiceTest {
 
         when(homeworkAssignmentRepository.findByPlayerIdOrderByAssignedAtDesc(playerId))
             .thenReturn(List.of(activeAssignment, exhaustedAssignment));
-        when(packSessionService.hasActivePack(playerId, activeCoachId)).thenReturn(true);
-        when(packSessionService.hasActivePack(playerId, exhaustedCoachId)).thenReturn(false);
+        when(packSessionService.hasActivePackForAnyOf(eq(playerId), any()))
+            .thenReturn(Set.of(activeCoachId));
 
         Drill drill = buildDrill(drillId);
         when(drillRepository.findAllById(any())).thenReturn(List.of(drill));
@@ -142,6 +165,33 @@ class HomeworkAssignmentServiceTest {
         // Exhausted coach's assignment is excluded; only active coach's drill remains
         assertThat(result).hasSize(1);
         assertThat(result.get(0).coachId()).isEqualTo(activeCoachId);
+    }
+
+    @Test
+    void getLockerRoomDrills_manyDistinctCoaches_looksUpActivePacksInOneBatchCall() {
+        // Story Deferred-75 AC6: proves the N+1 fix — regardless of how many distinct coaches appear
+        // across the player's assignments, hasActivePackForAnyOf must be called exactly once, not
+        // once per coach.
+        Long playerId = 1001L;
+        List<HomeworkAssignment> assignments = new java.util.ArrayList<>();
+        Set<UUID> coachIds = new java.util.HashSet<>();
+        for (int i = 0; i < 5; i++) {
+            UUID coachId = UUID.randomUUID();
+            coachIds.add(coachId);
+            assignments.add(buildAssignment(playerId, coachId, UUID.randomUUID()));
+        }
+
+        when(homeworkAssignmentRepository.findByPlayerIdOrderByAssignedAtDesc(playerId))
+            .thenReturn(assignments);
+        when(packSessionService.hasActivePackForAnyOf(eq(playerId), any())).thenReturn(coachIds);
+        when(drillRepository.findAllById(any())).thenReturn(List.of());
+        when(coachProfileService.getDisplayNamesByIds(any())).thenReturn(Map.of());
+        when(homeworkCompletionRepository.findAssignmentIdsByPlayerIdAndAssignmentIdIn(anyLong(), any()))
+            .thenReturn(Set.of());
+
+        service.getLockerRoomDrills(playerId);
+
+        verify(packSessionService, times(1)).hasActivePackForAnyOf(eq(playerId), eq(coachIds));
     }
 
     @Test
@@ -164,7 +214,7 @@ class HomeworkAssignmentServiceTest {
 
         when(homeworkAssignmentRepository.findByPlayerIdOrderByAssignedAtDesc(playerId))
             .thenReturn(List.of(assignment));
-        when(packSessionService.hasActivePack(playerId, coachId)).thenReturn(true);
+        when(packSessionService.hasActivePackForAnyOf(eq(playerId), any())).thenReturn(Set.of(coachId));
 
         Drill drill = buildDrill(drillId);
         when(drillRepository.findAllById(any())).thenReturn(List.of(drill));

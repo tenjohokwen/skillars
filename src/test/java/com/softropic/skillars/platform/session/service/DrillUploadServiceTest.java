@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.session.service;
 
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
@@ -22,6 +23,7 @@ import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
 import com.softropic.skillars.platform.video.service.VideoService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -33,11 +35,13 @@ import org.springframework.context.ApplicationEventPublisher;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -53,6 +57,8 @@ class DrillUploadServiceTest {
     @Mock private CoachProfileService coachProfileService;
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private VideoTypeConstraints videoTypeConstraints;
+    @Mock private EntityManager entityManager;
+    @Mock private PessimisticLockRetryer lockRetryer;
 
     private SimpleMeterRegistry meterRegistry;
     private DrillUploadService service;
@@ -67,9 +73,19 @@ class DrillUploadServiceTest {
         service = new DrillUploadService(
             drillRepository, drillVideoRefRepository, videoService,
             videoRepository, configService, coachProfileService, eventPublisher, videoTypeConstraints,
-            meterRegistry
+            meterRegistry, entityManager, lockRetryer
         );
         when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
+        // Story Deferred-75 AC5: the lock is real infrastructure this unit test doesn't exercise —
+        // execute the guarded supplier directly. findByIdForUpdate's returned Drill is discarded by
+        // the service (only entityManager.refresh(drill, ...) matters, itself a no-op mock), so its
+        // identity doesn't need to match the test's own drill fixture. lenient() since not every test
+        // reaches the locked section (e.g. tests that throw on ownership/gate/validation checks first).
+        lenient().when(drillRepository.findByIdForUpdate(any())).thenReturn(Optional.of(new Drill()));
+        lenient().when(lockRetryer.withBoundedRetry(any())).thenAnswer(inv -> {
+            Supplier<?> supplier = inv.getArgument(0);
+            return supplier.get();
+        });
     }
 
     // ── initiateUpload happy path ─────────────────────────────────────────────
@@ -419,7 +435,7 @@ class DrillUploadServiceTest {
         Drill d = new Drill();
         d.setId(id);
         d.setName("Test Drill");
-        d.setLibraryType("COACH");
+        d.setLibraryType("PRIVATE");
         d.setOwnerCoachId(ownerCoachId);
         d.setStatus("ACTIVE");
         return d;

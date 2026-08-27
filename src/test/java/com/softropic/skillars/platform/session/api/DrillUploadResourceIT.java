@@ -86,11 +86,11 @@ class DrillUploadResourceIT extends BaseSessionIT {
 
             // Coach drill owned by instrCoach
             coachDrillId = UUID.randomUUID();
-            insertDrill(coachDrillId, "Coach Test Drill", "COACH", instrCoachId, "ACTIVE");
+            insertDrill(coachDrillId, "Coach Test Drill", "PRIVATE", instrCoachId, "ACTIVE");
 
             // Coach drill owned by scoutCoach
             scoutCoachDrillId = UUID.randomUUID();
-            insertDrill(scoutCoachDrillId, "Scout Test Drill", "COACH", scoutCoachId, "ACTIVE");
+            insertDrill(scoutCoachDrillId, "Scout Test Drill", "PRIVATE", scoutCoachId, "ACTIVE");
 
             // Platform drill
             platformDrillId = jdbcTemplate.queryForObject(
@@ -100,7 +100,7 @@ class DrillUploadResourceIT extends BaseSessionIT {
 
             // Coach drill owned by otherCoach
             otherCoachDrillId = UUID.randomUUID();
-            insertDrill(otherCoachDrillId, "Other Coach Drill", "COACH", otherCoachId, "ACTIVE");
+            insertDrill(otherCoachDrillId, "Other Coach Drill", "PRIVATE", otherCoachId, "ACTIVE");
 
             return null;
         });
