@@ -216,6 +216,11 @@ Full service health reference — run `docker compose` commands from `/opt/skill
 
 Replace `<POSTGRES_USER>` and `<POSTGRES_DB>` with the values from your `.env`.
 
+Additionally, log in at `https://<MONITORING_DOMAIN>` with the `GF_SECURITY_ADMIN_USER`/
+`GF_SECURITY_ADMIN_PASSWORD` values from `.env` to confirm the admin account works end-to-end — the API
+health check above only confirms the process is up and reaches its own database, not that the admin login
+itself works.
+
 ---
 
 ## Step 8: Set Up External Uptime Monitor

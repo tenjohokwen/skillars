@@ -4,6 +4,7 @@ import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.development.repo.NeglectedSkillFlag;
 import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagRepository;
 import com.softropic.skillars.platform.development.repo.PlayerSluWeeklySnapshot;
+import com.softropic.skillars.platform.development.repo.SluRepository;
 import com.softropic.skillars.platform.development.repo.SluTargetRepository;
 import com.softropic.skillars.platform.development.repo.SluWeeklySnapshotRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyShort;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -32,6 +34,7 @@ class NeglectedSkillDetectionServiceTest {
     @Mock private SluTargetRepository sluTargetRepository;
     @Mock private SluWeeklySnapshotRepository snapshotRepository;
     @Mock private NeglectedSkillFlagRepository flagRepository;
+    @Mock private SluRepository sluRepository;
     @Mock private ConfigService configService;
 
     private NeglectedSkillProcessor processor;
@@ -41,11 +44,16 @@ class NeglectedSkillDetectionServiceTest {
     private static final short EVAL_YEAR = 2026;
     private static final short EVAL_WEEK = 24;
     private static final BigDecimal THRESHOLD = new BigDecimal("0.30");
+    // Story Deferred-76 AC9: well above every warmup threshold used in these tests, so the existing
+    // threshold-logic tests below are unaffected by the new warmup gate — they're testing neglect
+    // detection, not warmup behavior. Overridden per-test where the warmup gate itself is under test.
+    private static final long WARMUP_SESSION_COUNT = 10L;
 
     @BeforeEach
     void setUp() {
-        processor = new NeglectedSkillProcessor(sluTargetRepository, snapshotRepository, flagRepository);
+        processor = new NeglectedSkillProcessor(sluTargetRepository, snapshotRepository, flagRepository, sluRepository);
         detectionService = new NeglectedSkillDetectionService(sluTargetRepository, processor, configService);
+        lenient().when(sluRepository.countDistinctSessions(PLAYER_ID)).thenReturn(WARMUP_SESSION_COUNT);
     }
 
     @Test
@@ -56,7 +64,7 @@ class NeglectedSkillDetectionServiceTest {
         when(snapshotRepository.findByPlayerIdAndWeek(PLAYER_ID, EVAL_YEAR, EVAL_WEEK))
             .thenReturn(List.of(makeSnapshot(EVAL_YEAR, EVAL_WEEK, "PAC", new BigDecimal("5"))));
 
-        processor.processPlayer(PLAYER_ID, THRESHOLD, EVAL_YEAR, EVAL_WEEK);
+        processor.processPlayer(PLAYER_ID, THRESHOLD, WARMUP_SESSION_COUNT, EVAL_YEAR, EVAL_WEEK);
 
         ArgumentCaptor<NeglectedSkillFlag> captor = ArgumentCaptor.forClass(NeglectedSkillFlag.class);
         verify(flagRepository).save(captor.capture());
@@ -74,7 +82,7 @@ class NeglectedSkillDetectionServiceTest {
         when(flagRepository.findByPlayerIdAndResolvedAtIsNull(PLAYER_ID))
             .thenReturn(List.of());
 
-        processor.processPlayer(PLAYER_ID, THRESHOLD, EVAL_YEAR, EVAL_WEEK);
+        processor.processPlayer(PLAYER_ID, THRESHOLD, WARMUP_SESSION_COUNT, EVAL_YEAR, EVAL_WEEK);
 
         verify(flagRepository, never()).save(any());
     }
@@ -89,7 +97,7 @@ class NeglectedSkillDetectionServiceTest {
         when(flagRepository.findByPlayerIdAndResolvedAtIsNull(PLAYER_ID))
             .thenReturn(List.of());
 
-        processor.processPlayer(PLAYER_ID, THRESHOLD, EVAL_YEAR, EVAL_WEEK);
+        processor.processPlayer(PLAYER_ID, THRESHOLD, WARMUP_SESSION_COUNT, EVAL_YEAR, EVAL_WEEK);
 
         verify(flagRepository, never()).save(any());
     }
@@ -105,7 +113,7 @@ class NeglectedSkillDetectionServiceTest {
         when(flagRepository.findByPlayerIdAndResolvedAtIsNull(PLAYER_ID))
             .thenReturn(List.of(existingFlag));
 
-        processor.processPlayer(PLAYER_ID, THRESHOLD, EVAL_YEAR, EVAL_WEEK);
+        processor.processPlayer(PLAYER_ID, THRESHOLD, WARMUP_SESSION_COUNT, EVAL_YEAR, EVAL_WEEK);
 
         verify(flagRepository, never()).save(any());
     }
@@ -121,7 +129,7 @@ class NeglectedSkillDetectionServiceTest {
         when(flagRepository.findByPlayerIdAndResolvedAtIsNull(PLAYER_ID))
             .thenReturn(List.of(existingFlag));
 
-        processor.processPlayer(PLAYER_ID, THRESHOLD, EVAL_YEAR, EVAL_WEEK);
+        processor.processPlayer(PLAYER_ID, THRESHOLD, WARMUP_SESSION_COUNT, EVAL_YEAR, EVAL_WEEK);
 
         ArgumentCaptor<NeglectedSkillFlag> captor = ArgumentCaptor.forClass(NeglectedSkillFlag.class);
         verify(flagRepository).save(captor.capture());
@@ -136,7 +144,50 @@ class NeglectedSkillDetectionServiceTest {
         when(snapshotRepository.findByPlayerIdAndWeek(PLAYER_ID, EVAL_YEAR, EVAL_WEEK))
             .thenReturn(List.of(makeSnapshot(EVAL_YEAR, EVAL_WEEK, "PAC", new BigDecimal("6"))));
 
-        processor.processPlayer(PLAYER_ID, THRESHOLD, EVAL_YEAR, EVAL_WEEK);
+        processor.processPlayer(PLAYER_ID, THRESHOLD, WARMUP_SESSION_COUNT, EVAL_YEAR, EVAL_WEEK);
+
+        ArgumentCaptor<NeglectedSkillFlag> captor = ArgumentCaptor.forClass(NeglectedSkillFlag.class);
+        verify(flagRepository).save(captor.capture());
+        assertThat(captor.getValue().getSkillCode()).isEqualTo("PAC");
+    }
+
+    @Test
+    void processPlayer_belowWarmupThreshold_skipsEvaluationEntirely() {
+        // Story Deferred-76 AC9: a brand-new player (zero recorded SLU) would otherwise get every
+        // coach-targeted skill flagged on first evaluation — the warmup gate must short-circuit
+        // before any target/snapshot/flag lookup happens at all.
+        when(sluRepository.countDistinctSessions(PLAYER_ID)).thenReturn(2L);
+
+        processor.processPlayer(PLAYER_ID, THRESHOLD, WARMUP_SESSION_COUNT, EVAL_YEAR, EVAL_WEEK);
+
+        verify(sluTargetRepository, never()).findMaxTargetPerSkill(any());
+        verify(snapshotRepository, never()).findByPlayerIdAndWeek(anyLong(), anyShort(), anyShort());
+        verify(flagRepository, never()).findByPlayerIdAndResolvedAtIsNull(any());
+        verify(flagRepository, never()).save(any());
+    }
+
+    @Test
+    void processPlayer_nullSessionCount_skipsEvaluationEntirely() {
+        // countDistinctSessions can return null for a player with zero sessions (no rows to aggregate).
+        when(sluRepository.countDistinctSessions(PLAYER_ID)).thenReturn(null);
+
+        processor.processPlayer(PLAYER_ID, THRESHOLD, WARMUP_SESSION_COUNT, EVAL_YEAR, EVAL_WEEK);
+
+        verify(flagRepository, never()).save(any());
+    }
+
+    @Test
+    void processPlayer_atWarmupThreshold_evaluationProceeds() {
+        // Boundary: sessionCount == warmupSessionCount passes the gate (>= semantics), matching this
+        // module's existing >=-at-boundary convention (see detectNeglectedSkills_exactlyAtLowerBound
+        // for the analogous neglect-threshold boundary).
+        when(sluRepository.countDistinctSessions(PLAYER_ID)).thenReturn(WARMUP_SESSION_COUNT);
+        when(sluTargetRepository.findMaxTargetPerSkill(PLAYER_ID))
+            .thenReturn(maxTargets("PAC", new BigDecimal("10")));
+        when(snapshotRepository.findByPlayerIdAndWeek(PLAYER_ID, EVAL_YEAR, EVAL_WEEK))
+            .thenReturn(List.of(makeSnapshot(EVAL_YEAR, EVAL_WEEK, "PAC", new BigDecimal("5"))));
+
+        processor.processPlayer(PLAYER_ID, THRESHOLD, WARMUP_SESSION_COUNT, EVAL_YEAR, EVAL_WEEK);
 
         ArgumentCaptor<NeglectedSkillFlag> captor = ArgumentCaptor.forClass(NeglectedSkillFlag.class);
         verify(flagRepository).save(captor.capture());

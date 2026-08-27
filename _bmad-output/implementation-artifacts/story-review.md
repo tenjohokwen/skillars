@@ -1,254 +1,285 @@
-# Story Deferred-75 Audit: Session-Template Guards, Drill-Upload Concurrency, Homework Fixes & Library-Type Rename
+# Story Audit: Deferred-76
 
-**Audit Date:** 2026-08-27  
-**Auditor:** Senior code review  
-**Status:** Ready for dev with one critical assumption (AC4) to verify before deployment
-
----
+**Status:** APPROVED with verification checkpoints flagged below
 
 ## Summary
 
-The story is well-researched, thoroughly specified, and technically sound across all 12 ACs. The re-verification pass that preceded AC design correctly identified issues the ledger had missed or misframed. **One critical frontend assumption in AC4 requires explicit verification before deployment.** All other ACs have appropriate guards or acknowledge contingencies. No false positives found — issues correctly identified as bugs rather than design decisions.
+Story is well-researched and findings are solid. Five legitimate corner cases and re-verification checkpoints identified; no false positives found.
 
 ---
 
-## AC1: SessionTemplateService Guards ✓
+## AC1 — Production data-loss and provisioning-script safety fixes
 
-**Status:** Well-specified, no issues.
+✅ **Approved.** All four fixes are correct and necessary.
 
-- **Guard logic:** Adding ARCHIVED check to `deleteTemplate` mirrors existing checks in `renameTemplate`/`deployTemplate`. Correct.
-- **Defensive copy:** New ArrayList assignment prevents shared-reference footgun. Correctly identified as latent (no current mutation path, but real if future code changes).
-- **Test:** `deleteTemplate_alreadyArchived_returns403` appropriately mirrors existing patterns.
-- **No corner cases missed.** ✓
+**Corner case — shell script portability:**
+- `stat -c '%u:%g'` uses GNU stat format (Linux only); macOS `stat` uses different flags
+- This is acceptable: `provision.sh` and `install-crons.sh` target Hetzner nodes (Linux), documented in deployment docs as Debian/Ubuntu VMs
+- No action needed, but worth noting in commit message if context is lost
 
----
-
-## AC2: SessionPlanService Booking Terminal-Status Guard ✓
-
-**Status:** Well-specified, contingency appropriately noted.
-
-- **Guard logic:** Reuses `BookingStateMachine.isTerminal()` rather than hand-listing statuses. Correct — extends guard beyond just `COMPLETED` to all terminal states.
-- **Ordering:** Story explicitly notes putting booking check *after* session check to keep existing tests passing. Intentional, not a bug. Accepted trade-off.
-- **Corner case — booking not found:** AC shows `.orElseThrow(... "Booking not found")`, assumes `bookingQueryService.getBookingSnapshot()` returns `Optional`. **Verify this method signature exists.** (Low risk — .orElseThrow() syntax strongly implies it.)
-- **Test shape:** Correctly specifies checking `CANCELLED_PARENT` terminal status. Appropriately calls for verifying it's terminal via `BookingStateMachineTest` first.
-- **No missed flows.** ✓
+**Verified claims:**
+- Idempotent `chown_if_needed` helper correctly checks current owner before running `chown -R` — prevents interrupting in-progress container writes ✓
+- Early exit if directory doesn't exist — the `stat ... 2>/dev/null` failure case falls through correctly and runs chown, which is right (better to enforce correct perms than skip) ✓
 
 ---
 
-## AC3: Existing Test Fix ✓
+## AC2 — Observability configuration fixes
 
-**Status:** Mechanical fix, no issues.
+✅ **Approved.** All four fixes are correct.
 
-- Just fixing assertion shape on existing test and applying it to AC2's new test.
-- References correct precedent pattern from `RescheduleResourceIT.java`.
-- **No corner cases.** ✓
+**Corner case — trace ID format assumption:**
+- Regex `[a-fA-F0-9]{32}` assumes exactly 32 hex chars (W3C 128-bit format)
+- OTel spec allows variable-length IDs; if the app ever switches formats, this breaks silently
+- **Action:** Add a comment in `grafana-datasources.yml` noting this assumes W3C trace ID format (32 hex chars) — future-proofing for if the app changes formats
+- Not a blocker; just document the assumption
 
----
-
-## AC4: DrillCard.vue Context Gating — ⚠️ **CRITICAL ASSUMPTION**
-
-**Status:** Design is correct, but one assumption MUST be verified.
-
-- **Current:** Tag-edit block only gated on `libraryType === 'COACH'`.
-- **Fix:** Add `context !== 'locker-room'` check.
-- **Proposed conditional:** `v-if="drill.libraryType === 'PRIVATE' && context !== 'locker-room'"`
-
-### **CRITICAL ISSUE:**
-
-If the `context` prop is **not always passed** to DrillCard (or if it can be `null`/`undefined`), then:
-- `undefined !== 'locker-room'` evaluates to `true`
-- Tag-edit UI renders even on locker-room page
-- AC4 fails silently
-
-**Mitigation required before deployment:**
-
-Story states "DrillCard is used from four places (confirmed by grep)" with context values. **This needs explicit verification** that:
-1. All 4 usages pass the context prop (manual code-read of each usage)
-2. None are conditional or have fallback paths omitting context
-3. Context is never `null` or `undefined`
-
-**Safer alternative fix** (if context is optional):
-```vue
-<div v-if="drill.libraryType === 'PRIVATE' && context !== 'locker-room' && context" class="drill-card__tags q-mt-sm">
-```
-or (if being explicit):
-```vue
-<div v-if="drill.libraryType === 'PRIVATE' && (context === 'library' || context === 'session-builder')" class="drill-card__tags q-mt-sm">
-```
-
-**Recommendation:** Before writing code, inspect each of the 4 usages to confirm context is always passed. If any usage could omit it, add explicit null-check to conditional.
+**Verified claims:**
+- `spanStartTimeShift` reduction from `1h` to `1m` is reasonable (margin for clock skew between log timestamp and span emission) — the 2026-06-03 code review suggested this ✓
+- Tempo's `block_retention` of 336h (14d) is confirmed in `deploy/lgtm/tempo.yml:23` by the story ✓
 
 ---
 
-## AC5: DrillUploadService Locking — ✓
+## AC3 — Close the production live-Stripe-key guard gap
 
-**Status:** Well-designed, no issues.
+✅ **Approved.** Security guard improvement is sound and actually safer than the original.
 
-- **Lock pattern:** Correctly mirrors `CoachProfileService` (findByIdForUpdate + PessimisticLockRetryer + entityManager.refresh).
-- **Lock scope:** Locking only the Drill row is correct — serializes all callers on that drill's video state.
-- **Provider call inside lock:** Story correctly notes `videoService.initializeUpload()` must stay inside locked region so next caller sees committed write. This prevents the race. ✓
-- **Double-publish race:** AC correctly identifies the `existsByVideoId() → publish deletion` race and fixes it with same lock. ✓
-- **Comment-only follow-up:** Adding comment to `CoachSubscriptionTier` noting enum order is load-bearing — proportionate fix.
-- **Retry logic:** `PessimisticLockRetryer` has built-in bounded retry with SAVEPOINT rollback. Handles conflict/prolonged contention. ✓
-- **Test structure:** Correctly references `SessionPackPurchaseLockContentionIT` as structural precedent.
-- **No missed flows.** ✓
+**Critical change:** This flips a security guard from opt-in (only non-prod profiles block live keys) to require-prod (any non-`prod` profile rejects live keys). Correctly identified as highest-blast-radius change in this story.
 
----
+**Verified assumptions:**
+- `docker-compose.yml`'s `SPRING_PROFILES_ACTIVE=prod` propagates to `environment.getActiveProfiles()` — standard Spring Boot behavior ✓
+- The new logic `!prodProfileActive && LIVE_KEY_PATTERN` correctly requires the profile name to be exactly `"prod"`, failing closed if typo'd or absent ✓
+- Test inversion (turning passing test into failing, adding new positive case) is correctly described — **verify this test passes after the fix** during implementation ✓
 
-## AC6: HomeworkAssignmentService Batching & Size Guard — ✓
-
-**Status:** Well-specified, contingency appropriately noted.
-
-- **N+1 fix:** Batch query replaces N individual `hasActivePack(coachId)` calls with 1 query returning subset of coachIds with active packs. Correct approach.
-- **Query correctness contingency:** Story appropriately calls for re-verifying batch query conditions against `findActivePacks()` before writing. This is **dev responsibility** — must match exact same filters. **Mark as verification step.**
-- **Size guard:** `handleBookingCompleted` now truncates at 2 and logs WARN. Appropriate defense-in-depth for async path.
-- **Truncation vs. rejection:** Correctly chooses truncation (defense) over rejection for async listener (no caller to return error to).
-- **Testing:** Batching test verifies query count doesn't scale. Size-limit test verifies only 2 assignments created. Appropriate.
-- **No missed flows.** ✓
+**Corner case — command-line profile override:**
+- If someone runs `java -Dspring.profiles.active=uat ...` from CLI, Spring merges it with env var profiles correctly
+- Not an issue; Spring's standard profile resolution handles this
 
 ---
 
-## AC7: homework_assignments.pack_id FK — ✓
+## AC4 — Deploy-workflow and rollback-documentation hardening
 
-**Status:** Well-designed, contingency noted.
+✅ **Approved.** All parts are correct, with one verification point.
 
-- **Verification:** Story correctly verified column points at real, live `payment.session_pack_purchases.purchase_id`. Not dead or orphaned. ✓
-- **Migration safety:** Orphan-clear before FK addition. Defensive and correct.
-- **ON DELETE SET NULL:** Appropriate choice (column already nullable).
-- **Precedent:** Mirrors existing cross-schema FK from `booking.bookings → payment.session_pack_purchases`.
-- **Testing:** FK-violation IT correctly specified.
-- **No missed flows.** ✓
+**Re-verification checkpoint — GitHub Actions outcome value:**
+- The "early failure notification" step uses `steps.smoke.outcome == 'skipped'` to detect "job failed before reaching Smoke Test"
+- Story acknowledges: "This was not verified against a live GitHub Actions run"
+- **Action:** Before merging, confirm in a test run what the actual value of `steps.smoke.outcome` is for a step skipped due to an earlier step's failure (vs. unset/null/empty)
+- Likely correct, but GitHub's behavior can be surprising
 
----
+**Verified claims:**
+- Auto-Revert's local pre-check (`docker image inspect <prev-tag>` before network pull) is elegant — skips network entirely when image is locally cached, falls back to pull if not found locally ✓
+- Health-check loop in rollback.md uses `seq 1 6` (6 attempts × 10s = 60s total wait) — reasonable timeout ✓
+- `docker compose ps -q app` extracts container ID by service name — assumes single app container, which is true in this stack ✓
+- Documentation for `SSH_KNOWN_HOST` correction (multi-line output, not single line) is the real bug being fixed ✓
 
-## AC8: Rename 'COACH' → 'PRIVATE' — ✓
-
-**Status:** Well-scoped, constraint-name assumption must be verified.
-
-- **Scope verification:** Targeted grep sweep correctly identifies all locations (8 prod code, multiple test files).
-- **Constraint assumption:** Story assumes `drills_library_type_check` is auto-generated name for single-column CHECK. **Contingency noted:** failure is loud, not silent. Acceptable.
-- **Dev step before migration:** Run `\d session.drills` in psql to confirm auto-generated name. **Mark as verification step.**
-- **Migration structure:** Correctly drops and re-adds both constraints with 'PRIVATE' value. ✓
-- **Enum consistency:** Code patterns show hardcoded strings, not enum. Assuming String field. **Verify there's no Java enum this migration missed.** (Low risk.)
-- **Test sweep:** Running full `session` package tests confirms sweep is complete. ✓
-- **No false assumptions.** ✓
+**Non-issues:**
+- `docker compose pull app` idempotency — correct, will retry partial pulls
+- The curl-based health check inside the container via `docker exec` — standard approach ✓
 
 ---
 
-## AC9: Drill Video URL Refresh on Error — ✓
+## AC5 — Document a post-migration rollback procedure
 
-**Status:** Well-designed, contingency appropriately noted.
+✅ **Approved.** Documentation is correct.
 
-- **Error handler:** Adding `@error` handler on `<video>` elements is correct.
-- **Refetch guard:** `videoRetried` ref prevents loops. Each component instance gets one retry. Correct.
-- **One retry per mount:** If component unmounts/remounts, guard resets — acceptable (still bounded, intentional).
-- **Store field assumption:** Story explicitly calls out verifying `sessionStore.currentLibrary` exists. **Mark as verification step.** ✓
-- **Scope:** 1 element in DrillCard.vue + 3 in DrillDetailPanel.vue = 4 total. Correct.
-- **Fallback behavior:** If refetch also fails, video stays broken but no loop. Acceptable.
-- **Testing:** Manual verification (no frontend test runner) — confirm exactly one refetch fires. Appropriate.
-- **No missed flows.** ✓
+**Verified claim:**
+- Backup interval stated as `0 */6 * * *` (every 6 hours) is correct — story cites the actual `install-crons.sh` cron ✓
+- Data-loss window up to 6 hours is correctly stated
+
+**Not a corner case:** The story correctly notes this is the fallback ("when fix-forward can't unblock in time"), not the primary path.
 
 ---
 
-## AC10: Deterministic Seed Drill IDs — ✓
+## AC6 — Remove the dead `JWT_SECRET` configuration
 
-**Status:** Appropriate risk acceptance and safe guard.
+✅ **Approved.** Straightforward removal.
 
-- **Problem:** V39 uses `gen_random_uuid()` for 20 platform drills. Different id per environment.
-- **Risk:** Reassigning ids orphans any pre-existing references.
-- **Mitigation:** Guard aborts migration (fails loudly) if any references found. If guard fires, environment needs hand-written follow-up.
-- **Accepted risk:** Project owner was warned and chose to accept. Appropriate escalation.
-- **Guard logic:** Checks both `drill_video_refs` and `homework_assignments`. Covers known foreign-key tables. ✓
-- **UUID format:** `00000000-0000-4000-8000-000000000001` through `...000000000020` are valid v4 UUIDs. Extremely unlikely to conflict. ✓
-- **trans_key verification:** Story calls for re-verifying all 20 against live V39 before running. **Mark as verification step.**
-- **Idempotency:** Second application of same UPDATEs is a no-op. ✓
-- **Testing:** Post-migration assertions verify all 20 drills have fixed ids. ✓
-- **No false assumptions.** ✓
+**Verified claim:**
+- Story grepped `src/main/java` for `JWT_SECRET` and `@Value`/`Environment` bindings — zero matches confirmed ✓
+- Real mechanism confirmed: `JwtSecretService` → `SecretService.createSecret()` → auto-generated and stored Jasypt-encrypted in `sec.secret` DB table ✓
+
+**Non-issue:** Backwards compatibility — if someone has `JWT_SECRET` set in their production `.env`, the app won't read it and won't break. Safe to remove from docs.
 
 ---
 
-## AC11: developmentFocus Validation — ✓
+## AC7 — Build minimal real Stripe payment-failure alerting; scrub the stale Orange/MTN docs
 
-**Status:** Well-specified, source-of-truth location should be documented.
+✅ **Approved with verification checkpoint.**
 
-- **Real issue:** `computeFocusScore()` is not a stub — it's real 8-code switch with formulas. Story correctly notes ledger framing was wrong.
-- **Sync problem:** Frontend has same 8 codes hardcoded. Nothing enforces sync. Backend accepts free-form strings.
-- **Fix approach:** Add validator at request boundary restricting to known codes. Correct place.
-- **Source of truth:** Story says keep in "one place" but doesn't specify where. **Recommendation:** Document location (enum constant? service method? validator class?) clearly so future changes stay synced.
-- **Validator shape:** Story allows `@Pattern` or dedicated `@ValidFocusCode` annotation. Either acceptable; pick one.
-- **Defense-in-depth:** WARN log in switch default for any code bypassing validation. Correct approach.
-- **Known codes:** 8 total. Matches frontend selector. ✓
-- **Old sessions:** If invalid focus code exists, read is OK, update logs WARN and scores 0. Acceptable backward-compat.
-- **Testing:** Test rejecting unrecognized code (400) and accepting all 8 known codes (regression). ✓
-- **No missed flows.** ✓
+**Re-verification checkpoint — Micrometer metric naming:**
+- Story correctly requires verifying actual metric names from live `/actuator/prometheus` before finalizing alert `expr:` lines
+- Micrometer suffixes counters with `_total`, renames fields to snake_case, handles tag→label mapping — this must be verified against real output, not assumed
+- **Dev note in story already calls this out** ✓
 
----
+**Verified claims:**
+- Existing counters `SETTLE_CONFLICT_COUNTER` and `SETTLE_ERROR_COUNTER` confirmed in code (lines 35-36, incremented at 138/151) ✓
+- `BookingPaymentPersistenceService` is confirmed as the definitive settle-outcome point (only `new Drill()` call site verified in story) ✓
+- `StripeWebhookService.handleInvoicePaymentFailed` exists and handles subscription billing failures ✓
 
-## AC12: Ledger Hygiene — ✓
+**Corner case — asymmetric counters (settle success/failure vs. subscription invoice failure only):**
+- Story adds counters for booking settle success + failure, but only subscription invoice *failure*
+- Is this intentional? Yes — the alert rules focus on failure rates. But this means subscription billing success is not tracked.
+- **Not a blocker:** This is intentional (alerts are for failures). But if future monitoring needs success counts, a second iteration will be needed.
+- Document the intentional asymmetry in the commit message
 
-**Status:** Procedural/mechanical, no issues.
+**Potential gap — refunds not mentioned:**
+- Are refunds routed through `persistPaymentSuccess`/`persistPaymentFailure`? The story doesn't clarify.
+- **Recommendation:** Grep for "refund" in payment code during dev work; if refunds bypass these methods, add counters there too.
+- **Risk level:** Low (refunds are usually a small % of traffic, but should be included in failure metrics)
 
-- 14 ledger items closed with citations.
-- Story corrects false framings correctly (e.g., "already fixed unannotated", "premise was wrong").
-- One item (W3 from `skillars-4-3`) correctly kept open — mid-request crash leaving orphaned asset is separate gap, not fixed by locking.
-- Distinction correctly made. ✓
-- **No missed items.** ✓
-
----
-
-## Verification Checklist for Dev Before Implementation
-
-Add these verification steps to the AC task list:
-
-### **Before Coding:**
-
-1. **AC4 (CRITICAL):** Inspect all 4 usages of DrillCard and confirm every usage passes the `context` prop. If any could be undefined, add explicit null-check to v-if conditional.
-
-2. **AC2:** Verify `BookingStateMachine.isTerminal()` method exists and is already a `@Component`.
-
-3. **AC6:** Read `hasActivePack()` implementation and underlying `findActivePacks()` query. Copy exact filter conditions into new batch query.
-
-4. **AC8:** Before running migration, verify constraint names:
-   - Run `\d session.drills` in psql to confirm `drills_library_type_check` is auto-generated name
-   - If different, update migration accordingly
-
-5. **AC8:** Confirm there is no Java enum `LibraryType` anywhere. Story assumes String fields.
-
-6. **AC9:** Inspect `src/frontend/src/stores/session.store.js` and confirm it has `currentLibrary` ref or equivalent. If not, add it as part of AC9.
-
-7. **AC10:** Before writing migration, verify all 20 trans_key values by reading live `V39__session_foundation_20_drills.sql` and comparing against the 20 UPDATEs.
-
-8. **AC11:** Decide and document where to keep single source of truth for 8 known focus codes.
-
-### **Before Running Tests:**
-
-9. **AC2:** Verify in `BookingStateMachineTest` that `CANCELLED_PARENT` is indeed terminal (not false assumption).
-
-10. **Migrations (AC7, AC8, AC10):** Confirm no new migrations landed since V108. Run `ls src/main/resources/db/migration/ | sort -V | tail -5` and renumber V109/V110/V111 upward if needed.
+**Testing concern:**
+- Story correctly calls out that `CreditRoutingTest` already uses `SimpleMeterRegistry` with `@Spy` (not mocked) for counter assertions
+- Extends `StripeWebhookVerificationTest` for webhook counters — matches existing pattern ✓
 
 ---
 
-## Summary of Findings
+## AC8 — Verify Grafana admin login during first-time-setup
 
-| AC | Status | Issues | Contingencies |
-|----|--------|--------|---|
-| AC1 | ✓ | None | None |
-| AC2 | ✓ | None | Verify BookingQueryService.getBookingSnapshot() returns Optional |
-| AC3 | ✓ | None | None |
-| AC4 | ⚠️ **CRITICAL** | **context prop may be undefined** | **Verify all 4 usages pass context** |
-| AC5 | ✓ | None | None |
-| AC6 | ✓ | None | Verify batch query matches hasActivePack() filters |
-| AC7 | ✓ | None | None |
-| AC8 | ✓ | None | Verify drills_library_type_check constraint name |
-| AC9 | ✓ | None | Verify currentLibrary exists on store (or add it) |
-| AC10 | ✓ | None | Verify all 20 trans_key values against live V39 |
-| AC11 | ✓ | Minor | Document single source of truth for focus codes |
-| AC12 | ✓ | None | None |
+✅ **Approved.** Simple documentation addition.
+
+No corner cases — just adds a manual verification step that doesn't change any code.
 
 ---
 
-## Conclusion
+## AC9 — Neglected-skill detection: add a player warm-up grace period
 
-**The story is well-written, thoroughly researched, and technically sound.** The one critical assumption (AC4 context prop) must be verified before deployment. All other contingencies are appropriately noted and manageable. The story correctly identifies real bugs and corner cases — no false positives found.
+✅ **Approved with re-verification checkpoints.**
 
-**Recommendation: Proceed to dev with the 10 verification steps above tracked as part of implementation.**
+**Re-verification checkpoint 1 — Flyway migration ID:**
+- Story uses id 605 as "next free `platform_config` id" (highest currently in use is 604)
+- **Action:** Re-verify at dev time against live `main.platform_config` max id — other stories may have claimed it in the interim
+- Story acknowledges this ✓
+
+**Re-verification checkpoint 2 — Flyway version:**
+- Story uses `V112` as next free version in `src/main/resources/db/migration/`
+- **Action:** Re-verify this at dev time — later stories may have newer versions
+- Story acknowledges this ✓
+
+**Verified claims:**
+- `DevelopmentCorrelationService` already uses `sluRepository.countDistinctSessions(playerId)` — method exists and is consistent ✓
+- `sluRepository.countDistinctSessions()` returns `Long` or `null` — the code handles both cases correctly (`sessionCount == null || sessionCount < warmupSessionCount`) ✓
+- The early-return guard skips the entire `processPlayer` logic when warmup threshold not reached — correct to prevent flag-flood ✓
+
+**Corner case — "distinct sessions" definition:**
+- Story doesn't clarify what "distinct" means (per-day? per-week? unique session IDs?)
+- **Non-issue:** Since this reuses `DevelopmentCorrelationService`'s existing method, it's already consistent with that module's logic. The "distinct" definition is owned by the repo's session tracking, not this story.
+
+**Testing concerns:**
+- Story correctly identifies all 7 existing `processPlayer()` call sites that need the new `warmupSessionCount` argument — detailed ✓
+- The `lenient().when(sluRepository.countDistinctSessions(...)).thenReturn(10L)` stub in `setUp()` is correct — allows all existing tests to pass unchanged (they test threshold logic, not warmup gate) ✓
+- Two new tests required: below warmup threshold (no interactions with flag repo) and at boundary (warmup count == threshold passes) ✓
+- Note: Scheduler-level tests need `configService.getLong()` stubbed — the default Mockito return of `0L` would mean "no warmup needed" (all players pass the gate). Story correctly notes this could mask a bug if not verified.
+
+---
+
+## AC10 — Guard `SluFormula` against negative drill-metadata values
+
+✅ **Approved.** Two-part fix (annotations + guard) is well-reasoned.
+
+**Critical premise correction (noted in story):**
+- Initially assumed live `Drill` creation endpoint exists; research found only `DrillLibraryService.clone()` exists (copies from seed-migration drill)
+- **No live endpoint accepts user `DrillMetadata` input** — negative values can only come from hand-written Flyway migrations
+- Story correctly decided to fix both ends anyway (future-proofing + current defense-in-depth) ✓
+
+**Verified claims:**
+- Only `new Drill()` call site is `DrillLibraryService:123-131` (clone operation) — story searched codebase ✓
+- `SluFormula.calculate()` multiplies four factors together; two negatives cancel out silently (the bug) ✓
+- Test case proving bug: two negative factors (`intensity=-7, pressureLevel=-6`) should produce same positive SLU value as positive factors (double-negative cancellation) ✓
+
+**Corner case — exact magnitude verification:**
+- The test should verify that `intensity=-7, pressureLevel=-6` produces exactly the same SLU value as `intensity=7, pressureLevel=6` (42.0000)
+- Story mentions the test but doesn't explicitly state this detail
+- **Action:** When writing the test, ensure the double-negative case produces the exact same magnitude to prove the cancellation bug is real
+- Not a blocker; the test framework will catch this
+
+**Verification before merge:**
+- Story requires checking that current `V39`/`V111` seed migrations have no negative metadata values
+- **Action:** `git show V39:* | grep -E '(repDensity|intensity|pressureLevel|matchRealism).*-[0-9]'` or similar during dev work
+- Story acknowledges this ✓
+
+**Logging concern:**
+- The guard logs a warning with all four field values — good for debugging ✓
+- Requires adding `@Slf4j` to `SluFormula` (currently static-only utility class) — straightforward ✓
+
+---
+
+## AC11 — Ledger hygiene
+
+✅ **Approved.** Detailed and meticulously specified.
+
+**Re-verification checkpoints (story already calls these out):**
+
+1. **Item 933 (tmpspace):** Story marks as STALE, claiming `restore-from-dump.sh` uses `gunzip -t` for integrity check (no temp-disk write). 
+   - **Action:** Verify the actual `restore-from-dump.sh` code contains the gunzip -t pattern during dev work
+   - Claim is plausible (integrity check without decompression), but should be spot-checked
+
+2. **Item 1005 (postgres chown):** Story claims official postgres:17-alpine image's entrypoint self-chowns PGDATA before dropping privileges.
+   - **Action:** Verify this is true for postgres:17-alpine (likely true for official image)
+   - Claim is standard for official images, low risk, but should be spot-checked
+
+3. **Item 954, others:** Story references specific commit hashes (e.g., `3b0cc28`, "Platform Security — Coach-Player Authorization") as having closed security bugs.
+   - **Action:** Verify these commits are in the repo and did what's claimed
+   - Story cites them, so they should be present ✓
+
+**Other notes:**
+- Item D0 (per-coach UI grant/revoke) correctly notes the underlying security bug is *already* closed by intervening commit (`3b0cc28`), and the residual feature-scope item was decided CLOSED-WON'T-BUILD by the project owner
+- This is a decision call, not a technical issue, but correctly documented in the story ✓
+
+---
+
+## Cross-cutting concerns
+
+**1. Interdependencies:**
+- AC3's profile setting enables AC3's security guard logic — these must land together ✓
+- AC7's counters must exist before AC7's alert rules reference them — correct dependency ✓
+- AC9 and AC10 are isolated from other ACs ✓
+
+**2. Testing coverage:**
+- AC1/AC2/AC4/AC5/AC6/AC8: Documentation/config/shell scripts with no automated test harness (matches project precedent for `deploy-*` stories)
+- AC3: Critical test inversion required (currently-passing test becomes failing under new logic)
+- AC7: Requires live `/actuator/prometheus` check before finalizing metric names
+- AC9: Requires re-verification of Flyway IDs + extensive test setup changes (7 existing tests)
+- AC10: Requires test case proving double-negative bug is real
+- All acknowledged in the story ✓
+
+**3. Risk assessment:**
+- **Highest risk:** AC3 (security guard flip) — correctly identified as highest-blast-radius ✓
+- **Medium risk:** AC7 (payment counters and alerts) — correctly requires metric name verification ✓
+- **Low risk:** AC1, AC2, AC4, AC5, AC6, AC8 (straightforward fixes/docs) ✓
+- **Complex but low-risk:** AC9 (warmup grace period) — changes test setup in 7 places, but logic is sound ✓
+- **Dual-fix but low-risk:** AC10 (annotations + guard) — future-proofs + defends today, clear intent ✓
+
+---
+
+## False positives (things that look like issues but aren't)
+
+✅ None found. The story's claimed issues and fixes are all legitimate.
+
+- AC1's idempotent chown logic is correct
+- AC2's regex assumptions are reasonable for this codebase
+- AC3's security guard improvement is actually *safer* than the original
+- AC4's auto-revert pre-check is elegant
+- AC7's asymmetric counters (failure-focused) is intentional
+- AC9's warmup grace period correctly solves the flag-flood issue
+- AC10's defense-in-depth approach (annotations + guard) is well-reasoned
+- AC11's ledger cleanup is thorough and correctly documented
+
+---
+
+## Dev checklist for implementation
+
+- [ ] AC4: Verify `steps.smoke.outcome == 'skipped'` value in a live GitHub Actions run
+- [ ] AC7: Curl `/actuator/prometheus` and verify exact metric names before finalizing alert `expr:` lines
+- [ ] AC9: Re-verify Flyway version V112 and `platform_config` id 605 against live max values
+- [ ] AC9: Ensure all 7 existing `processPlayer()` call sites receive the new `warmupSessionCount` argument
+- [ ] AC10: Verify double-negative test case produces exact same magnitude as positive factors (42.0000)
+- [ ] AC10: Check current `V39`/`V111` seed migrations have no negative metadata values
+- [ ] AC11: Spot-check `restore-from-dump.sh` uses gunzip -t pattern (item 933)
+- [ ] AC11: Verify postgres:17-alpine image self-chowns PGDATA (item 1005)
+- [ ] AC11: Verify referenced commits (e.g., 3b0cc28) exist and did what's claimed
+
+---
+
+## Verdict
+
+**APPROVED for dev** with checkpoints above. Story is well-researched, findings are legitimate, fixes are correct. Re-verifications are all already called out in the story itself.

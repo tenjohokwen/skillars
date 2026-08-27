@@ -125,6 +125,18 @@ Expected output: Docker pulls the image layers, followed by:
 Container skillars-app-1  Started
 ```
 
+> Docker Compose names containers `<project>-<service>-<index>`; `skillars` is this repo's Compose
+> project name, so the app container is always `skillars-app-1`.
+
+> **If `docker compose pull` fails partway** (network timeout, GHCR auth expiry mid-pull): `.env`'s
+> `APP_IMAGE` was already updated in Step 3 to point at the target tag, but the image may not have
+> been fully pulled. Re-run `docker compose pull app` — it's idempotent and will resume/retry. If you
+> want to abandon the rollback instead, restore `.env` from the backup made in Step 3:
+> `cp .env.bak .env`.
+
+> **If `docker login` fails** ("unauthorized" or similar): verify the `GHCR_PAT` value hasn't expired
+> and still carries `read:packages` scope — see the note above Step 4 for generating a replacement.
+
 ---
 
 ## Step 5: Verify the Rollback
@@ -151,10 +163,43 @@ docker exec "$CID" wget -qO- http://localhost:8367/manage/health
 {"status":"UP",...}
 ```
 
-If the health check returns `"status":"DOWN"` or the command fails, the container may still be starting up. Retry after 10 seconds. If still failing after 60 seconds, check container logs:
+If the health check returns `"status":"DOWN"` or the command fails, the container may still be starting up.
+Retry for up to 60 seconds:
+
+```bash
+for i in $(seq 1 6); do
+  CID=$(docker compose ps -q --status running app 2>/dev/null | head -1)
+  [ -n "$CID" ] && docker exec "$CID" wget -qO- http://localhost:8367/manage/health 2>/dev/null \
+    | grep -q '"status":"UP"' && break
+  sleep 10
+done
+```
+
+If still failing after that, check container logs:
 
 ```bash
 docker compose logs --tail=50 app
 ```
 
 Once the health check passes, production is restored. Traefik automatically routes traffic to the healthy container — no additional steps required.
+
+---
+
+## Rollback After Migrations Have Run
+
+Everything above reverts the app **image**, which is safe on its own only when the bad release's Flyway
+migrations never ran. If they already executed against the production database, reverting the image alone is
+**not sufficient** — the DB schema now matches code that no longer exists on the reverted image, which can
+crash the reverted app on startup or corrupt data on write.
+
+**The supported remedy is a full restore, not an image-only rollback:**
+
+1. Revert the app image using Steps 1–5 above.
+2. Restore the database from the most recent `pg-backup.sh` dump, following
+   [`backup-restore.md`](backup-restore.md) → **Section A: Restore from pg_dump**.
+3. **Accepted data-loss window:** up to 6 hours — `pg-backup.sh` runs on a `0 */6 * * *` cron
+   (`deploy/backup/install-crons.sh`). Any writes made between the last backup and the incident are lost.
+
+A forward-fixing follow-up deploy remains the preferred option whenever feasible — this restore-from-backup
+path is the fallback for when the bad release's migrations have already caused a production-blocking failure
+that a fix-forward can't unblock in time.

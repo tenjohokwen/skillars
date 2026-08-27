@@ -34,6 +34,8 @@ public class BookingPaymentPersistenceService {
 
     private static final String SETTLE_CONFLICT_COUNTER = "booking.payment.settle_conflict";
     private static final String SETTLE_ERROR_COUNTER = "booking.payment.settle_error";
+    private static final String SETTLE_SUCCESS_COUNTER = "booking.payment.settle_success";
+    private static final String SETTLE_FAILED_COUNTER = "booking.payment.settle_failed";
 
     private final CreditWalletService creditWalletService;
     private final BookingPaymentRepository bookingPaymentRepository;
@@ -42,6 +44,19 @@ public class BookingPaymentPersistenceService {
     private final ApplicationEventPublisher eventPublisher;
     private final MeterRegistry meterRegistry;
     private final PessimisticLockRetryer lockRetryer;
+
+    private Counter settleConflictCounter;
+    private Counter settleErrorCounter;
+    private Counter settleSuccessCounter;
+    private Counter settleFailedCounter;
+
+    @jakarta.annotation.PostConstruct
+    void initializeCounters() {
+        settleConflictCounter = Counter.builder(SETTLE_CONFLICT_COUNTER).register(meterRegistry);
+        settleErrorCounter = Counter.builder(SETTLE_ERROR_COUNTER).register(meterRegistry);
+        settleSuccessCounter = Counter.builder(SETTLE_SUCCESS_COUNTER).register(meterRegistry);
+        settleFailedCounter = Counter.builder(SETTLE_FAILED_COUNTER).register(meterRegistry);
+    }
 
     /**
      * UAT.3 AC1. Writes a CAPTURE_PENDING {@code booking_payments} row BEFORE the caller contacts
@@ -135,10 +150,7 @@ public class BookingPaymentPersistenceService {
         try {
             bookingService.transition(bookingId, event, new TransitionContext(ActorRole.SYSTEM, null));
         } catch (BookingStateTransitionException e) {
-            Counter.builder(SETTLE_CONFLICT_COUNTER)
-                .tag("event", event.name())
-                .register(meterRegistry)
-                .increment();
+            settleConflictCounter.increment();
             log.error("Settle transition rejected: bookingId={} statusReadFrom={} event={} — the "
                     + "booking moved underneath the settlement and this settle will roll back",
                 bookingId, statusOf(bookingId), event, e);
@@ -148,10 +160,7 @@ public class BookingPaymentPersistenceService {
             // above. Everything else — a vanished booking, an optimistic-lock clash, a constraint
             // violation — was equally silent before, and this AC is about the routes nobody has
             // found yet, so catching only the anticipated one would leave that purpose half-met.
-            Counter.builder(SETTLE_ERROR_COUNTER)
-                .tag("event", event.name())
-                .register(meterRegistry)
-                .increment();
+            settleErrorCounter.increment();
             log.error("Settle transition failed unexpectedly: bookingId={} statusReadFrom={} event={} — "
                     + "this settle will roll back", bookingId, statusOf(bookingId), event, e);
             throw e;
@@ -181,6 +190,7 @@ public class BookingPaymentPersistenceService {
                                        String paymentIntentId, UUID batchPaymentIntentId,
                                        Long parentId, String parentEmail, String coachDisplayName,
                                        Instant requestedStartTime, String canonicalTimezone) {
+        settleSuccessCounter.increment();
         if (creditDebited.compareTo(BigDecimal.ZERO) > 0) {
             creditWalletService.writeLedgerEntry(parentId, creditDebited.negate(),
                 "BOOKING_DEDUCTION", bookingId, "Session booking deduction");
@@ -209,6 +219,7 @@ public class BookingPaymentPersistenceService {
     public void persistPaymentFailure(UUID bookingId, BigDecimal creditToReverse,
                                        Long parentId, String parentEmail, String coachDisplayName,
                                        Instant requestedStartTime, String canonicalTimezone) {
+        settleFailedCounter.increment();
         if (creditToReverse.compareTo(BigDecimal.ZERO) > 0) {
             creditWalletService.writeLedgerEntry(parentId, creditToReverse,
                 "BOOKING_DEDUCTION_REVERSAL", bookingId, "Payment failed - credit restored");

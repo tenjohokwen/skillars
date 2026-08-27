@@ -14,6 +14,16 @@ DEPLOY_ROOT="/opt/skillars"
 log() { echo "[provision] $*"; }
 err() { echo "[provision][error] $*" >&2; }
 
+# Idempotent chown: skips the recursive chown entirely when the directory's current owner already
+# matches, so a rerun against a live system can't interrupt an in-progress container write. Safe on
+# first provision too — a freshly-created directory never matches, so it always chowns then.
+chown_if_needed() {
+  local owner="$1" dir="$2"
+  if [ "$(stat -c '%u:%g' "$dir" 2>/dev/null)" != "$owner" ]; then
+    chown -R "$owner" "$dir"
+  fi
+}
+
 # ──────────────────────────────────────────────────
 # 1. System packages
 # ──────────────────────────────────────────────────
@@ -74,7 +84,7 @@ enabled  = true
 port     = ssh
 filter   = sshd
 maxretry = 5
-bantime  = 3600
+bantime  = 86400
 findtime = 600
 EOF
   systemctl enable fail2ban
@@ -171,13 +181,13 @@ if [ -b "${VOLUME_DEVICE}" ]; then
   # Recreate sub-directories on mounted volume
   mkdir -p "${MOUNT_POINT}/postgres"
   mkdir -p "${MOUNT_POINT}/prometheus"
-  chown -R 65534:65534 "${MOUNT_POINT}/prometheus"
+  chown_if_needed 65534:65534 "${MOUNT_POINT}/prometheus"
   mkdir -p "${MOUNT_POINT}/loki"
-  chown -R 10001:10001 "${MOUNT_POINT}/loki"
+  chown_if_needed 10001:10001 "${MOUNT_POINT}/loki"
   mkdir -p "${MOUNT_POINT}/tempo"
-  chown -R 10001:10001 "${MOUNT_POINT}/tempo"
+  chown_if_needed 10001:10001 "${MOUNT_POINT}/tempo"
   mkdir -p "${MOUNT_POINT}/grafana"
-  chown -R 472:472 "${MOUNT_POINT}/grafana"
+  chown_if_needed 472:472 "${MOUNT_POINT}/grafana"
 else
   log "⚠️  Hetzner Volume device ${VOLUME_DEVICE} not found."
   log "    Attach the Volume to this server in the Hetzner Cloud Console, then re-run this script."
@@ -200,7 +210,7 @@ fi
 # uid/gid verified from the image itself: `docker run --rm redis:7-alpine id redis`
 # -> uid=999(redis) gid=1000(redis). Do not guess it.
 mkdir -p "${MOUNT_POINT}/redis"
-chown -R 999:1000 "${MOUNT_POINT}/redis"
+chown_if_needed 999:1000 "${MOUNT_POINT}/redis"
 
 # acme.json — Traefik refuses to start if this file is missing or has wrong permissions.
 # 700 on the directory matches the manual fallback documented in deploy/traefik/README.md; the

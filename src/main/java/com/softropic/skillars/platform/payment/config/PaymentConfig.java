@@ -10,7 +10,6 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 
 import java.util.Arrays;
-import java.util.Set;
 import java.util.regex.Pattern;
 
 @Slf4j
@@ -19,11 +18,13 @@ import java.util.regex.Pattern;
 @EnableConfigurationProperties(PaymentProperties.class)
 public class PaymentConfig {
 
-    // Profiles that must never be able to move real money, even by accident (e.g. a
-    // copy-pasted .env). Deliberately opt-in on these rather than opt-out on "not prod":
-    // production today boots with no SPRING_PROFILES_ACTIVE set at all (a pre-existing,
-    // separately-tracked gap), so an opt-out check would fail-close on real production traffic.
-    private static final Set<String> NON_PROD_PROFILES = Set.of("dev", "uat", "test");
+    // Fail-closed by construction: a live key is refused unless the "prod" profile is explicitly
+    // active, rather than refused only under an allow-list of known non-prod profile names. An
+    // allow-list would silently fail to protect a typo'd, missing, or future profile name; requiring
+    // "prod" protects every environment except the one that's supposed to carry real money.
+    // docker-compose.yml sets SPRING_PROFILES_ACTIVE=prod for a plain production deploy;
+    // docker-compose.uat.yml already sets SPRING_PROFILES_ACTIVE=uat the same way.
+    private static final String PROD_PROFILE = "prod";
     // Matches both standard secret keys (sk_live_...) and restricted keys (rk_live_...).
     // Restricted keys can't complete Connect OAuth (StripeOnboardingService needs sk_...
     // for that), but a live restricted key scoped to PaymentIntents/Refunds/Subscriptions
@@ -38,14 +39,19 @@ public class PaymentConfig {
     @PostConstruct
     void configureStripe() {
         String apiKey = paymentProperties.getApiKey();
-        boolean nonProdProfileActive = Arrays.stream(environment.getActiveProfiles())
-            .anyMatch(NON_PROD_PROFILES::contains);
-        if (nonProdProfileActive && LIVE_KEY_PATTERN.matcher(apiKey).matches()) {
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new AppSetupException(
+                "app.payment.stripe.api-key is missing or empty. Stripe integration requires a valid API key.");
+        }
+        boolean prodProfileActive = Arrays.stream(environment.getActiveProfiles())
+            .filter(p -> p != null)
+            .anyMatch(PROD_PROFILE::equals);
+        if (!prodProfileActive && LIVE_KEY_PATTERN.matcher(apiKey).matches()) {
             throw new AppSetupException(
                 "app.payment.stripe.api-key is a LIVE Stripe key (starts with 'sk_live_' or " +
                 "'rk_live_') but active profile(s) " + Arrays.toString(environment.getActiveProfiles()) +
-                " indicate a non-production environment. Refusing to start — use a Stripe test-mode " +
-                "key (sk_test_...) here so this environment can never charge real money.");
+                " do not include 'prod'. Refusing to start — use a Stripe test-mode key (sk_test_...) " +
+                "here so this environment can never charge real money.");
         }
         Stripe.apiKey = apiKey;
         log.info("Stripe SDK initialised (apiKey present={})", !apiKey.isBlank());

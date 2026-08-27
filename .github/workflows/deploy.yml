@@ -35,6 +35,18 @@ jobs:
             exit 1
           fi
 
+      - name: Verify image exists in GHCR
+        env:
+          GHCR_PAT: ${{ secrets.GHCR_PAT }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          echo "$GHCR_PAT" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          IMAGE="ghcr.io/${{ github.repository }}:${IMAGE_TAG}"
+          if ! docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
+            echo "ERROR: $IMAGE does not exist in GHCR." >&2
+            exit 1
+          fi
+
       - name: Capture pre-deploy image
         id: pre_deploy
         run: |
@@ -51,6 +63,15 @@ jobs:
         run: |
           printf '%s' "$GHCR_PAT" | ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
             "docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
+
+      - name: Pre-check image availability locally before pull
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+            "docker image inspect 'ghcr.io/${{ github.repository }}:${IMAGE_TAG}' >/dev/null 2>&1 && \
+             echo 'Image already cached locally, pull not needed' || \
+             echo 'Image not in local cache, will pull during deploy'"
 
       - name: Deploy
         env:
@@ -96,8 +117,8 @@ jobs:
             echo "outcome=failed" >> $GITHUB_OUTPUT
           elif ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
                  "cd /opt/skillars && \
+                  (docker image inspect '${PREV}' >/dev/null 2>&1 || docker compose pull app) && \
                   sed -i \"s|^APP_IMAGE=.*|APP_IMAGE=${PREV}|\" .env && \
-                  docker compose pull app && \
                   docker compose up -d --no-deps app"; then
             echo "outcome=succeeded" >> $GITHUB_OUTPUT
           else
@@ -107,20 +128,24 @@ jobs:
       - name: Notify Slack — success
         if: steps.smoke.outputs.result == 'pass'
         uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d  # v4.0.0
+        env:
+          SLACK_MESSAGE_TEXT: "✅ *Production deploy succeeded*\nImage: `ghcr.io/${{ github.repository }}:${{ inputs.image_tag }}`\nTriggered by: ${{ github.actor }}"
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
           webhook-type: incoming-webhook
           payload: |
-            {"text": "✅ *Production deploy succeeded*\nImage: `ghcr.io/${{ github.repository }}:${{ inputs.image_tag }}`\nTriggered by: ${{ github.actor }}"}
+            {"text": "${{ env.SLACK_MESSAGE_TEXT }}"}
 
       - name: Notify Slack — failure & revert
         if: steps.smoke.outputs.result == 'fail'
         uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d  # v4.0.0
+        env:
+          SLACK_MESSAGE_TEXT: "❌ *Production deploy FAILED*\nFailed image: `ghcr.io/${{ github.repository }}:${{ inputs.image_tag }}`\nAuto-Revert: ${{ steps.revert.outputs.outcome }}\nPrevious image: `${{ steps.pre_deploy.outputs.image }}`\nTriggered by: ${{ github.actor }}"
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
           webhook-type: incoming-webhook
           payload: |
-            {"text": "❌ *Production deploy FAILED*\nFailed image: `ghcr.io/${{ github.repository }}:${{ inputs.image_tag }}`\nAuto-Revert: ${{ steps.revert.outputs.outcome }}\nPrevious image: `${{ steps.pre_deploy.outputs.image }}`\nTriggered by: ${{ github.actor }}"}
+            {"text": "${{ env.SLACK_MESSAGE_TEXT }}"}
 
       - name: Email — success
         if: steps.smoke.outputs.result == 'pass'
@@ -161,3 +186,31 @@ jobs:
         run: |
           echo "Smoke test failed — deploy reverted. Marking workflow as failed."
           exit 1
+
+      - name: Notify Slack — early failure (pre-smoke)
+        if: failure() && steps.smoke.outcome == 'skipped'
+        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d  # v4.0.0
+        env:
+          SLACK_MESSAGE_TEXT: "❌ *Production deploy FAILED before smoke test* (no auto-revert attempted)\nImage tag: `${{ inputs.image_tag }}`\nTriggered by: ${{ github.actor }}\nSee: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            {"text": "${{ env.SLACK_MESSAGE_TEXT }}"}
+
+      - name: Email — early failure (pre-smoke)
+        if: failure() && steps.smoke.outcome == 'skipped'
+        uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          to: ${{ secrets.NOTIFY_EMAIL }}
+          from: ${{ secrets.SMTP_USERNAME }}
+          subject: "❌ Deploy FAILED before smoke test: ${{ inputs.image_tag }}"
+          body: |
+            Production deploy of ghcr.io/${{ github.repository }}:${{ inputs.image_tag }} FAILED before the
+            smoke test ever ran (no auto-revert was attempted).
+            Triggered by: ${{ github.actor }}
+            Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

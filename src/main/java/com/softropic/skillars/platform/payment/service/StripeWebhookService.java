@@ -14,6 +14,8 @@ import com.stripe.model.Event;
 import com.stripe.model.Invoice;
 import com.stripe.model.Subscription;
 import com.stripe.net.Webhook;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,12 +35,22 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class StripeWebhookService {
 
+    private static final String INVOICE_PAYMENT_FAILED_COUNTER = "subscription.payment.invoice_failed";
+
     private final CoachStripeAccountRepository coachStripeAccountRepository;
     private final StripeWebhookEventRepository webhookEventRepository;
     private final PaymentProperties paymentProperties;
     private final ApplicationEventPublisher eventPublisher;
     private final PaymentCoachSubscriptionRepository paymentCoachSubscriptionRepository;
     private final PaymentPlayerSubscriptionRepository paymentPlayerSubscriptionRepository;
+    private final MeterRegistry meterRegistry;
+
+    private Counter invoicePaymentFailedCounter;
+
+    @jakarta.annotation.PostConstruct
+    void initializeCounters() {
+        invoicePaymentFailedCounter = Counter.builder(INVOICE_PAYMENT_FAILED_COUNTER).register(meterRegistry);
+    }
 
     @Autowired
     @Lazy
@@ -185,6 +197,7 @@ public class StripeWebhookService {
             log.warn("[STRIPE_WEBHOOK_INVOICE_NO_SUBSCRIPTION invoiceId={}]", invoice.getId());
             return;
         }
+        invoicePaymentFailedCounter.increment();
         subscriptionService.handleSubscriptionWebhook("invoice.payment_failed", stripeSubId, Map.of());
     }
 

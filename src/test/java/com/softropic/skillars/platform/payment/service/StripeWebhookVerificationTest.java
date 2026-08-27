@@ -8,6 +8,9 @@ import com.softropic.skillars.platform.payment.repo.CoachStripeAccountRepository
 import com.softropic.skillars.platform.payment.repo.PaymentCoachSubscriptionRepository;
 import com.softropic.skillars.platform.payment.repo.PaymentPlayerSubscriptionRepository;
 import com.softropic.skillars.platform.payment.repo.StripeWebhookEventRepository;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -44,7 +47,12 @@ class StripeWebhookVerificationTest {
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock PaymentCoachSubscriptionRepository paymentCoachSubscriptionRepository;
     @Mock PaymentPlayerSubscriptionRepository paymentPlayerSubscriptionRepository;
+    @Mock SubscriptionService subscriptionService;
 
+    // Story Deferred-76 AC7: a real registry, not a mock — Counter.builder(...).register(mock)
+    // returns null, so counter-increment assertions need SimpleMeterRegistry (matches
+    // CreditRoutingTest's identical pattern for BookingPaymentPersistenceService's counters).
+    MeterRegistry meterRegistry;
     PaymentProperties paymentProperties;
     StripeWebhookService webhookService;
 
@@ -52,11 +60,17 @@ class StripeWebhookVerificationTest {
     void setUp() {
         paymentProperties = new PaymentProperties();
         paymentProperties.setWebhookSecret(WEBHOOK_SECRET);
+        meterRegistry = new SimpleMeterRegistry();
         webhookService = new StripeWebhookService(
             coachStripeAccountRepository, webhookEventRepository, paymentProperties, eventPublisher,
-            paymentCoachSubscriptionRepository, paymentPlayerSubscriptionRepository);
+            paymentCoachSubscriptionRepository, paymentPlayerSubscriptionRepository, meterRegistry);
         // Wire the self-reference so @Transactional dispatch works in unit tests without a Spring context
         ReflectionTestUtils.setField(webhookService, "self", webhookService);
+        // subscriptionService is @Autowired @Lazy field injection, not constructor injection —
+        // must be wired manually here, same reason as "self" above.
+        ReflectionTestUtils.setField(webhookService, "subscriptionService", subscriptionService);
+        // Manually call @PostConstruct since this is a unit test without Spring to inject
+        webhookService.initializeCounters();
     }
 
     @Test
@@ -126,6 +140,32 @@ class StripeWebhookVerificationTest {
         verify(eventPublisher, never()).publishEvent(any());
     }
 
+    @Test
+    void processWebhook_invoicePaymentFailed_incrementsInvoiceFailedCounter() throws Exception {
+        String payload = buildInvoicePaymentFailedPayload("sub_test123");
+        String sigHeader = buildStripeSignature(WEBHOOK_SECRET, payload);
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+
+        webhookService.processWebhook(payload, sigHeader);
+
+        verify(subscriptionService).handleSubscriptionWebhook("invoice.payment_failed", "sub_test123", java.util.Map.of());
+        Counter counter = meterRegistry.find("subscription.payment.invoice_failed").counter();
+        assertThat(counter).isNotNull();
+        assertThat(counter.count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void processWebhook_invoicePaymentFailed_noSubscription_doesNotIncrementCounter() throws Exception {
+        String payload = buildInvoicePaymentFailedPayload(null);
+        String sigHeader = buildStripeSignature(WEBHOOK_SECRET, payload);
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+
+        webhookService.processWebhook(payload, sigHeader);
+
+        verify(subscriptionService, never()).handleSubscriptionWebhook(any(), any(), any());
+        assertThat(meterRegistry.find("subscription.payment.invoice_failed").counter()).isNull();
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private static String buildStripeSignature(String secret, String payload) throws Exception {
@@ -153,6 +193,24 @@ class StripeWebhookVerificationTest {
               }
             }
             """.formatted(accountId, chargesEnabled, payoutsEnabled);
+    }
+
+    private static String buildInvoicePaymentFailedPayload(String subscriptionId) {
+        String subscriptionField = subscriptionId == null ? "null" : "\"" + subscriptionId + "\"";
+        return """
+            {
+              "id": "evt_test_invoice_001",
+              "object": "event",
+              "type": "invoice.payment_failed",
+              "data": {
+                "object": {
+                  "id": "in_test_001",
+                  "object": "invoice",
+                  "subscription": %s
+                }
+              }
+            }
+            """.formatted(subscriptionField);
     }
 
     private static CoachStripeAccount buildAccount(UUID coachId, String stripeAccountId,

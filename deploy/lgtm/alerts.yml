@@ -7,7 +7,7 @@ groups:
         labels:
           severity: high
         annotations:
-          summary: "DB connection pool at {{ $value | humanizePercentage }} — starvation risk"
+          summary: "DB connection pool {{ $labels.pool }} at {{ $value | humanizePercentage }} — starvation risk"
 
       - alert: JvmHeapHigh
         expr: jvm_memory_used_bytes{area="heap"} / jvm_memory_max_bytes{area="heap"} > 0.85
@@ -16,6 +16,28 @@ groups:
           severity: warning
         annotations:
           summary: "JVM heap at {{ $value | humanizePercentage }}"
+
+      - alert: BookingPaymentSettleFailureRateHigh
+        expr: |
+          (rate(booking_payment_settle_failed_total[15m]) + rate(booking_payment_settle_error_total[15m]))
+          / (rate(booking_payment_settle_success_total[15m]) + rate(booking_payment_settle_failed_total[15m]) + rate(booking_payment_settle_error_total[15m]))
+          > 0.25
+          and (rate(booking_payment_settle_success_total[15m]) + rate(booking_payment_settle_failed_total[15m]) + rate(booking_payment_settle_error_total[15m])) > 0
+        for: 10m
+        labels:
+          severity: high
+        annotations:
+          summary: "Booking payment settle failure rate above 25% over 15m"
+          runbook: "docs/deployment/monitoring.md#bookingpaymentsettlefailureratehigh"
+
+      - alert: SubscriptionInvoicePaymentFailureHigh
+        expr: increase(subscription_payment_invoice_failed_total[1h]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 5 subscription invoice payment failures in the last hour"
+          runbook: "docs/deployment/monitoring.md#subscriptioninvoicepaymentfailurehigh"
 
   - name: skillars-infra-alerts
     rules:

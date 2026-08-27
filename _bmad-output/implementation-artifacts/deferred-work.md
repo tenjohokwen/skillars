@@ -685,7 +685,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 ## Deferred from: code review of skillars-5-4-skills-radar-display-development-correlation (2026-06-19)
 - W1: No FK from `player_radar_baselines.player_id` / `coach_radar_preferences.player_id` to `main.player_profiles` — accepted limitation per spec dev notes; consistent with Stories 5.1–5.3 no-FK pattern across `development.*` tables [`V51__radar_display_correlation.sql`]
 - W2: Rapid skill-toggle fires a PUT per click — no debounce; last-write-wins for fast toggling; low risk [`PlayerDevelopmentDashboardPage.vue`]
-- W3: `insertBaselineIfAbsent` `@Transactional` participates in outer transaction — `ON CONFLICT DO NOTHING` cannot protect across a rollback on first-ever baseline write; documented MVP limitation in spec dev notes [`PlayerRadarBaselineRepository.java`]
 - W4: Skill deactivation silently drops baseline from display — `findAllByActiveTrueOrderByDisplayOrderAsc` excludes inactive skills; baseline re-appears on reactivation [`RadarDisplayService.java:39`]
 - W5: IT `assertThat(minimumSessionCount).isEqualTo(5L)` hardcodes config value — low risk with Testcontainers; `ON CONFLICT DO NOTHING` in V51 migration [`RadarDisplayResourceIT.java:333`]
 - W7: `IMPROVEMENT_THRESHOLD = 3.0` hardcoded — exactly-3-point improvement classified as "no improvement"; explicitly accepted in spec dev notes; configurable in a future story [`DevelopmentCorrelationService.java:33`]
@@ -704,9 +703,8 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - D5: `SluTargetEditor` `currentTargets` watcher can discard in-progress user input if `fetchTargets` resolves while the dialog is open (race between fetchExposure completing and fetchTargets completing). Low probability; fix by guarding the targets-loaded state or deferring the watcher when open. [`SluTargetEditor.vue:51`] `[AUDIT 2026-08-13: already fixed — SluTargetEditor.vue:58-62 has the if (open.value) return guard this item asked for; verified during skillars-deferred-21 story creation]`
 
 ## Deferred from: code review of skillars-5-2-skill-exposure-dashboard-neglected-skill-detection — Round 2 Group A (2026-06-19)
-- D0: Narrative sharing consent system — player or parent should be able to grant a coach access to their narrative summary, with a visible toggle to revoke it; coaches currently have unrestricted read access to all narratives via `ROLE_COACH` guard; restrict access and implement a proper permission model in a dedicated story [`SkillExposureResource.java:34-38`]
 - D1: V49 `CREATE UNIQUE INDEX` blocks startup if phased deploy allowed Monday batch to create duplicate flags between V48 and V49 — mitigated by same-commit deployment of both migrations; negligible in standard CI pipeline [`V49__neglected_skill_unique_open_constraint.sql`]
-- D3: All skills flagged neglected for inactive/new player — `actual=0` falls below every coach target; technically correct per AC 4 literal but causes flag-flood on first evaluation; consider a "minimum sessions in the evaluated period" guard in a future UX refinement story [`NeglectedSkillProcessor.java`]
+- D3: All skills flagged neglected for inactive/new player — `actual=0` falls below every coach target; technically correct per AC 4 literal but causes flag-flood on first evaluation; consider a "minimum sessions in the evaluated period" guard in a future UX refinement story [`NeglectedSkillProcessor.java`] `[CLOSED by skillars-deferred-76 AC9]`
 - D6: `SluCalculationService` async ISO week boundary race — `now` captured pre-`saveAll`; a session straddling Monday midnight writes SLU rows and snapshot to different ISO weeks — pre-existing design acknowledged in story dev notes [`SluCalculationService.java:177-187`]
 
 ## Deferred from: code review of skillars-5-2-skill-exposure-dashboard-neglected-skill-detection (2026-06-19)
@@ -720,13 +718,13 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - D3: Duration rounding over/under-counts block time — prior review accepted as intentional approximation; documented in dev notes [`SluCalculationService.java:121`]
 - D4: Thread.sleep in negative-path IT tests — prior review explicitly deferred; acceptable for negative async tests with no positive signal [`SluCalculationServiceIT.java`]
 - D5: No booking_id stored in player_skill_stats — no DB-level idempotency anchor; behavioral gap addressed by idempotency pre-check patch; schema addition out of story scope [`V46__development_module_init.sql`]
-- D6: No guard on zero/negative repDensity/intensity metadata fields — pre-existing drill creation validation gap; zero repDensity silently produces no SLU without warning log [`SluFormula.java`]
+- D6: No guard on zero/negative repDensity/intensity metadata fields — pre-existing drill creation validation gap; zero repDensity silently produces no SLU without warning log [`SluFormula.java`] `[CLOSED by skillars-deferred-76 AC10 — same root cause as W1 above]`
 - D7: NUMERIC(10,4) overflow at extreme session attribute values — theoretical at realistic gameplay values with default 0.10 scales [`SluFormula.java`, `V46__development_module_init.sql`]
 - D8: SluRepository inherits deleteAll/deleteById — AC 4 met; comment warns developers; runtime override-to-throw is defense-in-depth only [`SluRepository.java`]
-- D9: Skill code case-sensitivity — lowercase skillWeighting keys silently dropped; fix belongs at drill creation (input normalisation), not SLU calculation [`SluCalculationService.java`]
+- D9: Skill code case-sensitivity — lowercase skillWeighting keys silently dropped; fix belongs at drill creation (input normalisation), not SLU calculation [`SluCalculationService.java`] `[CLOSED by skillars-deferred-76 AC10 — D9's "silent" framing was also partially stale: current code does log.warn on an unrecognized skill code, but the functional gap (contribution silently dropped) is the same bucket]`
 
 ## Deferred from: code review of skillars-5-1-slu-engine-skill-taxonomy (2026-06-18)
-- W1: Negative metadata fields (repDensity/intensity/etc.) can produce corrupt SLU via double-negative — pre-existing validation gap at drill creation; fix at DrillMetadata validation layer [`SluFormula.java:45-66`]
+- W1: Negative metadata fields (repDensity/intensity/etc.) can produce corrupt SLU via double-negative — pre-existing validation gap at drill creation; fix at DrillMetadata validation layer [`SluFormula.java:45-66`] `[CLOSED by skillars-deferred-76 AC10]`
 - W2: @Async executor naming ambiguity — explicit `@Async("taskExecutor")` qualifier would eliminate uncertainty; largely covered by the AsyncUncaughtExceptionHandler patch [`SluCalculationService.java:43`]
 - W4: Thread.sleep in negative-path IT tests — acceptable for negative async assertions where no positive signal exists; replace with Awaitility + log spy if flakiness is observed in CI [`SluCalculationServiceIT.java:107,125,135,171`]
 - W5: Platform config IDs 70-72 skip 68-69 — intentional gap; no migration uses 68-69; ON CONFLICT DO NOTHING prevents failures [`V46__development_module_init.sql:51-55`]
@@ -929,8 +927,7 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 ## Deferred from: code review of deploy-3-4-operational-documentation-suite (2026-06-05)
 - Integrity check (table count ≥ 1) is trivially weak — a partially-loaded dump that created only one table passes; pre-existing restore-from-dump.sh limitation [docs/deployment/backup-restore.md]
 - DROP DATABASE may fail if services other than `app` hold open DB connections — script stops only `app` before drop; pre-existing script limitation [docs/deployment/backup-restore.md]
-- Hardcoded container UIDs (65534/10001/472) not tied to Docker image versions — upstream UID changes (historically seen with Grafana) would silently break subdirectory ownership after snapshot restore [docs/deployment/backup-restore.md]
-- /tmp space check in restore-from-dump.sh validates compressed dump size only — decompressed SQL is typically 5-10x larger; mid-restore /tmp exhaustion possible; pre-existing script gap [docs/deployment/backup-restore.md]
+- Hardcoded container UIDs (65534/10001/472) not tied to Docker image versions — upstream UID changes (historically seen with Grafana) would silently break subdirectory ownership after snapshot restore [docs/deployment/backup-restore.md] `[AUDIT 2026-08-27: re-verified, still open, still a legitimate low-probability accepted tradeoff — hardcoded UIDs remain untied to image versions in provision.sh/restore-from-volume-backup.sh; monitor upstream image changelogs rather than fix now]`
 - APP_CID capture races container registration immediately after `docker compose start app` — health-wait loop can time out on a healthy app; pre-existing script race condition [docs/deployment/backup-restore.md]
 - WebhookPermanentFailure Admin API re-trigger has no endpoint or auth reference — Admin API not defined in this story's scope; needs dedicated API documentation [docs/deployment/monitoring.md]
 - CallbackRateZero public callback endpoint undocumented — application-specific URL not defined in deployment docs; needs a secrets-reference or application guide entry [docs/deployment/monitoring.md]
@@ -943,34 +940,31 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - DiskDataVolumeHigh requires Hetzner Volume mounted at `/opt/skillars/data` — if volume not provisioned, no metrics series exists and alert never fires; infrastructure provisioning dependency
 
 ## Deferred from: code review of deploy-3-2-scripted-restore-process (2026-06-04)
-- fstab not updated after snapshot restore — new volume mounted with `mount /dev/sdb ...` but no fstab update; volume won't auto-mount on reboot if volume UUID changed. Beyond Task 2 scope [restore-from-snapshot.sh:62]
-- App and DB left in partial state on mid-restore failure — no recovery trap by design; operator must manually restart the app service and investigate [restore-from-dump.sh:90]
-- /dev/sdb hardcoded, no filesystem UUID verification — per spec; operator confirms correct attachment at the Hetzner Console ENTER prompt [restore-from-snapshot.sh:23]
+- App and DB left in partial state on mid-restore failure — no recovery trap by design; operator must manually restart the app service and investigate [restore-from-dump.sh:90] `[AUDIT 2026-08-27: re-verified, still open — restore-from-dump.sh still has no trap on mid-restore failure. Note: its sibling restore-from-volume-backup.sh (which replaced restore-from-snapshot.sh) was given a trap ... ERR when rewritten; that improvement was never ported back here, so this is now an inconsistency between the two restore scripts rather than a uniform gap]`
 
 ## Deferred from: code review of deploy-3-1-postgresql-backup-automation (2026-06-04)
 - PGPASSWORD exposed via docker exec `-e` flag (visible in `ps aux` for duration of call) — spec-prescribed pattern; would require Docker secrets or a wrapper script to fix [deploy/backup/pg-backup.sh:22]
 - Credentials visible in `/proc/<pid>/environ` when `.env` is sourced — project-wide pattern, not introduced by this story
 - ~~No retention policy — S3 dumps and Hetzner snapshots accumulate unbounded; add lifecycle rules or a rotation script in a future backup hardening story~~ **CLOSED 2026-08-11 by `skillars-uat-3` AC6.** New `deploy/backup/prune-backups.sh`, installed by `install-crons.sh` at `30 3 * * *` (clear of both producers): `BACKUP_RETENTION_DAYS` (default 14) for the Object Storage dumps and `SNAPSHOT_RETENTION_DAYS` (default 7) for Hetzner snapshots, with a `BACKUP_RETENTION_MIN_KEEP` floor (default 8) that survives any age miscalculation, a `--dry-run` mode, key-stamp-derived ages rather than object mtimes, and a fatal error on an empty listing or an unparseable API response. Documented in `backup-restore.md` (Retention), `secrets-reference.md` and `runbook.md`. **But see the new `volume-snapshot.sh` item below — the snapshot half currently has nothing to prune, because Hetzner Cloud has no volume snapshot at all.**
-- install-crons.sh installs cron for the invoking user with no enforcement — typically root; document the expected user or add a guard in a future hardening pass
+- install-crons.sh installs cron for the invoking user with no enforcement — typically root; document the expected user or add a guard in a future hardening pass `[CLOSED by skillars-deferred-76 AC1]`
 - No upload integrity check (checksum / ETag verification after aws s3 cp) — out of scope for this story
-- No handling for Hetzner API HTTP 409 (action in progress) or 422 (quota exhausted) in volume-snapshot.sh — out of scope for this story
 - awscli v1 from Ubuntu apt may have `--endpoint-url` edge cases with Hetzner Object Storage — spec-approved as sufficient; revisit if upload failures occur in production
 
 ## Deferred from: code review of deploy-2-3-deployment-rollback-documentation (2026-06-04)
-- No pre-deploy GHCR image existence check — no step to verify the image tag exists in GHCR before triggering deploy; typo causes mid-run failure after 2–5 min wait.
-- No GHCR auth failure handling — no guidance if `docker login` fails (expired PAT, wrong token scope) before `docker compose pull`.
-- Step 5 health check retry loop is manual — "retry after 10 seconds" gives no command to re-run; a simple loop would be deterministic [rollback.md:139–142].
-- Partial pull failure leaves .env inconsistent — if `docker compose pull` times out, .env holds new tag but image not available; no recovery path documented [rollback.md:106].
-- Auto-Revert fails if previous image deleted from GHCR — GHCR retention policies can evict old images; Auto-Revert pull then fails with `outcome=failed` and production may be in unknown state.
-- `SSH_KNOWN_HOST` empty or multi-line edge cases — empty secret bypasses known-host verification; multi-line `ssh-keyscan` output is valid but undocumented [deploy.yml:27].
-- Container name `skillars-app-1` hardcoded in expected output without explaining Docker Compose naming convention (project-service-index) [rollback.md:113].
-- No explicit guidance if `docker compose pull app` fails mid-execution — the `&&` chain halts correctly, but no next-step is documented for auth errors, network timeout, or image-not-found.
+- No pre-deploy GHCR image existence check — no step to verify the image tag exists in GHCR before triggering deploy; typo causes mid-run failure after 2–5 min wait. `[CLOSED by skillars-deferred-76 AC4]`
+- No GHCR auth failure handling — no guidance if `docker login` fails (expired PAT, wrong token scope) before `docker compose pull`. `[CLOSED by skillars-deferred-76 AC4]`
+- Step 5 health check retry loop is manual — "retry after 10 seconds" gives no command to re-run; a simple loop would be deterministic [rollback.md:139–142]. `[CLOSED by skillars-deferred-76 AC4]`
+- Partial pull failure leaves .env inconsistent — if `docker compose pull` times out, .env holds new tag but image not available; no recovery path documented [rollback.md:106]. `[CLOSED by skillars-deferred-76 AC4]`
+- Auto-Revert fails if previous image deleted from GHCR — GHCR retention policies can evict old images; Auto-Revert pull then fails with `outcome=failed` and production may be in unknown state. `[CLOSED by skillars-deferred-76 AC4]`
+- `SSH_KNOWN_HOST` empty or multi-line edge cases — empty secret bypasses known-host verification; multi-line `ssh-keyscan` output is valid but undocumented [deploy.yml:27]. `[AUDIT 2026-08-27: the "bypasses verification" premise is backwards — no StrictHostKeyChecking=no exists, so an empty value fails closed, not open. The real, separate bug (secrets-reference.md's "single line" instruction contradicts ssh-keyscan's real multi-line output) is closed by skillars-deferred-76 AC4]`
+- Container name `skillars-app-1` hardcoded in expected output without explaining Docker Compose naming convention (project-service-index) [rollback.md:113]. `[CLOSED by skillars-deferred-76 AC4]`
+- No explicit guidance if `docker compose pull app` fails mid-execution — the `&&` chain halts correctly, but no next-step is documented for auth errors, network timeout, or image-not-found. `[CLOSED by skillars-deferred-76 AC4]`
 
 ## Deferred from: code review of deploy-2-2-manual-production-deploy-workflow-with-smoke-test-auto-revert (2026-06-04)
 - `Fail workflow` step is unreachable if a notification step throws — job still fails (attributed to the notification step instead), same end outcome, low severity diagnostic issue [`.github/workflows/deploy.yml`:139-143].
 
 ## Deferred from: code review of deploy-2-1-automated-ci-build-pipeline (2026-06-04)
-- No `SPRING_PROFILES_ACTIVE` in `ENTRYPOINT` — the container boots on the base profile; prod-specific beans and any config not overridden by environment variables silently use dev defaults. Recommend documenting the required env var in the Compose service definition. **RE-SCOPED TO PRODUCTION ONLY by `skillars-uat-1` (2026-08-10):** `docker-compose.uat.yml:4` sets `SPRING_PROFILES_ACTIVE=uat`, so this no longer applies to a UAT deploy. It remains open for the base `docker-compose.yml` and the `Dockerfile` `ENTRYPOINT` — i.e. for a plain production deploy, which is also why `PaymentConfig`'s live-key guard is written as opt-in on non-prod profiles rather than opt-out on prod.
+- No `SPRING_PROFILES_ACTIVE` in `ENTRYPOINT` — the container boots on the base profile; prod-specific beans and any config not overridden by environment variables silently use dev defaults. Recommend documenting the required env var in the Compose service definition. **RE-SCOPED TO PRODUCTION ONLY by `skillars-uat-1` (2026-08-10):** `docker-compose.uat.yml:4` sets `SPRING_PROFILES_ACTIVE=uat`, so this no longer applies to a UAT deploy. It remains open for the base `docker-compose.yml` and the `Dockerfile` `ENTRYPOINT` — i.e. for a plain production deploy, which is also why `PaymentConfig`'s live-key guard is written as opt-in on non-prod profiles rather than opt-out on prod. `[CLOSED by skillars-deferred-76 AC3]`
 - ~~No stable/latest symbolic tag alongside the SHA tag~~ **CLOSED by `skillars-uat-2` (2026-08-10):** `ci.yml` now pushes `ghcr.io/<repo>:latest` alongside `:sha-<short>`. The SHA tag stays and stays first — `docs/deployment/rollback.md` pins to it and a rollback still requires it explicitly.
 
 ## Deferred from: code review of deploy-1-5-first-time-setup-documentation (2026-06-04)
@@ -980,36 +974,33 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - No outbound firewall rules — observability containers (Prometheus, Loki, Tempo, Redis) have unrestricted internet egress; security hardening enhancement.
 - Docker Hub unauthenticated pull rate limits not documented — shared Hetzner egress IPs can hit the 100/6h limit; rare but unmitigated.
 - Partial `provision.sh` failure recovery undocumented — `set -euo pipefail` exits on first error; re-run may silently skip a broken install block [deploy/provision.sh].
-- No rollback procedure documented for a bad `APP_IMAGE` deploy when Flyway migrations have already run — operational concern for Epic 3.
-- Loki (720h), Tempo (336h), Prometheus (15d) retention periods inconsistent and undocumented — no disk sizing or tuning guidance [deploy/lgtm/].
-- `docker-compose-lgtm.yaml` in repo root has anonymous Grafana auth enabled and ports exposed — not warned against production use; dev-only artifact.
+- No rollback procedure documented for a bad `APP_IMAGE` deploy when Flyway migrations have already run — operational concern for Epic 3. `[CLOSED by skillars-deferred-76 AC5]`
+- Loki (720h), Tempo (336h), Prometheus (15d) retention periods inconsistent and undocumented — no disk sizing or tuning guidance [deploy/lgtm/]. `[CLOSED by skillars-deferred-76 AC2]`
 - No secret rotation procedure documented (PostgreSQL password, JWT secret, Grafana admin password) — ongoing operational maintenance concern.
-- JWT_SECRET minimum length stated (64+) but Spring algorithm and actual enforcement not documented — application implementation detail.
-- Grafana admin initial login not explicitly verified as part of Step 7 deployment completion check.
-- `provision.sh` re-run while stack is live runs `chown -R` over live data mounts — safe with current UIDs but fragile on container image UID changes.
+- JWT_SECRET minimum length stated (64+) but Spring algorithm and actual enforcement not documented — application implementation detail. `[CLOSED by skillars-deferred-76 AC6 — corrected: the real gap was that JWT_SECRET is dead configuration the app never reads at all, not merely "undocumented enforcement"]`
+- Grafana admin initial login not explicitly verified as part of Step 7 deployment completion check. `[CLOSED by skillars-deferred-76 AC8]`
+- `provision.sh` re-run while stack is live runs `chown -R` over live data mounts — safe with current UIDs but fragile on container image UID changes. `[CLOSED by skillars-deferred-76 AC1]`
 
 ## Deferred from: code review of deploy-1-5-first-time-setup-documentation (2026-06-03)
 - Firewall applied after provisioning — SSH port 22 is open to all internet IPs during the provisioning window. Deliberate ordering constraint (Hetzner firewall requires local hcloud CLI run, user may not have local clone yet). Consider documenting the exposure window or restructuring for users who already have a local clone.
 - `/dev/sdb` hardcoded device path unreliable on multi-volume servers — if Hetzner changes device assignment order the mount silently fails. The doc accuracy fix is a patch (see F2); fixing the script is Story 1.1 territory [deploy/provision.sh:145].
 - Repo cloned as root into `/opt/skillars` — `.git` directory sits alongside runtime data and secrets. Pre-existing architectural decision; would require a deploy-user or sparse-checkout approach to change.
-- `bantime=3600s` in fail2ban is a minimal starter value — inadequate for production. 1-hour bans are bypassed by slow-rate botnets. Pre-existing Story 1.1 config [deploy/provision.sh].
+- `bantime=3600s` in fail2ban is a minimal starter value — inadequate for production. 1-hour bans are bypassed by slow-rate botnets. Pre-existing Story 1.1 config [deploy/provision.sh]. `[CLOSED by skillars-deferred-76 AC1]`
 - No rollback / disaster-recovery documentation — explicitly out of scope for Story 1.5; belongs to Epic 3 (Stories 3.2 and 3.4).
 - git clone root (`/opt/skillars`) contains the volume data subdirectory (`/opt/skillars/data`) — `git clean` could interact with data dirs if `.gitignore` coverage lapses. Pre-existing architecture.
 
 ## Deferred from: code review of deploy-1-4-security-hardening (2026-06-03)
 - `err()` writes to stderr — lost in stdout-only log capture; if callers redirect stdout to a log file, error messages won't appear in it [deploy/provision.sh].
-- `touch` will error without parent dir if sections are reordered — parent dir (`${DEPLOY_ROOT}/traefik`) is created in section 5 which runs first; only an issue if the script structure is modified [deploy/provision.sh].
 
 ## Deferred from: code review of deploy-1-3-lgtm-observability-stack Round 2 (2026-06-03)
-- `chown` calls in provision.sh run unconditionally on every execution — safe for first provision, but re-running against a live system can interrupt in-progress container writes; document script as "first provision only" [deploy/provision.sh].
-- `${MOUNT_POINT}/postgres` has no `chown` after `mkdir -p` — Postgres (UID 999) will fail to write on a fresh volume. Pre-existing from Story 1.2; fix in Story 1.4 or a dedicated housekeeping ticket [deploy/provision.sh:126].
-- Duplicate logical alert definitions for PaymentFailureRateHigh, OrangeCircuitBreakerOpen, MtnCircuitBreakerOpen exist in both `alerts.yml` (Prometheus rules) and `grafana-alerts.yml` (Grafana unified alerts) — different notification paths with no Alertmanager wired; revisit when Alertmanager is added to avoid double-paging.
+- `chown` calls in provision.sh run unconditionally on every execution — safe for first provision, but re-running against a live system can interrupt in-progress container writes; document script as "first provision only" [deploy/provision.sh]. `[CLOSED by skillars-deferred-76 AC1]`
+- Duplicate logical alert definitions for PaymentFailureRateHigh, OrangeCircuitBreakerOpen, MtnCircuitBreakerOpen exist in both `alerts.yml` (Prometheus rules) and `grafana-alerts.yml` (Grafana unified alerts) — different notification paths with no Alertmanager wired; revisit when Alertmanager is added to avoid double-paging. `[CLOSED by skillars-deferred-76 AC7 — the underlying alerts never existed at all; superseded by real Stripe-based alerting]`
 
 ## Deferred from: code review of deploy-1-3-lgtm-observability-stack (2026-06-03)
-- Alert rule divide-by-zero guards (CallbackFailureRatioHigh, FraudBlockRateHigh, PaymentFailureRateHigh) in `deploy/lgtm/alerts.yml` — pre-existing in root `alerts.yml`; copied per spec. Guards like `and (...) > 0` needed on all ratio denominators.
-- `DbConnectionPoolHigh` alert has no label selector — pre-existing in root `alerts.yml`. Add `by (pool)` clause or label filter.
-- TraceID regex `[a-f0-9]{32}` only matches lowercase hex; OTel SDKs may emit uppercase. Pre-existing in root `grafana-datasources.yml`.
-- `spanStartTimeShift`/`spanEndTimeShift` of 1h creates extremely wide Loki query windows on trace drill-down. Pre-existing in root `grafana-datasources.yml`. Reduce to 1m/1m.
+- Alert rule divide-by-zero guards (CallbackFailureRatioHigh, FraudBlockRateHigh, PaymentFailureRateHigh) in `deploy/lgtm/alerts.yml` — pre-existing in root `alerts.yml`; copied per spec. Guards like `and (...) > 0` needed on all ratio denominators. `[CLOSED by skillars-deferred-76 AC7]`
+- `DbConnectionPoolHigh` alert has no label selector — pre-existing in root `alerts.yml`. Add `by (pool)` clause or label filter. `[CLOSED by skillars-deferred-76 AC2]`
+- TraceID regex `[a-f0-9]{32}` only matches lowercase hex; OTel SDKs may emit uppercase. Pre-existing in root `grafana-datasources.yml`. `[CLOSED by skillars-deferred-76 AC2]`
+- `spanStartTimeShift`/`spanEndTimeShift` of 1h creates extremely wide Loki query windows on trace drill-down. Pre-existing in root `grafana-datasources.yml`. Reduce to 1m/1m. `[CLOSED by skillars-deferred-76 AC2]`
 - Prometheus has no `depends_on: app` in compose — cold-start scrape failures on first `docker compose up`. Acceptable gap; scrapes recover once app is healthy.
 - LGTM data `mkdir -p` calls gated inside Hetzner Volume device `if [ -b ]` check — consistent with existing postgres pattern. If volume is absent at provision time, Docker auto-creates dirs as root (further compounds the permission issue once it's resolved).
 

@@ -36,6 +36,11 @@ class NeglectedSkillDetectionServiceIT extends AbstractIntegrationTest {
     private static final String SKILL_CODE = "PAC";
     // threshold=0.30 → lowerBound = maxTarget * 0.70
     private static final BigDecimal THRESHOLD = new BigDecimal("0.30");
+    // Story Deferred-76 AC9: this IT never seeds development.player_skill_stats rows for PLAYER_ID
+    // (only slu_targets and player_slu_weekly_snapshot, written directly via JDBC), so
+    // countDistinctSessions(PLAYER_ID) is 0 here — 0 keeps the new warmup gate a no-op so this IT's
+    // actual subject (the MAX-across-coaches query) is unaffected by warmup behavior.
+    private static final long WARMUP_SESSION_COUNT = 0L;
 
     @Autowired private SluTargetRepository sluTargetRepository;
     @Autowired private SluWeeklySnapshotRepository snapshotRepository;
@@ -63,7 +68,7 @@ class NeglectedSkillDetectionServiceIT extends AbstractIntegrationTest {
 
         // actual = 5 → below both possible lower bounds → flagged (sanity baseline)
         setSnapshotTotal(new BigDecimal("5"));
-        processor.processPlayer(PLAYER_ID, THRESHOLD, evalYear, evalWeek);
+        processor.processPlayer(PLAYER_ID, THRESHOLD, WARMUP_SESSION_COUNT, evalYear, evalWeek);
         assertOpenFlagExists();
 
         // actual = 10 → ABOVE coach1's lower bound (7.0) but BELOW the highest lower bound (14.0).
@@ -71,19 +76,19 @@ class NeglectedSkillDetectionServiceIT extends AbstractIntegrationTest {
         // single coach_id (e.g. only coach1), this would incorrectly resolve the flag (10 >= 7.0).
         // With the real MAX-across-coaches query, the flag correctly stays open (10 < 14.0).
         setSnapshotTotal(new BigDecimal("10"));
-        processor.processPlayer(PLAYER_ID, THRESHOLD, evalYear, evalWeek);
+        processor.processPlayer(PLAYER_ID, THRESHOLD, WARMUP_SESSION_COUNT, evalYear, evalWeek);
         assertOpenFlagExists();
 
         // actual = 14 → EXACTLY the highest lower bound. NeglectedSkillProcessor uses a strict
         // `actual.compareTo(lowerBound) < 0` check, so equality is NOT neglected — pins this
         // boundary so a future `<=` regression would be caught.
         setSnapshotTotal(new BigDecimal("14"));
-        processor.processPlayer(PLAYER_ID, THRESHOLD, evalYear, evalWeek);
+        processor.processPlayer(PLAYER_ID, THRESHOLD, WARMUP_SESSION_COUNT, evalYear, evalWeek);
         assertNoOpenFlag();
 
         // actual = 20 → above the highest lower bound (14.0) → resolved
         setSnapshotTotal(new BigDecimal("20"));
-        processor.processPlayer(PLAYER_ID, THRESHOLD, evalYear, evalWeek);
+        processor.processPlayer(PLAYER_ID, THRESHOLD, WARMUP_SESSION_COUNT, evalYear, evalWeek);
         assertNoOpenFlag();
     }
 

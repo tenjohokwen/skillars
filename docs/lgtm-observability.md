@@ -1,7 +1,18 @@
 # Skillars — LGTM Stack Observability Guide
 
+> **⚠️ STALE — describes a payment domain this app no longer has.** Every payment-specific query and
+> alert below (Orange Money, MTN MoMo, circuit breakers, callback/reconciliation metrics) was written for
+> a Mobile Money payment orchestration design this application never actually used in production — the
+> live app is Stripe-only (`payment/service/StripePaymentGateway.java`). None of the metrics or log
+> patterns referenced below (`payment_provider_latency_seconds`, `OrangeTokenService`, etc.) exist in the
+> running application. For the real, current alert inventory, see `deploy/lgtm/alerts.yml`,
+> `deploy/lgtm/grafana-alerts.yml`, and [`docs/deployment/monitoring.md`](deployment/monitoring.md). The
+> LGTM stack setup/architecture sections below (§0, §1's general reasoning, §3.6 JVM & Infrastructure)
+> remain accurate; the payment-specific query examples throughout do not.
+
 **Stack:** Loki · Grafana · Tempo · Mimir/Prometheus  
-**Application:** Skillars — Mobile Money Payment Orchestration (Orange Money + MTN MoMo)
+**Application:** Skillars — Mobile Money Payment Orchestration (Orange Money + MTN MoMo) — **superseded by
+Stripe; see warning above**
 
 ---
 
