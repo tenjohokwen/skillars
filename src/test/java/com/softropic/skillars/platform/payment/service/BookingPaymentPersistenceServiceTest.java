@@ -50,6 +50,9 @@ class BookingPaymentPersistenceServiceTest {
     @BeforeEach
     void setUp() {
         lenient().when(bookingPaymentRepository.findById(BOOKING_ID)).thenReturn(Optional.empty());
+        // @InjectMocks constructs the service but never invokes @PostConstruct — Mockito is not a
+        // Spring container. Without this, every settle*Counter field stays null.
+        service.initializeCounters();
     }
 
     @Test
@@ -79,6 +82,11 @@ class BookingPaymentPersistenceServiceTest {
             "pi_test_123", null, PARENT_ID, "parent@test.com", "Coach Name",
             Instant.now(), "Europe/Berlin");
 
-        assertThat(meterRegistry.find("booking.payment.settle_failed").counter()).isNull();
+        // initializeCounters() eagerly pre-registers all four counters at 0 (standard Micrometer
+        // practice, so they appear on dashboards before their first increment) — settle_failed is
+        // always registered, just never incremented by a success path.
+        Counter counter = meterRegistry.find("booking.payment.settle_failed").counter();
+        assertThat(counter).isNotNull();
+        assertThat(counter.count()).isEqualTo(0.0);
     }
 }
