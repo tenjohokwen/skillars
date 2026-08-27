@@ -119,7 +119,7 @@ public class DrillSuggestionService {
                 case "possession"   -> ((meta.cognitiveLoad() + meta.matchRealism()) / 2.0 - 1.0) / 4.0;
                 case "goalkeeping"  -> 0.5;
                 default             -> throw new IllegalArgumentException(
-                    "Unsupported development focus code '" + f + "' — must be one of: " + KNOWN_FOCUS_CODES)
+                    "Unsupported development focus code '" + f + "' — must be one of: " + KNOWN_FOCUS_CODES);
             };
         }
         return Math.min(1.0, total / focus.size());
