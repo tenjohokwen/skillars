@@ -3,7 +3,9 @@ package com.softropic.skillars.platform.session.service;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingSnapshot;
+import com.softropic.skillars.platform.booking.contract.BookingStatus;
 import com.softropic.skillars.platform.booking.service.BookingQueryService;
+import com.softropic.skillars.platform.booking.service.BookingStateMachine;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.session.contract.CreateSessionPlanRequest;
@@ -54,6 +56,7 @@ public class SessionPlanService {
     private final DrillLibraryService drillLibraryService;
     private final SessionDnaCalculator dnaCalculator;
     private final EquipmentListService equipmentListService;
+    private final BookingStateMachine bookingStateMachine;
 
     public SessionPlanResponse createSession(CreateSessionPlanRequest req, Long coachUserId) {
         drillLibraryService.checkSessionBuilderGate(coachUserId);
@@ -124,6 +127,20 @@ public class SessionPlanService {
         if ("COMPLETED".equals(session.getStatus())) {
             throw new OperationNotAllowedException(
                 "Completed sessions cannot be modified",
+                SessionErrorCode.SESSION_PLAN_LOCKED);
+        }
+
+        BookingSnapshot booking = bookingQueryService.getBookingSnapshot(session.getBookingId())
+            .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking"));
+        String bookingStatus = booking.status();
+        if (bookingStatus == null) {
+            throw new OperationNotAllowedException(
+                "Booking status is invalid; session plan can no longer be modified",
+                SessionErrorCode.SESSION_PLAN_LOCKED);
+        }
+        if (bookingStateMachine.isTerminal(BookingStatus.valueOf(bookingStatus))) {
+            throw new OperationNotAllowedException(
+                "Booking is no longer active; session plan can no longer be modified",
                 SessionErrorCode.SESSION_PLAN_LOCKED);
         }
 

@@ -11,6 +11,6 @@ import java.util.List;
 
 public record UpdateSessionPlanRequest(
     @NotNull @Size(min = 1, max = 4) List<@Valid SessionBlockRequest> blocks,
-    @NotEmpty List<@NotBlank String> developmentFocus,
+    @NotEmpty List<@NotBlank @ValidFocusCode String> developmentFocus,
     @Pattern(regexp = "DRAFT|SAVED") String status
 ) {}

@@ -24,6 +24,7 @@
         class="q-mb-xs"
         @add-to-session="emit('add-drill', drill)"
         @open-detail="emit('open-detail', drill)"
+        @video-error="emit('video-error')"
       />
     </div>
   </div>
@@ -39,6 +40,6 @@ defineProps({
   isPersonalized: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['close', 'add-drill', 'open-detail'])
+const emit = defineEmits(['close', 'add-drill', 'open-detail', 'video-error'])
 const { t } = useI18n()
 </script>

@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.session.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
@@ -25,6 +26,8 @@ import com.softropic.skillars.platform.video.repo.VideoRepository;
 import com.softropic.skillars.platform.video.service.VideoService;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -51,6 +54,8 @@ public class DrillUploadService {
     private final ApplicationEventPublisher eventPublisher;
     private final VideoTypeConstraints videoTypeConstraints;
     private final MeterRegistry meterRegistry;
+    private final EntityManager entityManager;
+    private final PessimisticLockRetryer lockRetryer;
 
     public DrillUploadInitiateResponse initiateUpload(UUID drillId, Long coachUserId, DrillUploadInitiateRequest req) {
         UUID coachId = resolveCoachId(coachUserId);
@@ -58,7 +63,7 @@ public class DrillUploadService {
         Drill drill = drillRepository.findById(drillId)
             .orElseThrow(() -> new ResourceNotFoundException("Drill not found", "drill"));
 
-        if (!"COACH".equals(drill.getLibraryType()) || !coachId.equals(drill.getOwnerCoachId())) {
+        if (!"PRIVATE".equals(drill.getLibraryType()) || !coachId.equals(drill.getOwnerCoachId())) {
             throw new OperationNotAllowedException("Drill upload not allowed", SessionErrorCode.DRILL_NOT_OWNED);
         }
 
@@ -73,35 +78,51 @@ public class DrillUploadService {
             throw new DrillConstraintViolationException("video", e.getMessage());
         }
 
-        Optional<DrillVideoRef> existing = drillVideoRefRepository.findByDrillId(drillId);
-        UUID existingVideoId = existing.map(DrillVideoRef::getVideoId).orElse(null);
-        if (existingVideoId != null) {
-            videoRepository.findById(existingVideoId).ifPresent(video -> {
-                if (video.getOperationalState() == OperationalState.READY) {
-                    throw new OperationNotAllowedException(
-                        "A video is already linked to this drill. Remove it before uploading a new one.",
-                        SessionErrorCode.DRILL_VIDEO_ALREADY_LINKED);
-                }
-            });
-        }
+        // Story Deferred-75 AC5: locks the Drill row for the duration of the check-then-act sequence
+        // below, closing the TOCTOU race where two concurrent initiateUpload calls both pass the
+        // existing/READY check before either commits its video-ref write. The provider call
+        // (videoService.initializeUpload) stays inside the locked region so a second, lock-waiting
+        // caller sees the first caller's committed write and correctly hits the READY/
+        // DRILL_VIDEO_ALREADY_LINKED guard instead of also creating a provider video.
+        return lockRetryer.withBoundedRetry(() -> {
+            drillRepository.findByIdForUpdate(drill.getId())
+                .orElseThrow(() -> new ResourceNotFoundException(
+                    "Drill was deleted by another user or no longer accessible", "drill"));
+            // The locked entity return is discarded because drill is already managed by this
+            // EntityManager (fetched at line 63). refresh() re-syncs the managed instance with
+            // the locked database row without needing the returned entity.
+            entityManager.refresh(drill, LockModeType.PESSIMISTIC_WRITE);
 
-        InitializeUploadResponse resp = videoService.initializeUpload(
-            new InitializeUploadRequest(coachId.toString(), req.fileName(), req.fileSizeBytes(),
-                req.mimeType(), VideoType.DRILL_DEMO));
-
-        if (existing.isPresent()) {
-            drillVideoRefRepository.setVideoId(drillId, resp.videoId());
-            // Replacing a non-READY video's ref (PROCESSING/FAILED — a READY one already threw
-            // above): the old reservation is otherwise orphaned until the reaper's timeout.
-            // Mirrors deleteVideo's own check-and-publish ordering.
-            if (existingVideoId != null && !drillVideoRefRepository.existsByVideoId(existingVideoId)) {
-                eventPublisher.publishEvent(new VideoPhysicalDeletionEvent(existingVideoId, drillId));
+            Optional<DrillVideoRef> existing = drillVideoRefRepository.findByDrillId(drillId);
+            UUID existingVideoId = existing.map(DrillVideoRef::getVideoId).orElse(null);
+            if (existingVideoId != null) {
+                videoRepository.findById(existingVideoId).ifPresent(video -> {
+                    if (video.getOperationalState() == OperationalState.READY) {
+                        throw new OperationNotAllowedException(
+                            "A video is already linked to this drill. Remove it before uploading a new one.",
+                            SessionErrorCode.DRILL_VIDEO_ALREADY_LINKED);
+                    }
+                });
             }
-        } else {
-            drillVideoRefRepository.upsertVideoId(drillId, resp.videoId());
-        }
 
-        return new DrillUploadInitiateResponse(resp.videoId(), resp.sessionId(), resp.signedUploadUrl(), resp.expiresAt());
+            InitializeUploadResponse resp = videoService.initializeUpload(
+                new InitializeUploadRequest(coachId.toString(), req.fileName(), req.fileSizeBytes(),
+                    req.mimeType(), VideoType.DRILL_DEMO));
+
+            if (existing.isPresent()) {
+                drillVideoRefRepository.setVideoId(drillId, resp.videoId());
+                // Replacing a non-READY video's ref (PROCESSING/FAILED — a READY one already threw
+                // above): the old reservation is otherwise orphaned until the reaper's timeout.
+                // Mirrors deleteVideo's own check-and-publish ordering.
+                if (existingVideoId != null && !drillVideoRefRepository.existsByVideoId(existingVideoId)) {
+                    eventPublisher.publishEvent(new VideoPhysicalDeletionEvent(existingVideoId, drillId));
+                }
+            } else {
+                drillVideoRefRepository.upsertVideoId(drillId, resp.videoId());
+            }
+
+            return new DrillUploadInitiateResponse(resp.videoId(), resp.sessionId(), resp.signedUploadUrl(), resp.expiresAt());
+        });
     }
 
     public void deleteVideo(UUID drillId, Long coachUserId) {
@@ -110,19 +131,29 @@ public class DrillUploadService {
         Drill drill = drillRepository.findById(drillId)
             .orElseThrow(() -> new ResourceNotFoundException("Drill not found", "drill"));
 
-        if (!"COACH".equals(drill.getLibraryType()) || !coachId.equals(drill.getOwnerCoachId())) {
+        if (!"PRIVATE".equals(drill.getLibraryType()) || !coachId.equals(drill.getOwnerCoachId())) {
             throw new OperationNotAllowedException("Drill upload not allowed", SessionErrorCode.DRILL_NOT_OWNED);
         }
 
-        drillVideoRefRepository.findByDrillId(drillId).ifPresent(ref -> {
-            if (ref.getVideoId() == null) return;
-            UUID videoId = ref.getVideoId();
+        // Story Deferred-75 AC5: locks the Drill row so two concurrent deletes on the same drillId
+        // cannot both observe existsByVideoId()==false before either commits its own clear, closing
+        // the ledger's Def14 double-publish race.
+        lockRetryer.withBoundedRetry(() -> {
+            drillRepository.findByIdForUpdate(drill.getId())
+                .orElseThrow(() -> new ResourceNotFoundException("Drill not found", "drill"));
+            entityManager.refresh(drill, LockModeType.PESSIMISTIC_WRITE);
 
-            drillVideoRefRepository.clearVideoId(drillId);
+            drillVideoRefRepository.findByDrillId(drillId).ifPresent(ref -> {
+                if (ref.getVideoId() == null) return;
+                UUID videoId = ref.getVideoId();
 
-            if (!drillVideoRefRepository.existsByVideoId(videoId)) {
-                eventPublisher.publishEvent(new VideoPhysicalDeletionEvent(videoId, drillId));
-            }
+                drillVideoRefRepository.clearVideoId(drillId);
+
+                if (!drillVideoRefRepository.existsByVideoId(videoId)) {
+                    eventPublisher.publishEvent(new VideoPhysicalDeletionEvent(videoId, drillId));
+                }
+            });
+            return null;
         });
     }
 

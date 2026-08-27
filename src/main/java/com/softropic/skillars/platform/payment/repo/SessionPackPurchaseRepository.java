@@ -11,6 +11,7 @@ import org.springframework.data.repository.query.Param;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 public interface SessionPackPurchaseRepository extends JpaRepository<SessionPackPurchase, UUID> {
@@ -52,4 +53,15 @@ public interface SessionPackPurchaseRepository extends JpaRepository<SessionPack
                                               @Param("now") Instant now);
 
     Optional<SessionPackPurchase> findTopByPlayerIdAndCoachIdOrderByCreatedAtDesc(Long playerId, UUID coachId);
+
+    // Story Deferred-75 AC6: batch form of findActivePacks' own filter conditions, copied exactly
+    // (remainingSessions > 0, expiresAt > now, and the pausedUntil window) so this method's semantics
+    // stay identical to the sum of individual hasActivePack calls it replaces in
+    // HomeworkAssignmentService.getLockerRoomDrills's N+1 loop.
+    @Query("SELECT DISTINCT p.coachId FROM SessionPackPurchase p WHERE p.playerId = :playerId " +
+        "AND p.coachId IN :coachIds AND p.remainingSessions > 0 AND p.expiresAt > :now " +
+        "AND (p.pausedUntil IS NULL OR p.pausedUntil <= :now)")
+    Set<UUID> findCoachIdsWithActivePack(@Param("playerId") Long playerId,
+                                          @Param("coachIds") Set<UUID> coachIds,
+                                          @Param("now") Instant now);
 }

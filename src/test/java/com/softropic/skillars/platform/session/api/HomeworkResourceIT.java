@@ -88,8 +88,9 @@ class HomeworkResourceIT extends BaseSessionIT {
             coachProfileId = insertCoachProfile(COACH_USER_ID);
             insertSubscription(coachProfileId, "INSTRUCTOR");
 
-            // homework_assignments.pack_id is a plain UUID column with no FK — any valid UUID works.
-            packId = UUID.randomUUID();
+            // Story Deferred-75 AC7: homework_assignments.pack_id now has a real FK into
+            // payment.session_pack_purchases (V109) — packId must reference a row that actually
+            // exists there (paymentPurchaseId, inserted below), not an arbitrary UUID.
 
             // Story 11.2: HomeworkAssignmentService's active-pack gating now queries
             // payment.session_pack_purchases exclusively (PackSessionService.hasActivePack),
@@ -109,10 +110,11 @@ class HomeworkResourceIT extends BaseSessionIT {
                 paymentPurchaseId, PARENT_ID, PLAYER_ID, coachProfileId, packTierId,
                 Timestamp.from(Instant.now().plus(180, ChronoUnit.DAYS))
             );
+            packId = paymentPurchaseId;
 
             // Drill
             drillId = UUID.randomUUID();
-            insertDrill(drillId, "Homework Drill", "COACH", coachProfileId, "ACTIVE");
+            insertDrill(drillId, "Homework Drill", "PRIVATE", coachProfileId, "ACTIVE");
 
             // Homework assignment
             assignmentId = UUID.randomUUID();
@@ -128,6 +130,20 @@ class HomeworkResourceIT extends BaseSessionIT {
         });
     }
 
+
+    @Test
+    void insertHomeworkAssignment_packIdNotInSessionPackPurchases_failsAtDbLayer() {
+        // Story Deferred-75 AC7: V109's fk_homework_assignments_pack now rejects a pack_id that
+        // doesn't reference a live payment.session_pack_purchases row.
+        UUID nonExistentPackId = UUID.randomUUID();
+        assertThatThrownBy(() -> transactionTemplate.execute(status -> jdbcTemplate.update(
+            "INSERT INTO session.homework_assignments " +
+            "(id, booking_id, player_id, coach_id, drill_id, pack_id, assigned_at) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            UUID.randomUUID(), UUID.randomUUID(), PLAYER_ID, coachProfileId, drillId, nonExistentPackId,
+            Timestamp.from(Instant.now())
+        ))).isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    }
 
     @Test
     void getLockerRoomDrills_parentOwner_returns200WithDrills() {

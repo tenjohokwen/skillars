@@ -51,11 +51,11 @@ class DrillTagResourceIT extends BaseSessionIT {
 
             // Private drill owned by coach 1
             privateDrillId = UUID.randomUUID();
-            insertDrill(privateDrillId, "My Private Drill", "COACH", coachProfileId, "ACTIVE");
+            insertDrill(privateDrillId, "My Private Drill", "PRIVATE", coachProfileId, "ACTIVE");
 
             // Private drill owned by coach 2
             coach2DrillId = UUID.randomUUID();
-            insertDrill(coach2DrillId, "Coach2 Drill", "COACH", coachProfileId2, "ACTIVE");
+            insertDrill(coach2DrillId, "Coach2 Drill", "PRIVATE", coachProfileId2, "ACTIVE");
 
             // Grab a PLATFORM drill from V39 seed
             platformDrillId = jdbcTemplate.queryForObject(

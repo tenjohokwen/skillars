@@ -87,7 +87,7 @@ class DrillLibraryServiceTest {
 
         DrillResponse result = service.cloneDrill(sourceDrillId, COACH_USER_ID);
 
-        assertThat(result.libraryType()).isEqualTo("COACH");
+        assertThat(result.libraryType()).isEqualTo("PRIVATE");
         assertThat(result.ownerCoachId()).isEqualTo(COACH_PROFILE_ID);
         assertThat(result.hasVideo()).isTrue();
 
@@ -120,7 +120,7 @@ class DrillLibraryServiceTest {
     @Test
     void cloneDrill_coachTypeDrill_throws403() {
         UUID sourceDrillId = UUID.randomUUID();
-        Drill source = buildDrill(sourceDrillId, "COACH", "ACTIVE", UUID.randomUUID());
+        Drill source = buildDrill(sourceDrillId, "PRIVATE", "ACTIVE", UUID.randomUUID());
 
         when(drillRepository.findById(sourceDrillId)).thenReturn(Optional.of(source));
 

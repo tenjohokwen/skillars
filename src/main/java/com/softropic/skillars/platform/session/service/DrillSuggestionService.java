@@ -99,6 +99,13 @@ public class DrillSuggestionService {
         return focusScore * 0.40 + neglectedScore * 0.30 + ageFitScore * 0.20 + recencyScore * 0.10;
     }
 
+    // Story Deferred-75 AC11: single source of truth for the known developmentFocus codes, referenced
+    // by @ValidFocusCode so the request-boundary validator and this switch's own case labels can't
+    // silently drift apart a third way (frontend DevelopmentFocusSelector.vue's FOCUS_OPTIONS is the
+    // second, independent copy this AC's validator guards against, not this one).
+    public static final Set<String> KNOWN_FOCUS_CODES = Set.of(
+        "technical", "physical", "cognitive", "matchRealism", "weakFoot", "set_pieces", "goalkeeping", "possession");
+
     private double computeFocusScore(DrillMetadata meta, List<String> focus) {
         double total = 0.0;
         for (String f : focus) {
@@ -111,7 +118,8 @@ public class DrillSuggestionService {
                 case "set_pieces"   -> (meta.pressureLevel() - 1.0) / 4.0;
                 case "possession"   -> ((meta.cognitiveLoad() + meta.matchRealism()) / 2.0 - 1.0) / 4.0;
                 case "goalkeeping"  -> 0.5;
-                default             -> 0.0;
+                default             -> throw new IllegalArgumentException(
+                    "Unsupported development focus code '" + f + "' — must be one of: " + KNOWN_FOCUS_CODES);
             };
         }
         return Math.min(1.0, total / focus.size());

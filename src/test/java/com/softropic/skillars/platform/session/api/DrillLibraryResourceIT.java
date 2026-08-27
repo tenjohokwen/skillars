@@ -89,7 +89,7 @@ class DrillLibraryResourceIT extends BaseSessionIT {
             anotherCoachDrillId = UUID.randomUUID();
             jdbcTemplate.update(
                 "INSERT INTO session.drills (id, name, library_type, owner_coach_id, status, metadata, version) " +
-                "VALUES (?, 'Coach Drill', 'COACH', ?, 'ACTIVE', ?::jsonb, 0)",
+                "VALUES (?, 'Coach Drill', 'PRIVATE', ?, 'ACTIVE', ?::jsonb, 0)",
                 anotherCoachDrillId, coachProfileId2,
                 "{\"primarySkills\":[\"dribbling\"],\"secondarySkills\":[],\"skillWeighting\":{\"dribbling\":100}," +
                 "\"repDensity\":10,\"intensity\":2,\"pressureLevel\":1,\"cognitiveLoad\":1,\"matchRealism\":2," +
@@ -184,7 +184,7 @@ class DrillLibraryResourceIT extends BaseSessionIT {
         );
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
-        assertThat(response.getBody().get("libraryType")).isEqualTo("COACH");
+        assertThat(response.getBody().get("libraryType")).isEqualTo("PRIVATE");
 
         // Verify clone appears in private library
         String cookies2 = loginAndGetCookies(COACH_EMAIL);

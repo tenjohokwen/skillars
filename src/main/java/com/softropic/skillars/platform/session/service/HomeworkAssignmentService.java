@@ -56,13 +56,23 @@ public class HomeworkAssignmentService {
         if (event.getHomeworkDrillIds() == null || event.getHomeworkDrillIds().isEmpty()) {
             return;
         }
+        // Story Deferred-75 AC6: WrapUpRequest.homeworkDrillIds carries @Size(max=2) on the HTTP path,
+        // but that constraint isn't enforced here — this is a defense-in-depth guard against a future
+        // publisher of BookingCompletedEvent assigning an unbounded number of homework drills. Truncate
+        // rather than reject: this runs @Async after commit, so there is no caller to return an error to.
+        if (event.getHomeworkDrillIds().size() > 2) {
+            log.warn("BookingCompletedEvent for booking {} carries {} homeworkDrillIds, exceeding the max of 2 — truncating",
+                event.getBookingId(), event.getHomeworkDrillIds().size());
+        }
+        List<UUID> drillIdsToAssign = event.getHomeworkDrillIds().stream().limit(2).toList();
+
         UUID sessionId = sessionRepository.findByBookingId(event.getBookingId())
             .map(s -> s.getId()).orElse(null);
         if (sessionId == null) {
             log.debug("No session found for booking {} — assigning homework with null sessionId (expected for QUICK-mode bookings)", event.getBookingId());
         }
         UUID packId = resolvePackId(event.getPlayerId(), event.getCoachId());
-        for (UUID drillId : event.getHomeworkDrillIds()) {
+        for (UUID drillId : drillIdsToAssign) {
             // Idempotency: skip if assignment already exists for this booking+drill.
             // Uses bookingId (never null) — not sessionId, which may be null for QUICK-mode bookings.
             // PostgreSQL UNIQUE constraints treat NULL ≠ NULL, so a nullable-column constraint gives
@@ -98,12 +108,8 @@ public class HomeworkAssignmentService {
                 return List.of();
             }
 
-            Set<UUID> activeCoachIds = all.stream()
-                .map(HomeworkAssignment::getCoachId)
-                .collect(Collectors.toSet())
-                .stream()
-                .filter(coachId -> packSessionService.hasActivePack(playerId, coachId))
-                .collect(Collectors.toSet());
+            Set<UUID> allCoachIds = all.stream().map(HomeworkAssignment::getCoachId).collect(Collectors.toSet());
+            Set<UUID> activeCoachIds = packSessionService.hasActivePackForAnyOf(playerId, allCoachIds);
 
             List<HomeworkAssignment> active = all.stream()
                 .filter(a -> activeCoachIds.contains(a.getCoachId()))
