@@ -343,7 +343,7 @@
 <dependency>
 			<groupId>org.hibernate.orm</groupId>
 			<artifactId>hibernate-envers</artifactId>
-			<version>6.6.14.Final</version>
+			<version>6.6.56.Final</version>
 		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
