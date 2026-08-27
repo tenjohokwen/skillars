@@ -58,13 +58,13 @@ public class HomeworkAssignmentService {
         }
         // Story Deferred-75 AC6: WrapUpRequest.homeworkDrillIds carries @Size(max=2) on the HTTP path,
         // but that constraint isn't enforced here — this is a defense-in-depth guard against a future
-        // publisher of BookingCompletedEvent assigning an unbounded number of homework drills.
+        // publisher of BookingCompletedEvent assigning an unbounded number of homework drills. Truncate
+        // rather than reject: this runs @Async after commit, so there is no caller to return an error to.
         if (event.getHomeworkDrillIds().size() > 2) {
-            throw new IllegalArgumentException(
-                "BookingCompletedEvent for booking " + event.getBookingId() + " carries " +
-                event.getHomeworkDrillIds().size() + " homeworkDrillIds, exceeding max of 2");
+            log.warn("BookingCompletedEvent for booking {} carries {} homeworkDrillIds, exceeding the max of 2 — truncating",
+                event.getBookingId(), event.getHomeworkDrillIds().size());
         }
-        List<UUID> drillIdsToAssign = event.getHomeworkDrillIds();
+        List<UUID> drillIdsToAssign = event.getHomeworkDrillIds().stream().limit(2).toList();
 
         UUID sessionId = sessionRepository.findByBookingId(event.getBookingId())
             .map(s -> s.getId()).orElse(null);
