@@ -118,6 +118,28 @@
 					<artifactId>commons-beanutils</artifactId>
 					<version>1.11.0</version>
 				</dependency>
+
+				<!--
+				  Transitive security pin, same rule as the commons-beanutils pin above: drop it once
+				  logstash-logback-encoder ships a release that pulls a patched tools.jackson:jackson-bom
+				  itself. logstash-logback-encoder 9.0 (bumped from 8.1, its Jackson-3 migration release)
+				  declares tools.jackson:jackson-bom 3.0.1, which resolves both artifacts below at 3.0.1 —
+				  vulnerable to CVE-2026-29062, GHSA-2m67-wjpj-xhg9, GHSA-r7wm-3cxj-wff9 (jackson-core) and
+				  CVE-2026-54512, CVE-2026-54513 (jackson-databind, PolymorphicTypeValidator bypass). All
+				  five are fixed at 3.1.4. This project does not otherwise use Jackson 3 (tools.jackson.*) —
+				  jackson-core/jackson-databind here exist solely as logstash-logback-encoder's own
+				  transitive dependency, unrelated to this project's primary com.fasterxml.jackson 2.x stack.
+				-->
+				<dependency>
+					<groupId>tools.jackson.core</groupId>
+					<artifactId>jackson-core</artifactId>
+					<version>3.1.4</version>
+				</dependency>
+				<dependency>
+					<groupId>tools.jackson.core</groupId>
+					<artifactId>jackson-databind</artifactId>
+					<version>3.1.4</version>
+				</dependency>
 			</dependencies>
 		</dependencyManagement>
 	
@@ -328,7 +350,7 @@
 		<dependency>
 			<groupId>net.logstash.logback</groupId>
 			<artifactId>logstash-logback-encoder</artifactId>
-			<version>8.1</version>
+			<version>9.0</version>
 		</dependency>
 		<dependency>
 			<groupId>com.github.loki4j</groupId>
