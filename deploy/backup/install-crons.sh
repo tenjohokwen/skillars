@@ -5,6 +5,11 @@
 # exists on disk, but a prior crontab install of it is not removed just by deleting the file.
 set -euo pipefail
 
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Error: This script must be run as root."
+  exit 1
+fi
+
 LOG="/var/log/skillars-backup.log"
 BACKUP_DIR="/opt/skillars/deploy/backup"
 

@@ -65,13 +65,25 @@ public class NeglectedSkillDetectionService {
         short evalYear = (short) evaluated.get(IsoFields.WEEK_BASED_YEAR);
         short evalWeek = (short) evaluated.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
 
+        long warmupSessionCount;
+        try {
+            warmupSessionCount = configService.getLong("development.neglectedSkill.warmupSessionCount");
+            if (warmupSessionCount < 0) {
+                log.error("Neglected skill detection aborted — development.neglectedSkill.warmupSessionCount is negative: {}", warmupSessionCount);
+                return;
+            }
+        } catch (IllegalStateException e) {
+            log.error("Neglected skill detection aborted — development.neglectedSkill.warmupSessionCount is missing or malformed");
+            return;
+        }
+
         List<Long> playerIds = sluTargetRepository.findDistinctPlayerIds();
         Instant started = Instant.now();
         boolean runtimeWarningLogged = false;
         for (int i = 0; i < playerIds.size(); i++) {
             Long playerId = playerIds.get(i);
             try {
-                processor.processPlayer(playerId, threshold, evalYear, evalWeek);
+                processor.processPlayer(playerId, threshold, warmupSessionCount, evalYear, evalWeek);
             } catch (Exception e) {
                 log.error("Failed processing neglected skills for player={}: {}", playerId, e.getMessage(), e);
             }

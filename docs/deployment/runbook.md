@@ -69,12 +69,13 @@ docker compose restart loki
 docker compose restart prometheus
 ```
 
-**All four retention windows, in one place:**
+**All five retention windows, in one place:**
 
 | Data | Window | Enforced by |
 |---|---|---|
 | Loki logs | 30 days | `loki.yml`, self-pruning |
 | Prometheus metrics | 15 days | Prometheus, self-pruning |
+| Tempo traces | 14 days (336h) | `tempo.yml` `block_retention`, self-pruning |
 | PostgreSQL dumps (Object Storage) | `BACKUP_RETENTION_DAYS`, default 14 days | `prune-backups.sh`, daily 03:30 UTC |
 | Volume backups (Object Storage) | `VOLUME_BACKUP_RETENTION_DAYS`, default 14 days | `prune-backups.sh`, daily 03:30 UTC |
 

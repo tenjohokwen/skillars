@@ -80,6 +80,49 @@ class SluFormulaTest {
     }
 
     @Test
+    void calculate_withDoubleNegativeFactors_returnsEmptyMap() {
+        // Story Deferred-76 AC10. Same repDensity/weight/duration as
+        // calculate_withValidMetadata_returnsNonZeroSluForWeightedSkills (which asserts this exact
+        // input, positive, yields 42.0000) — intensity and pressureLevel are negated here.
+        // Pre-guard, two negatives cancel: (-7×0.10) × (-6×0.10) = 0.7 × 0.6, identical to the
+        // positive case, so the old code would silently produce the SAME 42.0000 "valid-looking"
+        // result from nonsensical negative inputs. The guard must reject this before that
+        // cancellation ever happens.
+        DrillMetadata meta = metadata(Map.of("PAC", 5), 8, -7, -6, 5);
+
+        Map<String, BigDecimal> result = SluFormula.calculate(meta, 5, SCALE_0_10, SCALE_0_10, SCALE_0_10);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void calculate_withSingleNegativeFactor_returnsEmptyMap() {
+        DrillMetadata meta = metadata(Map.of("PAC", 5), 8, -7, 6, 5);
+
+        Map<String, BigDecimal> result = SluFormula.calculate(meta, 5, SCALE_0_10, SCALE_0_10, SCALE_0_10);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void calculate_withNegativeRepDensity_returnsEmptyMap() {
+        DrillMetadata meta = metadata(Map.of("PAC", 5), -8, 7, 6, 5);
+
+        Map<String, BigDecimal> result = SluFormula.calculate(meta, 5, SCALE_0_10, SCALE_0_10, SCALE_0_10);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void calculate_withNegativeMatchRealism_returnsEmptyMap() {
+        DrillMetadata meta = metadata(Map.of("PAC", 5), 8, 7, 6, -5);
+
+        Map<String, BigDecimal> result = SluFormula.calculate(meta, 5, SCALE_0_10, SCALE_0_10, SCALE_0_10);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
     void calculate_allFifteenSkills_scalesWithDuration() {
         Map<String, Integer> allSkills = Map.ofEntries(
             Map.entry("PAC", 1), Map.entry("SHO", 1), Map.entry("PAS", 1),

@@ -10,6 +10,11 @@ This document lists every secret required to run the application and CI/CD pipel
 Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 `deploy/provision.sh` auto-enforces mode 600 on re-run.
 
+> **JWT signing key is not an operator-supplied secret.** There is no `JWT_SECRET` (or equivalent) `.env`
+> variable — the app never reads one. The real JWT signing key is a 256-byte value, auto-generated on first
+> boot and stored Jasypt-encrypted in the database (`sec.secret` table, via `SecretService.createSecret` /
+> `JwtSecretService`). Nothing to configure here.
+
 | Variable | Format | How to obtain or generate |
 |---|---|---|
 | `APP_IMAGE` | `ghcr.io/<org>/javatemplate:sha-<commit>` | Produced by the CI pipeline (Epic 2) after merge to `main`. For the very first deploy (before CI is set up), build and push manually — see commands below the table |
@@ -19,7 +24,6 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 | `POSTGRES_USER` | Alphanumeric string, e.g. `skillars` | Choose a database username; default `skillars` |
 | `POSTGRES_PASSWORD` | 32+ character random string | `openssl rand -base64 32` |
 | `SPRING_DATASOURCE_URL` | JDBC URL | Fixed derived value: `jdbc:postgresql://postgres:5432/<POSTGRES_DB>?TimeZone=UTC` — substitute `<POSTGRES_DB>` with the literal database name you chose above; Docker Compose does not expand variable references within `.env` file values |
-| `JWT_SECRET` | 64+ character random string | `openssl rand -base64 64` |
 | `APP_BOOTSTRAP_ADMIN_EMAIL` | Email address | **Temporary — see the callout below.** The login for the platform's first administrator. Choose an address that does not already belong to a coach, parent or player account |
 | `APP_BOOTSTRAP_ADMIN_PASSWORD` | 24+ character random string | **Temporary — see the callout below.** `openssl rand -base64 24`. Stored bcrypt-hashed; never logged. Record it in your password manager before the first deploy — it cannot be recovered from the running system |
 | `APP_BOOTSTRAP_ADMIN_PHONE` | E.164 phone number, e.g. `+491700000000` | **Temporary — see the callout below.** Required whenever the two above are set. `main."user".phone` carries a `UNIQUE` constraint, so this cannot be a shared placeholder — a second admin bootstrapped on the same database needs a different number |
@@ -116,7 +120,7 @@ additional secrets (Slack webhook, alert routing) will be defined in Epic 2 stor
 | `SSH_DEPLOY_KEY` | PEM private key (ed25519 recommended) | Generate: `ssh-keygen -t ed25519 -C deploy@skillars-prod`; add the public key to `/root/.ssh/authorized_keys` on the Node; paste the private key here |
 | `SSH_HOST` | IP address | The Node's public IP address; used by the deploy workflow to SSH to the Node |
 | `SSH_USER` | String, e.g. `root` | SSH username on the Node (default `root`) |
-| `SSH_KNOWN_HOST` | Known hosts entry (single line) | Run `ssh-keyscan -H <node-ip>` from a trusted machine after provisioning and paste the full output line here; used to verify the Node host key instead of trusting on first use |
+| `SSH_KNOWN_HOST` | Known hosts entries (multi-line) | Run `ssh-keyscan -H <node-ip>` from a trusted machine after provisioning — it prints one line per host-key algorithm, not a single line. Paste **all** lines exactly as printed (do not truncate to one); used to verify the Node host key instead of trusting on first use |
 | `SLACK_WEBHOOK_URL` | HTTPS URL | Slack → Your workspace → Apps → Incoming Webhooks → Add to Slack → select channel → copy Webhook URL |
 | `SMTP_HOST` | Hostname | Your SMTP provider (e.g. `smtp.gmail.com`, `smtp.sendgrid.net`) |
 | `SMTP_PORT` | Integer | From your SMTP provider — `587` for STARTTLS, `465` for SSL/TLS |
@@ -133,9 +137,6 @@ Quick reference for generating strong secrets locally:
 ```bash
 # 32 bytes of entropy (~44 base64 characters) — for POSTGRES_PASSWORD:
 openssl rand -base64 32
-
-# 64 bytes of entropy (~88 base64 characters) — for JWT_SECRET:
-openssl rand -base64 64
 
 # 24 bytes of entropy (~32 base64 characters) — for GF_SECURITY_ADMIN_PASSWORD
 # and APP_BOOTSTRAP_ADMIN_PASSWORD:

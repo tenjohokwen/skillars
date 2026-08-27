@@ -73,9 +73,22 @@ class PaymentConfigTest {
     }
 
     @Test
-    void allowsLiveKeyWhenNoNonProdProfileActive() {
-        // Mirrors current production behaviour, which boots with no SPRING_PROFILES_ACTIVE set.
+    void refusesToStartWithLiveKeyWhenNoProdProfileActive() {
+        // No profile at all (or a typo'd/future profile name) must fail closed — only an explicit
+        // "prod" profile is allowed to carry a live key.
         when(environment.getActiveProfiles()).thenReturn(new String[]{});
+        PaymentProperties props = new PaymentProperties();
+        props.setApiKey("sk_live_abc123");
+        PaymentConfig config = new PaymentConfig(props, environment);
+
+        assertThatThrownBy(config::configureStripe)
+            .isInstanceOf(AppSetupException.class)
+            .hasMessageContaining("sk_live_");
+    }
+
+    @Test
+    void allowsLiveKeyUnderProdProfile() {
+        when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
         PaymentProperties props = new PaymentProperties();
         props.setApiKey("sk_live_abc123");
         PaymentConfig config = new PaymentConfig(props, environment);

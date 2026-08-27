@@ -21,7 +21,7 @@ scp .env root@<NODE_IP>:/opt/skillars/.env
 ssh root@<NODE_IP> "chmod 600 /opt/skillars/.env"
 ```
 
-Required vars: `DOMAIN`, `LETSENCRYPT_EMAIL`, `APP_IMAGE`, `POSTGRES_*`, `JWT_SECRET`.
+Required vars: `DOMAIN`, `LETSENCRYPT_EMAIL`, `APP_IMAGE`, `POSTGRES_*`.
 
 ## 3. Confirm DNS points to the Node
 

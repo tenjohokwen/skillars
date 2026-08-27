@@ -82,3 +82,8 @@ vendor/
 coverage/
 .cache/
 tmp/
+
+# Production deploy data directory (Hetzner Volume mounts here at /opt/skillars/data on the Node —
+# PostgreSQL, Redis AOF, LGTM stack data, Traefik acme.json). Must never be tracked or matched by
+# `git clean`; the repo is cloned directly into /opt/skillars, the same directory this mounts under.
+/data/

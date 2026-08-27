@@ -13,8 +13,10 @@ datasources:
     url: http://loki:3100
     jsonData:
       derivedFields:
+        # Assumes W3C 128-bit trace ID format (32 hex chars, case-insensitive — OTel SDKs may emit
+        # uppercase). If this app's trace ID format ever changes, this regex needs updating too.
         - datasourceUid: 'Tempo'
-          matcherRegex: '"traceId":"([a-f0-9]{32})"'
+          matcherRegex: '"traceId":"([a-fA-F0-9]{32})"'
           name: TraceID
           url: '$${__value.raw}'
 
@@ -38,8 +40,8 @@ datasources:
         tags: ['service']
         mappedTags: [{ key: 'service.name', value: 'service' }]
         mapTagNamesEnabled: true
-        spanStartTimeShift: '1h'
-        spanEndTimeShift: '1h'
+        spanStartTimeShift: '1m'
+        spanEndTimeShift: '1m'
         filterByTraceId: true
         filterBySpanId: false
       tracesToMetrics:

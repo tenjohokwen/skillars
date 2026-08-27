@@ -1,12 +1,14 @@
 package com.softropic.skillars.platform.development.service;
 
 import com.softropic.skillars.platform.session.contract.DrillMetadata;
+import lombok.extern.slf4j.Slf4j;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.HashMap;
 import java.util.Map;
 
+@Slf4j
 public final class SluFormula {
 
     private SluFormula() {}
@@ -39,6 +41,14 @@ public final class SluFormula {
                 || metadata.skillWeighting() == null
                 || metadata.skillWeighting().isEmpty()
                 || durationMinutes <= 0) {
+            return result;
+        }
+        if (metadata.repDensity() < 0 || metadata.intensity() < 0
+                || metadata.pressureLevel() < 0 || metadata.matchRealism() < 0
+                || metadata.cognitiveLoad() < 0) {
+            log.warn("Drill metadata has a negative rating field (repDensity={}, intensity={}, pressureLevel={}, "
+                    + "matchRealism={}, cognitiveLoad={}) — skipping SLU contribution for this drill to avoid a sign-cancellation false positive",
+                metadata.repDensity(), metadata.intensity(), metadata.pressureLevel(), metadata.matchRealism(), metadata.cognitiveLoad());
             return result;
         }
 

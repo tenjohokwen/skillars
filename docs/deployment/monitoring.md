@@ -25,11 +25,10 @@ Grafana is only accessible via HTTPS through Traefik. There is no direct port ex
 **Skillars Dashboard** — provisioned automatically from `deploy/lgtm/skillars-dashboard.json`.
 
 Shows:
-- Payment throughput (success rate, failure rate)
-- Payment provider latency (p95, p99 by provider)
-- JVM metrics (heap usage, GC activity)
+- Infrastructure health overview
+- JVM heap utilisation
 - HikariCP database connection pool utilisation
-- Circuit breaker state (Orange Money, MTN MoMo)
+- Live error logs and recent errors (Loki)
 
 For ad-hoc log queries (Loki) or trace lookups (Tempo), use Grafana's built-in **Explore** view — select the appropriate datasource (Loki or Tempo) from the dropdown.
 
@@ -110,136 +109,33 @@ docker compose pull node_exporter && docker compose up -d --no-deps node_exporte
 
 ---
 
-#### PaymentFailureRateHigh
-
-**Source:** `deploy/lgtm/alerts.yml` (skillars-alerts) and `deploy/lgtm/grafana-alerts.yml` (skillars-prometheus-alerts)
-
-**Meaning:** Payment failure rate exceeded 5% over a 5-minute window. May indicate a provider outage, misconfiguration, or an upstream fraud spike.
-
-**Response:**
-
-1. Check the circuit breaker state in the Skillars Dashboard. If `OrangeCircuitBreakerOpen` or `MtnCircuitBreakerOpen` is also firing, the provider is down — follow the circuit breaker response below.
-2. Check app logs for `OrchestratorError`:
-
-```bash
-docker compose logs app --tail=100 | grep -i "OrchestratorError"
-```
-
-3. Check provider status pages (Orange Money, MTN MoMo).
-4. If neither provider is down, check `FraudBlockRateHigh` — elevated fraud blocks count as failures in this metric.
-
----
-
-#### OrangeCircuitBreakerOpen
-
-**Source:** `deploy/lgtm/alerts.yml` (skillars-alerts) and `deploy/lgtm/grafana-alerts.yml` (skillars-prometheus-alerts)
-
-**Meaning:** The Orange Money circuit breaker tripped OPEN. All new Orange Money payments are immediately rejected with 503.
-
-**Response:**
-
-1. Check the Orange Money API status page.
-2. Check app logs for connection errors to Orange:
-
-```bash
-docker compose logs app --tail=100 | grep -i "orange"
-```
-
-3. If the provider is down: wait for the circuit breaker's automatic half-open retry. The breaker tests a single request after a configured wait period and closes automatically if the provider recovers.
-4. If the provider is restored but the breaker has not closed: restart the app service to reset the in-memory circuit breaker state:
-
-```bash
-docker compose restart app
-```
-
----
-
-#### MtnCircuitBreakerOpen
-
-**Source:** `deploy/lgtm/alerts.yml` (skillars-alerts) and `deploy/lgtm/grafana-alerts.yml` (skillars-prometheus-alerts)
-
-**Meaning:** The MTN Mobile Money circuit breaker tripped OPEN. All new MTN payments are immediately rejected with 503.
-
-**Response:** Same as `OrangeCircuitBreakerOpen` — substitute MTN MoMo API status page and MTN-related log entries.
-
----
-
-#### ProviderLatencyP99Critical
-
-**Source:** `deploy/lgtm/alerts.yml` (skillars-alerts)
-
-**Meaning:** A payment provider's p99 response latency exceeded 10 seconds. Payments are still succeeding but very slowly — SLO breach risk.
-
-**Response:**
-
-1. Identify which provider is affected from the Grafana alert label (`provider`).
-2. Check the provider's status page for degraded performance.
-3. Check app logs for timeout patterns:
-
-```bash
-docker compose logs app --tail=100 | grep -i "timeout"
-```
-
-4. If latency is sustained for more than 15 minutes and multi-provider failover is supported, consider temporarily routing traffic to the other provider.
-
----
-
 ### High Alerts
 
 ---
 
-#### WebhookPermanentFailure
-
-**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-loki-alerts)
-
-**Meaning:** A payment webhook exhausted all retry attempts and was moved to the dead-letter state. The merchant will not receive the payment status update automatically.
-
-**Response:**
-
-1. Find the affected transaction in Loki:
-
-```
-{service="skillars"} |= "FAILED_PERMANENT"
-```
-
-2. Note the `transactionId` from the log entry.
-3. Check whether the merchant's webhook endpoint is reachable.
-4. If the endpoint is restored, re-trigger the webhook manually via the Admin API.
-5. If the endpoint is permanently unreachable, notify the merchant through an alternative channel.
-
----
-
-#### CallbackRateZero
+#### BookingPaymentSettleFailureRateHigh
 
 **Source:** `deploy/lgtm/alerts.yml` (skillars-alerts)
 
-**Meaning:** No payment callbacks were received in 5 minutes while payments are being actively completed (more than 0.1 successful payments/second). Payments may be stuck in PROCESSING state indefinitely.
+**Meaning:** More than 25% of booking-payment settle outcomes over a 15-minute window were failures
+(`booking.payment.settle_failed`, incremented by `BookingPaymentPersistenceService.persistPaymentFailure`)
+or unexpected settle-transition errors (`booking.payment.settle_error`), relative to all settle outcomes in
+that window. May indicate a Stripe outage, a misconfiguration, or a bug in the booking-payment settle path.
 
 **Response:**
 
-1. Verify the provider webhook URL configured in the provider's portal matches the application's public callback endpoint.
-2. Check whether the Node's public IP is on the provider's IP whitelist — providers only send callbacks to whitelisted addresses.
-3. Check app logs for callback receipt or rejection:
+1. Check app logs for the settle failure/error path:
 
 ```bash
-docker compose logs app --tail=100 | grep -i "callback"
+docker compose logs app --tail=200 | grep -i "settle"
 ```
 
-4. If callbacks are being received but rejected: check the authentication signature verification in logs.
-
----
-
-#### ProviderLatencyP95High
-
-**Source:** `deploy/lgtm/alerts.yml` (skillars-alerts)
-
-**Meaning:** A payment provider's p95 latency exceeded 5 seconds. Not yet a SLO breach but trending toward one.
-
-**Response:**
-
-1. Identify the affected `provider` from the Grafana alert annotation.
-2. Monitor — this is a warning signal, not a critical failure.
-3. If the condition persists for more than 30 minutes, follow the `ProviderLatencyP99Critical` response procedure.
+2. Check the [Stripe status page](https://status.stripe.com/) for an active incident.
+3. Check `booking_payment_settle_conflict_total` and `booking_payment_settle_error_total` in Grafana Explore
+   to distinguish "the transition itself was rejected" (a concurrency/state issue, see
+   [`runbook.md`](runbook.md)'s `booking_payments` guidance) from "the settle call failed outright."
+4. If Stripe itself is degraded: no application action needed — monitor until Stripe recovers; failed
+   booking payments are surfaced to the parent to retry.
 
 ---
 
@@ -289,47 +185,6 @@ docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" "$CID" \
 
 ---
 
-#### ReconciliationDiscrepancy
-
-**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-loki-alerts)
-
-**Meaning:** The reconciliation job found a HIGH-severity discrepancy between provider records and internal payment state. At least one payment may be in an incorrect state.
-
-**Response:**
-
-1. Find the reconciliation report in Loki:
-
-```
-{service="skillars"} |= "severity=\"HIGH\""
-```
-
-2. Identify the affected `transactionId`(s) and the discrepancy type from the log entry.
-3. Compare the affected transactions against the provider's status via the provider portal or API.
-4. Manually correct the payment state via the Admin API if the internal state is wrong.
-5. Monitor for repeat discrepancies — if the alert fires repeatedly, escalate to a code-level investigation of the provider sync logic.
-
----
-
-#### FraudBlockRateHigh
-
-**Source:** `deploy/lgtm/alerts.yml` (skillars-alerts)
-
-**Meaning:** More than 20% of payment attempts are being blocked by fraud rules. Rules may be misconfigured or there is a genuine fraud spike.
-
-**Response:**
-
-1. Determine the pattern of blocks in Loki:
-
-```
-{service="skillars"} |= "fraud_blocked"
-```
-
-2. Determine whether blocks are from a single source (potential attack) or distributed (rules misconfiguration).
-3. If the rules are too aggressive: review and adjust fraud rule thresholds — no code change required, this is a configuration concern.
-4. If this is genuine fraud: no infrastructure action is required; alert the fraud or compliance team.
-
----
-
 #### JvmHeapHigh
 
 **Source:** `deploy/lgtm/alerts.yml` (skillars-alerts)
@@ -350,22 +205,30 @@ docker compose restart app
 
 ---
 
-#### CallbackFailureRatioHigh
+#### SubscriptionInvoicePaymentFailureHigh
 
 **Source:** `deploy/lgtm/alerts.yml` (skillars-alerts)
 
-**Meaning:** More than 10% of received callbacks reference unknown transaction IDs. May be stale callbacks from a previous deployment, test callbacks from the provider, or a state management issue.
+**Meaning:** More than 5 Stripe subscription invoice payments failed in the last hour
+(`subscription.payment.invoice_failed`, incremented by `StripeWebhookService.handleInvoicePaymentFailed`
+whenever an `invoice.payment_failed` webhook arrives for a known subscription). Coach or player
+subscriptions may be entering a past-due state.
 
 **Response:**
 
-1. Check Loki for the failure reason:
+1. Check app logs for the affected subscriptions:
 
-```
-{service="skillars"} |= "callback_failed"
+```bash
+docker compose logs app --tail=200 | grep -i "invoice.payment_failed"
 ```
 
-2. If callbacks reference old transaction IDs: these may be from a previous payment session and are expected after a redeploy — suppress if confirmed harmless.
-3. If new transactions are failing their callbacks: investigate the transaction lifecycle for state loss between the callback receipt and the lookup.
+2. Check the [Stripe Dashboard](https://dashboard.stripe.com/) → Billing → Failed payments for the specific
+   invoices and their decline reasons.
+3. If several failures share a decline reason (e.g. expired cards), this may be a real widespread payment-
+   method issue rather than an application bug — no code action needed, Stripe's own dunning/retry emails
+   handle follow-up.
+4. If failures correlate with a recent deploy, check for a regression in the subscription webhook handling
+   path (`StripeWebhookService`, `SubscriptionService`).
 
 ---
 
