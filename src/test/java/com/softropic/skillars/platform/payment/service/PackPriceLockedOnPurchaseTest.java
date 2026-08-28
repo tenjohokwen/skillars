@@ -62,8 +62,8 @@ class PackPriceLockedOnPurchaseTest {
         tier.setPricePerSession(PRICE_PER_SESSION);
         tier.setActive(true);
         when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(tier));
-        when(playerProfileRepository.findByIdAndParentId(PLAYER_ID, PARENT_ID))
-            .thenReturn(Optional.of(new PlayerProfile()));
+        when(playerProfileRepository.findById(PLAYER_ID))
+            .thenReturn(Optional.of(parentOwnedPlayer()));
 
         StripeCustomer customer = new StripeCustomer();
         customer.setParentId(PARENT_ID);
@@ -102,8 +102,8 @@ class PackPriceLockedOnPurchaseTest {
         originalTier.setPricePerSession(PRICE_PER_SESSION);
         originalTier.setActive(true);
         when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(originalTier));
-        when(playerProfileRepository.findByIdAndParentId(PLAYER_ID, PARENT_ID))
-            .thenReturn(Optional.of(new PlayerProfile()));
+        when(playerProfileRepository.findById(PLAYER_ID))
+            .thenReturn(Optional.of(parentOwnedPlayer()));
         when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(existingCustomer()));
         when(paymentGateway.chargeAndCapture(any(), any(), any(), any())).thenReturn("pi_stub_original");
 
@@ -127,5 +127,11 @@ class PackPriceLockedOnPurchaseTest {
         c.setParentId(PARENT_ID);
         c.setStripeCustomerId("cus_stub_existing");
         return c;
+    }
+
+    private PlayerProfile parentOwnedPlayer() {
+        PlayerProfile player = new PlayerProfile();
+        player.setParentId(PARENT_ID);
+        return player;
     }
 }
