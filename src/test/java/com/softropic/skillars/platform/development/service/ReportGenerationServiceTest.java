@@ -304,6 +304,46 @@ class ReportGenerationServiceTest {
         assertThat(captor.getValue().getBrandColour()).isEqualTo("#3B82F6");
     }
 
+    // ---- getBranding (Deferred-80 AC3) ----
+
+    @Test
+    void getBranding_academyTierWithSavedBranding_returnsSignedUrlAndColour() {
+        when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.ACADEMY);
+        CoachBranding branding = new CoachBranding();
+        branding.setCoachId(COACH_ID);
+        branding.setLogoKey("logos/test.png");
+        branding.setBrandColour("#3B82F6");
+        when(brandingRepository.findById(COACH_ID)).thenReturn(Optional.of(branding));
+        when(fileStorageService.signedDownloadUrl("logos/test.png")).thenReturn("https://cdn.test/logos/test.png");
+
+        var response = service.getBranding(COACH_ID);
+
+        assertThat(response.logoSignedUrl()).isEqualTo("https://cdn.test/logos/test.png");
+        assertThat(response.brandColour()).isEqualTo("#3B82F6");
+    }
+
+    @Test
+    void getBranding_downgradedTierWithExistingRow_returnsEmptyBrandingWithoutQueryingRepository() {
+        when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.INSTRUCTOR);
+
+        var response = service.getBranding(COACH_ID);
+
+        assertThat(response.logoSignedUrl()).isNull();
+        assertThat(response.brandColour()).isNull();
+        verify(brandingRepository, never()).findById(any());
+    }
+
+    @Test
+    void getBranding_academyTierNoSavedBranding_returnsEmptyBranding() {
+        when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.ACADEMY);
+        when(brandingRepository.findById(COACH_ID)).thenReturn(Optional.empty());
+
+        var response = service.getBranding(COACH_ID);
+
+        assertThat(response.logoSignedUrl()).isNull();
+        assertThat(response.brandColour()).isNull();
+    }
+
     private PerformanceReport readyReport(UUID coachId, String storageKey) {
         PerformanceReport r = new PerformanceReport();
         r.setId(UUID.randomUUID());

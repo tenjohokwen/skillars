@@ -16,7 +16,9 @@ import com.softropic.skillars.platform.video.repo.VideoQuotaRepository;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
@@ -43,6 +45,16 @@ public class VideoDeletionService {
     private final ConfigService configService;
     private final ApplicationEventPublisher publisher;
     private final VideoAccessGuard videoAccessGuard;
+
+    // cascadeDeleteForAccount below is deliberately NOT @Transactional at the method level, but its
+    // per-video deleteVideo(...) call needs its OWN transaction each iteration — a same-class call
+    // bypasses this bean's @Transactional proxy entirely (deleteByUser/the two-arg overload don't
+    // have this problem: they're each themselves @Transactional and called externally, so their own
+    // internal deleteVideo(...) call joins an already-open transaction instead of needing one).
+    // Mirrors RadarCompositeCalculationService's identical @Lazy @Autowired self field.
+    @Autowired
+    @Lazy
+    private VideoDeletionService self;
 
     /**
      * Central deletion method. Atomically marks PURGED, decrements quota (if skipQuotaDecrement=false),
@@ -155,7 +167,7 @@ public class VideoDeletionService {
             for (Video video : page.getContent()) {
                 if (failedIds.contains(video.getId())) continue;
                 try {
-                    deleteVideo(video.getId(), LifecycleTrigger.ACCOUNT_DELETION, true);
+                    self.deleteVideo(video.getId(), LifecycleTrigger.ACCOUNT_DELETION, true);
                     totalQueued++;
                     anyProgress = true;
                     log.debug("[VIDEO_ACCOUNT_DELETION] Queued videoId={} for ownerId={}", video.getId(), ownerId);

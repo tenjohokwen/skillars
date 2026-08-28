@@ -307,21 +307,24 @@ public class AvailabilityService {
     @Transactional
     public AvailabilityBlockResponse addBlock(Long userId, CreateBlockRequest req) {
         CoachProfile profile = requireProfile(userId);
+        CoachProfile lockedProfile = lockProfile(profile.getId());
         // Deferred-79 AC2: project-owner decision — a coach must not be able to block out a slot
         // that already has an active booking; reject up front rather than allowing the conflict to
         // exist. Same repository method, status set, and null-excludeBookingId convention this
         // class's own getAvailabilityCalendar already uses (line ~121).
+        // Deferred-80 AC1: now runs under lockProfile's per-coach lock, closing the check-then-act
+        // race between this check and the block save below (skillars-deferred-79 code review).
         List<Booking> overlapping = bookingRepository.findOverlappingBookings(
-            profile.getId(), req.startDatetime(), req.endDatetime(), BookingService.ACTIVE_SLOT_STATUSES, null);
+            lockedProfile.getId(), req.startDatetime(), req.endDatetime(), BookingService.ACTIVE_SLOT_STATUSES, null);
         if (!overlapping.isEmpty()) {
             throw new OperationNotAllowedException(
                 "You already have a booking during this time",
-                Map.of("coach id", profile.getId(), "start datetime", req.startDatetime(),
+                Map.of("coach id", lockedProfile.getId(), "start datetime", req.startDatetime(),
                     "end datetime", req.endDatetime()),
                 BookingError.BLOCK_OVERLAPS_BOOKING);
         }
         CoachAvailabilityBlock block = new CoachAvailabilityBlock();
-        block.setCoachId(profile.getId());
+        block.setCoachId(lockedProfile.getId());
         block.setStartDatetime(req.startDatetime());
         block.setEndDatetime(req.endDatetime());
         block.setReason(req.reason());
@@ -332,7 +335,8 @@ public class AvailabilityService {
     @Transactional
     public void deleteBlock(Long userId, UUID blockId) {
         CoachProfile profile = requireProfile(userId);
-        CoachAvailabilityBlock block = blockRepository.findByIdAndCoachId(blockId, profile.getId())
+        CoachProfile lockedProfile = lockProfile(profile.getId());
+        CoachAvailabilityBlock block = blockRepository.findByIdAndCoachId(blockId, lockedProfile.getId())
             .orElseThrow(() -> new OperationNotAllowedException("Block not found or not owned by coach", SecurityError.MISSING_RIGHTS));
         blockRepository.delete(block);
     }

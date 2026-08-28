@@ -1,6 +1,6 @@
 # Story skillars-deferred-80: Availability-block lock parity, video-cascade self-invocation fix, and branding tier gate
 
-Status: ready-for-dev
+Status: done
 
 <!-- Revised 2026-08-28 after senior-dev-review (story-review.md, "READY FOR IMPLEMENTATION... no
 unvalidated assumptions detected"): the review found zero decision-needed items and zero patches —
@@ -50,21 +50,21 @@ so that the check-then-act race window this codebase has now flagged three times
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Availability-block lock parity (AC: #1)
-  - [ ] Add `lockProfile(profile.getId())` to `AvailabilityService.addBlock` and `AvailabilityService.deleteBlock`, replacing unlocked `profile.getId()` usages with the locked profile's id
-  - [ ] Update `AvailabilityServiceTest`'s three existing `addBlock_...` tests to stub `findByIdForUpdate`
-  - [ ] Add `deleteBlock_ownedByCallingCoach_succeeds` — new test, no prior coverage existed
-- [ ] Task 2: Video-cascade self-invocation fix (AC: #2)
-  - [ ] Add `@Autowired @Lazy private VideoDeletionService self;` field, mirroring `RadarCompositeCalculationService.java:50-52`
-  - [ ] Change `cascadeDeleteForAccount`'s `deleteVideo(...)` call to `self.deleteVideo(...)`
-  - [ ] Wire `self` via `ReflectionTestUtils.setField` in `VideoDeletionServiceTest.setUp()`
-- [ ] Task 3: Branding tier gate (AC: #3)
-  - [ ] Add tier check to `ReportGenerationService.getBranding`, returning `new CoachBrandingResponse(null, null)` for non-ACADEMY without querying `brandingRepository`
-  - [ ] Add three `getBranding` test cases to `ReportGenerationServiceTest` (currently zero coverage)
-- [ ] Task 4: Ledger hygiene (no AC — housekeeping found during this story's creation)
-  - [ ] Mark `deferred-work.md`'s "`CoachAvailabilityBlock` is never enforced on any booking-write path" item (under `## Deferred from: story-review audit of skillars-deferred-78...`) `[CLOSED by skillars-deferred-79]` — it was fully addressed by that story but the ledger entry itself was never annotated
-  - [ ] Mark `deferred-work.md`'s "Batch Service Staleness Window Not Fully Closed" item (under `## Deferred from: code review of skillars-deferred-69...`) `[CLOSED by skillars-deferred-78 AC1]` — see Dev Notes below; verified during this story's creation that the fix already exists in code and predates this story
-  - [ ] Mark the three items under `## Deferred from: code review of skillars-deferred-79...` `[CLOSED by skillars-deferred-80 AC1]`
+- [x] Task 1: Availability-block lock parity (AC: #1)
+  - [x] Add `lockProfile(profile.getId())` to `AvailabilityService.addBlock` and `AvailabilityService.deleteBlock`, replacing unlocked `profile.getId()` usages with the locked profile's id
+  - [x] Update `AvailabilityServiceTest`'s three existing `addBlock_...` tests to stub `findByIdForUpdate`
+  - [x] Add `deleteBlock_ownedByCallingCoach_succeeds` — new test, no prior coverage existed
+- [x] Task 2: Video-cascade self-invocation fix (AC: #2)
+  - [x] Add `@Autowired @Lazy private VideoDeletionService self;` field, mirroring `RadarCompositeCalculationService.java:50-52`
+  - [x] Change `cascadeDeleteForAccount`'s `deleteVideo(...)` call to `self.deleteVideo(...)`
+  - [x] Wire `self` via `ReflectionTestUtils.setField` in `VideoDeletionServiceTest.setUp()`
+- [x] Task 3: Branding tier gate (AC: #3)
+  - [x] Add tier check to `ReportGenerationService.getBranding`, returning `new CoachBrandingResponse(null, null)` for non-ACADEMY without querying `brandingRepository`
+  - [x] Add three `getBranding` test cases to `ReportGenerationServiceTest` (currently zero coverage)
+- [x] Task 4: Ledger hygiene (no AC — housekeeping found during this story's creation)
+  - [x] Mark `deferred-work.md`'s "`CoachAvailabilityBlock` is never enforced on any booking-write path" item (under `## Deferred from: story-review audit of skillars-deferred-78...`) `[CLOSED by skillars-deferred-79]` — it was fully addressed by that story but the ledger entry itself was never annotated
+  - [x] Mark `deferred-work.md`'s "Batch Service Staleness Window Not Fully Closed" item (under `## Deferred from: code review of skillars-deferred-69...`) `[CLOSED by skillars-deferred-78 AC1]` — see Dev Notes below; verified during this story's creation that the fix already exists in code and predates this story
+  - [x] Mark the three items under `## Deferred from: code review of skillars-deferred-79...` `[CLOSED by skillars-deferred-80 AC1]`
 
 ## Dev Notes
 
@@ -127,7 +127,61 @@ Touches three unrelated modules in one story (Booking/Availability, Video, Payme
 - [Source: skillars-deferred-79 story file, Dev Notes "Explicitly out of scope"] — this story's AC1 is the direct follow-on that file flagged.
 - `RadarCompositeCalculationService.java:46-62` — precedent for AC2's `@Lazy` self-reference fix.
 
+## Dev Agent Record
+
+### Agent Model Used
+
+claude-sonnet-5 (bmad-dev-story workflow)
+
+### Debug Log References
+
+- Targeted `mvn -o test` runs per `docs/validation-strategy.md` (no full `mvn verify`):
+  - `AvailabilityServiceTest` — 32 tests, 0 failures (AC1: addBlock/deleteBlock lock parity, plus the 3 pre-existing `addBlock_...` tests updated and the new `deleteBlock_ownedByCallingCoach_succeeds`).
+  - `VideoDeletionServiceTest` — 3 tests, 0 failures (AC2: `self.deleteVideo(...)` wiring via `ReflectionTestUtils`).
+  - `ReportGenerationServiceTest` — 15 tests, 0 failures (AC3: 3 new `getBranding` cases plus all pre-existing tests unaffected).
+  - `AvailabilityResourceIT` — 13 tests, 0 failures (REST-facing confirmation that AC1's new per-coach lock on `addBlock`/`deleteBlock` introduces no regression at the HTTP layer).
+  - 63 targeted tests total, 0 failures.
+
+### Completion Notes List
+
+- AC1 implemented exactly as specified: `addBlock`/`deleteBlock` each now call the existing `lockProfile(profile.getId())` helper immediately after `requireProfile`, mirroring `addWindow`/`updateWindow`/`deleteWindow`'s identical shape. `addBlock`'s overlap check and block save, and `deleteBlock`'s `findByIdAndCoachId` lookup, all now use `lockedProfile.getId()` instead of the unlocked `profile.getId()`. No behavior change to error codes or the not-found path — only the row read is now locked. No new lock helper, no new locking pattern.
+- AC2 implemented exactly as specified: added `@Autowired @Lazy private VideoDeletionService self;` to `VideoDeletionService`, mirroring `RadarCompositeCalculationService.self` byte-for-byte in shape. `cascadeDeleteForAccount`'s internal `deleteVideo(...)` call changed to `self.deleteVideo(...)`, so each per-video deletion now genuinely runs in its own transaction through the Spring proxy, making the method's own doc comment true. `deleteByUser` and the two-arg `deleteVideo` overload were deliberately left untouched — both are already `@Transactional` and called externally, so their own internal `deleteVideo(...)` call joins an already-open transaction rather than needing the `self.` fix.
+- AC3 implemented exactly as specified: `getBranding` now looks up `CoachSubscriptionTier` first (mirroring `saveBranding`'s own lookup) and returns `new CoachBrandingResponse(null, null)` without querying `brandingRepository` at all when the tier isn't ACADEMY — no `FeatureGatedException`, since this backs a settings-page GET, not a write attempt. ACADEMY-tier behavior is byte-for-byte unchanged. `CoachBrandingResource` needed no changes (confirmed by reading it — it just delegates to the service).
+- Task 4 ledger hygiene: two of the three `deferred-work.md` items ("Batch Service Staleness Window Not Fully Closed" and the `CoachAvailabilityBlock`-enforcement item) were already tagged `[CLOSED by ...]` during this story's own creation pass (confirmed by reading the ledger before starting implementation — no further edit needed). The third — all three bullets under `## Deferred from: code review of skillars-deferred-79...` — were tagged `[CLOSED by skillars-deferred-80 AC1]` during this implementation pass, now that the lock fix they describe actually exists in code.
+- Sprint tracking note: `skillars-deferred-80` was not yet present in `sprint-status.yaml`'s `development_status` map despite the story file already existing with status `ready-for-dev` (the prior story-creation session never added it) — added at the start of this implementation pass, matching this project's own established precedent for this exact gap (`skillars-deferred-77`'s Dev Notes/Change Log document the identical situation).
+- No new files, no new repository methods, no new database migrations, no new i18n entries — matches the Dev Notes' "Project Structure Notes" scope statement exactly. All three ACs plus Task 4 shipped with no deviation from the story's literal spec.
+
+### File List
+
+- `src/main/java/com/softropic/skillars/platform/booking/service/AvailabilityService.java`
+- `src/main/java/com/softropic/skillars/platform/video/service/VideoDeletionService.java`
+- `src/main/java/com/softropic/skillars/platform/development/service/ReportGenerationService.java`
+- `src/test/java/com/softropic/skillars/platform/booking/service/AvailabilityServiceTest.java`
+- `src/test/java/com/softropic/skillars/platform/video/service/VideoDeletionServiceTest.java`
+- `src/test/java/com/softropic/skillars/platform/development/service/ReportGenerationServiceTest.java`
+- `_bmad-output/implementation-artifacts/deferred-work.md` (Task 4 ledger hygiene)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` (added missing `skillars-deferred-80` entry, marked in-progress then review)
+
+## Review Findings
+
+### Code Review (2026-08-28)
+
+**Patch findings (fixable):**
+- [ ] [Review][Patch] **DISMISSED (verified false positive).** NPE risk if getCoachSubscriptionTier() returns null [ReportGenerationService.java:224] — Add null check before dereferencing tier in comparison at line 225. Verified: line 225's `tier != CoachSubscriptionTier.ACADEMY` is a reference `!=` comparison against an enum constant, which cannot throw `NullPointerException` for any value of `tier`, including `null` (`null != X` evaluates to `true`, not a dereference). Separately, `CoachProfileService.getCoachSubscriptionTier` (`CoachProfileService.java:390-394`) never returns `null` in the first place — it either returns the tier or throws `ResourceNotFoundException` via `orElseThrow`. There is no null to check and no dereference that could NPE.
+- [ ] [Review][Patch] **DISMISSED (matches established pattern, no concrete failure mode).** Unhandled exception from getCoachSubscriptionTier() contradicts spec promise [ReportGenerationService.java:224] — Add try-catch or document assumption that tier lookup never throws. Verified: `getCoachSubscriptionTier` throws `ResourceNotFoundException` only when no `CoachSubscription` row exists for the coachId, and that row is created atomically with `CoachProfile` activation in `CoachProfileService.publishProfile` (`CoachProfileService.java:308-313`) — the same transaction that first makes a coach reachable via any `HAS_COACH_ROLE` endpoint. `getBranding`'s coachId is resolved via `CoachProfileService.getCoachIdByUserId` for the currently-authenticated coach, so the subscription row is guaranteed to exist by the time this line runs; the exception path is structurally unreachable through this call site. This AC's call is also byte-for-byte identical to `saveBranding`'s and `generateReport`'s own unguarded calls to the same method in the same class (neither wraps it either) — adding a try-catch here alone would be an inconsistent, unrequested deviation from the class's own established convention, not a fix to a gap this AC introduces.
+
+**Defer findings (pre-existing patterns or testing strategy):**
+- [x] [Review][Defer] VideoDeletionService self-injection - hidden failure if autowiring fails [VideoDeletionService.java:87-89] — deferred, pattern precedent exists in RadarCompositeCalculationService
+- [x] [Review][Defer] VideoDeletionServiceTest - doesn't validate real lazy-proxy injection [VideoDeletionServiceTest.java:226] — deferred, unit test uses ReflectionTestUtils; integration tests would catch Spring failures
+- [x] [Review][Defer] AvailabilityService deleteBlock test lacks error coverage [AvailabilityServiceTest.java:989-1012] — deferred, spec doesn't require exhaustive error case coverage
+- [x] [Review][Defer] VideoDeletionService lazy-autowired field initialization order [VideoDeletionService.java:87-89] — deferred, pattern precedent exists in codebase
+- [x] [Review][Defer] AvailabilityService - SELECT FOR UPDATE deadlock risk with unknown lock ordering [AvailabilityService.java:309] — deferred, pre-existing pattern used by addWindow/updateWindow/deleteWindow
+- [x] [Review][Defer] VideoDeletionService - missing null check on self field before dereference [VideoDeletionService.java:170] — deferred, Spring-level concern; app won't start if autowiring fails
+
 ## Change Log
 
 - 2026-08-28: Story created from `deferred-work.md` mining (Booking/Availability/Reschedule module, per standing instruction). Scope agreed with project owner: AC1 (addBlock/deleteBlock lock parity) and a batch pre-commit staleness fix were both proposed; direct code investigation during creation found the staleness fix was already shipped by `skillars-deferred-78` AC1 and the ledger was simply never updated — dropped from this story's ACs, closed via Task 4 ledger hygiene instead. Two unrelated bundle-in items agreed with project owner: `VideoDeletionService` self-invocation fix (AC2, no decision needed) and `ReportGenerationService.getBranding()` tier gate (AC3, project-owner decision: gate the read, leave the S3 object untouched on downgrade). Status: ready-for-dev.
 - 2026-08-28: Revised after senior-dev-review (`story-review.md`) — verdict "READY FOR IMPLEMENTATION," zero decision-needed items, zero patches. Every corner case and hypothetical concern the review raised (coach-row-deleted-mid-lock race, cross-coach interference, the `deleteByUser`/two-arg-overload proxy nuance, concurrent-transaction independence, client-side response caching) was independently confirmed correct-by-design or out of scope and woven inline into AC1/AC2/AC3 with citations (see "Items investigated per story-review.md" in Dev Notes for the full index) rather than left as open verification items. No AC, task, or Dev Note content changed in substance. Status remains ready-for-dev.
+- 2026-08-28: Implementation complete. All three ACs shipped exactly as specified plus Task 4 ledger hygiene (see Dev Agent Record for full detail). 63 targeted unit/integration tests green (`AvailabilityServiceTest` 32, `VideoDeletionServiceTest` 3, `ReportGenerationServiceTest` 15, `AvailabilityResourceIT` 13); no full `mvn verify` run locally per `docs/validation-strategy.md`. Status: review.
+- 2026-08-28: Code review complete (see Review Findings). 0 decision-needed, 0 open patch findings — both candidate `ReportGenerationService.getBranding()` patches (NPE risk, unhandled-exception risk) verified as false positives with no code change needed; the remaining 6 findings deferred as pre-existing/out-of-scope, each with a documented precedent elsewhere in the codebase. Status: done.
+- 2026-08-28: Code review findings triaged. Both `[Review][Patch]` items dismissed as verified false positives — no code change made. "NPE risk" claimed against `getBranding`'s `tier != CoachSubscriptionTier.ACADEMY` line: a reference `!=` comparison against an enum constant cannot NPE for any value including `null`, and `getCoachSubscriptionTier` never returns `null` anyway (it throws `ResourceNotFoundException` via `orElseThrow` instead). "Unhandled exception contradicts spec promise" claimed against the same call: `ResourceNotFoundException` is only reachable if the calling coach has no `CoachSubscription` row, which is structurally impossible for any authenticated `HAS_COACH_ROLE` caller since that row is created atomically with profile activation (`CoachProfileService.publishProfile`); the call is also byte-for-byte identical to `saveBranding`'s/`generateReport`'s own unguarded calls in the same class, so wrapping only this one would be an inconsistent, unrequested deviation. The 6 `[Review][Defer]` items were already resolved with rationale by the review pass itself (established-pattern precedent or Spring-level, app-won't-start concerns) — no further action needed. Status remains review.
