@@ -1,161 +1,152 @@
-# Story Review: skillars-deferred-79
+# Story Review: skillars-deferred-80
 
-**Story**: Coach availability-block booking enforcement  
-**Status**: ready-for-dev  
-**Review Date**: 2026-08-28  
-**Reviewer**: Senior Dev Audit
+**Reviewer Note:** This audit verifies the story design against actual codebase state and flags only genuine corner cases or unsupported assumptions that could affect implementation.
 
----
+## ✅ Verified — No Changes Needed
 
-## Summary
+### AC1: Availability-block lock parity
 
-Story is **sound overall**. AC1 and AC2 both correctly identify the five call sites and specify precise locations. Project-owner decisions are well-documented. Story acknowledges known TOCTOU limitations consistently with codebase precedent. No critical gaps found.
+**Claim verification:**
+- ✓ `lockProfile` helper exists (AvailabilityService.java:298-305) with correct shape
+- ✓ `addWindow`/`updateWindow`/`deleteWindow` all call `lockProfile` after `requireProfile` (lines 253-289)
+- ✓ Three existing `addBlock` tests confirmed (lines 926-988 in AvailabilityServiceTest)
+- ✓ Zero existing `deleteBlock` tests confirmed (grep verified)
+- ✓ `lockRetryer` stub in test setUp correctly delegates to supplier (AvailabilityServiceTest:87-90)
 
-**Minor gaps below require dev clarification or awareness during implementation; no blockers.**
+**Lock pattern soundness:**
+The pattern mirrors `addWindow` exactly. The race condition is closed because:
+1. Coach profile lock is acquired before the overlap check
+2. Any concurrent booking operation adds bookings under the same coach lock (verified: `BookingService` uses identical `lockProfile` pattern)
+3. Therefore no new bookings can be inserted between the check and the block save
 
----
+No detected issues with this pattern.
 
-## AC1: Block Enforcement at Booking-Write Paths
+**Test failure mode:**
+The three `addBlock_` tests currently stub `findByUserId` but not `findByIdForUpdate`. When `lockProfile` is added, tests will fail with `ResourceNotFoundException` on the `findByIdForUpdate` call (because Mockito defaults mock returns to empty Optional). The story's prescribed stub addition is correct and necessary. ✓
 
-### Verified Correct
-✓ Five call sites correctly identified (createBookingRequest, validateSlotDurationAndAvailability×2, validateRescheduleProposal, acceptRescheduleShared, duplicateNextWeek)  
-✓ Correct insertion point specified for each (after window check, before overlap check)  
-✓ `isSlotBlocked` mirror-design matches `isSlotWithinAvailabilityWindow` visibility/usage pattern  
-✓ Repository query already exists; no new DB migration needed  
-✓ TOCTOU window explicitly acknowledged per codebase precedent  
-✓ `BookingDuplicationService` correctly identified as needing the check via delegation (no new dependency)  
-✓ Test cases specify both rejection AND non-regression (slot outside any block still succeeds)
+### AC2: Video-cascade self-invocation fix
 
-### Corner Cases / Clarifications Needed
+**Claim verification:**
+- ✓ `cascadeDeleteForAccount` is NOT marked `@Transactional` (VideoDeletionService.java:145)
+- ✓ Plain call to `deleteVideo` on line 158 bypasses Spring proxy as described
+- ✓ Precedent exists: `RadarCompositeCalculationService.java:50-52` has identical `@Lazy` self-reference pattern
+- ✓ `deleteByUser` (line 103) and two-arg `deleteVideo` overload (line 94-96) are separate entry points
 
-**1. Error precedence not specified**
-- Order of checks is: window → block → overlap. If a slot fails both window AND block, which error fires? Story doesn't specify.
-- **Dev action**: Verify the implementation order matches spec and produces the intended error. Probably OK (window check throws first), but confirm.
+**Self-invocation logic:**
+- ✓ `deleteByUser` is `@Transactional` and called externally, so Spring proxy is invoked for it
+- ✓ `deleteByUser` calls `deleteVideo` (the three-arg version) on line 134, which goes through the proxy
+- ✓ This is DIFFERENT from `cascadeDeleteForAccount` which is NOT `@Transactional`, so its internal calls bypass the proxy
+- ✓ The fix (injecting `self` and calling `self.deleteVideo(...)`) correctly routes through the proxy
 
-**2. Batch pre-commit re-check + block additions between initial/commit**
-- `BookingBatchService` validates at start, then again pre-commit. What if coach adds a block between the two?
-- Pre-commit re-check (via same `validateSlotDurationAndAvailability` call) will catch it ✓, but user sees batch accepted then denied. Story doesn't discuss UX messaging for this scenario.
-- **Dev action**: Ensure error message from pre-commit re-check is actionable ("try again" not "invalid input"). Probably handled by existing pattern, but worth verifying.
+**Test fix:** 
+Using `ReflectionTestUtils.setField` is appropriate and precedented in this codebase. The three existing tests (`cascadeDeleteForAccount_...`) will correctly fail with NPE if the field wire-up is missing, catching the regression immediately.
 
-**3. Reschedule proposal + block added before accept**
-- Coach adds block after parent proposes reschedule but before parent accepts it.
-- Accept-time re-check catches it ✓. Good flow.
-- **However**: Parent's UI was shown a valid proposal; they return to accept and now get `SLOT_BLOCKED_BY_COACH`. No mention of how UI handles this or whether a "re-proposal" flow exists.
-- **Dev action**: Not in scope of this story (UI behavior), but implementation should assume accept rejection is possible and error messaging is clear.
+### AC3: Branding tier gate
 
-**4. Time boundary precision not specified**
-- Does a booking from 3:00-4:00 overlap a block from 4:00-5:00? (i.e., are boundaries inclusive or exclusive at endpoints?)
-- Story defers to existing `findOverlappingBookings` and `findByCoachIdAndEndDatetimeAfterAndStartDatetimeBefore` semantics.
-- **Dev action**: Verify these two queries use identical overlap logic. If they differ, this is a bug. Should be the same, but worth a grep-check.
+**Claim verification:**
+- ✓ `getBranding()` only called from `CoachBrandingResource.getBranding()` (CoachBrandingResource.java:29-35), a coach-self settings endpoint
+- ✓ No calls from `generateReport` or any report path (report uses separate tier check on lines 126-128)
+- ✓ `saveBranding` already has tier gate on lines 228-231
 
-**5. `BookingDuplicationService.duplicateNextWeek` check happens per occurrence?**
-- Story says check goes "right after the `SLOT_OUTSIDE_AVAILABILITY` throw". Looking at the AC detail: "`duplicateNextWeek`, which already mirrors `createBookingRequest`'s window-check-then-overlap-check shape exactly".
-- This implies the check happens within the loop that creates each week's copies. Correct?
-- **Dev action**: Verify the check is inside the loop per-occurrence, not outside-loop (once per operation). Story language suggests per-occurrence, but worth double-checking the code structure.
+**GET/PUT consistency:**
+The fix correctly addresses the asymmetry: `saveBranding` throws for non-ACADEMY, but `getBranding` currently returns stale branding. The decision to return empty response (instead of throwing) is correct for a settings-page GET — throwing would create a hard error for every downgraded coach with no recovery path. ✓
 
----
+**S3 object lifecycle:**
+The project-owner decision ("leave S3 logo object untouched on downgrade") assumes no automatic cleanup job deletes orphaned branding rows on tier downgrade. This is an explicit design decision documented in Dev Notes; no code evidence of such cleanup found. Re-upgrade will restore visibility of the same S3 object. ✓
 
-## AC2: Reject `addBlock` on Booking Overlap
-
-### Verified Correct
-✓ Uses `findOverlappingBookings` with `BookingService.ACTIVE_SLOT_STATUSES`—same pattern AC1 uses elsewhere  
-✓ Test specifies both rejection (overlap blocks) AND non-regression (free slot succeeds)  
-✓ Test explicitly specifies terminal-status bookings do NOT block (e.g., `CANCELLED_PARENT`)  
-✓ No new locking introduced (consistent with AC1's scope limits)  
-✓ Distinct error code (`BLOCK_OVERLAPS_BOOKING`) separate from parent-facing error ✓
-
-### Corner Cases / Clarifications Needed
-
-**1. Which booking statuses count as "active"?**
-- Story defers to `ACTIVE_SLOT_STATUSES` constant. Presumably this means non-terminal statuses (e.g., UPCOMING, CONFIRMED, maybe PENDING_PAYMENT).
-- **Dev action**: On first implementation, grep `BookingService.ACTIVE_SLOT_STATUSES` to confirm the constant definition. If it includes intermediate states like PENDING_PAYMENT or RESERVED, good. If not, that's a latent gap (coach could block a slot with a payment-pending booking).
-- **Critical**: Story's test case (c) is the right guard here—make sure the test actually runs with the real `ACTIVE_SLOT_STATUSES` constant, not a hardcoded mock list.
-
-**2. Coach's availability window vs block relationship**
-- No requirement that a block must fall *within* a coach's availability window. Coach can block time they don't claim to be available.
-- Probably intentional (blocks are explicit opt-outs), but story doesn't clarify.
-- **Dev action**: No change needed, but be aware that a coach can now have blocks outside their announced availability windows. This is fine (more permissive for coaches).
-
-**3. Multiple bookings in the same slot: error messaging**
-- Story specifies copy: "You already have a booking during this time — cancel or reschedule it first if you need to block this time out."
-- What if the coach has 3 bookings in that range (multiple kids, overlapping classes)? Error lists just one? All three?
-- **Dev action**: Probably the generic message is sufficient (coach should see *which* booking overlaps in the UI once they dismiss the error and retry). Story doesn't require itemization; keep it simple.
+**Repository lookup optimization:**
+The story prescribes skipping `brandingRepository.findById()` for non-ACADEMY tiers. This is a correct optimization (prevents unnecessary DB hit) but behavior-identical to current code (which returns `(null, null)` when no row exists). ✓
 
 ---
 
-## Cross-AC Issues
+## ⚠️  Edge Cases Identified — No Action Required
 
-**1. Race: Block deleted right after booking's block-check but before booking save**
-- Booking passes block check, but block is deleted before booking commits.
-- Booking succeeds on now-unblocked slot. Correct per TOCTOU acceptance.
-- ✓ Story acknowledges this window exists; no false assumption here.
+### AC1: Coach deletion race
 
-**2. Race: Booking added after block-check but before block saves**
-- Coach runs `addBlock` check against bookings, check passes (no overlap), but booking is inserted before block saves.
-- New block and new booking now overlap in DB. Broken invariant.
-- Story says: "not requested by project-owner decision, which is about the business rule (reject up front), not about closing every race around it; out of scope."
-- ✓ Accepted. Not a gap, but devs should be aware this is a known limitation (same class as everywhere else in codebase).
+**Scenario:** Coach is deleted between `requireProfile` (line 309) and `lockProfile` (new line).
 
-**3. Backward compatibility: Existing overlaps pre-ship**
-- If a block overlaps a booking and both existed before this story ships, they remain.
-- Story: "not backfilled or audited... forward-only, consistent with this codebase's established convention."
-- ✓ Correct and acknowledged.
+**Behavior:** `lockProfile` calls `findByIdForUpdate(coachId)` which returns empty Optional, throwing `ResourceNotFoundException`.
 
----
+**Assessment:** ✓ **Correct behavior.** Mirrors existing window-CRUD methods exactly (addWindow:253-255 has identical vulnerability). If coach is deleted, the operation correctly fails rather than silently using stale data. Error code is appropriate (`coach_profile` not found).
 
-## Test Coverage Gaps (Minor)
+### AC2: Self-reference null check
 
-**1. No test for overlapping blocks**
-- What if two coaches try to add blocks in the same time slot? Can they both block the same calendar slot?
-- **Not in AC1/AC2 scope** (each AC is single-coach), but might be worth a follow-up story if blocks should be global across all coaches (probably not, but confirm with PO).
-- **Dev action**: No change needed for this story, but worth noting for future.
+**Scenario:** Test forgets to wire `self` field via `ReflectionTestUtils.setField`.
 
-**2. No test for reschedule + concurrent block deletion**
-- Proposal check passes (slot free), block is deleted, accept-time re-check also passes. ✓
-- But what if block is *added* between proposal and accept? Re-check catches it ✓.
-- **Dev action**: Verify the accept-time re-check is actually a *fresh* query of the block table, not a cached copy from proposal-time. Story says "separate method", so should be fresh. Confirm code doesn't cache.
+**Behavior:** NPE when `cascadeDeleteForAccount` calls `self.deleteVideo(...)`.
 
-**3. Batch pre-commit boundary**
-- Story says `validateSlotDurationAndAvailability` is called twice (initial + pre-commit).
-- Test should verify BOTH calls include the block check, or it's dead code at one call site.
-- **Dev action**: When writing test, explicitly verify block-check error can fire at pre-commit stage (not just initial). Current story test spec doesn't explicitly require this; add it if missing.
+**Assessment:** ✓ **Caught by tests.** The existing three `cascadeDeleteForAccount_` test cases will all NPE before reaching assertions if `self` is not wired, making this a fail-fast regression. The story's test setup instruction is sufficient to prevent this in practice.
+
+### AC3: Stale cached responses
+
+**Scenario:** Coach fetches branding while ACADEMY (cached as having logo X), downgrades, then later response is served from cache.
+
+**Behavior:** Client might see old branding even though `getBranding` now returns empty.
+
+**Assessment:** ✓ **Out of scope.** Response caching (HTTP cache headers, client-side caching, CDN behavior) is not mentioned anywhere in the story and appears to be a platform-level concern separate from this change. `getBranding` is a coach-self endpoint (`@PreAuthorize(HAS_COACH_ROLE)`), not a public report page, so aggressive caching is unlikely. No evidence in the codebase of branding-specific cache headers.
 
 ---
 
-## Implementation Checklists
+## ✅ False Positives Eliminated
 
-### AC1 Implementation Order (Critical)
-1. Add `isSlotBlocked` method to `BookingService` + inject repository into three service classes ✓
-2. Wire check into all FIVE call sites in exact order: window→block→overlap ⚠️ **verify each call site**
-3. Add error enum + i18n keys (7 files) ⚠️ **verify all 7 files touched, not 4 or 6**
-4. Test all five sites + non-regression ⚠️ **verify `BookingDuplicationService` test exists**
+### AC1: "Overlap check could be stale if run against unlocked coach row"
 
-### AC2 Implementation Order (Critical)
-1. Add query to `addBlock` method ✓
-2. Add error enum + i18n keys (7 files, same batch as AC1) ⚠️ **don't forget frontend i18n**
-3. Test overlap rejection + non-regression + terminal-status-passes ⚠️ **test all three cases**
+**Initial concern:** What if another coach's booking operation changes shared state while we're checking overlaps?
 
----
+**Elimination:** Bookings are keyed by specific `(coachId, time)` pairs. The coach row lock prevents ANY concurrent operation that touches this specific coach's state. The overlap check queries bookings for this specific coachId only — no cross-coach interference. ✓
 
-## Known Limitations (Accepted per Story)
+### AC2: "What if `deleteVideo` is called from multiple entry points concurrently?"
 
-- ✓ TOCTOU windows exist (block added/deleted concurrent with booking checks)
-- ✓ No locking on `addBlock`/`deleteBlock`
-- ✓ No retroactive backfill of existing overlapping pairs
-- ✓ No coach-row lock for block CRUD (flagged for future story)
+**Initial concern:** Could concurrent calls create transaction order issues?
+
+**Elimination:** Spring's proxy-based `@Transactional` is method-level, not object-level. Each call through the proxy gets its own new transaction (or joins existing one depending on propagation, which is `REQUIRED` by default here — `deleteVideo` has no explicit propagation setting). Concurrent calls are independent transactions, which is exactly the intended behavior. ✓
+
+### AC3: "What if `getBranding` response is cached by clients?"
+
+**Initial concern:** Client caches response while coach is ACADEMY, then coach downgrades.
+
+**Elimination:** This is a client-side caching strategy issue, not a server-side implementation issue. The server correctly stops returning branding data. Any client that caches individual resource responses aggressively without re-validation headers is violating HTTP semantics. The story's scope is the server implementation, not client caching policy. ✓
 
 ---
 
-## Final Verdict
+## 📋 Implementation Checklist Soundness
 
-**No blockers. Story is implementable as written.**
+### Tasks section (lines 39-49)
 
-Story demonstrates strong awareness of existing patterns (`ACTIVE_SLOT_STATUSES`, repository queries, error-code conventions, lock usage, TOCTOU acceptance). Five call sites are correctly identified with precise line numbers. AC2 correctly defers to existing booking-overlap logic.
+All tasks correctly map to their ACs:
+- **Task 1** → AC1: Correct method names, correct substitution points (profile.getId() → lockedProfile.getId())
+- **Task 2** → AC2: Correct field structure, correct method to modify, correct test utility
+- **Task 3** → AC3: Correct return type, correct skip condition (tier check before repository lookup)
+- **Task 4** → Ledger hygiene: No implementation tasks, coordination-only
 
-**One implementation risk**: Ensure all FIVE call sites get the block check, and all SEVEN locale files are updated. Story is explicit about this, but implementation can slip. Add a pre-commit checklist step.
+No false dependencies between tasks detected — all three ACs are independent and could be implemented in any order.
 
-**Critical dev verifications before shipping**:
-1. Confirm `ACTIVE_SLOT_STATUSES` includes the intended booking statuses (not just terminal-rejection states).
-2. Verify both overlap-query methods (`findOverlappingBookings` and `findByCoachIdAndEndDatetimeAfterAndStartDatetimeBefore`) use identical boundary logic.
-3. Double-check all SEVEN locale files are touched (4 backend + 3 frontend), not a subset.
-4. Ensure test coverage includes terminal-status non-blocking behavior (AC2 case c).
+---
+
+## 🔍 Test Coverage Assessment
+
+### AC1 Tests
+- **Existing:** 3 addBlock tests → All will catch missing stubs via NPE/ResourceNotFoundException ✓
+- **New:** deleteBlock_ownedByCallingCoach_succeeds → Covers happy path, no prior test coverage ✓
+- **Gap:** No test for `deleteBlock` when block is not owned by coach (OperationNotAllowedException case), but the story correctly notes this is "no behavior change to the not-found path" so regression coverage is sufficient ✓
+
+### AC2 Tests
+- **Existing:** 3 cascadeDeleteForAccount tests will catch missing self-wiring via NPE ✓
+- **Gap:** Tests don't verify isolation of per-video transactions, but that's integration/performance testing scope, not unit test scope ✓
+
+### AC3 Tests
+- **Existing:** Zero coverage of `getBranding` confirmed
+- **New:** Three cases prescribed (ACADEMY with saved branding, downgraded tier with existing row, ACADEMY with no row) ✓
+- **Gap:** No test for non-ACADEMY coach with no row (trivial case: returns empty same as ACADEMY no-row) — story correctly identifies this as covered by case (c) regression check ✓
+
+---
+
+## 🎯 Conclusion
+
+**Status: READY FOR IMPLEMENTATION**
+
+All three ACs are well-scoped and architecturally sound. No unvalidated assumptions detected. The story correctly identifies all required code changes and their test implications. The edge cases identified above (coach deletion, self-ref null, cache staleness) are either correct-by-design or out-of-scope, not implementation bugs.
+
+The story's frequent cross-references to precedent patterns (deferred-78's lock pattern for AC1, RadarCompositeCalculationService for AC2, skillars-deferred-63 for AC3's downgrade decision) and ledger consistency (Task 4) demonstrate attention to this codebase's established conventions.
+
+**Recommendation:** Proceed to implementation. The developer can follow the story's AC and task structure with confidence.
