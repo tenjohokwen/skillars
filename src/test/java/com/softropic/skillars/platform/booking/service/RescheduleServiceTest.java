@@ -13,6 +13,7 @@ import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequest;
 import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequestRepository;
+import com.softropic.skillars.platform.booking.repo.CoachAvailabilityBlockRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
@@ -53,6 +54,7 @@ class RescheduleServiceTest {
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private jakarta.persistence.EntityManager entityManager;
     @Mock private CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
+    @Mock private CoachAvailabilityBlockRepository coachAvailabilityBlockRepository;
     @Mock private PessimisticLockRetryer lockRetryer;
 
     private RescheduleService service;
@@ -70,7 +72,7 @@ class RescheduleServiceTest {
     void setUp() {
         service = new RescheduleService(
             bookingService, bookingRepository, rescheduleRepo, coachProfileRepository, userRepository,
-            eventPublisher, entityManager, coachAvailabilityWindowRepository, lockRetryer
+            eventPublisher, entityManager, coachAvailabilityWindowRepository, coachAvailabilityBlockRepository, lockRetryer
         );
         lenient().when(lockRetryer.withBoundedRetry(any()))
             .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());

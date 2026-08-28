@@ -1000,4 +1000,15 @@ class BookingBatchServiceTest {
         }
         return new CreateBatchRequest(COACH_ID, PLAYER_ID, slots, BigDecimal.ZERO, null);
     }
+
+    private CoachAvailabilityWindow buildCoveringAvailabilityWindow() {
+        CoachAvailabilityWindow window = new CoachAvailabilityWindow();
+        window.setId(UUID.randomUUID());
+        window.setCoachId(COACH_ID);
+        window.setDayOfWeek((short) 1);
+        window.setStartTime(java.time.LocalTime.of(0, 0));
+        window.setEndTime(java.time.LocalTime.of(23, 59));
+        window.setCanonicalTimezone("UTC");
+        return window;
+    }
 }

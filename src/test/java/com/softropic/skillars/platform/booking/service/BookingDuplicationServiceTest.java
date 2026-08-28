@@ -264,10 +264,12 @@ class BookingDuplicationServiceTest {
         when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
         when(bookingService.isSlotBlocked(any(), any(), any())).thenReturn(false);
         when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any())).thenReturn(List.of());
-        Booking savedDuplicate = new Booking();
-        savedDuplicate.setId(UUID.randomUUID());
-        when(bookingRepository.save(any())).thenReturn(savedDuplicate);
-        when(packSessionService.findActivePackId(any(), any())).thenReturn(Optional.empty());
+        when(bookingRepository.save(any())).thenAnswer(i -> {
+            Booking b = i.getArgument(0);
+            b.setId(UUID.randomUUID());
+            return b;
+        });
+        when(packSessionService.findActivePackId(any(), any())).thenReturn(null);
 
         UUID duplicateId = service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID);
 
