@@ -50,6 +50,16 @@ import com.softropic.skillars.infrastructure.exception.ErrorCode;
  * against a pathological {@code weekStart} query parameter: a malformed request parameter, the
  * same kind of thing as {@code START_TIME_IN_PAST}/{@code INVALID_TIME_RANGE} above, not an
  * authorization failure.
+ *
+ * <p>{@code SLOT_BLOCKED_BY_COACH} (added by {@code skillars-deferred-79} AC1) is request-state
+ * validation, the same bucket as {@code SLOT_OUTSIDE_AVAILABILITY}/{@code SLOT_UNAVAILABLE}: a
+ * coach-initiated {@code CoachAvailabilityBlock} overlaps the requested/proposed slot. Deliberately
+ * distinct from those two codes — the cause (an explicit block-out) differs from "outside declared
+ * hours" or "double-booked."
+ *
+ * <p>{@code BLOCK_OVERLAPS_BOOKING} (added by {@code skillars-deferred-79} AC2) guards
+ * {@code AvailabilityService.addBlock}: a coach cannot create a block-out over a slot that already
+ * has an active booking. Also request-state validation, not authorization.
  */
 public enum BookingError implements ErrorCode {
     COACH_UNAVAILABLE,
@@ -68,7 +78,9 @@ public enum BookingError implements ErrorCode {
     SESSION_CROSSES_MIDNIGHT,
     CANNOT_RESPOND_TO_OWN_PROPOSAL,
     AVAILABILITY_CHANGED,
-    WEEK_START_OUT_OF_RANGE;
+    WEEK_START_OUT_OF_RANGE,
+    SLOT_BLOCKED_BY_COACH,
+    BLOCK_OVERLAPS_BOOKING;
 
     @Override
     public String getErrorCode() {
@@ -90,6 +102,8 @@ public enum BookingError implements ErrorCode {
             case CANNOT_RESPOND_TO_OWN_PROPOSAL -> "booking.cannotRespondToOwnProposal";
             case AVAILABILITY_CHANGED      -> "booking.availabilityChanged";
             case WEEK_START_OUT_OF_RANGE   -> "booking.weekStartOutOfRange";
+            case SLOT_BLOCKED_BY_COACH     -> "booking.slotBlockedByCoach";
+            case BLOCK_OVERLAPS_BOOKING    -> "booking.blockOverlapsBooking";
         };
     }
 }

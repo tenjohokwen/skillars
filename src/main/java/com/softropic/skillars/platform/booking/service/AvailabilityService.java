@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.booking.service;
 import com.softropic.skillars.platform.booking.contract.AvailabilityBlockResponse;
 import com.softropic.skillars.platform.booking.contract.AvailabilityWindowResponse;
 import com.softropic.skillars.platform.booking.contract.AvailableSlotResponse;
+import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.CoachAvailabilityResponse;
 import com.softropic.skillars.platform.booking.contract.CreateBlockRequest;
 import com.softropic.skillars.platform.booking.contract.CreateWindowRequest;
@@ -38,6 +39,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Slf4j
@@ -305,6 +307,19 @@ public class AvailabilityService {
     @Transactional
     public AvailabilityBlockResponse addBlock(Long userId, CreateBlockRequest req) {
         CoachProfile profile = requireProfile(userId);
+        // Deferred-79 AC2: project-owner decision — a coach must not be able to block out a slot
+        // that already has an active booking; reject up front rather than allowing the conflict to
+        // exist. Same repository method, status set, and null-excludeBookingId convention this
+        // class's own getAvailabilityCalendar already uses (line ~121).
+        List<Booking> overlapping = bookingRepository.findOverlappingBookings(
+            profile.getId(), req.startDatetime(), req.endDatetime(), BookingService.ACTIVE_SLOT_STATUSES, null);
+        if (!overlapping.isEmpty()) {
+            throw new OperationNotAllowedException(
+                "You already have a booking during this time",
+                Map.of("coach id", profile.getId(), "start datetime", req.startDatetime(),
+                    "end datetime", req.endDatetime()),
+                BookingError.BLOCK_OVERLAPS_BOOKING);
+        }
         CoachAvailabilityBlock block = new CoachAvailabilityBlock();
         block.setCoachId(profile.getId());
         block.setStartDatetime(req.startDatetime());

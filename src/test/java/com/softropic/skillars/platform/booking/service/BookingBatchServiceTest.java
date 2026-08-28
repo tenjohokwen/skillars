@@ -271,6 +271,64 @@ class BookingBatchServiceTest {
         verify(bookingRepository, never()).save(any());
     }
 
+    // ---- Deferred-79 AC1: CoachAvailabilityBlock enforcement ----
+
+    @Test
+    void createBatch_slotOverlapsActiveBlock_isRejected() {
+        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        stubOwnershipAndActiveCoach();
+        when(bookingService.isSlotBlocked(any(), any(), any())).thenReturn(true);
+
+        assertThatThrownBy(() -> service.createBatch(PARENT_ID, buildRequest(2)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.SLOT_BLOCKED_BY_COACH));
+
+        verify(batchRepository, never()).save(any());
+    }
+
+    /**
+     * Deferred-79 AC1 (story-review test-coverage gap, addressed): validateSlotDurationAndAvailability
+     * is called twice by createBatch (initial validation, then a fresh pre-commit re-check) — mirrors
+     * createBatch_availabilityNarrowsBetweenInitialResolveAndPersist_abortsWholeBatch's structure but
+     * with a block appearing between the two calls instead of a window narrowing, proving the block
+     * check fires at the pre-commit re-check stage specifically, not just the initial-validation call.
+     */
+    @Test
+    void createBatch_blockAddedBetweenInitialResolveAndPersist_abortsAtPreCommitStage() {
+        when(configService.getLong("booking.batch.maxSize")).thenReturn(10L);
+        stubOwnershipAndActiveCoach();
+        when(bookingService.isSlotBlocked(any(), any(), any())).thenReturn(false, true);
+
+        assertThatThrownBy(() -> service.createBatch(PARENT_ID, buildRequest(1)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.SLOT_BLOCKED_BY_COACH));
+
+        verify(coachAvailabilityWindowRepository, times(2)).findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID);
+        verify(batchRepository, never()).save(any());
+        verify(bookingRepository, never()).save(any());
+    }
+
+    @Test
+    void createBatch_slotWithoutBlock_createsSuccessfully() {
+        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        stubOwnershipAndActiveCoach();
+        when(bookingService.isSlotBlocked(any(), any(), any())).thenReturn(false);
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID))
+            .thenReturn(List.of(buildCoveringAvailabilityWindow()));
+        BookingBatch savedBatch = new BookingBatch();
+        savedBatch.setId(BATCH_ID);
+        when(batchRepository.save(any())).thenReturn(savedBatch);
+        when(bookingRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        BatchBookingCreatedResponse result = service.createBatch(PARENT_ID, buildRequest(2));
+
+        assertThat(result.bookingCount()).isEqualTo(2);
+        verify(batchRepository).save(any(BookingBatch.class));
+        verify(bookingRepository, times(2)).save(any(Booking.class));
+    }
+
     @Test
     void createBatch_slotOfTheWrongLength_isRejected() {
         when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
@@ -941,5 +999,16 @@ class BookingBatchServiceTest {
             slots.add(new BatchSlot(start, start.plus(1, ChronoUnit.HOURS)));
         }
         return new CreateBatchRequest(COACH_ID, PLAYER_ID, slots, BigDecimal.ZERO, null);
+    }
+
+    private CoachAvailabilityWindow buildCoveringAvailabilityWindow() {
+        CoachAvailabilityWindow window = new CoachAvailabilityWindow();
+        window.setId(UUID.randomUUID());
+        window.setCoachId(COACH_ID);
+        window.setDayOfWeek((short) 1);
+        window.setStartTime(java.time.LocalTime.of(0, 0));
+        window.setEndTime(java.time.LocalTime.of(23, 59));
+        window.setCanonicalTimezone("UTC");
+        return window;
     }
 }

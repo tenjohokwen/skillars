@@ -28,6 +28,7 @@ import com.softropic.skillars.platform.booking.contract.TransitionContext;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingBatch;
 import com.softropic.skillars.platform.booking.repo.BookingBatchRepository;
+import com.softropic.skillars.platform.booking.repo.CoachAvailabilityBlockRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequest;
 import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequestRepository;
@@ -112,6 +113,7 @@ public class BookingService {
     private final CoachProfileRepository coachProfileRepository;
     private final PaymentGateway paymentGateway;
     private final CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
+    private final CoachAvailabilityBlockRepository coachAvailabilityBlockRepository;
     private final PlayerProfileRepository playerProfileRepository;
     private final UserRepository userRepository;
     private final ApplicationEventPublisher eventPublisher;
@@ -269,6 +271,15 @@ public class BookingService {
             throw new OperationNotAllowedException("Requested slot is not within coach availability",
                 Map.of("requested start time", req.requestedStartTime(), "requested end time", req.requestedEndTime()),
                 BookingError.SLOT_OUTSIDE_AVAILABILITY);
+        }
+        // Deferred-79 AC1: a CoachAvailabilityBlock was previously enforced only on the read-side
+        // calendar (getAvailabilityCalendar) — a parent working off a stale view, or any client
+        // calling this endpoint directly, could book a slot the coach explicitly marked unavailable.
+        if (isSlotBlocked(req.requestedStartTime(), req.requestedEndTime(), req.coachId())) {
+            throw new OperationNotAllowedException("Coach has blocked out this time",
+                Map.of("submitted coach id", req.coachId(), "requested start time", req.requestedStartTime(),
+                    "requested end time", req.requestedEndTime()),
+                BookingError.SLOT_BLOCKED_BY_COACH);
         }
 
         List<Booking> overlapping = bookingRepository.findOverlappingBookings(
@@ -947,6 +958,21 @@ public class BookingService {
                 coachId, windows.size());
         }
         return false;
+    }
+
+    /**
+     * Deferred-79 AC1: package-private, mirrors {@link #isSlotWithinAvailabilityWindow}'s own
+     * visibility and external-call pattern — called by {@code BookingBatchService},
+     * {@code RescheduleService}, and {@code BookingDuplicationService} the same way. Unlike that
+     * method, no caller needs the raw block list for anything else (no signature computation), so
+     * the repository lookup lives entirely here rather than being fetched by each caller and passed
+     * in — there is nothing for a second {@code CoachAvailabilityBlockRepository} field at any call
+     * site to do.
+     */
+    boolean isSlotBlocked(Instant startTime, Instant endTime, UUID coachId) {
+        return !coachAvailabilityBlockRepository
+            .findByCoachIdAndEndDatetimeAfterAndStartDatetimeBefore(coachId, startTime, endTime)
+            .isEmpty();
     }
 
     private BookingResponse toResponse(Booking b, String coachName, String playerName, String parentName,

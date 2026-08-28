@@ -96,6 +96,15 @@ public class BookingDuplicationService {
                 BookingError.SLOT_OUTSIDE_AVAILABILITY);
         }
 
+        // Deferred-79 AC1: this method creates exactly one duplicate per invocation — no loop over
+        // multiple weeks/occurrences — so the check goes at this single point, once per call.
+        if (bookingService.isSlotBlocked(newStart, newEnd, coach.getId())) {
+            throw new OperationNotAllowedException(
+                "Coach has blocked out this time",
+                Map.of("proposed start time", newStart, "proposed end time", newEnd),
+                BookingError.SLOT_BLOCKED_BY_COACH);
+        }
+
         // Deferred-50 AC1: duplicateNextWeek previously relied solely on the DB-level exclusion
         // constraint at commit to catch a double-booking, surfacing as an unmapped 500 rather than a
         // clean rejection. Mirrors acceptReschedule's own overlap check (Deferred-14 AC4) — same

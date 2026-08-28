@@ -5,6 +5,7 @@ import com.softropic.skillars.platform.booking.repo.BookingBatchRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequestRepository;
+import com.softropic.skillars.platform.booking.repo.CoachAvailabilityBlockRepository;
 import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.platform.booking.service.BookingStateMachine;
 import com.softropic.skillars.platform.booking.service.SessionDurationResolver;
@@ -60,6 +61,10 @@ class ExpiredPackBookingValidationTest {
     @Mock CoachProfileRepository coachProfileRepository;
     @Mock PaymentGateway paymentGateway;
     @Mock CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
+    // Deferred-79 AC1: createBookingRequest calls isSlotBlocked after the window check, which
+    // reaches this repository directly — @InjectMocks otherwise leaves it null, NPEing any fixture
+    // that gets past the window check.
+    @Mock CoachAvailabilityBlockRepository coachAvailabilityBlockRepository;
     @Mock PlayerProfileRepository playerProfileRepository;
     @Mock UserRepository userRepository;
     @Mock ApplicationEventPublisher eventPublisher;
@@ -271,6 +276,8 @@ class ExpiredPackBookingValidationTest {
         window.setStartTime(LocalTime.of(0, 0));
         window.setEndTime(LocalTime.of(23, 59));
         when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID)).thenReturn(List.of(window));
+        when(coachAvailabilityBlockRepository.findByCoachIdAndEndDatetimeAfterAndStartDatetimeBefore(any(), any(), any()))
+            .thenReturn(Collections.emptyList());
 
         // UAT.2 AC3: every fixture in this class books exactly 10:00-11:00, which is the platform
         // default session length. The check sits before the window lookup, so it must be stubbed
