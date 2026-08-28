@@ -519,6 +519,96 @@ class BookingServiceConcurrencyIT extends AbstractIntegrationTest {
     }
 
     /**
+     * Deferred-78 AC1: proves the reordered lock actually closes the TOCTOU, not just that a lock
+     * exists. A background thread holds the coach-profile row lock and, WHILE holding it, deletes
+     * the coach's only availability window — the exact window {@code slotStart}/{@code slotEnd}
+     * (seeded in {@code setUp()}) falls inside. The booking thread is parked on
+     * {@code findByIdForUpdate} for the whole hold. If the window read still happened BEFORE lock
+     * acquisition (the pre-fix ordering this AC replaced), the booking thread would have already
+     * captured the now-deleted window and would succeed. Instead it must see the POST-delete,
+     * empty window list once it finally acquires the lock, and reject with
+     * {@code SLOT_OUTSIDE_AVAILABILITY} — proof the window fetch runs under the lock, not before it.
+     */
+    @Test
+    void createBookingRequest_windowDeletedWhileWaitingForCoachLock_seesPostLockEmptyWindowsAndRejects() throws Exception {
+        CreateBookingRequest req = new CreateBookingRequest(
+            coachProfileId, PLAYER_ID_1, slotStart, slotEnd, null, null, null);
+
+        CountDownLatch windowDeletedAndLockHeld = new CountDownLatch(1);
+        AtomicReference<Throwable> deleterFailure = new AtomicReference<>();
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        Future<?> deleter = executor.submit(() -> {
+            try {
+                transactionTemplate.execute(status -> {
+                    jdbcTemplate.queryForObject(
+                        "SELECT status FROM marketplace.coach_profiles WHERE id = ? FOR UPDATE",
+                        String.class, coachProfileId);
+                    jdbcTemplate.update(
+                        "DELETE FROM marketplace.coach_availability_windows WHERE coach_id = ?",
+                        coachProfileId);
+                    windowDeletedAndLockHeld.countDown();
+                    // See COACH_LOCK_HOLD_MILLIS's javadoc: guarantees the booking thread's first
+                    // findByIdForUpdate attempt collides with this still-open, uncommitted delete.
+                    try {
+                        Thread.sleep(COACH_LOCK_HOLD_MILLIS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new AssertionError("Interrupted while holding the coach_profiles lock — "
+                            + "results below are not trustworthy.", e);
+                    }
+                    return null;
+                });
+            } catch (Throwable t) {
+                deleterFailure.set(t);
+            }
+        });
+
+        AtomicReference<Throwable> bookingOutcome = new AtomicReference<>();
+        AtomicReference<Instant> bookingCallStartedAt = new AtomicReference<>();
+        AtomicReference<Instant> bookingCallEndedAt = new AtomicReference<>();
+        Future<?> booker = executor.submit(() -> {
+            try {
+                windowDeletedAndLockHeld.await(10, TimeUnit.SECONDS);
+                bookingCallStartedAt.set(Instant.now());
+                bookingService.createBookingRequest(PARENT_ID_1, req);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (Throwable t) {
+                bookingOutcome.set(t);
+            } finally {
+                bookingCallEndedAt.set(Instant.now());
+            }
+        });
+
+        deleter.get(30, TimeUnit.SECONDS);
+        booker.get(30, TimeUnit.SECONDS);
+        executor.shutdown();
+
+        if (deleterFailure.get() != null) {
+            throw new AssertionError("Window-deleting thread failed", deleterFailure.get());
+        }
+
+        assertThat(Duration.between(bookingCallStartedAt.get(), bookingCallEndedAt.get()))
+            .as("must have taken close to the full lock-hold duration via NO_WAIT retry — a near-"
+                + "instant outcome would mean the booking thread never actually contended for the "
+                + "coach-profile lock, making this test's proof worthless")
+            .isGreaterThanOrEqualTo(Duration.ofMillis(COACH_LOCK_HOLD_MILLIS - 300));
+
+        assertThat(bookingOutcome.get())
+            .as("must reject once the locked re-read sees the now-empty window list, proving the "
+                + "window fetch happens under the lock rather than before it")
+            .isInstanceOf(OperationNotAllowedException.class);
+        assertThat(((OperationNotAllowedException) bookingOutcome.get()).getErrorCode())
+            .isEqualTo(BookingError.SLOT_OUTSIDE_AVAILABILITY);
+
+        assertThat(bookingRepository.findAllByCoachId(coachProfileId))
+            .as("no booking row may be persisted once the window backing it was deleted before the lock was granted")
+            .isEmpty();
+    }
+
+    /**
      * skillars-deferred-72 AC1: {@code BookingRepository.findByIdForUpdate}'s one call site,
      * {@code BookingService.cancelBookingAsParent}, had zero dedicated concurrency IT — mirrors
      * {@code RescheduleServiceConcurrencyIT}'s exact two-test brief/prolonged shape, contending

@@ -278,7 +278,7 @@ public class CoachProfileService {
     @Transactional
     public ProfileBuilderStepResponse saveStep5(Long userId, ProfileBuilderStep5Request req) {
         CoachProfile profile = requireProfile(userId);
-        if (coachAvailabilityWindowRepository.findByCoachId(profile.getId()).isEmpty()) {
+        if (coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(profile.getId()).isEmpty()) {
             throw new MarketplaceException("marketplace.stepOutOfOrder", "Complete Step 4 before submitting Step 5");
         }
 
@@ -348,7 +348,7 @@ public class CoachProfileService {
             .map(sp -> new SessionPackDto(sp.getSessionCount(), sp.getTotalPrice(), "EUR", sp.getLabel()))
             .toList();
 
-        boolean available = !coachAvailabilityWindowRepository.findByCoachId(profile.getId()).isEmpty();
+        boolean available = !coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(profile.getId()).isEmpty();
 
         OffsetDateTime since = OffsetDateTime.now().minusDays(STRIKE_WINDOW_DAYS);
         int strikeCount = Math.toIntExact(coachReliabilityStrikeRepository
@@ -419,7 +419,7 @@ public class CoachProfileService {
         if (coachPricingRepository.findByCoachId(profile.getId()).isEmpty()) {
             throw new MarketplaceException("marketplace.incompleteProfile", "Step 3 not complete: pricing not set");
         }
-        if (coachAvailabilityWindowRepository.findByCoachId(profile.getId()).isEmpty()) {
+        if (coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(profile.getId()).isEmpty()) {
             throw new MarketplaceException("marketplace.incompleteProfile", "Step 4 not complete: no availability windows");
         }
     }
@@ -429,7 +429,7 @@ public class CoachProfileService {
         if (coachSpecialtyRepository.findByCoachId(profile.getId()).isEmpty()) return 1;
         if (coachAgeGroupRepository.findByCoachId(profile.getId()).isEmpty()) return 1;
         if (coachPricingRepository.findByCoachId(profile.getId()).isEmpty()) return 2;
-        if (coachAvailabilityWindowRepository.findByCoachId(profile.getId()).isEmpty()) return 3;
+        if (coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(profile.getId()).isEmpty()) return 3;
         if (profile.getStatus() == CoachProfileStatus.ACTIVE) return 5;
         return 4;
     }

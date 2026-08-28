@@ -270,7 +270,7 @@ class ExpiredPackBookingValidationTest {
         window.setDayOfWeek((short) dow.getValue());
         window.setStartTime(LocalTime.of(0, 0));
         window.setEndTime(LocalTime.of(23, 59));
-        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID)).thenReturn(List.of(window));
 
         // UAT.2 AC3: every fixture in this class books exactly 10:00-11:00, which is the platform
         // default session length. The check sits before the window lookup, so it must be stubbed

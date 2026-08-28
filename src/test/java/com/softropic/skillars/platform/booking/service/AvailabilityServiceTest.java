@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.booking.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.booking.contract.AvailabilityWindowResponse;
 import com.softropic.skillars.platform.booking.contract.AvailableSlotResponse;
 import com.softropic.skillars.platform.booking.contract.CoachAvailabilityResponse;
@@ -13,7 +14,9 @@ import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import jakarta.persistence.EntityManager;
 import org.instancio.Instancio;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -38,6 +41,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -61,11 +65,26 @@ class AvailabilityServiceTest {
     @Mock
     SessionDurationResolver sessionDurationResolver;
 
+    @Mock
+    PessimisticLockRetryer lockRetryer;
+
+    @Mock
+    EntityManager entityManager;
+
     @InjectMocks
     AvailabilityService service;
 
     private static final Long COACH_USER_ID = 300L;
     private static final Duration ONE_HOUR = Duration.ofHours(1);
+
+    // Deferred-78 AC1: addWindow/updateWindow/deleteWindow now re-lock the coach row via
+    // lockRetryer before mutating. Lenient because getAvailabilityCalendar/computeAvailableSlots
+    // tests below never call any of the three write methods.
+    @BeforeEach
+    void stubLockRetryer() {
+        lenient().when(lockRetryer.withBoundedRetry(any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
+    }
 
     // ----- updateWindow / hasBookingConflict tests (AC 4) -----
 
@@ -83,6 +102,7 @@ class AvailabilityServiceTest {
         window.setDayOfWeek((short) bookingStart.getDayOfWeek().getValue());
 
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(profile));
+        when(coachProfileRepository.findByIdForUpdate(coachId)).thenReturn(Optional.of(profile));
         when(windowRepository.findByIdAndCoachId(windowId, coachId)).thenReturn(Optional.of(window));
         when(windowRepository.save(window)).thenReturn(window);
         when(bookingRepository.findByCoachIdAndStatusInAndTimeBetween(
@@ -104,6 +124,7 @@ class AvailabilityServiceTest {
         CoachAvailabilityWindow window = makeWindow(windowId, coachId);
 
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(profile));
+        when(coachProfileRepository.findByIdForUpdate(coachId)).thenReturn(Optional.of(profile));
         when(windowRepository.findByIdAndCoachId(windowId, coachId)).thenReturn(Optional.of(window));
         when(windowRepository.save(window)).thenReturn(window);
         when(bookingRepository.findByCoachIdAndStatusInAndTimeBetween(
@@ -141,6 +162,7 @@ class AvailabilityServiceTest {
         window.setEndTime(bookingLocal.toLocalTime().plusMinutes(15));
 
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(profile));
+        when(coachProfileRepository.findByIdForUpdate(coachId)).thenReturn(Optional.of(profile));
         when(windowRepository.findByIdAndCoachId(windowId, coachId)).thenReturn(Optional.of(window));
         when(windowRepository.save(window)).thenReturn(window);
         when(bookingRepository.findByCoachIdAndStatusInAndTimeBetween(
@@ -262,7 +284,7 @@ class AvailabilityServiceTest {
         otherRequestersBooking.setStatus("REQUESTED");
 
         when(coachProfileRepository.findById(coachId)).thenReturn(Optional.of(profile));
-        when(windowRepository.findByCoachId(coachId)).thenReturn(List.of(window));
+        when(windowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(coachId)).thenReturn(List.of(window));
         when(blockRepository.findByCoachIdAndEndDatetimeAfterAndStartDatetimeBefore(eq(coachId), any(), any()))
             .thenReturn(List.of());
         when(bookingRepository.findOverlappingBookings(
@@ -322,7 +344,7 @@ class AvailabilityServiceTest {
         gapWindow.setCanonicalTimezone("Europe/Berlin");
 
         when(coachProfileRepository.findById(coachId)).thenReturn(Optional.of(profile));
-        when(windowRepository.findByCoachId(coachId)).thenReturn(List.of(gapWindow));
+        when(windowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(coachId)).thenReturn(List.of(gapWindow));
         when(blockRepository.findByCoachIdAndEndDatetimeAfterAndStartDatetimeBefore(eq(coachId), any(), any()))
             .thenReturn(List.of());
         when(bookingRepository.findOverlappingBookings(
@@ -358,7 +380,7 @@ class AvailabilityServiceTest {
         laWindow.setCanonicalTimezone("America/Los_Angeles");
 
         when(coachProfileRepository.findById(coachId)).thenReturn(Optional.of(profile));
-        when(windowRepository.findByCoachId(coachId)).thenReturn(List.of(laWindow));
+        when(windowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(coachId)).thenReturn(List.of(laWindow));
         when(blockRepository.findByCoachIdAndEndDatetimeAfterAndStartDatetimeBefore(eq(coachId), any(), any()))
             .thenReturn(List.of());
         when(bookingRepository.findOverlappingBookings(eq(coachId), any(), any(), anyList(), isNull()))
@@ -423,7 +445,7 @@ class AvailabilityServiceTest {
             Instant.parse("2026-06-14T10:30:00Z"), Instant.parse("2026-06-14T11:00:00Z"));
 
         when(coachProfileRepository.findById(coachId)).thenReturn(Optional.of(profile));
-        when(windowRepository.findByCoachId(coachId)).thenReturn(List.of(niueWindow, kiritimatiWindow));
+        when(windowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(coachId)).thenReturn(List.of(niueWindow, kiritimatiWindow));
         stubBlockFetch(coachId, List.of(beyondOneDayPadBlock));
         stubBookingFetch(coachId, List.of());
         when(sessionDurationResolver.resolve(coachId)).thenReturn(ONE_HOUR);
@@ -482,7 +504,7 @@ class AvailabilityServiceTest {
         booking.setStatus("REQUESTED");
 
         when(coachProfileRepository.findById(coachId)).thenReturn(Optional.of(profile));
-        when(windowRepository.findByCoachId(coachId)).thenReturn(List.of(niueWindow, kiritimatiWindow));
+        when(windowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(coachId)).thenReturn(List.of(niueWindow, kiritimatiWindow));
         stubBlockFetch(coachId, List.of());
         stubBookingFetch(coachId, List.of(booking));
         when(sessionDurationResolver.resolve(coachId)).thenReturn(ONE_HOUR);
@@ -537,10 +559,10 @@ class AvailabilityServiceTest {
         Instant expectedStart = weekStart.minusDays(2).atStartOfDay(profileZone).toInstant();
         Instant expectedEnd = weekStart.plusDays(9).atStartOfDay(profileZone).toInstant();
 
-        when(windowRepository.findByCoachId(coachId)).thenReturn(List.of(laWindow, niueWindow));
+        when(windowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(coachId)).thenReturn(List.of(laWindow, niueWindow));
         service.getAvailabilityCalendar(coachId, weekStart);
 
-        when(windowRepository.findByCoachId(coachId)).thenReturn(List.of(niueWindow, laWindow));
+        when(windowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(coachId)).thenReturn(List.of(niueWindow, laWindow));
         service.getAvailabilityCalendar(coachId, weekStart);
 
         ArgumentCaptor<Instant> startCaptor = ArgumentCaptor.forClass(Instant.class);
@@ -562,7 +584,7 @@ class AvailabilityServiceTest {
         profile.setCanonicalTimezone("   ");
 
         when(coachProfileRepository.findById(coachId)).thenReturn(Optional.of(profile));
-        when(windowRepository.findByCoachId(coachId)).thenReturn(List.of());
+        when(windowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(coachId)).thenReturn(List.of());
         stubBlockFetch(coachId, List.of());
         stubBookingFetch(coachId, List.of());
 
@@ -571,6 +593,51 @@ class AvailabilityServiceTest {
         assertThat(response.canonicalTimezone()).isEqualTo("UTC");
         assertThat(response.windows()).isEmpty();
         assertThat(response.computedSlots()).isEmpty();
+    }
+
+    /**
+     * Deferred-78 AC3: {@code findByCoachId} issued no ORDER BY, so callers received windows in
+     * undefined order. The repository stub below deliberately returns windows already in the
+     * day/start-time/id order the new derived query
+     * ({@code findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc}) guarantees, in an order distinct
+     * from construction order above — proving {@code getAvailabilityCalendar}'s {@code
+     * windowResponses} preserves whatever order the repository returns rather than re-deriving or
+     * shuffling it.
+     */
+    @Test
+    void getAvailabilityCalendar_windowsPreserveDayThenStartTimeThenIdOrderFromRepository() {
+        UUID coachId = UUID.randomUUID();
+        CoachProfile profile = makeCoachProfile(coachId, COACH_USER_ID);
+
+        UUID earlierId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        UUID laterId = UUID.fromString("00000000-0000-0000-0000-000000000002");
+
+        CoachAvailabilityWindow mondayLate = makeWindow(laterId, coachId);
+        mondayLate.setDayOfWeek((short) 1);
+        mondayLate.setStartTime(LocalTime.of(14, 0));
+        mondayLate.setEndTime(LocalTime.of(15, 0));
+
+        CoachAvailabilityWindow mondayEarly = makeWindow(earlierId, coachId);
+        mondayEarly.setDayOfWeek((short) 1);
+        mondayEarly.setStartTime(LocalTime.of(9, 0));
+        mondayEarly.setEndTime(LocalTime.of(10, 0));
+
+        CoachAvailabilityWindow tuesday = makeWindow(UUID.randomUUID(), coachId);
+        tuesday.setDayOfWeek((short) 2);
+        tuesday.setStartTime(LocalTime.of(8, 0));
+        tuesday.setEndTime(LocalTime.of(9, 0));
+
+        when(coachProfileRepository.findById(coachId)).thenReturn(Optional.of(profile));
+        when(windowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(coachId))
+            .thenReturn(List.of(mondayEarly, mondayLate, tuesday));
+        when(sessionDurationResolver.resolve(coachId)).thenReturn(ONE_HOUR);
+        stubBlockFetch(coachId, List.of());
+        stubBookingFetch(coachId, List.of());
+
+        CoachAvailabilityResponse response = service.getAvailabilityCalendar(coachId, LocalDate.of(2026, 6, 15));
+
+        assertThat(response.windows()).extracting(AvailabilityWindowResponse::id)
+            .containsExactly(earlierId, laterId, tuesday.getId());
     }
 
     // ----- computeAvailableSlots tests -----

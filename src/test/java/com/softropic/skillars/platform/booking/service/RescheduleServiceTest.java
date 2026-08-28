@@ -13,6 +13,7 @@ import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequest;
 import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequestRepository;
+import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
@@ -91,6 +92,11 @@ class RescheduleServiceTest {
         coach.setUserId(COACH_USER_ID);
         coach.setDisplayName("Test Coach");
         coach.setStatus(com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus.ACTIVE);
+
+        // Deferred-78 AC1: validateRescheduleProposal (called from requestReschedule/
+        // requestRescheduleAsCoach) now locks the coach row before its windows fetch. Lenient
+        // because tests that throw earlier (invalid status/time/duration, ownership) never reach it.
+        lenient().when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
     }
 
     @Test
@@ -104,7 +110,7 @@ class RescheduleServiceTest {
 
         Instant proposedStart = Instant.now().plus(3, ChronoUnit.DAYS);
         Instant proposedEnd = proposedStart.plus(1, ChronoUnit.HOURS);
-        service.requestReschedule(BOOKING_ID, PARENT_ID, new CreateRescheduleRequest(proposedStart, proposedEnd));
+        service.requestReschedule(BOOKING_ID, PARENT_ID, new CreateRescheduleRequest(proposedStart, proposedEnd, null));
 
         // Deferred-50 AC3: verify the actual proposed times were passed, not (for example) the
         // booking's original requestedStartTime/requestedEndTime — an argument-swap regression.
@@ -139,7 +145,7 @@ class RescheduleServiceTest {
 
         Instant proposedStart = Instant.now().plus(4, ChronoUnit.DAYS);
         service.requestReschedule(BOOKING_ID, PARENT_ID,
-            new CreateRescheduleRequest(proposedStart, proposedStart.plus(3, ChronoUnit.HOURS)));
+            new CreateRescheduleRequest(proposedStart, proposedStart.plus(3, ChronoUnit.HOURS), null));
 
         // Not just "save was called": the 3-hour length must round-trip into what is persisted.
         // A save(any()) assertion would still pass if the proposal were silently coerced to the
@@ -165,7 +171,7 @@ class RescheduleServiceTest {
 
         Instant proposedStart = Instant.now().plus(4, ChronoUnit.DAYS);
         assertThatThrownBy(() -> service.requestReschedule(BOOKING_ID, PARENT_ID,
-            new CreateRescheduleRequest(proposedStart, proposedStart.plus(8, ChronoUnit.HOURS))))
+            new CreateRescheduleRequest(proposedStart, proposedStart.plus(8, ChronoUnit.HOURS), null)))
             .isInstanceOf(OperationNotAllowedException.class)
             .hasMessageContaining("original length");
 
@@ -179,7 +185,7 @@ class RescheduleServiceTest {
 
         Instant proposedStart = Instant.now().plus(4, ChronoUnit.DAYS);
         assertThatThrownBy(() -> service.requestReschedule(BOOKING_ID, PARENT_ID,
-            new CreateRescheduleRequest(proposedStart, proposedStart.plus(30, ChronoUnit.MINUTES))))
+            new CreateRescheduleRequest(proposedStart, proposedStart.plus(30, ChronoUnit.MINUTES), null)))
             .isInstanceOf(OperationNotAllowedException.class)
             .hasMessageContaining("original length");
     }
@@ -193,7 +199,7 @@ class RescheduleServiceTest {
             new CreateRescheduleRequest(
                 Instant.now().plus(1, ChronoUnit.DAYS),
                 Instant.now().plus(1, ChronoUnit.DAYS).plus(1, ChronoUnit.HOURS)
-            )))
+            , null)))
             .isInstanceOf(OperationNotAllowedException.class);
 
         verify(rescheduleRepo, never()).save(any());
@@ -208,7 +214,7 @@ class RescheduleServiceTest {
             new CreateRescheduleRequest(
                 Instant.now().plus(1, ChronoUnit.DAYS),
                 Instant.now().plus(1, ChronoUnit.DAYS).plus(1, ChronoUnit.HOURS)
-            )))
+            , null)))
             .isInstanceOf(OperationNotAllowedException.class);
     }
 
@@ -220,7 +226,7 @@ class RescheduleServiceTest {
             new CreateRescheduleRequest(
                 Instant.now().minus(1, ChronoUnit.HOURS),
                 Instant.now().plus(1, ChronoUnit.HOURS)
-            )))
+            , null)))
             .isInstanceOf(OperationNotAllowedException.class);
     }
 
@@ -233,7 +239,7 @@ class RescheduleServiceTest {
 
         Instant proposedStart = Instant.now().plus(3, ChronoUnit.DAYS);
         assertThatThrownBy(() -> service.requestReschedule(BOOKING_ID, PARENT_ID,
-            new CreateRescheduleRequest(proposedStart, proposedStart.plus(1, ChronoUnit.HOURS))))
+            new CreateRescheduleRequest(proposedStart, proposedStart.plus(1, ChronoUnit.HOURS), null)))
             .isInstanceOf(OperationNotAllowedException.class)
             .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
                 .isEqualTo(BookingError.SLOT_OUTSIDE_AVAILABILITY));
@@ -252,9 +258,75 @@ class RescheduleServiceTest {
 
         Instant proposedStart = Instant.now().plus(3, ChronoUnit.DAYS);
         service.requestReschedule(BOOKING_ID, PARENT_ID,
-            new CreateRescheduleRequest(proposedStart, proposedStart.plus(1, ChronoUnit.HOURS)));
+            new CreateRescheduleRequest(proposedStart, proposedStart.plus(1, ChronoUnit.HOURS), null));
 
         verify(rescheduleRepo).save(any(BookingRescheduleRequest.class));
+    }
+
+    // ---- Deferred-78 AC2: availabilitySignature staleness guard ----
+
+    @Test
+    void requestReschedule_nullAvailabilitySignature_succeedsUnchanged() {
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
+        when(rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(BOOKING_ID, "PENDING"))
+            .thenReturn(Optional.empty());
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(rescheduleRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        Instant proposedStart = Instant.now().plus(3, ChronoUnit.DAYS);
+        service.requestReschedule(BOOKING_ID, PARENT_ID,
+            new CreateRescheduleRequest(proposedStart, proposedStart.plus(1, ChronoUnit.HOURS), null));
+
+        verify(rescheduleRepo).save(any(BookingRescheduleRequest.class));
+    }
+
+    @Test
+    void requestReschedule_matchingAvailabilitySignature_succeeds() {
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
+        when(rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(BOOKING_ID, "PENDING"))
+            .thenReturn(Optional.empty());
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(rescheduleRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        CoachAvailabilityWindow window = new CoachAvailabilityWindow();
+        window.setId(UUID.randomUUID());
+        window.setCoachId(COACH_ID);
+        window.setDayOfWeek((short) 1);
+        window.setStartTime(java.time.LocalTime.of(0, 0));
+        window.setEndTime(java.time.LocalTime.of(23, 59));
+        window.setCanonicalTimezone("UTC");
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID))
+            .thenReturn(List.of(window));
+
+        // originalDuration is confirmedBooking's own length (1 hour, set in setUp()) — the signature
+        // must be computed against that, not SessionDurationResolver.
+        String currentSignature =
+            AvailabilityService.computeAvailabilitySignature(List.of(window), Duration.ofHours(1));
+
+        Instant proposedStart = Instant.now().plus(3, ChronoUnit.DAYS);
+        service.requestReschedule(BOOKING_ID, PARENT_ID,
+            new CreateRescheduleRequest(proposedStart, proposedStart.plus(1, ChronoUnit.HOURS), currentSignature));
+
+        verify(rescheduleRepo).save(any(BookingRescheduleRequest.class));
+    }
+
+    @Test
+    void requestReschedule_staleAvailabilitySignature_throwsAvailabilityChanged() {
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID))
+            .thenReturn(List.of());
+
+        Instant proposedStart = Instant.now().plus(3, ChronoUnit.DAYS);
+        assertThatThrownBy(() -> service.requestReschedule(BOOKING_ID, PARENT_ID,
+            new CreateRescheduleRequest(proposedStart, proposedStart.plus(1, ChronoUnit.HOURS),
+                "a-stale-signature-that-cannot-match")))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.AVAILABILITY_CHANGED));
+
+        verify(rescheduleRepo, never()).save(any());
     }
 
     @Test
@@ -270,7 +342,7 @@ class RescheduleServiceTest {
         // pending-request check this test is about.
         Instant proposedStart = Instant.now().plus(3, ChronoUnit.DAYS);
         assertThatThrownBy(() -> service.requestReschedule(BOOKING_ID, PARENT_ID,
-            new CreateRescheduleRequest(proposedStart, proposedStart.plus(1, ChronoUnit.HOURS))))
+            new CreateRescheduleRequest(proposedStart, proposedStart.plus(1, ChronoUnit.HOURS), null)))
             .isInstanceOf(OperationNotAllowedException.class)
             .hasMessageContaining("pending reschedule");
     }
@@ -576,7 +648,7 @@ class RescheduleServiceTest {
 
         Instant proposedStart = Instant.now().plus(3, ChronoUnit.DAYS);
         Instant proposedEnd = proposedStart.plus(1, ChronoUnit.HOURS);
-        service.requestRescheduleAsCoach(BOOKING_ID, COACH_USER_ID, new CreateRescheduleRequest(proposedStart, proposedEnd));
+        service.requestRescheduleAsCoach(BOOKING_ID, COACH_USER_ID, new CreateRescheduleRequest(proposedStart, proposedEnd, null));
 
         ArgumentCaptor<BookingRescheduleRequest> savedCaptor = ArgumentCaptor.forClass(BookingRescheduleRequest.class);
         verify(rescheduleRepo).save(savedCaptor.capture());
@@ -597,7 +669,7 @@ class RescheduleServiceTest {
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
 
         assertThatThrownBy(() -> service.requestRescheduleAsCoach(BOOKING_ID, COACH_USER_ID,
-            new CreateRescheduleRequest(Instant.now().plus(1, ChronoUnit.DAYS), Instant.now().plus(1, ChronoUnit.DAYS).plus(1, ChronoUnit.HOURS))))
+            new CreateRescheduleRequest(Instant.now().plus(1, ChronoUnit.DAYS), Instant.now().plus(1, ChronoUnit.DAYS).plus(1, ChronoUnit.HOURS), null)))
             .isInstanceOf(OperationNotAllowedException.class);
 
         verify(rescheduleRepo, never()).save(any());

@@ -6,5 +6,6 @@ import java.time.Instant;
 
 public record CreateRescheduleRequest(
     @NotNull Instant proposedStartTime,
-    @NotNull Instant proposedEndTime
+    @NotNull Instant proposedEndTime,
+    String availabilitySignature
 ) {}

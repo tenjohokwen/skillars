@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.booking.service;
 
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import jakarta.persistence.EntityManager;
 import com.softropic.skillars.platform.booking.contract.BatchAcceptResult;
 import com.softropic.skillars.platform.booking.contract.BatchBookingAcceptedEvent;
 import com.softropic.skillars.platform.booking.contract.BatchBookingCreatedResponse;
@@ -73,6 +74,7 @@ class BookingBatchServiceTest {
     @Mock PlatformTransactionManager transactionManager;
     @Mock TransactionStatus transactionStatus;
     @Mock PessimisticLockRetryer lockRetryer;
+    @Mock EntityManager entityManager;
 
     @InjectMocks BookingBatchService service;
 
@@ -87,6 +89,10 @@ class BookingBatchServiceTest {
         service.initTransactionTemplates();
         lenient().when(lockRetryer.withBoundedRetry(any()))
             .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
+        // Deferred-78 AC1: createBatch now locks the coach row before its fresh re-check. Lenient
+        // because the tests that fail earlier (batch size, ownership, inactive coach, first-pass
+        // duration/availability/overlap checks) never reach the lock at all.
+        lenient().when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(buildActiveCoach()));
         // UAT.2 AC4: every buildRequest() slot is exactly one hour and inside the coach's
         // availability. Lenient because the tests that fail earlier (batch size, ownership,
         // inactive coach) never reach either check.
@@ -141,7 +147,7 @@ class BookingBatchServiceTest {
         window.setStartTime(java.time.LocalTime.of(0, 0));
         window.setEndTime(java.time.LocalTime.of(23, 59));
         window.setCanonicalTimezone("UTC");
-        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID)).thenReturn(List.of(window));
 
         BookingBatch savedBatch = new BookingBatch();
         savedBatch.setId(BATCH_ID);
@@ -237,7 +243,7 @@ class BookingBatchServiceTest {
         // skillars-deferred-69 AC7: now resolved twice total (once up front, once again immediately
         // before persist, to narrow the staleness window) — still O(1) in the slot count, not O(n),
         // which is the invariant this test's name pins. Was verify(times(1)) before AC7.
-        verify(coachAvailabilityWindowRepository, times(2)).findByCoachId(COACH_ID);
+        verify(coachAvailabilityWindowRepository, times(2)).findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID);
         verify(sessionDurationResolver, times(2)).resolve(COACH_ID);
         verify(bookingRepository, times(10)).save(any(Booking.class));
     }
@@ -260,7 +266,7 @@ class BookingBatchServiceTest {
             .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
                 .isEqualTo(BookingError.SLOT_OUTSIDE_AVAILABILITY));
 
-        verify(coachAvailabilityWindowRepository, times(2)).findByCoachId(COACH_ID);
+        verify(coachAvailabilityWindowRepository, times(2)).findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID);
         verify(batchRepository, never()).save(any());
         verify(bookingRepository, never()).save(any());
     }
