@@ -216,6 +216,15 @@ public class ReportGenerationService {
     }
 
     public CoachBrandingResponse getBranding(UUID coachId) {
+        // Deferred-80 AC3: mirrors saveBranding's own tier gate on the identical row, so a coach who
+        // downgrades from ACADEMY stops seeing their old logo/colour as "still set" on this
+        // settings-view GET. Unlike saveBranding's write-attempt gate, this does NOT throw
+        // FeatureGatedException — a settings-page load must not hard-error for every downgraded
+        // coach forever; it renders as if branding was never set instead.
+        CoachSubscriptionTier tier = coachProfileService.getCoachSubscriptionTier(coachId);
+        if (tier != CoachSubscriptionTier.ACADEMY) {
+            return new CoachBrandingResponse(null, null);
+        }
         Optional<CoachBranding> b = brandingRepository.findById(coachId);
         String logoUrl = b.flatMap(br -> Optional.ofNullable(br.getLogoKey()))
             .map(fileStorageService::signedDownloadUrl).orElse(null);

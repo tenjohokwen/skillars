@@ -15,6 +15,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageImpl;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 import java.util.UUID;
@@ -47,6 +48,10 @@ class VideoDeletionServiceTest {
     void setUp() {
         service = new VideoDeletionService(videoRepository, outboxRepository, deletionLogRepository,
             approvalRequestRepository, videoQuotaRepository, quotaService, configService, publisher, videoAccessGuard);
+        // cascadeDeleteForAccount routes its per-video call through self.deleteVideo(...) so each
+        // iteration gets its own transaction via the Spring proxy — wire self back to the same
+        // test-constructed instance, since there's no real proxy here.
+        ReflectionTestUtils.setField(service, "self", service);
     }
 
     private Video video(UUID id) {

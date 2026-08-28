@@ -933,6 +933,7 @@ class AvailabilityServiceTest {
         conflicting.setStatus("CONFIRMED");
 
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(profile));
+        when(coachProfileRepository.findByIdForUpdate(coachId)).thenReturn(Optional.of(profile));
         when(bookingRepository.findOverlappingBookings(
                 coachId, start, end, BookingService.ACTIVE_SLOT_STATUSES, null))
             .thenReturn(List.of(conflicting));
@@ -955,6 +956,7 @@ class AvailabilityServiceTest {
         Instant end = start.plusSeconds(3600);
 
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(profile));
+        when(coachProfileRepository.findByIdForUpdate(coachId)).thenReturn(Optional.of(profile));
         when(bookingRepository.findOverlappingBookings(
                 coachId, start, end, BookingService.ACTIVE_SLOT_STATUSES, null))
             .thenReturn(List.of());
@@ -977,6 +979,7 @@ class AvailabilityServiceTest {
         // return it here — this test pins that a terminal-status booking cannot block a new
         // CoachAvailabilityBlock, matching every other overlap check in this codebase.
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(profile));
+        when(coachProfileRepository.findByIdForUpdate(coachId)).thenReturn(Optional.of(profile));
         when(bookingRepository.findOverlappingBookings(
                 coachId, start, end, BookingService.ACTIVE_SLOT_STATUSES, null))
             .thenReturn(List.of());
@@ -985,5 +988,25 @@ class AvailabilityServiceTest {
         service.addBlock(COACH_USER_ID, new CreateBlockRequest(start, end, "Vacation"));
 
         verify(blockRepository).save(any(CoachAvailabilityBlock.class));
+    }
+
+    // ----- deleteBlock tests (Deferred-80 AC1) -----
+
+    @Test
+    void deleteBlock_ownedByCallingCoach_succeeds() {
+        UUID coachId = UUID.randomUUID();
+        UUID blockId = UUID.randomUUID();
+        CoachProfile profile = makeCoachProfile(coachId, COACH_USER_ID);
+        CoachAvailabilityBlock block = new CoachAvailabilityBlock();
+        block.setId(blockId);
+        block.setCoachId(coachId);
+
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(profile));
+        when(coachProfileRepository.findByIdForUpdate(coachId)).thenReturn(Optional.of(profile));
+        when(blockRepository.findByIdAndCoachId(blockId, coachId)).thenReturn(Optional.of(block));
+
+        service.deleteBlock(COACH_USER_ID, blockId);
+
+        verify(blockRepository).delete(block);
     }
 }
