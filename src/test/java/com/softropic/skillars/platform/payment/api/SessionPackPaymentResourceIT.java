@@ -1,9 +1,11 @@
 package com.softropic.skillars.platform.payment.api;
 
+import com.softropic.skillars.platform.booking.contract.PauseConflictResponse;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.config.PaymentProperties;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.contract.SavedPaymentMethodResponse;
+import com.softropic.skillars.platform.payment.contract.SessionPackPurchaseResponse;
 import com.softropic.skillars.platform.payment.repo.StripeCustomer;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.payment.service.PackSessionService;
@@ -14,6 +16,9 @@ import com.softropic.skillars.platform.video.service.VideoMetrics;
 
 import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.Test;
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.List;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -31,6 +36,8 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.Optional;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -224,24 +231,60 @@ class SessionPackPaymentResourceIT {
             .andExpect(jsonPath("$.hasCard").value(false));
     }
 
-    // ─── UAT.5 review finding: session-pack purchase/list must STAY parent-only ─────────────────
+    // ─── Deferred-81 AC4: self-registered PLAYER can now purchase/manage/browse session packs ───
     //
-    // Packs are explicitly out of scope for a self-booking player (story-level "Explicitly out of
-    // scope" list) — these two endpoints must NOT have been widened alongside the three above.
+    // Reverses the prior UAT.5-era decision (packs were explicitly out of scope for a self-booking
+    // player) — the project owner decided during this story's creation to add pack-purchase parity
+    // for self-booking players. Mutation check: reverting the @PreAuthorize widening on any one of
+    // these four endpoints back to HAS_PARENT_ROLE turns each of these into a 403, failing the test.
 
     @Test
     @WithMockUser(roles = "PLAYER")
-    void purchaseSessionPack_playerRole_returns403() throws Exception {
+    void purchaseSessionPack_playerRole_returns201() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        java.util.UUID packTierId = java.util.UUID.randomUUID();
+        when(sessionPackPaymentService.purchasePack(eq(PARENT_USER_ID), eq(packTierId), eq(1L), any()))
+            .thenReturn(new SessionPackPurchaseResponse(
+                java.util.UUID.randomUUID(), packTierId, "Starter", 5, 5, new BigDecimal("20.00"),
+                Instant.now().plusSeconds(3600), "pi_test", 1L, java.util.UUID.randomUUID(), null, "ACTIVE"));
+
         mockMvc.perform(post("/api/payment/session-packs/purchase")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"packTierId\":\"" + java.util.UUID.randomUUID() + "\",\"playerId\":1}"))
-            .andExpect(status().isForbidden());
+                .content("{\"packTierId\":\"" + packTierId + "\",\"playerId\":1}"))
+            .andExpect(status().isCreated());
     }
 
     @Test
     @WithMockUser(roles = "PLAYER")
-    void getMySessionPacks_playerRole_returns403() throws Exception {
+    void getMySessionPacks_playerRole_returns200() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        when(sessionPackPaymentService.getPacksForParent(PARENT_USER_ID, null)).thenReturn(List.of());
+
         mockMvc.perform(get("/api/payment/session-packs"))
-            .andExpect(status().isForbidden());
+            .andExpect(status().isOk());
+    }
+
+    @Test
+    @WithMockUser(roles = "PLAYER")
+    void pauseSessionPack_playerRole_returns200() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        java.util.UUID purchaseId = java.util.UUID.randomUUID();
+        when(packSessionService.pausePack(eq(PARENT_USER_ID), eq(purchaseId), any()))
+            .thenReturn(new PauseConflictResponse(true, List.of(), Instant.now().plusSeconds(3600)));
+
+        mockMvc.perform(post("/api/payment/session-packs/" + purchaseId + "/pause")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"pauseStartDate\":\"" + Instant.now().plusSeconds(60) + "\",\"pauseDurationDays\":7}"))
+            .andExpect(status().isOk());
+    }
+
+    @Test
+    @WithMockUser(roles = "PLAYER")
+    void getActiveCoachTier_playerRole_returns204WhenNoActiveTier() throws Exception {
+        java.util.UUID coachId = java.util.UUID.randomUUID();
+        when(sessionPackPaymentService.getActiveCoachTier(coachId)).thenReturn(null);
+
+        mockMvc.perform(get("/api/payment/coaches/" + coachId + "/session-pack-tiers"))
+            .andExpect(status().isNoContent());
     }
 }

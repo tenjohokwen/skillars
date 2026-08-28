@@ -5,7 +5,9 @@ import com.softropic.skillars.infrastructure.video.SignedPlaybackUrl;
 import com.softropic.skillars.infrastructure.video.UploadCredentials;
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.security.SecurityIT;
+import com.softropic.skillars.platform.session.contract.DrillResponse;
 import com.softropic.skillars.platform.session.contract.DrillUploadInitiateRequest;
+import com.softropic.skillars.platform.session.service.DrillLibraryService;
 import com.softropic.skillars.platform.session.service.DrillUploadService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,6 +19,7 @@ import org.springframework.test.context.event.ApplicationEvents;
 import org.springframework.test.context.event.RecordApplicationEvents;
 import org.springframework.test.context.jdbc.Sql;
 
+import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
@@ -59,11 +62,17 @@ class DrillUploadServiceConcurrencyIT extends BaseSessionIT {
 
     private static final long COACH_USER_ID = 9565000010L;
     private static final String COACH_EMAIL = "concurrency.upload@skillars-test.com";
+    private static final long COACH2_USER_ID = 9565000011L;
+    private static final String COACH2_EMAIL = "concurrency.upload2@skillars-test.com";
 
     private UUID coachId;
+    private UUID coach2Id;
 
     @Autowired
     DrillUploadService drillUploadService;
+
+    @Autowired
+    DrillLibraryService drillLibraryService;
 
     @Autowired
     ApplicationEvents applicationEvents;
@@ -89,6 +98,11 @@ class DrillUploadServiceConcurrencyIT extends BaseSessionIT {
             grantRole(COACH_USER_ID, "ROLE_COACH");
             coachId = insertCoachProfile(COACH_USER_ID);
             insertSubscription(coachId, "INSTRUCTOR");
+
+            insertUser(COACH2_USER_ID, COACH2_EMAIL, passwordHash, "COACH");
+            grantRole(COACH2_USER_ID, "ROLE_COACH");
+            coach2Id = insertCoachProfile(COACH2_USER_ID);
+            insertSubscription(coach2Id, "INSTRUCTOR");
             return null;
         });
     }
@@ -101,6 +115,18 @@ class DrillUploadServiceConcurrencyIT extends BaseSessionIT {
 
     private DrillUploadInitiateRequest uploadRequest() {
         return new DrillUploadInitiateRequest("demo.mp4", 1024L, "video/mp4", 10);
+    }
+
+    private void insertVideoRow(UUID videoId) {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.videos (id, owner_id, provider, provider_asset_id, operational_state, " +
+                "access_state, title, visibility, created_at, updated_at) " +
+                "VALUES (?, ?, 'bunny', ?, 'READY', 'ACTIVE', 'Test Video', 'PRIVATE', ?, ?)",
+                videoId, coachId.toString(), "asset-" + videoId,
+                Timestamp.from(Instant.now()), Timestamp.from(Instant.now()));
+            return null;
+        });
     }
 
     /**
@@ -254,6 +280,94 @@ class DrillUploadServiceConcurrencyIT extends BaseSessionIT {
         assertThat(publishedCount)
             .as("findByIdForUpdate's lock must serialize the two calls so only the second, "
                 + "post-lock re-check publishes exactly once — not zero (orphan) and not two (double-publish)")
+            .isEqualTo(1);
+    }
+
+    /**
+     * Deferred-81 AC3: the cross-drill half of the Def14 race this class's own class-level javadoc
+     * explicitly said was still open. Two DIFFERENT drillIds sharing one videoId — reachable via
+     * the public API only as two PRIVATE clones of the same PLATFORM source (deleteVideo/
+     * initiateUpload both require a PRIVATE, caller-owned drill, so the PLATFORM source itself is
+     * never a valid target) — must now serialize on the shared videoId via
+     * {@code VideoRepository.findByIdForUpdate}, closing the gap where two distinct Drill-row
+     * locks previously let both calls observe {@code existsByVideoId()==true} before either
+     * committed its own clear.
+     *
+     * <p>The two clones are owned by two DIFFERENT coaches, not the same coach twice: a
+     * {@code idx_drills_clone_uniqueness} DB constraint on {@code (source_drill_id,
+     * owner_coach_id)} means one coach can only ever clone a given source drill once — two
+     * distinct owners is the only way two clones of one source can coexist.
+     */
+    @Test
+    @Timeout(30)
+    void deleteVideo_concurrentCallsOnTwoClonesSharingOneVideoId_doesNotDoublePublishDeletionEvent() throws Exception {
+        UUID sourceDrillId = UUID.randomUUID();
+        insertDrill(sourceDrillId, "Platform Source Drill", "PLATFORM", null, "ACTIVE");
+        UUID videoId = UUID.randomUUID();
+        insertVideoRow(videoId);
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO session.drill_video_refs (drill_id, video_id, ref_count) VALUES (?, ?, 1)",
+                sourceDrillId, videoId);
+            return null;
+        });
+
+        // Two independent clones of the same PLATFORM source by two different coaches —
+        // cloneDrill reads the SOURCE's own ref each time, so both clones end up pointing at the
+        // identical videoId, exactly like DrillLibraryService.cloneDrill's own behavior this AC's
+        // text describes.
+        DrillResponse clone1 = drillLibraryService.cloneDrill(sourceDrillId, COACH_USER_ID);
+        DrillResponse clone2 = drillLibraryService.cloneDrill(sourceDrillId, COACH2_USER_ID);
+        UUID clone1DrillId = clone1.id();
+        UUID clone2DrillId = clone2.id();
+
+        // The PLATFORM source's own ref is never deletable via this service (deleteVideo requires
+        // a PRIVATE, caller-owned drill), so it is removed here to isolate the two-CLONE race this
+        // test targets — otherwise the source's surviving ref would keep existsByVideoId() true
+        // forever regardless of what either clone's deleteVideo call does, and the event would
+        // never publish at all.
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update("DELETE FROM session.drill_video_refs WHERE drill_id = ?", sourceDrillId);
+            return null;
+        });
+
+        int threadCount = 2;
+        CyclicBarrier barrier = new CyclicBarrier(threadCount);
+        ExecutorService pool = Executors.newFixedThreadPool(threadCount);
+        try {
+            Future<?> f1 = pool.submit(() -> {
+                barrier.await(10, TimeUnit.SECONDS);
+                drillUploadService.deleteVideo(clone1DrillId, COACH_USER_ID);
+                return null;
+            });
+            Future<?> f2 = pool.submit(() -> {
+                barrier.await(10, TimeUnit.SECONDS);
+                drillUploadService.deleteVideo(clone2DrillId, COACH2_USER_ID);
+                return null;
+            });
+            f1.get(20, TimeUnit.SECONDS);
+            f2.get(20, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT video_id FROM session.drill_video_refs WHERE drill_id = ?", UUID.class, clone1DrillId))
+            .as("both clones' refs must land cleared")
+            .isNull();
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT video_id FROM session.drill_video_refs WHERE drill_id = ?", UUID.class, clone2DrillId))
+            .as("both clones' refs must land cleared")
+            .isNull();
+
+        long publishedCount = applicationEvents.stream(
+                com.softropic.skillars.platform.session.contract.VideoPhysicalDeletionEvent.class)
+            .filter(e -> e.videoId().equals(videoId))
+            .count();
+        assertThat(publishedCount)
+            .as("the shared-videoId lock must serialize the two cross-drill calls so only the "
+                + "second, post-lock re-check publishes exactly once — not zero (orphan) and not "
+                + "two (double-publish)")
             .isEqualTo(1);
     }
 }

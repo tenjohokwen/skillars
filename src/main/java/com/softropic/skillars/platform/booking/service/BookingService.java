@@ -47,6 +47,7 @@ import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepositor
 import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
@@ -71,6 +72,7 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
+import java.util.Collection;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -486,6 +488,9 @@ public class BookingService {
         Map<UUID, String> coachNames = coachProfileRepository.findAllById(coachIds).stream()
             .collect(Collectors.toMap(CoachProfile::getId, CoachProfile::getDisplayName));
 
+        Set<Long> playerIds = bookings.stream().map(Booking::getPlayerId).collect(Collectors.toSet());
+        Map<Long, String> playerNames = resolvePlayerNames(playerIds);
+
         Set<UUID> bookingIds = bookings.stream().map(Booking::getId).collect(Collectors.toSet());
         Map<UUID, RescheduleRequestResponse> pendingReschedules = bookingIds.isEmpty()
             ? Map.of()
@@ -510,7 +515,7 @@ public class BookingService {
 
         return bookings.stream().map(b -> {
             String coachName = coachNames.getOrDefault(b.getCoachId(), "Unknown Coach");
-            String playerName = resolvePlayerName(b.getPlayerId());
+            String playerName = playerNames.getOrDefault(b.getPlayerId(), "Unknown Player");
             // batchSizeMap may be Map.of() (or simply lack the key) — Map.get(null) throws NPE on
             // the JDK's immutable maps, so only look up batch size when the booking is actually batched.
             Integer batchSize = b.getBatchId() != null ? batchSizeMap.get(b.getBatchId()) : null;
@@ -527,13 +532,26 @@ public class BookingService {
         List<Booking> bookings = bookingRepository
             .findByCoachIdAndStatusOrderByRequestedStartTimeAsc(coach.getId(), "REQUESTED");
 
+        // Deferred-81 AC1: collect player ids across BOTH singles and every batchGroups entry
+        // before either loop below, so the N+1 findById-per-row call is replaced by one
+        // findAllById covering the whole response, not just one branch of it. Parent ids are
+        // collected the same way — a batch group's parentId is shared by every booking in that
+        // group (one basket per parent), so collecting from ALL bookings (singles and batched
+        // alike) yields exactly the distinct parentId set either loop needs, no more. (Code
+        // review finding, Deferred-81: the singles loop's own per-row resolveParentName call was
+        // still unbatched — only the batch-group call was, per AC1's own explicit carve-out.)
+        Set<Long> playerIds = bookings.stream().map(Booking::getPlayerId).collect(Collectors.toSet());
+        Map<Long, String> playerNames = resolvePlayerNames(playerIds);
+        Set<Long> parentIds = bookings.stream().map(Booking::getParentId).collect(Collectors.toSet());
+        Map<Long, String> parentNames = resolveParentNames(parentIds);
+
         List<BookingResponse> singles = new java.util.ArrayList<>();
         Map<UUID, List<Booking>> batchedByBatchId = new java.util.LinkedHashMap<>();
 
         for (Booking b : bookings) {
             if (b.getBatchId() == null) {
-                String playerName = resolvePlayerName(b.getPlayerId());
-                String parentName = resolveParentName(b.getParentId());
+                String playerName = playerNames.getOrDefault(b.getPlayerId(), "Unknown Player");
+                String parentName = parentNames.getOrDefault(b.getParentId(), "Unknown Parent");
                 singles.add(toResponse(b, coach.getDisplayName(), playerName, parentName, null, null, null));
             } else {
                 batchedByBatchId.computeIfAbsent(b.getBatchId(), k -> new java.util.ArrayList<>()).add(b);
@@ -554,9 +572,10 @@ public class BookingService {
             // individually accepted/declined, showing a coach "Accept all 5 sessions" when only 2
             // remain. See skillars-deferred-34 code review Decision 2.
             int totalCount = batchBookings.size();
-            String parentName = batchBookings.isEmpty() ? "" : resolveParentName(batchBookings.get(0).getParentId());
+            String parentName = batchBookings.isEmpty() ? ""
+                : parentNames.getOrDefault(batchBookings.get(0).getParentId(), "Unknown Parent");
             List<BookingResponse> bookingResponses = batchBookings.stream().map(b -> {
-                String playerName = resolvePlayerName(b.getPlayerId());
+                String playerName = playerNames.getOrDefault(b.getPlayerId(), "Unknown Player");
                 return toResponse(b, coach.getDisplayName(), playerName, parentName, null, batchId, totalCount);
             }).toList();
             String status = batchStatusMap.getOrDefault(batchId, "PENDING");
@@ -620,10 +639,14 @@ public class BookingService {
         List<Booking> bookings = bookingRepository.findByParentIdAndPlayerIdAndStatusIn(
             parentId, playerId, List.of("CONFIRMED", "UPCOMING", "REQUESTED", "IN_PROGRESS"));
 
+        // Deferred-81 AC1: batches this method's per-row coach-name lookup, the identical N+1
+        // pattern getParentBookings' own coachNames map already avoids.
+        Set<UUID> coachIds = bookings.stream().map(Booking::getCoachId).collect(Collectors.toSet());
+        Map<UUID, String> coachNames = coachProfileRepository.findAllById(coachIds).stream()
+            .collect(Collectors.toMap(CoachProfile::getId, CoachProfile::getDisplayName));
+
         List<ParentScheduleItem> items = bookings.stream().map(b -> {
-            String coachName = coachProfileRepository.findById(b.getCoachId())
-                .map(CoachProfile::getDisplayName)
-                .orElse("Unknown Coach");
+            String coachName = coachNames.getOrDefault(b.getCoachId(), "Unknown Coach");
             return new ParentScheduleItem(
                 b.getId(),
                 b.getCoachId(),
@@ -897,13 +920,30 @@ public class BookingService {
 
     private String resolveParentName(Long parentId) {
         return userRepository.findById(parentId)
-            .map(u -> {
-                String firstName = u.getFirstName() != null ? u.getFirstName() : "";
-                String lastName = u.getLastName() != null ? u.getLastName() : "";
-                String fullName = (firstName + " " + lastName).trim();
-                return fullName.isEmpty() ? "Unknown Parent" : fullName;
-            })
+            .map(this::formatParentName)
             .orElse("Unknown Parent");
+    }
+
+    private String formatParentName(User u) {
+        String firstName = u.getFirstName() != null ? u.getFirstName() : "";
+        String lastName = u.getLastName() != null ? u.getLastName() : "";
+        String fullName = (firstName + " " + lastName).trim();
+        return fullName.isEmpty() ? "Unknown Parent" : fullName;
+    }
+
+    // Deferred-81 AC1: batched counterparts of resolvePlayerName/resolveParentName for the
+    // list-producing methods below, which previously issued one findById per row. Genuinely
+    // single-row call sites (createBookingRequest, acceptBooking, etc.) keep calling the
+    // per-id methods above unchanged — only getParentBookings/getCoachBookingRequests/
+    // getParentPlayerSchedule iterate a list of rows and need a pre-built map.
+    private Map<Long, String> resolvePlayerNames(Collection<Long> playerIds) {
+        return playerProfileRepository.findAllById(playerIds).stream()
+            .collect(Collectors.toMap(PlayerProfile::getId, PlayerProfile::getName));
+    }
+
+    private Map<Long, String> resolveParentNames(Collection<Long> parentIds) {
+        return userRepository.findAllById(parentIds).stream()
+            .collect(Collectors.toMap(User::getId, this::formatParentName));
     }
 
     /**

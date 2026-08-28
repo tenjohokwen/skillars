@@ -87,6 +87,7 @@ watch(playerId, val => { if (val) homeworkStore.fetchDrills(val) }, { immediate:
 // player's homework drills to get a fresh URL. Unlike the coach-facing pages, this page's drills
 // come from homeworkStore (keyed by playerId), not sessionStore.
 function handleVideoError() {
+  $q.notify({ type: 'warning', message: t('session.drillLibrary.videoLoadFailed') })
   if (playerId.value) homeworkStore.fetchDrills(playerId.value)
 }
 </script>

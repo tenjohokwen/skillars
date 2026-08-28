@@ -71,7 +71,7 @@
             @close="selectedLibrary = 'PLATFORM'"
             @add-drill="addDrillToActiveBlock"
             @open-detail="openDrillDetail"
-            @video-error="fetchDrills"
+            @video-error="handleVideoError"
           />
 
           <template v-else>
@@ -99,7 +99,7 @@
                 context="session-builder"
                 @open-detail="openDrillDetail(drill)"
                 @add-to-session="addDrillToActiveBlock(drill)"
-                @video-error="fetchDrills"
+                @video-error="handleVideoError"
               />
             </div>
           </template>
@@ -201,7 +201,7 @@
       context="session-builder"
       @close="isDrillDetailOpen = false"
       @add-to-session="onAddToSession"
-      @video-error="fetchDrills"
+      @video-error="handleVideoError"
     />
 
     <!-- Save as Template dialog -->
@@ -289,6 +289,13 @@ async function fetchDrills() {
   }
   sessionStore.searchQuery = drillSearch.value
   await sessionStore.searchDrills(selectedLibrary.value)
+}
+
+// Deferred-81 AC2: the drill/session video player previously refetched silently on a load
+// failure, leaving the video visibly broken with no explanation while the refetch ran.
+function handleVideoError() {
+  $q.notify({ type: 'warning', message: t('session.drillLibrary.videoLoadFailed') })
+  fetchDrills()
 }
 
 function openDrillDetail(drill) {

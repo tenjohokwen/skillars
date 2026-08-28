@@ -306,6 +306,7 @@ export default {
     drillLibrary: {
       title: "Bibliothèque d'exercices",
       loadError: 'Échec du chargement des exercices. Veuillez réessayer.',
+      videoLoadFailed: 'Échec du chargement de la vidéo — actualisation en cours…',
       platformTab: 'Bibliothèque de la plateforme',
       myLibraryTab: 'Ma bibliothèque',
       searchPlaceholder: 'Rechercher des exercices...',

@@ -298,6 +298,7 @@ export default {
     drillLibrary: {
       title: 'Drill Library',
       loadError: 'Failed to load drills. Please try again.',
+      videoLoadFailed: 'Video failed to load — refreshing…',
       platformTab: 'Platform Library',
       myLibraryTab: 'My Library',
       searchPlaceholder: 'Search drills...',

@@ -632,6 +632,7 @@ export default {
     drillLibrary: {
       title: 'Übungsbibliothek',
       loadError: 'Übungen konnten nicht geladen werden. Bitte versuche es erneut.',
+      videoLoadFailed: 'Video konnte nicht geladen werden — wird aktualisiert…',
       platformTab: 'Plattform-Bibliothek',
       myLibraryTab: 'Meine Bibliothek',
       searchPlaceholder: 'Übungen suchen...',

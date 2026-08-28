@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.contract.SavedPaymentMethodResponse;
 import com.softropic.skillars.platform.payment.contract.SessionPackPurchaseResponse;
+import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchase;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
 import com.softropic.skillars.platform.payment.repo.SessionPackTier;
@@ -63,11 +64,88 @@ class SessionPackPaymentServiceTest {
     private static final UUID TIER_ID = UUID.randomUUID();
 
     @Test
-    void purchasePack_playerNotOwnedByParent_throwsResourceNotFound() {
-        when(playerProfileRepository.findByIdAndParentId(PLAYER_ID, PARENT_ID)).thenReturn(Optional.empty());
+    void purchasePack_playerNotFound_throwsResourceNotFound() {
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, null))
             .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    /**
+     * Deferred-81 AC4: replaces the old findByIdAndParentId-based
+     * purchasePack_playerNotOwnedByParent_throwsResourceNotFound — a parent-owned player wrongly
+     * claimed by a different parentId now fails the XOR ownership check with
+     * OperationNotAllowedException (mirroring BookingService.createBookingRequest's own wrong-owner
+     * behavior) rather than the old 404, which used to mask "exists but not yours" as "not found".
+     */
+    @Test
+    void purchasePack_playerOwnedByDifferentParent_throwsOperationNotAllowed() {
+        PlayerProfile player = new PlayerProfile();
+        player.setId(PLAYER_ID);
+        player.setParentId(9999L);
+
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, null))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining("does not own this player");
+    }
+
+    /**
+     * Deferred-81 AC4: a self-registered (no-parent) player — parentId null, userId set — must be
+     * able to purchase their own session pack, mirroring BookingService.createBookingRequest's own
+     * self-booking XOR branch.
+     */
+    @Test
+    void purchasePack_selfRegisteredPlayer_succeeds() {
+        Long selfPlayerUserId = 8003L;
+        PlayerProfile player = new PlayerProfile();
+        player.setId(PLAYER_ID);
+        player.setUserId(selfPlayerUserId);
+
+        SessionPackTier tier = makeActiveTier();
+
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(tier));
+        when(stripeCustomerRepository.findById(selfPlayerUserId)).thenReturn(Optional.empty());
+        when(paymentGateway.createStripeCustomer(selfPlayerUserId)).thenReturn("cus_test");
+        when(stripeCustomerRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(paymentGateway.chargeAndCapture(TIER_ID, selfPlayerUserId, COACH_ID, tier.getTotalPrice()))
+            .thenReturn("pi_test");
+        when(sessionPackPurchaseRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        SessionPackPurchaseResponse response =
+            sessionPackPaymentService.purchasePack(selfPlayerUserId, TIER_ID, PLAYER_ID, "pm_test");
+
+        assertThat(response).isNotNull();
+        assertThat(response.remainingSessions()).isEqualTo(tier.getSessionCount());
+        verify(paymentGateway).chargeAndCapture(TIER_ID, selfPlayerUserId, COACH_ID, tier.getTotalPrice());
+    }
+
+    /** Deferred-81 AC4: someone else calling with a self-registered player's id must still be refused. */
+    @Test
+    void purchasePack_selfRegisteredPlayerWrongCaller_throwsNotOwned() {
+        PlayerProfile player = new PlayerProfile();
+        player.setId(PLAYER_ID);
+        player.setUserId(8003L);
+
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, null))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining("does not own this profile");
+    }
+
+    private SessionPackTier makeActiveTier() {
+        SessionPackTier tier = new SessionPackTier();
+        tier.setPackTierId(TIER_ID);
+        tier.setCoachId(COACH_ID);
+        tier.setLabel("Starter Pack");
+        tier.setSessionCount(5);
+        tier.setTotalPrice(new BigDecimal("100.00"));
+        tier.setPricePerSession(new BigDecimal("20.00"));
+        tier.setActive(true);
+        return tier;
     }
 
     @Test

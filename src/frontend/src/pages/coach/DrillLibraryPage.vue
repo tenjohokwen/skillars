@@ -260,6 +260,7 @@ function openDetail(drill) {
 // which also resets search/filters — a background recovery refetch should not silently clear
 // whatever the coach was searching for.
 function handleVideoError() {
+  $q.notify({ type: 'warning', message: t('session.drillLibrary.videoLoadFailed') })
   sessionStore.fetchDrills(selectedLibrary.value)
 }
 
