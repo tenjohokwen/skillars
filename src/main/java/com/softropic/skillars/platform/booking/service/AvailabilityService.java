@@ -18,6 +18,9 @@ import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -49,6 +52,12 @@ public class AvailabilityService {
     // Injected instead of ConfigService + CoachPricingRepository: the fallback chain has one
     // definition, shared with BookingService and BookingBatchService.
     private final SessionDurationResolver sessionDurationResolver;
+    // Deferred-78 AC1: addWindow/updateWindow/deleteWindow re-lock the coach row before mutating,
+    // mirroring BookingService's own two-step requireProfile-then-lock pattern — without this, the
+    // per-coach locks that BookingService/BookingBatchService/RescheduleService now take before
+    // reading windows serialize against nothing, since the writer side never took the same lock.
+    private final PessimisticLockRetryer lockRetryer;
+    private final EntityManager entityManager;
 
     @Transactional(readOnly = true)
     public CoachAvailabilityResponse getAvailabilityCalendar(UUID coachId, LocalDate weekStart) {
@@ -59,7 +68,7 @@ public class AvailabilityService {
         CoachProfile profile = coachProfileRepository.findById(coachId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
 
-        List<CoachAvailabilityWindow> windows = windowRepository.findByCoachId(coachId);
+        List<CoachAvailabilityWindow> windows = windowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(coachId);
 
         // Deferred-17 AC4 / skillars-deferred-65 AC3: the zone driving week-scoping bounds is the
         // coach profile's own canonical_timezone — the same column the booking's own
@@ -241,12 +250,13 @@ public class AvailabilityService {
     @Transactional
     public AvailabilityWindowResponse addWindow(Long userId, CreateWindowRequest req) {
         CoachProfile profile = requireProfile(userId);
+        CoachProfile lockedProfile = lockProfile(profile.getId());
         CoachAvailabilityWindow window = new CoachAvailabilityWindow();
-        window.setCoachId(profile.getId());
+        window.setCoachId(lockedProfile.getId());
         window.setDayOfWeek((short) req.dayOfWeek().intValue());
         window.setStartTime(req.startTime());
         window.setEndTime(req.endTime());
-        window.setCanonicalTimezone(profile.getCanonicalTimezone());
+        window.setCanonicalTimezone(lockedProfile.getCanonicalTimezone());
         CoachAvailabilityWindow saved = windowRepository.save(window);
         return toWindowResponse(saved, false);
     }
@@ -254,7 +264,8 @@ public class AvailabilityService {
     @Transactional
     public AvailabilityWindowResponse updateWindow(Long userId, UUID windowId, UpdateWindowRequest req) {
         CoachProfile profile = requireProfile(userId);
-        CoachAvailabilityWindow window = windowRepository.findByIdAndCoachId(windowId, profile.getId())
+        CoachProfile lockedProfile = lockProfile(profile.getId());
+        CoachAvailabilityWindow window = windowRepository.findByIdAndCoachId(windowId, lockedProfile.getId())
             .orElseThrow(() -> new ResourceNotFoundException("Availability window not found", "coach_availability_window"));
 
         window.setDayOfWeek((short) req.dayOfWeek().intValue());
@@ -262,16 +273,33 @@ public class AvailabilityService {
         window.setEndTime(req.endTime());
         CoachAvailabilityWindow saved = windowRepository.save(window);
 
-        boolean hasConflict = hasBookingConflict(profile.getId(), saved);
+        boolean hasConflict = hasBookingConflict(lockedProfile.getId(), saved);
         return toWindowResponse(saved, hasConflict);
     }
 
     @Transactional
     public void deleteWindow(Long userId, UUID windowId) {
         CoachProfile profile = requireProfile(userId);
-        CoachAvailabilityWindow window = windowRepository.findByIdAndCoachId(windowId, profile.getId())
+        CoachProfile lockedProfile = lockProfile(profile.getId());
+        CoachAvailabilityWindow window = windowRepository.findByIdAndCoachId(windowId, lockedProfile.getId())
             .orElseThrow(() -> new ResourceNotFoundException("Availability window not found", "coach_availability_window"));
         windowRepository.delete(window);
+    }
+
+    /**
+     * Deferred-78 AC1: resolves the coach by userId via the unlocked {@link #requireProfile} first
+     * (for a clean 404 before taking any lock — mirrors {@code BookingService.createBookingRequest}'s
+     * own unlocked-then-locked shape), then re-locks by the resolved id so this write serializes
+     * against the per-coach locks {@code BookingService}/{@code BookingBatchService}/
+     * {@code RescheduleService} take before reading windows.
+     */
+    private CoachProfile lockProfile(UUID coachId) {
+        return lockRetryer.withBoundedRetry(() -> {
+            CoachProfile c = coachProfileRepository.findByIdForUpdate(coachId)
+                .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+            entityManager.refresh(c, LockModeType.PESSIMISTIC_WRITE);
+            return c;
+        });
     }
 
     @Transactional

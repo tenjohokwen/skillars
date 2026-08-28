@@ -227,27 +227,16 @@ public class BookingService {
                 BookingError.INVALID_SESSION_DURATION);
         }
 
-        List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachId(req.coachId());
-        if (req.availabilitySignature() != null) {
-            String currentSignature = AvailabilityService.computeAvailabilitySignature(windows, requiredDuration);
-            if (!currentSignature.equals(req.availabilitySignature())) {
-                throw new OperationNotAllowedException(
-                    "Coach availability changed since this view was loaded — please refresh",
-                    Map.of("coach id", req.coachId()), BookingError.AVAILABILITY_CHANGED);
-            }
-        }
-        if (!isSlotWithinAvailabilityWindow(req.requestedStartTime(), req.requestedEndTime(), windows, req.coachId())) {
-            throw new OperationNotAllowedException("Requested slot is not within coach availability",
-                Map.of("requested start time", req.requestedStartTime(), "requested end time", req.requestedEndTime()),
-                BookingError.SLOT_OUTSIDE_AVAILABILITY);
-        }
-
-        // AC 1/2: acquire a per-coach lock before the authoritative overlap check so two
-        // concurrent requests for the same coach are serialized, not interleaved. The row is then
-        // re-read under that lock (Deferred-12 AC3): a suspension committed between the unlocked
-        // read at the top of this method and the lock being granted would otherwise still let the
-        // booking through. orElseThrow guards against the lock silently no-op'ing if the coach row
-        // vanished mid-request.
+        // Deferred-78 AC1: the lock is acquired here, BEFORE the availability-window read below,
+        // not after it as this used to do. A window fetched outside the lock could be mutated by a
+        // concurrent addWindow/updateWindow/deleteWindow (now also lock-guarded, see
+        // AvailabilityService) before this method's overlap check ever ran, so the signature check
+        // and isSlotWithinAvailabilityWindow below were validating against data that could already
+        // be stale by the time this transaction commits. The row is re-read under the lock
+        // (Deferred-12 AC3): a suspension committed between the unlocked read at the top of this
+        // method and the lock being granted would otherwise still let the booking through.
+        // orElseThrow guards against the lock silently no-op'ing if the coach row vanished
+        // mid-request.
         CoachProfile lockedCoach = lockRetryer.withBoundedRetry(() -> {
             CoachProfile c = coachProfileRepository.findByIdForUpdate(req.coachId())
                 .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
@@ -265,6 +254,21 @@ public class BookingService {
                 && lockedCoach.getStatus() != CoachProfileStatus.REDUCED
                 && lockedCoach.getStatus() != CoachProfileStatus.PENDING_REVIEW) {
             throw new OperationNotAllowedException("Coach profile is not active", metaData, BookingError.COACH_UNAVAILABLE);
+        }
+
+        List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(req.coachId());
+        if (req.availabilitySignature() != null) {
+            String currentSignature = AvailabilityService.computeAvailabilitySignature(windows, requiredDuration);
+            if (!currentSignature.equals(req.availabilitySignature())) {
+                throw new OperationNotAllowedException(
+                    "Coach availability changed since this view was loaded — please refresh",
+                    Map.of("coach id", req.coachId()), BookingError.AVAILABILITY_CHANGED);
+            }
+        }
+        if (!isSlotWithinAvailabilityWindow(req.requestedStartTime(), req.requestedEndTime(), windows, req.coachId())) {
+            throw new OperationNotAllowedException("Requested slot is not within coach availability",
+                Map.of("requested start time", req.requestedStartTime(), "requested end time", req.requestedEndTime()),
+                BookingError.SLOT_OUTSIDE_AVAILABILITY);
         }
 
         List<Booking> overlapping = bookingRepository.findOverlappingBookings(

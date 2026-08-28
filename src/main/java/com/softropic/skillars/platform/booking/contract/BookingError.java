@@ -44,6 +44,12 @@ import com.softropic.skillars.infrastructure.exception.ErrorCode;
  * coach-initiated reschedule) guards {@code acceptReschedule}/{@code declineReschedule} and the new
  * {@code acceptRescheduleAsParent}/{@code declineRescheduleAsParent}: whichever party proposed a
  * reschedule cannot be the one to accept or decline it. Request-state validation, not authorization.
+ *
+ * <p>{@code WEEK_START_OUT_OF_RANGE} (added by {@code skillars-deferred-78} AC6) guards
+ * {@code AvailabilityResource.getAvailability} and {@code ScheduleResource.getCoachSchedule}
+ * against a pathological {@code weekStart} query parameter: a malformed request parameter, the
+ * same kind of thing as {@code START_TIME_IN_PAST}/{@code INVALID_TIME_RANGE} above, not an
+ * authorization failure.
  */
 public enum BookingError implements ErrorCode {
     COACH_UNAVAILABLE,
@@ -61,7 +67,8 @@ public enum BookingError implements ErrorCode {
     CONCURRENT_MODIFICATION,
     SESSION_CROSSES_MIDNIGHT,
     CANNOT_RESPOND_TO_OWN_PROPOSAL,
-    AVAILABILITY_CHANGED;
+    AVAILABILITY_CHANGED,
+    WEEK_START_OUT_OF_RANGE;
 
     @Override
     public String getErrorCode() {
@@ -82,6 +89,7 @@ public enum BookingError implements ErrorCode {
             case SESSION_CROSSES_MIDNIGHT  -> "booking.sessionCrossesMidnight";
             case CANNOT_RESPOND_TO_OWN_PROPOSAL -> "booking.cannotRespondToOwnProposal";
             case AVAILABILITY_CHANGED      -> "booking.availabilityChanged";
+            case WEEK_START_OUT_OF_RANGE   -> "booking.weekStartOutOfRange";
         };
     }
 }

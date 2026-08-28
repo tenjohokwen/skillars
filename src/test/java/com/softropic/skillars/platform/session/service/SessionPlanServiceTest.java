@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.session.service;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingSnapshot;
+import com.softropic.skillars.platform.booking.contract.BookingStatusChangedEvent;
 import com.softropic.skillars.platform.booking.service.BookingQueryService;
 import com.softropic.skillars.platform.booking.service.BookingStateMachine;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
@@ -369,5 +370,136 @@ class SessionPlanServiceTest {
         service.handleBookingCompleted(event);
 
         verify(sessionRepository, times(1)).save(existing);
+    }
+
+    // ── handleBookingTerminalNonCompletion (Deferred-78 AC8) ──────────────────
+
+    @Test
+    void handleBookingTerminalNonCompletion_cancelledBookingWithDraftSession_transitionsToCancelled() {
+        Session existing = new Session();
+        existing.setId(UUID.randomUUID());
+        existing.setBookingId(BOOKING_ID);
+        existing.setStatus("DRAFT");
+        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(existing));
+
+        service.handleBookingTerminalNonCompletion(
+            new BookingStatusChangedEvent(this, BOOKING_ID, "CANCELLED_PARENT"));
+
+        assertThat(existing.getStatus()).isEqualTo("CANCELLED");
+        verify(sessionRepository, times(1)).save(existing);
+    }
+
+    @Test
+    void handleBookingTerminalNonCompletion_declinedBookingWithSavedSession_transitionsToCancelled() {
+        Session existing = new Session();
+        existing.setId(UUID.randomUUID());
+        existing.setBookingId(BOOKING_ID);
+        existing.setStatus("SAVED");
+        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(existing));
+
+        service.handleBookingTerminalNonCompletion(
+            new BookingStatusChangedEvent(this, BOOKING_ID, "DECLINED"));
+
+        assertThat(existing.getStatus()).isEqualTo("CANCELLED");
+        verify(sessionRepository, times(1)).save(existing);
+    }
+
+    @Test
+    void handleBookingTerminalNonCompletion_noShowBookingWithDraftSession_transitionsToCancelled() {
+        Session existing = new Session();
+        existing.setId(UUID.randomUUID());
+        existing.setBookingId(BOOKING_ID);
+        existing.setStatus("DRAFT");
+        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(existing));
+
+        service.handleBookingTerminalNonCompletion(
+            new BookingStatusChangedEvent(this, BOOKING_ID, "NO_SHOW_PLAYER"));
+
+        assertThat(existing.getStatus()).isEqualTo("CANCELLED");
+        verify(sessionRepository, times(1)).save(existing);
+    }
+
+    /**
+     * COMPLETED is terminal too, but this listener must not interfere with the existing
+     * handleBookingCompleted path — a COMPLETED transition is explicitly excluded.
+     */
+    @Test
+    void handleBookingTerminalNonCompletion_completedStatus_doesNotInterfereWithCompletedPath() {
+        Session existing = new Session();
+        existing.setId(UUID.randomUUID());
+        existing.setBookingId(BOOKING_ID);
+        existing.setStatus("DRAFT");
+
+        service.handleBookingTerminalNonCompletion(
+            new BookingStatusChangedEvent(this, BOOKING_ID, "COMPLETED"));
+
+        assertThat(existing.getStatus()).isEqualTo("DRAFT");
+        verify(sessionRepository, never()).findByBookingId(any());
+        verify(sessionRepository, never()).save(any(Session.class));
+    }
+
+    @Test
+    void handleBookingTerminalNonCompletion_nonTerminalStatus_doesNotTouchSession() {
+        service.handleBookingTerminalNonCompletion(
+            new BookingStatusChangedEvent(this, BOOKING_ID, "CONFIRMED"));
+
+        verify(sessionRepository, never()).findByBookingId(any());
+        verify(sessionRepository, never()).save(any(Session.class));
+    }
+
+    @Test
+    void handleBookingTerminalNonCompletion_completedSession_isNotOverwritten() {
+        Session existing = new Session();
+        existing.setId(UUID.randomUUID());
+        existing.setBookingId(BOOKING_ID);
+        existing.setStatus("COMPLETED");
+        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(existing));
+
+        service.handleBookingTerminalNonCompletion(
+            new BookingStatusChangedEvent(this, BOOKING_ID, "CANCELLED_COACH"));
+
+        assertThat(existing.getStatus()).isEqualTo("COMPLETED");
+        verify(sessionRepository, never()).save(any(Session.class));
+    }
+
+    @Test
+    void handleBookingTerminalNonCompletion_saveThrowsDataIntegrityViolation_isCaughtAndDoesNotPropagate() {
+        Session existing = new Session();
+        existing.setId(UUID.randomUUID());
+        existing.setBookingId(BOOKING_ID);
+        existing.setStatus("DRAFT");
+        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(existing));
+        doThrow(new DataIntegrityViolationException("constraint violation"))
+            .when(sessionRepository).save(existing);
+
+        service.handleBookingTerminalNonCompletion(
+            new BookingStatusChangedEvent(this, BOOKING_ID, "CANCELLED_PARENT"));
+
+        verify(sessionRepository, times(1)).save(existing);
+    }
+
+    // ── updateSession terminal-lock guard extended to CANCELLED (Deferred-78 AC8) ──
+
+    @Test
+    void updateSession_cancelledSession_throwsSessionPlanLocked() {
+        when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
+        UUID sessionId = UUID.randomUUID();
+        Session existing = new Session();
+        existing.setId(sessionId);
+        existing.setCoachId(COACH_ID);
+        existing.setBookingId(BOOKING_ID);
+        existing.setStatus("CANCELLED");
+        when(sessionRepository.findById(sessionId)).thenReturn(Optional.of(existing));
+
+        UpdateSessionPlanRequest req = new UpdateSessionPlanRequest(
+            List.of(blockRequest(DRILL_ID_1)), List.of("PASSING"), "SAVED");
+
+        assertThatThrownBy(() -> service.updateSession(sessionId, req, COACH_USER_ID))
+            .isInstanceOf(com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(
+                ((com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(com.softropic.skillars.platform.session.contract.SessionErrorCode.SESSION_PLAN_LOCKED));
+        verify(sessionRepository, never()).save(any(Session.class));
+        verify(bookingQueryService, never()).getBookingSnapshot(any());
     }
 }

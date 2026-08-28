@@ -41,6 +41,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
+import static net.logstash.logback.argument.StructuredArguments.kv;
+
 @Slf4j
 @Component
 public class BookingEmailListener {
@@ -57,302 +59,367 @@ public class BookingEmailListener {
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onBookingRequested(BookingRequestedEvent event) {
-        if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
-            log.warn("Cannot send booking requested email: coach email is blank, bookingId={}", event.getBookingId());
-            return;
+        try {
+            if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
+                log.warn("Cannot send booking requested email: coach email is blank, bookingId={}", event.getBookingId());
+                return;
+            }
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("coachDisplayName", event.getCoachDisplayName());
+            data.put("requestedStartTime", event.getRequestedStartTime().toString());
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+            data.put("notes", event.getNotes() != null ? event.getNotes() : "");
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getCoachEmail());
+            recipient.setLangKey("en");
+
+            publisher.publishEvent(new Envelope(
+                List.of(recipient), EmailTemplate.BOOKING_REQUESTED,
+                Instant.now().plus(Duration.ofDays(1)), data,
+                UUID.randomUUID().toString()
+            ));
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_REQUESTED),
+                kv("bookingId", event.getBookingId()), e);
         }
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("coachDisplayName", event.getCoachDisplayName());
-        data.put("requestedStartTime", event.getRequestedStartTime().toString());
-        data.put("canonicalTimezone", event.getCanonicalTimezone());
-        data.put("notes", event.getNotes() != null ? event.getNotes() : "");
-
-        Recipient recipient = new Recipient();
-        recipient.setEmail(event.getCoachEmail());
-        recipient.setLangKey("en");
-
-        publisher.publishEvent(new Envelope(
-            List.of(recipient), EmailTemplate.BOOKING_REQUESTED,
-            Instant.now().plus(Duration.ofDays(1)), data,
-            UUID.randomUUID().toString()
-        ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onBookingConfirmed(BookingConfirmedEvent event) {
-        if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
-            log.warn("Cannot send booking confirmed email: parent email is blank, bookingId={}", event.getBookingId());
-            return;
+        try {
+            if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
+                log.warn("Cannot send booking confirmed email: parent email is blank, bookingId={}", event.getBookingId());
+                return;
+            }
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("coachDisplayName", event.getCoachDisplayName());
+            data.put("requestedStartTime", event.getRequestedStartTime().toString());
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getParentEmail());
+            recipient.setLangKey("en");
+
+            publisher.publishEvent(new Envelope(
+                List.of(recipient), EmailTemplate.BOOKING_CONFIRMED,
+                Instant.now().plus(Duration.ofDays(1)), data,
+                UUID.randomUUID().toString()
+            ));
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_CONFIRMED),
+                kv("bookingId", event.getBookingId()), e);
         }
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("coachDisplayName", event.getCoachDisplayName());
-        data.put("requestedStartTime", event.getRequestedStartTime().toString());
-        data.put("canonicalTimezone", event.getCanonicalTimezone());
-
-        Recipient recipient = new Recipient();
-        recipient.setEmail(event.getParentEmail());
-        recipient.setLangKey("en");
-
-        publisher.publishEvent(new Envelope(
-            List.of(recipient), EmailTemplate.BOOKING_CONFIRMED,
-            Instant.now().plus(Duration.ofDays(1)), data,
-            UUID.randomUUID().toString()
-        ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onBookingDeclined(BookingDeclinedEvent event) {
-        if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
-            log.warn("Cannot send booking declined email: parent email is blank, bookingId={}", event.getBookingId());
-            return;
+        try {
+            if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
+                log.warn("Cannot send booking declined email: parent email is blank, bookingId={}", event.getBookingId());
+                return;
+            }
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("coachDisplayName", event.getCoachDisplayName());
+            data.put("requestedStartTime", event.getRequestedStartTime().toString());
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getParentEmail());
+            recipient.setLangKey("en");
+
+            publisher.publishEvent(new Envelope(
+                List.of(recipient), EmailTemplate.BOOKING_DECLINED,
+                Instant.now().plus(Duration.ofDays(1)), data,
+                UUID.randomUUID().toString()
+            ));
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_DECLINED),
+                kv("bookingId", event.getBookingId()), e);
         }
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("coachDisplayName", event.getCoachDisplayName());
-        data.put("requestedStartTime", event.getRequestedStartTime().toString());
-        data.put("canonicalTimezone", event.getCanonicalTimezone());
-
-        Recipient recipient = new Recipient();
-        recipient.setEmail(event.getParentEmail());
-        recipient.setLangKey("en");
-
-        publisher.publishEvent(new Envelope(
-            List.of(recipient), EmailTemplate.BOOKING_DECLINED,
-            Instant.now().plus(Duration.ofDays(1)), data,
-            UUID.randomUUID().toString()
-        ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onBookingExpired(BookingExpiredEvent event) {
-        if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
-            log.warn("Cannot send booking expired email: parent email is blank, bookingId={}", event.getBookingId());
-            return;
+        try {
+            if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
+                log.warn("Cannot send booking expired email: parent email is blank, bookingId={}", event.getBookingId());
+                return;
+            }
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("coachDisplayName", event.getCoachDisplayName());
+            data.put("requestedStartTime", event.getRequestedStartTime().toString());
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getParentEmail());
+            recipient.setLangKey("en");
+
+            publisher.publishEvent(new Envelope(
+                List.of(recipient), EmailTemplate.BOOKING_EXPIRED,
+                Instant.now().plus(Duration.ofDays(1)), data,
+                UUID.randomUUID().toString()
+            ));
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_EXPIRED),
+                kv("bookingId", event.getBookingId()), e);
         }
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("coachDisplayName", event.getCoachDisplayName());
-        data.put("requestedStartTime", event.getRequestedStartTime().toString());
-        data.put("canonicalTimezone", event.getCanonicalTimezone());
-
-        Recipient recipient = new Recipient();
-        recipient.setEmail(event.getParentEmail());
-        recipient.setLangKey("en");
-
-        publisher.publishEvent(new Envelope(
-            List.of(recipient), EmailTemplate.BOOKING_EXPIRED,
-            Instant.now().plus(Duration.ofDays(1)), data,
-            UUID.randomUUID().toString()
-        ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onQuickCompleteConfirmationRequired(QuickCompleteConfirmationRequiredEvent event) {
-        Map<String, Object> data = new HashMap<>();
-        data.put("coachDisplayName", event.getCoachDisplayName());
-        data.put("playerName", event.getPlayerName());
-        data.put("requestedStartTime", event.getSessionStartTime().toString());
-        data.put("canonicalTimezone", event.getCanonicalTimezone());
-        data.put("bookingsUrl", appBaseUrl + "/bookings");
+        try {
+            Map<String, Object> data = new HashMap<>();
+            data.put("coachDisplayName", event.getCoachDisplayName());
+            data.put("playerName", event.getPlayerName());
+            data.put("requestedStartTime", event.getSessionStartTime().toString());
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+            data.put("bookingsUrl", appBaseUrl + "/bookings");
 
-        Recipient recipient = new Recipient();
-        recipient.setEmail(event.getParentEmail());
-        recipient.setLangKey("en");
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getParentEmail());
+            recipient.setLangKey("en");
 
-        publisher.publishEvent(new Envelope(
-            List.of(recipient), EmailTemplate.BOOKING_QUICK_COMPLETE_CONFIRM,
-            Instant.now().plus(Duration.ofDays(1)), data,
-            UUID.randomUUID().toString()
-        ));
+            publisher.publishEvent(new Envelope(
+                List.of(recipient), EmailTemplate.BOOKING_QUICK_COMPLETE_CONFIRM,
+                Instant.now().plus(Duration.ofDays(1)), data,
+                UUID.randomUUID().toString()
+            ));
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_QUICK_COMPLETE_CONFIRM),
+                kv("bookingId", event.getBookingId()), e);
+        }
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onRescheduleRequested(RescheduleRequestedEvent event) {
-        if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
-            log.warn("Cannot send reschedule requested email: coach email is blank, bookingId={}", event.getBookingId());
-            return;
+        try {
+            if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
+                log.warn("Cannot send reschedule requested email: coach email is blank, bookingId={}", event.getBookingId());
+                return;
+            }
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("parentName", event.getParentName());
+            data.put("originalStartTime", formatInstantInZone(event.getOriginalStartTime(), event.getCanonicalTimezone()));
+            data.put("proposedStartTime", formatInstantInZone(event.getProposedStartTime(), event.getCanonicalTimezone()));
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getCoachEmail());
+            recipient.setLangKey("en");
+
+            publisher.publishEvent(new Envelope(
+                List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_REQUESTED,
+                Instant.now().plus(Duration.ofDays(1)), data,
+                UUID.randomUUID().toString()
+            ));
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_RESCHEDULE_REQUESTED),
+                kv("bookingId", event.getBookingId()), e);
         }
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("parentName", event.getParentName());
-        data.put("originalStartTime", formatInstantInZone(event.getOriginalStartTime(), event.getCanonicalTimezone()));
-        data.put("proposedStartTime", formatInstantInZone(event.getProposedStartTime(), event.getCanonicalTimezone()));
-        data.put("canonicalTimezone", event.getCanonicalTimezone());
-
-        Recipient recipient = new Recipient();
-        recipient.setEmail(event.getCoachEmail());
-        recipient.setLangKey("en");
-
-        publisher.publishEvent(new Envelope(
-            List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_REQUESTED,
-            Instant.now().plus(Duration.ofDays(1)), data,
-            UUID.randomUUID().toString()
-        ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onRescheduleAccepted(RescheduleAcceptedEvent event) {
-        Map<String, Object> data = new HashMap<>();
-        data.put("coachDisplayName", event.getCoachDisplayName());
-        data.put("newStartTime", formatInstantInZone(event.getNewStartTime(), event.getCanonicalTimezone()));
-        data.put("canonicalTimezone", event.getCanonicalTimezone());
+        try {
+            Map<String, Object> data = new HashMap<>();
+            data.put("coachDisplayName", event.getCoachDisplayName());
+            data.put("newStartTime", formatInstantInZone(event.getNewStartTime(), event.getCanonicalTimezone()));
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
 
-        for (String email : List.of(event.getParentEmail(), event.getCoachEmail()).stream()
-                .filter(e -> e != null && !e.isBlank()).toList()) {
-            Recipient recipient = new Recipient();
-            recipient.setEmail(email);
-            recipient.setLangKey("en");
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_ACCEPTED,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+            for (String email : List.of(event.getParentEmail(), event.getCoachEmail()).stream()
+                    .filter(e -> e != null && !e.isBlank()).toList()) {
+                Recipient recipient = new Recipient();
+                recipient.setEmail(email);
+                recipient.setLangKey("en");
+                publisher.publishEvent(new Envelope(
+                    List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_ACCEPTED,
+                    Instant.now().plus(Duration.ofDays(1)), data,
+                    UUID.randomUUID().toString()
+                ));
+            }
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_RESCHEDULE_ACCEPTED),
+                kv("bookingId", event.getBookingId()), e);
         }
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onRescheduleDeclined(RescheduleDeclinedEvent event) {
-        if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
-            log.warn("Cannot send reschedule declined email: parent email is blank, bookingId={}", event.getBookingId());
-            return;
+        try {
+            if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
+                log.warn("Cannot send reschedule declined email: parent email is blank, bookingId={}", event.getBookingId());
+                return;
+            }
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("coachDisplayName", event.getCoachDisplayName());
+            data.put("originalStartTime", formatInstantInZone(event.getOriginalStartTime(), event.getCanonicalTimezone()));
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getParentEmail());
+            recipient.setLangKey("en");
+
+            publisher.publishEvent(new Envelope(
+                List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_DECLINED,
+                Instant.now().plus(Duration.ofDays(1)), data,
+                UUID.randomUUID().toString()
+            ));
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_RESCHEDULE_DECLINED),
+                kv("bookingId", event.getBookingId()), e);
         }
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("coachDisplayName", event.getCoachDisplayName());
-        data.put("originalStartTime", formatInstantInZone(event.getOriginalStartTime(), event.getCanonicalTimezone()));
-        data.put("canonicalTimezone", event.getCanonicalTimezone());
-
-        Recipient recipient = new Recipient();
-        recipient.setEmail(event.getParentEmail());
-        recipient.setLangKey("en");
-
-        publisher.publishEvent(new Envelope(
-            List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_DECLINED,
-            Instant.now().plus(Duration.ofDays(1)), data,
-            UUID.randomUUID().toString()
-        ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onRescheduleRequestedByCoach(RescheduleRequestedByCoachEvent event) {
-        if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
-            log.warn("Cannot send reschedule requested by coach email: parent email is blank, bookingId={}", event.getBookingId());
-            return;
+        try {
+            if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
+                log.warn("Cannot send reschedule requested by coach email: parent email is blank, bookingId={}", event.getBookingId());
+                return;
+            }
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("coachDisplayName", event.getCoachDisplayName());
+            data.put("originalStartTime", formatInstantInZone(event.getOriginalStartTime(), event.getCanonicalTimezone()));
+            data.put("proposedStartTime", formatInstantInZone(event.getProposedStartTime(), event.getCanonicalTimezone()));
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getParentEmail());
+            recipient.setLangKey("en");
+
+            publisher.publishEvent(new Envelope(
+                List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_REQUESTED_BY_COACH,
+                Instant.now().plus(Duration.ofDays(1)), data,
+                UUID.randomUUID().toString()
+            ));
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_RESCHEDULE_REQUESTED_BY_COACH),
+                kv("bookingId", event.getBookingId()), e);
         }
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("coachDisplayName", event.getCoachDisplayName());
-        data.put("originalStartTime", formatInstantInZone(event.getOriginalStartTime(), event.getCanonicalTimezone()));
-        data.put("proposedStartTime", formatInstantInZone(event.getProposedStartTime(), event.getCanonicalTimezone()));
-        data.put("canonicalTimezone", event.getCanonicalTimezone());
-
-        Recipient recipient = new Recipient();
-        recipient.setEmail(event.getParentEmail());
-        recipient.setLangKey("en");
-
-        publisher.publishEvent(new Envelope(
-            List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_REQUESTED_BY_COACH,
-            Instant.now().plus(Duration.ofDays(1)), data,
-            UUID.randomUUID().toString()
-        ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onRescheduleDeclinedByParent(RescheduleDeclinedByParentEvent event) {
-        if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
-            log.warn("Cannot send reschedule declined by parent email: coach email is blank, bookingId={}", event.getBookingId());
-            return;
+        try {
+            if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
+                log.warn("Cannot send reschedule declined by parent email: coach email is blank, bookingId={}", event.getBookingId());
+                return;
+            }
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("parentName", event.getParentName());
+            data.put("originalStartTime", formatInstantInZone(event.getOriginalStartTime(), event.getCanonicalTimezone()));
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getCoachEmail());
+            recipient.setLangKey("en");
+
+            publisher.publishEvent(new Envelope(
+                List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_DECLINED_BY_PARENT,
+                Instant.now().plus(Duration.ofDays(1)), data,
+                UUID.randomUUID().toString()
+            ));
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_RESCHEDULE_DECLINED_BY_PARENT),
+                kv("bookingId", event.getBookingId()), e);
         }
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("parentName", event.getParentName());
-        data.put("originalStartTime", formatInstantInZone(event.getOriginalStartTime(), event.getCanonicalTimezone()));
-        data.put("canonicalTimezone", event.getCanonicalTimezone());
-
-        Recipient recipient = new Recipient();
-        recipient.setEmail(event.getCoachEmail());
-        recipient.setLangKey("en");
-
-        publisher.publishEvent(new Envelope(
-            List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_DECLINED_BY_PARENT,
-            Instant.now().plus(Duration.ofDays(1)), data,
-            UUID.randomUUID().toString()
-        ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onBatchBookingRequested(BatchBookingRequestedEvent event) {
-        if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
-            log.warn("Cannot send batch booking requested email: coach email is blank, batchId={}", event.getBatchId());
-            return;
+        try {
+            if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
+                log.warn("Cannot send batch booking requested email: coach email is blank, batchId={}", event.getBatchId());
+                return;
+            }
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("parentName", event.getParentName());
+            data.put("requestedCount", event.getRequestedCount());
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+            List<String> formattedDates = event.getSessionDates().stream()
+                .map(d -> formatInstantInZone(d, event.getCanonicalTimezone()))
+                .toList();
+            data.put("sessionDates", formattedDates);
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getCoachEmail());
+            recipient.setLangKey("en");
+
+            publisher.publishEvent(new Envelope(
+                List.of(recipient), EmailTemplate.BOOKING_BATCH_REQUESTED,
+                Instant.now().plus(Duration.ofDays(1)), data,
+                UUID.randomUUID().toString()
+            ));
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_BATCH_REQUESTED),
+                kv("batchId", event.getBatchId()), e);
         }
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("parentName", event.getParentName());
-        data.put("requestedCount", event.getRequestedCount());
-        data.put("canonicalTimezone", event.getCanonicalTimezone());
-        List<String> formattedDates = event.getSessionDates().stream()
-            .map(d -> formatInstantInZone(d, event.getCanonicalTimezone()))
-            .toList();
-        data.put("sessionDates", formattedDates);
-
-        Recipient recipient = new Recipient();
-        recipient.setEmail(event.getCoachEmail());
-        recipient.setLangKey("en");
-
-        publisher.publishEvent(new Envelope(
-            List.of(recipient), EmailTemplate.BOOKING_BATCH_REQUESTED,
-            Instant.now().plus(Duration.ofDays(1)), data,
-            UUID.randomUUID().toString()
-        ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onBatchBookingAccepted(BatchBookingAcceptedEvent event) {
-        if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
-            log.warn("Cannot send batch booking accepted email: parent email is blank, batchId={}", event.getBatchId());
-            return;
+        try {
+            if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
+                log.warn("Cannot send batch booking accepted email: parent email is blank, batchId={}", event.getBatchId());
+                return;
+            }
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("coachDisplayName", event.getCoachDisplayName());
+            data.put("acceptedCount", event.getAcceptedCount());
+            data.put("batchId", event.getBatchId().toString());
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getParentEmail());
+            recipient.setLangKey("en");
+
+            publisher.publishEvent(new Envelope(
+                List.of(recipient), EmailTemplate.BOOKING_BATCH_ACCEPTED,
+                Instant.now().plus(Duration.ofDays(1)), data,
+                UUID.randomUUID().toString()
+            ));
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_BATCH_ACCEPTED),
+                kv("batchId", event.getBatchId()), e);
         }
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("coachDisplayName", event.getCoachDisplayName());
-        data.put("acceptedCount", event.getAcceptedCount());
-        data.put("batchId", event.getBatchId().toString());
-
-        Recipient recipient = new Recipient();
-        recipient.setEmail(event.getParentEmail());
-        recipient.setLangKey("en");
-
-        publisher.publishEvent(new Envelope(
-            List.of(recipient), EmailTemplate.BOOKING_BATCH_ACCEPTED,
-            Instant.now().plus(Duration.ofDays(1)), data,
-            UUID.randomUUID().toString()
-        ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onDuplicateBookingProposed(DuplicateBookingProposedEvent event) {
-        if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
-            log.warn("Cannot send duplicate booking proposed email: parent email is blank, bookingId={}", event.getNewBookingId());
-            return;
+        try {
+            if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
+                log.warn("Cannot send duplicate booking proposed email: parent email is blank, bookingId={}", event.getNewBookingId());
+                return;
+            }
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("coachDisplayName", event.getCoachDisplayName());
+            data.put("proposedStartTime", formatInstantInZone(event.getProposedStartTime(), event.getCanonicalTimezone()));
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getParentEmail());
+            recipient.setLangKey("en");
+
+            publisher.publishEvent(new Envelope(
+                List.of(recipient), EmailTemplate.BOOKING_DUPLICATE_PROPOSED,
+                Instant.now().plus(Duration.ofDays(1)), data,
+                UUID.randomUUID().toString()
+            ));
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_DUPLICATE_PROPOSED),
+                kv("newBookingId", event.getNewBookingId()), e);
         }
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("coachDisplayName", event.getCoachDisplayName());
-        data.put("proposedStartTime", formatInstantInZone(event.getProposedStartTime(), event.getCanonicalTimezone()));
-        data.put("canonicalTimezone", event.getCanonicalTimezone());
-
-        Recipient recipient = new Recipient();
-        recipient.setEmail(event.getParentEmail());
-        recipient.setLangKey("en");
-
-        publisher.publishEvent(new Envelope(
-            List.of(recipient), EmailTemplate.BOOKING_DUPLICATE_PROPOSED,
-            Instant.now().plus(Duration.ofDays(1)), data,
-            UUID.randomUUID().toString()
-        ));
     }
 
     private String formatInstantInZone(Instant instant, String timezone) {
@@ -368,108 +435,133 @@ public class BookingEmailListener {
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onBookingCancelledDueToPause(BookingCancelledDueToPauseEvent event) {
-        Map<String, Object> data = new HashMap<>();
-        data.put("parentName", event.getParentName());
-        data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
-        data.put("canonicalTimezone", event.getCanonicalTimezone());
+        try {
+            Map<String, Object> data = new HashMap<>();
+            data.put("parentName", event.getParentName());
+            data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
 
-        Recipient recipient = new Recipient();
-        recipient.setEmail(event.getCoachEmail());
-        recipient.setLangKey("en");
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getCoachEmail());
+            recipient.setLangKey("en");
 
-        publisher.publishEvent(new Envelope(
-            List.of(recipient), EmailTemplate.BOOKING_CANCELLED_DUE_TO_PAUSE,
-            Instant.now().plus(Duration.ofDays(1)), data,
-            UUID.randomUUID().toString()
-        ));
+            publisher.publishEvent(new Envelope(
+                List.of(recipient), EmailTemplate.BOOKING_CANCELLED_DUE_TO_PAUSE,
+                Instant.now().plus(Duration.ofDays(1)), data,
+                UUID.randomUUID().toString()
+            ));
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_CANCELLED_DUE_TO_PAUSE),
+                kv("bookingId", event.getBookingId()), e);
+        }
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onBookingCancelledByParent(BookingCancelledByParentEvent event) {
-        if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
-            log.warn("Cannot send booking cancelled by parent email: coach email is blank, bookingId={}", event.getBookingId());
-            return;
+        try {
+            if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
+                log.warn("Cannot send booking cancelled by parent email: coach email is blank, bookingId={}", event.getBookingId());
+                return;
+            }
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getCoachEmail());
+            recipient.setLangKey("en");
+
+            publisher.publishEvent(new Envelope(
+                List.of(recipient), EmailTemplate.BOOKING_CANCELLED_BY_PARENT,
+                Instant.now().plus(Duration.ofDays(1)), data,
+                UUID.randomUUID().toString()
+            ));
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_CANCELLED_BY_PARENT),
+                kv("bookingId", event.getBookingId()), e);
         }
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
-        data.put("canonicalTimezone", event.getCanonicalTimezone());
-
-        Recipient recipient = new Recipient();
-        recipient.setEmail(event.getCoachEmail());
-        recipient.setLangKey("en");
-
-        publisher.publishEvent(new Envelope(
-            List.of(recipient), EmailTemplate.BOOKING_CANCELLED_BY_PARENT,
-            Instant.now().plus(Duration.ofDays(1)), data,
-            UUID.randomUUID().toString()
-        ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onBookingCancelledByCoach(BookingCancelledByCoachEvent event) {
-        if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
-            log.warn("Cannot send booking cancelled by coach email: parent email is blank, bookingId={}", event.getBookingId());
-            return;
+        try {
+            if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
+                log.warn("Cannot send booking cancelled by coach email: parent email is blank, bookingId={}", event.getBookingId());
+                return;
+            }
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getParentEmail());
+            recipient.setLangKey("en");
+
+            publisher.publishEvent(new Envelope(
+                List.of(recipient), EmailTemplate.BOOKING_CANCELLED_BY_COACH,
+                Instant.now().plus(Duration.ofDays(1)), data,
+                UUID.randomUUID().toString()
+            ));
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_CANCELLED_BY_COACH),
+                kv("bookingId", event.getBookingId()), e);
         }
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
-        data.put("canonicalTimezone", event.getCanonicalTimezone());
-
-        Recipient recipient = new Recipient();
-        recipient.setEmail(event.getParentEmail());
-        recipient.setLangKey("en");
-
-        publisher.publishEvent(new Envelope(
-            List.of(recipient), EmailTemplate.BOOKING_CANCELLED_BY_COACH,
-            Instant.now().plus(Duration.ofDays(1)), data,
-            UUID.randomUUID().toString()
-        ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onCoachNoShow(CoachNoShowEvent event) {
-        if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
-            log.warn("Cannot send coach no-show email: parent email is blank, bookingId={}", event.getBookingId());
-            return;
+        try {
+            if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
+                log.warn("Cannot send coach no-show email: parent email is blank, bookingId={}", event.getBookingId());
+                return;
+            }
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getParentEmail());
+            recipient.setLangKey("en");
+
+            publisher.publishEvent(new Envelope(
+                List.of(recipient), EmailTemplate.COACH_NO_SHOW,
+                Instant.now().plus(Duration.ofDays(1)), data,
+                UUID.randomUUID().toString()
+            ));
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.COACH_NO_SHOW),
+                kv("bookingId", event.getBookingId()), e);
         }
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
-        data.put("canonicalTimezone", event.getCanonicalTimezone());
-
-        Recipient recipient = new Recipient();
-        recipient.setEmail(event.getParentEmail());
-        recipient.setLangKey("en");
-
-        publisher.publishEvent(new Envelope(
-            List.of(recipient), EmailTemplate.COACH_NO_SHOW,
-            Instant.now().plus(Duration.ofDays(1)), data,
-            UUID.randomUUID().toString()
-        ));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPlayerNoShow(PlayerNoShowEvent event) {
-        if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
-            log.warn("Cannot send player no-show email: coach email is blank, bookingId={}", event.getBookingId());
-            return;
+        try {
+            if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
+                log.warn("Cannot send player no-show email: coach email is blank, bookingId={}", event.getBookingId());
+                return;
+            }
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getCoachEmail());
+            recipient.setLangKey("en");
+
+            publisher.publishEvent(new Envelope(
+                List.of(recipient), EmailTemplate.PLAYER_NO_SHOW,
+                Instant.now().plus(Duration.ofDays(1)), data,
+                UUID.randomUUID().toString()
+            ));
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.PLAYER_NO_SHOW),
+                kv("bookingId", event.getBookingId()), e);
         }
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
-        data.put("canonicalTimezone", event.getCanonicalTimezone());
-
-        Recipient recipient = new Recipient();
-        recipient.setEmail(event.getCoachEmail());
-        recipient.setLangKey("en");
-
-        publisher.publishEvent(new Envelope(
-            List.of(recipient), EmailTemplate.PLAYER_NO_SHOW,
-            Instant.now().plus(Duration.ofDays(1)), data,
-            UUID.randomUUID().toString()
-        ));
     }
 
     public void onBookingReminder(BookingReminderEvent event) {

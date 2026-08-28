@@ -130,7 +130,7 @@ class BookingServiceTest {
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
         when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
-        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID)).thenReturn(List.of(window));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
             .thenReturn(List.of());
@@ -155,7 +155,7 @@ class BookingServiceTest {
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
         when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
-        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID)).thenReturn(List.of(window));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
             .thenReturn(List.of());
@@ -179,7 +179,7 @@ class BookingServiceTest {
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
         when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
-        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID)).thenReturn(List.of(window));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
             .thenReturn(List.of());
@@ -203,7 +203,7 @@ class BookingServiceTest {
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
         when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
-        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID)).thenReturn(List.of(window));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
             .thenReturn(List.of(conflicting));
@@ -246,7 +246,7 @@ class BookingServiceTest {
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
         when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
-        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID)).thenReturn(List.of(window));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
             .thenReturn(List.of());
@@ -272,7 +272,7 @@ class BookingServiceTest {
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
         when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
-        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID)).thenReturn(List.of(window));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
             .thenReturn(List.of());
@@ -303,7 +303,10 @@ class BookingServiceTest {
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
         when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
-        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+        // Deferred-78 AC1: the lock is now acquired BEFORE the window fetch/signature check, not
+        // after — this staleness check runs inside the locked section.
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID)).thenReturn(List.of(window));
 
         CreateBookingRequest base = makeValidRequest(COACH_ID, PLAYER_ID, window);
         CreateBookingRequest req = new CreateBookingRequest(base.coachId(), base.playerId(),
@@ -314,8 +317,7 @@ class BookingServiceTest {
             .isInstanceOf(OperationNotAllowedException.class)
             .satisfies(ex -> assertThat(((OperationNotAllowedException) ex).getErrorCode())
                 .isEqualTo(BookingError.AVAILABILITY_CHANGED));
-        // Never reaches the pessimistic-lock/overlap-check machinery downstream of the window-fit check.
-        verify(coachProfileRepository, never()).findByIdForUpdate(COACH_ID);
+        // Never reaches the overlap-check machinery downstream of the window-fit check.
         verify(bookingRepository, never()).save(any(Booking.class));
     }
 
@@ -336,7 +338,7 @@ class BookingServiceTest {
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(selfPlayer));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
         when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
-        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID)).thenReturn(List.of(window));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
             .thenReturn(List.of());
@@ -446,7 +448,9 @@ class BookingServiceTest {
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
         when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
-        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(Collections.emptyList());
+        // Deferred-78 AC1: the lock is now acquired BEFORE the window fetch, not after.
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID)).thenReturn(Collections.emptyList());
 
         CreateBookingRequest req = makeValidRequest(COACH_ID, PLAYER_ID, makeCoveringWindow(COACH_ID));
 
@@ -586,6 +590,8 @@ class BookingServiceTest {
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
         when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+        // Deferred-78 AC1: the lock is now acquired BEFORE the window fetch, not after.
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
 
         ZonedDateTime slotStart = ZonedDateTime.now(ZoneId.of("Europe/Berlin"))
             .plusDays(1).withHour(23).withMinute(30).withSecond(0).withNano(0);
@@ -595,7 +601,7 @@ class BookingServiceTest {
         wideOpenWindow.setStartTime(LocalTime.of(0, 0, 0));
         wideOpenWindow.setEndTime(LocalTime.of(23, 59, 59));
         wideOpenWindow.setCanonicalTimezone("Europe/Berlin");
-        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(wideOpenWindow));
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID)).thenReturn(List.of(wideOpenWindow));
 
         CreateBookingRequest req = new CreateBookingRequest(
             COACH_ID, PLAYER_ID, slotStart.toInstant(), slotStart.plusHours(1).toInstant(),
@@ -648,7 +654,7 @@ class BookingServiceTest {
             .hasMessageContaining("session length");
         // Rejected before the window query and before the pessimistic lock, so a malformed request
         // costs neither. Both verifications fail if the check is moved after the window lookup.
-        verify(coachAvailabilityWindowRepository, never()).findByCoachId(COACH_ID);
+        verify(coachAvailabilityWindowRepository, never()).findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID);
         verify(coachProfileRepository, never()).findByIdForUpdate(COACH_ID);
     }
 
@@ -678,7 +684,7 @@ class BookingServiceTest {
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
         when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
         when(sessionDurationResolver.resolve(COACH_ID)).thenReturn(Duration.ofMinutes(90));
-        when(coachAvailabilityWindowRepository.findByCoachId(COACH_ID)).thenReturn(List.of(window));
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID)).thenReturn(List.of(window));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
             .thenReturn(List.of());

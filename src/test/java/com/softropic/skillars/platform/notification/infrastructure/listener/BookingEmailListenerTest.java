@@ -1,8 +1,13 @@
 package com.softropic.skillars.platform.notification.infrastructure.listener;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+
 import com.softropic.skillars.platform.booking.contract.BookingConfirmedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingExpiredEvent;
 import com.softropic.skillars.platform.booking.contract.BookingReminderEvent;
+import com.softropic.skillars.platform.booking.contract.BookingRequestedEvent;
 import com.softropic.skillars.platform.booking.contract.RescheduleDeclinedByParentEvent;
 import com.softropic.skillars.platform.booking.contract.RescheduleRequestedByCoachEvent;
 import com.softropic.skillars.platform.notification.contract.Envelope;
@@ -14,6 +19,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Instant;
@@ -146,6 +152,37 @@ class BookingEmailListenerTest {
 
         verify(publisher).publishEvent(envelopeCaptor.capture());
         assertThat(envelopeCaptor.getValue().recipients().get(0).getEmail()).isEqualTo("coach@example.com");
+    }
+
+    /**
+     * Deferred-78 AC7: onBookingRequested's data-prep (event.getRequestedStartTime().toString())
+     * NPEs when requestedStartTime is null — a malformed event, since MailManager's own outbox
+     * only ever protects a listener body AFTER publisher.publishEvent runs. Before this AC, that
+     * exception propagated out of the AFTER_COMMIT synchronization uncaught. Proves the method now
+     * returns normally, logs the failure, and never reaches publishEvent.
+     */
+    @Test
+    void onBookingRequested_nullRequestedStartTime_catchesFailureInsteadOfPropagating() {
+        Logger listenerLogger = (Logger) LoggerFactory.getLogger(BookingEmailListener.class);
+        ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
+        logCapture.start();
+
+        BookingRequestedEvent event = new BookingRequestedEvent(
+            this, UUID.randomUUID(), 1L, 2L, UUID.randomUUID(), "Coach", "coach@example.com",
+            "notes", null, "UTC");
+
+        try {
+            listenerLogger.addAppender(logCapture);
+            listener.onBookingRequested(event);
+        } finally {
+            listenerLogger.detachAppender(logCapture);
+        }
+
+        verify(publisher, never()).publishEvent(org.mockito.ArgumentMatchers.any(Envelope.class));
+        assertThat(logCapture.list)
+            .as("the NPE must be caught and logged, not propagated out of the AFTER_COMMIT listener")
+            .anySatisfy(loggingEvent -> assertThat(loggingEvent.getFormattedMessage())
+                .contains("Failed to prepare/publish notification"));
     }
 
     @Test

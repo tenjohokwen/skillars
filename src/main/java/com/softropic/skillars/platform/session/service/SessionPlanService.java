@@ -4,6 +4,7 @@ import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException
 import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingSnapshot;
 import com.softropic.skillars.platform.booking.contract.BookingStatus;
+import com.softropic.skillars.platform.booking.contract.BookingStatusChangedEvent;
 import com.softropic.skillars.platform.booking.service.BookingQueryService;
 import com.softropic.skillars.platform.booking.service.BookingStateMachine;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
@@ -124,7 +125,7 @@ public class SessionPlanService {
                 SessionErrorCode.SESSION_BOOKING_NOT_OWNED);
         }
 
-        if ("COMPLETED".equals(session.getStatus())) {
+        if ("COMPLETED".equals(session.getStatus()) || "CANCELLED".equals(session.getStatus())) {
             throw new OperationNotAllowedException(
                 "Completed sessions cannot be modified",
                 SessionErrorCode.SESSION_PLAN_LOCKED);
@@ -175,6 +176,38 @@ public class SessionPlanService {
                 }
             }
         }, () -> log.debug("No session plan found for completed booking {} — nothing to transition", event.getBookingId()));
+    }
+
+    /**
+     * Deferred-78 AC8: {@code handleBookingCompleted} above is the only listener that ever
+     * transitions a session plan's status, and it only fires on {@code BookingCompletedEvent} — a
+     * booking that instead becomes CANCELLED/DECLINED/NO_SHOW/etc. never locked its paired
+     * DRAFT/SAVED session plan. Subscribes to the same {@code BookingStatusChangedEvent} {@link
+     * com.softropic.skillars.platform.booking.service.BookingBatchStatusListener} already consumes
+     * — {@code BookingService.transitionInternal} is the single chokepoint that publishes it on
+     * every status write. {@code isTerminal()} is authoritative and dynamic by design; this
+     * deliberately does not hardcode a second list of terminal statuses to check against.
+     *
+     * <p>Forward-only, per project-owner decision: an already-orphaned session plan against an
+     * already-terminal booking predating this AC is left as-is, not backfilled.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void handleBookingTerminalNonCompletion(BookingStatusChangedEvent event) {
+        if ("COMPLETED".equals(event.newStatus())
+                || !bookingStateMachine.isTerminal(BookingStatus.valueOf(event.newStatus()))) {
+            return;
+        }
+        sessionRepository.findByBookingId(event.bookingId()).ifPresent(session -> {
+            if ("DRAFT".equals(session.getStatus()) || "SAVED".equals(session.getStatus())) {
+                session.setStatus("CANCELLED");
+                try {
+                    sessionRepository.save(session);
+                } catch (DataIntegrityViolationException e) {
+                    log.warn("Failed to transition session {} to CANCELLED for booking {} — concurrent modification or constraint violation", session.getId(), event.bookingId(), e);
+                }
+            }
+        });
     }
 
     @Transactional(readOnly = true)

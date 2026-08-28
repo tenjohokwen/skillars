@@ -54,8 +54,12 @@ export function useBookingSse(bookingId) {
   const connectionState = ref('disconnected')
   let es = null
   let retryCount = 0
-  let pollingInterval = null
+  let pollingTimeout = null
   const delays = [1000, 2000, 4000, 8000, 16000, 30000]
+  // Deferred-78 AC4: the fallback poll's own floor and ceiling. The ceiling deliberately reuses
+  // delays' own last entry (30000) rather than a second, separate constant — this is the same cap
+  // the SSE-reconnect backoff above already tops out at.
+  const POLL_FLOOR_MS = 2000
 
   function connect() {
     es = new EventSource(`/api/bookings/${bookingId}/events`, { withCredentials: true })
@@ -66,9 +70,9 @@ export function useBookingSse(bookingId) {
     es.addEventListener('status', (e) => {
       status.value = e.data
       retryCount = 0
-      if (pollingInterval) {
-        clearInterval(pollingInterval)
-        pollingInterval = null
+      if (pollingTimeout) {
+        clearTimeout(pollingTimeout)
+        pollingTimeout = null
         connectionState.value = 'connected'
       }
       if (TERMINAL_BOOKING_STATUSES.has(e.data)) {
@@ -79,21 +83,10 @@ export function useBookingSse(bookingId) {
     es.onerror = () => {
       es.close()
       retryCount++
-      if (retryCount >= 3 && !pollingInterval) {
+      if (retryCount >= 3 && !pollingTimeout) {
         connectionState.value = 'polling'
-        pollingInterval = setInterval(async () => {
-          const r = await getBookingById(bookingId)
-          status.value = r.status
-          if (TERMINAL_BOOKING_STATUSES.has(r.status)) {
-            // es is already closed/errored by this point (polling only starts after es.onerror), but
-            // close it explicitly rather than relying on that — defensive, not load-bearing.
-            es?.close()
-            clearInterval(pollingInterval)
-            pollingInterval = null
-            connectionState.value = 'disconnected'
-          }
-        }, 2000)
-      } else if (!pollingInterval) {
+        schedulePoll(POLL_FLOOR_MS)
+      } else if (!pollingTimeout) {
         connectionState.value = 'reconnecting'
         const delay = delays[Math.min(retryCount - 1, delays.length - 1)]
         setTimeout(connect, delay)
@@ -102,16 +95,41 @@ export function useBookingSse(bookingId) {
     es.addEventListener('heartbeat', () => {
       es.close()
       retryCount = 0
-      clearInterval(pollingInterval)
-      pollingInterval = null
+      clearTimeout(pollingTimeout)
+      pollingTimeout = null
       connect()
     })
   }
 
+  // A setInterval can't vary its own delay, so the fallback poll is a recursive setTimeout chain
+  // instead: a caught failure widens the NEXT poll's delay (doubling, capped at the ceiling above);
+  // a successful resolution resets it to the floor. "Successful" = the awaited call resolves
+  // without throwing — this project's axios wrapper rejects on any non-2xx response.
+  function schedulePoll(delay) {
+    pollingTimeout = setTimeout(async () => {
+      try {
+        const r = await getBookingById(bookingId)
+        status.value = r.status
+        if (TERMINAL_BOOKING_STATUSES.has(r.status)) {
+          // es is already closed/errored by this point (polling only starts after es.onerror), but
+          // close it explicitly rather than relying on that — defensive, not load-bearing.
+          es?.close()
+          pollingTimeout = null
+          connectionState.value = 'disconnected'
+          return
+        }
+        schedulePoll(POLL_FLOOR_MS)
+      } catch {
+        const ceiling = delays[delays.length - 1]
+        schedulePoll(Math.min(delay * 2, ceiling))
+      }
+    }, delay)
+  }
+
   function cleanup() {
     es?.close()
-    clearInterval(pollingInterval)
-    pollingInterval = null
+    clearTimeout(pollingTimeout)
+    pollingTimeout = null
     connectionState.value = 'disconnected'
   }
 

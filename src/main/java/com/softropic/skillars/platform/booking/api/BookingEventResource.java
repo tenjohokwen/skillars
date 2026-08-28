@@ -15,6 +15,7 @@ import com.softropic.skillars.platform.security.contract.exception.OperationNotA
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import io.micrometer.observation.annotation.Observed;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.http.ResponseEntity;
@@ -29,10 +30,13 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
+import static net.logstash.logback.argument.StructuredArguments.kv;
+
 @Observed(name = "booking.events")
 @RestController
 @RequestMapping("/api/bookings")
 @RequiredArgsConstructor
+@Slf4j
 public class BookingEventResource {
 
     private final BookingService bookingService;
@@ -71,15 +75,26 @@ public class BookingEventResource {
             return;
         }
         boolean isParent = Objects.equals(booking.getParentId(), actorUserId);
-        boolean isCoach = isCoachParty(booking.getCoachId(), actorUserId);
-        if (!isParent && !isCoach) {
+        if (isParent) {
+            return;
+        }
+        // Deferred-78 AC5: the throw below is reached only when isParent is also false, so the two
+        // branches here can never fire for the parent/admin cases above — only for a genuine
+        // unauthorized third party (no coach profile at all) or a coach whose profile exists but
+        // doesn't own this booking. Distinguishing them in the log is the point of this AC; the
+        // response itself stays the same generic 403 either way.
+        Optional<CoachProfile> coach = coachProfileRepository.findByUserId(actorUserId);
+        if (coach.isEmpty()) {
+            log.warn("Booking-party check failed: actor has no coach profile",
+                kv("bookingId", booking.getId()), kv("actorUserId", actorUserId));
             throw new OperationNotAllowedException("Not a party to this booking", SecurityError.MISSING_RIGHTS);
         }
-    }
-
-    private boolean isCoachParty(UUID coachId, Long actorUserId) {
-        Optional<CoachProfile> coach = coachProfileRepository.findByUserId(actorUserId);
-        return coach.map(c -> Objects.equals(c.getId(), coachId)).orElse(false);
+        if (!Objects.equals(coach.get().getId(), booking.getCoachId())) {
+            log.warn("Booking-party check failed: actor coach profile does not match booking coach",
+                kv("bookingId", booking.getId()), kv("actorUserId", actorUserId),
+                kv("actorCoachId", coach.get().getId()), kv("bookingCoachId", booking.getCoachId()));
+            throw new OperationNotAllowedException("Not a party to this booking", SecurityError.MISSING_RIGHTS);
+        }
     }
 
     private Long currentUserId() {

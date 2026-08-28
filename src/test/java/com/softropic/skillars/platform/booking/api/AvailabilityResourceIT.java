@@ -377,6 +377,68 @@ class AvailabilityResourceIT extends AbstractIntegrationTest {
         assertThat(startTime).startsWith("09:00");
     }
 
+    // ---- Deferred-78 AC6: weekStart bound (default booking.availability.weekStartRangeYears=2) ----
+
+    @Test
+    void getAvailability_weekStartExactlyAtPastBoundary_returns200() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        String weekStart = java.time.LocalDate.now().minusYears(2).toString();
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + AVAILABILITY_BASE + "/" + coachProfileId + "/availability?weekStart=" + weekStart,
+            HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    @Test
+    void getAvailability_weekStartOneDayPastBoundary_returns403WithWeekStartOutOfRangeKey() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        String weekStart = java.time.LocalDate.now().minusYears(2).minusDays(1).toString();
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + AVAILABILITY_BASE + "/" + coachProfileId + "/availability?weekStart=" + weekStart,
+            HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString()).contains("\"errorKey\":\"booking.weekStartOutOfRange\"");
+            });
+    }
+
+    @Test
+    void getAvailability_weekStartExactlyAtFutureBoundary_returns200() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        String weekStart = java.time.LocalDate.now().plusYears(2).toString();
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + AVAILABILITY_BASE + "/" + coachProfileId + "/availability?weekStart=" + weekStart,
+            HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    @Test
+    void getAvailability_weekStartOneDayFutureBoundary_returns403WithWeekStartOutOfRangeKey() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        String weekStart = java.time.LocalDate.now().plusYears(2).plusDays(1).toString();
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + AVAILABILITY_BASE + "/" + coachProfileId + "/availability?weekStart=" + weekStart,
+            HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString()).contains("\"errorKey\":\"booking.weekStartOutOfRange\"");
+            });
+    }
+
     // ----- helpers -----
 
     private String loginAndGetCookies(String email) {

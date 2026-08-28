@@ -482,6 +482,7 @@ export default {
       slotOutsideAvailability: 'Dieser Zeitpunkt liegt außerhalb der verfügbaren Zeiten dieses Coaches.',
       sessionCrossesMidnight: 'Eine Sitzung darf nicht über Mitternacht hinausgehen.',
       availabilityChanged: 'Die Verfügbarkeit dieses Coaches hat sich seit dem Laden dieser Seite geändert. Bitte wählen Sie eine neue Zeit.',
+      weekStartOutOfRange: 'Diese Woche liegt zu weit in der Vergangenheit oder Zukunft, um sie anzuzeigen.',
       batchAlreadyProcessed: 'Diese Anfragen wurden bereits bearbeitet.',
       batchNoneAccepted: 'Keine der Sitzungen in dieser Anfrage konnte angenommen werden.',
       notReschedulable: 'Diese Sitzung kann nicht mehr verschoben werden.',

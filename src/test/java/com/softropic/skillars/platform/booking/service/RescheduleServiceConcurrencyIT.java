@@ -2,6 +2,10 @@ package com.softropic.skillars.platform.booking.service;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
+import com.softropic.skillars.platform.booking.contract.BookingError;
+import com.softropic.skillars.platform.booking.contract.CreateRescheduleRequest;
+import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -22,6 +26,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -58,13 +63,14 @@ class RescheduleServiceConcurrencyIT extends AbstractIntegrationTest {
 
     private UUID bookingId;
     private UUID rescheduleId;
+    private UUID coachProfileId;
 
     @BeforeEach
     void setUp() {
         transactionTemplate.execute(status -> {
             insertCoachUser(COACH_USER_ID, "reschedule.concurrency.coach@skillars-test.com");
 
-            UUID coachProfileId = UUID.randomUUID();
+            coachProfileId = UUID.randomUUID();
             jdbcTemplate.update(
                 "INSERT INTO marketplace.coach_profiles " +
                 "(id, user_id, display_name, bio, city, languages, canonical_timezone, status) " +
@@ -240,6 +246,91 @@ class RescheduleServiceConcurrencyIT extends AbstractIntegrationTest {
             assertThat(rescheduleStatus)
                 .as("the failed attempt must not have partially applied the accept")
                 .isEqualTo("PENDING");
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    /**
+     * Deferred-78 AC1/AC2: {@code RescheduleService.validateRescheduleProposal} previously took no
+     * lock at all, so its window read could race a concurrent window edit. A background thread
+     * holds the coach-profile row lock and, WHILE holding it, deletes every availability window for
+     * this coach. {@code requestReschedule} is parked on its (new) {@code findByIdForUpdate} call
+     * for the whole hold. Once granted the lock it must see the POST-delete, empty window list — not
+     * a pre-lock snapshot — and reject with {@code SLOT_OUTSIDE_AVAILABILITY}.
+     */
+    @Test
+    @Timeout(30)
+    void requestReschedule_windowsDeletedWhileWaitingForCoachLock_seesPostLockEmptyWindowsAndRejects() throws Exception {
+        long holdMillis = 2000;
+        CountDownLatch windowsDeletedAndLockHeld = new CountDownLatch(1);
+        AtomicReference<Throwable> deleterFailure = new AtomicReference<>();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> deleter = pool.submit(() -> {
+                try {
+                    transactionTemplate.execute(status -> {
+                        jdbcTemplate.queryForObject(
+                            "SELECT status FROM marketplace.coach_profiles WHERE id = ? FOR UPDATE",
+                            String.class, coachProfileId);
+                        jdbcTemplate.update(
+                            "DELETE FROM marketplace.coach_availability_windows WHERE coach_id = ?",
+                            coachProfileId);
+                        windowsDeletedAndLockHeld.countDown();
+                        try {
+                            Thread.sleep(holdMillis);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            throw new AssertionError("Interrupted while holding the coach_profiles lock — "
+                                + "results below are not trustworthy.", e);
+                        }
+                        return null;
+                    });
+                } catch (Throwable t) {
+                    deleterFailure.set(t);
+                }
+            });
+
+            assertThat(windowsDeletedAndLockHeld.await(10, TimeUnit.SECONDS))
+                .as("deleter must delete the windows and hold the lock first").isTrue();
+
+            Instant proposedStart = safeFutureStart(6);
+            Instant proposedEnd = proposedStart.plus(1, ChronoUnit.HOURS);
+            Instant start = Instant.now();
+            AtomicReference<Throwable> outcome = new AtomicReference<>();
+            Future<?> contender = pool.submit(() -> {
+                try {
+                    rescheduleService.requestReschedule(bookingId, PARENT_ID,
+                        new CreateRescheduleRequest(proposedStart, proposedEnd, null));
+                } catch (Throwable t) {
+                    outcome.set(t);
+                }
+                return null;
+            });
+            contender.get(20, TimeUnit.SECONDS);
+            long elapsedMillis = Duration.between(start, Instant.now()).toMillis();
+
+            if (deleterFailure.get() != null) {
+                throw new AssertionError("Window-deleting thread failed", deleterFailure.get());
+            }
+
+            assertThat(elapsedMillis)
+                .as("must have actually waited out the lock hold via retry, not skipped it")
+                .isGreaterThanOrEqualTo(holdMillis - 300);
+
+            assertThat(outcome.get())
+                .as("must reject once the locked re-read sees the now-empty window list, proving the "
+                    + "window fetch happens under the lock rather than before it")
+                .isInstanceOf(OperationNotAllowedException.class);
+            assertThat(((OperationNotAllowedException) outcome.get()).getErrorCode())
+                .isEqualTo(BookingError.SLOT_OUTSIDE_AVAILABILITY);
+
+            String pendingCount = String.valueOf(jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM booking.booking_reschedule_requests WHERE booking_id = ? AND status = 'PENDING' AND proposed_start_time = ?",
+                Integer.class, bookingId, Timestamp.from(proposedStart)));
+            assertThat(pendingCount)
+                .as("no new reschedule request row may be persisted once its backing window was deleted before the lock was granted")
+                .isEqualTo("0");
         } finally {
             pool.shutdownNow();
         }

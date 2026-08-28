@@ -182,11 +182,42 @@ public class RescheduleService {
                     "original minutes", originalDuration.toMinutes()),
                 BookingError.INVALID_SESSION_DURATION);
         }
+        // Deferred-78 AC1: per-coach lock acquired here, before the availability-window read below
+        // — this method previously had no lock at all, so a concurrent addWindow/updateWindow/
+        // deleteWindow (now also lock-guarded, see AvailabilityService) could mutate windows between
+        // this read and the proposal being persisted by the caller. No status recheck is needed
+        // here (unlike BookingService.createBookingRequest/BookingBatchService.createBatch): a
+        // reschedule proposal does not create a new engagement with a coach, it only tests the
+        // already-accepted booking's new time against currently-configured windows, so coach
+        // suspension has no separate check to duplicate here.
+        CoachProfile lockedCoach = lockRetryer.withBoundedRetry(() -> {
+            CoachProfile c = coachProfileRepository.findByIdForUpdate(booking.getCoachId())
+                .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+            entityManager.refresh(c, LockModeType.PESSIMISTIC_WRITE);
+            return c;
+        });
+
         // Deferred-49 AC1: current availability, re-validated at request time — a coach who has
         // since narrowed their hours can reject a reschedule proposal the same way an initial
         // booking request is already blocked, even though the original booking was legitimate
         // when made. Reuses BookingService's own package-private helper rather than a second copy.
-        List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachId(booking.getCoachId());
+        List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(lockedCoach.getId());
+
+        // Deferred-78 AC2: mirrors the GET-vs-POST staleness guard BookingService.createBookingRequest
+        // and BookingBatchService.createBatch already have (skillars-deferred-71 AC2 /
+        // skillars-deferred-72 AC4) — until now RescheduleService had no such check at all.
+        // originalDuration is the booking's own current length (computed above), which is what a
+        // reschedule proposal's slotLength dimension of the signature must be checked against, not
+        // SessionDurationResolver — same reasoning that already governs the duration-match check a
+        // few lines above.
+        if (req.availabilitySignature() != null) {
+            String currentSignature = AvailabilityService.computeAvailabilitySignature(windows, originalDuration);
+            if (!currentSignature.equals(req.availabilitySignature())) {
+                throw new OperationNotAllowedException(
+                    "Coach availability changed since this view was loaded — please refresh",
+                    Map.of("coach id", lockedCoach.getId()), BookingError.AVAILABILITY_CHANGED);
+            }
+        }
         if (!bookingService.isSlotWithinAvailabilityWindow(req.proposedStartTime(), req.proposedEndTime(), windows, booking.getCoachId())) {
             throw new OperationNotAllowedException(
                 "Proposed slot is not within coach availability",
@@ -363,7 +394,7 @@ public class RescheduleService {
         // (not after) so a reschedule outside availability is rejected on that basis even when the
         // slot also happens to be free — matches this method's existing check ordering, where each
         // earlier check gates the next rather than running independently.
-        List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachId(coach.getId());
+        List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(coach.getId());
         if (!bookingService.isSlotWithinAvailabilityWindow(lockedReq.getProposedStartTime(), lockedReq.getProposedEndTime(), windows, coach.getId())) {
             throw new OperationNotAllowedException(
                 "Proposed slot is not within coach availability",

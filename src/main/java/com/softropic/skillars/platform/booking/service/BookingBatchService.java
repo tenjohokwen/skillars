@@ -30,6 +30,8 @@ import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 import jakarta.annotation.PostConstruct;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -69,6 +71,7 @@ public class BookingBatchService {
     private final CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
     private final PlatformTransactionManager transactionManager;
     private final PessimisticLockRetryer lockRetryer;
+    private final EntityManager entityManager;
 
     /**
      * REQUIRES_NEW per booking, mirroring {@code PaymentLifecycleService.perBookingTx}. A failure in
@@ -126,7 +129,7 @@ public class BookingBatchService {
         // CreateBatchRequest would otherwise multiply a per-slot lookup by ten.
         Duration requiredDuration = sessionDurationResolver.resolve(req.coachId());
         List<CoachAvailabilityWindow> windows =
-            coachAvailabilityWindowRepository.findByCoachId(req.coachId());
+            coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(req.coachId());
 
         // skillars-deferred-72 AC4: mirrors BookingService.createBookingRequest's single-slot
         // staleness guard (skillars-deferred-71 AC2) — a batch has exactly one coachId for its whole
@@ -182,21 +185,32 @@ public class BookingBatchService {
             }
         }
 
+        // Deferred-78 AC1: the per-coach lock is acquired here, immediately before the fresh
+        // re-check below, and held through this method's writes. skillars-deferred-69 AC7's
+        // original comment (preserved below) documented this exact window as an accepted,
+        // unclosed gap because no lock was taken here — that gap is what this AC closes. The fresh
+        // re-check now runs against a coach row this transaction holds locked, so a concurrent
+        // addWindow/updateWindow/deleteWindow (also lock-guarded, see AvailabilityService) cannot
+        // land between this re-check and the batch/booking writes below.
+        CoachProfile lockedCoach = lockRetryer.withBoundedRetry(() -> {
+            CoachProfile c = coachProfileRepository.findByIdForUpdate(req.coachId())
+                .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+            entityManager.refresh(c, LockModeType.PESSIMISTIC_WRITE);
+            return c;
+        });
+        if (lockedCoach.getStatus() != CoachProfileStatus.ACTIVE) {
+            throw new OperationNotAllowedException("Coach profile is not active", BookingError.COACH_UNAVAILABLE);
+        }
+
         // skillars-deferred-69 AC7: narrows (does not eliminate) the read-then-write staleness
         // window between the initial resolve above and this persist point — a coach edit landing in
         // between was previously invisible to this request. Re-fetches and re-runs the same
         // duration+availability validation against fresh values, inside this same transaction,
         // immediately before the batch/booking rows are written. If any slot now fails, the whole
-        // batch aborts (no partial writes above this point yet). This does NOT close the window
-        // entirely: CoachAvailabilityWindow/CoachAvailabilityBlock carry no @Version and no
-        // locked-read method exists for them anywhere in the codebase, so a coach edit landing
-        // between this re-check and the actual commit below remains unseen. Full elimination would
-        // require lock support on CoachAvailabilityWindow, which doesn't exist and is out of this
-        // story's scope — see acceptAll's own doc comment above for this codebase's precedent of
-        // being explicit about a fix's actual limits rather than overselling it.
+        // batch aborts (no partial writes above this point yet).
         Duration freshRequiredDuration = sessionDurationResolver.resolve(req.coachId());
         List<CoachAvailabilityWindow> freshWindows =
-            coachAvailabilityWindowRepository.findByCoachId(req.coachId());
+            coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(req.coachId());
         for (BatchSlot slot : req.slots()) {
             validateSlotDurationAndAvailability(slot, freshRequiredDuration, freshWindows, req.coachId());
         }

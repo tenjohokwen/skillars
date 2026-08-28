@@ -1221,6 +1221,7 @@ export default {
       slotOutsideAvailability: 'Cet horaire est en dehors des disponibilités de ce coach.',
       sessionCrossesMidnight: "Une séance ne peut pas s'étendre au-delà de minuit.",
       availabilityChanged: "La disponibilité de ce coach a changé depuis le chargement de cette page. Veuillez choisir un nouveau créneau.",
+      weekStartOutOfRange: "Cette semaine est trop éloignée dans le passé ou le futur pour être affichée.",
       batchAlreadyProcessed: 'Ces demandes ont déjà été traitées.',
       batchNoneAccepted:
         "Aucune des séances de cette demande n'a pu être acceptée.",
