@@ -151,7 +151,7 @@ class DrillUploadServiceTest {
 
         Video processingVideo = new Video();
         processingVideo.setOperationalState(OperationalState.PROCESSING);
-        when(videoRepository.findById(existingVideoId)).thenReturn(Optional.of(processingVideo));
+        when(videoRepository.findByIdForUpdate(existingVideoId)).thenReturn(Optional.of(processingVideo));
         when(drillVideoRefRepository.existsByVideoId(existingVideoId)).thenReturn(false);
 
         UUID newVideoId = UUID.randomUUID();
@@ -181,7 +181,7 @@ class DrillUploadServiceTest {
 
         Video processingVideo = new Video();
         processingVideo.setOperationalState(OperationalState.PROCESSING);
-        when(videoRepository.findById(existingVideoId)).thenReturn(Optional.of(processingVideo));
+        when(videoRepository.findByIdForUpdate(existingVideoId)).thenReturn(Optional.of(processingVideo));
         when(drillVideoRefRepository.existsByVideoId(existingVideoId)).thenReturn(true);
 
         UUID newVideoId = UUID.randomUUID();
@@ -209,7 +209,7 @@ class DrillUploadServiceTest {
 
         Video readyVideo = new Video();
         readyVideo.setOperationalState(OperationalState.READY);
-        when(videoRepository.findById(existingVideoId)).thenReturn(Optional.of(readyVideo));
+        when(videoRepository.findByIdForUpdate(existingVideoId)).thenReturn(Optional.of(readyVideo));
 
         assertThatThrownBy(() -> service.initiateUpload(DRILL_ID, COACH_USER_ID,
                 new DrillUploadInitiateRequest("v.mp4", 1024L, "video/mp4", 10)))

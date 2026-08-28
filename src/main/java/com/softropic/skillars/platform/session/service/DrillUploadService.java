@@ -22,6 +22,7 @@ import com.softropic.skillars.platform.video.contract.InitializeUploadResponse;
 import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.contract.VideoType;
 import com.softropic.skillars.platform.video.service.VideoTypeConstraints;
+import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
 import com.softropic.skillars.platform.video.service.VideoService;
 import io.micrometer.core.instrument.Counter;
@@ -96,13 +97,23 @@ public class DrillUploadService {
             Optional<DrillVideoRef> existing = drillVideoRefRepository.findByDrillId(drillId);
             UUID existingVideoId = existing.map(DrillVideoRef::getVideoId).orElse(null);
             if (existingVideoId != null) {
-                videoRepository.findById(existingVideoId).ifPresent(video -> {
-                    if (video.getOperationalState() == OperationalState.READY) {
-                        throw new OperationNotAllowedException(
-                            "A video is already linked to this drill. Remove it before uploading a new one.",
-                            SessionErrorCode.DRILL_VIDEO_ALREADY_LINKED);
-                    }
-                });
+                // Deferred-81 AC3. LOCK ORDERING: Drill (already held above) then Video, inside
+                // this same retry block — deleteVideo below takes the pair in the identical
+                // order, so the two methods can never form a Drill-then-Video / Video-then-Drill
+                // cycle between them. Closes the cross-drill half of the Def14 TOCTOU race:
+                // cloneDrill lets one videoId be shared by two Drill rows, so without this second
+                // lock a call here and a deleteVideo/initiateUpload call on the other drill
+                // sharing this videoId each take their own distinct Drill lock and never
+                // serialize against each other's existsByVideoId check below. No entityManager
+                // refresh needed here — unlike the drill row above, this is the first read of
+                // this Video entity in this method, so findByIdForUpdate's own result already
+                // reflects the now-locked row.
+                Optional<Video> lockedVideo = videoRepository.findByIdForUpdate(existingVideoId);
+                if (lockedVideo.isPresent() && lockedVideo.get().getOperationalState() == OperationalState.READY) {
+                    throw new OperationNotAllowedException(
+                        "A video is already linked to this drill. Remove it before uploading a new one.",
+                        SessionErrorCode.DRILL_VIDEO_ALREADY_LINKED);
+                }
             }
 
             InitializeUploadResponse resp = videoService.initializeUpload(
@@ -146,6 +157,15 @@ public class DrillUploadService {
             drillVideoRefRepository.findByDrillId(drillId).ifPresent(ref -> {
                 if (ref.getVideoId() == null) return;
                 UUID videoId = ref.getVideoId();
+
+                // Deferred-81 AC3. LOCK ORDERING: Drill (already held above) then Video, inside
+                // this same retry block — mirrors initiateUpload's identical ordering above, so
+                // the two methods cannot deadlock against each other. Taken before clearVideoId
+                // and the existsByVideoId check below, since those are exactly the check-then-act
+                // pair this AC closes for a videoId shared across two Drill rows (see
+                // initiateUpload's own comment for the full race description). The row is only
+                // used for its locking side effect here, not its fields.
+                videoRepository.findByIdForUpdate(videoId);
 
                 drillVideoRefRepository.clearVideoId(drillId);
 

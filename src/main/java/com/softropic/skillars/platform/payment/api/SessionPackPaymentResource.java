@@ -58,7 +58,7 @@ public class SessionPackPaymentResource {
     // ─── Parent: purchase a session pack ──────────────────────────────────────
 
     @PostMapping("/session-packs/purchase")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<SessionPackPurchaseResponse> purchaseSessionPack(
             @Valid @RequestBody PurchaseSessionPackRequest request) {
         Long parentId = securityUtil.getCurrentCoachUserId();
@@ -70,7 +70,7 @@ public class SessionPackPaymentResource {
     // ─── Parent: list own session packs ───────────────────────────────────────
 
     @GetMapping("/session-packs")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<List<SessionPackPurchaseResponse>> getMySessionPacks(
             @RequestParam(required = false) UUID coachId) {
         Long parentId = securityUtil.getCurrentCoachUserId();
@@ -80,7 +80,7 @@ public class SessionPackPaymentResource {
     // ─── Parent: pause a session pack ──────────────────────────────────────────
 
     @PostMapping("/session-packs/{purchaseId}/pause")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<PauseConflictResponse> pauseSessionPack(
             @PathVariable UUID purchaseId, @Valid @RequestBody PausePackRequest request) {
         Long parentId = securityUtil.getCurrentCoachUserId();
@@ -128,7 +128,7 @@ public class SessionPackPaymentResource {
     // ─── Parent: discover active tier for a coach ─────────────────────────────
 
     @GetMapping("/coaches/{coachId}/session-pack-tiers")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<SessionPackTierResponse> getActiveCoachTier(@PathVariable UUID coachId) {
         SessionPackTierResponse tier = sessionPackPaymentService.getActiveCoachTier(coachId);
         if (tier == null) {

@@ -13,7 +13,10 @@ import com.softropic.skillars.platform.booking.contract.BookingDeclinedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingRequestedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingResponse;
 import com.softropic.skillars.platform.booking.contract.BookingStateTransitionException;
+import com.softropic.skillars.platform.booking.contract.CoachInboxResponse;
 import com.softropic.skillars.platform.booking.contract.CreateBookingRequest;
+import com.softropic.skillars.platform.booking.contract.ParentScheduleItem;
+import com.softropic.skillars.platform.booking.contract.ParentScheduleResponse;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingBatchRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
@@ -480,6 +483,137 @@ class BookingServiceTest {
             .thenReturn(List.of());
 
         assertThat(bookingService.getParentPlayerSchedule(PARENT_ID, PLAYER_ID)).isNotNull();
+    }
+
+    // ---- Deferred-81 AC1: batched player/parent/coach name lookups ----
+
+    /**
+     * Three distinct players (not two — a 2-row fixture can pass an accidentally-still-N+1
+     * implementation that merely fails to break on the second row). Asserts the per-row
+     * playerProfileRepository.findById N+1 is gone, replaced by exactly one findAllById call
+     * regardless of booking-row count.
+     */
+    @Test
+    void getParentBookings_threeBookingsDistinctPlayers_batchesPlayerNameLookupIntoOneFindAllByIdCall() {
+        Long player1 = 201L;
+        Long player2 = 202L;
+        Long player3 = 203L;
+        Booking b1 = makeBooking(PARENT_ID, player1, COACH_ID, "REQUESTED");
+        Booking b2 = makeBooking(PARENT_ID, player2, COACH_ID, "REQUESTED");
+        Booking b3 = makeBooking(PARENT_ID, player3, COACH_ID, "REQUESTED");
+
+        when(bookingRepository.findAllByParentIdOrderByRequestedStartTimeAsc(PARENT_ID))
+            .thenReturn(List.of(b1, b2, b3));
+        when(coachProfileRepository.findAllById(any())).thenReturn(List.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
+        when(playerProfileRepository.findAllById(any())).thenReturn(List.of(
+            makePlayerNamed(player1, PARENT_ID, "Player One"),
+            makePlayerNamed(player2, PARENT_ID, "Player Two"),
+            makePlayerNamed(player3, PARENT_ID, "Player Three")));
+        when(rescheduleRequestRepository.findPendingByBookingIdIn(any())).thenReturn(List.of());
+
+        List<BookingResponse> responses = bookingService.getParentBookings(PARENT_ID);
+
+        assertThat(responses).extracting(BookingResponse::playerName)
+            .containsExactlyInAnyOrder("Player One", "Player Two", "Player Three");
+        verify(playerProfileRepository, org.mockito.Mockito.times(1)).findAllById(any());
+        verify(playerProfileRepository, never()).findById(any());
+    }
+
+    /** A player deleted after booking creation must still fall back to "Unknown Player", not throw. */
+    @Test
+    void getParentBookings_playerMissingFromBatchResult_fallsBackToUnknownPlayer() {
+        Booking b1 = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+
+        when(bookingRepository.findAllByParentIdOrderByRequestedStartTimeAsc(PARENT_ID)).thenReturn(List.of(b1));
+        when(coachProfileRepository.findAllById(any())).thenReturn(List.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
+        when(playerProfileRepository.findAllById(any())).thenReturn(List.of());
+        when(rescheduleRequestRepository.findPendingByBookingIdIn(any())).thenReturn(List.of());
+
+        List<BookingResponse> responses = bookingService.getParentBookings(PARENT_ID);
+
+        assertThat(responses).extracting(BookingResponse::playerName).containsExactly("Unknown Player");
+    }
+
+    /**
+     * Three distinct players split across two singles and one two-booking batch group — the
+     * playerIds set must be built from BOTH branches before either loop runs, not just singles.
+     */
+    @Test
+    void getCoachBookingRequests_singlesAndBatchedBookings_batchesPlayerNameLookupAcrossBoth() {
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        Long singlePlayer = 201L;
+        Long batchPlayer1 = 202L;
+        Long batchPlayer2 = 203L;
+        Long singleParent = PARENT_ID;
+        Long batchParent = 9001L;
+        UUID batchId = UUID.randomUUID();
+
+        Booking single = makeBooking(singleParent, singlePlayer, COACH_ID, "REQUESTED");
+        Booking batched1 = makeBooking(batchParent, batchPlayer1, COACH_ID, "REQUESTED");
+        batched1.setBatchId(batchId);
+        Booking batched2 = makeBooking(batchParent, batchPlayer2, COACH_ID, "REQUESTED");
+        batched2.setBatchId(batchId);
+
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findByCoachIdAndStatusOrderByRequestedStartTimeAsc(COACH_ID, "REQUESTED"))
+            .thenReturn(List.of(single, batched1, batched2));
+        when(playerProfileRepository.findAllById(any())).thenReturn(List.of(
+            makePlayerNamed(singlePlayer, singleParent, "Single Player"),
+            makePlayerNamed(batchPlayer1, batchParent, "Batch Player One"),
+            makePlayerNamed(batchPlayer2, batchParent, "Batch Player Two")));
+        // Deferred-81 AC1 code review finding: the singles loop's own parent-name lookup was still
+        // unbatched (only the once-per-batch-group call was) — two distinct parentIds here (one for
+        // the single, one shared by the batch group) proves both branches now resolve off one
+        // findAllById call rather than a per-row/per-group findById.
+        when(userRepository.findAllById(any())).thenReturn(List.of(
+            makeUserWithNameAndId(singleParent, "Single", "Parent"),
+            makeUserWithNameAndId(batchParent, "Batch", "Parent")));
+
+        CoachInboxResponse response = bookingService.getCoachBookingRequests(COACH_USER_ID);
+
+        assertThat(response.singleBookings()).extracting(BookingResponse::playerName)
+            .containsExactly("Single Player");
+        assertThat(response.singleBookings()).extracting(BookingResponse::parentName)
+            .containsExactly("Single Parent");
+        assertThat(response.batchGroups()).hasSize(1);
+        assertThat(response.batchGroups().get(0).bookings()).extracting(BookingResponse::playerName)
+            .containsExactlyInAnyOrder("Batch Player One", "Batch Player Two");
+        assertThat(response.batchGroups().get(0).parentName()).isEqualTo("Batch Parent");
+        verify(playerProfileRepository, org.mockito.Mockito.times(1)).findAllById(any());
+        verify(playerProfileRepository, never()).findById(any());
+        verify(userRepository, org.mockito.Mockito.times(1)).findAllById(any());
+        verify(userRepository, never()).findById(any());
+    }
+
+    /**
+     * Three distinct coaches for one player's schedule. getParentPlayerSchedule's per-row
+     * coachProfileRepository.findById N+1 (the sibling pattern one line away from the
+     * resolvePlayerName call this AC also targets) must collapse to one findAllById call.
+     */
+    @Test
+    void getParentPlayerSchedule_threeBookingsDistinctCoaches_batchesCoachNameLookupIntoOneFindAllByIdCall() {
+        PlayerProfile player = makePlayer(PLAYER_ID, PARENT_ID);
+        UUID coach1 = UUID.randomUUID();
+        UUID coach2 = UUID.randomUUID();
+        UUID coach3 = UUID.randomUUID();
+        Booking b1 = makeBooking(PARENT_ID, PLAYER_ID, coach1, "CONFIRMED");
+        Booking b2 = makeBooking(PARENT_ID, PLAYER_ID, coach2, "CONFIRMED");
+        Booking b3 = makeBooking(PARENT_ID, PLAYER_ID, coach3, "CONFIRMED");
+
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(bookingRepository.findByParentIdAndPlayerIdAndStatusIn(eq(PARENT_ID), eq(PLAYER_ID), anyList()))
+            .thenReturn(List.of(b1, b2, b3));
+        when(coachProfileRepository.findAllById(any())).thenReturn(List.of(
+            makeCoachNamed(coach1, 301L, "Coach One"),
+            makeCoachNamed(coach2, 302L, "Coach Two"),
+            makeCoachNamed(coach3, 303L, "Coach Three")));
+
+        ParentScheduleResponse response = bookingService.getParentPlayerSchedule(PARENT_ID, PLAYER_ID);
+
+        assertThat(response.sessions()).extracting(ParentScheduleItem::coachDisplayName)
+            .containsExactlyInAnyOrder("Coach One", "Coach Two", "Coach Three");
+        verify(coachProfileRepository, org.mockito.Mockito.times(1)).findAllById(any());
+        verify(coachProfileRepository, never()).findById(any());
     }
 
     @Test
@@ -1425,6 +1559,13 @@ class BookingServiceTest {
         return p;
     }
 
+    /** Deferred-81 AC1: a player with a caller-chosen name, for batched-lookup test assertions. */
+    private PlayerProfile makePlayerNamed(Long id, Long parentId, String name) {
+        PlayerProfile p = makePlayer(id, parentId);
+        p.setName(name);
+        return p;
+    }
+
     /** UAT.5: a self-registered adult player — parentId null, userId set (the chk_pp_owner XOR). */
     private PlayerProfile makeSelfPlayer(Long id, Long userId) {
         PlayerProfile p = new PlayerProfile();
@@ -1455,6 +1596,13 @@ class BookingServiceTest {
     private CoachProfile makeDraftCoach(UUID coachId, Long userId) {
         CoachProfile c = makeActiveCoach(coachId, userId);
         c.setStatus(CoachProfileStatus.DRAFT);
+        return c;
+    }
+
+    /** Deferred-81 AC1: a coach with a caller-chosen display name, for batched-lookup test assertions. */
+    private CoachProfile makeCoachNamed(UUID coachId, Long userId, String displayName) {
+        CoachProfile c = makeActiveCoach(coachId, userId);
+        c.setDisplayName(displayName);
         return c;
     }
 
@@ -1514,6 +1662,15 @@ class BookingServiceTest {
             emailField2.setAccessible(true);
             emailField2.set(u, email);
         } catch (Exception ignored) {}
+        return u;
+    }
+
+    /** Deferred-81 AC1: a User with an explicit id/name, for resolveParentNames batch-lookup tests. */
+    private User makeUserWithNameAndId(Long id, String firstName, String lastName) {
+        User u = new User();
+        u.setId(id);
+        u.setFirstName(firstName);
+        u.setLastName(lastName);
         return u;
     }
 }

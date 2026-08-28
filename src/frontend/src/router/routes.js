@@ -112,9 +112,11 @@ const routes = [
         meta: { requiresAuth: true },
       },
       {
+        // Dual-role (Deferred-81 AC4): a self-registered PLAYER can now purchase their own
+        // session pack, mirroring the request-booking route's dual-role widening below.
         path: 'parent/coaches/:coachId/purchase-sessions',
         component: () => import('pages/parent/SessionPackPurchasePage.vue'),
-        meta: { requiresAuth: true, role: 'PARENT' },
+        meta: { requiresAuth: true, roles: ['PARENT', 'PLAYER'] },
       },
       {
         path: 'parent/players/:playerId/packs',

@@ -19,6 +19,7 @@ import com.softropic.skillars.platform.payment.repo.StripeCustomer;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -33,6 +34,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -51,8 +53,22 @@ public class SessionPackPaymentService {
     private final PessimisticLockRetryer lockRetryer;
 
     public SessionPackPurchaseResponse purchasePack(Long parentId, UUID packTierId, Long playerId, String paymentMethodId) {
-        playerProfileRepository.findByIdAndParentId(playerId, parentId)
+        // Deferred-81 AC4: a self-registered (no-parent) player has parentId == null by
+        // definition, so the old findByIdAndParentId(playerId, parentId) lookup always returned
+        // empty for them — reworks this into the same parentId-vs-userId XOR branch
+        // BookingService.createBookingRequest/getParentPlayerSchedule and
+        // BookingBatchService.createBatch already use for the identical opaque-payer-id pattern.
+        PlayerProfile player = playerProfileRepository.findById(playerId)
             .orElseThrow(() -> new ResourceNotFoundException("Player not found", "player_profile"));
+        if (player.getParentId() != null) {
+            if (!Objects.equals(player.getParentId(), parentId)) {
+                throw new OperationNotAllowedException("Parent does not own this player", SecurityError.MISSING_RIGHTS);
+            }
+        } else {
+            if (!Objects.equals(player.getUserId(), parentId)) {
+                throw new OperationNotAllowedException("Player does not own this profile", SecurityError.MISSING_RIGHTS);
+            }
+        }
 
         SessionPackTier tier = sessionPackTierRepository.findById(packTierId)
             .orElseThrow(() -> new ResourceNotFoundException("Session pack tier not found", "session_pack_tier"));
