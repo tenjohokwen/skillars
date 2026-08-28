@@ -19,6 +19,7 @@ import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingBatch;
 import com.softropic.skillars.platform.booking.repo.BookingBatchRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.booking.repo.CoachAvailabilityBlockRepository;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
@@ -69,6 +70,7 @@ public class BookingBatchService {
     private final BookingService bookingService;
     private final SessionDurationResolver sessionDurationResolver;
     private final CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
+    private final CoachAvailabilityBlockRepository coachAvailabilityBlockRepository;
     private final PlatformTransactionManager transactionManager;
     private final PessimisticLockRetryer lockRetryer;
     private final EntityManager entityManager;
@@ -279,6 +281,15 @@ public class BookingBatchService {
                 Map.of("requested start time", slot.requestedStartTime(),
                     "requested end time", slot.requestedEndTime()),
                 BookingError.SLOT_OUTSIDE_AVAILABILITY);
+        }
+        // Deferred-79 AC1: called twice by createBatch (initial validation, then the pre-commit
+        // re-check) via this shared helper — one change here covers both call sites.
+        if (bookingService.isSlotBlocked(slot.requestedStartTime(), slot.requestedEndTime(), coachId)) {
+            throw new OperationNotAllowedException(
+                "Coach has blocked out this time",
+                Map.of("requested start time", slot.requestedStartTime(),
+                    "requested end time", slot.requestedEndTime()),
+                BookingError.SLOT_BLOCKED_BY_COACH);
         }
     }
 

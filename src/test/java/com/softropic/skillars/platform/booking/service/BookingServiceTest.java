@@ -81,6 +81,7 @@ class BookingServiceTest {
     @Mock private CoachProfileRepository coachProfileRepository;
     @Mock private PaymentGateway paymentGateway;
     @Mock private CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
+    @Mock private com.softropic.skillars.platform.booking.repo.CoachAvailabilityBlockRepository coachAvailabilityBlockRepository;
     @Mock private PlayerProfileRepository playerProfileRepository;
     @Mock private UserRepository userRepository;
     @Mock private ApplicationEventPublisher eventPublisher;
@@ -220,6 +221,61 @@ class BookingServiceTest {
         verify(bookingRepository).findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class),
             eq(List.of("REQUESTED", "ACCEPTED", "PAYMENT_PENDING", "CONFIRMED", "UPCOMING", "IN_PROGRESS", "PAUSED")),
             isNull());
+    }
+
+    // ---- Deferred-79 AC1: CoachAvailabilityBlock enforcement ----
+
+    @Test
+    void createBookingRequest_slotOverlapsActiveBlock_throwsSlotBlockedByCoach() {
+        PlayerProfile player = makePlayer(PLAYER_ID, PARENT_ID);
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        CoachAvailabilityWindow window = makeCoveringWindow(COACH_ID);
+
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID)).thenReturn(List.of(window));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(coachAvailabilityBlockRepository.findByCoachIdAndEndDatetimeAfterAndStartDatetimeBefore(
+                eq(COACH_ID), any(Instant.class), any(Instant.class)))
+            .thenReturn(List.of(new com.softropic.skillars.platform.booking.repo.CoachAvailabilityBlock()));
+
+        CreateBookingRequest req = makeValidRequest(COACH_ID, PLAYER_ID, window);
+
+        assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(ex -> assertThat(((OperationNotAllowedException) ex).getErrorCode())
+                .isEqualTo(BookingError.SLOT_BLOCKED_BY_COACH));
+        verify(bookingRepository, never()).save(any(Booking.class));
+        // Confirms the block check runs before the overlap check (window, then block, then overlap).
+        verify(bookingRepository, never()).findOverlappingBookings(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void createBookingRequest_slotOutsideAnyBlock_createsRequestedBooking() {
+        PlayerProfile player = makePlayer(PLAYER_ID, PARENT_ID);
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        CoachAvailabilityWindow window = makeCoveringWindow(COACH_ID);
+        Booking savedBooking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID)).thenReturn(List.of(window));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(coachAvailabilityBlockRepository.findByCoachIdAndEndDatetimeAfterAndStartDatetimeBefore(
+                eq(COACH_ID), any(Instant.class), any(Instant.class)))
+            .thenReturn(List.of());
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of());
+        when(bookingRepository.save(any(Booking.class))).thenReturn(savedBooking);
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+
+        CreateBookingRequest req = makeValidRequest(COACH_ID, PLAYER_ID, window);
+        BookingResponse response = bookingService.createBookingRequest(PARENT_ID, req);
+
+        assertThat(response).isNotNull();
+        verify(bookingRepository).save(any(Booking.class));
     }
 
     @Test

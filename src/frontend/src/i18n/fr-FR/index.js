@@ -1219,6 +1219,9 @@ export default {
       startTimeInPast: 'Cet horaire est déjà passé. Veuillez choisir un créneau ultérieur.',
       invalidTimeRange: 'La fin de la séance doit être postérieure à son début.',
       slotOutsideAvailability: 'Cet horaire est en dehors des disponibilités de ce coach.',
+      slotBlockedByCoach: 'Ce coach a bloqué ce créneau horaire.',
+      blockOverlapsBooking:
+        "Vous avez déjà une réservation à cet horaire — annulez-la ou reprogrammez-la d'abord si vous souhaitez bloquer ce créneau.",
       sessionCrossesMidnight: "Une séance ne peut pas s'étendre au-delà de minuit.",
       availabilityChanged: "La disponibilité de ce coach a changé depuis le chargement de cette page. Veuillez choisir un nouveau créneau.",
       weekStartOutOfRange: "Cette semaine est trop éloignée dans le passé ou le futur pour être affichée.",

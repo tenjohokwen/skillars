@@ -229,6 +229,52 @@ class BookingDuplicationServiceTest {
         verify(packSessionService, never()).findActivePackId(any(), any());
     }
 
+    /** Deferred-79 AC1: repeat-next-week must not land on a slot the coach has explicitly blocked out. */
+    @Test
+    void duplicateNextWeek_slotOverlapsActiveBlock_throwsSlotBlockedByCoach() {
+        Instant originalStart = Instant.now().minus(6, ChronoUnit.DAYS);
+        completedBooking.setRequestedStartTime(originalStart);
+        completedBooking.setRequestedEndTime(originalStart.plus(1, ChronoUnit.HOURS));
+
+        when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
+        when(bookingService.isSlotBlocked(any(), any(), any())).thenReturn(true);
+
+        assertThatThrownBy(() -> service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.SLOT_BLOCKED_BY_COACH));
+
+        verify(bookingRepository, never()).findOverlappingBookings(any(), any(), any(), any(), any());
+        verify(bookingRepository, never()).save(any());
+        verify(packSessionService, never()).findActivePackId(any(), any());
+    }
+
+    @Test
+    void duplicateNextWeek_slotNotBlocked_succeeds() {
+        Instant originalStart = Instant.now().minus(6, ChronoUnit.DAYS);
+        completedBooking.setRequestedStartTime(originalStart);
+        completedBooking.setRequestedEndTime(originalStart.plus(1, ChronoUnit.HOURS));
+
+        when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
+        when(bookingService.isSlotBlocked(any(), any(), any())).thenReturn(false);
+        when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any())).thenReturn(List.of());
+        Booking savedDuplicate = new Booking();
+        savedDuplicate.setId(UUID.randomUUID());
+        when(bookingRepository.save(any())).thenReturn(savedDuplicate);
+        when(packSessionService.findActivePackId(any(), any())).thenReturn(Optional.empty());
+
+        UUID duplicateId = service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID);
+
+        assertThat(duplicateId).isNotNull();
+        verify(bookingRepository).save(any(Booking.class));
+    }
+
     /** Deferred-50 AC1: repeat-next-week must not double-book the coach at the duplicated slot. */
     @Test
     void duplicateNextWeek_overlapsAnotherBooking_throwsSlotUnavailable() {

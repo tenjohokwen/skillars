@@ -247,6 +247,41 @@ class RescheduleServiceTest {
         verify(rescheduleRepo, never()).save(any());
     }
 
+    // ---- Deferred-79 AC1: CoachAvailabilityBlock enforcement ----
+
+    @Test
+    void requestReschedule_slotOverlapsActiveBlock_throwsSlotBlockedByCoach() {
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
+        when(bookingService.isSlotBlocked(any(), any(), any())).thenReturn(true);
+
+        Instant proposedStart = Instant.now().plus(3, ChronoUnit.DAYS);
+        assertThatThrownBy(() -> service.requestReschedule(BOOKING_ID, PARENT_ID,
+            new CreateRescheduleRequest(proposedStart, proposedStart.plus(1, ChronoUnit.HOURS), null)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.SLOT_BLOCKED_BY_COACH));
+
+        verify(rescheduleRepo, never()).save(any());
+    }
+
+    @Test
+    void requestReschedule_slotOutsideAnyBlock_createsRequest() {
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
+        when(bookingService.isSlotBlocked(any(), any(), any())).thenReturn(false);
+        when(rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(BOOKING_ID, "PENDING"))
+            .thenReturn(Optional.empty());
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(rescheduleRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        Instant proposedStart = Instant.now().plus(3, ChronoUnit.DAYS);
+        service.requestReschedule(BOOKING_ID, PARENT_ID,
+            new CreateRescheduleRequest(proposedStart, proposedStart.plus(1, ChronoUnit.HOURS), null));
+
+        verify(rescheduleRepo).save(any(BookingRescheduleRequest.class));
+    }
+
     @Test
     void requestReschedule_slotWithinAvailabilityWindow_createsRequest() {
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
@@ -486,6 +521,73 @@ class RescheduleServiceTest {
         verify(bookingRepository, never()).findOverlappingBookings(any(), any(), any(), any(), any());
         verify(bookingRepository, never()).save(any());
         verify(eventPublisher, never()).publishEvent(any(RescheduleAcceptedEvent.class));
+    }
+
+    /**
+     * Deferred-79 AC1: accept-time re-check, a fresh independent lookup — mirrors the availability
+     * re-check test above. The block check sits between the window check and the overlap check, so
+     * the overlap query is unreachable here and must not be stubbed (unreachable stubs fail strict
+     * Mockito verification).
+     */
+    @Test
+    void acceptReschedule_slotOverlapsActiveBlock_throwsSlotBlockedByCoach() {
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+
+        Instant originalStart = confirmedBooking.getRequestedStartTime();
+        Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        Instant proposedEnd = proposedStart.plus(1, ChronoUnit.HOURS);
+        BookingRescheduleRequest pending = new BookingRescheduleRequest();
+        pending.setBookingId(BOOKING_ID);
+        pending.setStatus("PENDING");
+        pending.setProposedStartTime(proposedStart);
+        pending.setProposedEndTime(proposedEnd);
+        when(rescheduleRepo.findById(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+        when(rescheduleRepo.findByIdForUpdate(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+        when(coachProfileRepository.findByIdForUpdate(coach.getId())).thenReturn(Optional.of(coach));
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
+        when(bookingService.isSlotBlocked(any(), any(), any())).thenReturn(true);
+
+        assertThatThrownBy(() -> service.acceptReschedule(BOOKING_ID, RESCHEDULE_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.SLOT_BLOCKED_BY_COACH));
+
+        assertThat(confirmedBooking.getRequestedStartTime())
+            .as("booking times must be left untouched when the coach has blocked out the slot")
+            .isEqualTo(originalStart);
+        assertThat(pending.getStatus()).isEqualTo("PENDING");
+        verify(bookingRepository, never()).findOverlappingBookings(any(), any(), any(), any(), any());
+        verify(bookingRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any(RescheduleAcceptedEvent.class));
+    }
+
+    @Test
+    void acceptReschedule_slotNotBlocked_succeeds() {
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+
+        Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        Instant proposedEnd = proposedStart.plus(1, ChronoUnit.HOURS);
+        BookingRescheduleRequest pending = new BookingRescheduleRequest();
+        pending.setBookingId(BOOKING_ID);
+        pending.setStatus("PENDING");
+        pending.setProposedStartTime(proposedStart);
+        pending.setProposedEndTime(proposedEnd);
+        when(rescheduleRepo.findById(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+        when(rescheduleRepo.findByIdForUpdate(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+        when(coachProfileRepository.findByIdForUpdate(coach.getId())).thenReturn(Optional.of(coach));
+        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(true);
+        when(bookingService.isSlotBlocked(any(), any(), any())).thenReturn(false);
+        when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(rescheduleRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(bookingRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.acceptReschedule(BOOKING_ID, RESCHEDULE_ID, COACH_USER_ID);
+
+        assertThat(pending.getStatus()).isEqualTo("ACCEPTED");
+        verify(bookingRepository).save(any(Booking.class));
+        verify(eventPublisher).publishEvent(any(RescheduleAcceptedEvent.class));
     }
 
     @Test

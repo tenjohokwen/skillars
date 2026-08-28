@@ -937,6 +937,9 @@ export default {
       startTimeInPast: 'That time has already passed. Pick a later slot.',
       invalidTimeRange: 'The session end time must be after its start time.',
       slotOutsideAvailability: "That time is outside this coach's available hours.",
+      slotBlockedByCoach: 'This coach has blocked out that time.',
+      blockOverlapsBooking:
+        'You already have a booking during this time — cancel or reschedule it first if you need to block this time out.',
       sessionCrossesMidnight: 'A session cannot cross midnight.',
       availabilityChanged: "This coach's availability changed since you loaded this page. Please pick a new time.",
       weekStartOutOfRange: 'That week is too far in the past or future to view.',

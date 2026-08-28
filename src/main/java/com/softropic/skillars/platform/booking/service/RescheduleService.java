@@ -15,6 +15,7 @@ import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequest;
 import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequestRepository;
+import com.softropic.skillars.platform.booking.repo.CoachAvailabilityBlockRepository;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
@@ -79,6 +80,7 @@ public class RescheduleService {
     // JPQL and returns an already-managed instance untouched. BookingService injects one the same way.
     private final EntityManager entityManager;
     private final CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
+    private final CoachAvailabilityBlockRepository coachAvailabilityBlockRepository;
     private final PessimisticLockRetryer lockRetryer;
 
     @Transactional
@@ -223,6 +225,14 @@ public class RescheduleService {
                 "Proposed slot is not within coach availability",
                 Map.of("proposed start time", req.proposedStartTime(), "proposed end time", req.proposedEndTime()),
                 BookingError.SLOT_OUTSIDE_AVAILABILITY);
+        }
+        // Deferred-79 AC1: request-time proposal check — the accept-time re-check below in
+        // acceptRescheduleShared repeats this against a freshly re-fetched block set.
+        if (bookingService.isSlotBlocked(req.proposedStartTime(), req.proposedEndTime(), booking.getCoachId())) {
+            throw new OperationNotAllowedException(
+                "Coach has blocked out this time",
+                Map.of("proposed start time", req.proposedStartTime(), "proposed end time", req.proposedEndTime()),
+                BookingError.SLOT_BLOCKED_BY_COACH);
         }
 
         rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(bookingId, "PENDING")
@@ -401,6 +411,15 @@ public class RescheduleService {
                 Map.of("submitted coach id", coach.getId(), "proposed start time", lockedReq.getProposedStartTime(),
                     "proposed end time", lockedReq.getProposedEndTime()),
                 BookingError.SLOT_OUTSIDE_AVAILABILITY);
+        }
+        // Deferred-79 AC1: accept-time re-check — a fresh, independent lookup against
+        // isSlotBlocked's own repository-backed query, not a cached copy from proposal time.
+        if (bookingService.isSlotBlocked(lockedReq.getProposedStartTime(), lockedReq.getProposedEndTime(), coach.getId())) {
+            throw new OperationNotAllowedException(
+                "Coach has blocked out this time",
+                Map.of("submitted coach id", coach.getId(), "proposed start time", lockedReq.getProposedStartTime(),
+                    "proposed end time", lockedReq.getProposedEndTime()),
+                BookingError.SLOT_BLOCKED_BY_COACH);
         }
 
         List<Booking> overlapping = bookingRepository.findOverlappingBookings(

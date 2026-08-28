@@ -4,7 +4,9 @@ import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.booking.contract.AvailabilityWindowResponse;
 import com.softropic.skillars.platform.booking.contract.AvailableSlotResponse;
+import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.CoachAvailabilityResponse;
+import com.softropic.skillars.platform.booking.contract.CreateBlockRequest;
 import com.softropic.skillars.platform.booking.contract.UpdateWindowRequest;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
@@ -14,6 +16,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import jakarta.persistence.EntityManager;
 import org.instancio.Instancio;
 import org.junit.jupiter.api.BeforeEach;
@@ -916,5 +919,71 @@ class AvailabilityServiceTest {
             AvailabilityService.computeAvailabilitySignature(List.of(window), Duration.ofMinutes(90));
 
         assertThat(withChangedDuration).isNotEqualTo(baseline);
+    }
+
+    // ----- addBlock tests (Deferred-79 AC2) -----
+
+    @Test
+    void addBlock_overlapsActiveBooking_throwsBlockOverlapsBooking() {
+        UUID coachId = UUID.randomUUID();
+        CoachProfile profile = makeCoachProfile(coachId, COACH_USER_ID);
+        Instant start = Instant.now().plus(3, java.time.temporal.ChronoUnit.DAYS);
+        Instant end = start.plusSeconds(3600);
+        Booking conflicting = makeBooking(coachId, start);
+        conflicting.setStatus("CONFIRMED");
+
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(profile));
+        when(bookingRepository.findOverlappingBookings(
+                coachId, start, end, BookingService.ACTIVE_SLOT_STATUSES, null))
+            .thenReturn(List.of(conflicting));
+
+        CreateBlockRequest req = new CreateBlockRequest(start, end, "Vacation");
+
+        assertThatThrownBy(() -> service.addBlock(COACH_USER_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.BLOCK_OVERLAPS_BOOKING));
+
+        verify(blockRepository, org.mockito.Mockito.never()).save(any());
+    }
+
+    @Test
+    void addBlock_noOverlappingBooking_succeeds() {
+        UUID coachId = UUID.randomUUID();
+        CoachProfile profile = makeCoachProfile(coachId, COACH_USER_ID);
+        Instant start = Instant.now().plus(3, java.time.temporal.ChronoUnit.DAYS);
+        Instant end = start.plusSeconds(3600);
+
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(profile));
+        when(bookingRepository.findOverlappingBookings(
+                coachId, start, end, BookingService.ACTIVE_SLOT_STATUSES, null))
+            .thenReturn(List.of());
+        when(blockRepository.save(any(CoachAvailabilityBlock.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.addBlock(COACH_USER_ID, new CreateBlockRequest(start, end, "Vacation"));
+
+        verify(blockRepository).save(any(CoachAvailabilityBlock.class));
+    }
+
+    @Test
+    void addBlock_overlappingBookingInTerminalStatus_doesNotBlock() {
+        UUID coachId = UUID.randomUUID();
+        CoachProfile profile = makeCoachProfile(coachId, COACH_USER_ID);
+        Instant start = Instant.now().plus(3, java.time.temporal.ChronoUnit.DAYS);
+        Instant end = start.plusSeconds(3600);
+
+        // CANCELLED_PARENT is not in BookingService.ACTIVE_SLOT_STATUSES, so
+        // findOverlappingBookings (whose query already filters by that status list) would never
+        // return it here — this test pins that a terminal-status booking cannot block a new
+        // CoachAvailabilityBlock, matching every other overlap check in this codebase.
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(profile));
+        when(bookingRepository.findOverlappingBookings(
+                coachId, start, end, BookingService.ACTIVE_SLOT_STATUSES, null))
+            .thenReturn(List.of());
+        when(blockRepository.save(any(CoachAvailabilityBlock.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.addBlock(COACH_USER_ID, new CreateBlockRequest(start, end, "Vacation"));
+
+        verify(blockRepository).save(any(CoachAvailabilityBlock.class));
     }
 }

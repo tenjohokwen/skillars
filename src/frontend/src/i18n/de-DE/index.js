@@ -480,6 +480,9 @@ export default {
       startTimeInPast: 'Dieser Zeitpunkt liegt bereits in der Vergangenheit. Bitte wählen Sie einen späteren Termin.',
       invalidTimeRange: 'Das Ende der Sitzung muss nach ihrem Beginn liegen.',
       slotOutsideAvailability: 'Dieser Zeitpunkt liegt außerhalb der verfügbaren Zeiten dieses Coaches.',
+      slotBlockedByCoach: 'Dieser Coach hat diese Zeit blockiert.',
+      blockOverlapsBooking:
+        'Sie haben bereits eine Buchung zu dieser Zeit — stornieren oder verschieben Sie diese zuerst, wenn Sie diese Zeit blockieren möchten.',
       sessionCrossesMidnight: 'Eine Sitzung darf nicht über Mitternacht hinausgehen.',
       availabilityChanged: 'Die Verfügbarkeit dieses Coaches hat sich seit dem Laden dieser Seite geändert. Bitte wählen Sie eine neue Zeit.',
       weekStartOutOfRange: 'Diese Woche liegt zu weit in der Vergangenheit oder Zukunft, um sie anzuzeigen.',
