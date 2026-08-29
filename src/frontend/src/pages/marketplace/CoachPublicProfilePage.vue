@@ -191,7 +191,7 @@
             class="full-width"
             size="md"
             :label="ctaLabel"
-            :loading="authStore.isParent && bookingStore.packsLoading"
+            :loading="(authStore.isParent || authStore.isPlayer) && bookingStore.packsLoading"
             @click="handleCta"
           />
         </div>
@@ -278,8 +278,7 @@ const hasCreditsForCoach = computed(() =>
 )
 
 const ctaLabel = computed(() => {
-  if (authStore.isPlayer) return t('marketplace.bookSession')
-  if (!authStore.isParent) return t('marketplace.signUpToBook')
+  if (!authStore.isParent && !authStore.isPlayer) return t('marketplace.signUpToBook')
   return hasCreditsForCoach.value ? t('marketplace.bookSession') : t('booking.packs.buySessions')
 })
 
@@ -302,9 +301,6 @@ onMounted(async () => {
         await bookingStore.loadPlayerPacks(playerStore.activePlayerId)
       }
     } else if (authStore.isPlayer) {
-      // Packs are out of scope for a self-booking player (session-pack purchase requires both
-      // parent_id and player_id — a self-registered player has no ownable pack), so no pack
-      // loading here. The page still renders coach pricing above for a per-session quote.
       try {
         selfPlayerId.value = await playerStore.fetchSelfPlayerId()
       } catch (profileErr) {
@@ -315,6 +311,13 @@ onMounted(async () => {
         if (profileErr.response?.status !== 404) {
           $q.notify({ type: 'negative', message: t('common.errorGeneric') })
         }
+      }
+      // Deferred-82 AC2: mirrors the parent branch above now that Deferred-81 AC4 unlocked
+      // self-booking pack ownership (parentId-vs-getUserId() XOR check on the backend). Kept
+      // out of the fetchSelfPlayerId try/catch above so a pack-load failure isn't misreported
+      // as a profile-not-found case; only attempted once an id actually resolved.
+      if (selfPlayerId.value) {
+        await bookingStore.loadPlayerPacks(selfPlayerId.value)
       }
     }
   } catch (err) {
@@ -329,14 +332,19 @@ onMounted(async () => {
 function handleCta() {
   if (!profile.value) return
   if (authStore.isPlayer) {
-    // Packs are out of scope for a self-booking player — always go straight to the
-    // booking-request flow, using the player's own id rather than a playerId query param
-    // sourced from playerStore (a parent's linked-children store, meaningless here).
-    const params = new URLSearchParams()
-    if (selfPlayerId.value) params.set('playerId', selfPlayerId.value)
-    if (profile.value?.displayName) params.set('coachName', profile.value.displayName)
-    const qs = params.toString()
-    router.push(`/parent/coaches/${coachId}/request-booking${qs ? `?${qs}` : ''}`)
+    // Deferred-82 AC2: mirrors the parent branch below now that a self-booking player can hold
+    // credits with this coach too — route to a per-session request or straight to purchase based
+    // on existing credits, using the player's own id rather than a playerId query param sourced
+    // from playerStore (a parent's linked-children store, meaningless here).
+    if (hasCreditsForCoach.value) {
+      const params = new URLSearchParams()
+      if (selfPlayerId.value) params.set('playerId', selfPlayerId.value)
+      if (profile.value?.displayName) params.set('coachName', profile.value.displayName)
+      const qs = params.toString()
+      router.push(`/parent/coaches/${coachId}/request-booking${qs ? `?${qs}` : ''}`)
+    } else {
+      router.push(`/parent/coaches/${coachId}/purchase-sessions`)
+    }
   } else if (authStore.isParent) {
     if (hasCreditsForCoach.value) {
       const playerId = playerStore.activePlayerId

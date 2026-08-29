@@ -45,6 +45,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -1008,5 +1009,22 @@ class AvailabilityServiceTest {
         service.deleteBlock(COACH_USER_ID, blockId);
 
         verify(blockRepository).delete(block);
+    }
+
+    @Test
+    void deleteBlock_notFoundOrNotOwned_throwsOperationNotAllowed() {
+        UUID coachId = UUID.randomUUID();
+        UUID blockId = UUID.randomUUID();
+        CoachProfile profile = makeCoachProfile(coachId, COACH_USER_ID);
+
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(profile));
+        when(coachProfileRepository.findByIdForUpdate(coachId)).thenReturn(Optional.of(profile));
+        when(blockRepository.findByIdAndCoachId(blockId, coachId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.deleteBlock(COACH_USER_ID, blockId))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining("Block not found or not owned by coach");
+
+        verify(blockRepository, never()).delete(any());
     }
 }
