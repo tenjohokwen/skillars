@@ -17,12 +17,15 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
 
 class AccountDeletionCascadeIT extends BaseVideoIT {
 
@@ -31,7 +34,7 @@ class AccountDeletionCascadeIT extends BaseVideoIT {
     @Autowired AccountDeletionCascadeListener listener;
     @Autowired VideoDeletionService videoDeletionService;
     @Autowired VideoRepository videoRepository;
-    @Autowired VideoDeletionOutboxRepository outboxRepository;
+    @MockitoSpyBean VideoDeletionOutboxRepository outboxRepository;
     @Autowired VideoApprovalRequestRepository approvalRequestRepository;
     @Autowired ApplicationEventPublisher eventPublisher;
     @Autowired TransactionTemplate transactionTemplate;
@@ -176,6 +179,29 @@ class AccountDeletionCascadeIT extends BaseVideoIT {
             .hasSize(1)
             .first()
             .satisfies(row -> assertThat(row.getBunnyVideoId()).isNull());
+    }
+
+    @Test
+    void onAccountDeleted_secondVideoFailsMidCascade_firstVideoStaysCommittedSecondRollsBack() {
+        String coachOwnerId = "coach-uuid-" + java.util.UUID.randomUUID();
+        Video videoA = seedVideo(coachOwnerId, "asset-partial-a");
+        Video videoB = seedVideo(coachOwnerId, "asset-partial-b");
+
+        doThrow(new RuntimeException("simulated outbox failure"))
+            .when(outboxRepository)
+            .save(argThat(outbox -> outbox.getVideoId().equals(videoB.getId())));
+
+        AccountDeletionRequestedEvent event =
+            new AccountDeletionRequestedEvent(coachOwnerId, AccountRole.COACH, List.of());
+        listener.onAccountDeleted(event);
+
+        assertThat(videoRepository.findById(videoA.getId()).orElseThrow().getOperationalState())
+            .isEqualTo(OperationalState.PURGED);
+        assertThat(outboxRepository.existsByVideoIdAndStatus(videoA.getId(), "PENDING")).isTrue();
+
+        assertThat(videoRepository.findById(videoB.getId()).orElseThrow().getOperationalState())
+            .isEqualTo(OperationalState.READY);
+        assertThat(outboxRepository.existsByVideoIdAndStatus(videoB.getId(), "PENDING")).isFalse();
     }
 
     private VideoApprovalRequest seedPendingApproval(java.util.UUID videoId, long playerId, long parentId) {
