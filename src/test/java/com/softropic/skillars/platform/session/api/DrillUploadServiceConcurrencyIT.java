@@ -370,4 +370,96 @@ class DrillUploadServiceConcurrencyIT extends BaseSessionIT {
                 + "two (double-publish)")
             .isEqualTo(1);
     }
+
+    /**
+     * Deferred-83 AC2: {@link #deleteVideo_concurrentCallsOnTwoClonesSharingOneVideoId_doesNotDoublePublishDeletionEvent()}
+     * above proves only the end result — the same outcome could occur by incidental thread
+     * scheduling even if the lock were silently removed. This test proves the video-row lock itself
+     * (the cross-drill {@code VideoRepository.findByIdForUpdate(videoId)} mechanism this AC targets)
+     * actually CAUSES serialization: an external holder — mirroring this exact file's own already-
+     * established {@link #initiateUpload_briefContention_succeedsAfterBoundedRetry()} pattern — takes
+     * a raw {@code SELECT ... FOR UPDATE} on the video row for a known duration, then
+     * {@code deleteVideo} is called on an independent clone sharing that same videoId. Completion
+     * only AFTER the hold elapses is direct proof {@link PessimisticLockRetryer} genuinely waited out
+     * (retried against) the video-row lock: an unrelated coincidence in scheduling cannot produce
+     * this outcome, since the holder is an entirely separate, externally controlled transaction, not
+     * a second racing application call whose ordering could get lucky.
+     *
+     * <p>A Mockito-based interception of {@code VideoRepository.findByIdForUpdate} (recording each
+     * caught {@code PessimisticLockingFailureException} before {@link PessimisticLockRetryer} retries
+     * it, so the proof would be timing-independent) was tried first. It does not work in this
+     * codebase: Spring Data JPA repository methods are interface methods with no bytecode body, so
+     * Mockito's {@code callRealMethod()} — needed to preserve genuine locking behavior while still
+     * observing the exception — throws {@code MockitoException: Cannot call abstract real method on
+     * java object!} for every invocation path tried, including retrieving the spy's own recorded
+     * spied instance via {@code Mockito.mockingDetails(...).getMockCreationSettings()
+     * .getSpiedInstance()} (which {@code @MockitoSpyBean} leaves {@code null} for this repository).
+     * The externally-held-lock design below reuses this file's own accepted elapsed-time-threshold
+     * convention instead (same {@code holdMillis - 200} tolerance as the brief-contention test above).
+     */
+    @Test
+    @Timeout(30)
+    void deleteVideo_videoRowHeldByAnotherTransaction_waitsOutTheLockBeforeCompleting() throws Exception {
+        UUID sourceDrillId = UUID.randomUUID();
+        insertDrill(sourceDrillId, "Platform Source Drill Causality", "PLATFORM", null, "ACTIVE");
+        UUID videoId = UUID.randomUUID();
+        insertVideoRow(videoId);
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO session.drill_video_refs (drill_id, video_id, ref_count) VALUES (?, ?, 1)",
+                sourceDrillId, videoId);
+            return null;
+        });
+
+        DrillResponse clone = drillLibraryService.cloneDrill(sourceDrillId, COACH_USER_ID);
+        UUID cloneDrillId = clone.id();
+
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update("DELETE FROM session.drill_video_refs WHERE drill_id = ?", sourceDrillId);
+            return null;
+        });
+
+        long holdMillis = 1200;
+        CountDownLatch lockHeld = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> holder = pool.submit(() -> transactionTemplate.execute(status -> {
+                jdbcTemplate.query("SELECT id FROM main.videos WHERE id = ? FOR UPDATE",
+                    rs -> { }, videoId);
+                lockHeld.countDown();
+                try {
+                    Thread.sleep(holdMillis);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return null;
+            }));
+
+            assertThat(lockHeld.await(5, TimeUnit.SECONDS))
+                .as("holder must acquire the video-row lock first").isTrue();
+
+            Instant start = Instant.now();
+            Future<?> contender = pool.submit(() -> {
+                drillUploadService.deleteVideo(cloneDrillId, COACH_USER_ID);
+                return null;
+            });
+            contender.get(20, TimeUnit.SECONDS);
+            long elapsedMillis = Duration.between(start, Instant.now()).toMillis();
+            holder.get(15, TimeUnit.SECONDS);
+
+            assertThat(elapsedMillis)
+                .as("deleteVideo must have genuinely waited out the externally-held video-row lock "
+                    + "via PessimisticLockRetryer's retry loop, not completed instantly — an instant "
+                    + "completion would mean the videoId findByIdForUpdate lock did not actually "
+                    + "serialize against the holder")
+                .isGreaterThanOrEqualTo(holdMillis - 200);
+
+            assertThat(jdbcTemplate.queryForObject(
+                "SELECT video_id FROM session.drill_video_refs WHERE drill_id = ?", UUID.class, cloneDrillId))
+                .as("the delete must still complete correctly once the lock is released")
+                .isNull();
+        } finally {
+            pool.shutdownNow();
+        }
+    }
 }

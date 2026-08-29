@@ -71,7 +71,7 @@
         <div class="glass-card q-pa-md q-mb-md row items-center q-gutter-sm">
           <q-rating
             v-if="profile.reviewCount > 0"
-            :model-value="profile.aggregateRating"
+            :model-value="profile.averageRating"
             readonly
             size="18px"
             color="amber"
@@ -79,10 +79,98 @@
           <span class="text-body2" style="color: var(--text-secondary)">
             {{
               profile.reviewCount > 0
-                ? `${profile.aggregateRating.toFixed(1)} (${profile.reviewCount})`
+                ? `${profile.averageRating.toFixed(1)} (${profile.reviewCount})`
                 : t('marketplace.noReviewsYet')
             }}
           </span>
+        </div>
+
+        <!-- Reviews -->
+        <div class="glass-card q-pa-md q-mb-md">
+          <div v-if="reviewsTotalElements === 0" class="text-body2" style="color: var(--text-secondary)">
+            {{ t('marketplace.noReviewsYet') }}
+          </div>
+          <template v-else>
+            <div
+              v-for="review in reviews"
+              :key="review.reviewId"
+              class="review-item q-mb-md"
+            >
+              <div class="row items-center q-gutter-sm q-mb-xs">
+                <q-rating :model-value="review.rating" readonly size="16px" color="amber" />
+                <span class="text-caption" style="color: var(--text-secondary)">
+                  {{ review.authorRole === 'PARENT' ? t('parent.nav') : t('player.nav') }}
+                  · {{ formatDate(review.createdAt) }}
+                </span>
+              </div>
+              <div v-if="review.body" class="text-body2" style="color: var(--text-primary)">
+                {{ review.body }}
+              </div>
+              <div
+                v-if="review.coachResponseBody?.trim()"
+                class="coach-response q-mt-sm q-pa-sm"
+              >
+                <div class="text-caption text-weight-bold" style="color: var(--text-secondary)">
+                  {{ t('reviews.coachResponseLabel') }}
+                </div>
+                <div class="text-body2" style="color: var(--text-primary)">
+                  {{ review.coachResponseBody }}
+                </div>
+              </div>
+            </div>
+            <q-btn
+              v-if="reviewsHasNext"
+              flat
+              dense
+              :label="t('reviews.loadMore')"
+              :loading="reviewsLoadingMore"
+              @click="loadMoreReviews"
+            />
+          </template>
+        </div>
+
+        <!-- Write / edit review (eligible parent or player only) -->
+        <div
+          v-if="authStore.isParent || authStore.isPlayer"
+          class="glass-card q-pa-md q-mb-md"
+        >
+          <template v-if="myReview">
+            <div class="text-subtitle1 q-mb-xs" style="color: var(--text-primary)">
+              {{ t('reviews.yourReview') }}
+            </div>
+            <q-rating
+              :model-value="myReview.rating"
+              readonly
+              size="18px"
+              color="amber"
+              class="q-mb-xs"
+            />
+            <div v-if="myReview.body" class="text-body2 q-mb-sm" style="color: var(--text-primary)">
+              {{ myReview.body }}
+            </div>
+            <div
+              v-if="myReview.moderationStatus === 'PENDING' || myReview.moderationStatus === 'UNDER_REVIEW'"
+              class="text-caption q-mb-sm"
+              style="color: var(--text-secondary)"
+            >
+              {{ t('reviews.pendingModeration') }}
+            </div>
+            <div
+              v-if="myReview.moderationStatus === 'BLOCKED'"
+              class="text-caption text-negative q-mb-sm"
+            >
+              {{ t('reviews.blocked') }}
+            </div>
+            <q-btn flat dense :label="t('reviews.editReview')" @click="openEditReview" />
+          </template>
+          <template v-else-if="showWriteReviewButton">
+            <q-btn
+              unelevated
+              color="primary"
+              :label="t('reviews.writeReview')"
+              @click="openWriteReview"
+            />
+          </template>
         </div>
 
         <!-- Bio -->
@@ -226,6 +314,50 @@
         </div>
       </q-card>
     </q-dialog>
+
+    <!-- Write / edit review dialog -->
+    <q-dialog v-model="reviewDialogOpen">
+      <q-card style="min-width: 320px; max-width: 480px; width: 100%">
+        <q-card-section>
+          <div class="text-h6">
+            {{ reviewDialogMode === 'edit' ? t('reviews.editReview') : t('reviews.writeReview') }}
+          </div>
+        </q-card-section>
+        <q-card-section>
+          <div class="text-caption q-mb-xs">{{ t('reviews.ratingLabel') }}</div>
+          <q-rating
+            v-model="reviewDialogRating"
+            size="48px"
+            color="amber"
+            icon="star_border"
+            icon-selected="star"
+            :max="5"
+            class="q-mb-md"
+          />
+          <q-input
+            v-model="reviewDialogBody"
+            type="textarea"
+            :label="t('reviews.bodyLabel')"
+            maxlength="1000"
+            filled
+          />
+          <div v-if="reviewDialogErrorMessage" class="text-negative text-caption q-mt-sm">
+            {{ reviewDialogErrorMessage }}
+          </div>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat :label="t('common.cancel')" v-close-popup />
+          <q-btn
+            unelevated
+            color="primary"
+            :label="reviewDialogMode === 'edit' ? t('reviews.save') : t('reviews.submit')"
+            :disable="!reviewDialogRating"
+            :loading="reviewDialogSubmitting"
+            @click="submitReviewDialog"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
 
@@ -235,6 +367,9 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { getCoachProfile } from 'src/api/marketplace.api'
+import { listCoachReviews, getMyReviewForCoach, submitReview, updateReview } from 'src/api/reviews.api'
+import { parseApiError } from 'src/utils/errorHandler'
+import { useErrorHandler } from 'src/composables/useErrorHandler'
 import { useAuthStore } from 'src/stores/auth.store'
 import { useBookingStore } from 'src/stores/booking.store'
 import { usePlayerStore } from 'src/stores/playerStore'
@@ -257,6 +392,26 @@ const loading = ref(true)
 const notFound = ref(false)
 const lightboxOpen = ref(false)
 const lightboxItem = ref(null)
+
+const reviews = ref([])
+const reviewsTotalElements = ref(0)
+const reviewsHasNext = ref(false)
+const reviewsCurrentPage = ref(0)
+const reviewsLoadingMore = ref(false)
+
+const myReview = ref(null)
+const showWriteReviewButton = ref(false)
+
+const reviewDialogOpen = ref(false)
+const reviewDialogMode = ref('write')
+const reviewDialogRating = ref(null)
+const reviewDialogBody = ref('')
+const reviewDialogSubmitting = ref(false)
+const {
+  setError: setReviewDialogError,
+  clearError: clearReviewDialogError,
+  errorMessage: reviewDialogErrorMessage,
+} = useErrorHandler()
 
 const coachId = route.params.coachId
 // UAT.5 AC4: resolved once for a self-registered player caller — the player's own player-profile
@@ -292,6 +447,11 @@ onMounted(async () => {
   try {
     const response = await getCoachProfile(coachId)
     profile.value = response
+
+    await fetchReviews(0)
+    if (authStore.isParent || authStore.isPlayer) {
+      await fetchMyReview()
+    }
 
     if (authStore.isParent) {
       if (!playerStore.activePlayerId) {
@@ -369,6 +529,89 @@ function openLightbox(item) {
   lightboxItem.value = item
   lightboxOpen.value = true
 }
+
+async function fetchReviews(page = 0) {
+  try {
+    const res = await listCoachReviews(coachId, page)
+    reviews.value = page === 0 ? res.reviews : reviews.value.concat(res.reviews)
+    reviewsTotalElements.value = res.totalElements
+    reviewsHasNext.value = res.hasNext
+    reviewsCurrentPage.value = res.page
+  } catch (err) {
+    console.error('Failed to load reviews', err)
+    $q.notify({ type: 'negative', message: t('common.errorGeneric') })
+  }
+}
+
+async function loadMoreReviews() {
+  reviewsLoadingMore.value = true
+  try {
+    await fetchReviews(reviewsCurrentPage.value + 1)
+  } finally {
+    reviewsLoadingMore.value = false
+  }
+}
+
+async function fetchMyReview() {
+  try {
+    myReview.value = await getMyReviewForCoach(coachId)
+    showWriteReviewButton.value = false
+  } catch (err) {
+    if (parseApiError(err).errorKey === 'reviews.reviewNotFound') {
+      myReview.value = null
+      showWriteReviewButton.value = true
+    } else {
+      console.error('Failed to load your review', err)
+      $q.notify({ type: 'negative', message: t('common.errorGeneric') })
+    }
+  }
+}
+
+function openWriteReview() {
+  reviewDialogMode.value = 'write'
+  reviewDialogRating.value = null
+  reviewDialogBody.value = ''
+  clearReviewDialogError()
+  reviewDialogOpen.value = true
+}
+
+function openEditReview() {
+  reviewDialogMode.value = 'edit'
+  reviewDialogRating.value = myReview.value?.rating ?? null
+  reviewDialogBody.value = myReview.value?.body ?? ''
+  clearReviewDialogError()
+  reviewDialogOpen.value = true
+}
+
+async function submitReviewDialog() {
+  reviewDialogSubmitting.value = true
+  clearReviewDialogError()
+  try {
+    if (reviewDialogMode.value === 'edit') {
+      await updateReview(myReview.value.reviewId, {
+        rating: reviewDialogRating.value,
+        body: reviewDialogBody.value,
+      })
+    } else {
+      await submitReview(coachId, {
+        rating: reviewDialogRating.value,
+        body: reviewDialogBody.value,
+      })
+    }
+    reviewDialogOpen.value = false
+    await fetchMyReview()
+    await fetchReviews(0)
+  } catch (err) {
+    setReviewDialogError(err)
+  } finally {
+    reviewDialogSubmitting.value = false
+  }
+}
+
+function formatDate(isoString) {
+  if (!isoString) return ''
+  return new Date(isoString).toLocaleDateString()
+}
 </script>
 
 <style lang="scss" scoped>
@@ -400,5 +643,15 @@ function openLightbox(item) {
   flex-shrink: 0;
   cursor: pointer;
   object-fit: cover;
+}
+
+.review-item:last-child {
+  margin-bottom: 0;
+}
+
+.coach-response {
+  border-left: 3px solid var(--border-subtle);
+  background: var(--surface-raised);
+  border-radius: 6px;
 }
 </style>

@@ -62,7 +62,17 @@ LOG="${1:?usage: assert-context-count.sh <build-log> [ceiling]}"
 # would mean the cache is thrashing on ordering alone, and the fix is to remove a context
 # configuration (or the remaining @DirtiesContext) so the suite sits below 32 distinct keys
 # with room to spare.
-CEILING="${2:-36}"
+#
+# CEILING = 37, deliberate +1 (skillars-deferred-83 AC1). AccountDeletionCascadeIT's
+# outboxRepository field moved from @Autowired to @MockitoSpyBean (mirrors CaptureReservationIT/
+# MessageModerationSweeperIT's own established "spy on a real repository to prove commit/
+# rollback" precedent). That changes the class's ContextCustomizer override set from
+# {VideoProviderAdapter} to {VideoProviderAdapter, VideoDeletionOutboxRepository}, which no
+# longer matches whichever other class it previously shared a context with -- forking a new one.
+# This is the deterministic, one-time cost the @MockitoBean trap describes (see
+# docs/testing/why-inheritance-over-import.md), not ordering-dependent thrashing: every local and
+# CI run of this branch reproduces exactly 37, not a range.
+CEILING="${2:-37}"
 
 if [ ! -f "$LOG" ]; then
   echo "assert-context-count: build log not found: $LOG" >&2

@@ -1,156 +1,172 @@
-# Story Review: skillars-deferred-82
+# Story Review: skillars-deferred-83
+
+**Reviewed:** 2026-08-29  
+**Reviewer:** Senior Dev Audit  
+**Status:** Ready for dev with noted timing assumptions
+
+---
 
 ## Summary
-This is a three-part story: one small, real, mechanical test-coverage fix (AC1), and two frontend UX completions for self-booking player pack management (AC2–AC3), plus ledger hygiene. The story is well-researched and thoroughly contextualized, but has several verification gaps that create risk.
+
+The story is well-structured with clear acceptance criteria. Combines two unrelated pieces of work (video-cascade test hardening + reviews module frontend) to meet the "no small stories" bar — a documented pattern. No blockers found. **Key risks:** AC2's thread-timing test fragility, AC1's cascade ordering determinism, and the emphasized "HTTP 403, not 404" detail in AC4 (noted by spec as most-likely developer mistake).
 
 ---
 
-## Critical Issues
+## Per-AC Audit
 
-### 1. **Missing verification of backend pack-ownership change from deferred-81 AC4**
-- **Severity**: HIGH — this is the foundational assumption for AC2/AC3
-- **Issue**: The story claims "skillars-deferred-81 AC4 unlocked the backend (ownership check, 4 widened endpoints) ... for a self-booking player to buy a session pack" and references it multiple times, but does not cite specific code lines or show the actual implementation. A reader of this story alone cannot verify the backend actually supports this.
-- **What's needed**: AC2/AC3 should cite the specific service method(s) that were widened to accept a self-booking player, and the ownership logic that makes `parentId` handle both parent and self-booking player cases. If deferred-81 is still in-flight, this story should explicitly note that dependency.
-- **False positive risk**: Low — this is a reasonable dependency on prior work, but without code citations it's a trust-me claim.
+### AC1: VideoDeletionService Transaction Isolation Test
 
-### 2. **Template logic break in CoachPublicProfilePage: `playerStore.activePlayerId` remains undefined for self-booking players**
-- **Severity**: HIGH — regression risk
-- **Issue**: The story modifies `onMounted` and `handleCta` to support self-booking players, calling `bookingStore.loadPlayerPacks(selfPlayerId.value)` and using `selfPlayerId` for routing. However, the template and other computed properties still reference `playerStore.activePlayerId` throughout the file. For a self-booking player, `playerStore` is "a parent's linked-children store and meaningless here" (the story's own phrase), so `playerStore.activePlayerId` will be `undefined` or uninitialized.
-- **What's at risk**: 
-  - Does `CoachPublicProfilePage.vue` have any `v-if="playerStore.activePlayerId"` checks that will fail for a player?
-  - Does the template render any coach-availability or booking-history that depends on a populated `playerStore`?
-  - The `handleBuySessions` method reads `playerStore.activePlayerId` — the story says "confirm whether `handleBuySessions` needs its own `authStore.isPlayer` branch" but doesn't verify whether the template even calls this for a player, or whether any hidden template logic depends on it being set.
-- **What's needed**: Do a full grep and template read of this file to confirm no template logic breaks when `playerStore` remains unpopulated for a self-booking player. Specifically verify: (1) no v-if checks on `playerStore.activePlayerId`, (2) no template bindings that expect it set, (3) the `handleBuySessions` call site and whether it's guarded to parent-only or could be called from a player context.
-- **False positive risk**: Medium-high — this is a plausible gap that could easily be missed.
+**Proposed:** Spy on `VideoDeletionOutboxRepository`, stub `doThrow` for video B's save only, assert A commits independently while B rolls back atomically.
 
-### 3. **MainLayout.vue error handling for `fetchSelfPlayerId()` is underspecified**
-- **Severity**: MEDIUM — UX degradation if unhandled
-- **Issue**: AC3 says to call `playerStore.fetchSelfPlayerId()` and "handle not-yet-resolved gracefully." The story says "treat a 404-on-fetchSelfPlayerId (verified-but-profile-not-finished) as 'hide the item' rather than a hard error" and to "follow this file's own existing precedent for how a not-yet-resolved async value should render," but does not:
-  1. Verify that an existing precedent actually exists (grep the file for other async-resolved items).
-  2. Specify what error/state actually occurs when the call returns empty (is it a 404 HTTP? An empty Optional? A thrown exception?).
-  3. Show the exact code pattern to use for hiding the nav item.
-- **What's needed**: Verify by direct read of `MainLayout.vue` whether any other nav item already handles async resolution (e.g., marketplace link, bookings, messaging). If one does, cite it and use the same pattern. If none do, the story should explicitly say "no precedent exists — hide the item using `v-if="selfPlayerId !== null && selfPlayerId !== undefined"`" (or similar).
-- **False positive risk**: Medium — the guidance is reasonable but vague enough to cause implementation confusion.
+**Strengths:**
+- Reuses established `@MockitoSpyBean` pattern (precedent: `CaptureReservationIT`, `MessageModerationSweeperIT`)
+- Correctly places failure at transaction boundary (outbox-save is END of `deleteVideo`, so rollback is clean)
+- Test-only, no production code change
 
-### 4. **Route semantics: `/parent/players/:playerId/packs` for a self-booking player is confusing**
-- **Severity**: LOW-MEDIUM — UX/clarity issue, not a functional bug
-- **Issue**: The route is defined as `/parent/players/:playerId/packs` with a "parent/" prefix. For a self-booking player navigating to their own packs, this is semantically misleading (are they viewing parent packs? Their own packs?). The story doesn't address why reusing this route slug is preferable to creating a player-specific route or a role-agnostic one.
-- **What's needed**: Either (1) accept the "parent/" prefix as acceptable for both roles (a reasonable choice for code reuse), or (2) add a comment in the route definition explaining why it's appropriate for both. This is not a show-stopper, but clarifying it avoids future confusion.
-- **False positive risk**: Low — this is a minor clarity issue, not a missed flow.
+**Corner cases to verify during dev:**
+
+1. **Cascade iteration order must be deterministic.** The spec seeds videos A and B but doesn't specify if `cascadeDeleteForAccount` iterates by ID order, insertion order, or non-deterministically. If non-deterministic:
+   - Sometimes B fails on iteration 2 (A already committed on iteration 1) → test passes
+   - Sometimes A fails on iteration 1 (B hasn't processed yet, nothing to rollback) → test fails or passes vacuously
+   - **Action:** Inspect `cascadeDeleteForAccount` implementation. If iteration is non-deterministic, seed/query videos with guaranteed order (e.g., by ID). Alternatively, use video IDs in assertions rather than A/B labels.
+
+2. **Outbox-save failure point verification.** The spec assumes outbox-save is the ONLY failure point in `deleteVideo`. If other operations exist after operational-state update (DB trigger side-effects?), the test might pass by accident if an earlier exception already rolled back.
+   - **Action:** Code-inspect `deleteVideo` method body. Confirm outbox-save is the last statement in the transaction, or identify the actual transaction boundary.
+
+3. **Seeded video state not specified.** The spec says "seed two videos, A and B" but not their initial `operationalState`. Are they `UPLOADED`? `ARCHIVED`? The cascade presumably updates to `PURGED`, so the state-change rollback is what gets tested.
+   - **Action:** Seed both in a known, identical state. Assert B's state explicitly pre- and post-cascade (e.g., `video_B.operationalState == UPLOADED` before, `video_B.operationalState == UPLOADED` after failure).
+
+4. **Outbox-row count verification.** The spec asserts "no outbox row exists for B" which is correct. But ensure the query is definitive (`findByVideoId(videoB.getId()).isEmpty()` not `count() == 0`), and that retry scenarios can't leave stale rows.
 
 ---
 
-## AC-Specific Issues
+### AC2: Cross-Drill Lock Causality Test
 
-### AC1: `deleteBlock` unit test
+**Proposed:** Instrument `findByIdForUpdate` with entry/exit timestamps, inject ~300ms sleep on first successful acquisition, assert second thread's timestamp is ~250ms+ later.
 
-**Status**: ✓ **No major issues.** The test specification is clear and correct. Minor notes:
+**Strengths:**
+- Measures lock causality (serialization), not just end-state correctness
+- Reuses `@MockitoSpyBean` pattern
+- One-shot `compareAndSet` guard prevents double-instrumentation
 
-- The test instructions say "stub `blockRepository.findByIdAndCoachId(blockId, coachId)` to return `Optional.empty()`" — confirm during implementation that `Mockito.when(blockRepository.findByIdAndCoachId(blockId, coachId)).thenReturn(Optional.empty())` is the syntax (or `.thenReturn(null)` if using a non-Optional, depending on the repo's signature).
-- The assertion correctly verifies both the exception and that `delete()` was never called. Good.
+**Timing-dependent risks:**
 
----
+1. **The 250ms threshold is fragile under CI load.** Injects 300ms, asserts ≥250ms separation (83% threshold). On a CI agent running other jobs, this could flake. JVM GC pauses, CPU contention, and thread scheduler latency can easily exceed 50ms.
+   - **Severity:** Medium. Conservative threshold (83%) should mostly absorb normal noise, but heavy load could cause failures.
+   - **Mitigation:** If flakiness occurs, increase injected sleep to 500ms (adjust threshold to ~400ms) or add `@RepeatedTest(5)` to detect intermittent failures. Consider a comment in the test explaining this is timing-based and may need adjustment on slow CI.
 
-### AC2: `CoachPublicProfilePage.vue` CTA logic
+2. **Edge case: thread interleaving and one-shot delay guard.** The `compareAndSet(false, true)` guard assumes the first thread to enter the `doAnswer` successfully is the one that should inject delay. But thread B's call might *return* from `doAnswer` (completing successfully) BEFORE thread A's injected sleep finishes, causing timestamps to nearly overlap despite the lock working correctly.
+   - **Specific scenario:** Thread A calls → enters doAnswer → sets flag → sleeps 300ms (now holding lock). Thread B calls → blocks on pessimistic lock → retries → eventually succeeds (call completes) while A's sleep is still running. If B's successful-call exit-timestamp is recorded at T+280ms and A's at T+300ms, the separation is only 20ms despite proper serialization.
+   - **Root cause:** The test measures when calls EXIT the spy, not how long each thread HELD the lock. B's call might successfully acquire the lock (breaking through retries) and exit before A's sleep finishes, even though B was truly blocked for 280ms by the lock.
+   - **Action:** Clarify test intent in a comment. The goal is to prove B was blocked/retried (not that B's exit is 250ms+ later). Consider measuring retry-count instead of timestamps: assert B experienced ≥1 retry (caught `PessimisticLockingFailureException`) before the successful call. Alternatively, measure the timing of the lock-acquisition event itself (when `findByIdForUpdate` ENTERS the spy), not the exit.
 
-**Status**: ⚠ **Unclear scope and incomplete verification.**
-
-**Issues**:
-
-1. **Assumption not verified: does `bookingStore.loadPlayerPacks(playerId)` work identically for a self-booking player?**
-   - The story says "Confirm during implementation whether the existing computed already works unchanged once `onMounted` populates `sessionPacks` for a player too, or whether it needs an explicit role branch."
-   - This is deferring a critical verification to implementation time. If the backend treats a parent-call vs a player-call differently (e.g., different filtering, different pack states, different ownership checks), this could silently fail at runtime.
-   - **What's needed**: Before coding, verify by reading `bookingStore.js`'s `loadPlayerPacks` method: does it accept a `playerId` parameter? Does it filter/transform the response based on caller role (e.g., checking `isParent()`)? Does it expect `playerStore.activePlayerId` to be set?
-
-2. **`hasCreditsForCoach` verification deferred to implementation.**
-   - The story says "confirm during implementation whether the existing computed already works unchanged." Again, this is defer-to-later verification.
-   - If the computed property checks `authStore.isParent` anywhere, it will break for a self-booking player.
-   - **What's needed**: Read the actual `hasCreditsForCoach` property in this file and confirm the predicate (`some(...)` logic) doesn't depend on role.
-
-3. **`handleBuySessions` scope unclear.**
-   - The story says "confirm whether `handleBuySessions` needs its own `authStore.isPlayer` branch ... by checking which `q-btn`(s) in this file's template actually call it."
-   - This is reasonable, but the story should provide the line number of this method (`handleBuySessions`) in the file so the dev knows what they're looking at.
-   - Also: if the method reads `playerStore.activePlayerId`, adding a player branch won't work — it will need to use `selfPlayerId.value` instead. The story touches on this but doesn't make it explicit.
-
-4. **Manual test success criteria are vague.**
-   - "confirming the CTA label and both purchase/booking routes behave identically to the equivalent parent-managed-player scenarios" — which scenarios? Which exact button clicks and expected behaviors?
-   - **What's needed**: Explicit test steps:
-     - Step 1: Log in as self-registered player with existing pack for Coach A → verify CTA shows "Book Session" and routes to `request-booking`.
-     - Step 2: Log in as self-registered player with no pack for Coach B → verify CTA shows "Buy Sessions" and routes to `purchase-sessions`.
-     - Step 3: Log in as self-registered player who hasn't completed profile yet → verify behavior degrades gracefully (CTA disabled? Hidden? Shows error?).
-     - Compare each step to the equivalent parent-managed-player case.
+3. **Verify shared repository instance.** The test spawns two threads via `ExecutorService`. Both must reference the same `VideoRepository` singleton for the mock spy to see both calls. The existing end-result test (`deleteVideo_concurrentCallsOnTwoClonesSharingOneVideoId_doesNotDoublePublishDeletionEvent`) presumably passes, so infrastructure is likely correct, but confirm.
 
 ---
 
-### AC3: Pack dashboard reachability
+### AC3: Reviews List UI — Read Side
 
-**Status**: ⚠ **Incomplete guidance on async resolution.**
+**Proposed:** Create `reviews.api.js`, add "Reviews" section to `CoachPublicProfilePage.vue`, list reviews with role, rating, body, date, coach-response (if present), "Load more" pagination.
 
-**Issues**:
+**Strengths:**
+- Follows `marketplace.api.js` pattern
+- Renders for guests (no auth gate)
+- Empty-state reuses existing key (avoids duplication)
 
-1. **"Existing precedent" for async nav items may not exist.**
-   - The story says "follow this file's own existing precedent for how a not-yet-resolved async value should render," but doesn't verify this precedent exists.
-   - If `MainLayout.vue` has no async-resolved nav items (all three existing ones — Marketplace, Bookings, Messaging — are static routes), then there is no precedent to follow, and the dev is inventing a new pattern.
-   - **What's needed**: Grep `MainLayout.vue` for any other `v-if` checks that involve async-resolved values. If none exist, state that explicitly and specify the pattern to use (e.g., `v-if="selfPlayerId"` to hide until resolved).
+**Ambiguities:**
 
-2. **Resolution timing and double-fetch risk.**
-   - AC2 resolves `selfPlayerId` in `onMounted` in `CoachPublicProfilePage.vue`.
-   - AC3 resolves it again in `MainLayout.vue` `onMounted`.
-   - The story says `playerStore.fetchSelfPlayerId()` is "already cached, dedup-safe" with an "early-return-if-already-resolved check." Good. But does this early-return survive a logout? The story mentions "generation-guarded against a stale resolve racing a logout" — verify this by reading `playerStore.js:26-28` to confirm the guard actually exists and works for a double-call scenario (fetch in CoachPublicProfilePage, then fetch again in MainLayout on the same session).
+1. **Date-formatting utility not named.** The spec says "reuse whatever date-formatting utility other pages already use" but doesn't identify it. Common options: `dayjs`, `vue-dayjs`, custom `formatDate()` helper.
+   - **Action:** Search `src/frontend` for existing date formatting in templates (look for `createdAt`, `formatDate`, `dayjs` usage). Reuse the established pattern.
 
-3. **Route binding to unresolved value.**
-   - The story says "Bind the new nav item's `:to` to a computed route using the resolved id."
-   - If `selfPlayerId` is not yet resolved on first mount, the computed route will be invalid, and the nav item might try to navigate to `/parent/players/undefined/packs`.
-   - **What's needed**: Explicitly handle the unresolved case in the computed route (return a falsy value or `''` if `selfPlayerId` is not yet set, then guard the nav item with `v-if="nav item route is truthy"`).
+2. **Coach-response visibility is conditional but underspecified.** "If present (indented/boxed)" — but if `coachResponseBody` is empty string or whitespace?
+   - **Action:** Render section only if `coachResponseBody?.trim()` is truthy.
 
-4. **No comment on route naming confusion (see Critical Issue #4 above).**
+3. **Pagination state management.** The "Load more" button must maintain a `currentPage` counter across multiple clicks. If the component rebuilds the entire list on each fetch, pagination breaks.
+   - **Action:** Maintain `currentPage` ref, increment on each button click before fetching `listCoachReviews(coachId, ++currentPage)`.
 
----
-
-## Task 4: Ledger Hygiene
-
-**Status**: ⚠ **Claims not backed by code citations.**
-
-The story lists seven items to close/decide in `deferred-work.md`:
-
-1. `getParentPlayerSchedule` N+1 — "no longer performs per-row lookups"
-2. `PlaybackService.authorizePlayback` — "already takes `videoRepository.findByIdForUpdate`"
-3. Session pack status constraints — "no persisted status column"
-4. `CashOutServiceTest` field mismatch — "test already stubs the right field"
-5. `pausePack` locking — "all four now call `findByIdForUpdate`"
-6. Messaging orphaned-profile — "decided: leave as-is"
-7. `drill_video_refs.video_id` FK — "decided: keep deferring"
-
-**Issue**: The story says "confirmed by direct read" multiple times but does not cite line numbers or show excerpts. For a reviewer, this means trust-the-author on each claim.
-
-**What's needed**: For items 1–5, include line-number citations (e.g., "`getParentPlayerSchedule` at `BookingService.java:623-661` no longer calls..."). For items 6–7, confirm the project owner's decision was actually documented and approved (the story says it was, but doesn't show evidence).
-
-**Risk**: If any of these claims is wrong (e.g., `pausePack` actually still has an unlocked variant somewhere), the story will ship stale ledger entries. This is low-risk for functionality (no code changes) but creates maintenance burden.
+4. **Empty state placement.** If the list is below other page content, the empty-state message might not be immediately visible. Acceptable UX but suboptimal.
+   - **Action:** Place empty state immediately after section title, before list. Show ONLY the message when `totalElements === 0`.
 
 ---
 
-## Non-Critical Observations
+### AC4: Reviews Write/Edit UI — Write Side
 
-### Strengths
-- Very thorough contextualization of why the story exists (dry ledger, project-owner decision).
-- Good adherence to existing patterns (dual-role routing, `fetchSelfPlayerId`, opaque-payer-id).
-- Explicit call-out of conventions (no frontend test framework).
-- Task 4 is good housekeeping, reducing technical debt in the ledger.
+**Proposed:** Role-gated dialog (`isParent || isPlayer`), call `getMyReviewForCoach` on mount, branch on `errorKey === 'reviews.reviewNotFound'`, handle moderation states, refresh both "your review" and AC3 list on success, use `useErrorHandler` for errors.
 
-### Suggestions
-- AC2/AC3 tests would benefit from explicit "pass" criteria (e.g., "CTA shows 'Book Session' and routes correctly" vs. "CTA label and routes behave identically").
-- Task 4 items should include code citations for verification.
-- Consider adding a note: "AC1, AC2, AC3 must be implemented in sequence — AC2 depends on the `bookingStore.loadPlayerPacks(playerId)` contract being correct, AC3 depends on AC2's player-branch being complete."
+**Strengths:**
+- Correctly uses `errorKey === 'reviews.reviewNotFound'` (not `status === 404`) **[spec emphasizes as most-likely mistake]**
+- Role-gate pre-applied (user doesn't see buttons if not eligible role)
+- Refresh both lists on success (keeps UI consistent)
+- Delegate error mapping to `useErrorHandler` (no custom logic)
+
+**Critical corner cases:**
+
+1. **HTTP 403 "not found" is the most-likely mistake.** The spec emphasizes repeatedly: endpoint returns 403 (not 404) with `errorKey === 'reviews.reviewNotFound'`. Naive `status === 404` check will fail.
+   - **Current safeguard:** Spec uses correct branch on `errorKey`. The `useErrorHandler` utility must map it correctly.
+   - **Action:** Explicit test scenario in dev-server pass: login as new player, visit coach profile, confirm "Write a review" button shows (not error page or "not found" message).
+
+2. **Pre-filling edit dialog requires safe field access.** If fetched review has `body === null` or `moderationStatus === undefined`:
+   - `v-model="rating"` should populate from `review.rating`
+   - `v-model="body"` should populate from `review.body || ''` (empty string for empty textarea)
+   - No moderation note shows (only if `PENDING`, `UNDER_REVIEW`, or `BLOCKED`)
+   - **Action:** Safely access: `review.body || ''`, `review.rating || 0`.
+
+3. **Dialog state cleanup between new/edit flows.** A user opens "Write a review" (blank form) → cancels → review is posted → visits again → sees "Edit" → opens dialog (should pre-fill). Must reset state on "Write a review" click and pre-fill on "Edit" click.
+   - **Action:** Reset dialog in `@show` event handler: `rating = null; body = ''` for new, pre-fill for edit.
+
+4. **Moderation status display is conditional.** The spec says:
+   - `PENDING` or `UNDER_REVIEW` → show pending note
+   - `BLOCKED` → show blocked note
+   - `APPROVED` (or missing) → show nothing
+   - **Action:** Use `v-if="review?.moderationStatus === 'PENDING' || review?.moderationStatus === 'UNDER_REVIEW'"` for pending, `v-if="review?.moderationStatus === 'BLOCKED'"` for blocked.
+
+5. **Eligibility window is not pre-flightable.** No API to check if user qualifies before submitting (no completed session with coach in last 14 days). User writes review, submits, then learns they're not eligible via `reviews.noRecentSession` error.
+   - **Status:** Spec acknowledges this. Backend enforces it, UI displays error via `useErrorHandler`.
+
+6. **Edit has a one-per-year rate limit.** Error key `reviews.updateTooSoon` is backend-enforced.
+
+7. **Submit success re-fetches in sequence.** Spec says "refresh the 'your review' state ... and re-fetch page 0 of the approved-reviews list." Sequential order is fine (if review is pending, "your review" shows pending, list doesn't include it yet). This is correct behavior.
+
+8. **Three i18n locale packs (en-US, de-DE, fr-FR) must be updated together.** The spec correctly requires all three. Missing any one is a failure.
+   - **Action:** Verify all 3 files have the new `reviews:` namespace with all strings and 8 error keys after implementation.
+
+9. **The 8 enumerated error keys are the only reachable ones.** Spec explicitly excludes flag/coach-response codes (because this UI never calls those endpoints). This is correct. If backend adds new error codes later, the UI falls back to raw-message behavior (safe but not localized).
 
 ---
 
-## Recommendation
+## Task 3: Ledger-Hygiene Audit
 
-**Ready for dev with corrections**. The story is well-structured and addresses real gaps, but developers should:
+The story closes/dismisses 6 items without picking them up. These seem reasonable but warrant quick verification:
 
-1. **Before coding AC2**, verify the `bookingStore.loadPlayerPacks()` contract in `bookingStore.js` (does it work identically for player and parent? Any role-based filtering?).
-2. **Before coding AC2**, verify no template logic in `CoachPublicProfilePage.vue` breaks when `playerStore` remains unpopulated for a self-booking player.
-3. **Before coding AC3**, verify whether `MainLayout.vue` has any existing async-nav-item patterns to follow, or if this is a new pattern to establish.
-4. **Before merging Task 4**, add line-number citations to the ledger-hygiene claims in this story and in `deferred-work.md` for traceability.
+1. **AvailabilityService.deleteBlock test coverage: already fixed by deferred-82 AC1.** → Verify that deferred-82 AC1 actually added this test. No further work needed if confirmed.
 
-No showstoppers, but verification gaps create unnecessary risk during implementation.
+2. **AvailabilityService SELECT FOR UPDATE deadlock risk: false premise — single-row-per-transaction locking.** → Quick scan: confirm each `AvailabilityService` lock-taking method locks exactly one coach-profile row (no nested locks, no circular waits). Claims solid but worth 30s verification.
+
+3. **VideoDeletionService self-injection concerns: unreachable Spring-startup-time issues.** Precedent: `RadarCompositeCalculationService` uses same pattern. → Verify `RadarCompositeCalculationService` exists and uses `@Lazy @Autowired self`. No change needed if precedent holds.
+
+4. **PlayerProfile XOR-ownership-both-null: false premise — V84__player_self_registration.sql CHECK constraint.** → Verify `chk_pp_owner` constraint exists: `(playerAccountId IS NOT NULL) OR (parentAccountId IS NOT NULL)`. State is truly unreachable if it does.
+
+5. **BookingService hardcoded-fallback strings: leave-as-is.** Same unreachable-orphaned-profile shape already decided for messaging. → Acceptable precedent.
+
+6. **SessionPackPaymentService.purchasePack missing @Transactional: no real bug.** Compensating-action pattern already correct for flows spanning external Stripe call. → Acceptable technical judgment.
+
+---
+
+## Summary of Risks by Severity
+
+### High
+- **AC4: HTTP 403 "not found" detail.** Most-likely dev mistake per spec itself. Mitigation: explicit test scenario in dev-server (new player with no review shows "Write a review", not error).
+
+### Medium
+- **AC2: Thread-timing test fragility.** 250ms threshold might flake under CI load. Mitigation: conservative threshold (83% of injected 300ms); add `@RepeatedTest(5)` if flakiness observed.
+- **AC1: Cascade iteration determinism.** If iteration is non-deterministic, test can flake. Mitigation: verify cascade order, seed/query to guarantee sequence.
+
+### Low
+- **AC3: Date-formatting utility not named.** Requires codebase search. Mitigation: standard for this codebase.
+- **AC4: Dialog state cleanup.** Requires careful component lifecycle. Mitigation: reset state in `@show` handler, pre-fill from fetched review.
+
+---
+
+## No Blockers
+
+The story is **ready for dev**. All ACs are implementable as specified. No architectural issues or false assumptions found. Exercise extra care on AC2's timing (could be flaky) and AC4's HTTP 403 detail (most-likely mistake).

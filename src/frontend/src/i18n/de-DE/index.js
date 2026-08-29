@@ -628,6 +628,29 @@ export default {
       VERIFIED_IDENTITY: 'Die Identität dieses Trainers wurde von Skillars verifiziert',
     },
   },
+  reviews: {
+    writeReview: 'Bewertung schreiben',
+    editReview: 'Bewertung bearbeiten',
+    yourReview: 'Deine Bewertung',
+    ratingLabel: 'Bewertung',
+    bodyLabel: 'Kommentar (optional)',
+    submit: 'Bewertung absenden',
+    save: 'Änderungen speichern',
+    loadMore: 'Weitere Bewertungen laden',
+    pendingModeration:
+      'Deine Bewertung wird geprüft und ist noch nicht öffentlich sichtbar.',
+    blocked: 'Deine Bewertung wurde durch die Moderation entfernt.',
+    coachResponseLabel: 'Antwort des Trainers',
+    noRecentSession:
+      'Du benötigst eine kürzlich abgeschlossene Einheit mit diesem Trainer, bevor du eine Bewertung abgeben kannst.',
+    alreadySubmitted: 'Du hast für diesen Trainer bereits eine Bewertung abgegeben.',
+    bodyTooLong: 'Deine Bewertung ist zu lang — maximal 1000 Zeichen.',
+    updateTooSoon: 'Du kannst eine Bewertung nur einmal pro Jahr bearbeiten.',
+    editNotPermitted: 'Diese Bewertung kann derzeit nicht bearbeitet werden.',
+    authorMismatch: 'Diese Bewertung gehört nicht dir.',
+    authorRoleNotAllowed: 'Trainer können keine Bewertungen abgeben.',
+    validationError: 'Bitte überprüfe deine Bewertung und versuche es erneut.',
+  },
   session: {
     drillLibrary: {
       title: 'Übungsbibliothek',

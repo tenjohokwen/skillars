@@ -20,6 +20,12 @@ email:
 
 app:
   environment: "${ENVIRONMENT:dev}"
+  # A fresh local database has no JWT signing secret and no way to get one short of hand-written
+  # SQL replicating Secret's own Jasypt encryption — see JwtSecretBootstrapRunner's own javadoc.
+  # Safe here only: the dev profile is never used against a real environment's database.
+  bootstrap:
+    jwt-secret:
+      enabled: true
   ses:
     from-address: noreply@skillars.com
     enabled: true
