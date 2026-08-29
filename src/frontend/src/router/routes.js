@@ -119,9 +119,12 @@ const routes = [
         meta: { requiresAuth: true, roles: ['PARENT', 'PLAYER'] },
       },
       {
+        // Dual-role (Deferred-82 AC3): a self-registered PLAYER can now reach their own
+        // session-pack dashboard too. The `parent/` prefix is retained for route/code reuse
+        // with the parent-managed-player flow, not because this destination is parent-only.
         path: 'parent/players/:playerId/packs',
         component: () => import('pages/parent/SessionPackDashboardPage.vue'),
-        meta: { requiresAuth: true, role: 'PARENT' },
+        meta: { requiresAuth: true, roles: ['PARENT', 'PLAYER'] },
       },
       {
         path: 'parent/players/:playerId/sessions',

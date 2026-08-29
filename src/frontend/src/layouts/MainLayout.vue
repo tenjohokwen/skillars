@@ -201,6 +201,15 @@
               <q-item-label class="nav-label">{{ t('messaging.pageTitle') }}</q-item-label>
             </q-item-section>
           </q-item>
+
+          <q-item v-if="packsRoute" clickable :to="packsRoute" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="confirmation_number" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('booking.packs.dashboardTitle') }}</q-item-label>
+            </q-item-section>
+          </q-item>
         </template>
 
         <!-- Admin section -->
@@ -258,6 +267,13 @@ const playerStore = usePlayerStore();
 const leftDrawerOpen = ref(false);
 const darkMode = ref(isDarkMode());
 
+// Deferred-82 AC3: resolved for a self-registered player caller so the pack-dashboard nav item
+// can bind its route once resolved, rather than to an unresolved/undefined playerId.
+const selfPlayerId = ref(null);
+const packsRoute = computed(() =>
+  selfPlayerId.value ? `/parent/players/${selfPlayerId.value}/packs` : null,
+);
+
 const languages = [
   { label: 'English', value: 'en-US' },
   { label: 'Français', value: 'fr-FR' },
@@ -308,11 +324,23 @@ function toggleLeftDrawer() {
   leftDrawerOpen.value = !leftDrawerOpen.value;
 }
 
-onMounted(() => {
+onMounted(async () => {
   loadLanguagePreference();
   // Automatic session-expiry handling (cookie/state clearing + redirect) is owned
   // by App.vue, which is always mounted — avoids a race between two listeners.
   window.addEventListener('storage', onStorageThemeChange);
+
+  if (authStore.isPlayer) {
+    try {
+      selfPlayerId.value = await playerStore.fetchSelfPlayerId();
+    } catch (err) {
+      // A 404 is the expected, silent case: verified but never finished the profile-builder
+      // step (same precedent as CoachPublicProfilePage.vue). Anything else is surfaced.
+      if (err.response?.status !== 404) {
+        console.error('Failed to resolve self player id for nav', err);
+      }
+    }
+  }
 });
 
 onUnmounted(() => {
