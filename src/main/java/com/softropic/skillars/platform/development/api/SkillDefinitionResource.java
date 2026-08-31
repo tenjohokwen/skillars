@@ -1,8 +1,7 @@
 package com.softropic.skillars.platform.development.api;
 
 import com.softropic.skillars.platform.development.contract.SkillDefinitionDto;
-import com.softropic.skillars.platform.development.contract.SkillDefinitionMapper;
-import com.softropic.skillars.platform.development.repo.SkillDefinitionRepository;
+import com.softropic.skillars.platform.development.service.SkillDefinitionService;
 import io.micrometer.observation.annotation.Observed;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -16,17 +15,12 @@ import java.util.List;
 @RequiredArgsConstructor
 public class SkillDefinitionResource {
 
-    private final SkillDefinitionRepository skillDefinitionRepository;
-    private final SkillDefinitionMapper skillDefinitionMapper;
+    private final SkillDefinitionService skillDefinitionService;
 
     @GetMapping("/api/development/skill-definitions")
     @PreAuthorize("isAuthenticated()")
     @Observed(name = "development.skill-definitions")
     public ResponseEntity<List<SkillDefinitionDto>> getSkillDefinitions() {
-        List<SkillDefinitionDto> dtos = skillDefinitionRepository.findAllByActiveTrueOrderByDisplayOrderAsc()
-            .stream()
-            .map(skillDefinitionMapper::toDto)
-            .toList();
-        return ResponseEntity.ok(dtos);
+        return ResponseEntity.ok(skillDefinitionService.getActiveSkillDefinitions());
     }
 }

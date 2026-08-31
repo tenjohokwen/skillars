@@ -1,6 +1,6 @@
 # Story skillars-deferred-84: coach_radar_preferences FK hardening, SLU snapshot-persistence resilience, skill-toggle debounce, and SkillDefinitionResource architecture compliance
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -103,25 +103,25 @@ The remaining ~20 items across these six sections (accepted design tradeoffs lik
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: `coach_radar_preferences` player FK hardening (AC: #1)
-  - [ ] Add `V117__coach_radar_preferences_player_fk.sql` (defensive orphan delete + `ADD CONSTRAINT ... ON DELETE CASCADE` + `CREATE INDEX ix_crp_player_id`)
-  - [ ] Add `CoachRadarPreferencePlayerFkIT` using the already-registered `9650000001`–`9650000010` range
-  - [ ] Run `mvn -o test -Dtest=CoachRadarPreferencePlayerFkIT`, confirm green
-- [ ] Task 2: SLU snapshot-write retry/compensation (AC: #2)
-  - [ ] Add `SnapshotPersistenceRetrier` mirroring `SluPersistenceRetrier` (incl. `@Slf4j` + full imports)
-  - [ ] Wire `SluCalculationService` to call the retrier instead of `SnapshotBatchWriter` directly
-  - [ ] Add `SnapshotPersistenceRetrierTest` mirroring `SluPersistenceRetrierTest`'s 3-test shape
-  - [ ] Strengthen `SluCalculationServiceIT` with an assertion against `player_slu_weekly_snapshot`
-  - [ ] Run `mvn -o test -Dtest=SnapshotPersistenceRetrierTest,SluCalculationServiceIT`, confirm both green
-- [ ] Task 3: Skill-toggle debounce, without regressing visual feedback (AC: #3)
-  - [ ] Add `localSelectedSkillCodes` ref to `PlayerDevelopmentDashboardPage.vue`, drive `SkillsRadarChart`'s prop and the page's own `hasBaseline` computed from it
-  - [ ] `onSkillSelectionChange` writes the ref synchronously, then calls a debounced `saveRadarPreferences` capturing `playerId` at click time
-  - [ ] Add `flush()` to the debounce helper; call it on player-switch (existing route watcher) and `onBeforeUnmount`; reset the ref in `clearDevelopmentState()`
-  - [ ] `npx eslint` clean; manual dev-server pass: rapid-click burst shows instant visual updates with one PUT ~300ms after the last click; a click-then-switch-player sequence persists against the correct (original) player
-- [ ] Task 4: `SkillDefinitionResource` service-layer extraction (AC: #4)
-  - [ ] Add `SkillDefinitionService`, update `SkillDefinitionResource` to delegate to it
-  - [ ] Add `SkillDefinitionServiceTest` and `SkillDefinitionResourceIT` (both currently missing) — IT inserts its own inactive row (none seeded), asserts relatively, uses the already-registered `9651000001`–`9651000005` range, no manual teardown needed (reset listener handles `skill_definitions`)
-  - [ ] Run `mvn -o test -Dtest=SkillDefinitionServiceTest,SkillDefinitionResourceIT`, confirm both green
+- [x] Task 1: `coach_radar_preferences` player FK hardening (AC: #1)
+  - [x] Add `V117__coach_radar_preferences_player_fk.sql` (defensive orphan delete + `ADD CONSTRAINT ... ON DELETE CASCADE` + `CREATE INDEX ix_crp_player_id`)
+  - [x] Add `CoachRadarPreferencePlayerFkIT` using the already-registered `9650000001`–`9650000010` range
+  - [x] Run `mvn -o test -Dtest=CoachRadarPreferencePlayerFkIT`, confirm green
+- [x] Task 2: SLU snapshot-write retry/compensation (AC: #2)
+  - [x] Add `SnapshotPersistenceRetrier` mirroring `SluPersistenceRetrier` (incl. `@Slf4j` + full imports)
+  - [x] Wire `SluCalculationService` to call the retrier instead of `SnapshotBatchWriter` directly
+  - [x] Add `SnapshotPersistenceRetrierTest` mirroring `SluPersistenceRetrierTest`'s 3-test shape
+  - [x] Strengthen `SluCalculationServiceIT` with an assertion against `player_slu_weekly_snapshot`
+  - [x] Run `mvn -o test -Dtest=SnapshotPersistenceRetrierTest,SluCalculationServiceIT`, confirm both green
+- [x] Task 3: Skill-toggle debounce, without regressing visual feedback (AC: #3)
+  - [x] Add `localSelectedSkillCodes` ref to `PlayerDevelopmentDashboardPage.vue`, drive `SkillsRadarChart`'s prop and the page's own `hasBaseline` computed from it
+  - [x] `onSkillSelectionChange` writes the ref synchronously, then calls a debounced `saveRadarPreferences` capturing `playerId` at click time
+  - [x] Add `flush()` to the debounce helper; call it on player-switch (existing route watcher) and `onBeforeUnmount`; reset the ref in `clearDevelopmentState()`
+  - [x] `npx eslint` clean; `quasar build` compiles. Manual dev-server browser click-through NOT performed — requires a running full stack with a coach account and seeded radar data (no dev-seeder fixture exists); logic verified by static review. See Completion Notes.
+- [x] Task 4: `SkillDefinitionResource` service-layer extraction (AC: #4)
+  - [x] Add `SkillDefinitionService`, update `SkillDefinitionResource` to delegate to it
+  - [x] Add `SkillDefinitionServiceTest` and `SkillDefinitionResourceIT` (both currently missing) — IT inserts its own inactive row (none seeded), asserts relatively, uses the already-registered `9651000001`–`9651000005` range, no manual teardown needed (reset listener handles `skill_definitions`)
+  - [x] Run `mvn -o test -Dtest=SkillDefinitionServiceTest,SkillDefinitionResourceIT`, confirm both green
 - [x] Task 5: Ledger hygiene (no AC — completed during this story's own creation research pass)
   - [x] Decided with the project owner (2026-08-30): `RadarDisplayService`'s deactivated-skill baseline drop (`skillars-5-4` W4) is intended behavior, not a bug — leave as-is
   - [x] Decided with the project owner (2026-08-30): `DevelopmentCorrelationService`'s hardcoded `IMPROVEMENT_THRESHOLD` (`skillars-5-4` W7) stays fixed — no concrete need to make it configurable
@@ -164,11 +164,30 @@ Touches four independent areas: `src/main/resources/db/migration/V117__coach_rad
 
 ### Completion Notes
 
-_To be filled in by the dev agent during implementation._
+All four ACs implemented; all targeted tests green. ACs are fully independent — implemented in order 1, 2, 4, 3.
+
+- **AC1** — `V117__coach_radar_preferences_player_fk.sql` mirrors `V113` exactly: defensive orphan-delete, then `ADD CONSTRAINT fk_crp_player_id ... ON DELETE CASCADE`, plus `CREATE INDEX ix_crp_player_id` (the review-added item — `coach_radar_preferences` PK is `(coach_id, player_id)`, so `player_id` had no standalone index). `coach_id`'s missing FK left untouched, as scoped. `CoachRadarPreferencePlayerFkIT` (id range `9650000001`–`9650000010`, extends `AbstractIntegrationTest` unchanged) seeds a user + player + preference row, deletes the player, asserts the preference row cascaded away. **1 test, green.**
+- **AC2** — new `SnapshotPersistenceRetrier` `@Component` (`development.service`), own `app.slu.snapshot-retry.*` namespace, `@Retryable(retryFor=DataAccessException.class, ...)` + `@Recover` mirroring `SluPersistenceRetrier`. Retry-safety verified by reading `SnapshotBatchWriter.writeAll` in full: it is `@Transactional` and only issues additive `upsertAdd` calls, so an uncaught mid-loop exception rolls back the whole transaction and a retry re-runs clean — no partial-apply path, no mid-batch non-transactional reader. `SluCalculationService` now calls `snapshotPersistenceRetrier.writeAllWithRetry(...)`; the now-unused `snapshotBatchWriter` field + import were removed (the retrier fully encapsulates it). `SnapshotPersistenceRetrierTest` — 3 tests mirroring `SluPersistenceRetrierTest` (delegation, `@Recover` doesn't rethrow, un-proxied method is a thin pass-through). `SluCalculationServiceIT` strengthened: `onBookingCompleted_withStructuredSession_...` now asserts `SUM(total_slu)` in `player_slu_weekly_snapshot` equals the sum of the written SLU rows (first + only snapshot write for the ISO week), and `@AfterEach` now also clears the snapshot table for `TEST_PLAYER_ID`. **3 unit + 11 IT, green.**
+- **AC4** — new `SkillDefinitionService` `@Service` (`@Transactional(readOnly = true)`, matching `RadarDisplayService`) holds the `findAllByActiveTrueOrderByDisplayOrderAsc().stream().map(mapper::toDto).toList()` logic. `SkillDefinitionResource` now injects only the service; endpoint, `@PreAuthorize("isAuthenticated()")`, `@Observed` name, and response shape all unchanged. `SkillDefinitionServiceTest` (unit, plain instantiation) pins delegation + per-element mapping. `SkillDefinitionResourceIT` (extends `AbstractIntegrationTest`, `@Sql({SecurityIT.SEC_DATA_SQL_PATH})` only — no `@MockitoBean`, so it stays on the shared context and does not move the CI context count) inserts its own active `ZZA` + inactive `ZZZ` rows (no inactive skill is seeded), logs in via the `loginAndGetCookies`/`authenticatedHeaders` pattern, asserts the response contains `ZZA` and `PAC` and excludes `ZZZ` (relative, not exact-count), plus a 401-unauthenticated check. No manual `skill_definitions` teardown (reset listener restores it). **1 unit + 2 IT, green.**
+- **AC3** — `PlayerDevelopmentDashboardPage.vue`: added a local `useDebounce(fn, delay)` helper (mirrors `DrillLibraryPage.vue`) extended with `flush()`. New `localSelectedSkillCodes` ref now drives both the `SkillsRadarChart` `:selected-skill-codes` prop and the page's own `hasBaseline` computed (previously both read `store.radarPreferences?.selectedSkillCodes` directly). A `watch(() => store.radarPreferences, ...)` keeps the local ref in sync on load / player-switch / resolved save. `onSkillSelectionChange` writes the local ref synchronously (instant visual feedback), then calls the 300 ms debounced save with `playerId.value` captured at call time. `flush()` runs in the `route.params.playerId` watcher (before `clearDevelopmentState()`) and in a new `onBeforeUnmount` so a pending PUT is never silently dropped; `clearDevelopmentState()` resets the local ref to `[]`. `npx eslint` clean, `quasar build` succeeds.
+  - **Disclosed gap**: the manual dev-server browser pass in AC3's test step was not performed — it needs a running full stack, a coach login, and a player with seeded radar/composite data, and no dev-seeder fixture exists for that state (same limitation `skillars-deferred-81` disclosed for its AC2). The click-burst / click-then-switch behaviours were verified by static review of the data flow, not in a live browser.
 
 ### File List
 
-_To be filled in by the dev agent during implementation._
+**New**
+- `src/main/resources/db/migration/V117__coach_radar_preferences_player_fk.sql`
+- `src/main/java/com/softropic/skillars/platform/development/service/SnapshotPersistenceRetrier.java`
+- `src/main/java/com/softropic/skillars/platform/development/service/SkillDefinitionService.java`
+- `src/test/java/com/softropic/skillars/platform/development/repo/CoachRadarPreferencePlayerFkIT.java`
+- `src/test/java/com/softropic/skillars/platform/development/service/SnapshotPersistenceRetrierTest.java`
+- `src/test/java/com/softropic/skillars/platform/development/service/SkillDefinitionServiceTest.java`
+- `src/test/java/com/softropic/skillars/platform/development/api/SkillDefinitionResourceIT.java`
+
+**Modified**
+- `src/main/java/com/softropic/skillars/platform/development/service/SluCalculationService.java` (call the snapshot retrier; drop now-unused `SnapshotBatchWriter` field/import)
+- `src/main/java/com/softropic/skillars/platform/development/api/SkillDefinitionResource.java` (delegate to `SkillDefinitionService`)
+- `src/test/java/com/softropic/skillars/platform/development/service/SluCalculationServiceIT.java` (assert `player_slu_weekly_snapshot`; clear it in `@AfterEach`)
+- `src/frontend/src/pages/player/PlayerDevelopmentDashboardPage.vue` (local selection ref + flushable debounce)
 
 ## Change Log
 
@@ -180,3 +199,33 @@ _To be filled in by the dev agent during implementation._
   - **AC2**: the illustrative code snippet was missing `@Slf4j` and its full import list (the class calls `log.error(...)` without ever declaring `log`) — corrected. `SluCalculationServiceIT` was cited as verifying the snapshot-write wiring but asserts nothing against `player_slu_weekly_snapshot` (grep-confirmed) — a broken proxy would fail it, but a silent no-op would pass green; AC2 now requires strengthening that IT with a real assertion. Documented two accepted, precedent-consistent quirks the review flagged as informational (a log line that fires even after a recovered failure; retry-exhaustion leaving the snapshot aggregate under-counted with no reconciliation) rather than treating either as a new defect.
   - **False positive caught and rejected, not applied**: the review's claim that AC4's IT needs explicit teardown code (`AbstractIntegrationTest` has no class-level `@Transactional`, so an inserted `skill_definitions` row would "break other ITs'... assertions" without manual cleanup) does not hold up against `DatabaseResetTestExecutionListener`'s actual implementation (read in full to verify): it truncates every application table and restores the four Flyway-seeded reference tables — `skill_definitions` among them — from a snapshot of their original migration state, before *every* test method suite-wide, exactly matching `docs/testing/readme.md`'s blanket "no teardown needed" rule. AC4 was corrected to state this explicitly (so a dev agent doesn't add dead cleanup code out of caution) rather than adopting the review's suggested fix.
   - No AC was redesigned in scope or intent beyond AC3's premise correction — every other flagged gap was folded in as an additional bullet within its existing AC. Status remains ready-for-dev.
+- 2026-08-31: dev-story implementation complete. All 4 ACs shipped as specified. AC1: `V117` FK + `ix_crp_player_id` index + `CoachRadarPreferencePlayerFkIT` (1 test green). AC2: `SnapshotPersistenceRetrier` + `SluCalculationService` wiring (dropped the now-unused `SnapshotBatchWriter` field) + `SnapshotPersistenceRetrierTest` (3) + strengthened `SluCalculationServiceIT` snapshot assertion (11) — all green. AC4: `SkillDefinitionService` extraction + `SkillDefinitionServiceTest` (1) + `SkillDefinitionResourceIT` (2) — all green. AC3: `PlayerDevelopmentDashboardPage.vue` local-selection ref + flushable 300 ms debounce; `npx eslint` clean, `quasar build` succeeds. One disclosed gap: AC3's manual dev-server browser pass not performed (no dev-seeder fixture for a coach + seeded-radar state) — verified by static review. Targeted backend tests only, per `docs/validation-strategy.md`; full suite is CI's gate. Status: in-progress -> review.
+- 2026-08-31: Addressed code review findings — 4 items resolved (1 decision-resolved patch + 3 patches; 4 deferred as pre-existing patterns, no action). All in AC2/AC3 scope, no AC redesign:
+  - **[Decision-resolved, Medium] Unguarded store↔local selection reconciliation** (`PlayerDevelopmentDashboardPage.vue`): removed the blind `watch(() => store.radarPreferences)` (grep-confirmed this page is `store.radarPreferences`'s only consumer) and replaced it with an explicit sync of `localSelectedSkillCodes` from `store.radarPreferences?.selectedSkillCodes ?? []` at the end of `loadPlayerData`, inside the existing `requestId === loadRequestId` staleness guard (added an early `return` on the stale-reload branch). A late-resolving (possibly stale-player) `saveRadarPreferences` PUT now updates `store.radarPreferences` but no longer drives the chart — closes both the same-player ~300 ms self-un-toggle and the fast-player-switch cross-player state corruption.
+  - **[Patch] Race-flaky snapshot assertion** (`SluCalculationServiceIT`): wrapped the `player_slu_weekly_snapshot` SUM read + assertion in `await().atMost(3, SECONDS).untilAsserted(...)` — the snapshot commits in its own tx which can land after the SLU rows (own tx) are already visible on the same `@Async` thread, so the prior single `queryForObject` could read 0.
+  - **[Patch] Local ref aliased the Pinia singleton array** (`PlayerDevelopmentDashboardPage.vue`): initialise `localSelectedSkillCodes` to `ref([])` instead of `ref(store.radarPreferences?.selectedSkillCodes ?? [])`. `onMounted` → `clearDevelopmentState()` already clears it; this removes the shared-array reference and the brief setup-tick staleness.
+  - **[Patch] Debounce dropped on tab close / hard nav** (`PlayerDevelopmentDashboardPage.vue`): `onBeforeUnmount` does not fire on tab close / refresh / full-page nav. Added a `pagehide` listener (`flushPendingRadarSave`) registered in `onMounted` and removed in `onBeforeUnmount` alongside the existing flush.
+  - Deferred (unchanged, pre-existing patterns `SnapshotPersistenceRetrier` inherits from `SluPersistenceRetrier` per AC2's "mirror exactly" directive): `TransactionException` not in `retryFor`/`@Recover`; no proxied retry-path test; `@Backoff` sleeps on the `@Async` listener pool with no bulkhead; V117 uses validating `ADD CONSTRAINT` + non-`CONCURRENTLY` index per codebase migration convention.
+  - Re-validation: `SluCalculationServiceIT` (11) green; `npx eslint` clean; `quasar build` succeeds.
+- 2026-08-31: Code review complete, all findings triaged and resolved (1 decision-resolved patch + 3 patches applied, 4 deferred as pre-existing patterns). No open items. Status: review -> done.
+
+## Review Findings
+
+_Adversarial code review 2026-08-31 — 3 layers (Blind Hunter + Edge Case Hunter + Acceptance Auditor). Triage: 1 decision-needed (resolved → patch), 4 patch, 4 deferred, 12 dismissed as noise / false-positive / accepted-by-spec. Acceptance Auditor: all four ACs satisfied (two Low/Info letter-vs-intent deviations, both already disclosed in the story record — `SnapshotBatchWriter` field removed from `SluCalculationService` where AC2 said "add alongside" [defensible: field became genuinely unused, bean still constructed, no direct-construction tests]; a benign extra 401 test + prettier reflow in AC3/AC4)._
+
+### Decision resolved → patch
+
+- [x] [Review][Patch] Unguarded store↔local selection reconciliation — same-player reversion + cross-player state corruption [`PlayerDevelopmentDashboardPage.vue:197,201-206,268-284,291-298`] — After AC3 decoupled visual state into `localSelectedSkillCodes`, `store.saveRadarPreferences` still unconditionally sets `store.radarPreferences = { selectedSkillCodes }` once its PUT resolves, and the new `watch(() => store.radarPreferences)` blindly mirrors that back into `localSelectedSkillCodes` with no guard. Two failure modes: **(a) same player, rapid clicks** — an earlier overlapping PUT resolving re-applies its older payload → a just-clicked node visibly un-toggles itself for up to ~300 ms [Medium]; **(b) fast player-switch mid-edit** — the route watcher's `flush()` fires `saveRadarPreferences(oldId, codes)` un-awaited; it resolves *after* `loadPlayerData(newId)` has populated the new player's prefs, overwrites `store.radarPreferences` with the old player's codes → the new player's radar renders the wrong skill subset until navigation/reload (`loadRequestId` guards `loadPlayerData` re-entry but not this second writer). Server rows are correct per-player in both modes — client state only. **Resolution (Option 2, chosen 2026-08-31):** `store.radarPreferences` has no consumer other than this page's own watch (grep-confirmed), so remove the blind `watch(() => store.radarPreferences)` and sync `localSelectedSkillCodes` explicitly instead — set it from `store.radarPreferences?.selectedSkillCodes ?? []` right after `store.fetchRadarPreferences(id)` resolves in `loadPlayerData` (inside the existing `requestId === loadRequestId` guard), keep the existing reset in `clearDevelopmentState()`. A resolved (possibly stale-player) PUT then no longer drives the chart at all; no new store state.
+
+### Patches
+
+- [x] [Review][Patch] `SluCalculationServiceIT` snapshot assertion is race-flaky [`src/test/java/com/softropic/skillars/platform/development/service/SluCalculationServiceIT.java:90`] — the new `player_slu_weekly_snapshot` SUM check runs under a plain `jdbcTemplate.queryForObject` gated only by `await().atMost(3, SECONDS).until(() -> countStats() > 0)`. `countStats()` reads `player_skill_stats`, which commits (own tx via `saveSluWithRetry`) *before* the snapshot write commits (own `@Transactional` tx via `writeAllWithRetry`) on the same `@Async` thread — so on a loaded CI run the SUM can read 0 while `statsTotal > 0` and `isEqualByComparingTo` fails intermittently. Wrap the snapshot query + assertion in `await().atMost(3, SECONDS).untilAsserted(() -> ...)`.
+- [x] [Review][Patch] `localSelectedSkillCodes` initialised from the Pinia singleton [`src/frontend/src/pages/player/PlayerDevelopmentDashboardPage.vue:197`] — `ref(store.radarPreferences?.selectedSkillCodes ?? [])` aliases the store's array instance when the singleton is already populated for another player, and is briefly stale on the setup tick before `onMounted` runs `clearDevelopmentState()`. Initialise to `ref([])` — behaviour is otherwise unchanged (`onMounted` already clears), this just removes the dormant shared-array footgun.
+- [x] [Review][Patch] 300 ms window silently drops the last selection on tab close / hard navigation [`src/frontend/src/pages/player/PlayerDevelopmentDashboardPage.vue:282-284`] — `flush()` only runs on `onBeforeUnmount` (SPA nav) and the route watcher; `onBeforeUnmount` does not fire on tab close, refresh, or full-page navigation, so a toggle within 300 ms of one is lost with no error surfaced (unlike `DrillLibraryPage`'s debounced *search*, this is a persistence call). Add a `pagehide` listener that calls `debouncedSaveRadarPreferences.flush()`, removed in `onBeforeUnmount`.
+
+### Deferred (pre-existing pattern / convention-level — not introduced by this change)
+
+- [x] [Review][Defer] `SnapshotPersistenceRetrier` (and the pre-existing `SluPersistenceRetrier` it mirrors) only retry/`@Recover` `DataAccessException` — a failure at transaction begin/commit (`CannotCreateTransactionException`, `TransactionSystemException` — subclasses of `TransactionException`, not `DataAccessException`) is neither retried nor recovered; it propagates raw out of the `@Async @TransactionalEventListener` method into `SimpleAsyncUncaughtExceptionHandler` and the "manual recovery needed" log never fires. AC2 was directed to mirror `SluPersistenceRetrier` exactly, which has the identical gap. [`src/main/java/com/softropic/skillars/platform/development/service/SnapshotPersistenceRetrier.java:39-53`] — deferred, pre-existing pattern
+- [x] [Review][Defer] No test exercises the actual retry/`@Recover` proxy path for any SLU retrier — all three `SnapshotPersistenceRetrierTest` tests use plain `new` instantiation and one explicitly pins the *un-proxied* no-retry behaviour; a regression to `@Retryable` / `retryFor` / the `@Recover` signature passes CI green. Mirrors the pre-existing `SluPersistenceRetrierTest` gap AC2 copied. A single `@SpringBootTest` + `@EnableRetry`-backed test proving retry-then-`@Recover` on exhaustion would cover both. [`src/test/java/com/softropic/skillars/platform/development/service/SnapshotPersistenceRetrierTest.java`] — deferred, pre-existing pattern
+- [x] [Review][Defer] `@Backoff` retry sleeps execute on the `@Async` booking-completed listener thread pool with no bulkhead — a DB hiccup during a burst of booking completions parks listener threads through the backoff chain (now two sequential chains per event, SLU then snapshot), stalling SLU/snapshot processing for other players. Pre-existing architecture (`SluPersistenceRetrier` is invoked the same way). [`src/main/java/com/softropic/skillars/platform/development/service/SluCalculationService.java:49-51`] — deferred, pre-existing architecture
+- [x] [Review][Defer] V117 (like the `V113` / `V109` precedents it was told to mirror) uses a plain validating `ADD CONSTRAINT ... FOREIGN KEY` (locks `main.player_profiles` for the row scan) + non-`CONCURRENTLY` `CREATE INDEX`, with no `NOT VALID` + later `VALIDATE CONSTRAINT` split for online-safe deploys. Codebase-wide migration convention, not specific to this table. [`src/main/resources/db/migration/V117__coach_radar_preferences_player_fk.sql`] — deferred, pre-existing convention

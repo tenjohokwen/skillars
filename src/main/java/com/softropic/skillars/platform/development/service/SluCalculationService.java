@@ -5,7 +5,6 @@ import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.development.repo.PlayerSkillStat;
 import com.softropic.skillars.platform.development.repo.SkillDefinitionRepository;
 import com.softropic.skillars.platform.development.repo.SluRepository;
-import com.softropic.skillars.platform.development.repo.SnapshotBatchWriter;
 import com.softropic.skillars.platform.session.contract.SessionBlockData;
 import com.softropic.skillars.platform.session.contract.SessionDrillRef;
 import com.softropic.skillars.platform.session.repo.Drill;
@@ -44,8 +43,8 @@ public class SluCalculationService {
     private final SluRepository sluRepository;
     private final SkillDefinitionRepository skillDefinitionRepository;
     private final ConfigService configService;
-    private final SnapshotBatchWriter snapshotBatchWriter;
     private final SluPersistenceRetrier sluPersistenceRetrier;
+    private final SnapshotPersistenceRetrier snapshotPersistenceRetrier;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Async
@@ -183,7 +182,7 @@ public class SluCalculationService {
         ZonedDateTime calcWeek = ZonedDateTime.ofInstant(now, ZoneOffset.UTC);
         short isoYear = (short) calcWeek.get(IsoFields.WEEK_BASED_YEAR);
         short isoWeek = (short) calcWeek.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
-        snapshotBatchWriter.writeAll(stats, isoYear, isoWeek);
+        snapshotPersistenceRetrier.writeAllWithRetry(stats, isoYear, isoWeek);
         log.debug("Weekly snapshot updated: {} skill entries for player {} week {}/{}",
             stats.size(), event.getPlayerId(), isoYear, isoWeek);
     }
