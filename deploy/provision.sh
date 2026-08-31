@@ -47,6 +47,47 @@ chown_if_needed() {
 }
 
 # ──────────────────────────────────────────────────
+# 0. Concurrency guard — whole-script exclusive lock (skillars-deferred-88 AC3)
+# ──────────────────────────────────────────────────
+# provision.sh is idempotent and re-run-safe, but two runs OVERLAPPING (two operators, or a manual
+# run racing a scheduled one) can still corrupt shared state — e.g. one run's `rm -rf "${STAGING}"`
+# landing mid-`rsync` of the other, or a double `mkfs.ext4` / `mount` of the same device. This is a
+# coarse WHOLE-SCRIPT lock (idempotent re-runs included), deliberately not per-section: concurrent
+# provision.sh is not a supported scenario and the lock exists to make that explicit, not to enable
+# parallelism.
+#
+# The self-re-exec idiom below only works when the script is invoked from a FILE
+# (`bash /opt/skillars/deploy/provision.sh` — the only documented invocation, per
+# docs/deployment/first-time-setup.md) — NOT under `curl … | bash`, where $0 is `bash` / `-bash`
+# with no path. Every documented invocation path is file-based.
+LOCK_FILE="/var/lock/skillars-provision.lock"
+if [ "${_PROVISION_LOCKED:-}" != "1" ]; then
+  if ! command -v flock >/dev/null 2>&1; then
+    err "flock not found — it ships with util-linux and is always present on the Ubuntu base."
+    err "Cannot guard against a concurrent provision.sh run; install util-linux and re-run."
+    exit 1
+  fi
+  [ -e "${LOCK_FILE}" ] || install -m 0644 /dev/null "${LOCK_FILE}"
+  # flock runs `bash "$0"` again with _PROVISION_LOCKED=1 while holding the lock, so the real body
+  # runs exactly once under the lock. --nonblock + --conflict-exit-code 99 makes a second concurrent
+  # invocation fail fast and distinguishably (99) instead of hanging; any other non-zero code is the
+  # re-exec'd child's own failure and must propagate. Invoked as `bash "$0"` (not bare "$0") so a
+  # checkout without the execute bit still works — the only documented invocation is
+  # `bash /opt/skillars/deploy/provision.sh` anyway.
+  #
+  # Capture flock's status DIRECTLY with `|| _flock_rc=$?` — `if cmd; then …; fi` followed by `$?`
+  # yields the *if-construct's* status (0 when no branch ran), never cmd's.
+  _flock_rc=0
+  env _PROVISION_LOCKED=1 flock --exclusive --nonblock --conflict-exit-code 99 \
+    "${LOCK_FILE}" bash "$0" "$@" || _flock_rc=$?
+  if [ "${_flock_rc}" -eq 99 ]; then
+    err "another provision.sh is already running (holds ${LOCK_FILE}); refusing to run concurrently."
+    exit 1
+  fi
+  exit "${_flock_rc}"
+fi
+
+# ──────────────────────────────────────────────────
 # 1. System packages
 # ──────────────────────────────────────────────────
 log "Installing system packages..."
@@ -190,21 +231,39 @@ fi
 MOUNT_POINT="${DEPLOY_ROOT}/data"
 STAGING="${DEPLOY_ROOT}/.pre-volume-migration"
 
+# Enumerate the attached Hetzner Volume by-id symlinks once (skillars-deferred-88 AC5). A glob with
+# no match yields the literal pattern, so -e each.
+_vol_links=()
+for _link in /dev/disk/by-id/scsi-0HC_Volume_*; do
+  [ -e "${_link}" ] && _vol_links+=("${_link}")
+done
+_vol_count="${#_vol_links[@]}"
+
 VOLUME_LINK=""
 if [ -n "${HETZNER_VOLUME_ID:-}" ]; then
   if [ -e "/dev/disk/by-id/scsi-0HC_Volume_${HETZNER_VOLUME_ID}" ]; then
     VOLUME_LINK="/dev/disk/by-id/scsi-0HC_Volume_${HETZNER_VOLUME_ID}"
+  elif [ "${_vol_count}" -gt 1 ]; then
+    # id set but unresolvable AND more than one Volume attached — the dangerous case: an operator
+    # who believes they pinned the device. Do NOT fall back to a guess (which today would readlink
+    # the lexically-first symlink and mkfs.ext4 it if unformatted).
+    err "HETZNER_VOLUME_ID=${HETZNER_VOLUME_ID} does not resolve to an attached Volume"
+    err "(/dev/disk/by-id/scsi-0HC_Volume_${HETZNER_VOLUME_ID} is absent) and ${_vol_count} Volumes are"
+    err "attached — refusing to fall back to a guess. Set HETZNER_VOLUME_ID to the digits after"
+    err "scsi-0HC_Volume_ for the intended Volume and re-run."
+    exit 1
   else
-    err "HETZNER_VOLUME_ID=${HETZNER_VOLUME_ID} is set but /dev/disk/by-id/scsi-0HC_Volume_${HETZNER_VOLUME_ID} does not exist (typo, stale id, or the Volume is not attached) — falling back to first-match / /dev/sdb, which may resolve to the WRONG Volume on a multi-Volume host."
+    # Exactly one (or zero) Volume attached — unambiguous, keep the warn-then-fall-back behaviour.
+    err "HETZNER_VOLUME_ID=${HETZNER_VOLUME_ID} is set but /dev/disk/by-id/scsi-0HC_Volume_${HETZNER_VOLUME_ID} does not exist (typo, stale id, or the Volume is not attached) — falling back to the single attached Volume / /dev/sdb."
   fi
+elif [ "${_vol_count}" -gt 1 ]; then
+  err "${_vol_count} Hetzner Volumes are attached and HETZNER_VOLUME_ID is not set — refusing to guess"
+  err "which one holds ${MOUNT_POINT}. Export HETZNER_VOLUME_ID=<id> (the digits after"
+  err "scsi-0HC_Volume_) and re-run."
+  exit 1
 fi
-if [ -z "${VOLUME_LINK}" ]; then
-  for _link in /dev/disk/by-id/scsi-0HC_Volume_*; do
-    if [ -e "${_link}" ]; then
-      VOLUME_LINK="${_link}"
-      break
-    fi
-  done
+if [ -z "${VOLUME_LINK}" ] && [ "${_vol_count}" -ge 1 ]; then
+  VOLUME_LINK="${_vol_links[0]}"
 fi
 
 if [ -n "${VOLUME_LINK}" ]; then
@@ -314,6 +373,30 @@ if [ -b "${VOLUME_DEVICE}" ]; then
     # sibling of ${MOUNT_POINT}, never under it, so it survives the mount and a later re-run.
     if pre_volume_payload_present "${MOUNT_POINT}"; then
       log "Pre-Volume data present on the root disk at ${MOUNT_POINT}; staging to ${STAGING} before mount."
+      # Free-space guard (skillars-deferred-88 AC5): the staging copy lands on the SAME root
+      # filesystem as ${MOUNT_POINT}. Refuse to start it if the root disk cannot hold a second copy
+      # plus rsync temp files (2x headroom) — otherwise ENOSPC aborts mid-rsync and every re-run
+      # loops on the same failure. Fail-OPEN on an unreadable du/df (|| true per the set -euo
+      # pipefail convention, skillars-deferred-85 AC3/AC6 precedent): the guard is best-effort; a
+      # genuine ENOSPC during the rsync still surfaces.
+      _payload_kb="$(du -sk "${MOUNT_POINT}" 2>/dev/null | awk '{print $1}' || true)"
+      _avail_kb="$(df -Pk "${DEPLOY_ROOT}" 2>/dev/null | awk 'NR==2 {print $4}' || true)"
+      # Numeric-validate before the arithmetic — a non-empty-but-non-numeric reading would make the
+      # $(( )) below error out under `set -euo pipefail` and abort BEFORE mount (the exact re-run
+      # loop this guard exists to prevent). Blank it out so the fail-OPEN branch handles it.
+      case "${_payload_kb}" in ''|*[!0-9]*) _payload_kb="" ;; esac
+      case "${_avail_kb}" in ''|*[!0-9]*) _avail_kb="" ;; esac
+      if [ -n "${_payload_kb}" ] && [ -n "${_avail_kb}" ]; then
+        if [ "$(( _payload_kb * 2 ))" -gt "${_avail_kb}" ]; then
+          err "Refusing to stage the pre-Volume tree: it is ${_payload_kb} KiB and only ${_avail_kb} KiB"
+          err "is free on the filesystem holding ${DEPLOY_ROOT} (need ~2x for the copy + rsync temp"
+          err "files). Free space on the root disk, or attach the Volume before the tree grows, then re-run."
+          exit 1
+        fi
+      else
+        log "⚠️  Could not read du/df for the free-space pre-check — skipping it; a genuine ENOSPC"
+        log "    during the staging rsync will still abort the run."
+      fi
       mkdir -p "${STAGING}"
       rsync -aHAX --numeric-ids "${MOUNT_POINT}/" "${STAGING}/"
     fi
@@ -337,8 +420,21 @@ if [ -b "${VOLUME_DEVICE}" ]; then
   # line and would append a SECOND entry for the same mount point (double `mount -a` on next
   # reboot). So purge any non-matching line for this mount point first (mirrors install-crons.sh's
   # stale-cron purge), then add the by-id entry if absent.
-  if grep -vFx "${FSTAB_ENTRY}" /etc/fstab | grep -qE "[[:space:]]${MOUNT_POINT}[[:space:]]"; then
-    sed -i "\#[[:space:]]${MOUNT_POINT}[[:space:]]#d" /etc/fstab
+  # Match ONLY an active, non-comment line for ${MOUNT_POINT} whose device field is a real token
+  # (first non-whitespace char is not `#`): delete an operator's stale non-canonical mount line,
+  # never their commented-out alternate entry (skillars-deferred-88 AC4). One regex, used
+  # identically in the guard and the sed address so they cannot diverge. `,` is the sed address
+  # delimiter — `#` can't be (it appears inside the bracket expression) and `/` can't be (it is in
+  # ${MOUNT_POINT}). The sed also deletes the canonical FSTAB_ENTRY if present; the add-block just
+  # below re-adds it, so the net effect stays idempotent.
+  _fstab_stale_re="^[[:space:]]*[^#[:space:]][^[:space:]]*[[:space:]]+${MOUNT_POINT}[[:space:]]"
+  if grep -vFx "${FSTAB_ENTRY}" /etc/fstab | grep -qE "${_fstab_stale_re}"; then
+    # Back up /etc/fstab ONLY on the run that actually mutates it (inside this `if`, not before it)
+    # so an idempotent steady-state re-run does not drop a fresh /etc/fstab.bak.<ts> every time.
+    _fstab_bak="/etc/fstab.bak.$(date +%Y%m%d%H%M%S)"
+    cp -p /etc/fstab "${_fstab_bak}"
+    log "Backed up /etc/fstab to ${_fstab_bak} before editing it."
+    sed -i -E "\\,${_fstab_stale_re},d" /etc/fstab
     log "Removed a stale /etc/fstab entry for ${MOUNT_POINT} (Volume is now referenced by its stable by-id path)."
   fi
   if ! grep -qF "${FSTAB_ENTRY}" /etc/fstab; then
@@ -425,6 +521,11 @@ fi
 # point from grafana-alerts.yml regardless of whether these vars are set, so if BOTH are blank
 # every firing alert routes to nowhere, silently.
 #
+# skillars-deferred-88 AC7: after the sanity checks below, render_grafana_contact_points rewrites
+# the marked `contactPoints:` region of grafana-alerts.yml so it carries ONLY the receivers whose
+# channel is actually configured in .env — a single-channel deployment no longer also provisions a
+# second receiver with an empty target that silently drops every alert routed to it.
+#
 # Read one value from .env, normalised so a functionally-blank channel cannot pass the guards below
 # and a genuinely-set one cannot read as blank: tolerate an optional `export ` prefix, strip a
 # trailing CR (CRLF .env), strip surrounding matching quotes (`KEY=""` -> empty), and trim
@@ -446,6 +547,100 @@ env_val() {
   printf '%s' "$v"
 }
 
+# skillars-deferred-88 AC7 — rewrite the `# >>> BEGIN … >>>` / `# <<< END … <<<` region of
+# grafana-alerts.yml so `notify-ops` carries only the receivers whose channel is set in .env.
+# Preconditions: at least one of GF_EMAIL / GF_SLACK is non-empty (the both-blank case has already
+# exited 1 above). The ${GF_*} placeholders are emitted verbatim (single-quoted echo / quoted
+# heredoc) — Grafana expands them from its own env; the real secrets never touch this file. Slack's
+# Go-template title/text lines are copied byte-for-byte from the committed default via a quoted
+# heredoc so the shell never touches `{{ … }}`. Idempotent: an unchanged region is a no-op with no
+# backup; a changed region gets a timestamped .bak first (AC4's spirit).
+render_grafana_contact_points() {
+  local file="${DEPLOY_ROOT}/deploy/lgtm/grafana-alerts.yml"
+  local begin='# >>> BEGIN provision.sh-managed contactPoints'
+  local end='# <<< END provision.sh-managed contactPoints'
+
+  if [ ! -f "${file}" ]; then
+    log "⚠️  ${file} not found — skipping contactPoints rendering."
+    return 0
+  fi
+  # Anchor at column 1 — the awk splice below only matches `index($0, …) == 1`, so an indented or
+  # duplicated marker that a substring grep would accept must NOT pass this guard.
+  if ! grep -qE '^# >>> BEGIN provision\.sh-managed contactPoints' "${file}" \
+     || ! grep -qE '^# <<< END provision\.sh-managed contactPoints' "${file}"; then
+    log "⚠️  ${file} has no column-1 provision.sh-managed contactPoints markers — leaving it untouched."
+    return 0
+  fi
+
+  local region_file new_file
+  region_file="$(mktemp)"
+  new_file="$(mktemp)"
+  # The single-quoted ${GF_*} / {{ … }} strings below are literal ON PURPOSE — Grafana, not the
+  # shell, expands them. SC2016 would flag every one.
+  # shellcheck disable=SC2016
+  {
+    echo "${begin} (skillars-deferred-88 AC7) >>>"
+    echo '# Do NOT hand-edit between these markers — provision.sh rewrites this region from the alert'
+    echo '# channels set in /opt/skillars/.env on every run. ${GF_*} placeholders are kept verbatim;'
+    echo '# Grafana expands them from its own container env, so no secret is ever written here.'
+    echo 'contactPoints:'
+    echo '  - orgId: 1'
+    echo '    name: notify-ops'
+    echo '    receivers:'
+    if [ -n "${GF_EMAIL}" ]; then
+      echo '      - uid: notify-ops-email'
+      echo '        type: email'
+      echo '        settings:'
+      echo '          addresses: "${GF_ALERT_NOTIFY_EMAIL}"'
+      echo '          singleEmail: false'
+    fi
+    if [ -n "${GF_SLACK}" ]; then
+      cat <<'SLACK_RECEIVER'
+      - uid: notify-ops-slack
+        type: slack
+        settings:
+          url: "${GF_SLACK_WEBHOOK_URL}"
+          username: "Skillars Alerts"
+          icon_emoji: ":rotating_light:"
+          title: "{{ len .Alerts.Firing }} alert(s) firing"
+          text: "{{ range .Alerts.Firing }}*{{ .Labels.alertname }}* — {{ .Annotations.summary }}\n{{ end }}"
+SLACK_RECEIVER
+    fi
+    echo "${end} <<<"
+  } > "${region_file}"
+
+  # Splice: replace everything between the BEGIN and END marker lines (inclusive) with region_file,
+  # which itself carries the marker lines.
+  awk -v rf="${region_file}" '
+    BEGIN { region = ""; while ((getline line < rf) > 0) region = region line "\n" }
+    index($0, "# >>> BEGIN provision.sh-managed contactPoints") == 1 { printf "%s", region; inblock = 1; next }
+    index($0, "# <<< END provision.sh-managed contactPoints") == 1 { inblock = 0; next }
+    !inblock { print }
+  ' "${file}" > "${new_file}"
+
+  # Splice sanity: the output must carry exactly one BEGIN and one END marker line (column 1). A
+  # column-1-mangled END would otherwise let the splice swallow everything to EOF (the policies:
+  # block); bail without touching the live file if that happened.
+  if [ "$(grep -cE '^# >>> BEGIN provision\.sh-managed contactPoints' "${new_file}")" != "1" ] \
+     || [ "$(grep -cE '^# <<< END provision\.sh-managed contactPoints' "${new_file}")" != "1" ]; then
+    err "grafana-alerts.yml contactPoints splice produced an unexpected marker count — leaving the file untouched."
+    rm -f "${region_file}" "${new_file}"
+    return 0
+  fi
+
+  if cmp -s "${file}" "${new_file}"; then
+    log "grafana-alerts.yml contactPoints already match the configured channels — no change."
+  else
+    local bak
+    bak="${file}.bak.$(date +%Y%m%d%H%M%S)"
+    cp -p "${file}" "${bak}"
+    cat "${new_file}" > "${file}"   # cat > keeps the file's inode + permissions
+    log "Rewrote grafana-alerts.yml contactPoints from the configured channels (backup: ${bak})."
+    log "    Grafana reads this file only at container start — run 'docker compose up -d --force-recreate grafana' for it to take effect."
+  fi
+  rm -f "${region_file}" "${new_file}"
+}
+
 # Only runs when .env is present — section 6.5 already tells the operator to place .env and re-run,
 # and this check fires on that re-run.
 if [ -f "${ENV_FILE}" ]; then
@@ -461,18 +656,20 @@ if [ -f "${ENV_FILE}" ]; then
   fi
 
   if [ -n "${GF_EMAIL}" ] && [ -z "${GF_SLACK}" ]; then
-    log "⚠️  GF_SLACK_WEBHOOK_URL is blank — the notify-ops Slack receiver will provision with an"
-    log "    empty URL and silently no-op on every alert until it is set."
+    log "ℹ️  GF_SLACK_WEBHOOK_URL is blank — provisioning notify-ops with the email receiver only"
+    log "    (the Slack receiver is omitted, not provisioned empty)."
   fi
   if [ -z "${GF_EMAIL}" ] && [ -n "${GF_SLACK}" ]; then
-    log "⚠️  GF_ALERT_NOTIFY_EMAIL is blank — the notify-ops email receiver will provision with an"
-    log "    empty address and silently no-op on every alert until it is set."
+    log "ℹ️  GF_ALERT_NOTIFY_EMAIL is blank — provisioning notify-ops with the Slack receiver only"
+    log "    (the email receiver is omitted, not provisioned empty)."
   fi
 
   if [ -n "${GF_EMAIL}" ] && [ "${GF_SMTP}" != "true" ]; then
     log "⚠️  GF_ALERT_NOTIFY_EMAIL is set but GF_SMTP_ENABLED is not 'true' — Grafana email routing"
     log "    also needs GF_SMTP_ENABLED=true and the GF_SMTP_* block, or email alerts silently fail."
   fi
+
+  render_grafana_contact_points
 fi
 
 log ""

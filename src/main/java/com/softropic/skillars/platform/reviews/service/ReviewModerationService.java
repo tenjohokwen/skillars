@@ -101,7 +101,19 @@ public class ReviewModerationService {
                 // .createBookingRequest, where an earlier findById forces one.
                 reviewRepository.findByIdForUpdate(reviewId).ifPresentOrElse(
                     review -> {
-                        // PENDING is the whole guard. ReviewSubmissionService.submitReview and
+                        // AC1 (skillars-deferred-88): epoch guard FIRST — it is the more specific
+                        // signal. A superseded review edit re-sets the row to PENDING with a higher
+                        // moderationEpoch, so a stale in-flight Gemini verdict for the previous edit
+                        // still sees PENDING and would otherwise land on top of fresher content
+                        // (skillars-deferred-14 D3). Drop any delivery whose captured epoch no longer
+                        // matches the row.
+                        if (review.getModerationEpoch() != event.moderationEpoch()) {
+                            log.warn("ReviewModerationService: review {} epoch moved {} -> {} since "
+                                    + "this verdict was requested — discarding stale moderation verdict {}",
+                                reviewId, event.moderationEpoch(), review.getModerationEpoch(), finalStatus);
+                            return;
+                        }
+                        // PENDING is the rest of the guard. ReviewSubmissionService.submitReview and
                         // .updateReview are the only publishers of ReviewSubmittedEvent and both set
                         // PENDING immediately before publishing, so PENDING is the only status this
                         // delivery may claim. Every other writer must win:
@@ -109,7 +121,9 @@ public class ReviewModerationService {
                         //   - ReviewFlagService.flag — auto-holds APPROVED -> UNDER_REVIEW at the
                         //     configured flag threshold (only reachable once already resolved);
                         //   - a duplicate delivery of this same event, which this also makes
-                        //     idempotent for free.
+                        //     idempotent for free;
+                        //   - a superseded edit whose epoch happens to still match (impossible after
+                        //     the epoch guard above) — historically the uncoverable case.
                         ReviewModerationStatus current = review.getModerationStatus();
                         if (current != ReviewModerationStatus.PENDING) {
                             log.warn("ReviewModerationService: review {} already resolved as {} — "

@@ -40,7 +40,16 @@ All alerts route to the `notify-ops` contact point:
 - **Email:** address configured in `GF_ALERT_NOTIFY_EMAIL`
 - **Slack:** webhook configured in `GF_SLACK_WEBHOOK_URL`
 
-Both variables must be set in `/opt/skillars/.env` for notifications to reach the operator.
+At least one must be set in `/opt/skillars/.env`. `provision.sh` renders the `contactPoints:` region
+of `deploy/lgtm/grafana-alerts.yml` (between the `# >>> BEGIN provision.sh-managed contactPoints`
+markers) from **only the channels that are configured**, so a single-channel deployment provisions
+exactly one receiver — not one live receiver plus one that silently drops every alert routed to it.
+The `${GF_ALERT_NOTIFY_EMAIL}` / `${GF_SLACK_WEBHOOK_URL}` placeholders stay in the file (Grafana
+expands them from its own container env); the real values are never written there. Edit the `.env`
+channels and re-run `provision.sh` to change which receivers are provisioned — do not hand-edit
+inside the markers. Grafana reads its provisioning files **only at container start**, so after a
+rewrite you must recreate the container for the change to take effect:
+`docker compose up -d --force-recreate grafana`.
 
 **Notification policy:** group wait 30s, group interval 5m, repeat interval 4h.
 

@@ -1,0 +1,3 @@
+# Story skillars-deferred-88 AC9: validate app.ses.enabled before any bean is created.
+org.springframework.boot.env.EnvironmentPostProcessor=\
+  com.softropic.skillars.infrastructure.ses.SesEnabledPropertyValidator

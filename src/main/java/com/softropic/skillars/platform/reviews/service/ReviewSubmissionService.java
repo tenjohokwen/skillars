@@ -12,6 +12,8 @@ import com.softropic.skillars.platform.reviews.contract.SubmitReviewResponse;
 import com.softropic.skillars.platform.reviews.repo.CoachReview;
 import com.softropic.skillars.platform.reviews.repo.CoachReviewRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -34,6 +36,7 @@ public class ReviewSubmissionService {
     private final CoachProfileRepository coachProfileRepository;
     private final ApplicationEventPublisher eventPublisher;
     private final ConfigService configService;
+    private final EntityManager entityManager;
 
     public SubmitReviewResponse submitReview(UUID coachId, Long authorId, String authorRoleStr,
                                              Integer rating, String body) {
@@ -69,8 +72,9 @@ public class ReviewSubmissionService {
                 "Review already submitted for this coach",
                 ReviewErrorCode.ALREADY_SUBMITTED);
         }
-        eventPublisher.publishEvent(
-            new ReviewSubmittedEvent(review.getReviewId(), coachId, authorId, rating, body));
+        // AC1 (skillars-deferred-88): a freshly-created review keeps the default moderationEpoch = 0.
+        eventPublisher.publishEvent(new ReviewSubmittedEvent(
+            review.getReviewId(), coachId, authorId, rating, body, review.getModerationEpoch()));
         return new SubmitReviewResponse(review.getReviewId());
     }
 
@@ -93,15 +97,44 @@ public class ReviewSubmissionService {
         }
         checkEligibility(review.getCoachId(), authorId);
 
-        review.setRating(rating);
-        review.setBody(body);
-        review.setModerationStatus(ReviewModerationStatus.PENDING);
-        review.setLastModifiedAt(Instant.now());
-        review.setCoachResponseBody(null);
-        review.setCoachResponseAt(null);
-        coachReviewRepository.save(review);
-        eventPublisher.publishEvent(
-            new ReviewSubmittedEvent(review.getReviewId(), review.getCoachId(), authorId, rating, body));
+        // AC1 (skillars-deferred-88): serialise the moderation-epoch bump. The findByReviewIdAndAuthorId
+        // load above is unlocked and only backs the author-match / 365-day / status pre-checks, so an
+        // unauthorised caller still gets AUTHOR_MISMATCH without ever taking a row lock (same
+        // order-of-operations rationale as MessagingService.softDeleteMessage). Every mutation below
+        // runs on the locked instance. Author identity is already confirmed by the pre-check, so a
+        // missing row here can only mean a concurrent delete — a not-found condition, not an authz one.
+        CoachReview locked = coachReviewRepository.findByIdForUpdate(reviewId)
+            .orElseThrow(() -> new ResourceNotFoundException("Review", reviewId.toString()));
+        // findByIdForUpdate is a JPQL query and the row is already managed from the unlocked load
+        // above, so Hibernate takes the DB lock but returns the existing instance without refreshing
+        // its fields. Without this refresh, two near-simultaneous edits would both read epoch N off a
+        // stale instance and both publish N+1 (a lost update). Mirrors MessagingService.softDeleteMessage
+        // / BookingService.createBookingRequest for the identical Hibernate identity-map gotcha.
+        entityManager.refresh(locked, LockModeType.PESSIMISTIC_WRITE);
+
+        // Re-run the moderation-status guard on the FRESH locked instance (review finding). The
+        // pre-check above ran on the stale unlocked read; a concurrent admin BLOCK, a
+        // ReviewFlagService.flag auto-hold, or a moderation-listener verdict committed between that
+        // read and this lock must not be silently reset to PENDING by the edit below. Mirrors
+        // MessagingService.softDeleteMessage re-checking getDeletedAt() after its own refresh.
+        ReviewModerationStatus lockedStatus = locked.getModerationStatus();
+        if (lockedStatus == ReviewModerationStatus.BLOCKED
+                || lockedStatus == ReviewModerationStatus.UNDER_REVIEW) {
+            throw new OperationNotAllowedException(
+                "Review cannot be edited in its current moderation status",
+                ReviewErrorCode.EDIT_NOT_PERMITTED);
+        }
+
+        locked.setRating(rating);
+        locked.setBody(body);
+        locked.setModerationStatus(ReviewModerationStatus.PENDING);
+        locked.setLastModifiedAt(Instant.now());
+        locked.setCoachResponseBody(null);
+        locked.setCoachResponseAt(null);
+        locked.setModerationEpoch(locked.getModerationEpoch() + 1);
+        coachReviewRepository.save(locked);
+        eventPublisher.publishEvent(new ReviewSubmittedEvent(
+            locked.getReviewId(), locked.getCoachId(), authorId, rating, body, locked.getModerationEpoch()));
     }
 
     public void submitCoachResponse(UUID reviewId, UUID coachId, String responseBody) {

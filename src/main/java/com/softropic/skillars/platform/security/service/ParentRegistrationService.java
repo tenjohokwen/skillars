@@ -123,6 +123,16 @@ public class ParentRegistrationService {
         User user = userRepository.findOneById(evt.getUserId())
             .orElseThrow(() -> new EmailTokenException("security.emailTokenInvalid", false));
 
+        // AC11 (skillars-deferred-88): an admin-locked or GDPR-erased half-registered account
+        // must not be able to self-advance verificationStatus with a still-valid pre-lock
+        // token. Non-terminal (canResend = true) so a later unlock lets the user resume.
+        if (user.isLocked()) {
+            // Terminal (canResend = false) — a locked account cannot self-resume; per the
+            // code-review decision (2026-08-31, option b), overriding the story's L2 default.
+            // An admin who locks a mid-registration user must also delete the stub.
+            throw new EmailTokenException("security.accountLocked", false);
+        }
+
         if (user.getVerificationStatus() != SkillarsVerificationStatus.UNVERIFIED) {
             throw new EmailTokenException("security.emailTokenInvalid", false);
         }
@@ -146,7 +156,11 @@ public class ParentRegistrationService {
         otpToken.setOtpHash(hashOtp(otp, user.getId()));
         otpToken.setExpiresAt(Instant.now().plus(10, ChronoUnit.MINUTES));
         otpToken.setUsed(false);
-        otpTokenRepository.save(otpToken);
+        // AC10 (skillars-deferred-88): saveAndFlush, not save — force the INSERT now so a
+        // collision with the uq_pot_one_active_per_user partial unique index surfaces here as a
+        // clean DataIntegrityViolationException (-> 409 security.otpResendInProgress via ApiAdvice),
+        // not a commit-time failure. @Tsid ids defer the INSERT to flush otherwise.
+        otpTokenRepository.saveAndFlush(otpToken);
 
         sendOtpEmail(user, otp);
 
@@ -169,6 +183,12 @@ public class ParentRegistrationService {
         User user = userRepository.findOneById(userId)
             .orElseThrow(() -> new OtpVerificationException("security.otpMismatch"));
 
+        // AC11 (skillars-deferred-88): defense-in-depth — a locked User (admin lock / GDPR
+        // erasure / user-erased event) cannot complete phone verification.
+        if (user.isLocked()) {
+            throw new OtpVerificationException("security.accountLocked");
+        }
+
         if (user.getVerificationStatus() != SkillarsVerificationStatus.EMAIL_VERIFIED) {
             throw new OtpVerificationException("security.otpMismatch");
         }
@@ -188,6 +208,13 @@ public class ParentRegistrationService {
     @RateLimited(key = "parent_resend_verification", capacity = 3, duration = 30)
     public void resendVerificationEmail(String email) {
         userRepository.findOneByEmail(email).ifPresent(user -> {
+            // AC11 / code-review decision (2026-08-31): a locked account cannot self-resume.
+            // Silent no-op (not a throw) so this endpoint keeps its always-200
+            // no-account-enumeration contract — a locked user stays indistinguishable from a
+            // nonexistent or already-verified one.
+            if (user.isLocked()) {
+                return;
+            }
             if (user.getVerificationStatus() == null ||
                 user.getVerificationStatus() == SkillarsVerificationStatus.UNVERIFIED) {
                 emailTokenRepository.deleteByUserIdAndUsedFalse(user.getId());
@@ -200,6 +227,12 @@ public class ParentRegistrationService {
     public void resendPhoneOtp(Long userId) {
         User user = userRepository.findOneById(userId)
             .orElseThrow(() -> new OtpVerificationException("security.otpMismatch"));
+        // AC11 / code-review decision (2026-08-31): a locked account cannot self-resume. This
+        // endpoint already needs a valid userId + EMAIL_VERIFIED status, so a specific message here
+        // is not an enumeration oracle (matches verifyPhone's locked guard).
+        if (user.isLocked()) {
+            throw new OtpVerificationException("security.accountLocked");
+        }
         if (user.getVerificationStatus() != SkillarsVerificationStatus.EMAIL_VERIFIED) {
             throw new OtpVerificationException("security.otpMismatch");
         }
@@ -210,7 +243,11 @@ public class ParentRegistrationService {
         otpToken.setOtpHash(hashOtp(otp, user.getId()));
         otpToken.setExpiresAt(Instant.now().plus(10, ChronoUnit.MINUTES));
         otpToken.setUsed(false);
-        otpTokenRepository.save(otpToken);
+        // AC10 (skillars-deferred-88): saveAndFlush, not save — force the INSERT now so a
+        // collision with the uq_pot_one_active_per_user partial unique index surfaces here as a
+        // clean DataIntegrityViolationException (-> 409 security.otpResendInProgress via ApiAdvice),
+        // not a commit-time failure. @Tsid ids defer the INSERT to flush otherwise.
+        otpTokenRepository.saveAndFlush(otpToken);
         sendOtpEmail(user, otp);
     }
 

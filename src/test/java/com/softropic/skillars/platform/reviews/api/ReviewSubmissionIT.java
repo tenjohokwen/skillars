@@ -4,9 +4,11 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.reviews.service.ReviewSubmissionService;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpHeaders;
@@ -27,6 +29,11 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -50,6 +57,7 @@ class ReviewSubmissionIT extends AbstractIntegrationTest {
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private HttpTestClient httpTestClient;
     @Autowired private PasswordEncoder passwordEncoder;
+    @Autowired private ReviewSubmissionService reviewSubmissionService;
 
     @LocalServerPort private int randomServerPort;
 
@@ -217,6 +225,73 @@ class ReviewSubmissionIT extends AbstractIntegrationTest {
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
                 .isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    /**
+     * AC1 (skillars-deferred-88): the moderation-epoch bump in {@code updateReview} must be applied
+     * to the row's <em>fresh</em> state read under the {@code findByIdForUpdate} lock, not to the
+     * stale instance already managed from the unlocked pre-check load. This is the same Hibernate
+     * identity-map gotcha {@code MessagingService.softDeleteMessage} documents: a {@code @Lock} JPQL
+     * query takes the DB lock but returns the existing managed instance without refreshing it, so
+     * {@code updateReview} must call {@code entityManager.refresh(locked, PESSIMISTIC_WRITE)}.
+     *
+     * <p>Deterministic causality proof (mirrors {@code DrillUploadServiceConcurrencyIT}'s
+     * externally-held-lock design): an external transaction holds a {@code SELECT ... FOR UPDATE} on
+     * the review row, bumps {@code moderation_epoch} from 5 straight to 99, and commits. Only after
+     * that release can {@code updateReview}'s locked read proceed; with the refresh it observes 99
+     * and writes 100. Without the refresh it still holds the pre-lock snapshot (epoch 5) and writes
+     * 6 — so the {@code isEqualTo(100)} assertion is a direct mutation check on the refresh line.
+     */
+    @Test
+    @Timeout(30)
+    void updateReview_epochBumpAppliesToFreshLockedState_notStaleInstance() throws Exception {
+        UUID reviewId = UUID.randomUUID();
+        Instant oldModified = Instant.now().minusSeconds(400L * 86400); // outside the 365-day re-edit rule
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO reviews.coach_reviews " +
+                "(review_id, coach_id, author_id, author_role, rating, body, moderation_status, " +
+                " created_at, last_modified_at, moderation_epoch) " +
+                "VALUES (?, ?, ?, 'PARENT', 3, 'original body', 'APPROVED', ?, ?, 5)",
+                reviewId, coachProfileId, PARENT_ID,
+                Timestamp.from(oldModified), Timestamp.from(oldModified));
+            return null;
+        });
+
+        CountDownLatch lockHeld = new CountDownLatch(1);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> holder = pool.submit(() -> transactionTemplate.execute(status -> {
+                jdbcTemplate.query(
+                    "SELECT review_id FROM reviews.coach_reviews WHERE review_id = ? FOR UPDATE",
+                    rs -> { }, reviewId);
+                jdbcTemplate.update(
+                    "UPDATE reviews.coach_reviews SET moderation_epoch = 99 WHERE review_id = ?", reviewId);
+                lockHeld.countDown();
+                try {
+                    Thread.sleep(1200);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return null; // commit -> releases the row lock, epoch now 99
+            }));
+
+            assertThat(lockHeld.await(5, TimeUnit.SECONDS))
+                .as("external holder must take the row lock and bump the epoch first").isTrue();
+
+            // Blocks on findByIdForUpdate until the holder above commits.
+            reviewSubmissionService.updateReview(reviewId, PARENT_ID, 4, "edited body");
+            holder.get(15, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        Long finalEpoch = jdbcTemplate.queryForObject(
+            "SELECT moderation_epoch FROM reviews.coach_reviews WHERE review_id = ?", Long.class, reviewId);
+        assertThat(finalEpoch)
+            .as("updateReview must bump the epoch it read under the lock (99) -> 100, not the stale "
+                + "pre-lock value (5) -> 6")
+            .isEqualTo(100L);
     }
 
     // ── helpers ──

@@ -399,6 +399,135 @@ class CoachRegistrationResourceIT extends AbstractIntegrationTest {
     }
 
 
+    // ── skillars-deferred-88 AC11: locked User cannot complete verification ──────────────────
+
+    @Test
+    void verifyEmail_lockedUser_rejectedAndStatusNotAdvanced() {
+        httpTestClient.makeHttpRequest(baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST,
+            registrationBody(TEST_EMAIL), jsonHeaders(), Void.class);
+
+        UUID token = jdbcTemplate.queryForObject(
+            "SELECT evt.token FROM main.email_verification_tokens evt " +
+            "JOIN main.\"user\" u ON u.id = evt.user_id WHERE u.email = ?", UUID.class, TEST_EMAIL);
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update("UPDATE main.\"user\" SET locked = true WHERE email = ?", TEST_EMAIL);
+            return null;
+        });
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + VERIFY_EMAIL_ENDPOINT + "?token=" + token, HttpMethod.GET, null, jsonHeaders(), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(ex.getResponseBodyAsString()).contains("security.accountLocked");
+            });
+
+        // Mutation check: drop the user.isLocked() guard in verifyEmail and this becomes EMAIL_VERIFIED.
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT verification_status FROM main.\"user\" WHERE email = ?", String.class, TEST_EMAIL))
+            .isEqualTo("UNVERIFIED");
+    }
+
+    @Test
+    void verifyPhone_lockedUser_rejectedAndStatusNotAdvanced() {
+        httpTestClient.makeHttpRequest(baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST,
+            registrationBody(TEST_EMAIL), jsonHeaders(), Void.class);
+        Long userId = jdbcTemplate.queryForObject(
+            "SELECT id FROM main.\"user\" WHERE email = ?", Long.class, TEST_EMAIL);
+
+        String knownOtp = "123456";
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update("UPDATE main.\"user\" SET verification_status = 'EMAIL_VERIFIED', "
+                + "activated = true, locked = true WHERE id = ?", userId);
+            jdbcTemplate.update(
+                "INSERT INTO main.phone_otp_tokens (id, version, user_id, otp_hash, expires_at, used) " +
+                "VALUES (999999999999881, 0, ?, ?, ?, false)",
+                userId, hashOtp(knownOtp, userId), Timestamp.from(Instant.now().plus(10, ChronoUnit.MINUTES)));
+            return null;
+        });
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + VERIFY_PHONE_ENDPOINT, HttpMethod.POST,
+            Map.of("userId", userId, "otp", knownOtp), jsonHeaders(), Void.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(ex.getResponseBodyAsString()).contains("security.accountLocked");
+            });
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT verification_status FROM main.\"user\" WHERE id = ?", String.class, userId))
+            .isEqualTo("EMAIL_VERIFIED");
+    }
+
+    @Test
+    void resendVerificationEmail_lockedUser_isSilentNoOp() {
+        httpTestClient.makeHttpRequest(baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST,
+            registrationBody(TEST_EMAIL), jsonHeaders(), Void.class);
+        UUID tokenBefore = jdbcTemplate.queryForObject(
+            "SELECT evt.token FROM main.email_verification_tokens evt " +
+            "JOIN main.\"user\" u ON u.id = evt.user_id WHERE u.email = ?", UUID.class, TEST_EMAIL);
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update("UPDATE main.\"user\" SET locked = true WHERE email = ?", TEST_EMAIL);
+            return null;
+        });
+
+        // Code-review decision (2026-08-31): a locked account cannot self-resume — but this endpoint
+        // must keep its always-200 no-account-enumeration contract, so a locked user is a SILENT
+        // no-op, not an error.
+        ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
+            baseUrl() + RESEND_ENDPOINT, HttpMethod.POST,
+            Map.of("email", TEST_EMAIL), jsonHeaders(), Void.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        // No fresh token issued — the pre-existing one is untouched (resend deletes + re-creates).
+        UUID tokenAfter = jdbcTemplate.queryForObject(
+            "SELECT evt.token FROM main.email_verification_tokens evt " +
+            "JOIN main.\"user\" u ON u.id = evt.user_id WHERE u.email = ?", UUID.class, TEST_EMAIL);
+        assertThat(tokenAfter).isEqualTo(tokenBefore);
+    }
+
+    // ── skillars-deferred-88 AC10: partial unique index on one active phone OTP per user ────────
+
+    @Test
+    void phoneOtpTokens_secondActiveRowForSameUser_rejectedByUniqueIndex() {
+        httpTestClient.makeHttpRequest(baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST,
+            registrationBody(TEST_EMAIL), jsonHeaders(), Void.class);
+        Long userId = jdbcTemplate.queryForObject(
+            "SELECT id FROM main.\"user\" WHERE email = ?", Long.class, TEST_EMAIL);
+
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.phone_otp_tokens (id, version, user_id, otp_hash, expires_at, used) " +
+                "VALUES (999999999999871, 0, ?, 'h1', ?, false)",
+                userId, Timestamp.from(Instant.now().plus(10, ChronoUnit.MINUTES)));
+            return null;
+        });
+
+        // A second used=false row for the same user must be rejected by uq_pot_one_active_per_user.
+        assertThatThrownBy(() -> transactionTemplate.execute(s -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.phone_otp_tokens (id, version, user_id, otp_hash, expires_at, used) " +
+                "VALUES (999999999999872, 0, ?, 'h2', ?, false)",
+                userId, Timestamp.from(Instant.now().plus(10, ChronoUnit.MINUTES)));
+            return null;
+        })).isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+
+        // A row with used=true does NOT count as "the one active row".
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.phone_otp_tokens (id, version, user_id, otp_hash, expires_at, used) " +
+                "VALUES (999999999999873, 0, ?, 'h3', ?, true)",
+                userId, Timestamp.from(Instant.now().plus(10, ChronoUnit.MINUTES)));
+            return null;
+        });
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM main.phone_otp_tokens WHERE user_id = ?", Integer.class, userId))
+            .isEqualTo(2);
+    }
+
     private HttpHeaders jsonHeaders() {
         HttpHeaders headers = new HttpHeaders();
         headers.add(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE);

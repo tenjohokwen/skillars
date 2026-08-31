@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.messaging.contract.ModerationVerdict;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpHeaders;
@@ -26,6 +27,7 @@ import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -34,7 +36,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -237,55 +238,92 @@ class SoftDeleteIT extends AbstractIntegrationTest {
             });
     }
 
-    // AC5: a concurrent double soft-delete must lose cleanly — exactly one 204, one 409
-    // messaging.alreadyDeleted, and a single deleted_at. Drives the real service method (not a raw
-    // SELECT FOR UPDATE stand-in) and asserts on the observed HTTP outcomes, per deferred-15's
-    // finding that a lock-shaped stand-in can pass against a plain findById. Mutation-verified —
-    // see Completion Notes for the recorded result of reverting findByIdForUpdate to findById.
+    /**
+     * AC2 (skillars-deferred-88): prove {@code MessagingService.softDeleteMessage}'s locked read
+     * genuinely serialises the {@code deletedAt}-check → write critical section, and drop the
+     * tautological {@code SELECT COUNT(*) … deleted_at IS NOT NULL} assertion (over a primary key it
+     * is 0 or 1, and always 1 given a successful delete).
+     *
+     * <p>The previous version released two DELETE threads on a start latch — that latch fires at
+     * request start (TCP, filter chain, dispatch), not at the critical section, so it could pass by
+     * request serialisation. This version mirrors {@code DrillUploadServiceConcurrencyIT}'s and
+     * {@code ReviewSubmissionIT.updateReview_epochBumpAppliesToFreshLockedState_notStaleInstance}'s
+     * externally-controlled design so the outcome cannot be a scheduling coincidence: a separate
+     * transaction takes {@code SELECT … FOR UPDATE} on the target row, sets its own
+     * {@code deleted_at}, and only then commits. The concurrent DELETE request is parked on that row
+     * lock the whole time; when it resumes it must re-read {@code deleted_at} <em>under</em> the lock,
+     * see the external delete, and lose cleanly with {@code 409 messaging.alreadyDeleted} — without
+     * overwriting the external {@code deleted_at}.
+     *
+     * <p><strong>Mutation check (H1, refined against observed behaviour):</strong> the story's note
+     * that {@code entityManager.refresh(message, PESSIMISTIC_WRITE)} at {@code MessagingService.java}
+     * is the "real causal lever" and that {@code findByIdForUpdate}→{@code findById} alone is a no-op
+     * is only half right in this codebase's Hibernate: the {@code @Lock} JPQL query <em>does</em>
+     * still emit its own {@code FOR UPDATE} even for an already-managed row, and the trailing
+     * {@code save()} {@code UPDATE} blocks on the row lock regardless — so neither mutation on its own
+     * changes whether the request <em>blocks</em>. What the read lock uniquely buys is the
+     * {@code deletedAt} re-check on <em>fresh</em> state: revert {@code findByIdForUpdate}→
+     * {@code findById} <em>and</em> {@code refresh(PESSIMISTIC_WRITE)}→{@code refresh(NONE)} together
+     * and the DELETE keeps its stale pre-lock snapshot ({@code deletedAt == null}), so it returns
+     * {@code 204} instead of {@code 409} and overwrites the external {@code deleted_at}. Both
+     * assertions below then fail. Verified — see Completion Notes.
+     */
     @Test
-    void concurrentDoubleSoftDelete_exactlyOneSucceeds_oneConflicts() throws Exception {
+    @Timeout(60)
+    void concurrentDoubleSoftDelete_loserRechecksUnderLockAndConflictsCleanly() throws Exception {
         String coachCookies = loginAndGetCookies(COACH_EMAIL);
         Long conversationId = ensureConversation(coachCookies);
         Long messageId = sendMsg(coachCookies, conversationId, "Delete me concurrently");
 
-        CountDownLatch startLatch = new CountDownLatch(1);
-        AtomicInteger successCount = new AtomicInteger(0);
-        AtomicInteger conflictCount = new AtomicInteger(0);
-
-        ExecutorService executor = Executors.newFixedThreadPool(2);
-        List<Future<?>> futures = new java.util.ArrayList<>();
-        for (int i = 0; i < 2; i++) {
-            futures.add(executor.submit(() -> {
+        long holdMillis = 1000;
+        // Truncate to millis: PostgreSQL timestamp stores microseconds and java.sql.Timestamp.equals
+        // compares nanoseconds exactly, so an un-truncated Instant.now() (nanos on Linux) would not
+        // round-trip equal.
+        Timestamp externalDeletedAt =
+            Timestamp.from(Instant.now().minusSeconds(30).truncatedTo(ChronoUnit.MILLIS));
+        CountDownLatch externalDeleteStaged = new CountDownLatch(1);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> holder = pool.submit(() -> transactionTemplate.execute(status -> {
+                jdbcTemplate.query("SELECT id FROM messaging.messages WHERE id = ? FOR UPDATE",
+                    rs -> { }, messageId);
+                jdbcTemplate.update(
+                    "UPDATE messaging.messages SET deleted_at = ? WHERE id = ?", externalDeletedAt, messageId);
+                externalDeleteStaged.countDown();
                 try {
-                    startLatch.await();
-                    httpTestClient.makeHttpRequest(
-                        baseUrl() + MESSAGING_BASE + "/conversations/" + conversationId + "/messages/" + messageId,
-                        HttpMethod.DELETE, null, authenticatedHeaders(coachCookies), Void.class);
-                    successCount.incrementAndGet();
-                } catch (HttpClientErrorException e) {
-                    if (e.getStatusCode() == HttpStatus.CONFLICT) {
-                        conflictCount.incrementAndGet();
-                    } else {
-                        throw new RuntimeException(e);
-                    }
+                    Thread.sleep(holdMillis);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
+                return null; // commit -> the external soft-delete lands and the row lock releases
             }));
-        }
-        startLatch.countDown();
-        for (Future<?> f : futures) {
-            f.get(30, TimeUnit.SECONDS);
-        }
-        executor.shutdown();
 
-        assertThat(successCount.get()).isEqualTo(1);
-        assertThat(conflictCount.get()).isEqualTo(1);
+            assertThat(externalDeleteStaged.await(5, TimeUnit.SECONDS))
+                .as("external holder must lock the row and stage its delete first").isTrue();
 
-        Integer deletedCount = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM messaging.messages WHERE id = ? AND deleted_at IS NOT NULL",
-            Integer.class, messageId);
-        assertThat(deletedCount).isEqualTo(1);
+            // Blocks on the row lock until the holder commits, then re-reads deleted_at under the
+            // lock. Causality is guaranteed by construction (a separate, externally-controlled
+            // transaction holds the lock and stages the delete) — no wall-clock timing assertion
+            // needed; the 409 body + the stable-deleted_at check below are the proof.
+            assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+                baseUrl() + MESSAGING_BASE + "/conversations/" + conversationId + "/messages/" + messageId,
+                HttpMethod.DELETE, null, authenticatedHeaders(coachCookies), Void.class))
+                .isInstanceOf(HttpClientErrorException.class)
+                .satisfies(e -> {
+                    HttpClientErrorException ex = (HttpClientErrorException) e;
+                    assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(ex.getResponseBodyAsString()).contains("messaging.alreadyDeleted");
+                });
+            holder.get(15, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        Timestamp finalDeletedAt = jdbcTemplate.queryForObject(
+            "SELECT deleted_at FROM messaging.messages WHERE id = ?", Timestamp.class, messageId);
+        assertThat(finalDeletedAt)
+            .as("the losing DELETE must not have overwritten the external transaction's deleted_at")
+            .isEqualTo(externalDeletedAt);
     }
 
     private Long ensureConversation(String cookies) {

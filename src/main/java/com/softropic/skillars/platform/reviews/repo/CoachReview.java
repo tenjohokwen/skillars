@@ -65,4 +65,11 @@ public class CoachReview {
 
     @Column(name = "last_modified_at", nullable = false)
     private Instant lastModifiedAt = Instant.now();
+
+    // Story skillars-deferred-88 AC1: monotonic per-review counter. submitReview leaves it at 0;
+    // updateReview bumps it under the findByIdForUpdate row lock; ReviewModerationService discards a
+    // verdict whose ReviewSubmittedEvent epoch != this row's current epoch. Primitive long mirrors
+    // the entity's plain-field style; @Getter/@Setter are class-level via Lombok.
+    @Column(name = "moderation_epoch", nullable = false)
+    private long moderationEpoch = 0L;
 }

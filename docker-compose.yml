@@ -48,6 +48,7 @@ services:
       - "traefik.http.middlewares.health-rewrite.replacepathregex.replacement=/manage/$$1"
     networks:
       - skillars-internal
+      - skillars-observability
     depends_on:
       postgres:
         condition: service_healthy
@@ -104,7 +105,7 @@ services:
           cpus: "0.25"
           memory: 256m
     networks:
-      - skillars-internal
+      - skillars-observability
     stop_grace_period: 30s
     restart: unless-stopped
     logging: *default-logging
@@ -162,7 +163,7 @@ services:
     stop_grace_period: 30s
     logging: *default-logging
     networks:
-      - skillars-internal
+      - skillars-observability
 
   loki:
     image: grafana/loki:3.4.2
@@ -185,7 +186,7 @@ services:
     stop_grace_period: 30s
     logging: *default-logging
     networks:
-      - skillars-internal
+      - skillars-observability
 
   tempo:
     image: grafana/tempo:2.9.0
@@ -208,7 +209,7 @@ services:
     stop_grace_period: 30s
     logging: *default-logging
     networks:
-      - skillars-internal
+      - skillars-observability
 
   grafana:
     image: grafana/grafana:11.4.0
@@ -265,6 +266,7 @@ services:
     logging: *default-logging
     networks:
       - skillars-internal
+      - skillars-observability
 
   node_exporter:
     image: prom/node-exporter:v1.9.0
@@ -288,12 +290,21 @@ services:
     stop_grace_period: 30s
     logging: *default-logging
     networks:
-      - skillars-internal
+      - skillars-observability
 
 networks:
   skillars-internal:
     driver: bridge
-    # Do NOT set internal: true — app needs outbound internet for OTLP/email/Bunny.net
+    # Do NOT set internal: true — app / grafana / traefik need outbound internet for
+    # OTLP/email/Bunny.net/Stripe and ACME.
+  # skillars-deferred-88 AC8: egress firewall for the observability stack. internal: true means no
+  # gateway is attached, so containers on THIS network alone have no route off-host — a compromised
+  # prometheus/loki/tempo/redis/node_exporter cannot exfiltrate or call home. app and grafana join
+  # BOTH networks (they legitimately need egress AND must reach these services); every other peer
+  # edge is preserved because the two parties still share a network. No host iptables involved.
+  skillars-observability:
+    driver: bridge
+    internal: true
 
 # No top-level `volumes:` key: every stateful service now binds under /opt/skillars/data, which
 # provision.sh mounts from the Hetzner Volume. docker-compose.uat.yml declares its own
