@@ -94,6 +94,14 @@ groups:
           severity: warning
 
 # ── Contact Points ──────────────────────────────────────────────────────────
+# >>> BEGIN provision.sh-managed contactPoints (skillars-deferred-88 AC7) >>>
+# Do NOT hand-edit between these markers. provision.sh rewrites this region from the alert channels
+# configured in /opt/skillars/.env (GF_ALERT_NOTIFY_EMAIL / GF_SLACK_WEBHOOK_URL) on every run, so a
+# single-channel deployment provisions exactly one receiver instead of one live receiver plus one
+# that silently drops every alert routed to it. The ${GF_*} placeholders are kept verbatim — Grafana
+# expands them from its own container env at load time, so no real secret is ever written here. The
+# committed default below keeps BOTH receivers so this file is valid before provision.sh ever runs
+# (Docker would otherwise create a directory at the bind-mount path).
 contactPoints:
   - orgId: 1
     name: notify-ops
@@ -111,6 +119,7 @@ contactPoints:
           icon_emoji: ":rotating_light:"
           title: "{{ len .Alerts.Firing }} alert(s) firing"
           text: "{{ range .Alerts.Firing }}*{{ .Labels.alertname }}* — {{ .Annotations.summary }}\n{{ end }}"
+# <<< END provision.sh-managed contactPoints <<<
 
 # ── Notification Policies ───────────────────────────────────────────────────
 policies:

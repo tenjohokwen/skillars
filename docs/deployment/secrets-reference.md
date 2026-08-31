@@ -46,9 +46,9 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 | `GF_SMTP_STARTTLS_POLICY` | String | `MandatoryStartTLS` for port 587 (recommended); `OpportunisticStartTLS` for flexible servers; `NoStartTLS` for unencrypted relay only — port 465 (SMTPS/implicit TLS) is not supported via this setting, use port 587 |
 | `GF_ALERT_NOTIFY_EMAIL` | Email address | Recipient for all Grafana-routed alerts |
 | `GF_SLACK_WEBHOOK_URL` | HTTPS URL | Slack → Apps → Incoming Webhooks → Add to Slack → select channel → copy URL |
-| `LOKI_URL` | Internal URL | Fixed value: `http://loki:3100` — do not change (Docker service name on `skillars-internal` network) |
+| `LOKI_URL` | Internal URL | Fixed value: `http://loki:3100` — do not change (Docker service name; reachable from `app` on the shared `skillars-observability` network) |
 | `LOKI_ENABLED` | Boolean | Fixed value: `true` — do not change |
-| `MANAGEMENT_OTLP_TRACING_ENDPOINT` | Internal URL | Fixed value: `http://tempo:4318/v1/traces` — do not change (Docker service name on `skillars-internal` network) |
+| `MANAGEMENT_OTLP_TRACING_ENDPOINT` | Internal URL | Fixed value: `http://tempo:4318/v1/traces` — do not change (Docker service name; reachable from `app` on the shared `skillars-observability` network) |
 | `HOS_ACCESS_KEY` | String | Hetzner Cloud Console → Object Storage → your bucket → Access Keys → Create access key; copy Access Key ID |
 | `HOS_SECRET_KEY` | String | Same creation flow as `HOS_ACCESS_KEY`; copy Secret Access Key (shown once) |
 | `HOS_BUCKET` | String, e.g. `skillars-backups` | Create a private bucket in Hetzner Cloud Console → Object Storage; use the exact bucket name here |
@@ -112,9 +112,11 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 > blank — Grafana still provisions the `notify-ops` contact point, so with neither set every alert
 > routes to a dead address. Set at least one. If you set `GF_ALERT_NOTIFY_EMAIL` you must **also** set
 > `GF_SMTP_ENABLED=true` and the `GF_SMTP_*` block, or email alerts fail silently (`provision.sh`
-> warns about this but does not stop). Setting only one of the two channels is allowed;
-> `provision.sh` warns that the other `notify-ops` receiver will provision empty and silently no-op
-> until it is configured.
+> warns about this but does not stop). Setting only one of the two channels is allowed and safe:
+> `provision.sh` rewrites the marked `contactPoints:` region of `deploy/lgtm/grafana-alerts.yml` to
+> contain **only** the configured channel's receiver, so there is no empty second receiver to
+> silently no-op. (The `${GF_*}` placeholders are kept in the file — Grafana expands them at load;
+> the secrets are never written there.)
 
 ---
 

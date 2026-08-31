@@ -3,6 +3,21 @@ name: CI
 on:
   push:
     branches: [master]
+  # skillars-deferred-88 AC6: manual recovery path for when a `master` history rewrite has frozen
+  # the ":latest ordering guard" — after a rebase/force-push the guard's
+  # `git merge-base --is-ancestor <published-rev> <HEAD>` returns 1/128 forever and `:latest` can
+  # never advance automatically again. A maintainer dispatches this with the box checked to
+  # force-publish `:latest` for the current commit, bypassing the ancestor check. Only honoured on
+  # `master` (enforced in the guard step).
+  workflow_dispatch:
+    inputs:
+      force_publish_latest:
+        description: >-
+          Force-publish :latest for the current commit WITHOUT the ancestor check.
+          Sanctioned recovery for a master history rewrite that has frozen the ordering guard.
+          Ignored (hard error) on any ref other than refs/heads/master.
+        type: boolean
+        default: false
 
 jobs:
   test:
@@ -94,6 +109,10 @@ jobs:
         env:
           IMAGE: ghcr.io/${{ github.repository }}
           SHA_SHORT: ${{ steps.sha.outputs.short }}
+          EVENT_NAME: ${{ github.event_name }}
+          GH_REF: ${{ github.ref }}
+          # true only on a workflow_dispatch with the box checked; the boolean input is absent on push.
+          FORCE_PUBLISH_LATEST: ${{ github.event_name == 'workflow_dispatch' && inputs.force_publish_latest }}
         run: |
           # GitHub runs `run:` steps with `bash -eo pipefail`; `set +e` here is deliberate — the
           # ancestry check must be able to "fail" (exit 1 / 128 / tool error) without aborting the
@@ -106,13 +125,43 @@ jobs:
           sha_tag="${IMAGE}:sha-${SHA_SHORT}"
           latest_tag="${IMAGE}:latest"
 
+          write_tags() {
+            {
+              echo "tags<<__TAGS_EOF__"
+              printf '%s\n' "$1"
+              echo "__TAGS_EOF__"
+            } >> "$GITHUB_OUTPUT"
+          }
+
+          # skillars-deferred-88 AC6: manual force-publish recovery. Must run BEFORE any imagetools /
+          # merge-base logic and skip all of it.
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ] && [ "${FORCE_PUBLISH_LATEST}" = "true" ]; then
+            if [ "${GH_REF}" != "refs/heads/master" ]; then
+              # A dispatch from a feature branch must never publish :latest from non-master code.
+              echo "::error::force_publish_latest is only permitted on master (got ${GH_REF})"
+              exit 1
+            fi
+            echo "::notice::force_publish_latest=true on master — publishing :latest for ${GITHUB_SHA} without the ancestor check."
+            write_tags "${sha_tag}"$'\n'"${latest_tag}"
+            exit 0
+          fi
+
           inspect_rc=0
           raw="$(docker buildx imagetools inspect "${latest_tag}" --raw 2>"${err_file}")" || inspect_rc=$?
 
           publish_latest=0
           published_rev=""
           if [ "${inspect_rc}" -ne 0 ]; then
-            if grep -qiE 'not ?found|MANIFEST_UNKNOWN|manifest unknown' "${err_file}"; then
+            # skillars-deferred-88 AC6: also recognise GHCR's "name unknown" phrasing for a package
+            # that has never been published. Deliberately NOT matching 'denied': GHCR returns `denied`
+            # both for a missing package AND for a genuine permission / org-SSO failure on an
+            # EXISTING package, so treating it as "absent -> publish both tags" would let a transient
+            # `denied` on a real :latest trigger an unconditional overwrite — the exact
+            # older-overwrites-newer regression this guard exists to prevent. A `denied` therefore
+            # stays in the generic "read failed -> sha- only, :latest untouched" branch (the safe
+            # direction); a brand-new repo's first :latest is at worst delayed one run and self-heals
+            # once the package exists.
+            if grep -qiE 'not ?found|manifest ?unknown|MANIFEST_UNKNOWN|name ?unknown' "${err_file}"; then
               echo "::notice::${latest_tag} does not exist yet — publishing :latest with no ordering constraint."
               publish_latest=1
             else
@@ -156,11 +205,7 @@ jobs:
           else
             tags="${sha_tag}"
           fi
-          {
-            echo "tags<<__TAGS_EOF__"
-            printf '%s\n' "${tags}"
-            echo "__TAGS_EOF__"
-          } >> "$GITHUB_OUTPUT"
+          write_tags "${tags}"
 
       - name: Build and push Docker image
         uses: ./.github/actions/docker-build
@@ -175,4 +220,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
+            # NOTE (skillars-deferred-88 AC6): github.event.head_commit is null on a workflow_dispatch
+            # payload, so on the manual :latest recovery path this label resolves to an empty string.
+            # Cosmetic only — the ordering guard reads `revision` (fed from github.sha), never this.
             org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}

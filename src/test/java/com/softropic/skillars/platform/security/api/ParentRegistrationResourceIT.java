@@ -10,6 +10,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
@@ -397,6 +398,118 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
     }
 
 
+    // ── skillars-deferred-88 AC11: locked User cannot complete verification (parent endpoints) ──
+
+    @Test
+    void verifyEmail_lockedUser_rejectedAndStatusNotAdvanced() {
+        httpTestClient.makeHttpRequest(baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST,
+            registrationBody(TEST_EMAIL), jsonHeaders(), Void.class);
+        UUID token = jdbcTemplate.queryForObject(
+            "SELECT evt.token FROM main.email_verification_tokens evt " +
+            "JOIN main.\"user\" u ON u.id = evt.user_id WHERE u.email = ?", UUID.class, TEST_EMAIL);
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update("UPDATE main.\"user\" SET locked = true WHERE email = ?", TEST_EMAIL);
+            return null;
+        });
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + VERIFY_EMAIL_ENDPOINT + "?token=" + token, HttpMethod.GET, null, jsonHeaders(), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(ex.getResponseBodyAsString()).contains("security.accountLocked");
+            });
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT verification_status FROM main.\"user\" WHERE email = ?", String.class, TEST_EMAIL))
+            .isEqualTo("UNVERIFIED");
+    }
+
+    @Test
+    void verifyPhone_lockedUser_rejectedAndStatusNotAdvanced() {
+        httpTestClient.makeHttpRequest(baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST,
+            registrationBody(TEST_EMAIL), jsonHeaders(), Void.class);
+        Long userId = jdbcTemplate.queryForObject(
+            "SELECT id FROM main.\"user\" WHERE email = ?", Long.class, TEST_EMAIL);
+        String knownOtp = "123456";
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update("UPDATE main.\"user\" SET verification_status = 'EMAIL_VERIFIED', "
+                + "activated = true, locked = true WHERE id = ?", userId);
+            jdbcTemplate.update(
+                "INSERT INTO main.phone_otp_tokens (id, version, user_id, otp_hash, expires_at, used) " +
+                "VALUES (999999999999681, 0, ?, ?, ?, false)",
+                userId, hashOtp(knownOtp, userId), Timestamp.from(Instant.now().plus(10, ChronoUnit.MINUTES)));
+            return null;
+        });
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + VERIFY_PHONE_ENDPOINT, HttpMethod.POST,
+            Map.of("userId", userId, "otp", knownOtp), jsonHeaders(), Void.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(ex.getResponseBodyAsString()).contains("security.accountLocked");
+            });
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT verification_status FROM main.\"user\" WHERE id = ?", String.class, userId))
+            .isEqualTo("EMAIL_VERIFIED");
+    }
+
+    /**
+     * skillars-deferred-88 AC10 — deterministic proof that {@code uq_pot_one_active_per_user}
+     * (V121) enforces the "one live phone OTP per user" invariant at the database, so a second
+     * active-token insert for the same user cannot commit even if the delete-before-insert the
+     * three registration services run in code is skipped or lost to a race.
+     *
+     * <p>A 6-thread barrier race was tried first but does not reliably contend (the threads
+     * serialise, zero losers, and the test would pass even with V121 dropped — code-review
+     * finding). A {@code @MockitoSpyBean} neutralising {@code deleteByUserIdAndUsedFalse} was the
+     * next attempt but forks an extra Spring context (context-count ceiling — Dev Notes). This
+     * exercises the constraint directly: one active row is seeded and committed, then a second
+     * {@code used = false} row for the same user is inserted in its own transaction and must be
+     * rejected by the partial unique index.
+     *
+     * <p>Asserts: the second insert throws {@code DataIntegrityViolationException} (Spring
+     * translates PG {@code 23505}); exactly one active row survives; {@code verification_status}
+     * is untouched. The {@code ApiAdvice} 409 {@code security.otpResendInProgress} mapping for
+     * this constraint name rides the same already-tested {@code DataIntegrityViolationException}
+     * handler path as the other entries in {@code CONSTRAINT_MAPPINGS}. Mutation check: drop
+     * V121's unique index → the second insert succeeds, two active rows → the first two
+     * assertions fail.
+     */
+    @Test
+    void secondActiveOtpInsert_forSameUser_isRejectedByPartialUniqueIndex() {
+        httpTestClient.makeHttpRequest(baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST,
+            registrationBody(TEST_EMAIL), jsonHeaders(), Void.class);
+        Long userId = jdbcTemplate.queryForObject(
+            "SELECT id FROM main.\"user\" WHERE email = ?", Long.class, TEST_EMAIL);
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update("UPDATE main.\"user\" SET verification_status = 'EMAIL_VERIFIED', "
+                + "activated = true WHERE id = ?", userId);
+            jdbcTemplate.update(
+                "INSERT INTO main.phone_otp_tokens (id, version, user_id, otp_hash, expires_at, used) " +
+                "VALUES (999999999999691, 0, ?, 'seed', ?, false)",
+                userId, Timestamp.from(Instant.now().plus(10, ChronoUnit.MINUTES)));
+            return null;
+        });
+
+        assertThatThrownBy(() -> transactionTemplate.execute(s -> jdbcTemplate.update(
+            "INSERT INTO main.phone_otp_tokens (id, version, user_id, otp_hash, expires_at, used) " +
+            "VALUES (999999999999692, 0, ?, 'seed2', ?, false)",
+            userId, Timestamp.from(Instant.now().plus(10, ChronoUnit.MINUTES)))))
+            .isInstanceOf(DataIntegrityViolationException.class);
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM main.phone_otp_tokens WHERE user_id = ? AND used = false", Integer.class, userId))
+            .as("the partial unique index must leave exactly one active OTP row")
+            .isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT verification_status FROM main.\"user\" WHERE id = ?", String.class, userId))
+            .as("a rejected OTP insert must not corrupt the outer verification state")
+            .isEqualTo("EMAIL_VERIFIED");
+    }
+
     private HttpHeaders jsonHeaders() {
         HttpHeaders headers = new HttpHeaders();
         headers.add(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE);
@@ -413,6 +526,56 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
             "password", TEST_PASSWORD,
             "phone", "1234567890"
         );
+    }
+
+    @Test
+    void resendVerificationEmail_lockedUser_isSilentNoOp() {
+        httpTestClient.makeHttpRequest(baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST,
+            registrationBody(TEST_EMAIL), jsonHeaders(), Void.class);
+        UUID tokenBefore = jdbcTemplate.queryForObject(
+            "SELECT evt.token FROM main.email_verification_tokens evt " +
+            "JOIN main.\"user\" u ON u.id = evt.user_id WHERE u.email = ?", UUID.class, TEST_EMAIL);
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update("UPDATE main.\"user\" SET locked = true WHERE email = ?", TEST_EMAIL);
+            return null;
+        });
+
+        ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
+            baseUrl() + RESEND_ENDPOINT, HttpMethod.POST,
+            Map.of("email", TEST_EMAIL), jsonHeaders(), Void.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        UUID tokenAfter = jdbcTemplate.queryForObject(
+            "SELECT evt.token FROM main.email_verification_tokens evt " +
+            "JOIN main.\"user\" u ON u.id = evt.user_id WHERE u.email = ?", UUID.class, TEST_EMAIL);
+        assertThat(tokenAfter).isEqualTo(tokenBefore);
+    }
+
+    @Test
+    void resendPhoneOtp_lockedUser_rejected() {
+        httpTestClient.makeHttpRequest(baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST,
+            registrationBody(TEST_EMAIL), jsonHeaders(), Void.class);
+        Long userId = jdbcTemplate.queryForObject(
+            "SELECT id FROM main.\"user\" WHERE email = ?", Long.class, TEST_EMAIL);
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update("UPDATE main.\"user\" SET verification_status = 'EMAIL_VERIFIED', "
+                + "activated = true, locked = true WHERE id = ?", userId);
+            return null;
+        });
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/security/parent/resend-otp", HttpMethod.POST,
+            Map.of("userId", userId), jsonHeaders(), Void.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(ex.getResponseBodyAsString()).contains("security.accountLocked");
+            });
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM main.phone_otp_tokens WHERE user_id = ?", Integer.class, userId))
+            .as("a locked user's resend-otp must not have inserted a token")
+            .isEqualTo(0);
     }
 
     private String hashOtp(String otp, Long userId) {

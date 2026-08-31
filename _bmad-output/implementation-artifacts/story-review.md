@@ -1,122 +1,279 @@
-# Senior-dev audit — story skillars-deferred-87
+# Senior-dev audit — Story skillars-deferred-88
 
 > **RESOLVED 2026-08-31 — all findings applied to the story (v0.2 in its Change Log).** Every finding
-> (H1–H6, M1–M5, L1–L8) was verified against the actual files and held up; **no false positives**.
-> M2 was folded in as a "pre-existing, out-of-scope caveat, do not overstate" note rather than a new
-> fix; L4 as a wording correction. See the story's Change Log v0.2 row for the per-finding disposition.
+> (H1–H3, M1–M5, L1–L7) was re-verified against the actual source and held — **no false positives**.
+> H1: AC2 mutation check retargeted to `entityManager.refresh`'s lock mode. H2: AC11 reframed around
+> admin-lock / GDPR-erasure (`LoginAttemptsService` never persists a lock). H3: AC10 uses
+> `saveAndFlush` in a `REQUIRES_NEW` boundary (the `@Tsid` id defers the INSERT to commit). M1: AC1
+> `updateReview` epoch bump moved under `findByIdForUpdate`. M2: only `name unknown` added to the
+> GHCR grep, `denied` left in the safe branch. M3: `workflow_dispatch` force-publish gated to
+> `master`. M4: AC9 reduced to the fail-fast validator; the four `@ConditionalOnProperty` gates left
+> as-is. M5: `grafana-alerts.yml` stays a committed default with a managed delimited region,
+> placeholders preserved. L1–L7 folded in (2-arg `EmailTokenException`, terminal-vs-not decision,
+> file-only `$0` re-exec, `.bak` inside the `if`, unresolvable-id+multi-Volume hard-fail,
+> `node_exporter` underscore + `uat-hostwinds` overlay, line-number re-anchor). See the story's
+> Change Log v0.2 row.
 
 ---
 
+Reviewed: the story file against source at `d99bd19` / `5efc0f0`.
+Scope: missed corner cases, false assumptions, missed flows. Every finding below was checked
+against the actual code; a "considered but not a defect" list is at the end to bound false positives.
 
-**Reviewed:** `_bmad-output/implementation-artifacts/skillars-deferred-87-backup-upload-verification-hardening-provision-volume-device-and-pre-volume-data-migration-ci-latest-ordering-guard.md`
-**Method:** every AC cross-checked against the actual files it modifies (`deploy/backup/pg-backup.sh`, `deploy/backup/volume-backup.sh`, `deploy/backup/env-guard.sh`, `deploy/backup/install-crons.sh`, `deploy/provision.sh`, `docs/deployment/first-time-setup.md`, `.github/workflows/ci.yml`, `.github/workflows/pr-build.yml`, `.github/actions/docker-build/action.yml`, `_bmad-output/implementation-artifacts/deferred-work.md`, `DrillUploadService.java`).
-**Verdict:** the AC intent is sound and the ledger-hygiene claims mostly check out, but **AC5 has a design flaw that would abort a clean first install**, **AC4 has an upgrade-path regression on already-provisioned nodes**, and **AC7 over-counts one ledger bullet in a way that would produce a false `[CLOSED]` annotation**. Details below, ordered by severity, each tagged with confidence.
-
----
-
-## What is solid (no action needed)
-
-- **AC7 cross-drill `videoId` closure is real.** `DrillUploadService.initiateUpload` (`:99-107`) and `.deleteVideo` (`:152-159`) both call `videoRepository.findByIdForUpdate(...)` inside the `lockRetryer.withBoundedRetry` block, with the Drill→Video lock-order comment citing "Deferred-81 AC3". `VideoRepository.findByIdForUpdate` exists. The IT name in the story matches. Annotating `skillars-4-3` W2 and `skillars-6-1` Def14 as closed is correct.
-- **AC7 `skillars-deferred-10` D5 closure is real.** `pr-build.yml:88` calls `./.github/actions/docker-build`, which carries `cache-from: type=gha` / `cache-to: type=gha,mode=max` (`action.yml:49-50`). D5's "`pr-build.yml` has no Docker layer caching" is genuinely obsolete.
-- **AC7 `skillars-deferred-10` D6 closure is real.** `first-time-setup.md:130` now reads "...a claim about Hetzner's infrastructure that we have not verified or found documented — treat it as unconfirmed rather than relying on it." D6's "asserts ... as fact with no citation" no longer holds.
-- **AC1/AC2 scoping to only `pg-backup.sh` + `volume-backup.sh` is correct** — `restore-from-dump.sh`, `restore-from-volume-backup.sh`, `prune-backups.sh` contain no `head-object`/ETag verification block (grep confirms), so there is nothing to change there.
-- **AC1 behaviour change strands no docs** — no file under `docs/deployment/` mentions the ETag/MD5 verification behaviour.
-- **The `deploy/backup/*.sh` "no shell test harness" claim is accurate** — no `.bats` / `*_test.sh` anywhere outside `node_modules`.
-- **AC6 not exercisable from a PR** is correctly stated (`ci.yml` is `push: [master]` only).
+Verdict: **the story is broadly sound and well-researched, but three ACs rest on claims that do not
+hold against the current code (AC2 mutation check, AC11 lock-writer premise, AC10 exception timing),
+and each needs its approach adjusted before dev.**
 
 ---
 
-## HIGH — substantive gaps / false assumptions
+## HIGH
 
-### H1. AC5 detection predicate is always true — it cannot tell real pre-Volume data from an empty dir section 6 just created
-**Confidence: high.** `provision.sh` section 6 (`:124-126`) runs `mkdir -p "${DEPLOY_ROOT}/data/postgres"` **before** section 7. `MOUNT_POINT="${DEPLOY_ROOT}/data"` (`:161`). So by the time AC5's check runs, `${MOUNT_POINT}` on the root disk **always** contains at least `postgres/`. The AC's literal predicate — `[ -n "$(ls -A "${MOUNT_POINT}" 2>/dev/null)" ]` (AC5, line 85) — is therefore true on *every* run, including a pristine first provision on a host that had the Volume attached from the start.
-**Fix:** the trigger must test for *meaningful* pre-Volume payload, not "non-empty" — e.g. presence of `traefik/acme.json`, or a non-empty `redis/`, or a non-empty LGTM dir. "`postgres/` exists and is empty" must not arm the migration.
+### H1 — AC2: the prescribed mutation check does not disable locking, so the "test that fails without the lock" is not actually achieved
 
-### H2. AC5 verification step will `exit 1` on a clean first install
-**Confidence: high.** AC5 (line 86) says after migrating, "verify a representative path landed (`traefik/acme.json` mode `600`, `redis/` owner `999:1000`)". But `redis/` and `traefik/acme.json` are created by **section 7.5, which runs *after* section 7** (`provision.sh:218`, `:224-245`). On a fresh host with the Volume attached from the start, section 7 runs `mkfs.ext4` → "first mount" is true, and (per H1) the non-empty check is also true, so the migration path is entered — then the `stat` on a non-existent `traefik/acme.json` fails and, under `set -euo pipefail`, **aborts a clean provision**. The verification must only assert paths that actually existed in the migration source, or be gated behind H1's tighter trigger.
+`MessagingService.softDeleteMessage` takes the row lock in **two** places:
 
-### H3. AC5 has no recovery path if the migration itself is interrupted — it recreates the exact bug it fixes
-**Confidence: high.** `provision.sh` is `set -euo pipefail`. If `rsync` (disk full on the Volume, etc.) or the post-migration verify fails **after** `mount "${VOLUME_DEVICE}" "${MOUNT_POINT}"` but **before** the root-disk copy is removed, the script aborts with the Volume mounted. On the operator's re-run: the already-mounted check (`mountpoint -q`) short-circuits section 7, and the pre-Volume tree is now **hidden underneath the mount** — AC5's own detection (`ls -A "${MOUNT_POINT}"` now lists Volume contents) can never see it again. Result: the pre-Volume certs/data are stranded and hidden on the root disk, permanently, with no script path to recover them — *precisely* the failure AC5 exists to prevent, now unrecoverable. AC5 needs either (a) migrate-before-mount (rm the root copy before `mount`), or (b) an explicit re-run detector that checks the root filesystem *under* the mount (`findmnt` + a bind mount) and resumes.
+```
+:319  Message message = messageRepository.findByIdForUpdate(messageId)...
+:325  entityManager.refresh(message, LockModeType.PESSIMISTIC_WRITE);
+```
 
-### H4. AC4 fstab handling regresses already-provisioned nodes
-**Confidence: high.** Current `FSTAB_ENTRY="${VOLUME_DEVICE} ${MOUNT_POINT} ext4 defaults,nofail 0 2"` with idempotency via `grep -qF "${FSTAB_ENTRY}" /etc/fstab` (`provision.sh:162`, `:181`). A node provisioned with today's script already has a `/dev/sdb /opt/skillars/data ext4 ...` line in `/etc/fstab`. After AC4 rewrites `FSTAB_ENTRY` to the `/dev/disk/by-id/scsi-0HC_Volume_*` form, `grep -qF` no longer matches the old line, so the script **appends a second fstab entry for the same mount point**. On the next reboot `mount -a` processes both. AC4 says "the `grep -qF` check must match on the exact string now written" but does not address the stale `/dev/sdb` line already on disk. It needs an explicit purge/replace of the old line — the pattern already exists in this codebase (`install-crons.sh:26-29` removes the stale `volume-snapshot.sh` cron the same way). This is exactly the re-run scenario the story cares about.
+AC2's mutation check is: *"revert `softDeleteMessage`'s `findByIdForUpdate` to `findById` → the
+'still blocked after a short wait' assertion fails."* That is wrong. Reverting only the repository
+call leaves `entityManager.refresh(message, LockModeType.PESSIMISTIC_WRITE)` in place, which still
+issues `SELECT … FOR UPDATE`. The row still locks, the concurrent `DELETE` still blocks, and the
+rewritten test still passes. The mutation the story names is a no-op for causality.
 
-### H5. AC4 leaves three `/dev/sdb` statements in `first-time-setup.md` that the script no longer honours
-**Confidence: high.** `first-time-setup.md` still says:
-- `:41` — "it expects the device at `/dev/sdb`"
-- `:43` — "run `lsblk` to confirm the volume appears as `/dev/sdb`. If it is listed under a different name, the provisioning script hardcodes `/dev/sdb` and will mount the wrong device — **stop and verify**"
-- `:93` — "Mounts the Hetzner Volume (`/dev/sdb`) at `/opt/skillars/data`"
+Impact: AC2's entire deliverable is "a durable guard — a test that fails without the lock,
+mutation-verified." As written that cannot be demonstrated.
 
-AC4's scope is `provision.sh` + AC7 only. AC3 and AC5 both edit `first-time-setup.md`, so the file *is* in play this story — AC4 must update these three spots too, or the doc will actively instruct operators to abort on the very device-name variation AC4 is making safe.
+Fix the AC: the effective mutation is on the `refresh` — change `LockModeType.PESSIMISTIC_WRITE` to
+`LockModeType.NONE` (or delete the `refresh` line). Note also that with the `refresh` present the
+`findByIdForUpdate` call is arguably already redundant for correctness; the test should pin the
+`refresh`, not the repository method.
 
-### H6. AC7 item 5 over-counts the `skillars-deferred-22` bullets → risks a false `[CLOSED]` annotation
-**Confidence: high.** The `## Deferred from: code review of skillars-deferred-22 …` section has exactly **one** cross-drill-lock `initiateUpload` bullet — `deferred-work.md:1109` ("...opens the same TOCTOU window as `deleteVideo`'s already-deferred `Def14` race... The cross-drill variant ... remains open"). The story (line 116 and line 25) says "**both** `skillars-deferred-22` `initiateUpload` bullets". The other `initiateUpload` bullet in that section — `:1108` ("doesn't confirm the video row itself still exists before publishing `VideoPhysicalDeletionEvent`") — is a **different, still-open** concern: `deferred-81` AC3 added the videoId lock but the `publishEvent` at `DrillUploadService.java:~121` still fires on `!existsByVideoId(...)` alone with no video-row existence check. Appending `[CLOSED by skillars-deferred-81 AC3]` to `:1108` would be factually wrong. AC7 must name the single correct bullet (`:1109`) and leave `:1108` untouched.
+### H2 — AC11: false premise — `LoginAttemptsService` does not set `User.locked`
+
+The story states (AC11 Problem, story summary, AC12 ledger note) that `User.locked` is *"set by
+`LoginAttemptsService` on brute-force lockout"* and that *"an account locked mid-registration (e.g.
+OTP brute-force lockout)"* is the scenario being closed.
+
+Grep of `src/main/java` for `setLocked` / `.lock()`:
+
+| Writer of `locked = true` | Trigger |
+|---|---|
+| `UserAdminService:64` `u.lock()` | admin manual action |
+| `GdprErasureService:96` | GDPR erasure |
+| `UserErasedEventListener:27` | user-erased event |
+
+`LoginAttemptsService`, `FraudAwareAuthenticationManager` and `AuthenticationFailureListener`
+throttle via **in-memory Guava `LoadingCache`s** (`expireAfterWrite(4, HOURS)`) and never touch
+`User.locked` or the DB. There is no OTP- or login-brute-force code path that persists a lock on a
+mid-registration user.
+
+Impact: the guard is still defensible defense-in-depth (an admin-locked or GDPR-erased user who
+still holds a valid pre-lock email/OTP token could self-advance `verificationStatus` to
+`EMAIL_VERIFIED` / `BASIC_VERIFIED`), but the AC's rationale, the "mid-registration account that
+gets locked" framing, and any test comment citing brute-force lockout are inaccurate and should be
+rewritten around the real writers (admin lock, erasure).
+
+### H3 — AC10: `DataIntegrityViolationException` won't surface at `save()`; the prescribed catch can't catch it, and the surrounding transaction is poisoned
+
+`PhoneOtpToken extends BaseEntity`, which uses `@Id @Tsid` — an **application-assigned** identifier.
+Hibernate does not need an immediate INSERT to obtain the id, so the INSERT is deferred to
+flush/commit. The three registration services are class-level `@Transactional`, and the OTP insert
+is the last DB write in `verifyEmail`. Therefore:
+
+1. The unique-index violation throws at **transaction commit** — after `verifyEmail` returns — as an
+   unhandled 500, which is exactly the outcome AC10 says it is preventing. A `try/catch` around
+   `otpTokenRepository.save(otpToken)` as literally described never fires. Catching it requires
+   `saveAndFlush()` or an explicit `entityManager.flush()`.
+2. Even with a forced flush, a constraint violation inside the outer `@Transactional` marks the
+   transaction rollback-only. Catching and re-throwing a "friendly retry" exception still rolls back
+   the `verificationStatus → EMAIL_VERIFIED` transition and `evt.setUsed(true)` performed earlier in
+   the same method, and the commit throws `UnexpectedRollbackException`. To get the "an OTP is
+   already being sent, retry" semantics the AC wants, the OTP delete+insert must run in a
+   `REQUIRES_NEW` sub-transaction or behind a savepoint.
+
+The AC treats this as "wrap the `save`." It is not that simple.
+
+Secondary (reachability): `email_verification_tokens` already has `@Version` (`version BIGINT`), so
+two concurrent `verifyEmail` calls **with the same token** are already serialized at
+`emailTokenRepository.save(evt)` (optimistic-lock → `security.emailTokenUsed`) before either reaches
+the OTP insert. The genuinely reachable double-insert requires concurrent *resend* calls creating
+two email tokens (no unique index there) plus no `@Version` on `User`. The index is still worth
+adding, but the AC's "two concurrent OTP requests … both commit" description skips the existing
+guard and overstates how easy the race is.
 
 ---
 
-## MEDIUM — likely to bite in implementation or first prod run
+## MEDIUM
 
-### M1. AC6's prescribed `imagetools inspect` template will probably not work against the real image
-**Confidence: medium.** `docker/build-push-action@v6` (`action.yml:41`) attaches **provenance attestations by default on push**, so `ghcr.io/…:latest` is published as an **OCI image index**, not a single image manifest. Against an index, the Go-template context's `.Image` is a per-platform map (`{"linux/amd64": {...}}`) with no `.Labels` field, so the AC's `--format '{{ index .Image.Labels "org.opencontainers.image.revision" }}'` (AC6, line 99) fails. The AC needs an index-aware template (`{{ (index .Image "linux/amd64").Config.Labels ... }}`), or should read the revision from a more robust source, and the dev must verify it against an actually-published image — which cannot be done until the first post-merge run, so this risk lands in prod.
+### M1 — AC1: the epoch is incremented on a non-locked read, so it does not defend the concurrent-edit case the AC exists to future-proof
 
-### M2. AC6's "SHA tag is always published regardless" is not guaranteed by the current concurrency config
-**Confidence: medium.** `build-and-push` has `concurrency: { group: build-and-push-${{ github.ref }}, cancel-in-progress: false }` (`ci.yml:52-54`). GitHub keeps only **one** run pending per concurrency group and **cancels the previously-pending run** when a newer one queues. With ≥3 master pushes in quick succession (story merge + two Dependabot squashes), the middle run's `build-and-push` is cancelled while pending and its `sha-<short>` tag is **never pushed** — so `docs/deployment/rollback.md` has no rollback target for that commit. AC6 (line 101) asserts "The immutable `sha-<short>` tag ... is **always** pushed regardless"; that is only true for runs that actually execute. Either weaken the claim or note the burst case explicitly.
+`updateReview` loads the row via `findByReviewIdAndAuthorId` (no lock), then does
+`setModerationEpoch(getModerationEpoch() + 1)`. Two near-simultaneous edits both read epoch *N*,
+both write *N+1*, both publish an event carrying *N+1*; the row ends at *N+1* and **both** in-flight
+Gemini verdicts pass the `event.moderationEpoch() == review.getModerationEpoch()` guard.
 
-### M3. AC6 has no defined behaviour when the published revision is absent from local git history
-**Confidence: medium.** `git merge-base --is-ancestor <published-rev> "$GITHUB_SHA"` exits **128** (not 0/1) when `<published-rev>` is unknown to the checked-out repo — reachable if `master` was ever force-pushed, or if `:latest` points at a commit from a deleted/rebased branch. AC6 handles "no such tag" but not "tag exists, commit unknown". Under `set -e` in the step this hard-fails the job. Specify: unknown commit ⇒ treat as "not a descendant" (safe: push SHA only + notice), don't abort.
+The sequential superseded-edit case is fixed. The concurrent case is not. The AC's own stated
+justification is "reachable the moment the 365-day edit rule is relaxed" — and a relaxed rule is
+precisely what makes rapid successive / concurrent edits reachable. Increment atomically
+(`UPDATE reviews.coach_reviews SET moderation_epoch = moderation_epoch + 1 WHERE …`) or perform the
+`updateReview` read under `findByIdForUpdate`.
 
-### M4. AC3's `provision.sh` recursive check is UID-only; the doc remediation in the same AC checks UID *and* GID
-**Confidence: medium.** AC3 prescribes `find "$dir" \! -user "${owner%%:*}" -print -quit` for the script, but `chown -R "$owner"` sets `uid:gid` (e.g. `999:1000`, `65534:65534`). A provision killed mid-`chown -R` that got children's UID right but GID wrong is not detected by a `\! -user` test, so the re-run still skips — the partial-completion hole AC3 is closing stays open for the GID half. The AC's *doc* snippet correctly uses `\! -user X -o \! -group X`; make the script side consistent.
+### M2 — AC6: reclassifying GHCR `denied` as ":latest absent" weakens the fail-safe
 
-### M5. AC3 reintroduces a full recursive walk on the common re-run path
-**Confidence: medium.** The design intent recorded in `provision.sh:23-25` is that `chown_if_needed` does **no** recursive traversal when the top-level owner already matches. AC3's second tier walks `find "$dir" ... -print -quit`, and `-quit` only short-circuits when a mismatch is **found** — on a healthy re-run (top-level matches, no mismatch anywhere) it walks the *entire* subtree of `prometheus/`, `loki/`, `tempo/`, `grafana/`, `redis/` on the mounted Volume, every time `provision.sh` is re-run. On a node with real observability retention that is a non-trivial metadata scan on every idempotent re-run. Acknowledge the cost, or bound the walk (e.g. `-maxdepth`, or only walk when a cheap sentinel suggests trouble).
+`denied` is GHCR's response **both** for a package that does not exist yet **and** for a genuine
+permission / org-SSO failure on an existing package. The current `else` branch (any unrecognised
+read failure → publish `sha-` only, leave `:latest` untouched) is deliberately the safe direction.
+Moving `denied` into the "absent → publish both tags" branch means a transient or permission
+`denied` on an existing `:latest` now triggers an unconditional `:latest` publish — the
+older-overwrites-newer regression the ordering guard exists to prevent.
+
+`name unknown` is unambiguous and safe to add. `denied` is not — either leave it in the generic
+branch, or have the AC explicitly acknowledge the residual risk (mitigated only by the fact that
+`build-and-push` has just authenticated with `packages: write`).
+
+### M3 — AC6: the `workflow_dispatch` force-publish path has no branch guard
+
+The AC short-circuits to "both tags, no ancestor check" on `force_publish_latest=true` but never
+requires `github.ref == 'refs/heads/master'`. A dispatch from any feature branch would then publish
+`:latest` from non-master code. Add an explicit ref check that fails the step (or refuses to append
+`latest`) when not on `master`. Also note `org.opencontainers.image.created` is fed from
+`github.event.head_commit.timestamp`, which is null on a `workflow_dispatch` payload — the label
+will be empty on the recovery path (cosmetic, but worth a fallback).
+
+### M4 — AC9: overstated premise, and "align the defaults" is incomplete and risky
+
+**Premise:** with `app.ses.enabled=yes` the context does **not** "silently" leave SES unwired.
+`SesEmailServiceImpl` (`havingValue="true"`), `DevSesEmailService` (`havingValue="true"`) and
+`NoOpSesEmailService` (`havingValue="false"`, `matchIfMissing=true` — applies only when the property
+is *absent*) all fail to match, so `SesEmailService` has **zero** implementations and the three
+`*RegistrationEmailListener` constructor injections fail startup with
+`NoSuchBeanDefinitionException`. Loud, not silent. Also, prod runs with
+`SPRING_PROFILES_ACTIVE=prod` (docker-compose `app` env), not "no active profile." The fail-fast
+validator is still worth adding for a *clear* message — but the story's justification needs
+correcting so the dev doesn't write a test asserting silent-noop behaviour that doesn't exist.
+
+**"Align the defaults":** the same property gate lives on four artifacts — `SesConfig`,
+`SesEmailServiceImpl`, `DevSesEmailService` (`matchIfMissing=false`) and `NoOpSesEmailService`
+(`matchIfMissing=true`). "Files expected to change (AC9)" lists only `SesConfig.java` /
+`SesProperties.java`. Changing `SesConfig`'s `matchIfMissing` (or the `SesProperties.enabled`
+default) without touching the other three re-introduces an inconsistency — e.g. absent property →
+`SesV2Client` bean created but no `SesEmailServiceImpl`. Recommendation: leave every `havingValue`
+gate exactly as-is (they are already mutually consistent: true/false-only for the real beans, a
+`matchIfMissing` fallback for the no-op) and add **only** the fail-fast validator. Do not touch
+`matchIfMissing` or the field default.
+
+### M5 — AC7: bootstrapping gap — the generated file may not exist when Docker binds it
+
+`provision.sh` today never writes `grafana-alerts.yml`; it runs **before** `docker compose up -d`
+and its section 8 only executes `if [ -f "${ENV_FILE}" ]`. Under option 1 (remove
+`grafana-alerts.yml` from the repo, generate it), any run where `.env` is absent — **including the
+documented first provision** ("place `.env`, then re-run") — leaves the bind-mount source
+`./deploy/lgtm/grafana-alerts.yml` missing, and Docker will silently create a **directory** at
+`/etc/grafana/provisioning/alerting/alerts.yml`, breaking alert provisioning.
+
+The AC must either keep a committed valid default file (option 2, delimited region) or generate
+unconditionally with safe empty-channel handling, and it must call out the `.gitignore` +
+`git rm --cached` step for the now-generated path.
+
+Also unspecified: whether the rendered `contactPoints` block **inlines the resolved secret values**
+(`GF_SLACK_WEBHOOK_URL`, `GF_ALERT_NOTIFY_EMAIL`) or preserves the `${...}` placeholders that
+Grafana currently expands at load. Inlining would write the Slack webhook and ops email into an
+on-disk file that today holds only placeholders — a secrets-hygiene regression. It must preserve the
+placeholders, and the Slack `text:` Go-template (`{{ range .Alerts.Firing }}`) must be emitted from
+a **quoted** heredoc so the shell doesn't mangle `{{ }}`.
 
 ---
 
-## LOW — nits, wording, and implementation traps worth pre-empting
+## LOW / NITS
 
-### L1. AC1 — the "ETag matches local MD5" success line must move into an `else`
-**Confidence: high.** In both scripts the success `echo` (`pg-backup.sh:96`, `volume-backup.sh:101`) sits after the `if [ "${REMOTE_ETAG}" != "${LOCAL_MD5}" ]; then … exit 1; fi` inside the `*)` arm. AC1 says "emit `[warn]` and continue instead of `exit 1`" and separately "keep the success line for the genuine-match case", but never says *restructure to `if/else`*. A literal edit (drop `exit 1`, keep everything else) prints the misleading "Upload verified: single-part ETag matches local MD5." line immediately after the warning on a real mismatch. Make the restructure explicit.
+### L1 — AC11: the AC's code sketch does not compile for `verifyEmail`
+`EmailTokenException` is only ever constructed as `(String key, boolean terminal)`. The sketch
+`throw new EmailTokenException("security.accountLocked")` is 1-arg. Dev must write
+`new EmailTokenException("security.accountLocked", true)`. (`OtpVerificationException("…")` in
+`verifyPhone` is fine as a 1-arg.)
 
-### L2. AC2 — the prescribed helper shape will trip the story's own `shellcheck` gate
-**Confidence: high.** AC2 wants a local function and "keep every capture `|| true`-guarded". `local REMOTE_SIZE=$(aws … ) || true` inside the helper (a) triggers **SC2155** ("Declare and assign separately") — a *new* shellcheck finding, which fails AC2's own "no-new-findings vs. baseline" verification bar — and (b) makes the `|| true` dead, because `local`'s own exit status (always 0) masks the command substitution. The helper must `local REMOTE_SIZE` then `REMOTE_SIZE=$(…) || true` on separate lines. Worth stating in the AC so the dev doesn't discover it via a failing gate.
+### L2 — AC11: abuse trade-off not considered
+Since `locked` is now also reachable via **admin action** (`UserAdminService.lock()`), a terminal
+exception in `verifyEmail`/`verifyPhone` means an admin lock (or a GDPR erasure) on a half-registered
+account permanently wedges that registration with no self-service path. Probably acceptable — but
+call it out, and consider a non-terminal error so a later unlock lets the user resume.
 
-### L3. AC2 — "15s" arithmetic
-**Confidence: high.** 5 attempts with a 3s sleep *between* attempts = 4 × 3s = 12s of waiting, not 15s. AC2's `exit 1` message wording ("a genuinely-invisible-after-15s object") and the hand-trace description should say 12s, or the loop should sleep after the 5th attempt too (5 × 3s = 15s) — pick one.
+### L3 — AC3: the `flock` self-re-exec idiom does not handle the piped case it claims to
+`exec env _PROVISION_LOCKED=1 flock … "$0" "$@"` re-executes `$0`. Under `curl … | bash`, `$0` is
+`bash`/`-bash` with no script path, so the re-exec runs an empty shell. The AC says the idiom "works
+when the script is piped or run directly" — it only works when run from a file, which is how the docs
+invoke it (`bash /opt/skillars/deploy/provision.sh`). Drop the piped claim.
 
-### L4. AC1 — the two `case` blocks are *not* identical
-**Confidence: high.** They differ in variable (`DUMP_FILE` vs `ARCHIVE_FILE`), log tag (`[pg-backup]` vs `[volume-backup]`), and comment wording ("dumps > 8 MB" vs "archives > 8 MB"). AC1's "identical `case … esac` block" prose is loose; the Tasks section already handles them separately, so this is only a wording fix in the AC.
+### L4 — AC4: spec vs. verification mismatch on when the `.bak` is written
+The AC says place `cp -p /etc/fstab …bak` "before the `sed -i` purge," but that `sed -i` is inside
+`if grep … ; then`. Verification case (d) ("no `/opt/skillars/data` line at all → backup still
+written") only holds if `cp` is placed *outside* the `if`. As written they conflict. And placing it
+outside means every idempotent steady-state re-run drops a fresh `/etc/fstab.bak.<ts>` forever
+(retention explicitly out of scope). Cleanest: back up only immediately before actually running
+`sed -i` (inside the `if`), and drop verification case (d)'s "backup still written" expectation.
 
-### L5. AC5 — "freshly-mounted Volume is empty" must ignore `lost+found`
-**Confidence: medium.** Every fresh `mkfs.ext4` volume mounts with a `lost+found` directory, so a bare `ls -A` emptiness test on the just-mounted Volume is never empty. The AC's alternate trigger ("the freshly-mounted Volume's `${MOUNT_POINT}` is empty") needs to exclude `lost+found`.
+### L5 — AC5: the multi-Volume hard-fail leaves the more dangerous case open
+The AC hard-fails only when `>1` `scsi-0HC_Volume_*` symlink exists **and** `HETZNER_VOLUME_ID` is
+unset. When `HETZNER_VOLUME_ID` is *set but unresolvable* (typo / stale id) **and** multiple Volumes
+are attached, the current code only `err`-warns, then falls through to "first matching symlink" →
+`readlink -f` → and if that Volume is unformatted, `mkfs.ext4` on it. That is the higher-risk path
+(operator believes they pinned the device). The hard-fail should also cover "id set, unresolvable,
+and `>1` Volume present."
 
-### L6. AC5 — removing the migrated root-disk copy through a shadowed mount is under-specified for a no-live-test prod script
-**Confidence: medium.** Once the Volume is mounted over `${MOUNT_POINT}`, the root-disk copy is only reachable via a bind mount of the parent, and the cleanup is an `rm -rf` adjacent to real `acme.json` cert data. The AC offers "(or mount at `${MOUNT_POINT}` then rsync from a bind-saved copy)" as a parenthetical alternative and picks neither. Given this project's "code-review + hand-trace, no live infra run" convention for `provision.sh`, the AC should commit to **one** mechanism and include a guard that refuses the `rm` if the bind source and the Volume resolve to the same filesystem (`findmnt` / `stat -f`).
+### L6 — AC8: wrong service name, and a third overlay is unlisted
+The compose service key is `node_exporter` (underscore); the AC body, Tasks and AC12 ledger text all
+write `node-exporter` (that hyphenated string is only the Prometheus job label; the scrape target is
+`node_exporter:9100`). Also `docker-compose.uat-hostwinds.yml` exists and is never mentioned in the
+"check they still merge" step (only `.local` and `.uat` are). The `.local`/`.uat` overlays add only
+`minio`/`minio-init` on `skillars-internal` and do not redefine base service network lists, so the
+merge risk there is low — but confirm `uat-hostwinds` too.
 
-### L7. Story rationale — "a false page" is not supported by anything in the repo
-**Confidence: high.** The Story statement and creation context say a false backup failure produces "a false page" "via the backup cron's alerting". There is **no** alerting or paging wired to the backup cron: `install-crons.sh` installs `… >> /var/log/skillars-backup.log 2>&1` and nothing scrapes that log or the backup freshness (no Prometheus rule, no Grafana alert, no `backup` reference in `deploy/**` YAML). The genuine harm AC1/AC2 fix is a **false failure line in the backup log plus deletion of the local artifact via the `trap`** — which is real and worth fixing, but the "false page" framing overstates the current wiring. Doesn't change any AC's mechanics; worth correcting so a reviewer of the *next* story doesn't go looking for alert config that isn't there.
-
-### L8. AC3/AC4/AC5 all rewrite the same ~50 lines of `provision.sh` section 7 (+ 7.5) with no stated sub-ordering
-**Confidence: medium.** `chown_if_needed` (AC3), device resolution + fstab (AC4), and the pre-Volume migration (AC5) all land in / around section 7, under `set -euo pipefail` and the "idempotent, re-run-safe by contract" requirement. The story lists them as independent ACs and the hand-trace cases don't include the combined "already-provisioned-with-old-script, new script + Volume now attached" path — which is the one that exercises H3 (recovery), H4 (stale fstab line) and AC4 device resolution all at once. Add that as an explicit hand-trace case in the Dev Agent Record.
+### L7 — line-number drift throughout Dev Notes / References
+`provision.sh` is 484 lines; citations `:193-202`, `:297-298`, `:333-350`, `:423-475` and Task refs
+`:341` / `:348` are all shifted (staging `rsync` ≈ `:344`, fstab block ≈ `:330-355`, section 8 ≈
+`:421-475`). `SoftDeleteIT` test cited `:246-289` is ≈ `:263-292`. `ReviewSubmissionService` publish
+sites cited `:63,:72,:98,:103` are `:63` / `:72-73` and `:98` / `:103-104`. Not blocking, but a
+re-anchor pass is cheap and will save the dev time.
 
 ---
 
-## Suggested AC edits (summary)
+## Considered, but NOT a defect (guarding against false positives)
 
-| # | AC | Change |
-|---|----|--------|
-| H1/H2 | AC5 | Arm migration only on a concrete pre-Volume marker (`traefik/acme.json` present, or non-empty `redis/`/LGTM dir) — not `ls -A` non-empty. Verify only source paths that existed. |
-| H3 | AC5 | Migrate-before-mount, or add a re-run detector that inspects the root fs under the mount; define the interrupted-migration recovery path. |
-| H4 | AC4 | Detect and replace/remove a pre-existing `/dev/sdb …` line in `/etc/fstab` (mirror `install-crons.sh`'s stale-cron purge). |
-| H5 | AC4 | Add `first-time-setup.md` lines 41, 43, 93 to AC4's file scope. |
-| H6 | AC7 §5 | Annotate only `deferred-work.md:1109`; do **not** touch `:1108` (different, still-open concern). |
-| M1 | AC6 | Index-aware `imagetools` template (or alternative revision source); require verification against a real published image. |
-| M2 | AC6 | Weaken / qualify the "SHA tag always pushed regardless" claim for the ≥3-push burst case. |
-| M3 | AC6 | Define behaviour when the published revision is not in local history (⇒ SHA-only + notice, don't abort). |
-| M4 | AC3 | Make the `provision.sh` recursive check test GID as well as UID, matching the AC's own doc snippet. |
-| M5 | AC3 | Acknowledge / bound the full-subtree `find` on the healthy re-run path. |
-| L1 | AC1 | State explicitly: convert the `*)` arm to `if mismatch → warn; else → success line`. |
-| L2 | AC2 | Split `local` declaration from assignment in the helper (SC2155 / dead `|| true`). |
-| L3 | AC2 | Reconcile "15s" vs 5×3s / 4×3s. |
-| L7 | Story | Drop or qualify "false page"; there is no backup alerting in the repo. |
-| L8 | AC3-5 | Add the "already-provisioned node, old script, Volume attached later" combined hand-trace case. |
+- **Migration numbering** — `V119` is the current max; `V120`/`V121` are correct and unused.
+- **AC1 event arity / types** — `ReviewSubmittedEvent` is a 5-field record (`UUID, UUID, Long, int,
+  String`); the story's 6-arg examples are type-consistent. All 8 `new ReviewSubmittedEvent(`
+  call-sites (6 in `ReviewModerationServiceTest`, 2 in `ReviewSubmissionService`) are correctly
+  identified; `ReviewModerationServiceTest` and `ReviewModerationIT` both exist as the story assumes.
+- **AC1 `ReviewModerationService` structure** — the `REQUIRES_NEW` / `AFTER_COMMIT` /
+  `findByIdForUpdate` / swallowing-catch description matches source exactly; the single added guard
+  clause and the "check epoch before the `PENDING` guard" ordering are correct.
+- **AC1 `submitCoachResponse`** — also calls `findByIdForUpdate` + `save` but never changes
+  `moderationStatus` or publishes an event, so it correctly needs no epoch change.
+- **AC2 409 / error-key mapping** — the existing test already asserts `HttpStatus.CONFLICT`, so the
+  409 mapping for `MessagingErrorCode.ALREADY_DELETED` exists; asserting the `messaging.alreadyDeleted`
+  body key is reasonable.
+- **AC2 no `@Version` on `Message`** — confirmed by the in-source comment at
+  `MessagingService.java:315-317`; the story correctly forbids adding it.
+- **AC7 file split point** — `grafana-alerts.yml` cleanly separates `groups:` (rules) from
+  `# ── Contact Points ──` / `contactPoints:` / `policies:`; the proposed split is structurally sound.
+- **AC8 Prometheus scrape targets** — `prometheus.yml` scrapes only `app:8367` and
+  `node_exporter:9100`; both are covered once `app` and `node_exporter` share the observability
+  network with `prometheus`. No hidden `postgres_exporter` / `cadvisor` / `traefik` scrape jobs that
+  would be stranded.
+- **AC8 Grafana datasources** — `prometheus:9090`, `loki:3100`, `tempo:3200`; all reachable with
+  `grafana` on both networks. `app` env URLs (`LOKI_URL`, `MANAGEMENT_OTLP_TRACING_ENDPOINT`,
+  `SPRING_DATA_REDIS_HOST`) are all satisfied by `app` joining `skillars-observability`.
+- **AC8 `internal: true` semantics** — a network with no gateway blocks egress for
+  observability-only members while still allowing intra-network DNS/routing and host-side image
+  pulls; the topology (5 restricted services observability-only, `app`/`grafana` dual-homed) is
+  correct.
+- **AC10 defensive dedup `DELETE … WHERE a.id < b.id`** — `@Tsid` ids are time-sorted, so
+  "highest id = newest unused row" holds; leaving exactly one row is the goal regardless.
+- **AC10 partial-index predicate** — `WHERE used = false` only (not `expires_at > now()`); correct,
+  `now()` is not `IMMUTABLE` and would be rejected in an index predicate.
+- **AC9 `SesEmailServiceImpl` does inject `SesV2Client`** — confirmed; and `SesEmailService` has
+  three impls (`SesEmailServiceImpl` `!dev`, `DevSesEmailService` `dev`, `NoOpSesEmailService`),
+  which is why the non-boolean value produces a hard startup failure (see M4).
