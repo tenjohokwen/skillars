@@ -38,9 +38,9 @@ In the **Hetzner Cloud Console**:
 
 2. **Attach a 100 GB Volume**
    - Create or attach immediately after server creation
-   - The provisioning script mounts the volume at `/opt/skillars/data` — it expects the device at `/dev/sdb` (the default for a single attached Hetzner Volume)
+   - The provisioning script mounts the volume at `/opt/skillars/data`. It resolves the device by its stable `/dev/disk/by-id/scsi-0HC_Volume_*` symlink (Hetzner's per-Volume identifier) and only falls back to `/dev/sdb` if no such symlink exists, so a non-`/dev/sdb` device name is handled automatically.
    - PostgreSQL, Prometheus, Loki, Tempo, and Grafana data all live on this volume
-   - After attaching, SSH to the Node and run `lsblk` to confirm the volume appears as `/dev/sdb`. If it is listed under a different name, the provisioning script hardcodes `/dev/sdb` and will mount the wrong device — stop and verify before proceeding to Step 3.
+   - After attaching you can confirm the Volume is visible with `lsblk`; whichever `/dev/sdX` name it gets, the provisioning script picks it up via the `by-id` path.
 
 ---
 
@@ -90,7 +90,7 @@ What `provision.sh` does (all steps are idempotent — safe to re-run):
 3. Configures fail2ban: sshd jail, maxretry=5, bantime=3600s
 4. Enables `ufw` (host-level firewall): allows SSH (22), HTTP (80), and HTTPS (443), then sets default-deny-incoming / default-allow-outgoing — SSH is allowed *before* `ufw` is enabled so the active provisioning session is not terminated
 5. Creates the base directory structure: `/opt/skillars/data/postgres`, `/opt/skillars/lgtm`
-6. Mounts the Hetzner Volume (`/dev/sdb`) at `/opt/skillars/data`, then creates the data subdirectories that live on it (`postgres`, `prometheus`, `loki`, `tempo`, `grafana`) with correct ownership
+6. Mounts the Hetzner Volume (resolved via its stable `/dev/disk/by-id` path) at `/opt/skillars/data`, then creates the data subdirectories that live on it (`postgres`, `prometheus`, `loki`, `tempo`, `grafana`) with correct ownership
 7. **After** the mount: creates `/opt/skillars/data/redis` (owned by uid 999, the redis image's user) and `/opt/skillars/data/traefik/acme.json` with mode 600 (required by Traefik; no manual step needed)
 
 > **The order of 6 and 7 matters and is deliberate.** Both paths live on the Volume, so creating
@@ -99,8 +99,16 @@ What `provision.sh` does (all steps are idempotent — safe to re-run):
 >
 > If the Volume is not attached yet, section 7 of the script logs a warning and skips the mount, but
 > still creates the redis directory and `acme.json` — on the root disk, where they work but do not
-> survive a rebuild. Attach the Volume in the Hetzner Console and re-run `provision.sh` to complete
-> the mount.
+> survive a rebuild. Attach the Volume in the Hetzner Console and re-run `provision.sh`: the re-run
+> mounts the Volume **and migrates the pre-Volume `data/` tree onto it** (TLS certs included),
+> staging it through `/opt/skillars/.pre-volume-migration` first. If that re-run is interrupted
+> *before* any file has landed on the Volume, the next re-run resumes it automatically; if it is
+> interrupted *mid-copy*, the next re-run sees a partially-populated Volume, stops with the
+> no-clobber warning below, and leaves `/opt/skillars/.pre-volume-migration` in place for you to
+> reconcile by hand. If the Volume you attach already contains data (a re-attach), the script
+> likewise does **not** overwrite it — it leaves the staged copy in `/opt/skillars/.pre-volume-migration`
+> and logs a reconciliation note. The now-shadowed root-disk copy under the mount can be reclaimed
+> manually (unmount `/opt/skillars/data`, `rm -rf` its root-disk contents, remount).
 
 ### If `provision.sh` fails partway through
 
@@ -116,12 +124,34 @@ step checks whether its work is already done — so the recovery procedure is si
 
 Two things to know before re-running:
 
-- **The one non-idempotent hazard is `chown -R` over live data mounts.** It is already mitigated —
-  `chown_if_needed` skips the recursive `chown` entirely when the directory's owner already matches,
-  so a re-run against a running stack cannot interrupt an in-progress container write.
-- **Ordering constraint:** the Hetzner Volume must be attached *before* the run that is expected to
-  mount it. A run with no Volume attached completes (with a warning) but leaves all data on the root
-  disk; re-run after attaching to complete the mount.
+- **The one non-idempotent hazard is `chown -R` over live data mounts.** `chown_if_needed` skips the
+  recursive `chown` when the directory's **top-level** owner already matches — so a re-run against a
+  running stack does not interrupt an in-progress container write — and *additionally* re-runs
+  `chown -R` when the directory or one of its **immediate children** (`find -maxdepth 2`) has a
+  mismatched uid **or** gid, which covers a run killed mid-`chown -R` with the top level already
+  done. A mismatch buried **more than two levels deep** is *not* caught automatically: after any
+  interrupted provision, remediate each non-root data subdir by hand —
+
+  | Subdir | Owner (`uid:gid`) |
+  |---|---|
+  | `data/prometheus` | `65534:65534` |
+  | `data/loki`, `data/tempo` | `10001:10001` |
+  | `data/grafana` | `472:472` |
+  | `data/redis` | `999:1000` |
+
+  ```bash
+  # example for grafana — repeat per subdir with its own uid:gid
+  find /opt/skillars/data/grafana \( \! -uid 472 -o \! -gid 472 \) -print -quit   # any output ⇒ mismatch present
+  chown -R 472:472 /opt/skillars/data/grafana                                     # fix it
+  ```
+
+  Both uid and gid are checked because `chown -R` sets both; an interruption can leave one correct
+  and the other stale.
+- **Ordering constraint:** attach the Hetzner Volume *before* the run that is expected to mount it. A
+  run with no Volume attached still completes (with a warning), leaving data on the root disk; the
+  next run after attaching mounts the Volume and **migrates that pre-Volume `data/` tree onto it**
+  (via `/opt/skillars/.pre-volume-migration`), unless the attached Volume already holds data, which
+  it will not overwrite.
 
 ---
 
