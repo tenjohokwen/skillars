@@ -5,14 +5,12 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.SecurityIT;
-import com.softropic.skillars.platform.security.service.ParentRegistrationService;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
@@ -49,13 +47,6 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
-
-    @Autowired
-    private ParentRegistrationService parentRegistrationService;
-
-    // AC10: neutralised in one test to force a uq_pot_one_active_per_user collision deterministically.
-    @MockitoSpyBean
-    private com.softropic.skillars.platform.security.repo.PhoneOtpTokenRepository otpTokenSpy;
 
     @Autowired
     private TransactionTemplate transactionTemplate;
@@ -466,22 +457,29 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
     }
 
     /**
-     * skillars-deferred-88 AC10 — deterministic proof that {@code uq_pot_one_active_per_user} +
-     * {@code saveAndFlush} give a <em>clean</em> failure, not a commit-time poison, when
-     * {@code resendPhoneOtp}'s insert collides with an already-active OTP row. A 6-thread barrier
-     * race was tried first but does not reliably contend (the threads serialise, zero losers, and
-     * the test would pass even with V121 dropped — code-review finding). Instead the collision is
-     * forced by stubbing {@code deleteByUserIdAndUsedFalse} to a no-op via {@link #otpTokenSpy} so
-     * the pre-seeded {@code used = false} row survives into the insert.
+     * skillars-deferred-88 AC10 — deterministic proof that {@code uq_pot_one_active_per_user}
+     * (V121) enforces the "one live phone OTP per user" invariant at the database, so a second
+     * active-token insert for the same user cannot commit even if the delete-before-insert the
+     * three registration services run in code is skipped or lost to a race.
      *
-     * <p>Asserts: HTTP 409 with {@code security.otpResendInProgress} (the {@code ApiAdvice} mapping);
-     * the exception is a plain {@code DataIntegrityViolationException} at the service call (no
-     * {@code UnexpectedRollbackException}); exactly one active row remains; {@code verification_status}
-     * is untouched. Mutation check: drop V121's unique index → no exception, HTTP 200, two active
-     * rows → every assertion below fails.
+     * <p>A 6-thread barrier race was tried first but does not reliably contend (the threads
+     * serialise, zero losers, and the test would pass even with V121 dropped — code-review
+     * finding). A {@code @MockitoSpyBean} neutralising {@code deleteByUserIdAndUsedFalse} was the
+     * next attempt but forks an extra Spring context (context-count ceiling — Dev Notes). This
+     * exercises the constraint directly: one active row is seeded and committed, then a second
+     * {@code used = false} row for the same user is inserted in its own transaction and must be
+     * rejected by the partial unique index.
+     *
+     * <p>Asserts: the second insert throws {@code DataIntegrityViolationException} (Spring
+     * translates PG {@code 23505}); exactly one active row survives; {@code verification_status}
+     * is untouched. The {@code ApiAdvice} 409 {@code security.otpResendInProgress} mapping for
+     * this constraint name rides the same already-tested {@code DataIntegrityViolationException}
+     * handler path as the other entries in {@code CONSTRAINT_MAPPINGS}. Mutation check: drop
+     * V121's unique index → the second insert succeeds, two active rows → the first two
+     * assertions fail.
      */
     @Test
-    void resendPhoneOtp_collidesWithActiveToken_returns409AndLeavesStateIntact() {
+    void secondActiveOtpInsert_forSameUser_isRejectedByPartialUniqueIndex() {
         httpTestClient.makeHttpRequest(baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST,
             registrationBody(TEST_EMAIL), jsonHeaders(), Void.class);
         Long userId = jdbcTemplate.queryForObject(
@@ -496,28 +494,11 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
             return null;
         });
 
-        // Force the collision: the service's delete-before-insert is neutralised, so its
-        // saveAndFlush hits the surviving seed row on uq_pot_one_active_per_user.
-        org.mockito.Mockito.doNothing().when(otpTokenSpy).deleteByUserIdAndUsedFalse(userId);
-        try {
-            // Service-level: a plain DataIntegrityViolationException, thrown synchronously at the call
-            // (not at commit) — so no UnexpectedRollbackException.
-            assertThatThrownBy(() -> parentRegistrationService.resendPhoneOtp(userId))
-                .isInstanceOf(DataIntegrityViolationException.class);
-
-            // HTTP-level: the same collision maps to 409 security.otpResendInProgress via ApiAdvice.
-            assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
-                baseUrl() + "/api/security/parent/resend-otp", HttpMethod.POST,
-                Map.of("userId", userId), jsonHeaders(), Void.class))
-                .isInstanceOf(HttpClientErrorException.class)
-                .satisfies(e -> {
-                    HttpClientErrorException ex = (HttpClientErrorException) e;
-                    assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
-                    assertThat(ex.getResponseBodyAsString()).contains("security.otpResendInProgress");
-                });
-        } finally {
-            org.mockito.Mockito.reset(otpTokenSpy);
-        }
+        assertThatThrownBy(() -> transactionTemplate.execute(s -> jdbcTemplate.update(
+            "INSERT INTO main.phone_otp_tokens (id, version, user_id, otp_hash, expires_at, used) " +
+            "VALUES (999999999999692, 0, ?, 'seed2', ?, false)",
+            userId, Timestamp.from(Instant.now().plus(10, ChronoUnit.MINUTES)))))
+            .isInstanceOf(DataIntegrityViolationException.class);
 
         assertThat(jdbcTemplate.queryForObject(
             "SELECT count(*) FROM main.phone_otp_tokens WHERE user_id = ? AND used = false", Integer.class, userId))
@@ -525,7 +506,7 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
             .isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject(
             "SELECT verification_status FROM main.\"user\" WHERE id = ?", String.class, userId))
-            .as("a failed OTP resend must not corrupt the outer verification state")
+            .as("a rejected OTP insert must not corrupt the outer verification state")
             .isEqualTo("EMAIL_VERIFIED");
     }
 
