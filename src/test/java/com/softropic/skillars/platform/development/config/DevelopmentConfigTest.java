@@ -7,7 +7,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -39,5 +41,21 @@ class DevelopmentConfigTest {
         assertThatThrownBy(config::validateSluRepositorySchema)
             .isInstanceOf(AppSetupException.class)
             .hasMessageContaining("SluRepository schema mismatch");
+    }
+
+    @Test
+    void sluRetryExecutor_isBoundedBulkhead_core2_max4_queue10() {
+        // skillars-deferred-86 AC3 / M2: small queue so the max pool engages under a real backlog.
+        // initialize() (inside sluRetryExecutor()) starts a live backing ThreadPoolExecutor, so shut
+        // it down after the assertions rather than leaking a pool per test run.
+        ThreadPoolTaskExecutor executor = new DevelopmentConfig(entityManager).sluRetryExecutor();
+        try {
+            assertThat(executor.getCorePoolSize()).isEqualTo(2);
+            assertThat(executor.getMaxPoolSize()).isEqualTo(4);
+            assertThat(executor.getQueueCapacity()).isEqualTo(10);
+            assertThat(executor.getThreadNamePrefix()).isEqualTo("slu-retry-");
+        } finally {
+            executor.shutdown();
+        }
     }
 }

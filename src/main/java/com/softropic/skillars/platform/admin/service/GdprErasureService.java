@@ -9,6 +9,7 @@ import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagReposi
 import com.softropic.skillars.platform.development.repo.PerformanceReportRepository;
 import com.softropic.skillars.platform.development.repo.PlayerRadarBaselineRepository;
 import com.softropic.skillars.platform.development.repo.PlayerRadarCompositeRepository;
+import com.softropic.skillars.platform.development.repo.PlayerSluWeeklySnapshotAppliedRepository;
 import com.softropic.skillars.platform.development.repo.PlayerTimelineRepository;
 import com.softropic.skillars.platform.development.repo.RadarAssessmentRepository;
 import com.softropic.skillars.platform.development.repo.SluRepository;
@@ -57,6 +58,7 @@ public class GdprErasureService {
     private final CoachReviewRepository coachReviewRepository;
     private final SluRepository sluRepository;
     private final SluWeeklySnapshotRepository sluWeeklySnapshotRepository;
+    private final PlayerSluWeeklySnapshotAppliedRepository playerSluWeeklySnapshotAppliedRepository;
     private final SluTargetRepository sluTargetRepository;
     private final RadarAssessmentRepository radarAssessmentRepository;
     private final NeglectedSkillFlagRepository neglectedSkillFlagRepository;
@@ -186,6 +188,7 @@ public class GdprErasureService {
         playerTimelineRepository.deleteByPlayerId(playerId);
         sluRepository.deleteAllByPlayerId(playerId);
         sluWeeklySnapshotRepository.deleteAllByPlayerId(playerId);
+        playerSluWeeklySnapshotAppliedRepository.deleteAllByPlayerId(playerId);
         sluTargetRepository.deleteAllByPlayerId(playerId);
         neglectedSkillFlagRepository.deleteAllByPlayerId(playerId);
         playerRadarBaselineRepository.deleteAllByPlayerId(playerId);
