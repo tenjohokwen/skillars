@@ -12,7 +12,13 @@ fi
 DEPLOY_ROOT="/opt/skillars"
 
 log() { echo "[provision] $*"; }
-err() { echo "[provision][error] $*" >&2; }
+# Writes to BOTH stderr (terminal-red visibility, stream-aware tooling) and stdout, so an operator
+# running `provision.sh > provision.log` with no `2>&1` still keeps every error line. Dual `echo`
+# rather than `| tee /dev/stderr` deliberately: a pipeline whose `tee` fails (stderr closed,
+# ENOSPC) would abort mid-message under `set -o pipefail`, and the unconfigured-alert block chains
+# three `err` calls before its `exit 1`. Known cosmetic cost: a caller that DOES redirect `2>&1`
+# sees each error line twice.
+err() { echo "[provision][error] $*" >&2; echo "[provision][error] $*"; }
 
 # Idempotent chown: skips the recursive chown entirely when the directory's current owner already
 # matches, so a rerun against a live system can't interrupt an in-progress container write. Safe on
@@ -236,6 +242,65 @@ else
     exit 1
   fi
   log "${ACME_JSON} permissions enforced (mode 600)."
+fi
+
+# ──────────────────────────────────────────────────
+# 8. Alert-routing sanity check
+# ──────────────────────────────────────────────────
+#
+# Deliberately AFTER section 7.5: an alert-routing misconfiguration must never block the Volume
+# mount or the acme.json / data-dir setup above. Grafana provisions the `notify-ops` contact
+# point from grafana-alerts.yml regardless of whether these vars are set, so if BOTH are blank
+# every firing alert routes to nowhere, silently.
+#
+# Read one value from .env, normalised so a functionally-blank channel cannot pass the guards below
+# and a genuinely-set one cannot read as blank: tolerate an optional `export ` prefix, strip a
+# trailing CR (CRLF .env), strip surrounding matching quotes (`KEY=""` -> empty), and trim
+# whitespace. The `|| true` is REQUIRED — under `set -euo pipefail` grep exits 1 when the key is
+# absent (common, these read as optional), which would otherwise abort the script with no message.
+env_val() {
+  local key="$1" v
+  v=$(grep -E "^([[:space:]]*export[[:space:]]+)?${key}=" "${ENV_FILE}" | tail -1 || true)
+  v=${v#*"${key}="}
+  v=${v%$'\r'}
+  v="${v#"${v%%[![:space:]]*}"}"
+  v="${v%"${v##*[![:space:]]}"}"
+  case "$v" in
+    \"*\") v=${v#\"}; v=${v%\"} ;;
+    \'*\') v=${v#\'}; v=${v%\'} ;;
+  esac
+  v="${v#"${v%%[![:space:]]*}"}"
+  v="${v%"${v##*[![:space:]]}"}"
+  printf '%s' "$v"
+}
+
+# Only runs when .env is present — section 6.5 already tells the operator to place .env and re-run,
+# and this check fires on that re-run.
+if [ -f "${ENV_FILE}" ]; then
+  GF_EMAIL=$(env_val GF_ALERT_NOTIFY_EMAIL)
+  GF_SLACK=$(env_val GF_SLACK_WEBHOOK_URL)
+  GF_SMTP=$(env_val GF_SMTP_ENABLED)
+
+  if [ -z "${GF_EMAIL}" ] && [ -z "${GF_SLACK}" ]; then
+    err "Alert routing is unconfigured: both GF_ALERT_NOTIFY_EMAIL and GF_SLACK_WEBHOOK_URL are"
+    err "blank in ${ENV_FILE}. Grafana still provisions the notify-ops contact point, so every"
+    err "alert would route to a dead address. Set at least one and re-run this script."
+    exit 1
+  fi
+
+  if [ -n "${GF_EMAIL}" ] && [ -z "${GF_SLACK}" ]; then
+    log "⚠️  GF_SLACK_WEBHOOK_URL is blank — the notify-ops Slack receiver will provision with an"
+    log "    empty URL and silently no-op on every alert until it is set."
+  fi
+  if [ -z "${GF_EMAIL}" ] && [ -n "${GF_SLACK}" ]; then
+    log "⚠️  GF_ALERT_NOTIFY_EMAIL is blank — the notify-ops email receiver will provision with an"
+    log "    empty address and silently no-op on every alert until it is set."
+  fi
+
+  if [ -n "${GF_EMAIL}" ] && [ "${GF_SMTP}" != "true" ]; then
+    log "⚠️  GF_ALERT_NOTIFY_EMAIL is set but GF_SMTP_ENABLED is not 'true' — Grafana email routing"
+    log "    also needs GF_SMTP_ENABLED=true and the GF_SMTP_* block, or email alerts silently fail."
+  fi
 fi
 
 log ""

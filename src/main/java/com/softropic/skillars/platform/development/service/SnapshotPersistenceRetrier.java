@@ -9,6 +9,9 @@ import org.springframework.retry.annotation.Backoff;
 import org.springframework.retry.annotation.Recover;
 import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.CannotCreateTransactionException;
+import org.springframework.transaction.TransactionException;
+import org.springframework.transaction.TransactionSystemException;
 
 import java.util.List;
 
@@ -22,6 +25,10 @@ import java.util.List;
  * <p>The wrapped {@link SnapshotBatchWriter#writeAll} is {@code @Transactional} and only issues
  * additive upserts, so a whole-method retry is safe: an uncaught exception mid-loop rolls the
  * transaction back entirely (nothing partially commits) and the retry re-runs against a clean slate.
+ * That same reasoning covers the transaction-boundary failures {@link TransactionSystemException}
+ * (commit failed → rolled back) and {@link CannotCreateTransactionException} (begin failed → nothing
+ * ran), which this bean also retries and structured-recovers alongside {@link DataAccessException}.
+ * Transaction-<em>usage</em> programming errors are deliberately excluded from {@code retryFor}.
  *
  * <p>Uses its own {@code app.slu.snapshot-retry.*} property namespace (distinct from
  * SluPersistenceRetrier's {@code app.slu.retry.*}) so the two retriers can be tuned independently.
@@ -34,7 +41,7 @@ public class SnapshotPersistenceRetrier {
     private final SnapshotBatchWriter snapshotBatchWriter;
 
     @Retryable(
-        retryFor = DataAccessException.class,
+        retryFor = {DataAccessException.class, TransactionSystemException.class, CannotCreateTransactionException.class},
         maxAttemptsExpression = "${app.slu.snapshot-retry.max-attempts:3}",
         backoff = @Backoff(
             delayExpression = "${app.slu.snapshot-retry.backoff-initial-ms:100}",
@@ -47,6 +54,15 @@ public class SnapshotPersistenceRetrier {
 
     @Recover
     public void recoverSnapshotWriteFailure(DataAccessException ex, List<PlayerSkillStat> stats,
+                                            short isoYear, short isoWeek) {
+        log.error("Failed to write SLU weekly snapshot after retries — {} rows lost for {}-W{}, manual recovery needed",
+            stats.size(), isoYear, isoWeek, ex);
+    }
+
+    // Reached only after a retryFor-matched TransactionSystemException / CannotCreateTransactionException
+    // exhausts its attempts. Kept separate from the DataAccessException overload (unambiguous siblings).
+    @Recover
+    public void recoverSnapshotWriteFailure(TransactionException ex, List<PlayerSkillStat> stats,
                                             short isoYear, short isoWeek) {
         log.error("Failed to write SLU weekly snapshot after retries — {} rows lost for {}-W{}, manual recovery needed",
             stats.size(), isoYear, isoWeek, ex);

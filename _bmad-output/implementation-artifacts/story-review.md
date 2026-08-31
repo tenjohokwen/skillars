@@ -1,117 +1,228 @@
-# Senior-dev audit — Story skillars-deferred-84
+# Senior-dev audit — story `skillars-deferred-85`
 
-**Story:** `coach_radar_preferences` FK hardening, SLU snapshot-persistence resilience, skill-toggle debounce, and `SkillDefinitionResource` architecture compliance
-**Reviewed against:** current `master` source (`274e074`)
-**Scope of review:** missed corner cases, false assumptions, missed flows. Findings verified live against source; low-confidence items are labelled as such and separated from blocking ones.
+**Scope reviewed:** the story spec only (`skillars-deferred-85-…-ops-doc-hardening.md`), cross-checked against current source:
+`SluPersistenceRetrier.java`, `SnapshotPersistenceRetrier.java`, `SluCalculationService.java`, `SnapshotBatchWriter.java`,
+`SluRepository.java`, `PlayerSkillStat.java`, both retrier tests, `IntegrationTestConventionTest.java`,
+`assert-context-count.sh`, `pr-build.yml`, `.github/dependabot.yml`, `deploy/backup/{pg-backup,volume-backup,restore-from-dump,restore-from-volume-backup,install-crons}.sh`,
+`deploy/provision.sh`, `deploy/lgtm/{alerts.yml,grafana-alerts.yml}`, `docker-compose.yml`,
+`docs/deployment/{secrets-reference,first-time-setup}.md`, `infrastructure/config/AsyncConfig.java`,
+`security/infrastructure/jwt/JwtSecretService.java`, `JwtSecretBootstrapRunner.java`, and the relevant `deferred-work.md` sections.
 
----
-
-## Verdict
-
-Three of the four ACs (AC1, AC2, AC4) are sound in intent and mostly accurate, with a handful of concrete gaps to close before/during implementation. **AC3 as written rests on a false premise about the frontend component architecture and cannot satisfy its own acceptance test** — it needs a design change, not just a debounce wrapper.
-
----
-
-## Blocking
-
-### B1 — AC3: "instant visual feedback" premise is false; the prescribed change regresses the UX it is meant to leave untouched
-
-AC3 states:
-
-> Do not debounce the visual toggle itself — `SkillsRadarChart.vue:272-278`'s `toggleSkill` already mutates its own local selection state and emits synchronously on every click, giving instant visual feedback independent of the parent's network call.
-
-Verified against source — this is not how it works:
-
-- `SkillsRadarChart.vue` has **no local selection state**. `toggleSkill` (`:272-279`) computes `updated` from the `selectedSkillCodes` **prop** and does nothing but `emit('update:selectedSkillCodes', updated)`. Every derived view (`activeSkills` `:198-203`, `polygonPoints`, `nodePositions`, `hasBaseline`) reads the prop directly.
-- The parent binds that prop to `store.radarPreferences?.selectedSkillCodes ?? []` (`PlayerDevelopmentDashboardPage.vue:27`) and uses `@update:selected-skill-codes` (not `v-model`), so nothing flows back into the chart except through the store.
-- `onSkillSelectionChange` (`:240-244`) does **not** write `codes` anywhere synchronously — it only calls `store.saveRadarPreferences(playerId.value, codes)`.
-- `development.store.js:147-154`: `saveRadarPreferences` updates `radarPreferences.value` **only after `await putRadarPreferences(...)` resolves** (`:149-150`). It is not optimistic.
-
-Consequences:
-
-1. The chart's selected-skill polygon **already** lags one network round-trip per click today — the "instant" feedback AC3 says must be preserved does not exist.
-2. Wrapping `store.saveRadarPreferences` in a trailing 300 ms debounce — while AC3 explicitly forbids adding local optimistic state — means the polygon, the `hasBaseline` computed, and the "Compare to baseline" toggle (`v-if="hasBaseline"`) will not visually change until ~300 ms after the *last* click **plus** the PUT round-trip. During a rapid burst there is **no visual feedback at all** until the burst ends.
-3. AC3's own manual acceptance test — "confirm the chart's visual selection updates instantly per click while only one PUT fires" — is **not achievable** with the prescribed implementation. A dev implementing exactly to spec will fail their own test.
-
-**What the fix actually requires:** decouple visual state from persistence. Introduce a local `selectedSkillCodes` ref in `PlayerDevelopmentDashboardPage.vue` (seeded from `store.radarPreferences` and kept in sync via a `watch`), update it synchronously in `onSkillSelectionChange`, drive `SkillsRadarChart` (and `hasBaseline`) from it, and debounce **only** the `store.saveRadarPreferences` call. This is precisely the "local UI state" AC3 tells the dev they will not need — they do.
+Overall: the story is well-researched and most of its factual claims check out (the `skillars-deferred-10` CI/CD
+cluster really is already shipped; `alerts.yml` really has no `Callback*`/`Fraud*` alerts; the two retrier files
+really only handle `DataAccessException`; `pr-build.yml` really does `load: true` + Trivy + shared composite action).
+The findings below are the gaps that survived verification — no fabricated issues.
 
 ---
 
-## Should-fix
+## High — will break CI as written
 
-### S1 — AC3: debounced write is silently lost on unmount / navigation
+### H1. AC2's `SluRetrierProxyRetryIT` fails `IntegrationTestConventionTest`, and the story neither tasks nor scopes the fix
 
-`DrillLibraryPage.vue`'s `useDebounce` (`:163-169`) is a bare trailing `setTimeout` with no `cancel`/`flush`. AC3 says to mirror it "exactly". For a *search* re-run that is harmless; for a **persistence** call it is not: a selection change followed by a route change or component unmount within 300 ms drops the PUT entirely, and `store.error` is never set, so the coach gets no feedback that their preference did not save. Add an `onBeforeUnmount` flush (or a debounced helper with a `flush()` method) and call it on teardown. The story's framing of the two debounce sites as equivalent overlooks this asymmetry.
+`IntegrationTestConventionTest.everyIntegrationTestExtendsTheCanonicalBase()` (runs in the Surefire **test** phase,
+so it fails a full `mvn verify` in seconds) scans every `target/test-classes/**/*IT.class` that is non-abstract and
+not a Spring Boot slice, and asserts each one either `extends AbstractIntegrationTest` **or** is in a hard-coded
+`ALLOWLIST` of three FQNs.
 
-### S2 — AC3: stale `playerId` capture across a player switch
+`SluRetrierProxyRetryIT` as specified:
+- is named `*IT`,
+- does **not** extend `AbstractIntegrationTest` (by design — "minimal standalone context"),
+- is **not** a slice (`@SpringJUnitConfig` / `@ExtendWith(SpringExtension.class)` match none of `isSlice()`'s
+  `org.springframework.boot.test.autoconfigure.*` / `WebMvcTest` / `DataJpaTest` / … checks),
+- is **not** in `ALLOWLIST`.
 
-`playerId` is `computed(() => Number(route.params.playerId))`. A debounced `store.saveRadarPreferences(playerId.value, codes)` resolves `playerId.value` at **fire time**. If the coach changes the selection and then navigates to a different player within the debounce window, the trailing call persists the *previous* player's `codes` against the *new* player's id, and also races the new player's `store.fetchRadarPreferences(id)` in `loadPlayerData`. Capture `playerId` at click time and cancel any pending save in the `watch(() => route.params.playerId, …)` handler (which already calls `clearDevelopmentState()` at `:227-233`).
+→ It becomes an `offenders` entry and `assertThat(offenders).isEmpty()` **fails the build**. This is deterministic,
+not "may flag" as the Dev Notes phrase it.
 
-### S3 — AC1: no index backs the new FK / cascade on `coach_radar_preferences.player_id`
+Why this is dangerous rather than merely missing: **the story's own AC2 verification steps do not catch it.**
+`mvn -o test -Dtest=SluRetrierProxyRetryIT` and `mvn -o test -Dtest='com.softropic.skillars.platform.development.**'`
+both run green — `IntegrationTestConventionTest` is in a different package and is not named in either `-Dtest`
+selector. The failure only appears in full CI.
 
-`coach_radar_preferences` PK is `(coach_id, player_id)` (`V51:18`), so `player_id` is **not** the leading column and has no standalone index. The V113 precedent tables this AC says to "mirror exactly" — `player_radar_composites` and `player_radar_baselines` — are both PK-led by `player_id`, so their cascade deletes and FK integrity checks are index-covered. Here they are not: every `DELETE FROM main.player_profiles …` will sequentially scan the whole `coach_radar_preferences` table, and so will each FK check. Add `CREATE INDEX ix_crp_player_id ON development.coach_radar_preferences (player_id);` in the same migration. Impact is low today (player deletion is rare, table is small) but it is a real divergence from the precedent and cheap to close.
+Also inconsistent: the story's "Files being modified" / "Project Structure Notes" say "3 Java test classes
+(2 updated, 1 new)" and never list `IntegrationTestConventionTest.java`.
 
-### S4 — AC4: the IT design has three concrete problems
-
-1. **No seeded inactive skill exists.** All 15 rows in `V46__development_module_init.sql:34-49` default to `active = true`, and no later migration (`V48`, `V50`, `V51`) deactivates any. So "reuse the existing seeded rows from V46's taxonomy if convenient" is impossible for the *inactive* case — the IT must `INSERT` an inactive `skill_definitions` row.
-2. **No transactional rollback.** `AbstractIntegrationTest` carries no class-level `@Transactional` (verified). Sibling ITs (`RadarCompositeBaselinePlayerFkIT`, `SluCalculationServiceIT`) clean up their own rows explicitly. `skill_definitions` is a small **shared reference table** many tests read; any inserted row (especially an active one) that is not deleted in teardown will break other ITs' skill-count / taxonomy assertions (e.g. `SkillExposureResourceIT`, radar ITs) and can collide on the PK `code` on a re-run. The story does not call out this cleanup requirement.
-3. **Brittle assertion.** "assert the response contains only the active skill and omits the inactive one" — the endpoint returns *all* active skills (15 seeded + any inserted). The assertion must be relative: contains the test active `code`, does not contain the test inactive `code`.
-
-Also: the story names no `…development.api` sibling IT to model the authenticated-request setup on (`GET /api/development/skill-definitions` is `@PreAuthorize("isAuthenticated()")`, and `@SpringBootTest(RANDOM_PORT)` rules out `@WithMockUser`). Point the dev at `SkillExposureResourceIT` / `RadarDisplayResourceIT` for the auth pattern.
-
----
-
-## Minor / accuracy
-
-### M1 — AC2: the `SnapshotPersistenceRetrier` code block does not compile as written
-
-The literal snippet declares only `@Component` + `@RequiredArgsConstructor` but calls `log.error(...)` in `@Recover`. It is missing `@Slf4j` (which `SluPersistenceRetrier` — the class it is told to mirror — has) and all imports. A dev following "mirror exactly" will likely add it, but the provided artifact is defective.
-
-### M2 — AC2: `SluCalculationServiceIT` does not actually verify the snapshot write
-
-The story claims running `SluCalculationServiceIT` "confirms the wiring change didn't break the existing end-to-end snapshot-write flow". The IT contains **no assertion against `development.player_slu_weekly_snapshot`** (grep-confirmed). It exercises the code path — so a broken AOP proxy or a thrown exception would fail it — but a `writeAllWithRetry` that silently no-ops would pass green. Either add a snapshot-row assertion to the IT or state the residual gap explicitly.
-
-### M3 — AC2: misleading success log after `@Recover`
-
-Once `@Recover` swallows the `DataAccessException`, `snapshotPersistenceRetrier.writeAllWithRetry(...)` returns normally even on total failure, so `SluCalculationService:187`'s `log.debug("Weekly snapshot updated: …")` will fire even when the snapshot write failed and was only recovered-logged. Today a hard failure suppresses that line. This is consistent with the pre-existing SLU path (`:179-180` behaves the same after `saveSluWithRetry`), so it is a precedent-consistent wart, not a regression — worth a one-line comment or a reordering.
-
-### M4 — AC2: residual data-consistency risk on retry exhaustion (acknowledge, not a defect)
-
-When all retries fail, `@Recover` only logs "manual recovery needed" while `player_skill_stats` already holds the committed rows — `player_slu_weekly_snapshot` is then permanently under-counted and the NFR-001 dashboard under-reports. The story correctly mirrors the accepted `SluPersistenceRetrier` precedent, so this is a known tradeoff. Note, though, that unlike raw SLU rows the snapshot is a **derived aggregate** and could be rebuilt from `player_skill_stats`; a stronger `@Recover` (or a reconciliation job) is possible if desired. Out of "mirror the sibling" scope, but flag it in the ledger rather than leaving it implicit.
-
-### M5 — AC1: the "V117 was previously claimed and reverted during skillars-deferred-83" rationale is unsubstantiated
-
-Git history shows **no `V117__*` file ever added or reverted** (`git log --all --diff-filter=A -- 'src/main/resources/db/migration/V117*'` is empty), and the most recent `db/migration` commit is deferred-78's, not deferred-83's. The **conclusion is correct** — latest is `V116__session_status_cancelled.sql`, so `V117` is the next free number — but the parenthetical justification is fabricated and could send a dev looking for a non-existent reverted migration. Drop or correct it.
-
-### M6 — Registry entries are already committed; the story describes them as pending
-
-`docs/testing/test-data-isolation.md:209-210` already contains both new ranges (`CoachRadarPreferencePlayerFkIT` → `9650000001`–`9650000010`, `SkillDefinitionResourceIT` → `9651000001`–`9651000005`), and the "Free blocks" list is already updated to `9652`–`9690`. AC1/AC4 and Task 1/Task 4 describe registering these ranges as dev work to be done. Not harmful, but the dev should not re-add them, and AC1's inline "`9650`–`9690` is listed free" is now stale (it is `9652`–`9690`).
-
-### M7 — Minor line-reference / package drift
-
-- AC4: inline logic is at `SkillDefinitionResource.java:26-29`, not `:24-27`.
-- AC4 / Project Structure Notes: `SkillDefinitionMapper` lives in `…development.contract`, not adjacent to the repo — the new `SkillDefinitionService` will import it cross-package (fine, just not as stated).
-- AC2 line refs `SluCalculationService.java:48` (field) and `:186` (call site) are **accurate** — verified.
+**Fix:** pick one and put it in the tasks + File List explicitly —
+(a) add `"com.softropic.skillars.platform.development.service.SluRetrierProxyRetryIT"` to `ALLOWLIST` in
+`IntegrationTestConventionTest.java` (that file's own javadoc calls this "a design decision, not a fix", which
+matches AC2's intent), **or**
+(b) name the class `SluRetrierProxyRetryTest` — it starts no container, and `*Test` naming keeps it out of the
+convention scan entirely while still running under Surefire. Note this changes the AC2 context-count wording
+(the class still adds one context either way; still check `missCount`).
 
 ---
 
-## Confirmed correct (no action needed)
+## Medium
 
-- **AC1 FK mechanics:** `coach_radar_preferences.player_id` is `BIGINT` (`V51:16`), `main.player_profiles.id` is `BIGINT` — the `ON DELETE CASCADE` FK and the defensive orphan-delete-first pattern correctly mirror `V113`. The unaliased correlated subquery form is valid PostgreSQL.
-- **AC1 `coach_id` scope exclusion** is well-reasoned and correctly deferred as a distinct, not-yet-flagged gap.
-- **AC2 retry-safety analysis** is sound: `SnapshotBatchWriter.writeAll` is `@Transactional` and loops an additive `upsertAdd` (`ON CONFLICT … DO UPDATE SET total_slu = total_slu + EXCLUDED.total_slu`, confirmed in `SkillExposureResourceIT:347`); an uncaught exception rolls the whole method back, so a fresh-transaction retry re-runs against a clean slate. The "read `SnapshotBatchWriter` fully before wiring" instruction is appropriate.
-- **AC2 separate `@Component`** for the `@Retryable` AOP proxy correctly follows the documented self-invocation precedent on `SluPersistenceRetrier`.
-- **AC2 property namespace** `app.slu.snapshot-retry.*` with inline defaults and no `application.yaml` entry correctly matches `SluPersistenceRetrier`'s precedent — grep confirms no `app.slu.retry.*` key exists in any resource file.
-- **CI context-count reasoning** is correct: ceiling is `37` (`assert-context-count.sh:75`); all four new test classes either extend `AbstractIntegrationTest` with no added `@MockitoBean`/`@TestPropertySource` (AC1 IT, AC4 IT) or are context-free Mockito unit tests (AC2, AC4 service test), so none moves the count.
-- **AC4 premise** verified: `SkillDefinitionResource` is the only resource in the module injecting a repository directly; no `SkillDefinitionService` exists; the resource has zero test coverage at any layer.
-- **AC independence** holds — schema / backend-resilience / frontend / architecture, no shared files or state.
+### M1. AC6 only catches "both alert vars empty" — the ledger item is "either … empty"
+
+`deploy-3-3` reads: *"if `GF_ALERT_NOTIFY_EMAIL` **or** `GF_SLACK_WEBHOOK_URL` are empty … Grafana provisions the
+contact point but notifications silently fail"*. AC6 hard-fails only when **both** are empty.
+
+`grafana-alerts.yml` unconditionally defines **both** receivers in the `notify-ops` contact point
+(`notify-ops-email` with `addresses: "${GF_ALERT_NOTIFY_EMAIL}"` and `notify-ops-slack` with
+`url: "${GF_SLACK_WEBHOOK_URL}"`). So an email-only or Slack-only deployment still provisions one receiver with an
+empty setting, and every alert still half-fails silently on that channel — exactly the ledger's complaint. AC6's
+Dev Notes even call out that email-only / Slack-only must keep working, but nothing makes `grafana-alerts.yml`
+provision receivers conditionally.
+
+Task 8 will mark `deploy-3-3` **closed**. Either broaden the fix (warn when exactly one is set; or template
+`grafana-alerts.yml` to include only configured receivers) or leave `deploy-3-3` annotated as partially open with
+the residual noted.
+
+### M2. AC6's email check gives false confidence — `GF_ALERT_NOTIFY_EMAIL` set ≠ email delivery works
+
+Grafana email routing also requires the `GF_SMTP_*` block (`GF_SMTP_ENABLED=true`, `GF_SMTP_HOST`, user, password,
+from-address — all present in `secrets-reference.md`). AC6 treats a non-empty `GF_ALERT_NOTIFY_EMAIL` as "email
+routing configured", but with SMTP disabled/unconfigured the email path still silently fails — the precise failure
+mode `deploy-3-3` is about. Consider: if `GF_ALERT_NOTIFY_EMAIL` is set, also require `GF_SMTP_ENABLED=true` (+ host),
+or at minimum document the SMTP dependency in the error message / `secrets-reference.md`.
+
+### M3. AC6's suggested `.env`-parsing one-liner aborts `provision.sh` under `set -euo pipefail`
+
+`provision.sh` runs `set -euo pipefail` throughout. The AC's proposed
+`grep -E '^GF_(ALERT_NOTIFY_EMAIL|SLACK_WEBHOOK_URL)=' "${ENV_FILE}" | cut -d= -f2-` inside a command substitution:
+when a variable is **absent** from `.env` (common — these are optional-looking vars), `grep` exits 1 → the pipeline
+fails under `pipefail` → `VAR=$(…)` makes the assignment fail → `set -e` aborts the script **with no message**,
+instead of reaching the intended `err "… set GF_ALERT_NOTIFY_EMAIL or GF_SLACK_WEBHOOK_URL …"; exit 1`.
+
+Verified locally: `set -euo pipefail; V=$(false | tr -d ' ')` exits immediately.
+
+**Fix:** the AC must specify `$(grep … | cut … || true)` (or `grep … || true`). As written the dev will very
+plausibly copy the snippet verbatim.
+
+### M4. AC7's JWT-rotation fallback text is wrong for this codebase — it would ship an incorrect runbook
+
+AC7 says: *"If the app genuinely has no externally-supplied JWT secret (it is generated at boot), … describe
+'rotation' as 'restart the app' with the same session-invalidation consequence."*
+
+Actual mechanism (`JwtSecretService` + `JwtSecretBootstrapRunner`):
+- `JwtSecretService.addSecretToThread()` fetches the key from the DB (`secretService.fetchSecret(JWT_VERSION,
+  JWT_BUS_NAME)`) and caches it in a `volatile Secret` for the process lifetime.
+- `JwtSecretBootstrapRunner` only **inserts** a key when none exists, and is **opt-in / disabled by default**
+  (`app.bootstrap.jwt-secret.enabled:false`).
+- There is **no rotation method** anywhere.
+
+So a plain restart with the key already in the DB regenerates nothing — "rotation = restart the app" is false.
+Real rotation = replace/re-encrypt the `Secret` row for `JWT_VERSION`/`JWT_BUS_NAME` (or bump `JWT_VERSION`), then
+restart. `secrets-reference.md` lines 13–16 already document the "auto-generated once, stored encrypted" model;
+AC7 must have the dev inspect `JwtSecretService`/`SecretService` for the real procedure, not follow the fallback
+sentence. Since the *entire deliverable of AC7 is a correct runbook*, this is worth calling out.
+
+### M5. New hard-`exit 1` requirement is undocumented for operators following the existing setup guide
+
+AC6 makes at least one alert channel effectively **mandatory** (hard stop in `provision.sh` when `.env` is present
+and both are blank). Neither AC6 nor AC7 updates `docs/deployment/first-time-setup.md` (Step 5 "Prepare Secrets")
+or `secrets-reference.md` to say so. An operator who followed the current docs (which never mention these vars as
+required) will hit a new `exit 1` on their `provision.sh` re-run. The error points at `secrets-reference.md`, but
+that file won't explain the requirement unless AC7 adds it. Add a line to the `.env`/secrets docs: "at least one of
+`GF_ALERT_NOTIFY_EMAIL` / `GF_SLACK_WEBHOOK_URL` is required; `provision.sh` refuses to proceed otherwise."
+
+### M6. AC1's stated motivation is factually off — the exception is **not** unhandled today
+
+The story (Story section, AC1 bullet, ledger mapping) says the transaction exception "propagates raw … into
+`SimpleAsyncUncaughtExceptionHandler` as a bare stack trace — the intended `log.error` never fires."
+
+`infrastructure.config.AsyncConfig` (the sole `AsyncConfigurer` bean) registers a **custom**
+`AsyncUncaughtExceptionHandler` that logs `"Uncaught exception in @Async method '{}': {}"` with the throwable.
+The `@Async @TransactionalEventListener` returns `void`, so an uncaught exception *is* routed there and *is*
+logged with a stack trace — just not `SimpleAsyncUncaughtExceptionHandler`, and not with the domain-specific
+`"… N rows lost for session X, manual recovery needed"` signal.
+
+The fix (widen `retryFor` + add `@Recover` overload) is still correct and worth doing — the real value is the
+**retry** and the **structured** recovery log. But the PR description and AC2 assertions should not lean on the
+"bare unhandled stack trace / `SimpleAsyncUncaughtExceptionHandler`" framing; it overstates the current severity
+and names the wrong class.
 
 ---
 
-## Recommended pre-dev actions
+## Low / notes (not blockers, worth a line in the story)
 
-1. **AC3:** rewrite to add a local `selectedSkillCodes` ref in `PlayerDevelopmentDashboardPage.vue`, drive the chart + `hasBaseline` from it, debounce only `store.saveRadarPreferences`, and flush the debounce on unmount and on player switch (addresses B1, S1, S2). Update the acceptance test wording accordingly.
-2. **AC1:** add the `(player_id)` index to the migration (S3).
-3. **AC4:** rewrite the IT bullet — require an explicitly inserted inactive row, explicit teardown of all inserted `skill_definitions` rows, a relative assertion, and a named sibling IT for the auth pattern (S4).
-4. **AC2:** add `@Slf4j` + imports to the snippet (M1); decide whether to strengthen `SluCalculationServiceIT` with a snapshot assertion or document the gap (M2).
-5. Correct or drop the V117 rationale (M5); note the registry rows are already committed (M6).
+### L1. AC3 leaves adjacent `deploy-3-4` items untouched — protect them in Task 8
+The `deploy-3-4` ledger section has four bullets: weak integrity check (→ AC3), **"DROP DATABASE may fail if
+services other than `app` hold open DB connections"**, hardcoded container UIDs, and **"APP_CID capture races
+container registration immediately after `docker compose start app`"**. AC3 edits exactly the code region of the
+last one (`restore-from-dump.sh:121`) and does the DB drop that the second one is about, yet addresses neither.
+That's acceptable as scope, but Task 8 must close only the weak-integrity-check bullet, not delete the section.
+Consider a one-line note in AC3 that the APP_CID race and the "other connections block DROP DATABASE" gaps remain
+open by design.
+
+### L2. AC1 `retryFor` uses the broad `TransactionException`
+`TransactionException` also covers transaction *usage* programming errors (`IllegalTransactionStateException`,
+`TransactionUsageException`, `NoTransactionException`). Not reachable for these two well-formed `@Transactional`
+delegates, but it is the same "don't retry/swallow programming errors" concern the Dev Notes raise against
+collapsing `@Recover` to `RuntimeException`. Either narrow to the two subclasses the ledger actually names
+(`TransactionSystemException`, `CannotCreateTransactionException`) or note the tradeoff explicitly.
+(Retry-safety itself is fine: `PlayerSkillStat` uses `GenerationType.UUID` — id assigned in-memory pre-INSERT — so
+a rolled-back attempt followed by `saveAll` retry still results in INSERTs via `merge`→transient, no dupes,
+no lost writes. The story's "no code change expected" verification conclusion holds.)
+
+### L3. AC4's "always single-part upload" assumption is likely false in production
+`aws s3 cp` (awscli v1) switches to multipart at `multipart_threshold` = 8 MB. A gzipped `pg_dump` of a
+117-migration app with real booking/payment/messaging/video data will commonly exceed 8 MB within months →
+multipart → `-N` ETag suffix → the MD5 comparison is **skipped** exactly in the production case it's meant to
+guard. The story does guard for it ("skip … log that only size was verified"), so it's not a bug, but AC4's prose
+("which a pg-backup dump of this app's size always is … single-part") oversells what the ETag check delivers.
+Realistically AC4 buys you `ContentLength == local size`, which is still worth having.
+
+### L4. AC4 uses `jq`; the sibling scripts use `--query … --output text`
+`jq` is installed (`provision.sh` line 32), but `restore-from-volume-backup.sh` and `prune-backups.sh` parse
+`aws s3api` output with `--query 'Contents[].Key' --output text` and never touch `jq`. `aws s3api head-object
+--query 'ContentLength' --output text` (and `--query 'ETag'`) would match the idiom the story elsewhere insists on
+preserving. Minor, but it's a gratuitous new dependency-on-convention.
+
+### L5. AC3's new `psql -t` capture lines have the same `set -e` fragility as M3
+The existing table-count capture (`TABLE_COUNT=$(docker exec … psql … 2>/dev/null | tr -d ' \n')`) only survives
+`set -euo pipefail` because `psql` succeeds on the happy path; a failed capture aborts the script *before* the
+`[ -z … ]` guard runs. AC3 adds two or three more such captures (flyway existence / row count / failed-migration
+count). Spec them with `|| true` on each capture (or as `if ! …; then` blocks) so the intended "integrity check
+failed" message and the new `ERR` trap fire cleanly instead of a bare `set -e` abort.
+
+### L6. AC6 guard placement aborts provisioning before the data-volume mount
+The `.env` block AC6 extends is section 6.5, *before* section 7 (Hetzner Volume mount) and 7.5 (redis dir +
+`acme.json`). A hard `exit 1` there leaves a first run that pre-placed `.env` with sections 1–6 done but the data
+volume unmounted and `acme.json` uncreated. Sections 7/7.5 are idempotent so a re-run recovers, but blocking
+*infrastructure* provisioning on an *alert-routing* misconfig is a poor trade. Consider moving the alert-routing
+check to the end of the script (after 7.5), or note the early-abort is deliberate.
+
+### L7. AC8 slightly overstates what's left to close in the alert-guard ledger items
+- The `deploy-1-3` bullet "Alert rule divide-by-zero guards (CallbackFailureRatioHigh, FraudBlockRateHigh,
+  PaymentFailureRateHigh)" is **already** annotated `[CLOSED by skillars-deferred-76 AC7]`. Only the `deploy-3-3`
+  bullet "CallbackFailureRatioHigh divide-by-zero on zero callback traffic" is genuinely still open + unannotated.
+- AC6's verification wording "confirm **every** ratio-style alert already carries an `and (denominator) > 0`
+  guard" is too strong: `alerts.yml`'s `DbConnectionPoolHigh` (`…active / …max`) and `JvmHeapHigh`
+  (`…used / …max`) are ratios with **no** explicit `> 0` guard. They're structurally safe (config/max gauges are
+  non-zero or absent → no series, not a false alert), so **do not** add noise guards — just phrase the check as
+  "every ratio with a denominator that can legitimately be zero", which is `BookingPaymentSettleFailureRateHigh`
+  and the `Disk*` alerts, all already guarded.
+
+### L8. `provision.sh` documented run form does not redirect at all
+`first-time-setup.md` Step 3 shows `bash deploy/provision.sh` with no redirection, so AC5's
+`provision.sh > provision.log` (no `2>&1`) scenario is a hypothetical operator variation. It is nonetheless the
+verbatim `deploy-1-4` ledger item, and the `tee /dev/stderr` fix is sound (every `err` call in `provision.sh` is
+immediately followed by `exit 1`, so even a non-zero `err` return under `pipefail` is harmless). No change needed —
+just don't expect this to matter for the documented path.
+
+---
+
+## Things the story got right (verified, so the dev doesn't re-litigate)
+
+- `skillars-deferred-10` D0/D2/D3/D4 really are shipped: `pr-build.yml` has `load: 'true'` + `aquasecurity/trivy-action`
+  (`severity: CRITICAL,HIGH`, `exit-code: '1'`, `trivyignores: .trivyignore`), `.github/dependabot.yml` has
+  `github-actions` + grouped `maven`, both workflows use `./.github/actions/docker-build`.
+- `alerts.yml` has no `Callback*` / `Fraud*` / `PaymentFailureRate*` alerts; `BookingPaymentSettleFailureRateHigh`
+  and both `Disk*` alerts carry `and (…) > 0`. `SubscriptionInvoicePaymentFailureHigh` is an `increase(...) > 5`
+  count, no division.
+- `assert-context-count.sh` ceiling is `37`; `pr-build.yml` invokes `assert-context-count.sh build.log 37`. The
+  documented "bump 37→38 only if CI reports 38, investigate if >38" handling is correct, and the new
+  `@SpringJUnitConfig` context does count toward `missCount`.
+- `restore-from-volume-backup.sh` really has `restore_failed()` + `trap restore_failed ERR` / `trap - ERR` and
+  `log()`/`err()` helpers — a valid template for AC3.
+- Backup/restore scripts run under cron as `>> "${LOG}" 2>&1` (`install-crons.sh`), so AC5 correctly scopes the
+  `err()`-to-stdout change to `provision.sh` only.
+- `docker-compose.yml` passes `GF_ALERT_NOTIFY_EMAIL=${GF_ALERT_NOTIFY_EMAIL:-}` / `GF_SLACK_WEBHOOK_URL=${…:-}`
+  and uses `${VAR:?…}` for `GF_SECURITY_ADMIN_PASSWORD` / `MONITORING_DOMAIN` — so AC6's reasoning for putting the
+  guard in `provision.sh` rather than compose is sound.
+- `secrets-reference.md` has `## Server .env` / `## GitHub Actions Secrets` / `## Notes on Secret Generation`;
+  `## Secret Rotation` after the last is a clean insertion point. It already documents the "no `JWT_SECRET` env var"
+  fact (see M4 for the rotation-procedure caveat).
