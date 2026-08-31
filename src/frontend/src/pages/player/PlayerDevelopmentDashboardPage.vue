@@ -24,7 +24,7 @@
         <q-card-section>
           <SkillsRadarChart
             :skills="store.radarDisplay?.skills ?? []"
-            :selected-skill-codes="store.radarPreferences?.selectedSkillCodes ?? []"
+            :selected-skill-codes="localSelectedSkillCodes"
             :show-baseline="showBaseline"
             :readonly="!isCoach"
             @update:selected-skill-codes="onSkillSelectionChange"
@@ -134,7 +134,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import SkillsRadarChart from 'src/components/development/SkillsRadarChart.vue'
 import DevelopmentCorrelationPanel from 'src/components/development/DevelopmentCorrelationPanel.vue'
 import { useRoute } from 'vue-router'
@@ -148,6 +148,33 @@ import SkillsRadarAssessmentPanel from 'src/components/development/SkillsRadarAs
 import RadarAssessmentHistoryList from 'src/components/development/RadarAssessmentHistoryList.vue'
 import PerformanceReportsPanel from 'src/components/development/PerformanceReportsPanel.vue'
 import PlayerTimelinePanel from 'src/components/development/PlayerTimelinePanel.vue'
+
+// Local inline debounce (this codebase has no shared debounce composable — mirrors
+// DrillLibraryPage.vue's own pattern). Extended with flush() so a pending persistence call is
+// never silently dropped on player-switch or unmount.
+function useDebounce(fn, delay) {
+  let timer = null
+  let pendingArgs = null
+  const debounced = (...args) => {
+    pendingArgs = args
+    clearTimeout(timer)
+    timer = setTimeout(() => {
+      timer = null
+      const argsToRun = pendingArgs
+      pendingArgs = null
+      fn(...argsToRun)
+    }, delay)
+  }
+  debounced.flush = () => {
+    if (timer === null) return
+    clearTimeout(timer)
+    timer = null
+    const argsToRun = pendingArgs
+    pendingArgs = null
+    if (argsToRun) fn(...argsToRun)
+  }
+  return debounced
+}
 
 const route = useRoute()
 const authStore = useAuthStore()
@@ -165,9 +192,23 @@ const showTargetEditor = ref(false)
 const showRadarPanel = ref(false)
 const showBaseline = ref(false)
 
+// Visual selection state, decoupled from persistence. Reads/writes here are synchronous so the
+// radar chart updates instantly per click; the PUT to persist is debounced separately.
+// Kept in sync with the store explicitly in loadPlayerData() rather than via a watch, so a
+// late-resolving (possibly stale-player) save cannot drive the chart.
+const localSelectedSkillCodes = ref([])
+
+const debouncedSaveRadarPreferences = useDebounce((targetPlayerId, codes) => {
+  store.saveRadarPreferences(targetPlayerId, codes)
+}, 300)
+
+function flushPendingRadarSave() {
+  debouncedSaveRadarPreferences.flush()
+}
+
 const hasBaseline = computed(() => {
   const skills = store.radarDisplay?.skills ?? []
-  const selected = store.radarPreferences?.selectedSkillCodes ?? []
+  const selected = localSelectedSkillCodes.value
   const active =
     selected.length > 0
       ? skills.filter((s) => selected.includes(s.skillCode))
@@ -186,16 +227,14 @@ function clearDevelopmentState() {
   store.radarDisplay = null
   store.radarPreferences = null
   store.correlationInsights = null
+  localSelectedSkillCodes.value = []
 }
 
 let loadRequestId = 0
 
 async function loadPlayerData(id) {
   const requestId = ++loadRequestId
-  await Promise.all([
-    store.fetchSkillDefinitions(),
-    store.fetchExposure(id),
-  ])
+  await Promise.all([store.fetchSkillDefinitions(), store.fetchExposure(id)])
   if (isCoach.value) {
     await Promise.all([
       store.fetchTargets(id),
@@ -203,43 +242,60 @@ async function loadPlayerData(id) {
       store.fetchRadarDisplay(id),
       store.fetchRadarPreferences(id),
       store.fetchCorrelationInsights(id),
-      authStore.fetchCoachTier().finally(() => { tierLoaded.value = true }),
+      authStore.fetchCoachTier().finally(() => {
+        tierLoaded.value = true
+      }),
     ])
   }
   if (isParent.value) {
-    await Promise.all([
-      store.fetchNarrative(id),
-      store.fetchRadarDisplay(id),
-    ])
+    await Promise.all([store.fetchNarrative(id), store.fetchRadarDisplay(id)])
   }
   if (requestId !== loadRequestId) {
     // A newer player load started while this one was in flight — its response may
     // have landed out of order and clobbered fresher data. Reload the current player.
     await loadPlayerData(playerId.value)
+    return
   }
+  // Sync visual selection from the freshly-loaded preferences for this (still-current) player.
+  localSelectedSkillCodes.value = store.radarPreferences?.selectedSkillCodes ?? []
 }
 
 onMounted(async () => {
+  window.addEventListener('pagehide', flushPendingRadarSave)
   clearDevelopmentState()
   await loadPlayerData(playerId.value)
 })
 
-watch(() => route.params.playerId, async (newPlayerId) => {
-  const id = Number(newPlayerId)
-  if (!Number.isFinite(id)) return
-  // Clear stale state before loading new player
-  clearDevelopmentState()
-  await loadPlayerData(id)
-}, { immediate: false })
+watch(
+  () => route.params.playerId,
+  async (newPlayerId) => {
+    const id = Number(newPlayerId)
+    if (!Number.isFinite(id)) return
+    // Persist any pending selection against the player it was made for, before switching away.
+    debouncedSaveRadarPreferences.flush()
+    // Clear stale state before loading new player
+    clearDevelopmentState()
+    await loadPlayerData(id)
+  },
+  { immediate: false },
+)
+
+onBeforeUnmount(() => {
+  window.removeEventListener('pagehide', flushPendingRadarSave)
+  debouncedSaveRadarPreferences.flush()
+})
 
 async function onSaveTargets(targets) {
   await store.saveTargets(playerId.value, targets)
   await store.fetchExposure(playerId.value)
 }
 
-async function onSkillSelectionChange(codes) {
-  if (isCoach.value) {
-    await store.saveRadarPreferences(playerId.value, codes)
-  }
+function onSkillSelectionChange(codes) {
+  if (!isCoach.value) return
+  // Instant visual feedback — no network round-trip in this path.
+  localSelectedSkillCodes.value = codes
+  // Capture playerId now, not when the debounce fires — a mid-window navigation must not
+  // persist this selection against a different player's id.
+  debouncedSaveRadarPreferences(playerId.value, codes)
 }
 </script>

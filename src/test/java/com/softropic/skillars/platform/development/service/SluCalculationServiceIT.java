@@ -63,6 +63,7 @@ class SluCalculationServiceIT extends AbstractIntegrationTest {
     void cleanUpSluRows() {
         transactionTemplate.execute(status -> {
             jdbcTemplate.update("DELETE FROM development.player_skill_stats WHERE player_id = ?", TEST_PLAYER_ID);
+            jdbcTemplate.update("DELETE FROM development.player_slu_weekly_snapshot WHERE player_id = ?", TEST_PLAYER_ID);
             return null;
         });
     }
@@ -84,6 +85,22 @@ class SluCalculationServiceIT extends AbstractIntegrationTest {
         assertThat(stats).allMatch(s -> s.getPlayerId().equals(TEST_PLAYER_ID));
         assertThat(stats.stream().map(PlayerSkillStat::getSkillCode).toList())
             .containsAnyOf("PAC", "SHO");
+
+        // The weekly snapshot write goes through SnapshotPersistenceRetrier.writeAllWithRetry now
+        // (Deferred-84 AC2). Assert it actually landed rows — a silently no-opping retrier would
+        // still leave the assertions above green. This is the first (and only) snapshot write for
+        // the current ISO week in this test run, so the snapshot total mirrors the SLU rows exactly.
+        // Poll: the snapshot commits in its own @Transactional tx, which can land after the SLU rows
+        // (own tx) are already visible on the same @Async thread — a single read could see 0.
+        BigDecimal statsTotal = stats.stream()
+            .map(PlayerSkillStat::getSluValue)
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        await().atMost(3, SECONDS).untilAsserted(() -> {
+            BigDecimal snapshotTotal = jdbcTemplate.queryForObject(
+                "SELECT COALESCE(SUM(total_slu), 0) FROM development.player_slu_weekly_snapshot WHERE player_id = ?",
+                BigDecimal.class, TEST_PLAYER_ID);
+            assertThat(snapshotTotal).isEqualByComparingTo(statsTotal);
+        });
 
         cleanDrill(drillId);
         cleanSession(bookingId);
