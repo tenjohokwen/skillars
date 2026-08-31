@@ -22,13 +22,17 @@ import java.util.List;
  * SluPersistenceRetrier, BookingService.acceptAndInitiatePayment and TimelineEventListener's
  * {@code @Lazy @Autowired} self).
  *
- * <p>The wrapped {@link SnapshotBatchWriter#writeAll} is {@code @Transactional} and only issues
- * additive upserts, so a whole-method retry is safe: an uncaught exception mid-loop rolls the
- * transaction back entirely (nothing partially commits) and the retry re-runs against a clean slate.
- * That same reasoning covers the transaction-boundary failures {@link TransactionSystemException}
- * (commit failed → rolled back) and {@link CannotCreateTransactionException} (begin failed → nothing
- * ran), which this bean also retries and structured-recovers alongside {@link DataAccessException}.
- * Transaction-<em>usage</em> programming errors are deliberately excluded from {@code retryFor}.
+ * <p>A whole-method retry of {@link SnapshotBatchWriter#writeAll} is safe <strong>because
+ * {@code writeAll} is idempotent per {@code (session_id, weekly-bucket)} marker</strong>
+ * (skillars-deferred-86 AC1), not merely because a rolled-back transaction leaves a clean slate.
+ * That distinction matters for {@link TransactionSystemException}: it is raised on a commit-phase
+ * system error, which <em>includes</em> the ambiguous case where PostgreSQL committed server-side
+ * but the client lost the ack — the transaction did <em>not</em> roll back, and before AC1 the
+ * retry's additive upserts double-counted. Now the first attempt's marker rows are present, so
+ * {@code upsertAddIdempotent}'s {@code ON CONFLICT DO NOTHING} makes every re-applied delta a no-op.
+ * {@link CannotCreateTransactionException} (begin failed → nothing ran) is trivially safe to retry.
+ * All three are retried and structured-recovered alongside {@link DataAccessException};
+ * transaction-<em>usage</em> programming errors are deliberately excluded from {@code retryFor}.
  *
  * <p>Uses its own {@code app.slu.snapshot-retry.*} property namespace (distinct from
  * SluPersistenceRetrier's {@code app.slu.retry.*}) so the two retriers can be tuned independently.

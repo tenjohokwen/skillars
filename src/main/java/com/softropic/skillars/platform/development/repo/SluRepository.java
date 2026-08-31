@@ -19,6 +19,10 @@ public interface SluRepository extends JpaRepository<PlayerSkillStat, UUID> {
 
     List<PlayerSkillStat> findBySessionId(UUID sessionId);
 
+    // skillars-deferred-86 AC2: the write-once check for SluPersistenceRetrier.saveSluWithRetry's
+    // explicit check-then-act. session_id is indexed (V46 idx_player_skill_stats_session_id).
+    boolean existsBySessionId(UUID sessionId);
+
     @Query(nativeQuery = true, value = """
         SELECT skill_code, SUM(slu_value) as total_slu
         FROM development.player_skill_stats

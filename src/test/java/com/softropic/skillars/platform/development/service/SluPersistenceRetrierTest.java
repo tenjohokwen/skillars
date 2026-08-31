@@ -13,6 +13,8 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -37,6 +39,40 @@ class SluPersistenceRetrierTest {
         retrier.saveSluWithRetry(rows);
 
         verify(sluRepository).saveAll(rows);
+    }
+
+    @Test
+    void saveSluWithRetry_sessionAlreadyPersisted_skipsSaveAll() {
+        PlayerSkillStat stat = new PlayerSkillStat();
+        UUID sessionId = UUID.randomUUID();
+        stat.setSessionId(sessionId);
+        List<PlayerSkillStat> rows = List.of(stat);
+        when(sluRepository.existsBySessionId(sessionId)).thenReturn(true);
+
+        // skillars-deferred-86 AC2: the explicit check-then-act short-circuits an idempotent retry.
+        assertThatCode(() -> retrier.saveSluWithRetry(rows)).doesNotThrowAnyException();
+        verify(sluRepository, never()).saveAll(any());
+    }
+
+    @Test
+    void saveSluWithRetry_sessionNotYetPersisted_callsSaveAll() {
+        PlayerSkillStat stat = new PlayerSkillStat();
+        UUID sessionId = UUID.randomUUID();
+        stat.setSessionId(sessionId);
+        List<PlayerSkillStat> rows = List.of(stat);
+        when(sluRepository.existsBySessionId(sessionId)).thenReturn(false);
+
+        retrier.saveSluWithRetry(rows);
+
+        verify(sluRepository).saveAll(rows);
+    }
+
+    @Test
+    void saveSluWithRetry_emptyList_callsNothing() {
+        retrier.saveSluWithRetry(List.of());
+
+        verify(sluRepository, never()).saveAll(any());
+        verify(sluRepository, never()).existsBySessionId(any());
     }
 
     @Test

@@ -2,14 +2,22 @@ package com.softropic.skillars.platform.development.service;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
 import com.softropic.skillars.platform.development.repo.PlayerSkillStat;
 import com.softropic.skillars.platform.development.repo.SluRepository;
+import com.softropic.skillars.platform.development.repo.SluWeeklySnapshotRepository;
+import com.softropic.skillars.platform.development.repo.SnapshotBatchWriter;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -17,18 +25,27 @@ import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.sql.Date;
+import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.temporal.IsoFields;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.awaitility.Awaitility.await;
 
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
 class SluCalculationServiceIT extends AbstractIntegrationTest {
 
     private static final long   TEST_PLAYER_ID = 9900000001L;
+    private static final long   TEST_PARENT_USER_ID = 9900000000L;
     private static final UUID   TEST_COACH_ID  = UUID.fromString("99000000-0000-0000-0000-000000000001");
 
     // Drill metadata JSON using valid skill_definitions codes (PAC, SHO — seeded by V46 migration)
@@ -50,9 +67,41 @@ class SluCalculationServiceIT extends AbstractIntegrationTest {
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private SluRepository sluRepository;
+    @Autowired private SnapshotBatchWriter snapshotBatchWriter;
+    @Autowired private SluWeeklySnapshotRepository snapshotRepository;
+    @Autowired private SluPersistenceRetrier sluPersistenceRetrier;
 
     @MockitoBean
     VideoProviderAdapter videoProviderAdapter;
+
+    // player_slu_weekly_snapshot_applied (skillars-deferred-86 AC1) has an FK to main.player_profiles
+    // (ON DELETE CASCADE, mirroring V113/V117). player_skill_stats / player_slu_weekly_snapshot have
+    // no such FK, which is why this IT historically never needed a player_profiles row — the marker
+    // table does, so seed one (idempotently) for TEST_PLAYER_ID before every test.
+    @BeforeEach
+    void seedPlayerProfile() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.\"user\" " +
+                "(id, created_by, created_date, last_modified_by, last_modified_date, request_id, session_id, " +
+                "status, dob, email, first_name, gender, lang_key, last_name, iso2_country, phone, " +
+                "activated, locked, login, login_id_type, password_hash, otp_enabled, " +
+                "skillars_role, verification_status) " +
+                "VALUES (?, 'system', ?, 'system', ?, 'test-req', NULL, " +
+                "'ACTIVE', '1990-01-01', 'd86slu.parent@skillars-test.com', 'Test', 'OTHER', 'en', 'x', 'DE', '9900000000', " +
+                "true, false, 'd86slu.parent@skillars-test.com', 'EMAIL', 'x', false, " +
+                "'PARENT', 'BASIC_VERIFIED') ON CONFLICT (id) DO NOTHING",
+                TEST_PARENT_USER_ID, Timestamp.from(Instant.now()), Timestamp.from(Instant.now()));
+            jdbcTemplate.update(
+                "INSERT INTO main.player_profiles " +
+                "(id, name, date_of_birth, position, age_tier, parent_id, independent_account_allowed, created_at, created_by) " +
+                "VALUES (?, 'D86 SLU Player', ?, 'MIDFIELDER', 'AGE_10_12', ?, false, ?, 'system') " +
+                "ON CONFLICT (id) DO NOTHING",
+                TEST_PLAYER_ID, Date.valueOf(LocalDate.now().minusYears(10)),
+                TEST_PARENT_USER_ID, Timestamp.from(Instant.now()));
+            return null;
+        });
+    }
 
     // player_skill_stats is append-only (no application-level delete path), so every test that
     // legitimately writes rows for the shared TEST_PLAYER_ID must clean them up itself — otherwise
@@ -64,8 +113,194 @@ class SluCalculationServiceIT extends AbstractIntegrationTest {
         transactionTemplate.execute(status -> {
             jdbcTemplate.update("DELETE FROM development.player_skill_stats WHERE player_id = ?", TEST_PLAYER_ID);
             jdbcTemplate.update("DELETE FROM development.player_slu_weekly_snapshot WHERE player_id = ?", TEST_PLAYER_ID);
+            // skillars-deferred-86 M1: the marker table honours the same "every test cleans up its
+            // own rows for the shared player" contract — the ON DELETE CASCADE FK does not help here
+            // because the player_profiles row is deleted last (and only if the seed inserted it).
+            jdbcTemplate.update("DELETE FROM development.player_slu_weekly_snapshot_applied WHERE player_id = ?", TEST_PLAYER_ID);
+            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = ?", TEST_PLAYER_ID);
+            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id = ?", TEST_PARENT_USER_ID);
             return null;
         });
+    }
+
+    private List<PlayerSkillStat> buildStats(UUID sessionId, String... skillCodesAndValues) {
+        List<PlayerSkillStat> stats = new ArrayList<>();
+        for (int i = 0; i < skillCodesAndValues.length; i += 2) {
+            PlayerSkillStat stat = new PlayerSkillStat();
+            stat.setPlayerId(TEST_PLAYER_ID);
+            stat.setSessionId(sessionId);
+            stat.setCoachId(TEST_COACH_ID);
+            stat.setSkillCode(skillCodesAndValues[i]);
+            stat.setSluValue(new BigDecimal(skillCodesAndValues[i + 1]));
+            stat.setCalculatedAt(Instant.now());
+            stats.add(stat);
+        }
+        return stats;
+    }
+
+    private BigDecimal snapshotTotal() {
+        return jdbcTemplate.queryForObject(
+            "SELECT COALESCE(SUM(total_slu), 0) FROM development.player_slu_weekly_snapshot WHERE player_id = ?",
+            BigDecimal.class, TEST_PLAYER_ID);
+    }
+
+    private int markerCount(UUID sessionId) {
+        Integer c = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.player_slu_weekly_snapshot_applied WHERE session_id = ? AND player_id = ?",
+            Integer.class, sessionId, TEST_PLAYER_ID);
+        return c != null ? c : 0;
+    }
+
+    @Test
+    void writeAll_calledTwiceForSameSession_appliesDeltaOnceAndRecordsMarkers() {
+        UUID sessionId = UUID.randomUUID();
+        ZonedDateTime now = ZonedDateTime.ofInstant(Instant.now(), ZoneOffset.UTC);
+        short isoYear = (short) now.get(IsoFields.WEEK_BASED_YEAR);
+        short isoWeek = (short) now.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
+        List<PlayerSkillStat> stats = buildStats(sessionId, "PAC", "10.0000", "SHO", "4.0000");
+
+        // First write — the delta lands.
+        snapshotBatchWriter.writeAll(stats, isoYear, isoWeek);
+        assertThat(snapshotTotal()).isEqualByComparingTo("14.0000");
+        assertThat(markerCount(sessionId)).isEqualTo(2);
+
+        // Second write with the same session — semantically the ambiguous-commit retry. No-op.
+        snapshotBatchWriter.writeAll(stats, isoYear, isoWeek);
+        assertThat(snapshotTotal()).isEqualByComparingTo("14.0000");
+        assertThat(markerCount(sessionId)).isEqualTo(2);
+    }
+
+    @Test
+    void writeAll_twoDistinctSessionsSameBucket_totalIsTheSum() {
+        ZonedDateTime now = ZonedDateTime.ofInstant(Instant.now(), ZoneOffset.UTC);
+        short isoYear = (short) now.get(IsoFields.WEEK_BASED_YEAR);
+        short isoWeek = (short) now.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
+        UUID sessionA = UUID.randomUUID();
+        UUID sessionB = UUID.randomUUID();
+
+        snapshotBatchWriter.writeAll(buildStats(sessionA, "PAC", "10.0000"), isoYear, isoWeek);
+        snapshotBatchWriter.writeAll(buildStats(sessionB, "PAC", "3.0000"), isoYear, isoWeek);
+
+        assertThat(snapshotTotal()).isEqualByComparingTo("13.0000");
+        assertThat(markerCount(sessionA)).isEqualTo(1);
+        assertThat(markerCount(sessionB)).isEqualTo(1);
+    }
+
+    // ── AC2: SLU saveAll retry safety ────────────────────────────────────────
+
+    /**
+     * Pins the CURRENT (pre-AC2-guard) retry behaviour of the SLU save path, driven through the real
+     * {@code @Retryable}-proxied {@link SluPersistenceRetrier} bean. Uses rows with a {@code null}
+     * {@code session_id} (a legitimate Quick-Complete shape) so the new {@code existsBySessionId}
+     * check-then-act is skipped ({@code sessionId != null} is false) and {@code saveAll} is actually
+     * reached on both invocations — the second one is the retry, semantically (same "no fault
+     * injector" approach AC1's tests use).
+     *
+     * <p>On the second call the instances already carry an id from attempt 1's {@code persist()}, so
+     * {@code SimpleJpaRepository.save} routes them through {@code em.merge()} — a SELECT-by-id that
+     * finds the committed rows and, every non-key column being {@code updatable = false}, issues no
+     * UPDATE. Asserts: no exception, no duplicate rows, and — via a log appender on the retrier — the
+     * {@code @Recover} "rows lost … manual recovery needed" path is never taken. This is the evidence
+     * that skillars-deferred-86 H1's re-framing of AC2 (documentation + backstop, not a bug fix) is
+     * correct.
+     */
+    @Test
+    void saveSluWithRetryRetriedTwice_nullSession_mergesCleanlyThroughProxyWithNoRecover() {
+        List<PlayerSkillStat> stats = buildStats(null, "PAC", "12.0000", "SHO", "5.0000");
+
+        Logger retrierLogger = (Logger) LoggerFactory.getLogger(SluPersistenceRetrier.class);
+        ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
+        logCapture.start();
+        retrierLogger.addAppender(logCapture);
+        try {
+            transactionTemplate.execute(status -> {
+                sluPersistenceRetrier.saveSluWithRetry(stats);   // attempt 1 — through the proxy, reaches saveAll → persist
+                return null;
+            });
+            assertThat(stats).allMatch(s -> s.getId() != null);
+            long afterFirst = countStatsWithNullSessionFor(stats);
+
+            assertThatCode(() -> transactionTemplate.execute(status -> {
+                sluPersistenceRetrier.saveSluWithRetry(stats);   // "retry" — reaches saveAll → em.merge, not persist
+                return null;
+            })).doesNotThrowAnyException();
+
+            assertThat(countStatsWithNullSessionFor(stats)).isEqualTo(afterFirst).isEqualTo(2);
+            assertThat(logCapture.list)
+                .noneMatch(e -> e.getLevel() == Level.ERROR && e.getFormattedMessage().contains("rows lost"));
+        } finally {
+            retrierLogger.detachAppender(logCapture);
+            transactionTemplate.execute(status -> {
+                stats.forEach(s -> jdbcTemplate.update(
+                    "DELETE FROM development.player_skill_stats WHERE id = ?", s.getId()));
+                return null;
+            });
+        }
+    }
+
+    private long countStatsWithNullSessionFor(List<PlayerSkillStat> stats) {
+        Long c = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.player_skill_stats WHERE player_id = ? AND session_id IS NULL",
+            Long.class, TEST_PLAYER_ID);
+        return c != null ? c : 0L;
+    }
+
+    @Test
+    void saveSluWithRetry_calledAgainForAlreadyPersistedSession_writesNoDuplicateRows() {
+        UUID drillId   = insertDrill(DRILL_METADATA_JSON);
+        UUID bookingId = UUID.randomUUID();
+        UUID sessionId = insertSession(bookingId, drillId, "SAVED", 10, 1);
+
+        publishEventInTransaction(bookingId, true);
+        await().atMost(5, SECONDS).until(() -> countStats() > 0);
+
+        List<PlayerSkillStat> persisted = sluRepository.findBySessionId(sessionId);
+        int before = countStatsForSession(sessionId);
+        assertThat(before).isPositive();
+
+        Logger retrierLogger = (Logger) LoggerFactory.getLogger(SluPersistenceRetrier.class);
+        ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
+        logCapture.start();
+        retrierLogger.addAppender(logCapture);
+        try {
+            // Direct second call through the @Retryable-proxied bean — AC2's check-then-act sees
+            // existsBySessionId == true, returns before saveAll, so no exception and @Recover is
+            // structurally unreachable (nothing was attempted to recover from).
+            assertThatCode(() -> sluPersistenceRetrier.saveSluWithRetry(persisted)).doesNotThrowAnyException();
+        } finally {
+            retrierLogger.detachAppender(logCapture);
+        }
+
+        assertThat(countStatsForSession(sessionId)).isEqualTo(before);
+        assertThat(logCapture.list)
+            .noneMatch(e -> e.getLevel() == Level.ERROR && e.getFormattedMessage().contains("rows lost"));
+
+        cleanDrill(drillId);
+        cleanSession(bookingId);
+    }
+
+    @Test
+    void upsertAddIdempotent_firstCallAppliesDeltaAndMarker_secondCallIsNoOp() {
+        UUID sessionId = UUID.randomUUID();
+        ZonedDateTime now = ZonedDateTime.ofInstant(Instant.now(), ZoneOffset.UTC);
+        short isoYear = (short) now.get(IsoFields.WEEK_BASED_YEAR);
+        short isoWeek = (short) now.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
+
+        transactionTemplate.execute(status -> {
+            snapshotRepository.upsertAddIdempotent(sessionId, TEST_PLAYER_ID, "PAC", isoYear, isoWeek, new BigDecimal("7.5000"));
+            return null;
+        });
+        assertThat(snapshotTotal()).isEqualByComparingTo("7.5000");
+        assertThat(markerCount(sessionId)).isEqualTo(1);
+
+        // Same key again — marker INSERT hits ON CONFLICT DO NOTHING, WHERE EXISTS(ins) is false,
+        // total_slu is untouched.
+        transactionTemplate.execute(status -> {
+            snapshotRepository.upsertAddIdempotent(sessionId, TEST_PLAYER_ID, "PAC", isoYear, isoWeek, new BigDecimal("7.5000"));
+            return null;
+        });
+        assertThat(snapshotTotal()).isEqualByComparingTo("7.5000");
+        assertThat(markerCount(sessionId)).isEqualTo(1);
     }
 
     @Test
@@ -76,7 +311,7 @@ class SluCalculationServiceIT extends AbstractIntegrationTest {
 
         publishEventInTransaction(bookingId, true);
 
-        await().atMost(3, SECONDS).until(() -> countStats() > 0);
+        await().atMost(5, SECONDS).until(() -> countStats() > 0);
 
         List<PlayerSkillStat> stats = sluRepository.findByPlayerIdOrderByCalculatedAtDesc(TEST_PLAYER_ID);
         assertThat(stats).isNotEmpty();
@@ -95,7 +330,7 @@ class SluCalculationServiceIT extends AbstractIntegrationTest {
         BigDecimal statsTotal = stats.stream()
             .map(PlayerSkillStat::getSluValue)
             .reduce(BigDecimal.ZERO, BigDecimal::add);
-        await().atMost(3, SECONDS).untilAsserted(() -> {
+        await().atMost(5, SECONDS).untilAsserted(() -> {
             BigDecimal snapshotTotal = jdbcTemplate.queryForObject(
                 "SELECT COALESCE(SUM(total_slu), 0) FROM development.player_slu_weekly_snapshot WHERE player_id = ?",
                 BigDecimal.class, TEST_PLAYER_ID);
@@ -114,7 +349,7 @@ class SluCalculationServiceIT extends AbstractIntegrationTest {
 
         publishEventInTransaction(bookingId, true);
 
-        await().atMost(3, SECONDS).until(() -> countStats() > 0);
+        await().atMost(5, SECONDS).until(() -> countStats() > 0);
 
         List<PlayerSkillStat> stats = sluRepository.findByPlayerIdOrderByCalculatedAtDesc(TEST_PLAYER_ID);
         assertThat(stats).isNotEmpty();
@@ -254,7 +489,7 @@ class SluCalculationServiceIT extends AbstractIntegrationTest {
 
         publishEventInTransaction(bookingId, true);
 
-        await().atMost(3, SECONDS).until(() -> countStats() > 0);
+        await().atMost(5, SECONDS).until(() -> countStats() > 0);
 
         // Single-block single-drill SLU for reference — repDensity=8, weight=5, intensity=7,
         // pressure=6, matchRealism=5, intensityScale=0.10, pressureScale=0.10, matchRealismScale=0.10
@@ -296,7 +531,7 @@ class SluCalculationServiceIT extends AbstractIntegrationTest {
         publishEventInTransaction(bookingId, true);
 
         // Real drill should still produce rows even though the first drill was missing
-        await().atMost(3, SECONDS).until(() -> countStats() > 0);
+        await().atMost(5, SECONDS).until(() -> countStats() > 0);
 
         assertThat(countStats()).isPositive();
 
@@ -382,6 +617,14 @@ class SluCalculationServiceIT extends AbstractIntegrationTest {
         Integer count = jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM development.player_skill_stats WHERE player_id = ?",
             Integer.class, TEST_PLAYER_ID
+        );
+        return count != null ? count : 0;
+    }
+
+    private int countStatsForSession(UUID sessionId) {
+        Integer count = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.player_skill_stats WHERE session_id = ?",
+            Integer.class, sessionId
         );
         return count != null ? count : 0;
     }

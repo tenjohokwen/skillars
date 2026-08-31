@@ -43,8 +43,7 @@ public class SluCalculationService {
     private final SluRepository sluRepository;
     private final SkillDefinitionRepository skillDefinitionRepository;
     private final ConfigService configService;
-    private final SluPersistenceRetrier sluPersistenceRetrier;
-    private final SnapshotPersistenceRetrier snapshotPersistenceRetrier;
+    private final SluPersistenceDispatcher sluPersistenceDispatcher;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Async
@@ -174,16 +173,17 @@ public class SluCalculationService {
             return;
         }
 
-        sluPersistenceRetrier.saveSluWithRetry(stats);
-        log.info("SLU recorded: {} skill entries for session {} player {}",
-            stats.size(), session.getId(), event.getPlayerId());
-
-        // Update weekly snapshot for sub-second dashboard queries (NFR-001)
+        // Weekly snapshot bucket for sub-second dashboard queries (NFR-001)
         ZonedDateTime calcWeek = ZonedDateTime.ofInstant(now, ZoneOffset.UTC);
         short isoYear = (short) calcWeek.get(IsoFields.WEEK_BASED_YEAR);
         short isoWeek = (short) calcWeek.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
-        snapshotPersistenceRetrier.writeAllWithRetry(stats, isoYear, isoWeek);
-        log.debug("Weekly snapshot updated: {} skill entries for player {} week {}/{}",
-            stats.size(), event.getPlayerId(), isoYear, isoWeek);
+
+        // AC3 (skillars-deferred-86): dispatch the SLU + snapshot persistence chain onto the
+        // dedicated bounded sluRetryExecutor. The retry @Backoff sleeps happen there, never on this
+        // @Async listener thread, which returns immediately. The retriers log their own outcome, so
+        // this line records dispatch — not completion.
+        sluPersistenceDispatcher.dispatchSluPersistence(stats, isoYear, isoWeek);
+        log.info("SLU + weekly-snapshot persistence dispatched for session {} player {} ({} skill entries)",
+            session.getId(), event.getPlayerId(), stats.size());
     }
 }
