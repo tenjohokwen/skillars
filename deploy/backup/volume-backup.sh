@@ -61,25 +61,52 @@ AWS_SECRET_ACCESS_KEY="${HOS_SECRET_KEY}" \
   --endpoint-url "${HOS_ENDPOINT}" \
   --no-progress
 
+# Read the object's ContentLength, retrying while it is still not visible (empty / None). If Hetzner
+# Object Storage does not guarantee strong read-after-write consistency for a brand-new PUT (AWS S3
+# now does; Hetzner's guarantee is undocumented), the first head-object can miss a good upload.
+# 5 attempts, 3s apart => 4 sleeps => ~12s max wall time. A retrieved-but-WRONG size is a genuine
+# truncation/corruption signal and is returned immediately — the caller fails fast, no retry.
+# `local` is declared on its own line, then assigned separately: `local x=$(...)` masks the command
+# substitution's exit status (shellcheck SC2155) and makes the `|| out=""` guard dead.
+head_object_content_length() {  # $1 bucket, $2 key — echoes ContentLength, or empty on exhaustion
+  local i out
+  for i in 1 2 3 4 5; do
+    out=$(AWS_ACCESS_KEY_ID="${HOS_ACCESS_KEY}" AWS_SECRET_ACCESS_KEY="${HOS_SECRET_KEY}" \
+      aws s3api head-object --bucket "$1" --key "$2" --endpoint-url "${HOS_ENDPOINT}" \
+      --query 'ContentLength' --output text) || out=""
+    case "${out}" in
+      ""|None) ;;                          # not visible yet — keep retrying
+      *) printf '%s' "${out}"; return 0 ;; # got a value (right or wrong) — caller decides
+    esac
+    [ "${i}" -lt 5 ] && sleep 3
+  done
+  return 0   # still empty after ~12s — the caller's -z / None check + exit 1 handles it
+}
+
 # Verify the object landed intact. Same unverified-upload gap as pg-backup.sh — a truncated or
-# failed-but-exit-0 upload is otherwise undetectable until a restore fails. Captures wrapped
-# `|| true` so a head-object failure yields the diagnostic, not a bare `set -euo pipefail` abort.
+# failed-but-exit-0 upload is otherwise undetectable until a restore fails. The ContentLength read
+# goes through head_object_content_length()'s bounded ~12s retry so a brief read-after-write
+# visibility lag on a good upload does not trip the failure path. The capture is still `|| true`-
+# guarded so a head-object failure (or the helper's `return 0` on exhaustion) yields the diagnostic,
+# not a bare `set -euo pipefail` abort.
 LOCAL_SIZE=$(stat -c %s "${ARCHIVE_FILE}")
-REMOTE_SIZE=$(
-  AWS_ACCESS_KEY_ID="${HOS_ACCESS_KEY}" \
-  AWS_SECRET_ACCESS_KEY="${HOS_SECRET_KEY}" \
-  aws s3api head-object --bucket "${HOS_BUCKET}" --key "${OBJECT_KEY}" \
-    --endpoint-url "${HOS_ENDPOINT}" --query 'ContentLength' --output text
-) || true
+REMOTE_SIZE=$(head_object_content_length "${HOS_BUCKET}" "${OBJECT_KEY}") || true
 if [ -z "${REMOTE_SIZE}" ] || [ "${REMOTE_SIZE}" = "None" ] || [ "${REMOTE_SIZE}" != "${LOCAL_SIZE}" ]; then
-  echo "[volume-backup][error] upload verification failed: local ${LOCAL_SIZE} bytes, remote '${REMOTE_SIZE:-<none>}' — archive NOT confirmed in Object Storage" >&2
+  echo "[volume-backup][error] upload verification failed: local ${LOCAL_SIZE} bytes, remote '${REMOTE_SIZE:-<none>}' — archive NOT confirmed in Object Storage (ContentLength read retried up to ~12s)" >&2
   exit 1
 fi
 echo "[volume-backup] Upload verified: ${LOCAL_SIZE} bytes (ContentLength match)."
 
-# Best-effort ETag/MD5 check, secondary — only meaningful for a single-part (no `-`) ETag.
-# A volume tar of this app's data dir will normally exceed awscli v1's 8 MB multipart_threshold,
-# so the multipart branch (size-only) is the expected path in production.
+# Best-effort ETag/MD5 check, secondary and ADVISORY ONLY — only meaningful for a single-part
+# (no `-`) ETag. A volume tar of this app's data dir will normally exceed awscli v1's 8 MB
+# multipart_threshold, so the multipart branch (size-only) is the expected path in production.
+# Even for a single-part ETag a mismatch is a WARNING, not a failure: the ETag equals the raw
+# object MD5 only for an unencrypted bucket with a plain ETag scheme, so SSE-KMS/SSE-C or a
+# provider-specific scheme produces a legitimate mismatch on an intact archive. The
+# `ContentLength == local size` check above is the SOLE hard gate on upload integrity.
+# (skillars-deferred-85 AC4 made a single-part mismatch `exit 1`; skillars-deferred-87 AC1
+# deliberately reverses that.)
+# No retry loop here — the ContentLength read above already confirmed the object is visible.
 REMOTE_ETAG=$(
   AWS_ACCESS_KEY_ID="${HOS_ACCESS_KEY}" \
   AWS_SECRET_ACCESS_KEY="${HOS_SECRET_KEY}" \
@@ -95,10 +122,10 @@ case "${REMOTE_ETAG}" in
   *)
     LOCAL_MD5=$(md5sum "${ARCHIVE_FILE}" | cut -d' ' -f1)
     if [ "${REMOTE_ETAG}" != "${LOCAL_MD5}" ]; then
-      echo "[volume-backup][error] upload verification failed: single-part ETag ${REMOTE_ETAG} != local MD5 ${LOCAL_MD5}" >&2
-      exit 1
-    fi
-    echo "[volume-backup] Upload verified: single-part ETag matches local MD5." ;;
+      echo "[volume-backup][warn] single-part ETag ${REMOTE_ETAG} != local MD5 ${LOCAL_MD5}. Upload already confirmed by the ContentLength match above (the authoritative leg); a single-part ETag equals the raw object MD5 only for an unencrypted bucket with a plain ETag scheme, so SSE-KMS/SSE-C or a provider-specific ETag is the expected cause here. Continuing." >&2
+    else
+      echo "[volume-backup] Upload verified: single-part ETag matches local MD5."
+    fi ;;
 esac
 
 echo "[volume-backup] Done. $(date -u)"
