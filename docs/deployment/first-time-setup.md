@@ -102,6 +102,27 @@ What `provision.sh` does (all steps are idempotent — safe to re-run):
 > survive a rebuild. Attach the Volume in the Hetzner Console and re-run `provision.sh` to complete
 > the mount.
 
+### If `provision.sh` fails partway through
+
+`provision.sh` runs `set -euo pipefail` and exits on the first error. It is **idempotent** — every
+step checks whether its work is already done — so the recovery procedure is simply:
+
+1. Read the last `[provision]` / `[provision][error]` line to identify the failed step (error lines
+   go to **both** stdout and stderr, so they survive `provision.sh > provision.log` with no
+   `2>&1`).
+2. Fix the reported cause (missing package mirror, `.env` not yet placed, alert channel not set,
+   Volume not attached, …).
+3. Re-run `bash deploy/provision.sh`. Completed steps are detected and skipped.
+
+Two things to know before re-running:
+
+- **The one non-idempotent hazard is `chown -R` over live data mounts.** It is already mitigated —
+  `chown_if_needed` skips the recursive `chown` entirely when the directory's owner already matches,
+  so a re-run against a running stack cannot interrupt an in-progress container write.
+- **Ordering constraint:** the Hetzner Volume must be attached *before* the run that is expected to
+  mount it. A run with no Volume attached completes (with a warning) but leaves all data on the root
+  disk; re-run after attaching to complete the mount.
+
 ---
 
 ## Step 4: Apply the Firewall
@@ -151,6 +172,12 @@ cp .env.example .env
 
 Open `.env` and fill in **every value**. See [`docs/deployment/secrets-reference.md`](secrets-reference.md) for the full list with format descriptions and generation commands.
 
+> **At least one of `GF_ALERT_NOTIFY_EMAIL` / `GF_SLACK_WEBHOOK_URL` is required** — `provision.sh`
+> (Step 3) refuses to proceed (`exit 1`) if `.env` is present and both are blank. If you set
+> `GF_ALERT_NOTIFY_EMAIL`, you must **also** set `GF_SMTP_ENABLED=true` and the `GF_SMTP_*` block, or
+> email alerts silently fail. Setting only one channel is allowed (a warning is printed for the
+> other).
+
 > **Before copying secrets:** verify `.env` is gitignored so it can never be accidentally committed:
 > ```bash
 > git check-ignore -v .env   # must print a line referencing .gitignore — if empty, stop and fix .gitignore first
@@ -181,6 +208,16 @@ Wait for DNS propagation (verify with `dig` as shown in Step 2), then start all 
 ```bash
 ssh root@<NODE_IP> "cd /opt/skillars && docker compose up -d"
 ```
+
+> **Docker Hub pull rate limits.** Unauthenticated pulls from Docker Hub are rate-limited per
+> source IP, and shared Hetzner egress IPs can hit that ceiling. The symptom is `toomanyrequests`
+> on `docker compose pull` / `up`. Mitigation: run `docker login` on the Node with a free Docker
+> Hub account, which raises the limit. **As of 2026 the figures are ~100 pulls / 6h
+> unauthenticated and ~200 / 6h authenticated — Docker has changed these repeatedly, so check
+> [docs.docker.com/docker-hub/download-rate-limit](https://docs.docker.com/docker-hub/download-rate-limit/)
+> for the current numbers rather than relying on these.** The images this stack pulls from Docker
+> Hub are `grafana/grafana`, `redis`, `prom/*`, `grafana/loki`, and `grafana/tempo`; the `app`
+> image is GHCR-hosted and unaffected.
 
 Watch the startup status:
 

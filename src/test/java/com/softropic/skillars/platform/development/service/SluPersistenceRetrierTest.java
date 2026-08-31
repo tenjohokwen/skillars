@@ -7,6 +7,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.TransientDataAccessResourceException;
+import org.springframework.transaction.TransactionSystemException;
 
 import java.util.List;
 import java.util.UUID;
@@ -48,6 +49,18 @@ class SluPersistenceRetrierTest {
         // The @Recover method is the terminal handler after retries are exhausted — it must not
         // rethrow (matching the AOP contract: @Retryable's caller sees a clean return, not a
         // propagated exception), only log for ops visibility that the rows were lost.
+        assertThatCode(() -> retrier.recoverSluSaveFailure(ex, rows)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void recoverSluSaveFailure_transactionException_logsAndDoesNotRethrow() {
+        PlayerSkillStat stat = new PlayerSkillStat();
+        stat.setSessionId(UUID.randomUUID());
+        List<PlayerSkillStat> rows = List.of(stat);
+        TransactionSystemException ex = new TransactionSystemException("commit failed");
+
+        // The TransactionException @Recover overload is the terminal handler for a retried
+        // transaction begin/commit failure — same no-rethrow contract as the DataAccessException one.
         assertThatCode(() -> retrier.recoverSluSaveFailure(ex, rows)).doesNotThrowAnyException();
     }
 

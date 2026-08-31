@@ -51,12 +51,54 @@ if [ ! -s "${ARCHIVE_FILE}" ]; then
   exit 1
 fi
 
-echo "[volume-backup] Uploading to s3://${HOS_BUCKET}/${PREFIX}skillars-volume-${TIMESTAMP}.tar.gz"
+OBJECT_KEY="${PREFIX}skillars-volume-${TIMESTAMP}.tar.gz"
+
+echo "[volume-backup] Uploading to s3://${HOS_BUCKET}/${OBJECT_KEY}"
 AWS_ACCESS_KEY_ID="${HOS_ACCESS_KEY}" \
 AWS_SECRET_ACCESS_KEY="${HOS_SECRET_KEY}" \
   aws s3 cp "${ARCHIVE_FILE}" \
-  "s3://${HOS_BUCKET}/${PREFIX}skillars-volume-${TIMESTAMP}.tar.gz" \
+  "s3://${HOS_BUCKET}/${OBJECT_KEY}" \
   --endpoint-url "${HOS_ENDPOINT}" \
   --no-progress
+
+# Verify the object landed intact. Same unverified-upload gap as pg-backup.sh — a truncated or
+# failed-but-exit-0 upload is otherwise undetectable until a restore fails. Captures wrapped
+# `|| true` so a head-object failure yields the diagnostic, not a bare `set -euo pipefail` abort.
+LOCAL_SIZE=$(stat -c %s "${ARCHIVE_FILE}")
+REMOTE_SIZE=$(
+  AWS_ACCESS_KEY_ID="${HOS_ACCESS_KEY}" \
+  AWS_SECRET_ACCESS_KEY="${HOS_SECRET_KEY}" \
+  aws s3api head-object --bucket "${HOS_BUCKET}" --key "${OBJECT_KEY}" \
+    --endpoint-url "${HOS_ENDPOINT}" --query 'ContentLength' --output text
+) || true
+if [ -z "${REMOTE_SIZE}" ] || [ "${REMOTE_SIZE}" = "None" ] || [ "${REMOTE_SIZE}" != "${LOCAL_SIZE}" ]; then
+  echo "[volume-backup][error] upload verification failed: local ${LOCAL_SIZE} bytes, remote '${REMOTE_SIZE:-<none>}' — archive NOT confirmed in Object Storage" >&2
+  exit 1
+fi
+echo "[volume-backup] Upload verified: ${LOCAL_SIZE} bytes (ContentLength match)."
+
+# Best-effort ETag/MD5 check, secondary — only meaningful for a single-part (no `-`) ETag.
+# A volume tar of this app's data dir will normally exceed awscli v1's 8 MB multipart_threshold,
+# so the multipart branch (size-only) is the expected path in production.
+REMOTE_ETAG=$(
+  AWS_ACCESS_KEY_ID="${HOS_ACCESS_KEY}" \
+  AWS_SECRET_ACCESS_KEY="${HOS_SECRET_KEY}" \
+  aws s3api head-object --bucket "${HOS_BUCKET}" --key "${OBJECT_KEY}" \
+    --endpoint-url "${HOS_ENDPOINT}" --query 'ETag' --output text
+) || true
+REMOTE_ETAG=${REMOTE_ETAG//\"/}
+case "${REMOTE_ETAG}" in
+  ""|None)
+    echo "[volume-backup] Upload ETag unavailable — size-only verification." ;;
+  *-*)
+    echo "[volume-backup] Upload ETag is multipart — size-only verification (expected for archives > 8 MB)." ;;
+  *)
+    LOCAL_MD5=$(md5sum "${ARCHIVE_FILE}" | cut -d' ' -f1)
+    if [ "${REMOTE_ETAG}" != "${LOCAL_MD5}" ]; then
+      echo "[volume-backup][error] upload verification failed: single-part ETag ${REMOTE_ETAG} != local MD5 ${LOCAL_MD5}" >&2
+      exit 1
+    fi
+    echo "[volume-backup] Upload verified: single-part ETag matches local MD5." ;;
+esac
 
 echo "[volume-backup] Done. $(date -u)"

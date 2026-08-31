@@ -107,6 +107,15 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 > Docker service names on the `skillars-internal` bridge network. They are not real secrets and their
 > values must not be changed — the application cannot reach these services by any other address.
 
+> **At least one Grafana alert channel is required.** `deploy/provision.sh` **refuses to proceed**
+> (`exit 1`) if `.env` is present and **both** `GF_ALERT_NOTIFY_EMAIL` and `GF_SLACK_WEBHOOK_URL` are
+> blank — Grafana still provisions the `notify-ops` contact point, so with neither set every alert
+> routes to a dead address. Set at least one. If you set `GF_ALERT_NOTIFY_EMAIL` you must **also** set
+> `GF_SMTP_ENABLED=true` and the `GF_SMTP_*` block, or email alerts fail silently (`provision.sh`
+> warns about this but does not stop). Setting only one of the two channels is allowed;
+> `provision.sh` warns that the other `notify-ops` receiver will provision empty and silently no-op
+> until it is configured.
+
 ---
 
 ## GitHub Actions Secrets — Configure in Repository Settings → Secrets and Variables → Actions
@@ -151,3 +160,95 @@ ssh-keygen -t ed25519 -C deploy@skillars-prod -f ~/.ssh/skillars_deploy
 ```
 
 See [`docs/deployment/first-time-setup.md`](first-time-setup.md) for the full deployment walkthrough.
+
+---
+
+## Secret Rotation
+
+There is **no scheduled rotation cadence** today. The procedures below are for a
+compromise-triggered or policy-triggered rotation of a single secret.
+
+### `POSTGRES_PASSWORD`
+
+1. Change the role password inside the running postgres container. Prefer `psql`'s interactive
+   `\password` meta-command — it prompts for the value and sends a pre-hashed `ALTER ROLE`, so the
+   plaintext never reaches shell history or the Postgres statement log (which `ALTER ROLE … WITH
+   PASSWORD '<literal>'` does when `log_statement`/`log_min_duration_statement` are on), and a `'`
+   in the password is handled for you:
+   ```bash
+   docker compose -f /opt/skillars/docker-compose.yml exec -it postgres \
+     psql -U "<POSTGRES_USER>" -d postgres -c '\password <POSTGRES_USER>'
+   ```
+   Only if a non-interactive path is unavoidable, `ALTER ROLE "<POSTGRES_USER>" WITH PASSWORD
+   '<NEW_PASSWORD>'` works — but clear the shell history line afterwards and be aware of the log
+   exposure above.
+2. Update `POSTGRES_PASSWORD` in `/opt/skillars/.env`.
+3. Recreate every consumer so it picks up the new value:
+   ```bash
+   cd /opt/skillars && docker compose up -d
+   ```
+   `app` reads it via `SPRING_DATASOURCE_*`; `pg-backup.sh` and `restore-from-dump.sh` read
+   `POSTGRES_PASSWORD` from the same `.env`, so no separate update is needed for the backup cron.
+4. Confirm: `docker compose logs app --tail=50` shows a clean datasource start, and
+   `bash /opt/skillars/deploy/backup/pg-backup.sh` completes with `Upload verified`.
+
+### JWT signing key
+
+**Rotation is not "restart the app".** The JWT signing key is **not** an environment variable — it
+is a Jasypt-encrypted row in the `sec` table keyed by `(version, busId)` =
+(`JWT_VERSION` = `v1`, `JWT_BUS_NAME` = `jot`), created once per environment and cached for the life
+of each process in `JwtSecretService`'s `volatile Secret` field. `Secret`'s columns are
+`updatable = false` and `SecretService` exposes only `createInactiveSecret` / `createActiveSecret` /
+`fetchSecret` / `fetchLatestActiveSecretAsBytes` — **there is no first-class rotate/replace method**.
+Treat rotation as a one-off DBA + ops task, not a documented button.
+
+> **Before you start.** This is a destructive, downtime-bearing procedure — do it in a planned
+> maintenance window. Both paths below run `docker compose down`, which stops **the entire stack**
+> (app, Traefik, Grafana, the LGTM containers), not just the app. First:
+> 1. Take a fresh database dump: `bash /opt/skillars/deploy/backup/pg-backup.sh` and confirm it
+>    ends with `Upload verified`.
+> 2. Dry-run the delete as a read to confirm exactly one row matches:
+>    ```bash
+>    docker compose exec postgres psql -U "<POSTGRES_USER>" -d "<POSTGRES_DB>" \
+>      -c "SELECT version, bus_id, created_date FROM sec WHERE version = 'v1' AND bus_id = 'jot';"
+>    ```
+
+Two supported ways to force a new key:
+
+- **Replace the `(v1, jot)` row in place.** Stop the stack, delete the row, let
+  `JwtSecretBootstrapRunner` recreate it (it only INSERTs when none exists), then disable the runner
+  again:
+  ```bash
+  cd /opt/skillars && docker compose down          # FULL-STACK DOWNTIME STARTS HERE
+  docker compose up -d postgres
+  docker compose exec postgres psql -U "<POSTGRES_USER>" -d "<POSTGRES_DB>" \
+    -c "DELETE FROM sec WHERE version = 'v1' AND bus_id = 'jot';"
+  # temporarily enable the bootstrap runner for one boot:
+  #   add  APP_BOOTSTRAP_JWT_SECRET_ENABLED=true  to /opt/skillars/.env
+  docker compose up -d                             # downtime ends once app is healthy
+  docker compose logs app | grep jwt_secret_bootstrap   # expect action=create_secret status=SUCCESS
+  # then REMOVE APP_BOOTSTRAP_JWT_SECRET_ENABLED from .env and redeploy:
+  docker compose up -d
+  ```
+  If the bootstrap runner logs anything other than `action=create_secret status=SUCCESS`, restore
+  the pre-rotation dump (`restore-from-dump.sh latest`) rather than leaving the `sec` table empty —
+  an empty `(v1, jot)` fails **every** request, authenticated or not.
+- **Bump `JWT_VERSION`** (e.g. `v1` → `v2`) in `SecurityConstants` — a code change + redeploy. On
+  next boot the fetch for `(v2, jot)` misses; provision the new row the same way (bootstrap runner,
+  or hand-rolled Jasypt SQL). The stale `(v1, jot)` row is simply left unused.
+
+**Operational consequence, either way:** every issued access token (15 min TTL) **and** refresh
+token (7 day TTL) signed with the old key becomes invalid the moment each app instance restarts and
+re-reads the `volatile` cache. All users must re-authenticate. Roll during a low-traffic window.
+
+### `GF_SECURITY_ADMIN_PASSWORD`
+
+1. Update `GF_SECURITY_ADMIN_PASSWORD` in `/opt/skillars/.env`.
+2. Recreate the Grafana container: `cd /opt/skillars && docker compose up -d grafana`.
+   Grafana persists the admin user in `/opt/skillars/data/grafana`, so the env var only takes effect
+   on a container **recreate**, and a password that was already changed from within the Grafana UI is
+   **not** overridden by the env var (documented Grafana behaviour).
+3. If the UI password was changed and is now lost, reset it from inside the container:
+   ```bash
+   docker compose exec grafana grafana-cli admin reset-admin-password '<NEW_PASSWORD>'
+   ```

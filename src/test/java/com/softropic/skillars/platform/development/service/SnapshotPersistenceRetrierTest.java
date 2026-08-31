@@ -7,6 +7,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.TransientDataAccessResourceException;
+import org.springframework.transaction.TransactionSystemException;
 
 import java.util.List;
 
@@ -47,6 +48,17 @@ class SnapshotPersistenceRetrierTest {
         // The @Recover method is the terminal handler after retries are exhausted — it must not
         // rethrow (matching the AOP contract: @Retryable's caller sees a clean return, not a
         // propagated exception), only log for ops visibility that the snapshot rows were lost.
+        assertThatCode(() -> retrier.recoverSnapshotWriteFailure(ex, stats, ISO_YEAR, ISO_WEEK))
+            .doesNotThrowAnyException();
+    }
+
+    @Test
+    void recoverSnapshotWriteFailure_transactionException_logsAndDoesNotRethrow() {
+        List<PlayerSkillStat> stats = List.of(new PlayerSkillStat());
+        TransactionSystemException ex = new TransactionSystemException("commit failed");
+
+        // The TransactionException @Recover overload is the terminal handler for a retried
+        // transaction begin/commit failure — same no-rethrow contract as the DataAccessException one.
         assertThatCode(() -> retrier.recoverSnapshotWriteFailure(ex, stats, ISO_YEAR, ISO_WEEK))
             .doesNotThrowAnyException();
     }
