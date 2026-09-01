@@ -108,7 +108,25 @@ What `provision.sh` does (all steps are idempotent — safe to re-run):
 > reconcile by hand. If the Volume you attach already contains data (a re-attach), the script
 > likewise does **not** overwrite it — it leaves the staged copy in `/opt/skillars/.pre-volume-migration`
 > and logs a reconciliation note. The now-shadowed root-disk copy under the mount can be reclaimed
-> manually (unmount `/opt/skillars/data`, `rm -rf` its root-disk contents, remount).
+> manually — see **Reclaim shadowed pre-Volume data** below.
+
+#### Reclaim shadowed pre-Volume data
+
+Whenever `/opt/skillars/data` is a mount and a `data/` tree was written to the **root disk** under
+that path before the Volume was mounted, that root-disk copy is now hidden beneath the mount. It is
+harmless (it consumes root-disk space but is never read), but to reclaim the space:
+
+1. Stop the stack: `docker compose -f /opt/skillars/docker-compose.yml down`
+2. `umount /opt/skillars/data`
+3. `rm -rf /opt/skillars/data/*` (this now targets the **root-disk** directory, not the Volume)
+4. `mount /opt/skillars/data` (or re-run `provision.sh`)
+5. Restart the stack.
+
+This is only needed when the Volume was mounted **outside `provision.sh`** (a manual `mount`, or an
+`/etc/fstab` entry) before the script first ran — in that case nothing was ever staged. When
+`provision.sh` itself performed the first mount it staged and migrated the tree onto the Volume, so
+the root-disk copy there is a verified duplicate, not unique data. `findmnt` / `lsblk` cannot show
+content beneath a mount; only the unmount in step 2 reveals it.
 
 ### If `provision.sh` fails partway through
 
@@ -127,9 +145,10 @@ Two things to know before re-running:
 - **The one non-idempotent hazard is `chown -R` over live data mounts.** `chown_if_needed` skips the
   recursive `chown` when the directory's **top-level** owner already matches — so a re-run against a
   running stack does not interrupt an in-progress container write — and *additionally* re-runs
-  `chown -R` when the directory or one of its **immediate children** (`find -maxdepth 2`) has a
+  `chown -R` when the directory, its **children or its grandchildren** (`find -maxdepth 2`) has a
   mismatched uid **or** gid, which covers a run killed mid-`chown -R` with the top level already
-  done. A mismatch buried **more than two levels deep** is *not* caught automatically: after any
+  done (two levels, not one, so a single-child dir like `loki/` → `chunks/` that was descended into
+  is still caught). A mismatch buried **more than two levels deep** is *not* caught automatically: after any
   interrupted provision, remediate each non-root data subdir by hand —
 
   | Subdir | Owner (`uid:gid`) |
@@ -180,6 +199,48 @@ bash deploy/firewall/apply-firewall.sh
 > **Run this AFTER Step 3 (provisioning).** The Hetzner default allows SSH from all IPs.
 > After the firewall is applied, port 22 is restricted to `SSH_ALLOWLIST_IP` only.
 > Ports 80 and 443 remain open to all.
+
+#### SSH exposure window (Step 3 → Step 4)
+
+Between `provision.sh` finishing (**Step 3**) and `apply-firewall.sh` running (**Step 4**), TCP 22
+is reachable from **any internet IP** *unless* you scope it with `SSH_ALLOWLIST_IP` (below) — by
+default the host `ufw` rule `provision.sh` adds is `allow 22/tcp` (all sources), and the Hetzner
+Cloud firewall that narrows it to `SSH_ALLOWLIST_IP/32` is only applied here in Step 4. During that
+window an unscoped host is protected only by key-only SSH auth + `fail2ban`. **Minimise it by
+running Step 4 immediately after Step 3.** The Hetzner Cloud firewall remains the real perimeter
+regardless.
+
+To scope the host `ufw` SSH rule from the start of Step 3 instead, export `SSH_ALLOWLIST_IP`
+**before** running `provision.sh`. It must be **your workstation's** public egress IP — the *same*
+value Step 4 uses. Get it by running `curl -s ifconfig.me` **on your local machine** (not on the
+node — on the node that command returns the node's own IP, which will never match your SSH session
+and scoping will silently fall back to open):
+
+```bash
+# on your LOCAL machine, note the output:
+curl -s ifconfig.me
+
+# then on the node, before provisioning (use `sudo -E` if you run provision.sh via sudo, or plain
+# `sudo` strips the variable):
+export SSH_ALLOWLIST_IP=<that-value>   # bare IPv4, no /32
+bash deploy/provision.sh
+```
+
+`provision.sh` only scopes the rule when the value is a valid bare IPv4 **and** matches the client
+IP of the SSH session it is running in (`$SSH_CLIENT` / `$SSH_CONNECTION`). A malformed value, a
+mismatch (operator behind NAT/VPN, dynamic IP, IPv6 session, or the "ran `curl` on the node"
+mistake above), or no SSH session at all → it logs a warning and falls back to the internet-wide
+`allow 22/tcp`, so it can never lock you out mid-run.
+
+**IPv6:** the scoped rule is IPv4-only, and scoping removes the broad v4 **and** v6 port-22 rules,
+so while it is active SSH over IPv6 on port 22 is closed. Don't set `SSH_ALLOWLIST_IP` if you need
+IPv6 SSH before Step 4; the Step 4 Hetzner Cloud firewall is dual-stack either way.
+
+**Asymmetry:** a later `provision.sh` run with `SSH_ALLOWLIST_IP` unset does **not** re-widen a
+previously-scoped rule — remove it by hand with
+`ufw delete allow from <ip>/32 to any port 22 proto tcp` if you need 22 open to all again. A
+re-run with a *different* `SSH_ALLOWLIST_IP` (your egress IP changed) *does* clean up: the old
+scoped rule is pruned before the new one is added.
 
 The script is idempotent — re-running updates existing rules rather than creating duplicates.
 

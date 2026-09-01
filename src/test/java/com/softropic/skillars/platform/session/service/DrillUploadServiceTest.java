@@ -369,11 +369,15 @@ class DrillUploadServiceTest {
     // ── deleteVideo ───────────────────────────────────────────────────────────
 
     @Test
-    void deleteVideo_noOtherRefExists_publishesVideoPhysicalDeletionEvent() {
+    void deleteVideo_noOtherRefExists_videoRowPresent_publishesVideoPhysicalDeletionEvent() {
         Drill drill = coachDrill(DRILL_ID, COACH_ID);
         UUID videoId = UUID.randomUUID();
         when(drillRepository.findById(DRILL_ID)).thenReturn(Optional.of(drill));
         when(drillVideoRefRepository.findByDrillId(DRILL_ID)).thenReturn(Optional.of(buildRef(DRILL_ID, videoId)));
+        // Deferred-89 AC3: the videos row is still present under the lock, so a genuinely orphaned
+        // reservation (ref cleared, no other ref) is still published — the presence check does not
+        // suppress the legitimate path.
+        when(videoRepository.findByIdForUpdate(videoId)).thenReturn(Optional.of(new Video()));
         when(drillVideoRefRepository.existsByVideoId(videoId)).thenReturn(false);
 
         service.deleteVideo(DRILL_ID, COACH_USER_ID);
@@ -386,11 +390,56 @@ class DrillUploadServiceTest {
     }
 
     @Test
+    void deleteVideo_videoRowMissing_doesNotPublishEvent() {
+        // Deferred-89 AC3 (defence-in-depth): drill_video_refs.video_id has no FK (V38), so a ref can
+        // point at a videoId whose videos row is already gone. findByIdForUpdate returns empty →
+        // the physical-deletion event must NOT be re-published. Mutation check: dropping the
+        // lockedVideo.isPresent() guard makes this publish an event → test fails.
+        Drill drill = coachDrill(DRILL_ID, COACH_ID);
+        UUID videoId = UUID.randomUUID();
+        when(drillRepository.findById(DRILL_ID)).thenReturn(Optional.of(drill));
+        when(drillVideoRefRepository.findByDrillId(DRILL_ID)).thenReturn(Optional.of(buildRef(DRILL_ID, videoId)));
+        when(videoRepository.findByIdForUpdate(videoId)).thenReturn(Optional.empty());
+
+        service.deleteVideo(DRILL_ID, COACH_USER_ID);
+
+        verify(drillVideoRefRepository).clearVideoId(DRILL_ID);
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void initiateUpload_replacePath_videoRowMissing_doesNotPublishEvent() {
+        // Deferred-89 AC3: the mirrored initiateUpload replace path — an existing ref points at a
+        // videoId with no videos row. The hoisted lockedVideo is empty, so neither the READY guard
+        // nor the orphaned-reservation publish fires; the new ref is still written.
+        Drill drill = coachDrill(DRILL_ID, COACH_ID);
+        UUID existingVideoId = UUID.randomUUID();
+        when(drillRepository.findById(DRILL_ID)).thenReturn(Optional.of(drill));
+        when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.INSTRUCTOR);
+        when(configService.getBoolean("feature.drillVideoUpload.enabled.INSTRUCTOR")).thenReturn(true);
+        when(drillVideoRefRepository.findByDrillId(DRILL_ID))
+            .thenReturn(Optional.of(buildRef(DRILL_ID, existingVideoId)));
+        when(videoRepository.findByIdForUpdate(existingVideoId)).thenReturn(Optional.empty());
+
+        UUID newVideoId = UUID.randomUUID();
+        when(videoService.initializeUpload(any())).thenReturn(
+            new InitializeUploadResponse(newVideoId, UUID.randomUUID(), "p", "https://tus.example.com/upload",
+                Instant.now(), "test-sig", 9_999_999_999L, 12345L)
+        );
+
+        service.initiateUpload(DRILL_ID, COACH_USER_ID, new DrillUploadInitiateRequest("v.mp4", 1024L, "video/mp4", 10));
+
+        verify(drillVideoRefRepository).setVideoId(DRILL_ID, newVideoId);
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
     void deleteVideo_otherRefExists_doesNotPublishEvent_clearsVideoId() {
         Drill drill = coachDrill(DRILL_ID, COACH_ID);
         UUID videoId = UUID.randomUUID();
         when(drillRepository.findById(DRILL_ID)).thenReturn(Optional.of(drill));
         when(drillVideoRefRepository.findByDrillId(DRILL_ID)).thenReturn(Optional.of(buildRef(DRILL_ID, videoId)));
+        when(videoRepository.findByIdForUpdate(videoId)).thenReturn(Optional.of(new Video()));
         when(drillVideoRefRepository.existsByVideoId(videoId)).thenReturn(true);
 
         service.deleteVideo(DRILL_ID, COACH_USER_ID);

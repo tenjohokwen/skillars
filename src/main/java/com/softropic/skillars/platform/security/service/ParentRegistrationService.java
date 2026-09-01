@@ -225,6 +225,13 @@ public class ParentRegistrationService {
 
     @RateLimited(key = "parent_resend_otp", capacity = 3, duration = 30)
     public void resendPhoneOtp(Long userId) {
+        // skillars-deferred-89 code review: @RateLimited above buckets per client IP only. Add a
+        // per-user cap (mirroring verifyPhone's tryConsume) so a distributed caller who knows a
+        // victim's userId cannot repeatedly delete their in-flight OTP / bomb their inbox from many
+        // IPs. Same vague OtpVerificationException as the other guards here — no rate-state oracle.
+        if (!rateLimitingService.tryConsume(String.valueOf(userId), "parent_resend_otp_user", 3, 30, TimeUnit.MINUTES)) {
+            throw new OtpVerificationException("security.otpMismatch");
+        }
         User user = userRepository.findOneById(userId)
             .orElseThrow(() -> new OtpVerificationException("security.otpMismatch"));
         // AC11 / code-review decision (2026-08-31): a locked account cannot self-resume. This

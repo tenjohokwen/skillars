@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.security.api;
 
+import com.softropic.skillars.platform.security.api.dto.ResendOtpRequest;
 import com.softropic.skillars.platform.security.api.dto.ResendVerificationRequest;
 import com.softropic.skillars.platform.security.api.dto.VerifyEmailResponse;
 import com.softropic.skillars.platform.security.api.dto.VerifyPhoneRequest;
@@ -51,6 +52,16 @@ public class PlayerRegistrationResource {
     @PostMapping("/resend-verification")
     public ResponseEntity<Void> resendVerification(@RequestBody @Valid ResendVerificationRequest request) {
         playerRegistrationService.resendVerificationEmail(request.email());
+        return ResponseEntity.ok().build();
+    }
+
+    // skillars-deferred-89 AC7: parity with ParentRegistrationResource./resend-otp — an
+    // EMAIL_VERIFIED player whose single OTP email never arrived can re-request one. HTTP 200 (not
+    // 204), mirroring parent exactly.
+    @PreAuthorize("permitAll()")
+    @PostMapping("/resend-otp")
+    public ResponseEntity<Void> resendOtp(@RequestBody @Valid ResendOtpRequest request) {
+        playerRegistrationService.resendPhoneOtp(request.userId());
         return ResponseEntity.ok().build();
     }
 }

@@ -11,6 +11,20 @@ fi
 
 DEPLOY_ROOT="/opt/skillars"
 
+# skillars-deferred-89 AC8 — optional. When set, section 5 scopes the host firewall's port-22 rule
+# to this single source IP for the window between this script finishing and
+# deploy/firewall/apply-firewall.sh (first-time-setup.md Step 4) applying the Hetzner Cloud
+# firewall. Must be a bare IPv4 address — validated with apply-firewall.sh's exact regex, /32
+# appended by this script. A malformed value, or one that does not match the live SSH session's
+# client IP, fails OPEN to the internet-wide `ufw allow 22/tcp` with a warning; it never bricks the
+# session. Unset by default. See docs/deployment/first-time-setup.md, "SSH exposure window".
+#
+# NOTE: set it to YOUR workstation's public egress IP (the same value Step 4 uses — run
+# `curl -s ifconfig.me` on your LOCAL machine, NOT on the node), and if you invoke this script via
+# `sudo` you MUST pass `sudo -E` (or add SSH_ALLOWLIST_IP / SSH_CLIENT to sudoers `env_keep`) —
+# plain `sudo` strips both under the default `env_reset`, so scoping silently does not happen.
+SSH_ALLOWLIST_IP="${SSH_ALLOWLIST_IP:-}"
+
 log() { echo "[provision] $*"; }
 # Writes to BOTH stderr (terminal-red visibility, stream-aware tooling) and stdout, so an operator
 # running `provision.sh > provision.log` with no `2>&1` still keeps every error line. Dual `echo`
@@ -28,14 +42,17 @@ err() { echo "[provision][error] $*" >&2; echo "[provision][error] $*"; }
 # OOM, power loss during the exact chown) can leave the top-level dir already owned correctly while
 # its children are only half-changed; the top-level check alone would then skip on re-run and leave
 # mixed ownership under the data mount for good. So when the top-level owner matches, also scan the
-# dir and its immediate children (`-maxdepth 2`) for a uid OR gid mismatch — `chown -R` sets both,
-# so an interruption between them leaves one right and one wrong — and fall through to `chown -R` on
-# a hit. GNU `chown -R` traverses pre-order (each directory is chowned before its contents), so an
-# interruption always leaves the top level done and some descendants not; `-maxdepth 2` catches the
-# common early-interruption case (top level + its immediate children) without a full metadata scan
-# of a Volume carrying real observability retention on every idempotent re-run. LIMITATION: a
-# mismatch buried more than two levels deep is NOT caught here — docs/deployment/first-time-setup.md
-# documents the manual `find … \( \! -uid N -o \! -gid N \) -print -quit` + `chown -R` remediation.
+# directory, its children and its grandchildren (`find … -maxdepth 2` from $dir: depth 0 = $dir,
+# 1 = children, 2 = grandchildren) for a uid OR gid mismatch — `chown -R` sets both, so an
+# interruption between them leaves one right and one wrong — and fall through to `chown -R` on a
+# hit. GNU `chown -R` traverses pre-order (each directory is chowned before its contents), so an
+# interruption always leaves the top level done and some descendants not; going two levels deep
+# (not one) catches the case where a single-child directory — e.g. `loki/` → `chunks/`,
+# `prometheus/` → its data dir — was descended into before the interruption, which `-maxdepth 1`
+# would miss entirely. Still bounded: no full metadata scan of a Volume carrying real observability
+# retention on every idempotent re-run. LIMITATION: a mismatch buried more than two levels deep is
+# NOT caught here — docs/deployment/first-time-setup.md documents the manual
+# `find … \( \! -uid N -o \! -gid N \) -print -quit` + `chown -R` remediation.
 chown_if_needed() {
   local owner="$1" dir="$2"
   local uid="${owner%%:*}" gid="${owner##*:}"
@@ -44,6 +61,24 @@ chown_if_needed() {
   elif [ -n "$(find "$dir" -maxdepth 2 \( \! -uid "$uid" -o \! -gid "$gid" \) -print -quit 2>/dev/null)" ]; then
     chown -R "$owner" "$dir"
   fi
+}
+
+# skillars-deferred-89 AC8 (code review). Delete every `SSH (allowlisted)` ufw rule whose source is
+# NOT $1. Without this, an operator whose egress IP changed between runs (dynamic ISP / VPN) would
+# accumulate a permanent SSH grant for each reassigned address. Rule numbers shift on every delete,
+# so re-query and remove one at a time. `ufw status numbered` lines look like
+#   [ 3] 22/tcp    ALLOW IN    203.0.113.10    # SSH (allowlisted)
+prune_stale_allowlisted_ssh_rules() {
+  local keep_ip="$1" keep_re line num
+  keep_re="[[:space:]]${keep_ip//./\\.}[[:space:]]"
+  while :; do
+    line="$(ufw status numbered 2>/dev/null | grep 'SSH (allowlisted)' | grep -vE "${keep_re}" | tail -n1 || true)"
+    [ -n "${line}" ] || break
+    num="$(printf '%s' "${line}" | sed -n 's/^\[[[:space:]]*\([0-9]\{1,\}\)\].*/\1/p')"
+    [ -n "${num}" ] || break
+    log "Removing a stale scoped SSH rule (#${num}, source no longer ${keep_ip}): ${line#*] }"
+    ufw --force delete "${num}"
+  done
 }
 
 # ──────────────────────────────────────────────────
@@ -162,8 +197,67 @@ fi
 # 5. Host firewall (ufw)
 # ──────────────────────────────────────────────────
 log "Configuring ufw..."
-# Allow SSH first — CRITICAL: must happen before 'ufw enable' or the SSH session may terminate
-ufw allow 22/tcp comment 'SSH'
+# Allow SSH first — CRITICAL: must happen before 'ufw enable' or the SSH session may terminate.
+#
+# skillars-deferred-89 AC8: optionally scope the port-22 rule to $SSH_ALLOWLIST_IP for the window
+# between this script finishing and deploy/firewall/apply-firewall.sh (Step 4) applying the Hetzner
+# Cloud firewall. Safeguards so this can never lock the operator out mid-run:
+#   1. validate with apply-firewall.sh's exact IPv4 regex — a malformed value falls open to
+#      `ufw allow 22/tcp` with a warning.
+#   2. cross-check against the live SSH session ($SSH_CLIENT / $SSH_CONNECTION) — a mismatch, or no
+#      SSH session at all, falls open with a loud warning naming both IPs. Guards against a
+#      valid-but-wrong IP (operator behind NAT/VPN, dynamic IP, IPv6 session) locking the session
+#      out when `ufw --force enable` runs seconds later.
+#   3. ADD the desired rule BEFORE deleting any other port-22 rule (code review P1). On a re-run ufw
+#      is already enabled with default-deny-incoming; if an `allow` failed under `set -euo pipefail`
+#      AFTER a delete, the script would abort with 22 having no accept rule and only console
+#      recovery. Add-then-delete leaves 22 continuously covered.
+#   4. re-scope cleanly (code review P9): on the scoped path, prune every prior `SSH (allowlisted)`
+#      rule for a DIFFERENT source IP, so an operator whose egress IP changed between runs does not
+#      accumulate permanent SSH grants for reassigned addresses.
+# IPv6 (code review P10): the scoped rule is IPv4-only. `ufw delete allow 22/tcp` removes the v4 AND
+# v6 broad rules, so while a scoped rule is active SSH over IPv6 on port 22 is closed. The Hetzner
+# Cloud firewall from Step 4 is dual-stack and remains the real perimeter; an operator who needs
+# IPv6 SSH in the meantime should not set SSH_ALLOWLIST_IP.
+# ASYMMETRY: a later run with SSH_ALLOWLIST_IP unset does NOT auto-widen a previously-scoped rule
+# (a scoped `from <ip>/32` rule is not generically targetable here) — it only warns. Re-open 22 to
+# all by hand: `ufw delete allow from <ip>/32 to any port 22 proto tcp`.
+ssh_client_ip="${SSH_CLIENT:-}"; ssh_client_ip="${ssh_client_ip%% *}"
+if [ -z "${ssh_client_ip}" ]; then
+  ssh_client_ip="${SSH_CONNECTION:-}"; ssh_client_ip="${ssh_client_ip%% *}"
+fi
+if [ -n "${SSH_ALLOWLIST_IP}" ] \
+   && [[ "${SSH_ALLOWLIST_IP}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] \
+   && [ -n "${ssh_client_ip}" ] && [ "${SSH_ALLOWLIST_IP}" = "${ssh_client_ip}" ]; then
+  log "Scoping the ufw SSH rule to ${SSH_ALLOWLIST_IP}/32 (matches this SSH session's client IP)."
+  log "  NOTE: the scoped rule is IPv4-only — SSH over IPv6 on port 22 is closed while it is active."
+  # Add first (P1), then remove the broad rule and any stale scoped rule for another IP (P9).
+  ufw allow from "${SSH_ALLOWLIST_IP}/32" to any port 22 proto tcp comment 'SSH (allowlisted)'
+  ufw delete allow 22/tcp 2>/dev/null || true
+  prune_stale_allowlisted_ssh_rules "${SSH_ALLOWLIST_IP}"
+else
+  if [ -n "${SSH_ALLOWLIST_IP}" ]; then
+    if ! [[ "${SSH_ALLOWLIST_IP}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+      err "SSH_ALLOWLIST_IP='${SSH_ALLOWLIST_IP}' is not a bare IPv4 address — malformed, ignoring; opening 22/tcp to all."
+    else
+      err "SSH_ALLOWLIST_IP='${SSH_ALLOWLIST_IP}' does not match this SSH session's client IP ('${ssh_client_ip:-none}') — ignoring; opening 22/tcp to all."
+    fi
+  else
+    # code review P3: no signal at all is wrong when `sudo` (without -E) has silently stripped the
+    # var, or the operator simply forgot it. One informational line — 22 is about to open wide.
+    log "SSH_ALLOWLIST_IP not set — port 22/tcp opens to ALL sources until Step 4 (apply-firewall.sh)."
+    log "  To scope it: export SSH_ALLOWLIST_IP=<your-workstation-public-IP> and re-run (with 'sudo -E' if using sudo)."
+  fi
+  ufw allow 22/tcp comment 'SSH'
+  # Asymmetry (skillars-deferred-89 AC8): a scoped `allow from <ip>/32` rule from a prior run is not
+  # generically targetable, so it is NOT auto-removed here. Only warn when one is actually present —
+  # a plain re-run with SSH_ALLOWLIST_IP never set must stay quiet.
+  if ufw status 2>/dev/null | grep -q "SSH (allowlisted)"; then
+    err "A previously-scoped 'SSH (allowlisted)' ufw rule is still present and was NOT auto-widened."
+    err "Port 22 is open to all via the rule just added; drop the scoped one by hand for a clean state:"
+    err "  ufw delete allow from <ip>/32 to any port 22 proto tcp"
+  fi
+fi
 # Traefik exposes 80 and 443 to the host
 ufw allow 80/tcp comment 'HTTP'
 ufw allow 443/tcp comment 'HTTPS'
@@ -368,6 +462,12 @@ settle_pre_volume_migration() {
 if [ -b "${VOLUME_DEVICE}" ]; then
   if mountpoint -q "${MOUNT_POINT}"; then
     log "Volume ${VOLUME_DEVICE} already mounted at ${MOUNT_POINT} — skipping mount."
+    # skillars-deferred-89 AC9(a): the staging branch below only runs when provision.sh performs the
+    # mount itself. If the Volume was mounted OUTSIDE this script (manual mount, or an /etc/fstab
+    # entry) before provisioning ever ran, any pre-Volume data/ tree is now shadowed under it and was
+    # never staged. (A prior provision.sh run instead leaves a verified duplicate safely on the
+    # Volume — not data loss.) findmnt/lsblk cannot see content beneath a mount; only an unmount can.
+    log "  If this host was NOT first provisioned by provision.sh before the Volume was attached, verify no pre-Volume data is shadowed under ${MOUNT_POINT} — see docs/deployment/first-time-setup.md, 'Reclaim shadowed pre-Volume data'."
   else
     # Stage any pre-Volume payload on the root disk BEFORE the mount hides it. ${STAGING} is a
     # sibling of ${MOUNT_POINT}, never under it, so it survives the mount and a later re-run.

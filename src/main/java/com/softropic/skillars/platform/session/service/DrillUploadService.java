@@ -96,6 +96,12 @@ public class DrillUploadService {
 
             Optional<DrillVideoRef> existing = drillVideoRefRepository.findByDrillId(drillId);
             UUID existingVideoId = existing.map(DrillVideoRef::getVideoId).orElse(null);
+            // Deferred-89 AC3: hoisted out of the block below so the orphaned-reservation publish
+            // further down can confirm the videos row still exists before re-queuing it for physical
+            // deletion. Defence-in-depth: drill_video_refs.video_id has no FK (V38), so a ref can
+            // point at a videoId whose videos row is already gone. Stays empty when there is no
+            // prior video ref.
+            Optional<Video> lockedVideo = Optional.empty();
             if (existingVideoId != null) {
                 // Deferred-81 AC3. LOCK ORDERING: Drill (already held above) then Video, inside
                 // this same retry block — deleteVideo below takes the pair in the identical
@@ -108,7 +114,7 @@ public class DrillUploadService {
                 // refresh needed here — unlike the drill row above, this is the first read of
                 // this Video entity in this method, so findByIdForUpdate's own result already
                 // reflects the now-locked row.
-                Optional<Video> lockedVideo = videoRepository.findByIdForUpdate(existingVideoId);
+                lockedVideo = videoRepository.findByIdForUpdate(existingVideoId);
                 if (lockedVideo.isPresent() && lockedVideo.get().getOperationalState() == OperationalState.READY) {
                     throw new OperationNotAllowedException(
                         "A video is already linked to this drill. Remove it before uploading a new one.",
@@ -124,8 +130,12 @@ public class DrillUploadService {
                 drillVideoRefRepository.setVideoId(drillId, resp.videoId());
                 // Replacing a non-READY video's ref (PROCESSING/FAILED — a READY one already threw
                 // above): the old reservation is otherwise orphaned until the reaper's timeout.
-                // Mirrors deleteVideo's own check-and-publish ordering.
-                if (existingVideoId != null && !drillVideoRefRepository.existsByVideoId(existingVideoId)) {
+                // Mirrors deleteVideo's own check-and-publish ordering. Deferred-89 AC3: also gate on
+                // lockedVideo.isPresent() (the videos row held under the lock above) so an
+                // already-soft-deleted / absent video is not re-queued for physical deletion.
+                if (existingVideoId != null
+                        && lockedVideo.isPresent()
+                        && !drillVideoRefRepository.existsByVideoId(existingVideoId)) {
                     eventPublisher.publishEvent(new VideoPhysicalDeletionEvent(existingVideoId, drillId));
                 }
             } else {
@@ -163,13 +173,18 @@ public class DrillUploadService {
                 // the two methods cannot deadlock against each other. Taken before clearVideoId
                 // and the existsByVideoId check below, since those are exactly the check-then-act
                 // pair this AC closes for a videoId shared across two Drill rows (see
-                // initiateUpload's own comment for the full race description). The row is only
-                // used for its locking side effect here, not its fields.
-                videoRepository.findByIdForUpdate(videoId);
+                // initiateUpload's own comment for the full race description). Deferred-89 AC3: the
+                // result is now captured (was discarded) — used for its locking side effect AND its
+                // presence.
+                Optional<Video> lockedVideo = videoRepository.findByIdForUpdate(videoId);
 
                 drillVideoRefRepository.clearVideoId(drillId);
 
-                if (!drillVideoRefRepository.existsByVideoId(videoId)) {
+                // Deferred-89 AC3: gate the re-publish on the videos row still existing.
+                // drill_video_refs.video_id has no FK (V38), so a ref can outlive its videos row;
+                // without this check an already-soft-deleted / absent video is re-queued for physical
+                // deletion (downstream: a caught VideoNotFoundException + log noise).
+                if (lockedVideo.isPresent() && !drillVideoRefRepository.existsByVideoId(videoId)) {
                     eventPublisher.publishEvent(new VideoPhysicalDeletionEvent(videoId, drillId));
                 }
             });

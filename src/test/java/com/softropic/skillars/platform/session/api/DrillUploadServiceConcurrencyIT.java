@@ -238,6 +238,9 @@ class DrillUploadServiceConcurrencyIT extends BaseSessionIT {
     void deleteVideo_concurrentCallsOnSameDrill_doesNotDoublePublishDeletionEvent() throws Exception {
         UUID drillId = insertUploadTestDrill();
         UUID videoId = UUID.randomUUID();
+        // Deferred-89 AC3: deleteVideo now gates the publish on the videos row still existing, so the
+        // row must be present for the legitimate single publish this test asserts.
+        insertVideoRow(videoId);
         transactionTemplate.execute(status -> {
             jdbcTemplate.update(
                 "INSERT INTO session.drill_video_refs (drill_id, video_id, ref_count) VALUES (?, ?, 1)",
