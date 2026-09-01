@@ -56,6 +56,25 @@ Record the full image reference before proceeding:
 ghcr.io/<org>/javatemplate:<tag>
 ```
 
+### If the commit has no `sha-<short>` image in GHCR
+
+The `build-and-push` job runs under a `concurrency` group. GitHub keeps **one** pending run per
+group and cancels an earlier still-pending run when a newer one queues — so in a burst of three or
+more quick merges the middle commit's CI can be cancelled **before it built anything**, and that
+commit then has **no image at all**, not even `sha-<short>`. (`cancel-in-progress: false` only
+protects a run that has already started.)
+
+If Option A/B/C above turn up no image for your target commit, produce it before rolling back:
+
+1. Repository → **Actions** → the **CI** run for that commit (it will show as *cancelled*).
+2. **Re-run all jobs**.
+3. Wait for `build-and-push` to finish, then confirm `sha-<short>` now appears on the GHCR package
+   page (Option C).
+4. Proceed with the steps below.
+
+If you cannot wait for CI, roll back to the **nearest older commit that does have an image** instead
+and open a follow-up to redeploy the intended commit once its image exists.
+
 ---
 
 ## Step 2: SSH Into the Node

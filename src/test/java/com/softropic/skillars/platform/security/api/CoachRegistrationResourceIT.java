@@ -528,6 +528,130 @@ class CoachRegistrationResourceIT extends AbstractIntegrationTest {
             .isEqualTo(2);
     }
 
+    // ── skillars-deferred-89 AC7: /resend-otp parity with parent ─────────────────────────────────
+    // Mirrors ParentRegistrationResourceIT's /resend-otp cases. The V121 uq_pot_one_active_per_user
+    // 409 path is already proven spy-free by phoneOtpTokens_secondActiveRowForSameUser_rejectedByUniqueIndex
+    // above (skillars-deferred-88 AC10 shape) — the ApiAdvice 409 security.otpResendInProgress mapping
+    // rides that same DataIntegrityViolationException handler.
+
+    private static final String RESEND_OTP_ENDPOINT = "/api/security/coach/resend-otp";
+
+    @Test
+    void resendOtp_emailVerifiedUser_returns200_replacesActiveOtpToken() {
+        httpTestClient.makeHttpRequest(baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST,
+            registrationBody(TEST_EMAIL), jsonHeaders(), Void.class);
+        Long userId = jdbcTemplate.queryForObject(
+            "SELECT id FROM main.\"user\" WHERE email = ?", Long.class, TEST_EMAIL);
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update("UPDATE main.\"user\" SET verification_status = 'EMAIL_VERIFIED', "
+                + "activated = true WHERE id = ?", userId);
+            jdbcTemplate.update(
+                "INSERT INTO main.phone_otp_tokens (id, version, user_id, otp_hash, expires_at, used) " +
+                "VALUES (999999999999881, 0, ?, 'stale-hash', ?, false)",
+                userId, Timestamp.from(Instant.now().plus(10, ChronoUnit.MINUTES)));
+            return null;
+        });
+
+        ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
+            baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST, Map.of("userId", userId), jsonHeaders(), Void.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM main.phone_otp_tokens WHERE user_id = ? AND used = false", Integer.class, userId))
+            .as("the stale active token is deleted and exactly one fresh one issued")
+            .isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT otp_hash FROM main.phone_otp_tokens WHERE user_id = ? AND used = false", String.class, userId))
+            .isNotEqualTo("stale-hash");
+    }
+
+    @Test
+    void resendOtp_unknownUserId_returns400_otpMismatch() {
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST, Map.of("userId", 987654321L), jsonHeaders(), Void.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(ex.getResponseBodyAsString()).contains("security.otpMismatch");
+            });
+    }
+
+    @Test
+    void resendOtp_lockedUser_returns400_accountLocked_noTokenInserted() {
+        httpTestClient.makeHttpRequest(baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST,
+            registrationBody(TEST_EMAIL), jsonHeaders(), Void.class);
+        Long userId = jdbcTemplate.queryForObject(
+            "SELECT id FROM main.\"user\" WHERE email = ?", Long.class, TEST_EMAIL);
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update("UPDATE main.\"user\" SET verification_status = 'EMAIL_VERIFIED', "
+                + "activated = true, locked = true WHERE id = ?", userId);
+            return null;
+        });
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST, Map.of("userId", userId), jsonHeaders(), Void.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(ex.getResponseBodyAsString()).contains("security.accountLocked");
+            });
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM main.phone_otp_tokens WHERE user_id = ?", Integer.class, userId))
+            .as("a locked user's resend-otp must not have inserted a token")
+            .isEqualTo(0);
+    }
+
+    @Test
+    void resendOtp_userNotEmailVerified_returns400_otpMismatch() {
+        httpTestClient.makeHttpRequest(baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST,
+            registrationBody(TEST_EMAIL), jsonHeaders(), Void.class);
+        Long userId = jdbcTemplate.queryForObject(
+            "SELECT id FROM main.\"user\" WHERE email = ?", Long.class, TEST_EMAIL);
+        // user is still UNVERIFIED (verify-email not called)
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST, Map.of("userId", userId), jsonHeaders(), Void.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(ex.getResponseBodyAsString()).contains("security.otpMismatch");
+            });
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM main.phone_otp_tokens WHERE user_id = ? AND used = false", Integer.class, userId))
+            .isEqualTo(0);
+    }
+
+    @Test
+    void resendOtp_perUserRateLimit_fourthCallForSameUserIsRejected() {
+        // skillars-deferred-89 code review: the class-level @RateLimited buckets per client IP only
+        // (and is disabled under the test profile). resendPhoneOtp additionally consumes a per-user
+        // bucket (capacity 3 / 30 min, keyed on userId) so a distributed caller who knows a victim's
+        // userId cannot keep deleting their in-flight OTP from many IPs. 4th call for one user → 400.
+        httpTestClient.makeHttpRequest(baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST,
+            registrationBody(TEST_EMAIL), jsonHeaders(), Void.class);
+        Long userId = jdbcTemplate.queryForObject(
+            "SELECT id FROM main.\"user\" WHERE email = ?", Long.class, TEST_EMAIL);
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update("UPDATE main.\"user\" SET verification_status = 'EMAIL_VERIFIED', "
+                + "activated = true WHERE id = ?", userId);
+            return null;
+        });
+
+        for (int i = 0; i < 3; i++) {
+            ResponseEntity<Void> ok = httpTestClient.makeHttpRequest(
+                baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST, Map.of("userId", userId), jsonHeaders(), Void.class);
+            assertThat(ok.getStatusCode()).as("call %s within the per-user cap", i + 1).isEqualTo(HttpStatus.OK);
+        }
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST, Map.of("userId", userId), jsonHeaders(), Void.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
     private HttpHeaders jsonHeaders() {
         HttpHeaders headers = new HttpHeaders();
         headers.add(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE);

@@ -578,6 +578,36 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
             .isEqualTo(0);
     }
 
+    @Test
+    void resendPhoneOtp_perUserRateLimit_fourthCallForSameUserIsRejected() {
+        // skillars-deferred-89 code review: the class-level @RateLimited buckets per client IP only
+        // (and is disabled under the test profile). resendPhoneOtp additionally consumes a per-user
+        // bucket (capacity 3 / 30 min, keyed on userId) so a distributed caller who knows a victim's
+        // userId cannot keep deleting their in-flight OTP from many IPs. 4th call for one user → 400.
+        httpTestClient.makeHttpRequest(baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST,
+            registrationBody(TEST_EMAIL), jsonHeaders(), Void.class);
+        Long userId = jdbcTemplate.queryForObject(
+            "SELECT id FROM main.\"user\" WHERE email = ?", Long.class, TEST_EMAIL);
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update("UPDATE main.\"user\" SET verification_status = 'EMAIL_VERIFIED', "
+                + "activated = true WHERE id = ?", userId);
+            return null;
+        });
+
+        for (int i = 0; i < 3; i++) {
+            ResponseEntity<Void> ok = httpTestClient.makeHttpRequest(
+                baseUrl() + "/api/security/parent/resend-otp", HttpMethod.POST,
+                Map.of("userId", userId), jsonHeaders(), Void.class);
+            assertThat(ok.getStatusCode()).as("call %s within the per-user cap", i + 1).isEqualTo(HttpStatus.OK);
+        }
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/security/parent/resend-otp", HttpMethod.POST,
+            Map.of("userId", userId), jsonHeaders(), Void.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
     private String hashOtp(String otp, Long userId) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");

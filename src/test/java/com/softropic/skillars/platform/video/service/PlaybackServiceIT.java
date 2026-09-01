@@ -19,6 +19,8 @@ import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -38,6 +40,8 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
 class PlaybackServiceIT extends BaseVideoIT {
+
+    private static final Logger log = LoggerFactory.getLogger(PlaybackServiceIT.class);
 
     @MockitoBean
     VideoProviderAdapter videoProviderAdapter;
@@ -102,8 +106,18 @@ class PlaybackServiceIT extends BaseVideoIT {
             .isInstanceOf(VideoNotFoundException.class);
     }
 
+    /**
+     * Measurement only — NOT a gate; see skillars-deferred-89 AC5. A hard millisecond wall-clock p99
+     * bound inside a merge-gating IT is structurally flaky (JIT / GC / Testcontainers / CI-host
+     * noise) even after skillars-deferred-23 AC1 fixed the percentile-index and warmup bugs. This
+     * runs the 100 iterations and logs the p50/p95/p99 so the numbers still appear in CI output, but
+     * only keeps a very loose pathology ceiling (a multi-second p99 means something is genuinely
+     * broken, not jitter). The correctness of {@code authorizePlayback} is covered by the other
+     * cases in this class. ({@code @Tag}-exclusion is not an option — {@code pom.xml} has no
+     * {@code excludedGroups}/{@code <groups>} mechanism.)
+     */
     @Test
-    void authorizePlayback_performance_p99Under200ms() {
+    void authorizePlayback_performance_measuresLatencyDistribution() {
         Video video = seedVideo(OperationalState.READY, AccessState.ACTIVE);
         int warmupIterations = 20;
         int iterations = 100;
@@ -120,11 +134,22 @@ class PlaybackServiceIT extends BaseVideoIT {
         }
 
         Arrays.sort(latencies);
-        // Nearest-rank percentile via integer ceiling division (avoids floating-point rounding
-        // pitfalls in iterations * 0.99): rank = ceil(iterations * 99 / 100), 0-based index = rank - 1.
-        int p99Index = (iterations * 99 + 99) / 100 - 1;
-        long p99 = latencies[p99Index];
-        assertThat(p99).as("p99 latency must be < 200ms but was %dms", p99).isLessThan(200L);
+        long p50 = latencies[nearestRankIndex(iterations, 50)];
+        long p95 = latencies[nearestRankIndex(iterations, 95)];
+        long p99 = latencies[nearestRankIndex(iterations, 99)];
+        log.info("authorizePlayback latency over {} iterations (measurement only, not a gate): "
+            + "p50={}ms p95={}ms p99={}ms", iterations, p50, p95, p99);
+
+        // Loose pathology ceiling only — catches a real regression (something O(n) per call, a lock,
+        // a missing index), not CI jitter.
+        assertThat(p99).as("p99 latency %dms indicates a genuine pathology, not jitter", p99)
+            .isLessThan(5_000L);
+    }
+
+    // Nearest-rank percentile via integer ceiling division (avoids floating-point rounding pitfalls
+    // in count * p/100): rank = ceil(count * p / 100), 0-based index = rank - 1.
+    private static int nearestRankIndex(int count, int percentile) {
+        return (count * percentile + 99) / 100 - 1;
     }
 
     private Video seedVideo(OperationalState opState, AccessState accessState) {
