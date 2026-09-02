@@ -17,13 +17,20 @@ WORKDIR /app
 
 # Patch OS packages before dropping privileges. The eclipse-temurin:17-jre-alpine tag
 # lags Alpine's package index, so Trivy flags packages the base layer ships stale --
-# currently libexpat (CVE-2026-56408) and p11-kit (CVE-2026-2100). `apk upgrade` pulls
-# the fixed builds from the same Alpine release the base image is pinned to.
+# e.g. libexpat (CVE-2026-66046 / CVE-2026-76641, fixed in 2.8.4-r0). `apk upgrade`
+# pulls the fixed builds from the same Alpine release the base image is pinned to.
+#
+# APK_UPGRADE_CACHE_BUST busts the build cache for this layer on every CI build (the
+# workflow feeds it a per-run value). Without it, BuildKit keys the `apk upgrade` layer
+# only on the command string, so a cached layer from days ago keeps shipping the stale
+# packages even after Alpine publishes the fix -- which is exactly how PR #136's Trivy
+# gate started failing on an already-patched CVE.
 #
 # This trades a little build reproducibility for a clean scan: two builds of the same
 # commit on different days can pick up different package builds. That is the accepted
 # tradeoff while the pr-build Trivy gate runs with exit-code 1 on HIGH.
-RUN apk upgrade --no-cache
+ARG APK_UPGRADE_CACHE_BUST=local
+RUN echo "apk upgrade cache-bust: ${APK_UPGRADE_CACHE_BUST}" && apk upgrade --no-cache
 
 # Create non-root user
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
