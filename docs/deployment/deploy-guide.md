@@ -11,7 +11,7 @@ Before triggering a deploy you need:
 
 - **GitHub repository access** — to view Actions runs and trigger `workflow_dispatch`
 - **Secrets configured** — the following GitHub Actions secrets must already be in place:
-  `SSH_DEPLOY_KEY`, `SSH_HOST`, `SSH_USER`, `SSH_KNOWN_HOST`, `GHCR_PAT`, `SLACK_WEBHOOK_URL`, `SMTP_*`, `NOTIFY_EMAIL`
+  `SSH_DEPLOY_KEY`, `SSH_HOST`, `SSH_USER`, `SSH_KNOWN_HOST`, `GHCR_PAT` (GitHub Container Registry Personal Access Token), `SLACK_WEBHOOK_URL`, `SMTP_*`, `NOTIFY_EMAIL`
 
   If any secrets are missing, see [`docs/deployment/secrets-reference.md`](secrets-reference.md) for the full list and setup instructions.
 
@@ -19,9 +19,22 @@ No SSH access to the Node is required to trigger a deploy — GitHub Actions han
 
 ---
 
+## Pre-Flight Checks
+
+Before starting, verify:
+
+- **GitHub Actions access**: You can view the Actions tab and trigger workflows in the repository
+- **Secrets configured**: All GitHub Actions secrets listed in "Prerequisites" are in place (see [`docs/deployment/secrets-reference.md`](secrets-reference.md))
+- **Production Node healthy**: If you have SSH access, optionally verify the Node is responsive and disk/memory are not critical (see [`docs/deployment/first-time-setup.md`](first-time-setup.md) for Node access)
+- **No ongoing incident**: Check team chat or status page — do not deploy during an active production incident unless explicitly directed to do so
+
+If any checks fail, resolve them before proceeding.
+
+---
+
 ## Step 1: Find the Image Tag
 
-The CI pipeline (`.github/workflows/ci.yml`) runs automatically on every merge to `main`. It builds and pushes a Docker image to GHCR tagged with the commit SHA in the format `sha-<short-sha>` (e.g., `sha-abc1234`).
+The CI pipeline (`.github/workflows/ci.yml`) runs automatically on every push to the `master` branch. It builds and pushes a Docker image to GHCR tagged with the commit SHA in the format `sha-<short-sha>` (e.g., `sha-abc1234`).
 
 **Option A — From GitHub Actions:**
 
@@ -47,8 +60,10 @@ git log --oneline -5
 The full image reference is:
 
 ```
-ghcr.io/<org>/javatemplate:sha-<commit>
+ghcr.io/tenjohokwen/skillars:sha-<commit>
 ```
+
+For example, if the commit SHA is `abc1234def`, the image tag is `sha-abc1234` and the full reference is `ghcr.io/tenjohokwen/skillars:sha-abc1234`.
 
 ---
 
@@ -58,7 +73,8 @@ Before triggering a production deploy, validate the candidate image in your stag
 
 1. Deploy the image tag identified in Step 1 to your staging environment
 2. Run acceptance tests and confirm the build meets your release criteria
-3. Once validated, proceed to Step 2 to trigger production
+3. **If UAT validation fails**: Do NOT proceed to Step 2. Fix the issues, merge the fix to `master`, and restart with a new image tag.
+4. Once validated, proceed to Step 2 to trigger production
 
 > The ≤ 30-minute cycle target assumes UAT validation is included in this window. If your UAT process takes longer, that is expected — do not skip it.
 
@@ -114,17 +130,33 @@ The application is live at the configured domain. No further action needed.
 
 ---
 
+## Step 4: Post-Deploy Validation (Optional)
+
+After a successful deploy, you may optionally validate production with:
+
+- **Check the health endpoint**: Visit `https://<domain>/actuator/health` (or use curl)
+- **Smoke test key flows**: Log in as a user, verify critical features work end-to-end
+- **Monitor logs**: Check Grafana or Loki for any error spikes post-deployment
+- **Check metrics**: Verify CPU, memory, and request latency remain normal
+
+If anything looks wrong, follow [`docs/deployment/rollback.md`](rollback.md) immediately.
+
+---
+
 ## Expected Timeline
 
 | Activity | Time |
 |---|---|
+| Pre-flight checks | ~1 min |
 | Identify image tag | ~2 min |
+| UAT validation (if needed) | ~5–20 min |
 | Trigger workflow via GitHub Actions UI | ~1 min |
 | Workflow runs (pull + restart + smoke test) | ~2–5 min |
 | Result notification received | ~1 min after pass/fail |
-| **Total (happy path)** | **~5–10 min** |
+| **Total (happy path, no UAT)** | **~5–10 min** |
+| **Total (happy path, with UAT)** | **~15–30 min** |
 
-Maximum cycle including UAT validation before deploy: **≤ 30 minutes**.
+Post-deploy validation (Step 4) is optional and not included in the timeline above.
 
 ---
 

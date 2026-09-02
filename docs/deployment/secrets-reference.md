@@ -46,13 +46,12 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 
 | Variable | Format | How to obtain or generate |
 |---|---|---|
-| `APP_IMAGE` | `ghcr.io/<org>/javatemplate:sha-<commit>` | Produced by the CI pipeline (Epic 2) after merge to `main`. For the very first deploy (before CI is set up), build and push manually — see commands below the table |
+| `APP_IMAGE` | `ghcr.io/tenjohokwen/skillars:sha-<commit>` | Produced by the CI pipeline after push to `master`. For the very first deploy (before CI is set up), build and push manually — see commands below the table |
 | `DOMAIN` | FQDN, e.g. `api.example.com` | Your registered domain; must have an A record pointing to the Node IP before first deploy |
 | `LETSENCRYPT_EMAIL` | Email address | Your email address; used by Let's Encrypt for certificate expiry notifications |
 | `POSTGRES_DB` | Alphanumeric string, e.g. `skillars` | Choose a database name; default `skillars` |
 | `POSTGRES_USER` | Alphanumeric string, e.g. `skillars` | Choose a database username; default `skillars` |
 | `POSTGRES_PASSWORD` | 32+ character random string | `openssl rand -base64 32` |
-| `SPRING_DATASOURCE_URL` | JDBC URL | Fixed derived value: `jdbc:postgresql://postgres:5432/<POSTGRES_DB>?TimeZone=UTC` — substitute `<POSTGRES_DB>` with the literal database name you chose above; Docker Compose does not expand variable references within `.env` file values |
 | `APP_BOOTSTRAP_ADMIN_EMAIL` | Email address | **Temporary — see the callout below.** The login for the platform's first administrator. Choose an address that does not already belong to a coach, parent or player account |
 | `APP_BOOTSTRAP_ADMIN_PASSWORD` | 24+ character random string | **Temporary — see the callout below.** `openssl rand -base64 24`. Stored bcrypt-hashed; never logged. Record it in your password manager before the first deploy — it cannot be recovered from the running system |
 | `APP_BOOTSTRAP_ADMIN_PHONE` | E.164 phone number, e.g. `+491700000000` | **Temporary — see the callout below.** Required whenever the two above are set. `main."user".phone` carries a `UNIQUE` constraint, so this cannot be a shared placeholder — a second admin bootstrapped on the same database needs a different number |
@@ -60,6 +59,9 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 | `SPRING_MAIL_PORT` | Integer, e.g. `587` | From your email provider — 587 for STARTTLS, 465 for SSL/TLS |
 | `SPRING_MAIL_USERNAME` | Email address | Your SMTP username or sending address |
 | `SPRING_MAIL_PASSWORD` | String | App password or SMTP credential from your email provider |
+| `GMX_PASSWORD` | String | Password for the `gmx` entry in `email.providerConfigs` (application.yaml keeps its own provider list, separate from `spring.mail.*`). Referenced with **no default**, so before the compose passthrough was fixed an unset value aborted startup on the `prod` profile |
+| `GMAIL_PASSWORD` | String | As above, for the `gmail` provider entry |
+| `MANAGEMENT_HEALTH_MAIL_ENABLED` | Boolean | **Tuning knob, not a secret.** Actuator's mail health indicator opens a real SMTP connection and authenticates. Set `false` wherever the mail credentials are placeholders, or `/manage/health` reports DOWN and the container never becomes healthy. Consumed by the UAT and local compose files |
 | `BUNNY_API_KEY` | Hex string | Passed to the app as `APP_VIDEO_BUNNY_API_KEY`. Bunny.net Dashboard → Account → API |
 | `BUNNY_LIBRARY_ID` | Integer | Passed to the app as `APP_VIDEO_BUNNY_LIBRARY_ID`. Bunny.net Dashboard → Stream → Your Library → Library ID |
 | `BUNNY_CDN_HOSTNAME` | Hostname, e.g. `your-library.b-cdn.net` | Passed to the app as `APP_VIDEO_BUNNY_CDN_HOSTNAME`. Bunny.net Dashboard → Stream → Your Library → Pull Zone hostname |
@@ -75,19 +77,42 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 | `GF_SMTP_STARTTLS_POLICY` | String | `MandatoryStartTLS` for port 587 (recommended); `OpportunisticStartTLS` for flexible servers; `NoStartTLS` for unencrypted relay only — port 465 (SMTPS/implicit TLS) is not supported via this setting, use port 587 |
 | `GF_ALERT_NOTIFY_EMAIL` | Email address | Recipient for all Grafana-routed alerts |
 | `GF_SLACK_WEBHOOK_URL` | HTTPS URL | Slack → Apps → Incoming Webhooks → Add to Slack → select channel → copy URL |
-| `LOKI_URL` | Internal URL | Fixed value: `http://loki:3100` — do not change (Docker service name; reachable from `app` on the shared `skillars-observability` network) |
-| `LOKI_ENABLED` | Boolean | `true` for any environment that runs a `loki` container. **This became load-bearing on 2026-09-01**: until the loki4j 2.x appender fix, `logback-spring.xml` could not build the appender at all, so the value changed nothing (and, at `true`, aborted startup). It now genuinely controls whether logs are shipped. Set `false` only where no `loki` container exists — `docker-compose.uat-hostwinds.yml` does exactly that. Note `application-prod.yaml` also hardcodes `loki.enabled: true`; an OS environment variable outranks it, so this still wins |
-| `MANAGEMENT_OTLP_TRACING_ENDPOINT` | Internal URL | Fixed value: `http://tempo:4318/v1/traces` — do not change (Docker service name; reachable from `app` on the shared `skillars-observability` network) |
-| `HOS_ACCESS_KEY` | String | Hetzner Cloud Console → Object Storage → your bucket → Access Keys → Create access key; copy Access Key ID |
-| `HOS_SECRET_KEY` | String | Same creation flow as `HOS_ACCESS_KEY`; copy Secret Access Key (shown once) |
-| `HOS_BUCKET` | String, e.g. `skillars-backups` | Create a private bucket in Hetzner Cloud Console → Object Storage; use the exact bucket name here |
-| `HOS_ENDPOINT` | HTTPS URL, e.g. `https://s3.fsn1.hetzner.com` | Hetzner Object Storage endpoint for your datacenter region (fsn1 = Falkenstein, nbg1 = Nuremberg, hel1 = Helsinki) — visible in the bucket details page |
-| `HOS_BACKUP_PREFIX` | String ending in `/`, e.g. `pg-backups/` | Choose a key prefix to organize backups within the bucket; default `pg-backups/` |
-| `HOS_VOLUME_BACKUP_PREFIX` | String ending in `/`, e.g. `volume-backups/` | Choose a key prefix to organize file-level volume backups within the bucket; default `volume-backups/` |
+| `MINIO_ROOT_USER` | String | MinIO admin username (production and UAT). Default `minioadmin` |
+| `MINIO_ROOT_PASSWORD` | 24+ character random string | MinIO admin password (production and UAT). `openssl rand -base64 24` |
+| `STORAGE_DOMAIN` | FQDN, e.g. `storage.skillars.com` | Public hostname Traefik routes to MinIO in production (or test domains in UAT). Must be reachable **by the browser**, not just from inside the compose network — presigned upload URLs are built from it |
+| `BACKUP_STORAGE_TYPE` | String: `hetzner` or `s3-compatible` | **Production only.** Backup destination storage type. Use `hetzner` for Hetzner Object Storage, or `s3-compatible` for MinIO or other S3-compatible storage |
+| `HOS_ACCESS_KEY` | String | Hetzner Object Storage access key (if `BACKUP_STORAGE_TYPE=hetzner`). Hetzner Cloud Console → Object Storage → your bucket → Access Keys → Create access key; copy Access Key ID |
+| `HOS_SECRET_KEY` | String | Hetzner Object Storage secret key (if `BACKUP_STORAGE_TYPE=hetzner`). Same creation flow as `HOS_ACCESS_KEY`; copy Secret Access Key (shown once) |
+| `HOS_BUCKET` | String, e.g. `skillars-backups` | Hetzner Object Storage bucket name (if `BACKUP_STORAGE_TYPE=hetzner`). Create a private bucket in Hetzner Cloud Console → Object Storage; use the exact bucket name here |
+| `HOS_ENDPOINT` | HTTPS URL, e.g. `https://s3.fsn1.hetzner.com` | Hetzner Object Storage endpoint for your datacenter region (if `BACKUP_STORAGE_TYPE=hetzner`). Examples: `https://s3.fsn1.hetzner.com` (Falkenstein), `https://s3.nbg1.hetzner.com` (Nuremberg), `https://s3.hel1.hetzner.com` (Helsinki) |
+| `HOS_BACKUP_PREFIX` | String ending in `/`, e.g. `pg-backups/` | Backup key prefix for Hetzner Object Storage (if `BACKUP_STORAGE_TYPE=hetzner`). Choose a prefix to organize backups within the bucket; default `pg-backups/` |
+| `HOS_VOLUME_BACKUP_PREFIX` | String ending in `/`, e.g. `volume-backups/` | Volume backup key prefix for Hetzner Object Storage (if `BACKUP_STORAGE_TYPE=hetzner`). Choose a prefix to organize file-level volume backups; default `volume-backups/` |
+| `S3_BACKUP_ACCESS_KEY` | String | S3-compatible backup storage access key (if `BACKUP_STORAGE_TYPE=s3-compatible`). E.g., MinIO root user or IAM credentials |
+| `S3_BACKUP_SECRET_KEY` | String | S3-compatible backup storage secret key (if `BACKUP_STORAGE_TYPE=s3-compatible`) |
+| `S3_BACKUP_BUCKET` | String, e.g. `skillars-backups` | S3-compatible backup storage bucket name (if `BACKUP_STORAGE_TYPE=s3-compatible`) |
+| `S3_BACKUP_ENDPOINT` | HTTPS URL, e.g. `https://minio.skillars.com:9000` | S3-compatible backup storage endpoint (if `BACKUP_STORAGE_TYPE=s3-compatible`). E.g., MinIO service URL or third-party S3-compatible provider |
+| `S3_BACKUP_REGION` | String, e.g. `us-east-1` | S3-compatible backup storage region (if `BACKUP_STORAGE_TYPE=s3-compatible`). Default `us-east-1` |
+| `S3_BACKUP_PREFIX` | String ending in `/`, e.g. `pg-backups/` | Backup key prefix for S3-compatible storage (if `BACKUP_STORAGE_TYPE=s3-compatible`). Default `pg-backups/` |
+| `S3_BACKUP_VOLUME_PREFIX` | String ending in `/`, e.g. `volume-backups/` | Volume backup key prefix for S3-compatible storage (if `BACKUP_STORAGE_TYPE=s3-compatible`). Default `volume-backups/` |
 | `BACKUP_RETENTION_DAYS` | Integer, e.g. `14` | **Tuning knob, not a secret.** How many days of PostgreSQL dumps `prune-backups.sh` keeps; default `14` (~56 dumps at the 6-hourly cadence) |
 | `BACKUP_RETENTION_MIN_KEEP` | Integer, e.g. `8` | **Tuning knob, not a secret.** Newest dumps retained unconditionally regardless of age — the floor that stops a bad cutoff emptying the bucket; default `8` |
 | `VOLUME_BACKUP_RETENTION_DAYS` | Integer, e.g. `14` | **Tuning knob, not a secret.** How many days of file-level volume backups `prune-backups.sh` keeps; default `14` (~14 backups at the daily cadence) |
 | `VOLUME_BACKUP_RETENTION_MIN_KEEP` | Integer, e.g. `4` | **Tuning knob, not a secret.** Newest volume backups retained unconditionally regardless of age — the floor that stops a bad cutoff emptying the bucket; default `4` |
+
+### Storage Architecture
+
+**MinIO in Production:**
+- MinIO runs as a container in production for object storage (videos, images, documents)
+- The app communicates with MinIO via `APP_STORAGE_ENDPOINT_URL` (internal: `http://minio:9000`)
+- Clients (browsers) receive presigned URLs for direct upload/download, using a public endpoint (e.g., `https://storage.skillars.com`)
+- MinIO data persists on the volume (`/opt/skillars/data/minio`) and is backed up by `volume-backup.sh`
+
+**Backup Storage:**
+- PostgreSQL dumps and volume backups are stored off-server (not in MinIO or S3)
+- Configure via `BACKUP_STORAGE_TYPE`:
+  - `hetzner`: Use Hetzner Object Storage (HOS_* variables)
+  - `s3-compatible`: Use MinIO or other S3-compatible storage (S3_BACKUP_* variables)
+- Backup schedule: PostgreSQL every 6 hours, volumes daily; retention: 14 days by default
 
 ### Application secrets
 
@@ -105,10 +130,10 @@ application read them but no deploy supplied them. Defaults below are the applic
 | `APP_VIDEO_PLAYBACK_SIGNING_SECRET` | Base64 string decoding to ≥32 bytes | `""` under `prod` — see the profile note below | `openssl rand -base64 32`. Signs video playback URLs (HS256) |
 | `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET` | String | `""` under `prod` — see the profile note below | Bunny.net Stream → your library → Webhook signing secret |
 | `PLATFORM_PIN_ENCRYPTION_SECRET` | String | dev placeholder (`S3CR3TW0RD`) | `openssl rand -base64 32`. Encrypts parent-approval PINs — **rotating it invalidates every stored PIN** |
-| `APP_STORAGE_BUCKET` | String | `skillars-dev` | S3 (or MinIO) bucket for uploads |
-| `APP_STORAGE_ENDPOINT_URL` | URL | `http://localhost:9000` | Real AWS S3 endpoint, or the MinIO URL. Presigned upload URLs are built from this, so it must be reachable **by the browser**, not just by the container |
-| `APP_STORAGE_REGION` | AWS region | `us-east-1` | Region of the bucket above |
-| `APP_STORAGE_S3_ACCESS_KEY` / `APP_STORAGE_S3_SECRET_KEY` | String | **not bound under `prod`** — see the profile note below | IAM credentials scoped to the bucket |
+| `APP_STORAGE_BUCKET` | String | `skillars-dev` | S3 bucket name (AWS S3 or MinIO). MinIO runs as a container in production for object storage (videos, images, documents) |
+| `APP_STORAGE_ENDPOINT_URL` | URL | `http://localhost:9000` | S3-compatible endpoint URL. Examples: AWS S3 (`https://s3.amazonaws.com`), MinIO (`http://minio:9000` from inside container; `https://storage.skillars.com` from browser). Presigned upload URLs are built from this, so it must be reachable **by the browser** — use an HTTPS URL with a registered domain or public MinIO service hostname |
+| `APP_STORAGE_REGION` | String | `us-east-1` | S3 region. For MinIO, default to `us-east-1` |
+| `APP_STORAGE_S3_ACCESS_KEY` / `APP_STORAGE_S3_SECRET_KEY` | String | **not bound under `prod`** — see the profile note below | S3 credentials. For MinIO in production, use MinIO's root user (or IAM-equivalent). Leave blank to use AWS default credential chain (instance profile / `~/.aws`), which works only for AWS S3 |
 | `GEMINI_API_KEY` | String | *empty* | Google AI Studio → API keys. Used by the AI narrative features |
 | `ARACHNID_API_KEY` | String | *empty* | Project Arachnid (C3P) credential. Only needed when `features.toggles.arachnid-enabled` is on |
 | `APP_ACCESS_LOG_ENABLED` | Boolean | `true` | **Tuning knob, not a secret.** Tomcat access logging, emitted through SLF4J (loggers `skillars.access` for port 9990 and `skillars.access.management` for 8367) so entries reach Loki. Set `false` to disable both; see [`local-deployment.md`](local-deployment.md) for silencing only the management half, which is mostly healthcheck and Prometheus traffic |
@@ -125,12 +150,17 @@ application read them but no deploy supplied them. Defaults below are the applic
 > Leaving the two S3 keys blank still selects the AWS default credential chain — that check is on
 > blankness, not presence, so blank preserves the previous production behaviour.
 
-> **AWS SES.** `application-prod.yaml` sets `app.ses.enabled: true`, so a production boot constructs
+> **Email Providers:** The application uses SMTP for email via the `SPRING_MAIL_*` variables (the standard path).
+> Configure `SPRING_MAIL_HOST`, `SPRING_MAIL_PORT`, `SPRING_MAIL_USERNAME`, and `SPRING_MAIL_PASSWORD`
+> for your SMTP provider (Gmail, SendGrid, GMX, etc.). The `GMX_PASSWORD` and `GMAIL_PASSWORD` variables
+> are provider-specific overrides in `application.yaml` for multi-tenant mail routing.
+>
+> **AWS SES (legacy):** `application-prod.yaml` sets `app.ses.enabled: true`, so a production boot constructs
 > a real `SesV2Client` (region defaults to `eu-west-1` via `app.ses.region`). Credentials come from
 > the AWS SDK default provider chain — environment, instance profile, or `~/.aws` — none of which
-> `docker-compose.yml` supplies, so transactional email will fail at send time until that is
-> configured. `uat` and `dev` set it to `false` and use `NoOpSesEmailService`, which logs the
-> subject and drops the message.
+> `docker-compose.yml` supplies. **Do not use SES unless AWS credentials are configured via IAM roles on the Node.**
+> If AWS SES is not needed, set `app.ses.enabled: false` in `application.yaml`. `uat` and `dev` set it to `false`
+> and use `NoOpSesEmailService`, which logs the subject and drops the message.
 >
 > Until 2026-09-01 this bean crashed the application outright on any profile with SES enabled:
 > `pom.xml` declared `httpclient5` at test scope, stripping it from the shipped jar even though the
@@ -175,15 +205,19 @@ application read them but no deploy supplied them. Defaults below are the applic
 > Log in to GHCR, build the image, and push it so `APP_IMAGE` can be pulled:
 > ```bash
 > echo $GHCR_PAT | docker login ghcr.io -u <github-username> --password-stdin
-> docker build -t ghcr.io/<org>/javatemplate:sha-$(git rev-parse --short HEAD) .
-> docker push ghcr.io/<org>/javatemplate:sha-$(git rev-parse --short HEAD)
-> # Then set APP_IMAGE=ghcr.io/<org>/javatemplate:sha-$(git rev-parse --short HEAD) in .env
+> docker build -t ghcr.io/tenjohokwen/skillars:sha-$(git rev-parse --short HEAD) .
+> docker push ghcr.io/tenjohokwen/skillars:sha-$(git rev-parse --short HEAD)
+> # Then set APP_IMAGE=ghcr.io/tenjohokwen/skillars:sha-$(git rev-parse --short HEAD) in .env
 > ```
-> Run these commands from the root of your local repository clone before Step 6.
+> Run these commands from the root of your local repository clone before Step 6 of [`first-time-setup.md`](first-time-setup.md).
 
-> **Note on internal service addresses:** `LOKI_URL` and `MANAGEMENT_OTLP_TRACING_ENDPOINT` reference
-> Docker service names on the `skillars-internal` bridge network. They are not real secrets and their
-> values must not be changed — the application cannot reach these services by any other address.
+> **Not settable from `.env`, deliberately omitted from the table and from `.env.example`:**
+> `LOKI_URL`, `LOKI_ENABLED` and `MANAGEMENT_OTLP_TRACING_ENDPOINT` are written as hardcoded
+> literals on the `app` service (they point at Docker service names on the shared
+> `skillars-observability` network and the app cannot reach those services by any other address),
+> and `SPRING_DATASOURCE_URL` is derived by compose from `POSTGRES_DB`. Setting any of the four in
+> `.env` has no effect. Change them by editing the compose file — which is what
+> `docker-compose.uat-hostwinds.yml` does to turn Loki off where no `loki` container exists.
 
 > **At least one Grafana alert channel is required.** `deploy/provision.sh` **refuses to proceed**
 > (`exit 1`) if `.env` is present and **both** `GF_ALERT_NOTIFY_EMAIL` and `GF_SLACK_WEBHOOK_URL` are

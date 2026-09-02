@@ -109,6 +109,9 @@
         <tr><td><code>VideoDeletionOutboxProcessor</code></td><td>Drains the deletion outbox, calling Bunny <code>deleteAsset</code>; consults <code>session.repo.DrillVideoRef</code> ref-counting so a shared drill-demo asset isn't physically deleted while other sessions still reference it.</td></tr>
         <tr><td><code>QuotaReservationTimeoutService</code> / <code>QuotaReservationBatchExpirer</code></td><td>Reaper for the <code>QuotaProvider</code> contract — expires stale ACTIVE reservations under a ShedLock-guarded scheduled job.</td></tr>
         <tr><td><code>ModerationSlaMonitorService</code></td><td>Detects videos stuck in SCANNING past an SLA and republishes a moderation retry event.</td></tr>
+        <tr><td><code>VideoAccessCache</code></td><td>Request-scoped cache for playback authorization decisions and video entity lookups, preventing redundant DB queries during access evaluation and lifecycle checks.</td></tr>
+        <tr><td><code>VideoModerationScanPersistenceService</code></td><td>Immutable audit trail for moderation scan results (Arachnid, VideoIntel, minor-safety) — persists scan metadata and findings per scan attempt with timestamps.</td></tr>
+        <tr><td><code>ReconciliationWorkerScheduler</code></td><td>Scheduled reconciliation against the Bunny.net provider to detect and correct drift in video state — runs on-demand when <code>/api/video/admin/videos/{videoId}/reconcile</code> is called.</td></tr>
       </tbody>
     </table>
 
