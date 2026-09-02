@@ -222,6 +222,14 @@ public class JwtManagerImpl implements LoginTokenManager {
         if (StringUtils.containsIgnoreCase(roles, "ADMIN")) {
             CookieUtil.addCookie(res, ADMIN_COOKIE, "admin", false, (int) JWT_TTL.toSeconds());
         }
+        // 'rint' cookie: a FIXED value of 600000 ms (JWT_TTL - 5 min = 10 min), NOT a live countdown.
+        // Under the sliding-window design the JWT is re-issued with a fresh full TTL on every request,
+        // so this value is identical on every response. The frontend (sessionManager.js) derives its
+        // session-warning window as (JWT_TTL - rint) = 5 minutes before expiry. HttpOnly=false so JS can
+        // read it; browserSessionTtl (-1) writes a session cookie (no Max-Age/Expires) — it is NOT
+        // per-tab: it is shared across all tabs/windows of the browser and can survive a browser
+        // restart under session-restore; it is dropped only when the browser session truly ends.
+        // See SecurityConstants.SESSION_REFRESH_COUNTDOWN. Absolute-timestamp redesign is deferred to Story 1.7b.
         CookieUtil.addCookie(res,
                 SESSION_REFRESH_COUNTDOWN,
                 String.valueOf(JWT_TTL.minusMinutes(5).toMillis()),

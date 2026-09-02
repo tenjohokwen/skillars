@@ -57,7 +57,22 @@ public final class SecurityConstants {
     public static final String JWT_COOKIE_NAME = "potc";
     public static final String JWT_BUS_NAME = "jot";
     public static final String JWT_VERSION               = "v1";
-    public static final String SESSION_REFRESH_COUNTDOWN = "rint"; //Not used at the moment but Clients should actually use this to alert users that their session is about to expire
+    /**
+     * Name of the {@code rint} cookie ("refresh interval").
+     * <p>
+     * {@code JwtManagerImpl.createLoginCookies} writes this cookie on every authenticated request
+     * (login, refresh and TTL extension) with a <b>fixed</b> value of
+     * {@code JWT_TTL.minusMinutes(5).toMillis()} = 600000 ms (i.e. 10 minutes).
+     * <p>
+     * The frontend ({@code src/frontend/src/plugins/sessionManager.js}) reads it and derives the
+     * session-warning window as {@code JWT_TTL - rint} = 15 min - 10 min = <b>5 minutes before expiry</b>.
+     * It is a server-issued reference value only; the warning threshold itself is computed client-side.
+     * <p>
+     * Note: the value is fixed under the current sliding-window design (the JWT is re-issued with a
+     * fresh full TTL on every request), so {@code rint} does not count down. Re-designing it into an
+     * absolute expiry timestamp is deferred to Story 1.7b.
+     */
+    public static final String SESSION_REFRESH_COUNTDOWN = "rint";
     public static final String B_COOKIE                  = "bcookie";
     public static final String F_COOKIE = "fcookie"; //fingerprint cookie. Set by browser
     public static final String USER_COOKIE = "user"; //username cookie

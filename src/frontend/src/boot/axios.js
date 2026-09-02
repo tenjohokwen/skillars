@@ -93,8 +93,13 @@ api.interceptors.request.use(
     // Set Accept-Language header for i18n error messages from backend
     config.headers['Accept-Language'] = getCurrentLocale();
 
-    // Record activity for session tracking (skip for /refresh endpoint)
-    if (!config.url?.includes('/refresh')) {
+    // Record activity for session tracking. The keep-alive call is excluded here so that
+    // merely *issuing* it (or a failed one) doesn't reset the idle timer — a genuine
+    // user-initiated refresh already records activity explicitly in
+    // sessionManager.refreshSession() on success. Exact-match the path (minus any query
+    // string) rather than a substring test that could catch unrelated URLs.
+    const requestPath = (config.url || '').split('?')[0];
+    if (requestPath !== '/refresh') {
       recordActivity();
     }
 

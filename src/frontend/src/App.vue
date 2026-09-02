@@ -18,7 +18,8 @@ const authStore = useAuthStore();
 const playerStore = usePlayerStore();
 
 function isAuthenticated() {
-  return document.cookie.includes('user=');
+  // Exact cookie-name match: a bare `.includes('user=')` would also match e.g. `xuser=...`
+  return document.cookie.split(';').some((c) => c.trim().startsWith('user='));
 }
 
 function handleSessionExpired() {

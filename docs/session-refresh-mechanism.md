@@ -1,652 +1,431 @@
 # Session Refresh Mechanism for Frontend Integration
 
-This document explains the session management and refresh mechanism for Vue.js 3 + Quasar 2 frontend integration. It covers how to keep sessions alive, detect session expiration, and implement session timeout warnings.
+This document explains how session keep-alive, expiry detection and the session-timeout
+warning actually work in this codebase (Vue 3 + Quasar 2 frontend, Spring Security backend).
+
+> **Accuracy note (Story 1.7a).** An earlier version of this document described an
+> idealised design that was never fully implemented — it referenced a `stores/session.js`
+> Pinia store, a `useSessionStore()`, a `composables/useActivityTracking.js` and a
+> `rint` cookie that counts down. **None of those exist.** This version describes the
+> code as it is on `master`. Known rough edges are called out in
+> [Known limitations](#known-limitations); their fixes are tracked in Story 1.7b.
 
 ## Overview
 
-The backend uses a **JWT-based authentication system** with a **two-tier token refresh mechanism**:
-
-1. **JWT TTL Extension** - Token validity extended on each request (15 minutes)
-2. **DB Refresh Token** - Database validation every 5 minutes
+Authentication is JWT-based. The JWT lives in an **HttpOnly cookie** (`potc`) and is
+**re-issued with a fresh full 15-minute TTL on every authenticated request** — a
+"sliding window", not a countdown from login. A short-lived DB re-check runs on top of
+that so revoked/locked accounts are caught within ~5 minutes.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Session Lifecycle                             │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│   Login ──► JWT Created (15 min TTL) ──► User makes requests    │
-│                                              │                   │
-│                                              ▼                   │
-│                                    ┌─────────────────┐          │
-│                                    │ Each Request:   │          │
-│                                    │ - Extends JWT   │          │
-│                                    │   by 15 min     │          │
-│                                    │ - Every 5 min:  │          │
-│                                    │   DB validation │          │
-│                                    └─────────────────┘          │
-│                                              │                   │
-│                                              ▼                   │
-│                              No activity for 15 min?             │
-│                                     │          │                 │
-│                                    Yes        No                 │
-│                                     │          │                 │
-│                                     ▼          └──► Continue     │
-│                              Session Expires                     │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                         Session Lifecycle                             │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  Login ──► JWT issued (15 min TTL) + refresh-token cookie (7 days)    │
+│                              │                                        │
+│                              ▼                                        │
+│              Every authenticated request passes through              │
+│              JWTAuthorizationFilter, which:                          │
+│                • re-issues the JWT with a fresh 15 min TTL           │
+│                  (potc, user, rint cookies rewritten)                │
+│                • every ~5 min, re-authorises against the DB          │
+│                  (catches locked / deactivated / force-logged-out)   │
+│                              │                                        │
+│                              ▼                                        │
+│           No authenticated request for 15 min?                       │
+│                    │                    │                             │
+│                   Yes                  No ──► session stays alive     │
+│                    │                                                  │
+│                    ▼                                                  │
+│        JWT in potc cookie expires; next request → 401                │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-## Key Timeouts
+Two consequences that trip people up:
 
-| Timer | Duration | Description |
-|-------|----------|-------------|
-| JWT TTL | 15 minutes | Token expires if no activity |
-| DB Refresh | 5 minutes | Database validation interval |
-| OTP/2FA | 30 minutes | One-time password validity |
-| Password Reset | 24 hours | Reset link validity |
-| Account Activation | 7 days | Activation link validity |
+- **"Activity" means API requests only.** There is no mouse/keyboard/scroll tracking.
+  The Axios request interceptor calls `recordActivity()`; nothing else does. An idle
+  tab that makes no HTTP calls will show the warning and then fire `session:expired`
+  even though the user is looking at it.
+- **The warning threshold is computed on the client.** The server does not tell the
+  client "you have N seconds left". The client counts elapsed time since the last API
+  request and compares against a threshold it derives locally (see
+  [The `rint` cookie](#the-rint-cookie)).
 
-## Session Refresh Endpoint
+## Key timeouts
 
-### Endpoint Details
+| Constant | Value | Where | Meaning |
+|---|---|---|---|
+| `JWT_TTL` | 15 min | `SecurityConstants` | Access-token (`potc` cookie) lifetime; reset on every authed request |
+| `DB_REFRESH_TOKEN_INTERVAL` | 5 min | `SecurityConstants` | How often `JWTAuthorizationFilter` does a full DB re-authorisation (`daoAuthProvider.authorize`) instead of a TTL-only bump. The TTL-only path is **not** DB-free: it still runs one `refresh_tokens` revocation lookup whenever an `rtkn` cookie is present. |
+| `REFRESH_TOKEN_TTL` | 7 days | `SecurityConstants` | `rtkn` and `skp` cookie lifetime |
+| `SESSION_TTL` | 15 min (900000 ms) | `plugins/sessionManager.js` | Frontend's copy of `JWT_TTL` — **hardcoded**, must be kept in sync manually |
+| `DEFAULT_WARNING_THRESHOLD` | 2 min (120000 ms) | `plugins/sessionManager.js` | Warning window used **only until** a `rint` cookie has been seen |
+| `rint` cookie value | 10 min (600000 ms) | `JwtManagerImpl` | Fixed; frontend derives its real warning window from it (see below) |
+| `SESSION_CHECK_INTERVAL` | 30 s | `plugins/sessionManager.js` | How often the monitor recomputes time-until-expiry |
+| `COUNTDOWN_INTERVAL` | 1 s | `plugins/sessionManager.js` | Per-second countdown updates while the warning dialog is visible |
 
-**Endpoint:** `GET /refresh` or `POST /refresh`
+## The two "refresh" endpoints
 
-**Authentication:** Required (valid JWT)
+There are two distinct endpoints and it matters which you call.
 
-**Purpose:** Keep the session alive without performing any other action
+### `GET /refresh` — keep an active session alive
 
-**Response:** `200 OK` (empty body)
+- Handled by
+  `com.softropic.skillars.platform.security.infrastructure.filter.SessionRefreshFilter`.
+- It is a **secured, no-op endpoint**. Because `/refresh` is registered in
+  `AppEndpoints.SECURED_MAPPINGS`, the request first flows through
+  `JWTAuthorizationFilter`, which extends the JWT TTL and rewrites the `potc` / `user`
+  / `rint` cookies. Only then does `SessionRefreshFilter` run — and all it does is
+  `response.setStatus(200)` with an empty body. It does not chain the request any
+  further.
+- Filter ordering is wired in `SecurityConfiguration#filterChain`
+  (`.addFilterAfter(new SessionRefreshFilter(AppEndpoints.REFRESH), JWTAuthorizationFilter.class)`).
+- It does **not** rotate the refresh token (`rtkn`) or `skp`.
+- The matcher (`PathPatternRequestMatcher`) binds no HTTP verb, so any method to
+  `/refresh` short-circuits here; the frontend uses `GET`.
+- Frontend call: `sessionApi.refresh()` in `src/api/session.api.js` → `api.get('/refresh')`.
+- **Dev only:** `/refresh` needs a proxy entry in `src/frontend/quasar.config.js`
+  (added alongside `/api`, `/authenticate`, …). Without it, `quasar dev` answers
+  `GET /refresh` with the SPA fallback (`200` + `index.html`), `refreshSession()` sees a
+  resolved promise and clears the warning, but the JWT is never extended. Production is
+  unaffected (Spring serves the SPA).
 
-**What happens:**
-1. The `JWTAuthorizationFilter` intercepts the request
-2. If JWT is valid, it extends the TTL by 15 minutes
-3. If DB refresh token expired (>5 min), it validates against database
-4. `SessionRefreshFilter` returns 200 OK
+Use this to keep a session alive without doing other work — e.g. the "Continue session"
+button in the warning dialog.
 
-## The `rint` Cookie (Session Refresh Countdown)
+### `POST /api/auth/refresh` — full token rotation
 
-The backend sets a special cookie called `rint` (Refresh Interval) that the frontend can read to implement session timeout warnings.
+- Handled by `com.softropic.skillars.platform.security.api.AuthResource#refresh` →
+  `AuthService#refresh`.
+- The client presents its `rtkn` refresh-token cookie; the backend validates it,
+  marks it used, issues a **new access token + new refresh token pair**, and rewrites
+  `rtkn` and `skp`. Includes multi-tab race handling (a short grace window) and
+  token-reuse detection (revoke-all).
+- Response body is a `LoginResponse` (`{ userId, role, displayName }`).
+- Frontend call: `authApi.skillarsRefresh()` in `src/api/auth.api.js` →
+  `api.post('/api/auth/refresh')`.
 
-### Cookie Details
+Use this for login flows and explicit re-authentication, not for routine keep-alive.
 
-| Property | Value |
-|----------|-------|
-| Name | `rint` |
-| HTTPOnly | No (readable by JavaScript) |
-| TTL | Same as JWT (15 minutes) |
-| Value | Timestamp or countdown indicator |
+## Session cookies
 
-### How to Use for Session Warnings
+Set by `JwtManagerImpl` (on login / TTL extension / DB re-auth) and by `AuthService`
+(refresh-token and profile cookies). Attributes below are what the code actually sets.
 
-The `rint` cookie is set when the user logs in and refreshed with each authenticated request. When this cookie is about to expire, you should warn the user.
+**Applies to every cookie in this table:** `CookieUtil` writes them all with
+`Path=/`, `SameSite=Lax`, and `Secure` — where `Secure` is emitted only when the
+current request arrived over HTTPS (`RequestMetadataProvider.getClientInfo().isHttps()`),
+so over plain HTTP in local dev the cookies are **not** `Secure`. The per-row column
+below is `HttpOnly` and lifetime only.
 
-## Frontend Implementation
+"Browser-session" lifetime = `Max-Age=-1`, i.e. a session cookie with no `Expires`/`Max-Age`
+attribute. It is **not** per-tab: it is shared across all tabs/windows of the browser and
+can survive a browser restart when session-restore is enabled; it is dropped only when the
+browser session genuinely ends.
 
-### 1. Session Management Store (Pinia)
+| Cookie | Constant | HttpOnly | Lifetime | Contents / purpose |
+|---|---|---|---|---|
+| `potc` | `JWT_COOKIE_NAME` | **yes** | 15 min (`JWT_TTL`) | The JWT itself. Not readable from JS. |
+| `user` | `USER_COOKIE` | no | 15 min | The user's **display name** (plain string — *not* the JWT, *not* JSON). Used only as a cheap "is a session present" hint on the client. |
+| `admin` | `ADMIN_COOKIE` | no | 15 min | Literal `"admin"`, set only when the roles claim contains `ADMIN`. |
+| `rint` | `SESSION_REFRESH_COUNTDOWN` | no | browser-session | Fixed value `600000` (ms). See [below](#the-rint-cookie). |
+| `rtkn` | `REFRESH_TOKEN_COOKIE` | **yes** | 7 days (`REFRESH_TOKEN_TTL`) | Opaque refresh token. Issued only by `POST /api/auth/login` and `POST /api/auth/refresh`. |
+| `skp` | `SKILLARS_PROFILE_COOKIE` | no | 7 days | URL-encoded JSON `{"id":<Long>,"role":"COACH"}`. Read by `authStore.hydrateFromCookie()` to restore auth state on page load. |
+| `bcookie` | `B_COOKIE` | **yes** | browser-session | Client id. |
+| `ION` | `JWT_SESSION_COOKIE` | **yes** | browser-session | Session id. |
+| `fcookie` | `F_COOKIE` | no | 1 year | Browser fingerprint for fraud checks. Set **client-side** in `src/boot/axios.js` (`setBrowserFingerprint()`), not by the backend (so its flags are whatever that code sets, not `CookieUtil`'s). |
 
-```javascript
-// stores/session.js
-import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
-import { api } from 'src/boot/axios';
-import { useCookies } from '@vueuse/integrations/useCookies';
+Because `potc` is HttpOnly, the client cannot inspect the real token or its expiry.
+That is why the frontend relies on `user` (presence) and `skp` (identity), and tracks
+the countdown itself.
 
-export const useSessionStore = defineStore('session', () => {
-  // State
-  const isAuthenticated = ref(false);
-  const displayName = ref('');
-  const isAdmin = ref(false);
-  const sessionExpiresAt = ref(null);
-  const showSessionWarning = ref(false);
+## The `rint` cookie
 
-  // Timers
-  let sessionCheckInterval = null;
-  let warningTimeout = null;
-  let expirationTimeout = null;
+`JwtManagerImpl.createLoginCookies()` writes `rint` on every authenticated request:
 
-  // Constants
-  const SESSION_TTL_MS = 15 * 60 * 1000; // 15 minutes
-  const WARNING_BEFORE_MS = 2 * 60 * 1000; // Warn 2 minutes before expiry
-  const CHECK_INTERVAL_MS = 30 * 1000; // Check every 30 seconds
-
-  // Computed
-  const timeUntilExpiry = computed(() => {
-    if (!sessionExpiresAt.value) return 0;
-    return Math.max(0, sessionExpiresAt.value - Date.now());
-  });
-
-  const minutesUntilExpiry = computed(() => {
-    return Math.ceil(timeUntilExpiry.value / 60000);
-  });
-
-  // Actions
-  function initSession() {
-    const cookies = useCookies();
-    const userCookie = cookies.get('user');
-    const adminCookie = cookies.get('admin');
-
-    if (userCookie) {
-      isAuthenticated.value = true;
-      displayName.value = userCookie;
-      isAdmin.value = adminCookie === 'true';
-      resetSessionTimer();
-      startSessionMonitoring();
-    }
-  }
-
-  function resetSessionTimer() {
-    // Set new expiration time
-    sessionExpiresAt.value = Date.now() + SESSION_TTL_MS;
-    showSessionWarning.value = false;
-
-    // Clear existing timeouts
-    if (warningTimeout) clearTimeout(warningTimeout);
-    if (expirationTimeout) clearTimeout(expirationTimeout);
-
-    // Set warning timeout (2 min before expiry)
-    warningTimeout = setTimeout(() => {
-      showSessionWarning.value = true;
-    }, SESSION_TTL_MS - WARNING_BEFORE_MS);
-
-    // Set expiration timeout
-    expirationTimeout = setTimeout(() => {
-      handleSessionExpired();
-    }, SESSION_TTL_MS);
-  }
-
-  function startSessionMonitoring() {
-    // Check session status periodically
-    sessionCheckInterval = setInterval(() => {
-      checkSessionStatus();
-    }, CHECK_INTERVAL_MS);
-  }
-
-  function checkSessionStatus() {
-    const cookies = useCookies();
-    const userCookie = cookies.get('user');
-
-    if (!userCookie && isAuthenticated.value) {
-      // Session expired on server side
-      handleSessionExpired();
-    }
-  }
-
-  async function refreshSession() {
-    try {
-      await api.get('/refresh', { withCredentials: true });
-      resetSessionTimer();
-      return true;
-    } catch (error) {
-      if (error.response?.status === 401) {
-        handleSessionExpired();
-      }
-      return false;
-    }
-  }
-
-  function handleSessionExpired() {
-    isAuthenticated.value = false;
-    displayName.value = '';
-    isAdmin.value = false;
-    sessionExpiresAt.value = null;
-    showSessionWarning.value = false;
-
-    // Clear intervals and timeouts
-    if (sessionCheckInterval) clearInterval(sessionCheckInterval);
-    if (warningTimeout) clearTimeout(warningTimeout);
-    if (expirationTimeout) clearTimeout(expirationTimeout);
-
-    // Emit event or redirect
-    window.location.href = '/login?expired=true';
-  }
-
-  async function logout() {
-    try {
-      await api.post('/api/logout', {}, { withCredentials: true });
-    } finally {
-      handleSessionExpired();
-    }
-  }
-
-  function cleanup() {
-    if (sessionCheckInterval) clearInterval(sessionCheckInterval);
-    if (warningTimeout) clearTimeout(warningTimeout);
-    if (expirationTimeout) clearTimeout(expirationTimeout);
-  }
-
-  return {
-    // State
-    isAuthenticated,
-    displayName,
-    isAdmin,
-    showSessionWarning,
-    timeUntilExpiry,
-    minutesUntilExpiry,
-    // Actions
-    initSession,
-    resetSessionTimer,
-    refreshSession,
-    logout,
-    cleanup
-  };
-});
+```java
+// FIXED value: JWT_TTL - 5 min = 10 min = 600000 ms. Not a countdown.
+CookieUtil.addCookie(res,
+        SESSION_REFRESH_COUNTDOWN,
+        String.valueOf(JWT_TTL.minusMinutes(5).toMillis()),
+        false,               // HttpOnly = false → JS can read it
+        browserSessionTtl);  // -1 → session cookie: shared across tabs, survives tab close,
+                             //      cleared only when the browser session ends
 ```
 
-### 2. Session Warning Dialog Component
+The value never changes during a session — under the sliding window the JWT is always
+re-issued with a fresh full TTL, so `JWT_TTL - 5min` is a constant.
+
+The frontend (`plugins/sessionManager.js → syncWarningThresholdFromCookie()`) reads it
+and derives the warning window:
+
+```js
+const threshold = SESSION_TTL - rint;      // 900000 - 600000 = 300000 ms = 5 minutes
+if (threshold > 0 && threshold < SESSION_TTL) {
+  warningThreshold.value = threshold;       // warn 5 minutes before expiry
+}
+```
+
+So the effective behaviour is: **warn 5 minutes before expiry** — but only because the
+backend happens to hardcode `JWT_TTL - 5min` and the frontend happens to hardcode
+`SESSION_TTL = JWT_TTL`. If either constant changes without the other, the warning
+window silently drifts. Until the first `rint` cookie is observed, the frontend falls
+back to `DEFAULT_WARNING_THRESHOLD` (2 minutes).
+
+Redesigning `rint` into an absolute expiry timestamp (so the client no longer needs a
+hardcoded `SESSION_TTL`) is tracked in **Story 1.7b**.
+
+## Frontend implementation
+
+### Modules (actual paths)
+
+| File | Role |
+|---|---|
+| `src/plugins/sessionManager.js` | Standalone module holding ref-based session state and the monitor timers. **Not a Pinia store.** |
+| `src/composables/useSession.js` | Thin composable wrapper: re-exports the refs as `computed`, plus `handleRefresh` / `handleLogout` / `initSession` / `destroySession`. |
+| `src/components/common/SessionWarningDialog.vue` | The warning dialog. Rendered once, in `App.vue`. |
+| `src/boot/axios.js` | Request interceptor calls `recordActivity()`; response interceptor calls `syncWarningThresholdFromCookie()` and handles 401. |
+| `src/App.vue` | Starts session monitoring on mount if a `user` cookie is present; listens for the `session:expired` event. |
+| `src/stores/auth.store.js` | Pinia store for identity (`userId`, `role`, `displayName`); `hydrateFromCookie()` reads `skp`. |
+| `src/api/session.api.js` | `sessionApi.refresh()` → `GET /refresh`. |
+| `src/api/auth.api.js` | `authApi.skillarsRefresh()` → `POST /api/auth/refresh`. Note there are **two** logout helpers: `authApi.logout()` → `POST /api/logout` (the one `useSession.handleLogout()` actually calls) and `authApi.skillarsLogout()` → `POST /api/auth/logout`. |
+
+### `plugins/sessionManager.js` (the monitor)
+
+Key exported functions:
+
+- `recordActivity()` — sets `lastActivityTime = Date.now()`. Called by the Axios
+  request interceptor for every request **except** `GET /refresh`.
+- `startSessionMonitoring()` — clears old timers, records activity, syncs the threshold
+  from any existing `rint` cookie, then starts a `setInterval` (every
+  `SESSION_CHECK_INTERVAL` = 30 s) that:
+  - recomputes `timeUntilExpiry = SESSION_TTL - (Date.now() - lastActivityTime)`;
+  - sets `showWarning` when `0 < timeUntilExpiry < warningThreshold`;
+  - starts a 1-second countdown timer while the warning is visible;
+  - dispatches `window` event `session:expired` and calls `cleanup()` when
+    `timeUntilExpiry <= 0`.
+- `syncWarningThresholdFromCookie()` — see [The `rint` cookie](#the-rint-cookie). Called
+  by the Axios response interceptor after every response (success and error).
+- `refreshSession()` — dynamically imports `src/api/session.api` (to avoid the
+  `axios.js → sessionManager.js → session.api.js → axios.js` import cycle), calls
+  `sessionApi.refresh()`, then `recordActivity()` and clears the warning.
+- `stopSessionMonitoring()` / `cleanup()` — tear down timers and reset state.
+
+Exported refs (consume via `useSession()`): `showWarning`, `timeUntilExpiry`,
+`secondsRemaining`, `minutesRemaining`, `isRefreshing`, `warningThresholdSeconds`.
+
+### `composables/useSession.js`
+
+```js
+import { useSession } from 'src/composables/useSession';
+
+const {
+  showWarning, secondsRemaining, minutesRemaining, isRefreshing,
+  warningThresholdSeconds, handleRefresh, handleLogout,
+  initSession, destroySession,
+} = useSession();
+```
+
+- `handleRefresh()` → `refreshSession()` from the plugin.
+- `handleLogout()` → `stopSessionMonitoring()`, `authApi.logout()` (errors ignored),
+  `playerStore.resetSelfPlayerId()`, `cleanup()`, then `router.push('/login')`.
+  > **Known gap:** this path does not clear the Pinia `authStore` / `skp` cookie, so
+  > the router's `requiresGuest` guard can bounce the user back in. Tracked in 1.7b.
+- `initSession()` → `startSessionMonitoring()`.
+- `destroySession()` → `stopSessionMonitoring()` + `cleanup()`.
+
+### `components/common/SessionWarningDialog.vue`
 
 ```vue
-<!-- components/SessionWarningDialog.vue -->
-<template>
-  <q-dialog v-model="showDialog" persistent>
-    <q-card style="min-width: 350px">
-      <q-card-section class="row items-center">
-        <q-avatar icon="access_time" color="warning" text-color="white" />
-        <span class="q-ml-sm text-h6">Session Expiring</span>
-      </q-card-section>
-
-      <q-card-section>
-        <p>Your session will expire in <strong>{{ minutesRemaining }}</strong> minute(s).</p>
-        <p>Do you want to continue your session?</p>
-      </q-card-section>
-
-      <q-card-section>
-        <q-linear-progress
-          :value="progressValue"
-          color="warning"
-          class="q-mt-md"
-        />
-      </q-card-section>
-
-      <q-card-actions align="right">
-        <q-btn
-          flat
-          label="Logout"
-          color="negative"
-          @click="handleLogout"
-          :loading="loading"
-        />
-        <q-btn
-          label="Continue Session"
-          color="primary"
-          @click="handleRefresh"
-          :loading="loading"
-        />
-      </q-card-actions>
-    </q-card>
-  </q-dialog>
-</template>
-
 <script setup>
-import { ref, computed, watch } from 'vue';
-import { useSessionStore } from 'stores/session';
-import { useQuasar } from 'quasar';
+import { ref, watch, computed } from 'vue';
+import { useSession } from 'src/composables/useSession';
 
-const $q = useQuasar();
-const sessionStore = useSessionStore();
+const {
+  showWarning, secondsRemaining, minutesRemaining,
+  isRefreshing, warningThresholdSeconds, handleRefresh, handleLogout,
+} = useSession();
 
-const loading = ref(false);
-const showDialog = ref(false);
+const dialogVisible = ref(showWarning.value);
+watch(showWarning, (v) => { dialogVisible.value = v; });
 
-// Watch for session warning
-watch(() => sessionStore.showSessionWarning, (show) => {
-  showDialog.value = show;
+const formattedCountdown = computed(() => {
+  const s = secondsRemaining.value;
+  return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
 });
-
-const minutesRemaining = computed(() => sessionStore.minutesUntilExpiry);
-
 const progressValue = computed(() => {
-  // Progress from 1 to 0 over 2 minutes
-  const twoMinutesMs = 2 * 60 * 1000;
-  return Math.max(0, sessionStore.timeUntilExpiry / twoMinutesMs);
+  const max = warningThresholdSeconds.value || 1;
+  return Math.max(0, Math.min(1, secondsRemaining.value / max));
 });
-
-async function handleRefresh() {
-  loading.value = true;
-  try {
-    const success = await sessionStore.refreshSession();
-    if (success) {
-      showDialog.value = false;
-      $q.notify({
-        type: 'positive',
-        message: 'Session refreshed successfully',
-        position: 'top'
-      });
-    }
-  } catch (error) {
-    $q.notify({
-      type: 'negative',
-      message: 'Failed to refresh session',
-      position: 'top'
-    });
-  } finally {
-    loading.value = false;
-  }
-}
-
-async function handleLogout() {
-  loading.value = true;
-  await sessionStore.logout();
-}
 </script>
 ```
 
-### 3. Axios Interceptor for Session Management
+The dialog is `persistent`, shows an `MM:SS` countdown, and offers **Logout** and
+**Continue session** (calls `handleRefresh`). All user-facing strings go through
+`vue-i18n` (`session.*`, `auth.logout`).
 
-```javascript
-// boot/axios.js
-import { boot } from 'quasar/wrappers';
-import axios from 'axios';
-import { useSessionStore } from 'stores/session';
+### `boot/axios.js` (interceptors)
 
-const api = axios.create({
-  baseURL: process.env.API_URL || 'http://localhost:8080',
-  withCredentials: true, // Always send cookies
-  timeout: 30000
-});
+```js
+// Request: count everything as activity except the keep-alive call itself.
+const requestPath = (config.url || '').split('?')[0];
+if (requestPath !== '/refresh') {
+  recordActivity();
+}
 
-export default boot(({ app, router }) => {
-  // Response interceptor
-  api.interceptors.response.use(
-    (response) => {
-      // Reset session timer on successful authenticated requests
-      const sessionStore = useSessionStore();
-      if (sessionStore.isAuthenticated) {
-        sessionStore.resetSessionTimer();
-      }
-      return response;
-    },
-    (error) => {
-      const sessionStore = useSessionStore();
+// Response (success, and non-401 errors): the auth filter extended the JWT and rewrote
+// `rint` before we got here, so re-sync the threshold. On a 401/expired response the
+// filter clears cookies instead of refreshing them, and the block below runs.
+syncWarningThresholdFromCookie();
 
-      if (error.response?.status === 401) {
-        // Session expired
-        sessionStore.logout();
-        router.push('/login?expired=true');
-      }
-
-      return Promise.reject(error);
-    }
-  );
-
-  // Request interceptor (optional - for adding headers)
-  api.interceptors.request.use(
-    (config) => {
-      // Add any custom headers if needed
-      return config;
-    },
-    (error) => Promise.reject(error)
-  );
-
-  app.config.globalProperties.$axios = axios;
-  app.config.globalProperties.$api = api;
-});
-
-export { api };
-```
-
-### 4. Activity-Based Session Refresh
-
-For a better user experience, refresh the session automatically when the user is active:
-
-```javascript
-// composables/useActivityTracking.js
-import { onMounted, onUnmounted } from 'vue';
-import { useSessionStore } from 'stores/session';
-import { debounce } from 'quasar';
-
-export function useActivityTracking() {
-  const sessionStore = useSessionStore();
-
-  // Debounced refresh - max once every 5 minutes
-  const debouncedRefresh = debounce(() => {
-    if (sessionStore.isAuthenticated) {
-      sessionStore.refreshSession();
-    }
-  }, 5 * 60 * 1000, true); // 5 minutes, leading edge
-
-  const activityEvents = ['mousedown', 'keydown', 'scroll', 'touchstart'];
-
-  function handleActivity() {
-    if (sessionStore.isAuthenticated && sessionStore.showSessionWarning) {
-      // If warning is showing and user is active, refresh immediately
-      sessionStore.refreshSession();
-    } else {
-      // Otherwise use debounced refresh
-      debouncedRefresh();
-    }
-  }
-
-  onMounted(() => {
-    activityEvents.forEach(event => {
-      document.addEventListener(event, handleActivity, { passive: true });
-    });
-  });
-
-  onUnmounted(() => {
-    activityEvents.forEach(event => {
-      document.removeEventListener(event, handleActivity);
-    });
-  });
+// Error, status 401:
+const errorKey = data?.errorMsg?.errorKey || '';
+if (status === 401 && (errorKey === 'security.sessionExpired' || errorKey === 'security.unauthorized')) {
+  stopSessionMonitoring();
+  cleanup();
+  // clear `user` and `skp`, then hard-redirect to /login?...&expired=true
 }
 ```
 
-### 5. App Layout with Session Warning
+> **Known gap:** `JWTAuthorizationFilter` emits a bare `401` (`res.sendError(...)`)
+> with no `ErrorDto` body, so `errorKey` is `''` and the block above does not fire on a
+> genuinely expired token — the request just fails. Tracked as 1.7b B3.
 
-```vue
-<!-- layouts/MainLayout.vue -->
-<template>
-  <q-layout view="lHh Lpr lFf">
-    <q-header elevated>
-      <q-toolbar>
-        <q-toolbar-title>My App</q-toolbar-title>
+### `App.vue`
 
-        <!-- Session indicator -->
-        <div v-if="sessionStore.isAuthenticated" class="row items-center q-gutter-sm">
-          <q-chip
-            v-if="sessionStore.showSessionWarning"
-            color="warning"
-            text-color="white"
-            icon="warning"
-          >
-            Session expiring in {{ sessionStore.minutesUntilExpiry }} min
-          </q-chip>
-          <span>{{ sessionStore.displayName }}</span>
-          <q-btn flat icon="logout" @click="sessionStore.logout" />
-        </div>
-      </q-toolbar>
-    </q-header>
+```js
+function isAuthenticated() {
+  // Exact cookie-name match (a bare includes('user=') would also match `xuser=...`).
+  return document.cookie.split(';').some((c) => c.trim().startsWith('user='));
+}
 
-    <q-page-container>
-      <router-view />
-    </q-page-container>
-
-    <!-- Session Warning Dialog -->
-    <SessionWarningDialog />
-  </q-layout>
-</template>
-
-<script setup>
-import { onMounted, onUnmounted } from 'vue';
-import { useSessionStore } from 'stores/session';
-import { useActivityTracking } from 'src/composables/useActivityTracking';
-import SessionWarningDialog from 'components/SessionWarningDialog.vue';
-
-const sessionStore = useSessionStore();
-
-// Initialize session on mount
 onMounted(() => {
-  sessionStore.initSession();
-});
-
-// Cleanup on unmount
-onUnmounted(() => {
-  sessionStore.cleanup();
-});
-
-// Track user activity
-useActivityTracking();
-</script>
-```
-
-### 6. Route Guards for Protected Pages
-
-```javascript
-// router/index.js
-import { route } from 'quasar/wrappers';
-import { createRouter, createWebHistory } from 'vue-router';
-import routes from './routes';
-
-export default route(function () {
-  const Router = createRouter({
-    history: createWebHistory(),
-    routes
-  });
-
-  Router.beforeEach((to, from, next) => {
-    const requiresAuth = to.matched.some(record => record.meta.requiresAuth);
-
-    // Check for user cookie (non-HTTPOnly, readable by JS)
-    const userCookie = document.cookie
-      .split('; ')
-      .find(row => row.startsWith('user='));
-
-    const isAuthenticated = !!userCookie;
-
-    if (requiresAuth && !isAuthenticated) {
-      next({ path: '/login', query: { redirect: to.fullPath } });
-    } else if (to.path === '/login' && isAuthenticated) {
-      next('/dashboard');
-    } else {
-      next();
-    }
-  });
-
-  return Router;
+  if (isAuthenticated()) startSessionMonitoring();
+  window.addEventListener('session:expired', handleSessionExpired);
 });
 ```
 
-## Best Practices
+`handleSessionExpired()` clears the `user` cookie, calls `authStore.logout()`
+(best-effort), `playerStore.resetSelfPlayerId()`, `cleanup()`, then routes to
+`/login?redirect=...&expired=true`.
 
-### 1. Always Use `withCredentials`
+### Route guard (`router/index.js`)
 
-```javascript
-// Ensure cookies are sent with every request
-axios.defaults.withCredentials = true;
+Auth state for guards comes from the Pinia `authStore`, hydrated once from the `skp`
+cookie:
+
+```js
+if (!hydrated) { authStore.hydrateFromCookie(); hydrated = true; }
+const isAuthenticated = authStore.isAuthenticated;   // !!userId, from skp
+
+if (requiresAuth  && !isAuthenticated) next({ path: '/login', query: { redirect: to.fullPath } });
+if (requiresGuest &&  isAuthenticated) next(ROLE_ROUTES[authStore.role] || '/dashboard');
 ```
 
-### 2. Handle 401 Responses Globally
+Note `skp` has a 7-day TTL while `potc` is 15 minutes: the guard can consider a user
+"authenticated" (valid `skp`) after the actual JWT session has expired. The first API
+call then returns 401 — but see the **Known gap** above: because `JWTAuthorizationFilter`
+sends a bodyless 401, the interceptor's `errorKey` gate does not fire, so today that
+request simply fails rather than cleanly redirecting to `/login`. The
+elapsed-time monitor's `session:expired` event is the path that does reliably fire
+(after 15 min of no successful API calls). Both are tightened in 1.7b.
 
-```javascript
-// In your axios interceptor
-if (error.response?.status === 401) {
-  sessionStore.logout();
-  router.push('/login?expired=true');
-}
-```
+## Backend components
 
-### 3. Refresh on Tab Focus
+| File (`com.softropic.skillars…`) | Role |
+|---|---|
+| `platform.security.infrastructure.jwt.filter.JWTAuthorizationFilter` | On every authed request: re-issues the JWT with a fresh 15 min TTL and rewrites `potc` / `user` / `rint`. Fast path = `checkAuthorities` + `extendTtlOfToken` (plus a `refresh_tokens` revocation lookup when `rtkn` is present); every ~5 min (or on revocation) it instead runs a full `daoAuthProvider.authorize` DB re-auth. This is where "sliding window" happens. |
+| `platform.security.infrastructure.filter.SessionRefreshFilter` | Terminal handler for `/refresh` (matcher binds no HTTP verb — any method short-circuits here; frontend uses `GET`); returns an empty `200`. Does not refresh anything itself. |
+| `platform.security.api.AuthResource` | `POST /api/auth/login` \| `/refresh` \| `/logout`. `/refresh` here = full token rotation, returns `LoginResponse`. |
+| `platform.security.service.AuthService` | Refresh-token persistence/rotation, `skp` cookie, reuse detection, multi-tab grace window. |
+| `platform.security.infrastructure.jwt.JwtManagerImpl` | Builds and sets all JWT-related cookies (`createLoginCookies`), including the fixed-value `rint`. |
+| `platform.security.config.SecurityConfiguration` | Filter-chain wiring; `SessionRefreshFilter` is added right after `JWTAuthorizationFilter`. |
+| `infrastructure.security.SecurityConstants` | `JWT_TTL`, `DB_REFRESH_TOKEN_INTERVAL`, `REFRESH_TOKEN_TTL`, all cookie-name constants. |
 
-```javascript
-// Refresh session when user returns to the tab
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && sessionStore.isAuthenticated) {
-    sessionStore.refreshSession();
-  }
-});
-```
+## Sequence diagrams
 
-### 4. Don't Refresh Too Frequently
-
-```javascript
-// Debounce refreshes to avoid overwhelming the server
-// Maximum once every 5 minutes for activity-based refresh
-```
-
-### 5. Show Warning Before Expiry
-
-```javascript
-// Show warning 2 minutes before session expires
-// This gives users time to save their work
-const WARNING_BEFORE_MS = 2 * 60 * 1000;
-```
-
-## Sequence Diagrams
-
-### Normal Session Flow
+### Keep-alive from the warning dialog
 
 ```
-User                    Frontend                   Backend
- │                         │                          │
- │──── Login ─────────────►│                          │
- │                         │──── POST /authenticate ──►│
- │                         │◄──── JWT + Cookies ───────│
- │◄──── Logged In ─────────│                          │
- │                         │                          │
- │──── Make Request ──────►│                          │
- │                         │──── GET /api/data ───────►│
- │                         │   (JWT in cookie)         │
- │                         │◄──── Data + Extended JWT ─│
- │◄──── Response ──────────│                          │
- │                         │                          │
- │     (13 min later)      │                          │
- │                         │◄── Warning Dialog ────────│
- │                         │                          │
- │──── Click Refresh ─────►│                          │
- │                         │──── GET /refresh ────────►│
- │                         │◄──── 200 OK + New JWT ────│
- │◄──── Session Extended ──│                          │
+User                Frontend                                 Backend
+ │                     │                                        │
+ │  (~10 min idle)     │                                        │
+ │                     │ monitor: timeUntilExpiry < 5 min       │
+ │                     │ (i.e. ≥10 min since last API call,      │
+ │                     │  under the 15 min TTL; ±30s check tick) │
+ │◄── warning dialog ──│                                        │
+ │                     │                                        │
+ │── Continue ────────►│ sessionApi.refresh()                   │
+ │                     │──── GET /refresh (potc cookie) ───────►│
+ │                     │                       JWTAuthorizationFilter
+ │                     │                        re-issues JWT (fresh 15 min)
+ │                     │                        rewrites potc/user/rint
+ │                     │                       SessionRefreshFilter → 200
+ │                     │◄──────────── 200 (empty) ──────────────│
+ │                     │ recordActivity(); showWarning = false  │
+ │◄── dialog closes ───│                                        │
 ```
 
-### Session Expiry Flow
+### Expiry
 
 ```
-User                    Frontend                   Backend
- │                         │                          │
- │     (15 min idle)       │                          │
- │                         │                          │
- │──── Make Request ──────►│                          │
- │                         │──── GET /api/data ───────►│
- │                         │   (Expired JWT)           │
- │                         │◄──── 401 Unauthorized ────│
- │                         │                          │
- │◄──── Redirect to Login ─│                          │
- │                         │                          │
+User                Frontend                                 Backend
+ │  (15 min, no API calls)                                     │
+ │                     │ monitor: timeUntilExpiry <= 0         │
+ │                     │ window 'session:expired' → App.vue    │
+ │                     │ clear `user`, authStore.logout(),     │
+ │                     │ cleanup()                              │
+ │◄── /login?expired=true ─┤                                    │
 ```
 
 ## Troubleshooting
 
-### Session Expires Unexpectedly
+**Warning dialog never appears.** The warning is driven purely by *elapsed time since
+the last successful API call* — an idle tab still warns and expires on schedule, so
+"no dialog" points at the monitor not running, not at inactivity. Check that
+`startSessionMonitoring()` ran (it only does if a `user` cookie was present at
+`App.vue` mount — direct navigation to a page while unauthenticated, then logging in
+via SPA routing without a full reload, can skip it) and that a `rint` cookie exists so
+the threshold is the derived 5 min rather than the 2 min fallback.
 
-1. Check if `withCredentials: true` is set
-2. Verify CORS configuration allows credentials
-3. Check if cookies are being blocked by browser
+**Warning window is wrong (not ~5 min).** `SESSION_TTL` in `plugins/sessionManager.js`
+must equal the backend `JWT_TTL`, and backend `rint` must equal `JWT_TTL - 5min`. If
+someone changed one side only, they drift. (1.7b removes this coupling.)
 
-### Warning Dialog Not Showing
+**Expired token doesn't redirect to /login.** Known issue: the JWT filter returns a
+bodyless 401, so the interceptor's `errorKey` check misses. Tracked as 1.7b B3.
 
-1. Verify the `rint` cookie is being set
-2. Check if the session timer is being reset properly
-3. Ensure the warning component is mounted
+**Logout bounces back into the app.** Known issue in `useSession.handleLogout()` — it
+doesn't clear `authStore` / `skp`. Use `App.vue`'s `handleSessionExpired()` path or
+`authStore.logout()` (which clears `skp`) as the reference. Tracked in 1.7b.
 
-### Refresh Not Working
+## Known limitations
 
-1. Check network tab for 401 responses
-2. Verify the `/refresh` endpoint is accessible
-3. Check if the JWT cookie is being sent
+These are real defects, deferred to **Story 1.7b** because they need an architectural
+decision on the `rint` contract first:
+
+1. **`rint` is a fixed value, not a countdown / absolute timestamp.** The warning
+   window works only by coincidence of two independently-hardcoded constants.
+2. **Idle background tab can force-log-out an active tab.** Each tab runs its own
+   elapsed-time timer and never sees another tab's API activity.
+3. **`useSession.handleLogout()` doesn't fully clear session state** (`skp` survives),
+   so the guard can bounce the user back in.
+4. **Expired-token 401 has no `ErrorDto` body**, so the frontend's
+   `errorKey === 'security.sessionExpired'` gate never fires for that case.
+5. **`SESSION_TTL` is hardcoded on the frontend** and must be manually kept in sync
+   with the backend `JWT_TTL`.
 
 ## Summary
 
-| Component | Purpose |
-|-----------|---------|
-| `/refresh` endpoint | Keep session alive |
-| `rint` cookie | Frontend-readable session indicator |
-| Session Store | Manage auth state and timers |
-| Warning Dialog | Alert user before expiry |
-| Activity Tracking | Auto-refresh on user activity |
-| Axios Interceptor | Handle 401s and reset timers |
-
-The key to a good session management implementation is:
-1. **Proactively refresh** the session when the user is active
-2. **Warn users** before their session expires
-3. **Handle expiration gracefully** with clear messaging
-4. **Reset timers** on every successful authenticated request
+| Piece | Reality |
+|---|---|
+| `GET /refresh` | Secured no-op; TTL extension happens upstream in `JWTAuthorizationFilter`. |
+| `POST /api/auth/refresh` | Full refresh-token rotation; returns `LoginResponse`. |
+| `rint` cookie | Fixed `600000` ms, browser-session TTL, JS-readable; client derives a 5-min warning window from it. |
+| Session state | `plugins/sessionManager.js` (refs + timers) + `composables/useSession.js` (wrapper). No Pinia session store. |
+| Identity state | `stores/auth.store.js`, hydrated from the `skp` cookie. |
+| "Activity" | API requests only (Axios request interceptor). No input tracking. |
+| Warning dialog | `components/common/SessionWarningDialog.vue`, mounted once in `App.vue`. |
