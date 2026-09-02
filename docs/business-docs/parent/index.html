@@ -31,7 +31,7 @@
     <p class="subtitle">The account holder and legal guardian who manages one or more minor players — discovering coaches, booking and paying for sessions, and overseeing what their child does on the platform.</p>
 
     <h2>Who this persona is</h2>
-    <p>A Parent is Skillars' primary paying customer for anyone under 18. Their child (the Player) has no login of their own — the Parent account browses, books, pays, and even reviews video content on the child's behalf. This makes Parent the busiest and most commercially important persona in the product: nearly every payment flow and most booking flows in Skillars are Parent-initiated, including — currently — bookings for adult self-registered players too (see the <a href="../player/index.html">Player</a> page for that gap).</p>
+    <p>A Parent is Skillars' primary paying customer for anyone under 18. Their child (the Player) has no login of their own — the Parent account browses, books, pays, and even reviews video content on the child's behalf. This makes Parent the busiest and most commercially important persona in the product: nearly every payment flow and most booking flows in Skillars are Parent-initiated. Parents can also book coaches on behalf of adult players if they choose to.</p>
 
     <h2>Your journey at a glance</h2>
     <pre class="mermaid">
@@ -114,7 +114,17 @@ flowchart LR
       <li><code>/parent/approvals</code>: <strong>this is specifically about video content, not booking approval</strong> despite the generic name — it's the parental-approval queue for videos your child has uploaded (drill clips, homework submissions). Each pending item shows the player, video type, and date, with Approve/Reject buttons. This is the "minor safety gate" that sits between a child uploading a video and it becoming visible/usable.</li>
     </ol>
 
-    <h3>6. Messaging a coach</h3>
+    <h3>6. Reviewing a coach</h3>
+    <p><strong>Why it matters:</strong> your feedback as a parent and payer helps other parents make informed choices and helps coaches improve their service.</p>
+    <ol>
+      <li>After you've booked and experienced a coach, visit their profile again at <code>/coaches/:coachId</code>.</li>
+      <li>Scroll to the "Write Review" section (visible only if you're logged in as a parent and haven't already reviewed this coach).</li>
+      <li>Click "Write Review" to open a dialog where you can rate the coach 1–5 stars and write up to 1000 characters of feedback.</li>
+      <li>Once submitted, your review goes into moderation — it may initially show a "Pending moderation" status. Once approved, it appears on the coach's profile where all parents and players can see it.</li>
+      <li>You can edit your existing review by clicking "Edit Review" next to it; coaches can also respond to your review with their own message.</li>
+    </ol>
+
+    <h3>7. Messaging a coach</h3>
     <p>Same <code>/messaging</code> screen as every other persona — conversation list plus thread. As the guardian of a minor, your exact role in a given conversation (primary participant vs. silent observer, and whether your name or your child's is shown) depends on your child's age tier, computed automatically from their date of birth.</p>
 
     <h2>Conventions &amp; Gotchas</h2>
