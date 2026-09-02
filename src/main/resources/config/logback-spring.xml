@@ -4,7 +4,13 @@
     <springProperty name="environment" source="app.environment"         defaultValue="dev"/>
     <springProperty name="appVersion"  source="app.version"             defaultValue="unknown"/>
     <springProperty name="lokiUrl"     source="loki.url"                defaultValue="http://localhost:3100"/>
-    <springProperty name="lokiEnabled" source="loki.enabled"            defaultValue="true"/>
+    <!--
+      defaultValue is fail-closed on purpose. It only applies if the Spring property is absent,
+      which in practice never happens — application.yaml always defines loki.enabled as
+      ${LOKI_ENABLED:false}. Were it ever to apply, "true" would make the app try to ship every log
+      batch to localhost:3100; "false" simply logs to the console.
+    -->
+    <springProperty name="lokiEnabled" source="loki.enabled"            defaultValue="false"/>
 
     <appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">
         <encoder class="net.logstash.logback.encoder.LoggingEventCompositeJsonEncoder">
@@ -33,53 +39,128 @@
         </encoder>
     </appender>
 
+    <!--
+      loki4j 2.x configuration. This was written against the 1.x schema until
+      loki-logback-appender was bumped 1.5.2 -> 2.1.0 (039b1a8, PR #48); the old form
+      declared the sender as `<http class="com.github.loki4j.logback.JavaHttpSender">`,
+      which 2.x rejects with IncompatibleClassException because `http` now binds to
+      PipelineConfigAppenderBase$HttpCfg and the sender moved to a nested `<sender>`.
+      Spring Boot treats a logback configuration error as fatal, so that mismatch was a
+      hard startup crash (before any bean existed), not a degraded-logging warning.
+
+      Verified against the shipped jar rather than from memory — the 2.x surface is:
+        Loki4jAppender.setLabels(String), setStructuredMetadata(String),
+                       setMessage(Layout<ILoggingEvent>), setReadMarkers/setVerbose(boolean)
+        PipelineConfigAppenderBase.setHttp(HttpCfg), setBatch(BatchCfg)
+        HttpCfg.setUrl(String), setSender(HttpSender), setTenantId, timeouts, retries
+      There is no `setFormat` and no `sortByTime` in 2.x, so `<format>`/`JsonEncoder`
+      and `<sortByTime>` are gone; the label pattern is now the plain `<labels>` string
+      and the message layout is a direct child of the appender.
+    -->
     <if condition='property("lokiEnabled").equals("true")'>
         <then>
             <appender name="LOKI" class="com.github.loki4j.logback.Loki4jAppender">
-                <http class="com.github.loki4j.logback.JavaHttpSender">
+                <http>
                     <url>${lokiUrl}/loki/api/v1/push</url>
+                    <sender class="com.github.loki4j.logback.JavaHttpSender"/>
                 </http>
-                <format class="com.github.loki4j.logback.JsonEncoder">
-                    <label>
-                        <pattern>app=${appName},environment=${environment},level=%level</pattern>
-                    </label>
-                    <message class="net.logstash.logback.layout.LoggingEventCompositeJsonLayout">
-                        <providers>
-                            <timestamp>
-                                <timeZone>UTC</timeZone>
-                            </timestamp>
-                            <logLevel/>
-                            <threadName/>
-                            <loggerName/>
-                            <message/>
-                            <mdc/>
-                            <arguments/>
-                            <keyValuePairs/>
-                            <stackTrace/>
+                <!--
+                  Newline-separated, NOT the comma-separated 1.x form. loki4j 2.x
+                  defaults the label pair separator to a newline regex; passing the old
+                  `app=x,environment=y,level=%level` string on one line fails with
+                      IllegalArgumentException: Unable to split '...' to key-value pairs
+                  which, like every other logback config error here, aborts startup.
+                -->
+                <labels>
+                    app = ${appName}
+                    environment = ${environment}
+                    level = %level
+                </labels>
+                <message class="net.logstash.logback.layout.LoggingEventCompositeJsonLayout">
+                    <providers>
+                        <timestamp>
+                            <timeZone>UTC</timeZone>
+                        </timestamp>
+                        <logLevel/>
+                        <threadName/>
+                        <loggerName/>
+                        <message/>
+                        <mdc/>
+                        <arguments/>
+                        <keyValuePairs/>
+                        <stackTrace/>
+                        <pattern>
                             <pattern>
-                                <pattern>
-                                    {
-                                      "service":     "${appName}",
-                                      "environment": "${environment}",
-                                      "version":     "${appVersion}"
-                                    }
-                                </pattern>
+                                {
+                                  "service":     "${appName}",
+                                  "environment": "${environment}",
+                                  "version":     "${appVersion}"
+                                }
                             </pattern>
-                        </providers>
-                    </message>
-                    <sortByTime>true</sortByTime>
-                </format>
+                        </pattern>
+                    </providers>
+                </message>
             </appender>
+
         </then>
+        <!--
+          When Loki is off, LOKI still has to resolve to *something*: <root> below is
+          unconditional (see the note there), so a missing appender would leave a
+          dangling <appender-ref>. NOPAppender is logback's own do-nothing appender,
+          which keeps the reference valid at zero cost.
+        -->
+        <else>
+            <appender name="LOKI" class="ch.qos.logback.core.helpers.NOPAppender"/>
+        </else>
     </if>
+
+    <!--
+      <root> is deliberately OUTSIDE the <if>, and unconditional.
+
+      Two structures were tried against a running app and both failed, so do not
+      "simplify" this back into either of them:
+
+        1. <if> nested inside <root> (the original) — logback rejects it outright:
+               WARN IfNestedWithinSecondPhaseElementSC -
+               Element <root> ... contains a nested <if> element
+           Logback flags it as unsupported. It is not inert, though — measured against
+           this exact file, the appender-ref still took effect and LOKI ended up on
+           the root logger. So this shape "worked" while emitting a warning, which is
+           precisely why it survived; do not read the warning as harmless.
+
+        2. <root> declared inside <if>/<then> and <if>/<else> — logback processes
+           <root> in an earlier phase than <if>, so neither branch's <root> is applied
+           and the context ends up with NO appenders at all:
+               WARN - No appenders present in context [default] for logger [...]
+           Spring Boot then fails startup with "Could not initialize Logback logging".
+
+      Conditionally defining the *appender* (which <if> does support) and referencing
+      it unconditionally here is the combination that actually works.
+    -->
+    <!--
+      Tomcat access log, emitted through SLF4J by Slf4jAccessLogValve rather than written to a
+      file (the old file valve pointed at a directory the non-root container user cannot create,
+      so it never produced anything). Declared explicitly, with additivity left on, so the access
+      log inherits the root appenders — console JSON and Loki — while still being addressable on
+      its own: set this level to OFF to silence access logging without touching anything else.
+
+      The logger name is a contract shared with Slf4jAccessLogValve.ACCESS_LOGGER_NAME and is what
+      you filter on in Grafana (logger="skillars.access").
+    -->
+    <logger name="skillars.access" level="INFO"/>
+
+    <!--
+      Actuator/management server (port 8367) access log. A child logger of the one above, so
+      setting 'skillars.access' to OFF silences both, while this one can be turned off on its own.
+      Worth knowing before you leave it at INFO: this port carries the container healthcheck
+      hitting /manage/health every 30s plus Prometheus scrapes, so in a quiet environment it is
+      the majority of all access log volume.
+    -->
+    <logger name="skillars.access.management" level="INFO"/>
 
     <root level="INFO">
         <appender-ref ref="JSON"/>
-        <if condition='property("lokiEnabled").equals("true")'>
-            <then>
-                <appender-ref ref="LOKI"/>
-            </then>
-        </if>
+        <appender-ref ref="LOKI"/>
     </root>
 
 </configuration>

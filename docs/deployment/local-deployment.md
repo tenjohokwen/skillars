@@ -4,10 +4,9 @@ Run Skillars on your own machine using Docker — no domain or TLS required. Thi
 trims the production [`docker-compose.yml`](../../docker-compose.yml) down to
 the services the app needs to run (`app`, `postgres`, `redis`, with `loki` and
 `tempo` coming along automatically — see [Notes](#notes) below), plus
-`prometheus` and `grafana` so you can browse metrics/traces locally instead of
-relying solely on `docker logs` (see [Step 6.1](#step-61-browse-grafana-optional)
-and the [Logs](#logs) section — app logs specifically aren't wired up to
-Grafana yet, see below).
+`prometheus` and `grafana` so you can browse metrics, traces and logs locally
+instead of relying solely on `docker logs` (see
+[Step 6.1](#step-61-browse-grafana-optional) and the [Logs](#logs) section).
 
 For the full production stack (Traefik/TLS, backups), see
 [`first-time-setup.md`](first-time-setup.md) instead.
@@ -134,6 +133,7 @@ services:
       - SPRING_PROFILES_ACTIVE=dev
       - APP_VIDEO_BUNNY_LIBRARY_ID=123456
       - MANAGEMENT_HEALTH_MAIL_ENABLED=false
+      - APP_PAYMENT_STRIPE_API_KEY=sk_test_local_placeholder
     ports:
       - "9990:9990"   # main app
       - "8367:8367"   # actuator/health (management port)
@@ -179,7 +179,7 @@ the developer's own machine. `traefik` has the same kind of fixed host-path/conf
 dependency, but since it never starts in this trimmed stack, it's never
 evaluated and doesn't need an override.
 
-The two extra `app.environment` entries fix real startup failures found by
+The three extra `app.environment` entries fix real startup failures found by
 actually running this stack, not hypothetical ones:
 
 - **`APP_VIDEO_BUNNY_LIBRARY_ID=123456`** — `VideoProviderConfig`'s
@@ -199,6 +199,48 @@ actually running this stack, not hypothetical ones:
   failure, the container never reports `healthy`. Disabling this one
   indicator sidesteps a check that was never going to succeed locally
   anyway.
+- **`APP_PAYMENT_STRIPE_API_KEY=sk_test_local_placeholder`** —
+  `PaymentConfig.configureStripe()` throws `AppSetupException` when
+  `app.payment.stripe.api-key` is blank, and blank is exactly what it resolves
+  to here: `application.yaml` defaults it to `""` and `application-dev.yaml`
+  doesn't override it. `docker-compose.yml` does pass the variable through since
+  2026-09-02, but it has no value on your machine, so this local override still
+  has to supply one. Without it the app context refuses to start. This fail-fast
+  arrived in `82a89a9` (2026-08-27), after the rest of this guide was written and
+  verified, which is why it isn't reflected in the step-by-step above. Any
+  test-shaped placeholder works — the adjacent guard in the same method only
+  rejects keys matching `^(sk|rk)_live_`, and refuses those outside the `prod`
+  profile precisely so a local or UAT environment can never charge real money.
+
+Two further crash loops used to sit behind these and needed environment
+variables of their own. Both were real bugs that broke production deploys as much
+as local ones, and both are now fixed in the code — no override required:
+
+- The Loki appender in `logback-spring.xml` was written against the loki4j 1.x
+  schema and was never updated when `loki-logback-appender` was bumped to 2.1.0
+  in `039b1a8` (PR #48). Logback threw `IncompatibleClassException`, which Spring
+  Boot treats as fatal, killing the JVM before any bean existed.
+- `application-dev.yaml` set `app.ses.enabled: true`, which asked for a real AWS
+  SES client that then failed with
+  `NoClassDefFoundError: org/apache/hc/client5/...` — because `pom.xml` declared
+  `httpclient5` at *test* scope, stripping it from the shipped jar even though
+  `software.amazon.awssdk:apache5-client` needs it at runtime.
+
+See `requirements/deployment/local/local-manual-testing.md` for the full
+write-up, including the two latent logback problems the first crash was masking.
+
+A third problem sat alongside those, visible on every start as:
+
+```
+ERROR AccessLogValve - Failed to create directory [/usr/local/var/ledger] for access logs
+```
+
+`application.yaml` pointed Tomcat's access log at an absolute path the non-root
+`appuser` in the image cannot create. Tomcat logged it and continued, so the app
+still reached `UP` — it just never produced an access log, in any environment.
+Also fixed: access logging is now emitted through SLF4J and reaches Loki, so
+**you should no longer see that error**. If you do, you are running an image
+built before 2026-09-01. See the [Logs](#logs) section.
 
 Keep this as a separate file passed explicitly with `-f` (rather than naming
 it `docker-compose.override.yml`, which Compose auto-loads). The deploy
@@ -248,8 +290,18 @@ table rather than an environment variable. **Without this row, login and any
 authenticated request fail** with `AppSetupException: JWT secret key has not
 been set in DB`.
 
-Seed it using the same fixture the integration tests use
-(`src/test/resources/sql/secData.sql`):
+**Under the `dev` profile this step is not needed and running it fails.**
+`application-dev.yaml` sets `app.bootstrap.jwt-secret.enabled: true`, so
+`JwtSecretBootstrapRunner` writes the row itself on first start — you will see
+`JWT secret bootstrap created a new active JWT signing secret` in the app log.
+Seeding the fixture on top of that hits the unique constraint:
+
+```
+ERROR: duplicate key value violates unique constraint "sec_version_bus_id_key"
+```
+
+Only seed it by hand on a profile that does not enable that runner, using the
+same fixture the integration tests use (`src/test/resources/sql/secData.sql`):
 
 ```bash
 dcl exec -T postgres psql -U postgres -d skillars < src/test/resources/sql/secData.sql
@@ -257,26 +309,30 @@ dcl exec -T postgres psql -U postgres -d skillars < src/test/resources/sql/secDa
 
 (Substitute `-U`/`-d` if you changed `POSTGRES_USER`/`POSTGRES_DB` in `.env.local`.)
 
-### Optional: sample login users
+### Optional: sample login users — no longer reliable
 
 `src/test/resources/sql/initTestData.sql` seeds the same JWT secret row
-**plus** roles and test accounts (including an admin). If you want ready-made
-logins instead of registering through the API, run this file instead of
-`secData.sql` (not both — both insert the same `main.sec` row and the second
-will fail on the unique constraint):
+**plus** roles and test accounts (including an admin), and this guide used to
+offer it as a shortcut past registration. **It now partially fails**: its
+`main.authority` inserts carry no `ON CONFLICT` clause, while migrations `V21`
+and `V92` seed those same role names (`ROLE_COACH`, `ROLE_PARENT`,
+`ROLE_ADMIN`, `ROLE_LTD_ADMIN`) with `ON CONFLICT (name) DO NOTHING`. By the
+time Flyway has run, those rows exist, and the fixture's inserts hit the unique
+constraint on `authority.name`.
 
-```bash
-dcl exec -T postgres psql -U postgres -d skillars < src/test/resources/sql/initTestData.sql
-```
+Stick with `secData.sql` above and register accounts through the app. Every
+role the registration flows need is already seeded by Flyway, so no user
+fixture is required.
 
-Notable accounts it creates (password `admin*123!` for all):
+If you specifically want an admin account, use the `AdminBootstrapRunner`
+environment variables instead (`APP_BOOTSTRAP_ADMIN_EMAIL`,
+`APP_BOOTSTRAP_ADMIN_PASSWORD`, `APP_BOOTSTRAP_ADMIN_PHONE` — see
+`.env.example`), adding them to `app.environment` in
+`docker-compose.local.yml`, since `.env.local` alone does not reach the JVM.
 
-| Login | Notes |
-|---|---|
-| `me@yahoo.com` | Regular activated user (`ROLE_USER`) |
-| `queb@yahoo.com` | Admin (`ROLE_ADMIN`, `ROLE_USER`, `ROLE_LTD_ADMIN`) |
-| `not-activated@yahoo.com` | Inactive — for testing the activation flow |
-| `locked@yahoo.com` | Locked — for testing the locked-account flow |
+For the full manual-testing path — getting a paid coach and a paid
+parent/player through every workflow without Stripe — see
+[`requirements/deployment/local/local-manual-testing.md`](../../requirements/deployment/local/local-manual-testing.md).
 
 ---
 
@@ -307,9 +363,10 @@ Open `http://localhost:3000` and log in with user `admin` and whatever you set
 `GF_SECURITY_ADMIN_PASSWORD` to in `.env.local`. The `loki`, `tempo`, and
 `prometheus` datasources are already provisioned (via
 `deploy/lgtm/grafana-datasources.yml`), along with the dashboards under
-`deploy/lgtm/skillars-dashboard.json` — traces (Tempo) and metrics
-(Prometheus) are queryable through the UI. Logs are the exception — see the
-[Logs](#logs) section below for why `Loki` currently returns nothing.
+`deploy/lgtm/skillars-dashboard.json` — traces (Tempo), metrics (Prometheus)
+and, since the appender fix, logs (Loki) are all queryable through the UI. Try
+`{app="skillars"}` in Explore against the `Loki` datasource; see the
+[Logs](#logs) section below.
 
 `GF_SERVER_ROOT_URL` is still set to `https://${MONITORING_DOMAIN}` (whatever
 placeholder you gave it in Step 2) since that variable is shared with the
@@ -460,18 +517,71 @@ Other containers work the same way — swap the container name:
 
 ### Via Grafana
 
-**Not wired up yet** — `docker logs`/`dcl logs` above is currently the only
-way to see app logs, local or production. `Loki` is provisioned as a
-datasource and the container runs, but nothing actually pushes logs into it:
-`logback-spring.xml` only declares a console (`JSON`) appender; despite the
-`loki.url`/`loki.enabled` Spring properties it reads (and a
-`loki-logback-appender` dependency already sitting in `pom.xml`), no Loki
-appender is ever declared or attached to the root logger, so `LOKI_URL`/
-`LOKI_ENABLED` on the `app` container currently do nothing. Confirmed by
-querying `{service="skillars"}` in Grafana Explore against the `Loki`
-datasource — zero results — while `docker logs skillars-app-1` shows plenty
-of output for the same window. Wiring up the appender (so Explore/LogQL
-actually work) is a separate follow-up, not done as part of this guide.
+**This now works.** Earlier revisions of this guide were wrong about why it did
+not, twice over, so it is worth being precise:
+
+1. The original text claimed no Loki appender was declared at all. That was
+   wrong; one *was* declared.
+2. A later revision said the appender was never attached, because the
+   `<appender-ref>` sat inside an `<if>` nested in `<root>` — a shape logback
+   warns about. Also wrong: parsing that exact file shows the reference still took
+   effect. The construct is unsupported and now restructured, but it was not what
+   stopped logs.
+3. What actually stopped them: the appender's own config was written against the
+   loki4j 1.x schema and broke outright when `loki-logback-appender` was bumped to
+   2.1.0 — and since Spring Boot treats a logback error as fatal, that was a
+   startup crash, not just missing logs.
+
+If you are wondering about the "zero results" observation recorded here before
+that bump, note the query used was `{service="skillars"}` while the config's label
+is `app` — worth re-checking before concluding logs are missing.
+
+All of it is fixed, and `LogbackSpringConfigTest` now guards the parse. `LOKI_ENABLED=true` (the value `docker-compose.yml` already
+sets) now genuinely ships logs, verified by querying Loki directly:
+
+```bash
+docker run --rm --network skillars_skillars-observability curlimages/curl -s \
+  -G 'http://loki:3100/loki/api/v1/query_range' \
+  --data-urlencode 'query={app="skillars"}' --data-urlencode 'limit=5'
+```
+
+Note `loki` has no published host port in this stack, so query it from inside the
+`skillars-observability` network as above, or use Grafana Explore at
+`http://localhost:3000`. Streams carry `app`, `environment` and `level` labels,
+and each line is the full JSON event including `traceId`/`spanId`/`requestId` —
+so you can pivot from a Tempo trace to its logs and back.
+
+Expect a delay before new lines appear: loki4j batches with a 60-second default
+timeout, so a request you just made will sit in the appender's buffer for up to a
+minute. `docker logs` shows it immediately.
+
+### Tomcat access logs
+
+These are in Loki too, under two loggers:
+
+| Logger | Server |
+|---|---|
+| `skillars.access` | main app, port 9990 |
+| `skillars.access.management` | actuator, port 8367 |
+
+They are emitted through SLF4J rather than written to a file — Tomcat's stock
+file valve pointed at `/usr/local/var/ledger`, a path the image's non-root
+`appuser` cannot create, so it logged `Failed to create directory` on every boot
+in every environment and never produced an access log at all. Even had it worked,
+the file would have sat inside the container with nothing collecting it.
+
+The management logger is a child of the main one, so setting `skillars.access` to
+`OFF` in `config/logback-spring.xml` silences both, while
+`skillars.access.management` can be silenced on its own. Consider doing that: the
+actuator port carries the container healthcheck every 30 seconds plus Prometheus
+scrapes, and in a quiet environment that is the bulk of all access log volume.
+
+Turn both off entirely with `APP_ACCESS_LOG_ENABLED=false`.
+
+One gap remains: `src/test/resources/logback-test.xml` shadows
+`logback-spring.xml`, so no test ever loads the production logging config. That
+is why the Dependabot bump merged green, and the same class of regression can
+still slip through.
 
 
 ## Manual migration

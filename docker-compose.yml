@@ -17,6 +17,78 @@ services:
       - LOKI_URL=http://loki:3100
       - LOKI_ENABLED=true
       - MANAGEMENT_OTLP_TRACING_ENDPOINT=http://tempo:4318/v1/traces
+      # ── Everything below reaches the JVM ONLY because it is listed here ────────────────
+      # There is no `env_file:` on this service. Putting a variable in /opt/skillars/.env does
+      # nothing on its own — it only feeds ${VAR} placeholders written literally in this file.
+      # Until 2026-09-02 this list stopped at MANAGEMENT_OTLP_TRACING_ENDPOINT, so a production
+      # deploy silently ignored every mail, Stripe, video and admin-bootstrap value an operator
+      # set, and could not start at all (see APP_PAYMENT_STRIPE_API_KEY below).
+      # docker-compose.uat.yml is layered over this file (-f docker-compose.yml -f
+      # docker-compose.uat.yml), so it INHERITS everything here and only overrides the keys it
+      # restates. Add a new variable here and UAT picks it up for free.
+
+      # Mail. SPRING_MAIL_PASSWORD / GMX_PASSWORD / GMAIL_PASSWORD are referenced by
+      # application.yaml WITHOUT a default, so on the prod profile an unset value is not a
+      # degraded mailer — it is an unresolvable placeholder that aborts startup. The `:-`
+      # defaults below keep that failure out of the container boot path; a blank password then
+      # simply fails SMTP auth at send time, which is diagnosable.
+      # EMPTY IS NOT UNSET. Spring applies a ${prop:default} default only when the property is
+      # ABSENT; an empty environment variable is present-and-blank and overrides it. So every
+      # `:-` default below has to mirror the application's own default, and — the part that is
+      # easy to miss — that includes PROFILE defaults, not just application.yaml. Listing a
+      # variable here silently disables the corresponding ${VAR:dev-default} in
+      # application-dev.yaml / application-uat.yaml, which is why docker-compose.local.yml now
+      # restates the dev values it needs. Adding a variable to this block is therefore not a
+      # no-op for the other environments: check every profile before you do.
+      - SPRING_MAIL_HOST=${SPRING_MAIL_HOST:-mail.gmx.net}
+      - SPRING_MAIL_PORT=${SPRING_MAIL_PORT:-587}
+      - SPRING_MAIL_USERNAME=${SPRING_MAIL_USERNAME:-blue-bone@gmx.de}
+      - SPRING_MAIL_PASSWORD=${SPRING_MAIL_PASSWORD:-}
+      - GMX_PASSWORD=${GMX_PASSWORD:-}
+      - GMAIL_PASSWORD=${GMAIL_PASSWORD:-}
+
+      # Payments. A blank APP_PAYMENT_STRIPE_API_KEY makes PaymentConfig.configureStripe() abort
+      # startup by design — deliberately loud, since a payment platform booting without a gateway
+      # is worse than not booting. The same method refuses an sk_live_/rk_live_ key unless the
+      # prod profile is active, so this is the one environment where a live key is accepted.
+      - APP_PAYMENT_STRIPE_API_KEY=${APP_PAYMENT_STRIPE_API_KEY:-}
+      - APP_PAYMENT_STRIPE_WEBHOOK_SECRET=${APP_PAYMENT_STRIPE_WEBHOOK_SECRET:-}
+      - APP_PAYMENT_STRIPE_OAUTH_CLIENT_ID=${APP_PAYMENT_STRIPE_OAUTH_CLIENT_ID:-}
+      - APP_PAYMENT_STRIPE_PUBLISHABLE_KEY=${APP_PAYMENT_STRIPE_PUBLISHABLE_KEY:-}
+      # Must be set to an ABSOLUTE https URL on your domain — Stripe rejects a relative
+      # redirect_uri, and PaymentConfig only warns about it. Compose cannot nest ${DOMAIN}
+      # inside a :- default, so this mirrors application.yaml's relative fallback instead.
+      - APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL=${APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL:-/api/payment/coaches/me/stripe/callback}
+
+      # Video. BUNNY_* are the .env names; the app reads APP_VIDEO_BUNNY_* — same mapping
+      # docker-compose.uat.yml uses. LIBRARY_ID must be numeric or VideoProviderConfig fails the
+      # whole context, so it keeps a placeholder default rather than an empty string.
+      - APP_VIDEO_BUNNY_API_KEY=${BUNNY_API_KEY:-}
+      - APP_VIDEO_BUNNY_LIBRARY_ID=${BUNNY_LIBRARY_ID:-123456}
+      - APP_VIDEO_BUNNY_CDN_HOSTNAME=${BUNNY_CDN_HOSTNAME:-}
+      - APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET=${APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET:-}
+      - APP_VIDEO_PLAYBACK_SIGNING_SECRET=${APP_VIDEO_PLAYBACK_SIGNING_SECRET:-}
+
+      # Storage. Leave the two S3 keys blank to keep the AWS default credential provider chain
+      # (instance profile / ~/.aws), which is what this deploy used before these lines existed.
+      - APP_STORAGE_BUCKET=${APP_STORAGE_BUCKET:-skillars-dev}
+      - APP_STORAGE_ENDPOINT_URL=${APP_STORAGE_ENDPOINT_URL:-http://localhost:9000}
+      - APP_STORAGE_REGION=${APP_STORAGE_REGION:-us-east-1}
+      - APP_STORAGE_S3_ACCESS_KEY=${APP_STORAGE_S3_ACCESS_KEY:-}
+      - APP_STORAGE_S3_SECRET_KEY=${APP_STORAGE_S3_SECRET_KEY:-}
+
+      # Platform / AI
+      - PLATFORM_PIN_ENCRYPTION_SECRET=${PLATFORM_PIN_ENCRYPTION_SECRET:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - ENVIRONMENT=${ENVIRONMENT:-prod}
+      - APP_VERSION=${APP_VERSION:-unknown}
+      - APP_FRONTEND_URL=${APP_FRONTEND_URL:-https://skillars.com}
+
+      # First-admin bootstrap. Inert unless EMAIL and PASSWORD are both non-blank; remove the
+      # password from .env and redeploy once the account exists. See secrets-reference.md.
+      - APP_BOOTSTRAP_ADMIN_EMAIL=${APP_BOOTSTRAP_ADMIN_EMAIL:-}
+      - APP_BOOTSTRAP_ADMIN_PASSWORD=${APP_BOOTSTRAP_ADMIN_PASSWORD:-}
+      - APP_BOOTSTRAP_ADMIN_PHONE=${APP_BOOTSTRAP_ADMIN_PHONE:-}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8367/manage/health || exit 1"]
       interval: 30s

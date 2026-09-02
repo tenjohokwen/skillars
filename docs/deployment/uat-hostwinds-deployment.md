@@ -354,7 +354,19 @@ compose logs` just work.
 on the `app` service unconditionally, and — unlike an older assumption
 recorded in `local-deployment.md`'s own Logs section — `logback-spring.xml`
 *does* attach a real `Loki4jAppender` to the root logger when
-`loki.enabled=true`. Since this guide never starts a `loki` container,
+`loki.enabled=true`.
+
+> This override turned out to be load-bearing for a second reason. Between the
+> loki4j `1.5.2 → 2.1.0` bump (`039b1a8`, PR #48, 2026-08-13) and the appender
+> fix on 2026-09-01, `loki.enabled=true` did not merely push logs nowhere — it
+> aborted startup outright, because logback could not build the 1.x-shaped
+> appender and Spring Boot treats a logback configuration error as fatal. This
+> guide's `LOKI_ENABLED=false` is why a Hostwinds UAT deploy kept working
+> through that window while the full stack would not have. The appender is now
+> correct, so the override is back to being a pure "no loki container here"
+> optimisation.
+
+Since this guide never starts a `loki` container,
 `docker-compose.uat-hostwinds.yml` explicitly sets `LOKI_ENABLED=false` to
 stop the app from trying (harmlessly, but pointlessly) to push every log
 batch to a hostname that will never resolve. If logs ever look like they're

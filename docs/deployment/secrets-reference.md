@@ -10,6 +10,35 @@ This document lists every secret required to run the application and CI/CD pipel
 Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 `deploy/provision.sh` auto-enforces mode 600 on re-run.
 
+> ### How `.env` reaches the application
+>
+> There is **no `env_file:` directive in any compose file**. `.env` only feeds `${VAR}`
+> placeholders written literally in the compose YAML, so a variable reaches the app's JVM only if
+> it is listed under the `app` service's `environment:` block. That block is now complete for a
+> production deploy — every app-facing variable in this document is passed through.
+>
+> **This was not true before 2026-09-02.** `docker-compose.yml` previously listed nine variables
+> and stopped, so a production deploy silently ignored every mail, Stripe, video, storage and
+> admin-bootstrap value an operator set — and could not start at all, because
+> `APP_PAYMENT_STRIPE_API_KEY` resolved empty and `PaymentConfig.configureStripe()` aborts on a
+> blank key. If you are looking at a Node that has not been redeployed since, that is why.
+>
+> Two consequences worth keeping in mind when adding a variable:
+>
+> - **Adding it to `.env` is half the job.** It must also be listed under `app.environment` in
+>   `docker-compose.yml`. UAT and local are layered over that file (`-f docker-compose.yml -f
+>   docker-compose.uat.yml`), so they inherit it automatically — only add it to an override
+>   file when that environment needs a *different* value.
+> - **An empty value is not the same as an unset one.** Spring applies a `${prop:default}` default
+>   only when the property is *absent*; an empty environment variable is present-and-blank and
+>   overrides the default. The compose defaults therefore mirror the application defaults
+>   (`SPRING_MAIL_HOST` → `mail.gmx.net`, `APP_STORAGE_BUCKET` → `skillars-dev`, and so on) rather
+>   than being blank. **This includes profile defaults.** Adding a variable to
+>   `docker-compose.yml` disables any `${VAR:some-default}` fallback for it in
+>   `application-dev.yaml` / `application-uat.yaml`, so a change aimed at production can break
+>   local or UAT startup. `docker-compose.local.yml` restates the dev values for exactly this
+>   reason.
+
 > **JWT signing key is not an operator-supplied secret.** There is no `JWT_SECRET` (or equivalent) `.env`
 > variable — the app never reads one. The real JWT signing key is a 256-byte value, auto-generated on first
 > boot and stored Jasypt-encrypted in the database (`sec.secret` table, via `SecretService.createSecret` /
@@ -31,9 +60,9 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 | `SPRING_MAIL_PORT` | Integer, e.g. `587` | From your email provider — 587 for STARTTLS, 465 for SSL/TLS |
 | `SPRING_MAIL_USERNAME` | Email address | Your SMTP username or sending address |
 | `SPRING_MAIL_PASSWORD` | String | App password or SMTP credential from your email provider |
-| `BUNNY_API_KEY` | Hex string | Bunny.net Dashboard → Account → API |
-| `BUNNY_LIBRARY_ID` | Integer | Bunny.net Dashboard → Stream → Your Library → Library ID |
-| `BUNNY_CDN_HOSTNAME` | Hostname, e.g. `your-library.b-cdn.net` | Bunny.net Dashboard → Stream → Your Library → Pull Zone hostname |
+| `BUNNY_API_KEY` | Hex string | Passed to the app as `APP_VIDEO_BUNNY_API_KEY`. Bunny.net Dashboard → Account → API |
+| `BUNNY_LIBRARY_ID` | Integer | Passed to the app as `APP_VIDEO_BUNNY_LIBRARY_ID`. Bunny.net Dashboard → Stream → Your Library → Library ID |
+| `BUNNY_CDN_HOSTNAME` | Hostname, e.g. `your-library.b-cdn.net` | Passed to the app as `APP_VIDEO_BUNNY_CDN_HOSTNAME`. Bunny.net Dashboard → Stream → Your Library → Pull Zone hostname |
 | `MONITORING_DOMAIN` | FQDN, e.g. `monitoring.api.example.com` | Subdomain you configured in DNS (Step 2 of the setup guide); used by Grafana |
 | `GF_SECURITY_ADMIN_USER` | Alphanumeric string, e.g. `admin` | Choose a Grafana admin username |
 | `GF_SECURITY_ADMIN_PASSWORD` | 24+ character random string | `openssl rand -base64 24` |
@@ -47,7 +76,7 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 | `GF_ALERT_NOTIFY_EMAIL` | Email address | Recipient for all Grafana-routed alerts |
 | `GF_SLACK_WEBHOOK_URL` | HTTPS URL | Slack → Apps → Incoming Webhooks → Add to Slack → select channel → copy URL |
 | `LOKI_URL` | Internal URL | Fixed value: `http://loki:3100` — do not change (Docker service name; reachable from `app` on the shared `skillars-observability` network) |
-| `LOKI_ENABLED` | Boolean | Fixed value: `true` — do not change |
+| `LOKI_ENABLED` | Boolean | `true` for any environment that runs a `loki` container. **This became load-bearing on 2026-09-01**: until the loki4j 2.x appender fix, `logback-spring.xml` could not build the appender at all, so the value changed nothing (and, at `true`, aborted startup). It now genuinely controls whether logs are shipped. Set `false` only where no `loki` container exists — `docker-compose.uat-hostwinds.yml` does exactly that. Note `application-prod.yaml` also hardcodes `loki.enabled: true`; an OS environment variable outranks it, so this still wins |
 | `MANAGEMENT_OTLP_TRACING_ENDPOINT` | Internal URL | Fixed value: `http://tempo:4318/v1/traces` — do not change (Docker service name; reachable from `app` on the shared `skillars-observability` network) |
 | `HOS_ACCESS_KEY` | String | Hetzner Cloud Console → Object Storage → your bucket → Access Keys → Create access key; copy Access Key ID |
 | `HOS_SECRET_KEY` | String | Same creation flow as `HOS_ACCESS_KEY`; copy Secret Access Key (shown once) |
@@ -59,6 +88,55 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 | `BACKUP_RETENTION_MIN_KEEP` | Integer, e.g. `8` | **Tuning knob, not a secret.** Newest dumps retained unconditionally regardless of age — the floor that stops a bad cutoff emptying the bucket; default `8` |
 | `VOLUME_BACKUP_RETENTION_DAYS` | Integer, e.g. `14` | **Tuning knob, not a secret.** How many days of file-level volume backups `prune-backups.sh` keeps; default `14` (~14 backups at the daily cadence) |
 | `VOLUME_BACKUP_RETENTION_MIN_KEEP` | Integer, e.g. `4` | **Tuning knob, not a secret.** Newest volume backups retained unconditionally regardless of age — the floor that stops a bad cutoff emptying the bucket; default `4` |
+
+### Application secrets
+
+These were added to `.env.example` and to both compose files on 2026-09-02; before that the
+application read them but no deploy supplied them. Defaults below are the application's own, from
+`application.yaml`.
+
+| Variable | Format | Default if unset | How to obtain or generate |
+|---|---|---|---|
+| `APP_PAYMENT_STRIPE_API_KEY` | `sk_test_…` / `sk_live_…` (or `rk_…`) | *empty* — **application refuses to start** | Stripe Dashboard → Developers → API keys. `PaymentConfig` rejects a `sk_live_`/`rk_live_` key unless the `prod` profile is active, so non-production environments cannot charge real money even by mistake |
+| `APP_PAYMENT_STRIPE_WEBHOOK_SECRET` | `whsec_…` | *empty* | Stripe Dashboard → Developers → Webhooks → your endpoint → Signing secret. Endpoint path is `/api/payment/webhooks/stripe`. Without it, webhook signature verification cannot succeed |
+| `APP_PAYMENT_STRIPE_OAUTH_CLIENT_ID` | `ca_…` | *empty* | Stripe Dashboard → Settings → Connect → Integration. Required for coach Connect onboarding |
+| `APP_PAYMENT_STRIPE_PUBLISHABLE_KEY` | `pk_test_…` / `pk_live_…` | *empty* | Stripe Dashboard → Developers → API keys. Served to the browser by `/api/payment/stripe/config`; card entry, `SetupIntent` and pack purchase are all non-functional without it |
+| `APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL` | Absolute URL | relative path (`/api/payment/coaches/me/stripe/callback`) | Must be absolute in any real environment — Stripe rejects a relative `redirect_uri`. `PaymentConfig` logs a warning, it does not fail |
+| `APP_VIDEO_PLAYBACK_SIGNING_SECRET` | Base64 string decoding to ≥32 bytes | `""` under `prod` — see the profile note below | `openssl rand -base64 32`. Signs video playback URLs (HS256) |
+| `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET` | String | `""` under `prod` — see the profile note below | Bunny.net Stream → your library → Webhook signing secret |
+| `PLATFORM_PIN_ENCRYPTION_SECRET` | String | dev placeholder (`S3CR3TW0RD`) | `openssl rand -base64 32`. Encrypts parent-approval PINs — **rotating it invalidates every stored PIN** |
+| `APP_STORAGE_BUCKET` | String | `skillars-dev` | S3 (or MinIO) bucket for uploads |
+| `APP_STORAGE_ENDPOINT_URL` | URL | `http://localhost:9000` | Real AWS S3 endpoint, or the MinIO URL. Presigned upload URLs are built from this, so it must be reachable **by the browser**, not just by the container |
+| `APP_STORAGE_REGION` | AWS region | `us-east-1` | Region of the bucket above |
+| `APP_STORAGE_S3_ACCESS_KEY` / `APP_STORAGE_S3_SECRET_KEY` | String | **not bound under `prod`** — see the profile note below | IAM credentials scoped to the bucket |
+| `GEMINI_API_KEY` | String | *empty* | Google AI Studio → API keys. Used by the AI narrative features |
+| `ARACHNID_API_KEY` | String | *empty* | Project Arachnid (C3P) credential. Only needed when `features.toggles.arachnid-enabled` is on |
+| `APP_ACCESS_LOG_ENABLED` | Boolean | `true` | **Tuning knob, not a secret.** Tomcat access logging, emitted through SLF4J (loggers `skillars.access` for port 9990 and `skillars.access.management` for 8367) so entries reach Loki. Set `false` to disable both; see [`local-deployment.md`](local-deployment.md) for silencing only the management half, which is mostly healthcheck and Prometheus traffic |
+| `ENVIRONMENT` | String | `prod` | Stamped onto every log line and Loki stream as the `environment` label |
+| `APP_VERSION` | String | `unknown` | Stamped onto every log line; set from the CI build to make log/trace correlation across deploys possible |
+| `APP_FRONTEND_URL` | URL | per-profile | Base URL used to build email verification links. Wrong value ⇒ users receive unusable links |
+
+> **Previously wired only on `dev` and `uat`.** `app.storage.s3.access-key`,
+> `app.storage.s3.secret-key`, `app.video.playback.signing-secret`,
+> `app.video.bunny.webhook-signing-secret` and `skillars.platform.pin-encryption-secret` carried
+> their `${...}` placeholders in `application-dev.yaml` / `application-uat.yaml` only, so under the
+> `prod` profile the corresponding variables were bound to nothing and setting them had no effect.
+> They are now declared in base `application.yaml` as well, and are configurable on every profile.
+> Leaving the two S3 keys blank still selects the AWS default credential chain — that check is on
+> blankness, not presence, so blank preserves the previous production behaviour.
+
+> **AWS SES.** `application-prod.yaml` sets `app.ses.enabled: true`, so a production boot constructs
+> a real `SesV2Client` (region defaults to `eu-west-1` via `app.ses.region`). Credentials come from
+> the AWS SDK default provider chain — environment, instance profile, or `~/.aws` — none of which
+> `docker-compose.yml` supplies, so transactional email will fail at send time until that is
+> configured. `uat` and `dev` set it to `false` and use `NoOpSesEmailService`, which logs the
+> subject and drops the message.
+>
+> Until 2026-09-01 this bean crashed the application outright on any profile with SES enabled:
+> `pom.xml` declared `httpclient5` at test scope, stripping it from the shipped jar even though the
+> AWS SDK's `apache5-client` needs it at runtime, producing
+> `NoClassDefFoundError: org/apache/hc/client5/http/io/HttpClientConnectionManager`. Fixed by
+> moving that dependency to compile scope.
 
 > **The three `APP_BOOTSTRAP_ADMIN_*` variables are the only entries in this table that are meant to
 > be removed again.** Every other secret here is permanent; these exist to create one account, once.
