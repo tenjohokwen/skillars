@@ -116,6 +116,13 @@ export default defineConfig((ctx) => {
           target: 'http://localhost:9990',
           changeOrigin: true,
         },
+        // Session keep-alive endpoint (SessionRefreshFilter). Without this, `quasar dev`
+        // serves the SPA fallback for GET /refresh (200 + index.html) and the JWT is
+        // never actually extended in development. See docs/session-refresh-mechanism.md.
+        '/refresh': {
+          target: 'http://localhost:9990',
+          changeOrigin: true,
+        },
         '/manage': {
           target: 'http://localhost:8367',
           changeOrigin: true,

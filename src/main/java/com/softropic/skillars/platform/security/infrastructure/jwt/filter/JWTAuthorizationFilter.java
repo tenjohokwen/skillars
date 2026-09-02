@@ -53,6 +53,34 @@ import static com.softropic.skillars.infrastructure.security.SecurityConstants.R
  *     <li>An id theft is detected</li>
  *     <li>The client is not whitelisted</li>
  * </ul>
+ *
+ * <h2>Sliding-window session keep-alive</h2>
+ * On every authenticated request this filter re-issues the JWT with a <b>fresh full TTL</b>
+ * ({@code SecurityConstants.JWT_TTL}, 15 min) rather than counting down from login:
+ * <ul>
+ *     <li><b>Fast path</b> &mdash; DB refresh token still valid and no revocation:
+ *         {@code daoAuthProvider.checkAuthorities(...)} against the existing claims, then
+ *         {@code loginTokenManager.extendTtlOfToken(req, res)} stamps a new expiry. This path does
+ *         <i>not</i> re-load the account, but it still issues one {@code refresh_tokens} lookup
+ *         ({@code isRefreshTokenRevoked}) whenever an {@code rtkn} cookie is present.</li>
+ *     <li><b>DB re-auth path</b> &mdash; DB refresh token expired (checked every
+ *         {@code DB_REFRESH_TOKEN_INTERVAL} = 5 min) <i>or</i> all refresh tokens for the user have
+ *         been revoked: {@code daoAuthProvider.authorize(...)} re-checks the account against the DB
+ *         so locked / deactivated / force-logged-out users are caught, then
+ *         {@code renewLoginToken(...)} mints the fresh token. ({@code renewLoginToken} itself touches
+ *         no repository &mdash; the DB hit is {@code daoAuthProvider.authorize}.)</li>
+ * </ul>
+ * Either path also rewrites the {@code user}, {@code potc} and {@code rint} cookies (see
+ * {@code JwtManagerImpl.createLoginCookies}). Because the TTL is always reset to the full 15 min,
+ * {@code rint} is effectively constant and the client, not the server, tracks the countdown.
+ * <p>
+ * This is why {@code GET /refresh} keeps a session alive: the request is a secured endpoint, so it
+ * passes through this filter (which extends the token) <i>before</i> reaching
+ * {@link com.softropic.skillars.platform.security.infrastructure.filter.SessionRefreshFilter},
+ * which merely returns 200 (wired in {@code SecurityConfiguration#filterChain}, the
+ * {@code addFilterAfter(new SessionRefreshFilter(...), JWTAuthorizationFilter.class)} line).
+ * For full token rotation (issuing a new refresh-token pair) use {@code POST /api/auth/refresh}
+ * ({@link com.softropic.skillars.platform.security.api.AuthResource}) instead.
  */
 public class JWTAuthorizationFilter extends OncePerRequestFilter {
     private final ApplicationEventPublisher publisher;
