@@ -240,7 +240,7 @@ src/
 | `potc` | Yes | JWT Token | No |
 | `user` | No | Display name | Yes |
 | `admin` | No | Admin flag | Yes |
-| `rint` | No | Session countdown | Yes |
+| `rint` | No | JWT's **absolute expiry**, epoch ms (not a countdown) | Yes |
 
 ---
 
@@ -250,19 +250,34 @@ src/
 
 **File:** `src/plugins/sessionManager.js`
 
+> **Superseded by Story 1.7b.** The requirements below described a purely client-side
+> elapsed-time countdown against a hardcoded TTL. Expiry is now read from the server-issued
+> `rint` cookie as an absolute timestamp. See
+> [Session Refresh Mechanism](./session-refresh-mechanism.md) for the authoritative description —
+> do not re-implement from this section.
+
 **Requirements:**
-- Track last activity time
-- Show warning 2 minutes before 15-minute session expires
-- Check session status every 30 seconds
-- Provide reactive state: `showWarning`, `timeUntilExpiry`, `isRefreshing`
-- Export functions: `recordActivity()`, `startSessionMonitoring()`, `stopSessionMonitoring()`, `refreshSession()`, `cleanup()`
-- Dispatch `session:expired` event when session expires
+- Read expiry from the `rint` cookie as **absolute epoch milliseconds**:
+  `timeUntilExpiry = rint - Date.now()`. Do not keep a client-side copy of `JWT_TTL`.
+- Fall back to an elapsed-time estimate only when `rint` is absent, is in the stale pre-1.7b
+  fixed-delta format, or is contradicted by a fast client clock.
+- Show the warning 5 minutes before expiry (a fixed client-side constant, not server-issued).
+- Re-evaluate every 30 seconds, and again after every API response.
+- Provide reactive state: `showWarning`, `timeUntilExpiry`, `isRefreshing`, `secondsRemaining`,
+  `minutesRemaining`, `warningThresholdSeconds`.
+- Export: `recordActivity()`, `startSessionMonitoring()`, `stopSessionMonitoring()`,
+  `refreshSession()`, `cleanup()`, `refreshExpiryState()`.
+- Dispatch the `session:expired` event when the session expires. Note `startSessionMonitoring()`
+  evaluates immediately and can dispatch **synchronously**, so the listener must be registered
+  before it is called.
 
 ```javascript
-// Constants
-const SESSION_WARNING_THRESHOLD = 2 * 60 * 1000; // 2 minutes
+// Constants (src/plugins/sessionManager.js)
+const WARNING_THRESHOLD = 5 * 60 * 1000;         // 5 minutes, client-side UX choice
 const SESSION_CHECK_INTERVAL = 30 * 1000;        // 30 seconds
-const SESSION_TTL = 15 * 60 * 1000;              // 15 minutes
+const COUNTDOWN_INTERVAL = 1000;                 // 1s, while the dialog is visible
+const LEGACY_SESSION_TTL = 15 * 60 * 1000;       // fallback bound only
+const MIN_PLAUSIBLE_EPOCH_MS = 1_000_000_000_000; // rejects a stale pre-1.7b `rint`
 ```
 
 ### 5.2 Axios Interceptors

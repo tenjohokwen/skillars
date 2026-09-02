@@ -160,6 +160,8 @@ public class SecurityConfiguration {
                                            SecurityUtil securityUtil,
                                            CorsConfiguration corsConfiguration,
                                            RefreshTokenRepository refreshTokenRepository,
+                                           org.springframework.context.MessageSource messageSource,
+                                           com.fasterxml.jackson.databind.ObjectMapper objectMapper,
                                            @Qualifier("loginAttemptService") LoginDecisionManager<RequestMetadata> loginDecisionManager,
                                            Environment env) throws Exception {
         //TODO test first, then remove the following line
@@ -201,7 +203,9 @@ public class SecurityConfiguration {
                                                        loginTokenManager,
                                                        securityUtil,
                                                        env,
-                                                       refreshTokenRepository),
+                                                       refreshTokenRepository,
+                                                       messageSource,
+                                                       objectMapper),
                             BasicAuthenticationFilter.class)
             .addFilterBefore(securityAdviceFilter, WebAsyncManagerIntegrationFilter.class)
             .addFilterBefore(new LoggingFilter(PUBLIC_STATIC_RESOURCES),

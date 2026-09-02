@@ -32,13 +32,21 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.context.MessageSource;
+
 import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.util.Locale;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -89,13 +97,20 @@ class JWTAuthorizationFilterTest {
     @Mock
     private RefreshTokenRepository refreshTokenRepository;
 
+    @Mock
+    private MessageSource messageSource;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    private StringWriter responseBody;
+
     @Spy
     private UserDetails userDetails = principal; //new User("testuser", "", List.of(new SimpleGrantedAuthority("ROLE_USER"))); // Mocked, returned by daoAuthProvider
 
     private JWTAuthorizationFilter filter;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws IOException {
         MockitoAnnotations.openMocks(this);
         daoAuthProvider.setUserDetailsService(loadUserByUserNameService);
         SecurityContextHolder.clearContext(); // Ensure context is clean before each test
@@ -108,8 +123,16 @@ class JWTAuthorizationFilterTest {
                 loginTokenManager,
                 securityUtil,
                 environment,
-                refreshTokenRepository
+                refreshTokenRepository,
+                messageSource,
+                objectMapper
         );
+
+        // The 401 path now writes an ErrorDto body via the response writer + MessageSource.
+        responseBody = new StringWriter();
+        when(response.getWriter()).thenReturn(new PrintWriter(responseBody, true));
+        when(messageSource.getMessage(anyString(), nullable(Object[].class), anyString(), nullable(Locale.class)))
+                .thenAnswer(inv -> inv.getArgument(2));
 
         when(environment.getProperty("activate.security", Boolean.class, true)).thenReturn(true);
         // Default "happy path" mocks, can be overridden in specific tests
@@ -170,13 +193,17 @@ class JWTAuthorizationFilterTest {
         filter.doFilterInternal(request, response, filterChain);
 
         // Verification
-        verify(response).sendError(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         verify(securityUtil).logout(response);
         verify(filterChain, never()).doFilter(request, response);
+        // setStatus() alone only proves a setter was called on the mock; assert the ErrorDto body
+        // too, so dropping the objectMapper.writeValue call cannot pass this test.
+        assertTrue(responseBody.toString().contains("\"errorKey\":\"security.unauthorized\""),
+                "missing-token 401 body must carry errorKey=security.unauthorized, was: " + responseBody);
     }
 
     @Test
-    @DisplayName("Expired Token: 401 sent, filter chain aborted")
+    @DisplayName("Expired Token: 401 with ErrorDto body carrying errorKey=security.sessionExpired")
     void testWhenJWTExpiredException_LetExceptionBubbleUp() throws ServletException, IOException {
         // Setup
         JWTExpiredException expiredException = new JWTExpiredException("Token expired", null, null);
@@ -186,13 +213,16 @@ class JWTAuthorizationFilterTest {
         filter.doFilterInternal(request, response, filterChain);
 
         // Verification
-        verify(response).sendError(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(response).setContentType("application/json");
         verify(securityUtil).logout(response);
         verify(filterChain, never()).doFilter(request, response);
+        assertTrue(responseBody.toString().contains("\"errorKey\":\"security.sessionExpired\""),
+                "expired-JWT 401 body must carry errorKey=security.sessionExpired, was: " + responseBody);
     }
 
     @Test
-    @DisplayName("Invalid Signature Token: 401 sent, filter chain aborted")
+    @DisplayName("Invalid Signature Token: 401 with ErrorDto body carrying errorKey=security.unauthorized")
     void testWhenInvalidJWTDataException_LetExceptionBubbleUp() throws ServletException, IOException {
         // Setup
         InvalidJWTDataException invalidSigException = new InvalidJWTDataException("Invalid signature", null);
@@ -202,9 +232,11 @@ class JWTAuthorizationFilterTest {
         filter.doFilterInternal(request, response, filterChain);
 
         // Verification
-        verify(response).sendError(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         verify(securityUtil).logout(response);
         verify(filterChain, never()).doFilter(request, response);
+        assertTrue(responseBody.toString().contains("\"errorKey\":\"security.unauthorized\""),
+                "non-expired 401 body must carry errorKey=security.unauthorized, was: " + responseBody);
     }
 
     @Test
@@ -226,9 +258,13 @@ class JWTAuthorizationFilterTest {
         filter.doFilterInternal(request, response, filterChain);
 
         // Verification
-        verify(response).sendError(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         verify(securityUtil).logout(response);
         verify(filterChain, never()).doFilter(request, response);
+        // setStatus() alone only proves a setter was called on the mock; assert the ErrorDto body
+        // too, so dropping the objectMapper.writeValue call cannot pass this test.
+        assertTrue(responseBody.toString().contains("\"errorKey\":\"security.unauthorized\""),
+                "token-fixation 401 body must carry errorKey=security.unauthorized, was: " + responseBody);
     }
 
     @Test
@@ -244,9 +280,13 @@ class JWTAuthorizationFilterTest {
         filter.doFilterInternal(request, response, filterChain);
 
         // Verification
-        verify(response).sendError(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         verify(securityUtil).logout(response);
         verify(filterChain, never()).doFilter(request, response);
+        // setStatus() alone only proves a setter was called on the mock; assert the ErrorDto body
+        // too, so dropping the objectMapper.writeValue call cannot pass this test.
+        assertTrue(responseBody.toString().contains("\"errorKey\":\"security.unauthorized\""),
+                "disabled-user 401 body must carry errorKey=security.unauthorized, was: " + responseBody);
     }
 
     @Test
@@ -262,9 +302,13 @@ class JWTAuthorizationFilterTest {
         filter.doFilterInternal(request, response, filterChain);
 
         // Verification
-        verify(response).sendError(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         verify(securityUtil).logout(response);
         verify(filterChain, never()).doFilter(request, response);
+        // setStatus() alone only proves a setter was called on the mock; assert the ErrorDto body
+        // too, so dropping the objectMapper.writeValue call cannot pass this test.
+        assertTrue(responseBody.toString().contains("\"errorKey\":\"security.unauthorized\""),
+                "locked-user 401 body must carry errorKey=security.unauthorized, was: " + responseBody);
     }
 
     @Test
@@ -295,9 +339,13 @@ class JWTAuthorizationFilterTest {
         filter.doFilterInternal(request, response, filterChain);
 
         // Verification
-        verify(response).sendError(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         verify(securityUtil).logout(response);
         verify(filterChain, never()).doFilter(request, response);
+        // setStatus() alone only proves a setter was called on the mock; assert the ErrorDto body
+        // too, so dropping the objectMapper.writeValue call cannot pass this test.
+        assertTrue(responseBody.toString().contains("\"errorKey\":\"security.unauthorized\""),
+                "authorization-exception 401 body must carry errorKey=security.unauthorized, was: " + responseBody);
 
         verify(loginTokenManager).ensureClientHasPostLoginId();
         verify(loginTokenManager).isTokenFixed(request);

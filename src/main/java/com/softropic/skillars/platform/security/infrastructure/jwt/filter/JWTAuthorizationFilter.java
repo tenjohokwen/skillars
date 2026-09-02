@@ -1,13 +1,18 @@
 package com.softropic.skillars.platform.security.infrastructure.jwt.filter;
 
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.softropic.skillars.infrastructure.message.ErrorDto;
+import com.softropic.skillars.infrastructure.message.ErrorMsg;
 import com.softropic.skillars.infrastructure.security.CookieUtil;
+import com.softropic.skillars.infrastructure.security.RequestMetadataProvider;
 import com.softropic.skillars.infrastructure.security.event.AuthenticationAction;
 import com.softropic.skillars.infrastructure.security.event.PreAuthEvent;
 import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.service.LoginTokenManager;
 import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.infrastructure.security.AuthorizationException;
+import com.softropic.skillars.platform.security.contract.exception.JWTExpiredException;
 import com.softropic.skillars.platform.security.contract.exception.JWTTheftException;
 import com.softropic.skillars.platform.security.contract.exception.MissingAuthenticationException;
 import com.softropic.skillars.infrastructure.security.SecurityError;
@@ -16,7 +21,9 @@ import com.softropic.skillars.platform.security.infrastructure.SecuredHttpEndpoi
 import com.softropic.skillars.platform.security.service.DaoAuthProvider;
 
 import org.apache.commons.collections4.CollectionUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.MessageSource;
 import org.springframework.core.env.Environment;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.AccountStatusException;
@@ -28,6 +35,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.util.Locale;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -90,6 +98,8 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
     private final SecurityUtil     securityUtil;
     private final Environment       env;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final MessageSource     messageSource;
+    private final ObjectMapper      objectMapper;
 
     public JWTAuthorizationFilter(DaoAuthProvider daoAuthProvider,
                                   ApplicationEventPublisher applicationEventPublisher,
@@ -97,7 +107,9 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
                                   LoginTokenManager loginTokenManager,
                                   SecurityUtil securityUtil,
                                   Environment env,
-                                  RefreshTokenRepository refreshTokenRepository
+                                  RefreshTokenRepository refreshTokenRepository,
+                                  MessageSource messageSource,
+                                  ObjectMapper objectMapper
     ) {
         super();
         this.publisher = applicationEventPublisher;
@@ -107,6 +119,8 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
         this.securityUtil = securityUtil;
         this.env = env;
         this.refreshTokenRepository = refreshTokenRepository;
+        this.messageSource = messageSource;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -121,7 +135,10 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
                 catch (AccountStatusException | AuthorizationException | AccessDeniedException e) {
                     //includes AccountExpiredException, CredentialsExpiredException, LockedException, InvalidJWTDataException, JWTTheftException, JWTExpiredException, AccessDeniedException (missing token)
                     securityUtil.logout(res);
-                    res.sendError(HttpServletResponse.SC_UNAUTHORIZED);
+                    // Emit an ErrorDto body (not a bare sendError) so the SPA's axios interceptor
+                    // can read errorMsg.errorKey and route to /login. Status stays 401 for every
+                    // caught type; the key is 'security.sessionExpired' only for an expired JWT.
+                    writeUnauthorized(res, e);
                     return;
                 }
             } else {
@@ -199,6 +216,32 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
                                                                                 userDetails.getAuthorities());
         authenticationToken.setDetails(userDetails);
         return authenticationToken;
+    }
+
+    /**
+     * Writes a 401 response whose body matches the application {@link ErrorDto} shape
+     * ({@code {helpCode, errorMsg: {errorKey, message}, fieldErrors: []}}) so the SPA's axios
+     * interceptor can gate on {@code errorMsg.errorKey}. An expired JWT yields
+     * {@code security.sessionExpired} (aligned with {@code ApiAdvice.jwtExpirationHandler});
+     * anything else caught here yields {@code security.unauthorized}. The status is 401 in all
+     * cases &mdash; this filter deliberately does not defer to {@code @RestControllerAdvice}
+     * (which would remap some of these to 403).
+     */
+    private void writeUnauthorized(final HttpServletResponse res, final Exception cause) throws IOException {
+        final boolean expired = cause instanceof JWTExpiredException;
+        final String errorKey = expired ? "security.sessionExpired" : "security.unauthorized";
+        final String defaultMsg = expired
+                ? "Your session is no longer valid. You need to sign-in again"
+                : "Unauthorized Access."; // matches ApiAdvice.handleAuthException's default for this key
+        final String lang = RequestMetadataProvider.getClientInfo().getChosenLang();
+        final Locale locale = StringUtils.isNotBlank(lang) ? Locale.forLanguageTag(lang) : Locale.getDefault();
+        final String message = messageSource.getMessage(errorKey, null, defaultMsg, locale);
+
+        final ErrorDto body = new ErrorDto(null, new ErrorMsg(errorKey, message));
+        res.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        res.setContentType("application/json");
+        res.setCharacterEncoding("UTF-8");
+        objectMapper.writeValue(res.getWriter(), body);
     }
 
 }
