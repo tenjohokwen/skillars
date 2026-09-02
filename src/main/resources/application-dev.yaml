@@ -28,7 +28,16 @@ app:
       enabled: true
   ses:
     from-address: noreply@skillars.com
-    enabled: true
+    # MUST stay false on this profile — `true` cannot work here, independently of any
+    # AWS credentials. SesEmailServiceImpl is @Profile("!dev") precisely so that dev
+    # suppresses mail, and NoOpSesEmailService only matches havingValue = "false" (its
+    # matchIfMissing = true covers an absent property, not a `true` one). So `true` left
+    # SesEmailService with ZERO implementations under dev, while still asking
+    # SesConfig.sesV2Client — which carries no profile restriction, only
+    # @ConditionalOnProperty — to build a real AWS SES client that dev never uses.
+    # Whichever of those two failed first, the app did not start.
+    # `false` is what dev meant all along: no AWS client, NoOp email, subjects logged.
+    enabled: false
   frontend-url: "http://localhost:9000"
   # Local MinIO (see docker-compose.local.yml) instead of real AWS S3 — avoids paid
   # API calls in dev. Point APP_STORAGE_* env vars at real AWS when this profile is

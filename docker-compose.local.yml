@@ -14,9 +14,36 @@ services:
       - SPRING_PROFILES_ACTIVE=dev
       - APP_VIDEO_BUNNY_LIBRARY_ID=123456
       - MANAGEMENT_HEALTH_MAIL_ENABLED=false
+      # PaymentConfig.configureStripe() throws AppSetupException on a blank key, and blank is what
+      # it resolves to locally: application.yaml defaults it to "", application-dev.yaml has no
+      # payment section, and the base compose file never passes it (only docker-compose.uat.yml
+      # does). Without this the whole app context refuses to start. The guard in that same method
+      # rejects only ^(sk|rk)_live_ outside the prod profile, so a test-shaped placeholder is fine
+      # and a real live key would still be refused here.
+      - APP_PAYMENT_STRIPE_API_KEY=sk_test_local_placeholder
+      # No LOKI_ENABLED override: docker-compose.yml's LOKI_ENABLED=true now works, so
+      # app logs actually reach the local Loki container and are queryable in Grafana.
+      # No APP_SES_ENABLED override here any more: application-dev.yaml now sets
+      # app.ses.enabled: false, which is what the dev profile always meant. See the
+      # comment there for why `true` could never work on this profile.
       - SPRING_MAIL_PASSWORD=${SPRING_MAIL_PASSWORD}
       - GMAIL_PASSWORD=${GMAIL_PASSWORD}
       - GMX_PASSWORD=${GMX_PASSWORD}
+      # These restate application-dev.yaml's OWN defaults, and are required rather than tidy.
+      # docker-compose.yml passes each of these variables through with a `:-` empty default so a
+      # production deploy can set them. But an empty environment variable is present-and-blank,
+      # not absent, so it OVERRIDES the `${VAR:dev-default}` fallbacks in application-dev.yaml —
+      # the dev profile's defaults stop applying the moment the base file passes the variable.
+      # Found by running it: an empty APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET aborts startup in
+      # BunnyVideoProviderAdapter ("webhookSigningSecret must not be blank"), and an empty
+      # APP_STORAGE_S3_ACCESS_KEY silently drops MinIO back to the AWS default credential chain,
+      # breaking every upload. Keep this block in step with application-dev.yaml.
+      - APP_STORAGE_S3_ACCESS_KEY=minioadmin
+      - APP_STORAGE_S3_SECRET_KEY=minioadmin123
+      - APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET=dev-webhook-signing-secret
+      - APP_VIDEO_PLAYBACK_SIGNING_SECRET=dGVzdC1wbGF5YmFjay1zaWduaW5nLXNlY3JldC0zMi1ieXRlcyEh
+      - PLATFORM_PIN_ENCRYPTION_SECRET=S3CR3TW0RD
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-dev-key}
       # App container talks to MinIO over the compose network by service name.
       # The presigned upload URLs it generates also use this host — see the
       # /etc/hosts note by the `minio` service below for why that's required.

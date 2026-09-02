@@ -46,5 +46,13 @@ runs:
         load: ${{ inputs.load }}
         tags: ${{ inputs.tags }}
         labels: ${{ inputs.labels }}
+        # Forces the Dockerfile's `apk upgrade` layer to re-run on every build instead of
+        # being served from the type=gha cache. A cached layer is keyed only on the command
+        # string, so without this it keeps shipping stale OS packages even after Alpine
+        # publishes a fix -- which broke the pr-build Trivy gate on an already-patched
+        # libexpat CVE. Everything above it in the Dockerfile (the Maven build stage) still
+        # caches normally; only the fast trailing runtime-stage layers rebuild.
+        build-args: |
+          APK_UPGRADE_CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}
         cache-from: type=gha
         cache-to: type=gha,mode=max

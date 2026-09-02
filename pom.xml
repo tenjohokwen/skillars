@@ -64,11 +64,13 @@
 			  postgresql CVE-2026-42198, CVE-2026-54291. The 3.5.16 parent manages 42.7.11,
 			             which fixes only the first; 42.7.12 fixes both.
 			  httpcore5  CVE-2026-54399 - denial of service via excessive HTTP headers. The
-			             3.5.16 parent manages 5.3.6; fix is 5.4.3 (or 5.5-beta2). Pulled in by
-			             the direct test-scope httpclient5 dependency below (WireMock stub
-			             assertions); Trivy scans app.jar and flags it regardless of test scope
-			             because Spring Boot's repackage step does not exclude it from the
-			             resolved runtime classpath.
+			             3.5.16 parent manages 5.3.6; fix is 5.4.3 (or 5.5-beta2). Reaches the
+			             runtime classpath via software.amazon.awssdk:apache5-client (AWS SDK
+			             BOM 2.54.2), which is what the SDK's sync HTTP client is built on, and
+			             is also used directly by the WireMock stub assertions in src/test.
+			             The httpclient5 declaration below is deliberately NOT test-scoped —
+			             see the comment there; test scope stripped it from the shipped jar and
+			             broke every AWS SDK sync client at runtime.
 			-->
 			<thymeleaf.version>3.1.5.RELEASE</thymeleaf.version>
 			<netty.version>4.1.136.Final</netty.version>
@@ -460,10 +462,23 @@
 			<version>4.2.2</version>
 			<scope>test</scope>
 		</dependency>
+		<!--
+		  MUST NOT be test-scoped. It is a genuine RUNTIME dependency: the AWS SDK v2 BOM
+		  (2.54.2) resolves software.amazon.awssdk:apache5-client onto the compile classpath,
+		  and that client is built on Apache HttpClient 5. A direct declaration wins over the
+		  transitive one under Maven's nearest-definition rule, so marking it `test` here
+		  silently stripped httpclient5 from the shipped jar while leaving httpcore5 (pulled in
+		  separately) behind — the exact split that produces, at SesV2Client construction:
+		      NoClassDefFoundError: org/apache/hc/client5/http/io/HttpClientConnectionManager
+		  i.e. any AWS SDK sync client (SES here, and S3 if it ever selects Apache) dies at
+		  runtime while every test still passes, because the test classpath had it all along.
+		  The declaration itself is kept — src/test TestConfig and ConversationResourceIT
+		  compile against org.apache.hc.client5, and the httpcore5.version property above
+		  pins the CVE-fixed transitive core — but at default (compile) scope so it ships.
+		-->
 		<dependency>
 			<groupId>org.apache.httpcomponents.client5</groupId>
 			<artifactId>httpclient5</artifactId>
-			<scope>test</scope>
 		</dependency>
 		<dependency>
 			<groupId>com.github.librepdf</groupId>
