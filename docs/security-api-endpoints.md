@@ -244,12 +244,19 @@ Content-Type: application/json
 **Cookies Set on Successful Login:**
 | Cookie | HTTPOnly | Purpose | TTL |
 |--------|----------|---------|-----|
-| potc | Yes | JWT Token | 15 minutes |
+| potc | Yes | JWT Token | 15 minutes (`JWT_TTL`) |
 | bcookie | Yes | Browser Client ID | Session |
 | ION | Yes | JWT Session ID | Session |
 | user | No | Display name (readable by JS) | 15 minutes |
-| admin | No | Admin indicator (if applicable) | 15 minutes |
-| rint | No | Session refresh countdown | 15 minutes |
+| admin | No | Admin indicator — literal string `"admin"`, set only when the roles claim contains `ADMIN` (**not** `"true"`) | 15 minutes |
+| rint | No | The JWT's **absolute expiry as epoch milliseconds** — rewritten (advanced) on every authenticated response. Not a countdown and not a delta. | `JWT_TTL + 60s` (~16 min) |
+| rtkn | Yes | Opaque refresh token | 7 days (`REFRESH_TOKEN_TTL`) |
+| skp | No | URL-encoded JSON `{"id":<Long>,"role":"COACH"}`; hydrates client-side auth state | 7 days |
+
+> `CookieUtil` writes every cookie above with `Path=/` and `SameSite=Lax`. `Secure` is emitted
+> only when the request arrived over HTTPS, so cookies are **not** `Secure` over plain HTTP in
+> local dev. For how `rint` drives the client-side countdown, see
+> [Session Refresh Mechanism](./session-refresh-mechanism.md) — that document is the authority.
 
 **Error Responses:**
 - `401 Unauthorized` - Invalid credentials

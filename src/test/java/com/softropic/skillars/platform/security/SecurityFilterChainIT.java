@@ -93,12 +93,16 @@ public class SecurityFilterChainIT extends AbstractIntegrationTest {
     @Sql(scripts = {"/sql/authorityData.sql", "/sql/userData.sql", "/sql/secData.sql"})
     void testSecuredEndpointRequiresAuth() {
         String url = baseUrl() + ACCOUNT_URL;
-        
+
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(url, HttpMethod.GET, null, baseHeaders(), Map.class))
                 .isInstanceOf(HttpClientErrorException.class)
                 .satisfies(e -> {
                     HttpClientErrorException ex = (HttpClientErrorException) e;
                     assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+                    // JWTAuthorizationFilter now emits an ErrorDto body (not a bare sendError) so the
+                    // SPA axios interceptor can gate on errorMsg.errorKey. No token -> security.unauthorized.
+                    assertThat(ex.getResponseBodyAsString())
+                            .contains("\"errorKey\":\"security.unauthorized\"");
                 });
     }
 

@@ -58,19 +58,29 @@ public final class SecurityConstants {
     public static final String JWT_BUS_NAME = "jot";
     public static final String JWT_VERSION               = "v1";
     /**
-     * Name of the {@code rint} cookie ("refresh interval").
+     * Name of the {@code rint} cookie ("refresh instant").
      * <p>
-     * {@code JwtManagerImpl.createLoginCookies} writes this cookie on every authenticated request
-     * (login, refresh and TTL extension) with a <b>fixed</b> value of
-     * {@code JWT_TTL.minusMinutes(5).toMillis()} = 600000 ms (i.e. 10 minutes).
+     * {@code JwtManagerImpl.createLoginCookies} writes this cookie on every authenticated response
+     * (login, refresh and TTL extension) as the JWT's <b>absolute expiry time in epoch
+     * milliseconds</b> ({@code ClockProvider now + JWT_TTL}). Because the sliding window re-issues
+     * the JWT with a fresh full TTL on every request, the value <b>advances</b> on each response.
      * <p>
-     * The frontend ({@code src/frontend/src/plugins/sessionManager.js}) reads it and derives the
-     * session-warning window as {@code JWT_TTL - rint} = 15 min - 10 min = <b>5 minutes before expiry</b>.
-     * It is a server-issued reference value only; the warning threshold itself is computed client-side.
+     * The frontend ({@code src/frontend/src/plugins/sessionManager.js}) reads it as
+     * {@code timeUntilExpiry = rint - Date.now()} and shows the session warning when that drops
+     * below a client-side constant ({@code WARNING_THRESHOLD}, 5 min). No copy of {@code JWT_TTL}
+     * is needed on the client; the contract is time-based, so a backend TTL change needs no
+     * frontend change. It is also multi-tab safe — an idle tab sees a sibling's advanced value and
+     * does not force a logout — and survives timer suspension across a laptop sleep, because the
+     * deadline is a stored instant rather than an accumulating countdown.
      * <p>
-     * Note: the value is fixed under the current sliding-window design (the JWT is re-issued with a
-     * fresh full TTL on every request), so {@code rint} does not count down. Re-designing it into an
-     * absolute expiry timestamp is deferred to Story 1.7b.
+     * It is <b>not</b> immune to client clock drift. {@code rint - Date.now()} subtracts a client
+     * instant from a server instant, so the result carries the wall-clock offset between the two
+     * machines; the client's legacy elapsed-time fallback is the skew-immune path. The frontend
+     * therefore sanity-checks the computed remaining time and degrades to that fallback when it
+     * falls outside a plausible band.
+     * <p>
+     * {@code HttpOnly=false} so JS can read it. {@code maxAge} is {@code JWT_TTL + 60s} so the
+     * client can still read "expired at T" for a brief grace window after the JWT is gone.
      */
     public static final String SESSION_REFRESH_COUNTDOWN = "rint";
     public static final String B_COOKIE                  = "bcookie";

@@ -288,8 +288,17 @@ public class JwtManagerImplTest {
             assertThat(bCookieValueFromHeader).isEqualTo(browserCookieValue);
             final String userCookieValueFromHeader = extractCookie(mockResponse, USER_COOKIE);
             assertThat(userCookieValueFromHeader).isEqualTo(principal.getDisplayName());
-            final String sessionTimeoutWarningInterval = extractCookie(mockResponse, SESSION_REFRESH_COUNTDOWN);
-            assertThat(sessionTimeoutWarningInterval).isEqualTo(String.valueOf(JWT_TTL.minusMinutes(5).toMillis()));
+            // Story 1.7b: 'rint' is the JWT's absolute expiry in epoch ms, not a fixed 5-min delta.
+            // (The JWT 'exp' claim is a NumericDate truncated to whole seconds, so allow ~1s slack.)
+            final long rint = Long.parseLong(extractCookie(mockResponse, SESSION_REFRESH_COUNTDOWN));
+            assertThat(rint)
+                    .isGreaterThan(ClockProvider.getClock().millis())
+                    .isCloseTo(claims.getExpiration().getTime(), org.assertj.core.api.Assertions.within(1_500L))
+                    // Pin the absolute magnitude too: rint and the JWT 'exp' are both derived from
+                    // (now + JWT_TTL), so asserting only that they agree would still pass if that
+                    // expression were wrong and silently shortened every session.
+                    .isCloseTo(ClockProvider.getClock().millis() + JWT_TTL.toMillis(),
+                               org.assertj.core.api.Assertions.within(2_000L));
         }
     }
 
@@ -501,8 +510,15 @@ public class JwtManagerImplTest {
 
         final String userCookieValueFromHeader = extractCookie(mockResponse, USER_COOKIE);
         assertThat(userCookieValueFromHeader).isEqualTo(principal.getDisplayName());
-        final String sessionTimeoutWarningInterval = extractCookie(mockResponse, SESSION_REFRESH_COUNTDOWN);
-        assertThat(sessionTimeoutWarningInterval).isEqualTo(String.valueOf(JWT_TTL.minusMinutes(5).toMillis()));
+        // Story 1.7b: 'rint' is the JWT's absolute expiry in epoch ms, not a fixed 5-min delta.
+        // (The JWT 'exp' claim is a NumericDate truncated to whole seconds, so allow ~1s slack.)
+        final long rint = Long.parseLong(extractCookie(mockResponse, SESSION_REFRESH_COUNTDOWN));
+        assertThat(rint)
+                .isGreaterThan(ClockProvider.getClock().millis())
+                .isCloseTo(claims.getExpiration().getTime(), org.assertj.core.api.Assertions.within(1_500L))
+                // Pin the absolute magnitude too - see testCreateLoginToken_success.
+                .isCloseTo(ClockProvider.getClock().millis() + JWT_TTL.toMillis(),
+                           org.assertj.core.api.Assertions.within(2_000L));
 
         Instant expectedIssuedAt = Instant.now(ClockProvider.getClock());
         assertThat(claims.getIssuedAt().toInstant()).isCloseTo(expectedIssuedAt, org.assertj.core.api.Assertions.within(2, ChronoUnit.SECONDS));
@@ -632,9 +648,15 @@ public class JwtManagerImplTest {
 
         assertThat(extendedClaims.getIssuedAt().toInstant()).isCloseTo(extendInstant, org.assertj.core.api.Assertions.within(1, ChronoUnit.SECONDS));
         assertThat(extendedClaims.getExpiration().toInstant()).isCloseTo(extendInstant.plus(JWT_TTL), org.assertj.core.api.Assertions.within(1, ChronoUnit.SECONDS));
-            
+
         assertThat(extendedClaims.get(CLIENT_ID, String.class)).isEqualTo(RequestMetadataProvider.getClientInfo().getClientIdentifier());
 
+        // Story 1.7b: the 'rint' cookie carries the *new* (extended) absolute expiry, which is
+        // strictly later than the original token's expiry after the clock advanced by 20s.
+        final long extendedRint = Long.parseLong(extractCookie(mockHttpServletResponse, SESSION_REFRESH_COUNTDOWN));
+        assertThat(extendedRint).isGreaterThan(initialClaims.getExpiration().getTime());
+        assertThat(extendedRint).isCloseTo(extendedClaims.getExpiration().getTime(),
+                                           org.assertj.core.api.Assertions.within(1_500L));
     }
 
     @Test

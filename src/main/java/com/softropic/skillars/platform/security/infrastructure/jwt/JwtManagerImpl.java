@@ -201,12 +201,16 @@ public class JwtManagerImpl implements LoginTokenManager {
     }
 
     private void createAndSetJwt(HttpServletResponse res, Map<String, Object> claims) {
-        createLoginCookies(res, claims);
+        // Absolute expiry instant shared by the JWT and the 'rint' cookie so the client reads
+        // exactly the token's expiry. TokenCreatorImpl.generateTokenFromClaims derives its 'exp'
+        // the same way (ClockProvider now + JWT_TTL); any sub-millisecond skew is immaterial.
+        final long jwtExpiryEpochMs = ClockProvider.getClock().millis() + JWT_TTL.toMillis();
+        createLoginCookies(res, claims, jwtExpiryEpochMs);
         final String token = tokenCreator.generateTokenFromClaims(claims);
         CookieUtil.addCookie(res, JWT_COOKIE_NAME, token, true, (int) JWT_TTL.toSeconds());
     }
 
-    private void createLoginCookies(HttpServletResponse res, Map<String, Object> claims) {
+    private void createLoginCookies(HttpServletResponse res, Map<String, Object> claims, long jwtExpiryEpochMs) {
         final int browserSessionTtl = -1;
 
         final String clientId = (String) claims.get(CLIENT_ID);
@@ -222,18 +226,21 @@ public class JwtManagerImpl implements LoginTokenManager {
         if (StringUtils.containsIgnoreCase(roles, "ADMIN")) {
             CookieUtil.addCookie(res, ADMIN_COOKIE, "admin", false, (int) JWT_TTL.toSeconds());
         }
-        // 'rint' cookie: a FIXED value of 600000 ms (JWT_TTL - 5 min = 10 min), NOT a live countdown.
-        // Under the sliding-window design the JWT is re-issued with a fresh full TTL on every request,
-        // so this value is identical on every response. The frontend (sessionManager.js) derives its
-        // session-warning window as (JWT_TTL - rint) = 5 minutes before expiry. HttpOnly=false so JS can
-        // read it; browserSessionTtl (-1) writes a session cookie (no Max-Age/Expires) — it is NOT
-        // per-tab: it is shared across all tabs/windows of the browser and can survive a browser
-        // restart under session-restore; it is dropped only when the browser session truly ends.
-        // See SecurityConstants.SESSION_REFRESH_COUNTDOWN. Absolute-timestamp redesign is deferred to Story 1.7b.
+        // 'rint' cookie: the JWT's ABSOLUTE expiry as epoch milliseconds, rewritten on every
+        // authenticated response so it advances each time the sliding-window TTL resets.
+        // The frontend computes timeUntilExpiry = rint - Date.now(): no JWT_TTL copy needed,
+        // multi-tab safe (an idle tab sees a sibling's advanced value and does not force-logout),
+        // and it survives timer suspension across a laptop sleep. It is NOT immune to client clock
+        // drift though - subtracting a client instant from a server one carries the offset between
+        // the two clocks - so the frontend sanity-checks the result and falls back to a local
+        // elapsed-time estimate when it is implausible.
+        // HttpOnly=false so JS can read it. maxAge is JWT_TTL + 60s so the client can still read
+        // "expired at T" for a short grace window after the JWT itself is gone.
+        // See SecurityConstants.SESSION_REFRESH_COUNTDOWN.
         CookieUtil.addCookie(res,
                 SESSION_REFRESH_COUNTDOWN,
-                String.valueOf(JWT_TTL.minusMinutes(5).toMillis()),
+                String.valueOf(jwtExpiryEpochMs),
                 false,
-                browserSessionTtl);
+                (int) (JWT_TTL.toSeconds() + 60));
     }
 }

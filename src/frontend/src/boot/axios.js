@@ -1,7 +1,7 @@
 import { defineBoot } from '#q-app/wrappers';
 import axios from 'axios';
 import { getCurrentBrowserFingerPrint } from '@rajesh896/broprint.js';
-import { recordActivity, stopSessionMonitoring, cleanup, syncWarningThresholdFromCookie } from 'src/plugins/sessionManager';
+import { recordActivity, stopSessionMonitoring, cleanup, refreshExpiryState } from 'src/plugins/sessionManager';
 import { getCurrentLocale } from 'src/boot/i18n';
 
 // Loading state management
@@ -120,10 +120,10 @@ api.interceptors.response.use(
     pendingRequests--;
     notifyLoadingChange();
 
-    // Every authenticated request refreshes the 'rint' cookie server-side
-    // (see JWTAuthorizationFilter -> extendTtlOfToken); keep our warning
-    // threshold in sync with it.
-    syncWarningThresholdFromCookie();
+    // Every authenticated response rewrites the 'rint' cookie (the JWT's new absolute
+    // expiry, see JWTAuthorizationFilter -> extendTtlOfToken); re-evaluate from it so the
+    // monitor and any open warning dialog reflect the extension immediately.
+    refreshExpiryState();
 
     // Unwrap axios response - return just the data
     return response.data;
@@ -134,7 +134,12 @@ api.interceptors.response.use(
     notifyLoadingChange();
 
     // The auth filter runs (and refreshes 'rint') before business-logic errors occur too.
-    syncWarningThresholdFromCookie();
+    // On a 401 the filter has already cleared 'rint' (JwtManagerImpl.deleteLoginToken), so this
+    // normally takes the legacy elapsed-time fallback and the errorKey gate below owns the
+    // teardown. It is not a guarantee: if that fallback is itself already past zero, tick()
+    // fires 'session:expired' here and both paths tear down. That is idempotent (cleanup() and
+    // stopSessionMonitoring() are both safe to repeat) but can produce two navigations.
+    refreshExpiryState();
 
     // Handle different error scenarios
     if (error.response) {

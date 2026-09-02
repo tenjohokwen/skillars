@@ -38,11 +38,17 @@ function handleSessionExpired() {
 }
 
 onMounted(() => {
+  // Register the listener BEFORE starting the monitor. startSessionMonitoring() evaluates the
+  // session immediately (see sessionManager.tick()), so a session that is already past its
+  // 'rint' deadline at mount dispatches 'session:expired' synchronously from inside that call.
+  // With the old ordering that event landed before this listener existed and was silently
+  // dropped, and because the monitor also declines to arm its interval for an expired session
+  // the app was left with no session handling at all until the next API call 401'd.
+  window.addEventListener('session:expired', handleSessionExpired);
+
   if (isAuthenticated()) {
     startSessionMonitoring();
   }
-
-  window.addEventListener('session:expired', handleSessionExpired);
 });
 
 onUnmounted(() => {

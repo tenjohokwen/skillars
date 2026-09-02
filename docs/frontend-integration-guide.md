@@ -225,124 +225,36 @@ Session management is completely transparent to components. The axios intercepto
 
 #### Session Manager Plugin
 
+> **⚠️ The implementation previously reproduced here was never accurate and has been removed.**
+> It described a client-side elapsed-time countdown against a hardcoded `SESSION_TTL`, with a
+> 2-minute warning, a `readonly`-wrapped `sessionState` object and a `resetTimers()` helper —
+> none of which exist in `src/plugins/sessionManager.js`. Duplicating the implementation across
+> documents is what let it drift. **[Session Refresh Mechanism](./session-refresh-mechanism.md)
+> is the single authority**; the summary below is orientation only.
+
+Since Story 1.7b, expiry is **server-driven**. The backend publishes the JWT's absolute expiry in
+the JS-readable `rint` cookie (epoch milliseconds) and rewrites it on every authenticated
+response, so the client never needs its own copy of `JWT_TTL`:
+
 ```javascript
-// src/plugins/sessionManager.js
-import { ref, readonly } from 'vue';
-import { sessionApi } from 'src/api';
-
-// Private state
-const SESSION_WARNING_THRESHOLD = 2 * 60 * 1000; // 2 minutes before expiry
-const SESSION_CHECK_INTERVAL = 30 * 1000; // Check every 30 seconds
-const SESSION_TTL = 15 * 60 * 1000; // 15 minutes
-
-let sessionTimer = null;
-let warningTimer = null;
-let lastActivityTime = Date.now();
-
-// Reactive state (read-only externally)
-const _showWarning = ref(false);
-const _timeUntilExpiry = ref(SESSION_TTL);
-const _isRefreshing = ref(false);
-
-export const sessionState = {
-  showWarning: readonly(_showWarning),
-  timeUntilExpiry: readonly(_timeUntilExpiry),
-  isRefreshing: readonly(_isRefreshing)
-};
-
-/**
- * Record user activity - called by interceptors on each request
- */
-export function recordActivity() {
-  lastActivityTime = Date.now();
-  _showWarning.value = false;
-  resetTimers();
-}
-
-/**
- * Start session monitoring
- */
-export function startSessionMonitoring() {
-  if (sessionTimer) return; // Already running
-
-  sessionTimer = setInterval(() => {
-    const elapsed = Date.now() - lastActivityTime;
-    const remaining = SESSION_TTL - elapsed;
-    _timeUntilExpiry.value = Math.max(0, remaining);
-
-    // Show warning when approaching expiry
-    if (remaining <= SESSION_WARNING_THRESHOLD && remaining > 0) {
-      _showWarning.value = true;
-    }
-
-    // Session expired
-    if (remaining <= 0) {
-      handleSessionExpired();
-    }
-  }, SESSION_CHECK_INTERVAL);
-}
-
-/**
- * Stop session monitoring
- */
-export function stopSessionMonitoring() {
-  if (sessionTimer) {
-    clearInterval(sessionTimer);
-    sessionTimer = null;
-  }
-  if (warningTimer) {
-    clearTimeout(warningTimer);
-    warningTimer = null;
-  }
-  _showWarning.value = false;
-}
-
-/**
- * Refresh session - can be called by warning dialog
- */
-export async function refreshSession() {
-  if (_isRefreshing.value) return false;
-
-  _isRefreshing.value = true;
-  try {
-    await sessionApi.refresh();
-    recordActivity();
-    return true;
-  } catch (error) {
-    handleSessionExpired();
-    return false;
-  } finally {
-    _isRefreshing.value = false;
-  }
-}
-
-/**
- * Handle session expiration
- */
-function handleSessionExpired() {
-  stopSessionMonitoring();
-  _showWarning.value = false;
-
-  // Dispatch custom event for app to handle
-  window.dispatchEvent(new CustomEvent('session:expired'));
-}
-
-/**
- * Reset timers on activity
- */
-function resetTimers() {
-  _timeUntilExpiry.value = SESSION_TTL;
-}
-
-/**
- * Cleanup - call on logout
- */
-export function cleanup() {
-  stopSessionMonitoring();
-  lastActivityTime = Date.now();
-  _timeUntilExpiry.value = SESSION_TTL;
-}
+// The contract, in one line (src/plugins/sessionManager.js)
+timeUntilExpiry = Number(getCookie('rint')) - Date.now();
 ```
+
+What the real module does:
+
+| Behaviour | Detail |
+|---|---|
+| Expiry source | `rint` cookie, absolute epoch ms. Falls back to an elapsed-time estimate only when `rint` is absent, stale-format, or contradicted by a fast client clock. |
+| Warning | Fires at `timeUntilExpiry <= 5 min` — a fixed client constant, not server-issued. |
+| Cadence | Re-evaluated every 30 s, plus after **every** API response (success and error). |
+| Multi-tab | An idle tab re-reads `rint` each tick and sees an active sibling's advanced value, so it no longer force-logs-out the active tab. |
+| Expiry event | Dispatches `session:expired` on `window`. `startSessionMonitoring()` evaluates immediately and can dispatch **synchronously**, so register the listener *before* calling it. |
+| Exports | `recordActivity`, `startSessionMonitoring`, `stopSessionMonitoring`, `refreshSession`, `cleanup`, `refreshExpiryState`, plus reactive refs. Consume via `useSession()`. |
+
+Keep-alive is `GET /refresh` (`sessionApi.refresh()`), a secured no-op — the TTL extension happens
+upstream in `JWTAuthorizationFilter`. That is a different endpoint from `POST /api/auth/refresh`,
+which performs full refresh-token rotation.
 
 #### Axios Interceptors with Session Management
 
@@ -1154,16 +1066,23 @@ import SessionWarningDialog from 'components/common/SessionWarningDialog.vue';
 
 ### Cookies Set by Backend
 
-| Cookie | HTTPOnly | Secure | Purpose | TTL | Frontend Access |
-|--------|----------|--------|---------|-----|-----------------|
-| `potc` | Yes | Yes | JWT Token | 15 min | No (HTTP only) |
-| `bcookie` | Yes | Yes | Browser Client ID | Session | No (HTTP only) |
-| `ION` | Yes | Yes | JWT Session ID | Session | No (HTTP only) |
-| `user` | No | No | Display name | 15 min | Yes |
-| `admin` | No | No | Admin indicator | 15 min | Yes |
-| `rint` | No | No | Session countdown | 15 min | Yes |
-| `lang` | No | No | Language preference | Long | Yes |
-| `lii` | Yes | Yes | 2FA Login Info ID | 30 min | No (HTTP only) |
+| Cookie | HTTPOnly | Purpose | TTL | Frontend Access |
+|--------|----------|---------|-----|-----------------|
+| `potc` | Yes | JWT Token | 15 min | No (HTTP only) |
+| `bcookie` | Yes | Browser Client ID | Session | No (HTTP only) |
+| `ION` | Yes | JWT Session ID | Session | No (HTTP only) |
+| `user` | No | Display name (plain string, **not** JSON) | 15 min | Yes |
+| `admin` | No | Literal `"admin"` when the roles claim contains `ADMIN` | 15 min | Yes |
+| `rint` | No | JWT's **absolute expiry**, epoch ms — advanced every authed response | `JWT_TTL + 60s` (~16 min) | Yes |
+| `rtkn` | Yes | Opaque refresh token | 7 days | No (HTTP only) |
+| `skp` | No | URL-encoded JSON `{"id":<Long>,"role":"COACH"}` | 7 days | Yes |
+| `lang` | No | Language preference | Long | Yes |
+| `lii` | Yes | 2FA Login Info ID | 30 min | No (HTTP only) |
+
+> The `Secure` column was removed because it was wrong per-row: `CookieUtil` sets `Secure` on
+> **every** cookie based on whether the current request arrived over HTTPS, so all of them are
+> `Secure` in production and none are over plain HTTP in local dev. All are `Path=/`,
+> `SameSite=Lax`.
 
 ### Reading Cookies in Vue.js
 
@@ -1178,7 +1097,10 @@ function getCookie(name) {
 
 // Usage
 const displayName = getCookie('user');
-const isAdmin = getCookie('admin') === 'true';
+const isAdmin = getCookie('admin') === 'admin'; // the value is the literal string "admin"
+
+// `rint` is the JWT's absolute expiry in epoch ms — subtract, don't treat it as a duration:
+const msUntilExpiry = Number(getCookie('rint')) - Date.now();
 
 // Using @vueuse/integrations
 import { useCookies } from '@vueuse/integrations/useCookies';
@@ -1190,7 +1112,8 @@ const displayName = cookies.get('user');
 ### Cookie Security Notes
 
 - **HTTPOnly cookies** (`potc`, `bcookie`, `ION`, `lii`) cannot be accessed via JavaScript - this is intentional for security
-- **Non-HTTPOnly cookies** (`user`, `admin`, `rint`) can be read to update UI state
+- **Non-HTTPOnly cookies** (`user`, `admin`, `rint`, `skp`, `lang`) can be read to update UI state.
+  `rint` is deliberately JS-readable so the client can compute time-until-expiry.
 - Always use `withCredentials: true` for API calls to ensure cookies are sent
 - The backend handles all cookie creation and validation
 
@@ -1317,8 +1240,10 @@ export default boot(({ app, router }) => {
 
       // Handle session expiration
       if (status === 401) {
+        // The filter emits `security.unauthorized` for every non-expiry auth failure, and the
+        // real interceptor gates on both keys — see boot/axios.js.
         const errorKey = errorData?.errorMsg?.errorKey;
-        if (errorKey === 'security.sessionExpired') {
+        if (errorKey === 'security.sessionExpired' || errorKey === 'security.unauthorized') {
           const currentPath = router.currentRoute.value.fullPath;
           if (currentPath !== '/login') {
             router.push({
@@ -1926,9 +1851,11 @@ export default boot(({ app, router }) => {
 
       // Handle session expiration
       if (status === 401) {
+        // The filter emits `security.unauthorized` for every non-expiry auth failure, and the
+        // real interceptor gates on both keys — see boot/axios.js.
         const errorKey = errorData?.errorMsg?.errorKey;
 
-        if (errorKey === 'security.sessionExpired') {
+        if (errorKey === 'security.sessionExpired' || errorKey === 'security.unauthorized') {
           const currentPath = router.currentRoute.value.fullPath;
           if (currentPath !== '/login') {
             router.push({
