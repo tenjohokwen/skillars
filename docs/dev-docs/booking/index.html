@@ -124,6 +124,7 @@
       <tr><td><code>BookingSseService</code></td><td>Pushes live booking status changes to subscribed clients over Server-Sent Events.</td></tr>
       <tr><td><code>BookingQueryService</code></td><td>Lightweight read-only booking snapshot lookup for other modules that only need id/coach/player/status.</td></tr>
       <tr><td><code>ProjectedRevenueService</code></td><td>Computes a coach's projected gross/commission/net revenue for a given week from confirmed/upcoming bookings.</td></tr>
+      <tr><td><code>SessionDurationResolver</code></td><td>Resolves the duration of a coaching session (in minutes) using a fallback chain: coach's custom <code>CoachPricing.session_duration_minutes</code> if set, else the platform-wide configurable default. Used by <code>AvailabilityService</code>, <code>BookingService</code>, and <code>BookingBatchService</code> to ensure consistent duration enforcement.</td></tr>
     </table>
 
     <h3>REST endpoints</h3>

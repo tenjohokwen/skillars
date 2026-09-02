@@ -28,10 +28,10 @@ Image tags follow the format `sha-<7-char-commit-sha>` (e.g., `sha-abc1234`). Id
 
 **Option A — From GitHub Actions CI history:**
 
-1. Go to repository → **Actions** → **CI Build** workflow
+1. Go to repository → **Actions** → **CI** workflow
 2. Find the run for the commit you want to roll back to
 3. Open the run and read the image tag from the **Build and push Docker image** step output
-4. Full image reference: `ghcr.io/<org>/javatemplate:sha-<commit>`
+4. Full image reference: `ghcr.io/tenjohokwen/skillars:sha-<commit>`
 
 **Option B — From git log:**
 
@@ -46,14 +46,14 @@ git log --oneline -10
 
 **Option C — From the GHCR package page:**
 
-1. Go to the packages page for your repository (e.g., `https://github.com/orgs/<org>/packages/container/javatemplate/versions`)
+1. Go to the packages page: `https://github.com/users/tenjohokwen/packages/container/skillars/versions`
 2. Find the image version by tag or date
 3. Copy the tag (e.g., `sha-abc1234`)
 
 Record the full image reference before proceeding:
 
 ```
-ghcr.io/<org>/javatemplate:<tag>
+ghcr.io/tenjohokwen/skillars:<tag>
 ```
 
 ### If the commit has no `sha-<short>` image in GHCR
@@ -102,16 +102,16 @@ cd /opt/skillars
 cp .env .env.bak
 
 # Update APP_IMAGE to the target image
-sed -i "s|^APP_IMAGE=.*|APP_IMAGE=ghcr.io/<org>/javatemplate:<tag>|" .env
+sed -i "s|^APP_IMAGE=.*|APP_IMAGE=ghcr.io/tenjohokwen/skillars:<tag>|" .env
 
 # Verify the change before proceeding
 grep '^APP_IMAGE=' .env
 ```
 
-Replace `<org>` and `<tag>` with your actual values. The expected output is:
+Replace `<tag>` with your target image tag (e.g., `sha-abc1234`). The expected output is:
 
 ```
-APP_IMAGE=ghcr.io/<org>/javatemplate:sha-abc1234
+APP_IMAGE=ghcr.io/tenjohokwen/skillars:sha-abc1234
 ```
 
 > **Note:** The `sed` command matches only the `APP_IMAGE=` line — it is safe to run. Do not edit `.env` manually with a text editor unless `sed` fails, as manual edits risk accidentally altering other values.
@@ -204,6 +204,41 @@ Once the health check passes, production is restored. Traefik automatically rout
 
 ---
 
+## Step 6: Post-Rollback Actions (Strongly Recommended)
+
+After production is restored, take the following actions:
+
+1. **Verify external availability**
+   ```bash
+   curl -s https://<DOMAIN>/actuator/health
+   # Expected response: {"status":"UP"} with HTTP 200
+   ```
+
+2. **Check application logs for errors**
+   - From the Node: `docker compose logs --tail=100 app`
+   - Or view in Grafana: `https://<MONITORING_DOMAIN>` → Loki logs
+   - See [`docs/deployment/monitoring.md`](monitoring.md) for log query examples
+
+3. **Verify data integrity**
+   - Spot-check key user flows (login, bookings, payments, video playback)
+   - Query the database for obvious corruption: `docker compose exec postgres psql -U postgres skillars -c "SELECT COUNT(*) FROM users;"`
+
+4. **Investigate the root cause**
+   - Review the logs of the bad deployment in GitHub Actions
+   - Check application error logs for clues
+   - Reference [`docs/deployment/runbook.md`](runbook.md) for common issues
+
+5. **Communicate with stakeholders**
+   - Notify your team/users that the incident is resolved
+   - Schedule a postmortem to prevent recurrence
+
+6. **Plan the fix-forward**
+   - Once you've identified the issue, create a PR to fix it
+   - Test the fix in your staging environment (see [`docs/deployment/deploy-guide.md`](deploy-guide.md) Step 2: UAT Validation)
+   - Re-deploy using the normal deployment workflow
+
+---
+
 ## Rollback After Migrations Have Run
 
 Everything above reverts the app **image**, which is safe on its own only when the bad release's Flyway
@@ -213,9 +248,10 @@ crash the reverted app on startup or corrupt data on write.
 
 **The supported remedy is a full restore, not an image-only rollback:**
 
-1. Revert the app image using Steps 1–5 above.
+1. Revert the app image using Steps 1–6 above.
 2. Restore the database from the most recent `pg-backup.sh` dump, following
    [`backup-restore.md`](backup-restore.md) → **Section A: Restore from pg_dump**.
+   - **Backup storage location:** Backups are stored per your deployment provider configuration (see [`backup-restore.md`](backup-restore.md) for details)
 3. **Accepted data-loss window:** up to 6 hours — `pg-backup.sh` runs on a `0 */6 * * *` cron
    (`deploy/backup/install-crons.sh`). Any writes made between the last backup and the incident are lost.
 

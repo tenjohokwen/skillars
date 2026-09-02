@@ -82,6 +82,9 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - ENVIRONMENT=${ENVIRONMENT:-prod}
       - APP_VERSION=${APP_VERSION:-unknown}
+      # Access logging via SLF4J -> Loki. false silences both the 9990 and 8367 loggers;
+      # to silence only the noisy management one, re-level skillars.access.management instead.
+      - APP_ACCESS_LOG_ENABLED=${APP_ACCESS_LOG_ENABLED:-true}
       - APP_FRONTEND_URL=${APP_FRONTEND_URL:-https://skillars.com}
 
       # First-admin bootstrap. Inert unless EMAIL and PASSWORD are both non-blank; remove the

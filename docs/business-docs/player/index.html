@@ -42,12 +42,16 @@ flowchart LR
     D --> E["/player/profile-builder<br/>Pick your position"]
     E --> F["/player/locker-room/:id<br/>Your homework hub"]
     F --> G["/marketplace<br/>Browse coaches"]
-    G --> H["/coaches/:coachId<br/>View a coach's profile"]
-    F --> I["/player/development/:id<br/>Skills Radar & progress"]
-    F --> J["/player/videos<br/>Upload drill videos"]
-    F --> K["/messaging<br/>Chat with your coach"]
+    G --> H["/coaches/:coachId<br/>View coach & book"]
+    H --> I["Buy session pack"]
+    I --> J["Request booking"]
+    J --> K["Live session &<br/>coach feedback"]
+    H --> L["Write review"]
+    K --> M["/player/development/:id<br/>Skills Radar & progress"]
+    F --> N["/player/videos<br/>Upload drill videos"]
+    K --> O["/messaging<br/>Chat with your coach"]
     </pre>
-    <p>The one thing to know up front: <strong>booking a session is not something a Player does themselves today.</strong> See the callout in "Browsing the marketplace" below.</p>
+    <p>As an adult self-registered player, you have full control over booking and paying for sessions with coaches directly — no parent account required.</p>
 
     <h3>1. Registering as a player</h3>
     <p><strong>Why it matters:</strong> this is Skillars' self-serve acquisition path for adult athletes — no coach or parent has to invite them first.</p>
@@ -83,17 +87,16 @@ flowchart LR
       <li>If nothing's been assigned yet, you'll see an empty state instead.</li>
     </ol>
 
-    <h3>5. Browsing the marketplace</h3>
-    <p><strong>Why it matters:</strong> this is how a player evaluates and chooses a coach to work with.</p>
+    <h3>5. Browsing the marketplace and booking a session</h3>
+    <p><strong>Why it matters:</strong> this is how a player evaluates, chooses, and books a coach to work with directly.</p>
     <ol>
       <li>Go to <code>/marketplace</code> (also reachable while logged out — it's public).</li>
       <li>You must type a city and search before any results show — there's no default/nearby listing.</li>
       <li>Once a city is entered, filters appear: District, Age group, Language, and a Sort option; results are shown as a grid of coach cards with a "Load more" button for pagination.</li>
-      <li>Clicking a coach card opens <code>/coaches/:coachId</code> — their public profile: photo, verification badge, availability status, star rating (or "No reviews yet"), bio, specialties, languages, and price.</li>
+      <li>Clicking a coach card opens <code>/coaches/:coachId</code> — their public profile: photo, verification badge, availability status, star rating, reviews from other players/parents, bio, specialties, languages, price, and session packs they offer.</li>
+      <li>On the coach's profile, you'll see their published session packs (bundles of sessions at a fixed price) and a call-to-action button. If you already own credits with this coach, the button says "Book Session" and takes you to request-booking. If not, it says "Buy Sessions" and takes you to a purchase page where you can buy a pack.</li>
+      <li>After purchasing a pack, you'll have session credits with that coach. Click "Book Session" to request a specific date and time — the coach accepts or declines in their booking-requests inbox, and once accepted you're in their command-center system for the live session.</li>
     </ol>
-    <div class="callout warn">
-      <p><strong>As of the current build, a Player cannot actually complete a booking from this screen.</strong> The profile page's call-to-action button only has real behavior for Parent accounts (it routes them to a buy-sessions or booking-request page). For anyone who is not a Parent — including a fully logged-in adult Player — the button reads "Sign up to book" and pushes you to <code>/login</code> with a return URL. Since you're already logged in, that's a dead end that loops you back to where you started. Booking today is a Parent-initiated action even when the person training is an adult self-registered player. If you want to actually get booked with a coach right now, that has to happen outside this screen (e.g. the coach books you directly, or a parent account requests it on your behalf).</p>
-    </div>
 
     <h3>6. Tracking your development</h3>
     <p><strong>Why it matters:</strong> this is Skillars' core value proposition beyond just scheduling — a visible, ongoing record of skill growth.</p>
@@ -111,7 +114,17 @@ flowchart LR
       <li>Each video can be deleted from the same list.</li>
     </ol>
 
-    <h3>8. Messaging your coach</h3>
+    <h3>8. Reviewing a coach</h3>
+    <p><strong>Why it matters:</strong> your honest feedback helps other players choose coaches and helps coaches improve their service.</p>
+    <ol>
+      <li>After you've trained with a coach, visit their profile again at <code>/coaches/:coachId</code>.</li>
+      <li>Scroll to the "Write Review" section (visible only if you're logged in and haven't already reviewed this coach).</li>
+      <li>Click "Write Review" to open a dialog where you can rate the coach 1–5 stars and write up to 1000 characters of feedback.</li>
+      <li>Once submitted, your review goes into moderation — it may initially show a "Pending moderation" status. Once approved, it appears on the coach's profile where all players can see it.</li>
+      <li>You can edit your existing review by clicking "Edit Review" next to it; coaches can also respond to your review with their own message.</li>
+    </ol>
+
+    <h3>9. Messaging your coach</h3>
     <ol>
       <li>Go to <code>/messaging</code>: a two-panel screen — conversation list on the left, message thread on the right.</li>
       <li>Selecting a conversation loads its message history; type in the box at the bottom and press Enter or click send.</li>
@@ -120,19 +133,16 @@ flowchart LR
 
     <h2>Conventions &amp; Gotchas</h2>
     <div class="callout warn">
-      <p><strong>Booking is not player-initiated in the current UI</strong> — see the marketplace section above. Don't promise a prospective player "browse and book" as a complete self-serve loop until this is wired up.</p>
-    </div>
-    <div class="callout warn">
       <p><strong>Use <code>/player-register</code>, never the generic <code>/register</code> page</strong> — they lead to different account types.</p>
     </div>
     <div class="callout">
-      <p><strong>There's no player-facing "leave a review" screen.</strong> Ratings shown on a coach's profile are real, but nothing in the current UI lets a player submit one.</p>
+      <p><strong>Player profiles must complete the profile-builder step before they can book sessions.</strong> A player who registers but doesn't finish the "Pick your position" step won't have a resolvable player ID, and marketplace booking won't function yet.</p>
     </div>
 
     <h2>Related Personas</h2>
     <div class="card-grid">
-      <div class="card"><h4><a href="../parent/index.html">Parent</a></h4><p>Books sessions and pays on behalf of players under 18 — and is currently the only account type that can actually complete a booking through the UI.</p></div>
-      <div class="card"><h4><a href="../coach/index.html">Coach</a></h4><p>The other side of every booking, messaging thread, homework assignment, and development assessment a player sees.</p></div>
+      <div class="card"><h4><a href="../parent/index.html">Parent</a></h4><p>Books sessions and pays on behalf of players under 18 — Parents can also book for adult players if they prefer. See how parent booking differs from self-booking.</p></div>
+      <div class="card"><h4><a href="../coach/index.html">Coach</a></h4><p>The other side of every booking, messaging thread, homework assignment, review, and development assessment a player sees.</p></div>
       <div class="card"><h4><a href="../trust-and-safety/index.html">Trust &amp; Safety</a></h4><p>As an adult player you sit in the unrestricted age tier — this explains what changes for the minors you'll see referenced everywhere.</p></div>
     </div>
     <p><a href="../index.html">&larr; Back to Home</a></p>

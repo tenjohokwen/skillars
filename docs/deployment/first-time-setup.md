@@ -3,7 +3,11 @@
 Follow this guide end-to-end to bring up a live, TLS-enabled production environment from zero.
 **Target time: ≤ 2 hours.**
 
-You will need: SSH access to a fresh server, a secrets file, and a registered domain.
+**Supported providers (as of 2026-09):**
+- **netcup VPS 1000 G12** (recommended) — currently Hetzner CX32 is out of supply
+- **Hetzner Cloud CX42+** (legacy, tested)
+
+You will need: SSH access to a fresh server, a secrets file, a registered domain, and cloud provider account.
 All deployment instructions are contained in this repository.
 
 ---
@@ -14,33 +18,63 @@ Ensure the following are available on your **local machine** before starting:
 
 | Requirement | How to obtain |
 |---|---|
-| `hcloud` CLI | `brew install hcloud` (macOS) or download from [hetznercloud/cli releases](https://github.com/hetznercloud/cli/releases) |
 | `openssl` | Pre-installed on macOS/Linux; install via `apt install openssl` if absent |
-| Hetzner Cloud account | https://console.hetzner.cloud |
-| Hetzner API token (read + write) | Hetzner Console → Security → API Tokens → Generate API token |
-| SSH key uploaded to Hetzner | Hetzner Console → Security → SSH Keys → Add SSH Key |
+| Cloud provider account | **netcup** (https://www.netcup.eu) or **Hetzner Cloud** (https://console.hetzner.cloud) |
+| Provider API credentials (if using Hetzner) | Hetzner Console → Security → API Tokens → Generate API token; for netcup, use account credentials |
+| `hcloud` CLI (Hetzner only) | `brew install hcloud` (macOS) or download from [hetznercloud/cli releases](https://github.com/hetznercloud/cli/releases) |
+| SSH key uploaded to provider | Upload to your provider's console (Hetzner Console → Security → SSH Keys or netcup control panel) |
 | Registered domain with DNS management access | Your domain registrar |
-| SSH private key on local machine | The key pair whose public key is uploaded to Hetzner |
-| Local clone of this repository | `git clone <REPO_URL>` on your local machine — required for Step 4 (firewall script) and Step 5 (`.env` file) |
+| SSH private key on local machine | The key pair whose public key is uploaded to your cloud provider |
+| Local clone of this repository | `git clone https://github.com/tenjohokwen/skillars.git` on your local machine — required for Step 4 (firewall script) and Step 5 (`.env` file) |
 
 ---
 
-## Step 1: Create the Hetzner Server and Volume
+## Step 1: Create the Server and Storage
 
-In the **Hetzner Cloud Console**:
+**⚠️ Provider Migration Note:** This guide was written for Hetzner Cloud. As of 2026-09, the recommended provider is **netcup VPS 1000 G12** (Hetzner CX32 is out of supply). The general principles below apply to both, but provider-specific steps (Cloud Console, firewall API, volume mounting) differ. Verify netcup equivalents before proceeding.
 
-1. **Create a server**
-   - Type: **CX32** (4 vCPU, 8 GB RAM)
+Choose your provider and follow the equivalent steps:
+
+### Option A: netcup VPS (Recommended as of 2026-09)
+
+1. **Create a VPS**
+   - Product: **VPS 1000 G12** (2 vCPU, 4 GB RAM base; scales to 4 vCPU, 8 GB for high-load scenarios)
    - OS: **Ubuntu 22.04 LTS**
-   - Name: **`skillars-prod`** — the firewall script uses this name by default; change it only if you also set `HCLOUD_SERVER_NAME` when running the firewall script
+   - Name: **`skillars-prod`** or your chosen identifier
+   - SSH Keys: upload your public key during provisioning
+   - Note the **public IP address** — you will need it for SSH and DNS
+
+2. **Provision additional storage**
+   - netcup's standard VPS includes local storage; ensure **≥100 GB** available for `/opt/skillars/data`
+   - Alternatively, attach a managed volume if available
+   - After provisioning, verify available space: `lsblk` or `df -h`
+   - **MinIO:** The stack runs MinIO as a container for object storage (videos, images, documents). Ensure the Volume/storage pool has sufficient capacity for your media library (plan for growth).
+
+### Option B: Hetzner Cloud (Legacy)
+
+1. **Create a server** (in **Hetzner Cloud Console**)
+   - Type: **CX42** or larger (4+ vCPU, 8+ GB RAM — CX32 is out of supply)
+   - OS: **Ubuntu 22.04 LTS**
+   - Name: **`skillars-prod`** — the firewall script uses this name by default
    - SSH Keys: select the key you uploaded in the prerequisites
    - Note the **public IP address** — you will need it for SSH and DNS
 
 2. **Attach a 100 GB Volume**
    - Create or attach immediately after server creation
-   - The provisioning script mounts the volume at `/opt/skillars/data`. It resolves the device by its stable `/dev/disk/by-id/scsi-0HC_Volume_*` symlink (Hetzner's per-Volume identifier) and only falls back to `/dev/sdb` if no such symlink exists, so a non-`/dev/sdb` device name is handled automatically.
-   - PostgreSQL, Prometheus, Loki, Tempo, and Grafana data all live on this volume
-   - After attaching you can confirm the Volume is visible with `lsblk`; whichever `/dev/sdX` name it gets, the provisioning script picks it up via the `by-id` path.
+   - The provisioning script mounts the volume at `/opt/skillars/data` via its stable `/dev/disk/by-id/scsi-0HC_Volume_*` symlink
+   - PostgreSQL, Prometheus, Loki, Tempo, Grafana, MinIO, and Traefik certificates all live on this volume
+   - After attaching, verify with `lsblk`; the provisioning script picks it up via the `by-id` path
+
+---
+
+### Resource Requirements (Both Providers)
+
+The stack requires:
+- **CPU:** ~2–3 vCPU under normal load; 4 vCPU recommended for headroom
+- **Memory:** ~6–7 GB reserved by containers; 8 GB minimum for host OS and overhead
+- **Storage:** ≥100 GB for database and system; add capacity for MinIO media library (depends on your upload volume)
+
+If running on netcup VPS 1000 G12 base tier (2 vCPU, 4 GB RAM), monitor CPU and memory closely during testing. Upgrade if sustained load exceeds 80% on either metric.
 
 ---
 
@@ -78,7 +112,7 @@ SSH to the Node and run the provisioning script:
 
 ```bash
 ssh root@<NODE_IP>
-git clone <REPO_URL> /opt/skillars   # your GitHub repository URL, e.g. https://github.com/<org>/javatemplate.git
+git clone <REPO_URL> /opt/skillars   # your GitHub repository URL, e.g. https://github.com/<org>/skillars.git
 cd /opt/skillars
 bash deploy/provision.sh
 ```
@@ -176,7 +210,13 @@ Two things to know before re-running:
 
 ## Step 4: Apply the Firewall
 
-> **Defence in depth:** `provision.sh` (Step 3) already enabled `ufw`, a host-level firewall running inside the VM kernel (allows 22/80/443, default-deny incoming). The Hetzner Cloud firewall applied below is the primary network perimeter — it filters traffic before it ever reaches the VM. **Note:** Docker manages iptables directly for ports it publishes (80/443, serving Traefik), which can bypass ufw's rules for those ports — today, ufw's SSH (22) rule is the port genuinely enforced host-side; the Hetzner Cloud firewall remains the real perimeter for 80/443. The two layers are otherwise independent: ufw's SSH enforcement runs entirely inside the VM kernel and does not depend on Hetzner's API at all. Whether already-applied Hetzner Cloud firewall rules keep enforcing during a Hetzner API outage is a claim about Hetzner's infrastructure that we have not verified or found documented — treat it as unconfirmed rather than relying on it.
+> **Defence in depth:** `provision.sh` (Step 3) already enabled `ufw`, a host-level firewall running inside the VM kernel (allows 22/80/443, default-deny incoming). A provider-level firewall (if available) adds a second perimeter — it filters traffic before it reaches the VM. **Note:** Docker manages iptables directly for ports it publishes (80/443, serving Traefik), which can bypass ufw's rules for those ports — ufw's SSH (22) rule is the port genuinely enforced host-side. The provider-level firewall (if applicable) remains the real perimeter for 80/443. The two layers are otherwise independent: ufw runs entirely inside the VM kernel and does not depend on provider APIs.
+
+**⚠️ Provider-specific firewall steps:**
+- **Hetzner Cloud:** Use `hcloud` CLI (see below)
+- **netcup:** Manual firewall configuration via control panel (Step 4 instructions below apply to Hetzner; for netcup, apply equivalent rules via your provider console)
+
+### Hetzner Cloud Firewall Setup
 
 Run this from your **local machine** (not the Node):
 
@@ -250,6 +290,21 @@ Optional overrides:
 export HCLOUD_SERVER_NAME=skillars-prod   # default; change if you named the server differently
 export FIREWALL_NAME=skillars-prod-fw     # default firewall name
 ```
+
+### netcup Firewall Setup (Alternative to Hetzner)
+
+If using **netcup**, the `apply-firewall.sh` script does not apply. Instead, manually configure your VPS firewall via the netcup control panel:
+
+1. Log into your netcup account
+2. Navigate to your VPS (e.g., VPS 1000 G12) and open the **Firewall** or **Security** settings
+3. Create inbound rules:
+   - **SSH (22)**: Restrict to your public IP (from `curl -s ifconfig.me`), or allow all if not yet provisioned
+   - **HTTP (80)**: Allow from all sources (required for Let's Encrypt HTTP-01 challenge)
+   - **HTTPS (443)**: Allow from all sources
+4. All other inbound traffic: Deny by default
+5. Outbound: Allow all (required for SMTP, Let's Encrypt, Stripe, etc.)
+
+After firewall configuration, proceed to Step 5.
 
 ---
 
@@ -341,6 +396,7 @@ Full service health reference — run `docker compose` commands from `/opt/skill
 | grafana | `curl -s https://<MONITORING_DOMAIN>/api/health` → `{"database":"ok"}` |
 | loki | `docker compose exec loki wget -qO- http://localhost:3100/ready` |
 | tempo | `docker compose exec tempo wget -qO- http://localhost:3200/ready` |
+| minio | `docker compose exec minio mc admin info local` → displays service info and status |
 
 Replace `<POSTGRES_USER>` and `<POSTGRES_DB>` with the values from your `.env`.
 
@@ -351,9 +407,9 @@ itself works.
 
 ---
 
-## Step 8: Set Up External Uptime Monitor
+## Step 8: Set Up External Uptime Monitor (Required)
 
-With the stack verified, configure an external uptime monitor that is independent of this Node.
+With the stack verified, you **must** configure an external uptime monitor that is independent of this Node.
 If the Node (and the entire LGTM stack) goes down, this monitor is the only alert path still active.
 
 Follow the setup instructions in [`docs/deployment/uptime-monitor.md`](uptime-monitor.md).
@@ -361,8 +417,62 @@ Follow the setup instructions in [`docs/deployment/uptime-monitor.md`](uptime-mo
 **Required before this step:**
 - The application is reachable at `https://YOUR_DOMAIN/actuator/health` (confirmed in Step 7)
 - You have a Slack webhook URL (the same one used for `SLACK_WEBHOOK_URL` in GitHub Actions secrets works)
+- OR an alternative alerting channel (email, PagerDuty, etc.)
 
 **Expected time:** ~5 minutes.
+
+> **Do not mark this environment as "production-ready" until Step 8 is complete.** Without an external monitor, you have no way to detect outages.
+
+---
+
+## Step 9: Configure Backup Strategy (Strongly Recommended)
+
+After the stack is live, establish a backup and recovery plan:
+
+**Data at risk:**
+- PostgreSQL database: player/coach/admin data, payment history, session state
+- MinIO object storage: uploaded video files, images, documents
+- Traefik `acme.json`: TLS certificates (regenerating costs time and hits Let's Encrypt rate limits)
+
+**Backup options:**
+
+1. **Database backups**
+   - Run `docker compose exec postgres pg_dump -U postgres skillars > skillars-$(date +%Y%m%d-%H%M%S).sql` regularly (daily recommended)
+   - Store backups off-server (S3, cloud storage, NAS)
+   - Test recovery at least monthly: `psql -U postgres skillars < backup.sql`
+
+2. **Volume/filesystem backups**
+   - If using a managed volume (Hetzner, netcup), use provider snapshots if available
+   - Alternatively, use `restic`, `duplicati`, or similar for incremental off-site backups of `/opt/skillars/data`
+   - Include MinIO data in filesystem backups
+
+3. **Automated recovery testing**
+   - Monthly: restore a backup to a test environment and verify the app starts correctly
+   - Keep recovery procedures documented and tested
+
+See [`docs/deployment/backup-restore.md`](backup-restore.md) for detailed backup/restore procedures.
+
+---
+
+## Step 10: Post-Setup Monitoring & Operations
+
+After setup is complete:
+
+1. **Review monitoring dashboards**
+   - Log into Grafana at `https://<MONITORING_DOMAIN>`
+   - Verify alerts are wired up: check [`docs/deployment/monitoring.md`](monitoring.md)
+
+2. **Familiarize yourself with the runbook**
+   - Read [`docs/deployment/runbook.md`](runbook.md) for common operational tasks:
+     - Viewing logs
+     - Restarting services
+     - Scaling the stack
+     - Health checks
+     - Known issues and fixes
+
+3. **Establish on-call procedures**
+   - Configure escalation policies if using PagerDuty or similar
+   - Document your team's response procedures for alerts
 
 ---
 

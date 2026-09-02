@@ -82,6 +82,8 @@
         <tr><td><code>PerformanceReport</code></td><td>performance_reports</td><td>Record of a generated PDF report (storage key, next-steps text, coach, generation time).</td></tr>
         <tr><td><code>CoachBranding</code></td><td>coach_branding</td><td>Academy-tier coach's logo key + brand colour used to white-label PDF reports.</td></tr>
         <tr><td><code>PlayerTimelineEvent</code></td><td>player_timeline_events</td><td>Append-only feed of development-relevant events (session completed, radar assessment, report generated, …) with JSONB metadata.</td></tr>
+        <tr><td><code>PlayerSluWeeklySnapshotApplied</code></td><td>player_slu_weekly_snapshot_applied</td><td>Marker table tracking which ISO week/player pairs have had their weekly SLU snapshot successfully written; prevents redundant writes and aids idempotency verification.</td></tr>
+        <tr><td><code>RadarCompositeDlqEntry</code></td><td>radar_composite_dlq</td><td>Dead-letter queue for radar composite calculation failures; records player/skill/errors for async retry and manual review when the composite calculation service encounters unrecoverable errors.</td></tr>
       </tbody>
     </table>
 
@@ -89,9 +91,14 @@
     <table>
       <thead><tr><th>Service</th><th>Orchestrates</th></tr></thead>
       <tbody>
-        <tr><td><code>SluCalculationService</code></td><td>Listens for <code>BookingCompletedEvent</code> (after commit, async); computes SLU per drill/skill via <code>SluFormula</code>, writes <code>player_skill_stats</code>, and updates the weekly snapshot. Guards against no-shows, missing session plans, non-committed statuses, and duplicate delivery.</td></tr>
+        <tr><td><code>SluCalculationService</code></td><td>Listens for <code>BookingCompletedEvent</code> (after commit, async); computes SLU per drill/skill via <code>SluFormula</code>, and dispatches the detail-row and weekly-snapshot writes to <code>SluPersistenceDispatcher</code>. Guards against no-shows, missing session plans, non-committed statuses, and duplicate delivery.</td></tr>
+        <tr><td><code>SluPersistenceDispatcher</code></td><td>Async dispatcher that chains detail-row persistence through <code>SluPersistenceRetrier</code>, then (only on success) weekly-snapshot persistence through <code>SnapshotPersistenceRetrier</code> — ensuring a snapshot write never orphans detail rows that failed to persist. Runs on a dedicated <code>sluRetryExecutor</code> pool to avoid blocking other listeners.</td></tr>
+        <tr><td><code>SluPersistenceRetrier</code></td><td>Retryable bean that writes <code>player_skill_stats</code> detail rows with collision handling — a partial unique index on <code>(session_id, skill_code)</code> catches concurrent duplicate deliveries and treats them as idempotent no-ops rather than errors.</td></tr>
+        <tr><td><code>SnapshotPersistenceRetrier</code></td><td>Retryable bean that upserts the denormalized <code>player_slu_weekly_snapshot</code> row for the SLU total of a given ISO week.</td></tr>
         <tr><td><code>RadarAssessmentService</code></td><td>Validates coach-player relationship and subscription tier, persists submitted radar entries, and publishes <code>RadarEntrySubmittedEvent</code>.</td></tr>
-        <tr><td><code>RadarCompositeCalculationService</code></td><td>Listens for <code>RadarEntrySubmittedEvent</code> (after commit, async); recomputes the weighted composite score and freezes the first-ever baseline.</td></tr>
+        <tr><td><code>RadarCompositeCalculationService</code></td><td>Listens for <code>RadarEntrySubmittedEvent</code> (after commit, async); recomputes the weighted composite score and freezes the first-ever baseline. On failure, publishes composite to a DLQ for async retry.</td></tr>
+        <tr><td><code>RadarCompositeDlqService</code></td><td>Dead-letter queue service for failed radar composite calculations; captures player/skill/error details and triggers <code>RadarCompositeDlqProcessor</code> for exponential-backoff retry.</td></tr>
+        <tr><td><code>RadarCompositeDlqProcessor</code></td><td>Scheduled job (ShedLock-guarded) that drains the radar composite DLQ, re-attempting calculation with exponential backoff; flags permanently failed entries for manual review.</td></tr>
         <tr><td><code>RadarDisplayService</code></td><td>Assembles the radar chart data (composite + baseline per skill) and manages per-coach skill display preferences.</td></tr>
         <tr><td><code>NeglectedSkillDetectionService</code></td><td>Weekly ShedLock-guarded cron entry point; validates the neglect threshold config and iterates all players with targets.</td></tr>
         <tr><td><code>NeglectedSkillProcessor</code></td><td>Per-player logic comparing actual weekly SLU snapshot vs. max target per skill; opens/resolves <code>NeglectedSkillFlag</code> rows.</td></tr>
