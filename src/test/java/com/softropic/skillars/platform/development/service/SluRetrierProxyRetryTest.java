@@ -60,13 +60,19 @@ class SluRetrierProxyRetryTest {
         }
 
         @Bean
+        SluSnapshotOutboxSupport sluSnapshotOutboxSupport() {
+            return Mockito.mock(SluSnapshotOutboxSupport.class);
+        }
+
+        @Bean
         SluPersistenceRetrier sluPersistenceRetrier(SluRepository sluRepository) {
             return new SluPersistenceRetrier(sluRepository);
         }
 
         @Bean
-        SnapshotPersistenceRetrier snapshotPersistenceRetrier(SnapshotBatchWriter snapshotBatchWriter) {
-            return new SnapshotPersistenceRetrier(snapshotBatchWriter);
+        SnapshotPersistenceRetrier snapshotPersistenceRetrier(SnapshotBatchWriter snapshotBatchWriter,
+                                                              SluSnapshotOutboxSupport sluSnapshotOutboxSupport) {
+            return new SnapshotPersistenceRetrier(snapshotBatchWriter, sluSnapshotOutboxSupport);
         }
     }
 

@@ -117,6 +117,12 @@ app:
   # Awaitility and Thread.sleep site in src/test (all are @Async, @TransactionalEventListener, SSE,
   # CountDownLatch, or DB row-lock contention). Tests that exercise a sweeper invoke it directly,
   # as BasePaymentIT.releaseSchedulerLock documents.
+  # skillars-deferred-91 code review D3: the AFTER_COMMIT outbox drain is @Async in production so
+  # it never runs on an HTTP request thread. Under test it runs on the calling thread, so an IT can
+  # assert on what the drain produced immediately after the call that triggered it instead of
+  # racing it. Same philosophy as app.scheduling.enabled below.
+  outbox:
+    drain-async: false
   scheduling:
     enabled: false
   payment:

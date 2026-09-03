@@ -4,10 +4,8 @@ import com.softropic.skillars.platform.booking.contract.PackPausedEvent;
 import com.softropic.skillars.platform.booking.contract.SessionPackExpiredEvent;
 import com.softropic.skillars.platform.booking.contract.SessionPackExpiryWarningEvent;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
-import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.contract.Recipient;
 
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
@@ -34,7 +32,7 @@ import static net.logstash.logback.argument.StructuredArguments.kv;
 @RequiredArgsConstructor
 public class SessionPackEmailListener {
 
-    private final ApplicationEventPublisher publisher;
+    private final com.softropic.skillars.platform.notification.service.NotificationOutboxSupport notificationOutboxSupport;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onExpiryWarning(SessionPackExpiryWarningEvent event) {
@@ -49,11 +47,8 @@ public class SessionPackEmailListener {
             recipient.setEmail(event.getParentEmail());
             recipient.setLangKey("en");
 
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.SESSION_PACK_EXPIRY_WARNING,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.SESSION_PACK_EXPIRY_WARNING, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.SESSION_PACK_EXPIRY_WARNING),
                 kv("packId", event.getPackId()), e);
@@ -71,11 +66,8 @@ public class SessionPackEmailListener {
             recipient.setEmail(event.getParentEmail());
             recipient.setLangKey("en");
 
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.SESSION_PACK_EXPIRED,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.SESSION_PACK_EXPIRED, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.SESSION_PACK_EXPIRED),
                 kv("packId", event.getPackId()), e);
@@ -97,11 +89,8 @@ public class SessionPackEmailListener {
             recipient.setEmail(event.getParentEmail());
             recipient.setLangKey("en");
 
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.PACK_PAUSED,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.PACK_PAUSED, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.PACK_PAUSED),
                 kv("packId", event.getPackId()), e);

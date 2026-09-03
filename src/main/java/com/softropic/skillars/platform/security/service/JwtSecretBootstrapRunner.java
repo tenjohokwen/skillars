@@ -38,6 +38,14 @@ import static net.logstash.logback.argument.StructuredArguments.kv;
  *       is explicitly {@code true}. This MUST stay unset (or false) in every real environment: those
  *       provision the secret once, deliberately, and this runner exists only so a brand-new local
  *       database can boot at all.</li>
+ *   <li><strong>Enforced local-only guard (skillars-deferred-91 AC18).</strong> "MUST stay unset"
+ *       used to be a javadoc promise only. Now, when the flag is {@code true}, the runner also
+ *       requires {@code spring.datasource.url} to target {@code localhost} / {@code 127.0.0.1} /
+ *       {@code [::1]} and throws (failing the boot) otherwise. Signal chosen: the datasource host,
+ *       not a second co-located "i-understand" flag — a flag pair travels together when settings are
+ *       copied between environments, a datasource pointed at a real DB does not. A misconfigured
+ *       non-dev deploy that sets the flag {@code true} now fails to start instead of silently
+ *       seeding a well-known signing secret.</li>
  *   <li><strong>Not {@code @Profile}-gated</strong>, for the same reason as {@code AdminBootstrapRunner}
  *       — production boots with no {@code SPRING_PROFILES_ACTIVE} set at all, so a profile guard
  *       would fail-close in precisely the environments that must never enable this. The property
@@ -61,19 +69,64 @@ import static net.logstash.logback.argument.StructuredArguments.kv;
 @Component
 public class JwtSecretBootstrapRunner implements ApplicationRunner {
 
+    /**
+     * Matches a JDBC URL whose <em>entire</em> host authority is loopback. Covers
+     * {@code jdbc:postgresql://localhost/db}, {@code //127.0.0.1:5432/db}, {@code //[::1]:5432/db}
+     * and a {@code user:pass@host} authority. Anything else — a hostname, a private IP, an RDS
+     * endpoint — is treated as non-local.
+     *
+     * <p>skillars-deferred-91 code review: this is matched with {@code matches()} against the
+     * extracted authority, not {@code find()} over the whole URL. Scanning the whole string let a
+     * pgjdbc multi-host failover URL through —
+     * {@code jdbc:postgresql://localhost:5432,prod-db.internal:5432/skillars} contains
+     * {@code //localhost:} and passed the guard while the driver could connect to production — as
+     * would any URL carrying {@code //localhost} inside a query parameter. A comma-separated host
+     * list now fails the guard because every host must be loopback for the authority to match.
+     */
+    private static final java.util.regex.Pattern LOCAL_AUTHORITY = java.util.regex.Pattern.compile(
+        "(?:[^@/]*@)?(?:localhost|127\\.0\\.0\\.1|\\[::1\\]|\\[0:0:0:0:0:0:0:1\\])(?::\\d+)?",
+        java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /** Pulls the authority out of {@code …://<authority>/db?params} (everything between // and / or ?). */
+    private static final java.util.regex.Pattern JDBC_AUTHORITY = java.util.regex.Pattern.compile(
+        "^[^/]*//([^/?#]*)");
+
+    /** True only when the URL has an authority and that whole authority is a loopback host. */
+    static boolean targetsLoopback(String jdbcUrl) {
+        final java.util.regex.Matcher authority = JDBC_AUTHORITY.matcher(jdbcUrl);
+        if (!authority.find()) {
+            return false;
+        }
+        return LOCAL_AUTHORITY.matcher(authority.group(1)).matches();
+    }
+
     private final SecretService secretService;
     private final boolean enabled;
+    private final String datasourceUrl;
 
     public JwtSecretBootstrapRunner(SecretService secretService,
-            @Value("${app.bootstrap.jwt-secret.enabled:false}") boolean enabled) {
+            @Value("${app.bootstrap.jwt-secret.enabled:false}") boolean enabled,
+            @Value("${spring.datasource.url:}") String datasourceUrl) {
         this.secretService = secretService;
         this.enabled = enabled;
+        this.datasourceUrl = datasourceUrl;
     }
 
     @Override
     public void run(ApplicationArguments args) {
         if (!enabled) {
             return;
+        }
+
+        // skillars-deferred-91 AC18: fail-fast local-only guard. A non-dev deploy that sets the flag
+        // true must not boot and silently seed a known secret.
+        final String url = datasourceUrl == null ? "" : datasourceUrl;
+        if (!targetsLoopback(url)) {
+            throw new IllegalStateException(
+                "app.bootstrap.jwt-secret.enabled=true is a LOCAL-DEVELOPMENT-ONLY convenience, but "
+              + "spring.datasource.url does not target localhost / 127.0.0.1 / [::1]. Refusing to seed "
+              + "a well-known JWT signing secret into a non-local database — unset "
+              + "app.bootstrap.jwt-secret.enabled for this environment. (datasource host is not loopback)");
         }
 
         try {

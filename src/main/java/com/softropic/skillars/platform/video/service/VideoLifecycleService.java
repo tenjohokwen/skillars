@@ -5,6 +5,7 @@ import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.contract.event.VideoStatusChangedEvent;
 import com.softropic.skillars.platform.video.contract.exception.TerminalStateViolationException;
 import com.softropic.skillars.platform.video.contract.exception.VideoNotFoundException;
+import com.softropic.skillars.platform.video.contract.exception.VideoStateConflictException;
 import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -151,8 +152,10 @@ public class VideoLifecycleService {
         Video video = videoRepository.findById(videoId)
             .orElseThrow(() -> new VideoNotFoundException(videoId));
         if (video.getOperationalState() != OperationalState.READY) {
-            throw new IllegalStateException(
-                "markPurged requires operationalState=READY, got " + video.getOperationalState() + " for videoId=" + videoId);
+            // skillars-deferred-91 code review D11: reachable from a request when the video's state
+            // changed underneath the caller — a conflict for the client, not a 5xx for alerting.
+            throw new VideoStateConflictException(videoId, OperationalState.READY.name(),
+                video.getOperationalState().name());
         }
         long priorBytes = video.getStorageBytes() != null ? video.getStorageBytes() : 0L;
         video.setOperationalState(OperationalState.DELETED);

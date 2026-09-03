@@ -10,7 +10,9 @@ import com.softropic.skillars.platform.booking.contract.BookingReminderEvent;
 import com.softropic.skillars.platform.booking.contract.BookingRequestedEvent;
 import com.softropic.skillars.platform.booking.contract.RescheduleDeclinedByParentEvent;
 import com.softropic.skillars.platform.booking.contract.RescheduleRequestedByCoachEvent;
-import com.softropic.skillars.platform.notification.contract.Envelope;
+import com.softropic.skillars.platform.notification.contract.EmailTemplate;
+import com.softropic.skillars.platform.notification.contract.Recipient;
+import com.softropic.skillars.platform.notification.service.NotificationOutboxSupport;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,7 +22,6 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.slf4j.LoggerFactory;
-import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Instant;
 import java.util.HashSet;
@@ -28,6 +29,9 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -36,16 +40,23 @@ import static org.mockito.Mockito.verify;
 class BookingEmailListenerTest {
 
     @Mock
-    private ApplicationEventPublisher publisher;
+    private NotificationOutboxSupport notificationOutboxSupport;
 
     @Captor
-    private ArgumentCaptor<Envelope> envelopeCaptor;
+    private ArgumentCaptor<Recipient> recipientCaptor;
+
+    @Captor
+    private ArgumentCaptor<String> sendIdCaptor;
 
     private BookingEmailListener listener;
 
     @BeforeEach
     void setUp() {
-        listener = new BookingEmailListener(publisher, "http://localhost", "8080");
+        listener = new BookingEmailListener(notificationOutboxSupport, "http://localhost", "8080");
+    }
+
+    private void verifyNoEmailEnqueued() {
+        verify(notificationOutboxSupport, never()).enqueueEmail(any(), any(), anyMap(), anyString());
     }
 
     @Test
@@ -57,7 +68,7 @@ class BookingEmailListenerTest {
 
         listener.onBookingExpired(event);
 
-        verify(publisher, never()).publishEvent(org.mockito.ArgumentMatchers.any(Envelope.class));
+        verifyNoEmailEnqueued();
     }
 
     @Test
@@ -69,7 +80,7 @@ class BookingEmailListenerTest {
 
         listener.onBookingExpired(event);
 
-        verify(publisher, never()).publishEvent(org.mockito.ArgumentMatchers.any(Envelope.class));
+        verifyNoEmailEnqueued();
     }
 
     @Test
@@ -81,8 +92,9 @@ class BookingEmailListenerTest {
 
         listener.onBookingExpired(event);
 
-        verify(publisher).publishEvent(envelopeCaptor.capture());
-        assertThat(envelopeCaptor.getValue().recipients().get(0).getEmail()).isEqualTo("parent@example.com");
+        verify(notificationOutboxSupport).enqueueEmail(
+            any(EmailTemplate.class), recipientCaptor.capture(), anyMap(), anyString());
+        assertThat(recipientCaptor.getValue().getEmail()).isEqualTo("parent@example.com");
     }
 
     @Test
@@ -95,7 +107,7 @@ class BookingEmailListenerTest {
 
         listener.onBookingReminder(event);
 
-        verify(publisher, never()).publishEvent(org.mockito.ArgumentMatchers.any(Envelope.class));
+        verifyNoEmailEnqueued();
     }
 
     @Test
@@ -108,8 +120,9 @@ class BookingEmailListenerTest {
 
         listener.onBookingReminder(event);
 
-        verify(publisher, times(1)).publishEvent(envelopeCaptor.capture());
-        assertThat(envelopeCaptor.getValue().recipients().get(0).getEmail()).isEqualTo("parent@example.com");
+        verify(notificationOutboxSupport, times(1)).enqueueEmail(
+            any(EmailTemplate.class), recipientCaptor.capture(), anyMap(), anyString());
+        assertThat(recipientCaptor.getValue().getEmail()).isEqualTo("parent@example.com");
     }
 
     @Test
@@ -119,7 +132,7 @@ class BookingEmailListenerTest {
 
         listener.onRescheduleRequestedByCoach(event);
 
-        verify(publisher, never()).publishEvent(org.mockito.ArgumentMatchers.any(Envelope.class));
+        verifyNoEmailEnqueued();
     }
 
     @Test
@@ -129,8 +142,9 @@ class BookingEmailListenerTest {
 
         listener.onRescheduleRequestedByCoach(event);
 
-        verify(publisher).publishEvent(envelopeCaptor.capture());
-        assertThat(envelopeCaptor.getValue().recipients().get(0).getEmail()).isEqualTo("parent@example.com");
+        verify(notificationOutboxSupport).enqueueEmail(
+            any(EmailTemplate.class), recipientCaptor.capture(), anyMap(), anyString());
+        assertThat(recipientCaptor.getValue().getEmail()).isEqualTo("parent@example.com");
     }
 
     @Test
@@ -140,7 +154,7 @@ class BookingEmailListenerTest {
 
         listener.onRescheduleDeclinedByParent(event);
 
-        verify(publisher, never()).publishEvent(org.mockito.ArgumentMatchers.any(Envelope.class));
+        verifyNoEmailEnqueued();
     }
 
     @Test
@@ -150,16 +164,15 @@ class BookingEmailListenerTest {
 
         listener.onRescheduleDeclinedByParent(event);
 
-        verify(publisher).publishEvent(envelopeCaptor.capture());
-        assertThat(envelopeCaptor.getValue().recipients().get(0).getEmail()).isEqualTo("coach@example.com");
+        verify(notificationOutboxSupport).enqueueEmail(
+            any(EmailTemplate.class), recipientCaptor.capture(), anyMap(), anyString());
+        assertThat(recipientCaptor.getValue().getEmail()).isEqualTo("coach@example.com");
     }
 
     /**
      * Deferred-78 AC7: onBookingRequested's data-prep (event.getRequestedStartTime().toString())
-     * NPEs when requestedStartTime is null — a malformed event, since MailManager's own outbox
-     * only ever protects a listener body AFTER publisher.publishEvent runs. Before this AC, that
-     * exception propagated out of the AFTER_COMMIT synchronization uncaught. Proves the method now
-     * returns normally, logs the failure, and never reaches publishEvent.
+     * NPEs when requestedStartTime is null — a malformed event. Proves the method now returns
+     * normally, logs the failure, and never reaches the outbox enqueue.
      */
     @Test
     void onBookingRequested_nullRequestedStartTime_catchesFailureInsteadOfPropagating() {
@@ -178,7 +191,7 @@ class BookingEmailListenerTest {
             listenerLogger.detachAppender(logCapture);
         }
 
-        verify(publisher, never()).publishEvent(org.mockito.ArgumentMatchers.any(Envelope.class));
+        verifyNoEmailEnqueued();
         assertThat(logCapture.list)
             .as("the NPE must be caught and logged, not propagated out of the AFTER_COMMIT listener")
             .anySatisfy(loggingEvent -> assertThat(loggingEvent.getFormattedMessage())
@@ -187,7 +200,6 @@ class BookingEmailListenerTest {
 
     @Test
     void sendId_hasNoCollisionAcross10kEmails() {
-        Set<String> sendIds = new HashSet<>();
         for (int i = 0; i < 10_000; i++) {
             BookingConfirmedEvent event = BookingConfirmedEvent.builder()
                     .source(this).bookingId(UUID.randomUUID()).parentId(1L).parentEmail("parent@example.com")
@@ -196,10 +208,9 @@ class BookingEmailListenerTest {
             listener.onBookingConfirmed(event);
         }
 
-        verify(publisher, times(10_000)).publishEvent(envelopeCaptor.capture());
-        for (Envelope envelope : envelopeCaptor.getAllValues()) {
-            sendIds.add(envelope.sendId());
-        }
+        verify(notificationOutboxSupport, times(10_000)).enqueueEmail(
+            any(EmailTemplate.class), any(Recipient.class), anyMap(), sendIdCaptor.capture());
+        Set<String> sendIds = new HashSet<>(sendIdCaptor.getAllValues());
         assertThat(sendIds).hasSize(10_000);
     }
 }

@@ -59,4 +59,16 @@ public interface CoachProfileRepository
     void updateRatingAggregate(@Param("coachId") UUID coachId,
                                @Param("avgRating") Double avgRating,
                                @Param("reviewCount") int reviewCount);
+
+    /**
+     * The public profile and its pricing row in one round trip (skillars-deferred-91 AC11 / code
+     * review D9). {@code coach_pricing} is one-to-one on {@code coach_id}, so an ad-hoc
+     * {@code LEFT JOIN … ON} adds no rows and costs no cartesian product — it simply removes the
+     * separate {@code coachPricingRepository.findByCoachId} round trip. LEFT, not INNER: a coach
+     * without a pricing row must still render.
+     *
+     * @return a single {@code [CoachProfile, CoachPricing-or-null]} pair, or empty if no such coach
+     */
+    @Query("SELECT p, pr FROM CoachProfile p LEFT JOIN CoachPricing pr ON pr.coachId = p.id WHERE p.id = :coachId")
+    List<Object[]> findByIdWithPricing(@Param("coachId") UUID coachId);
 }

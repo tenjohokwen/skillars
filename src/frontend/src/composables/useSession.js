@@ -71,6 +71,15 @@ export function useSession() {
     stopSessionMonitoring();
 
     document.cookie = 'user=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+    // skillars-deferred-91 AC14: clear 'rint' client-side too. sessionManager's fast-teardown
+    // branch (computeTimeUntilExpiry, skillars-deferred-90 AC3) fires only when 'rint' is absent,
+    // but 'rint' is otherwise removed solely by the backend logout Set-Cookie — which is
+    // Promise.race()d against LOGOUT_BACKEND_WAIT_MS just below. If that call stalls or errors,
+    // sibling tabs keep 'rint' and keep rendering an authenticated UI until the stale 'rint'
+    // deadline fires. 'rint' is not HttpOnly (sessionManager reads it via document.cookie), so
+    // expiring it here makes every sibling tab's next tick() enter the fast-teardown branch
+    // regardless of the backend call's fate.
+    document.cookie = 'rint=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
     // Awaited so callers of handleLogout() get a real guarantee that the backend revocation was
     // attempted before the promise resolves (the 'rtkn' refresh token has a 7-day TTL). This
     // does not delay the guard: authStore.logout() clears the skp cookie and the Pinia state
@@ -85,6 +94,14 @@ export function useSession() {
       authStore.logout(), // clears skp + Pinia userId/role/displayName, then backend logout
       new Promise((resolve) => setTimeout(resolve, LOGOUT_BACKEND_WAIT_MS)),
     ]);
+    // skillars-deferred-91 code review: clear 'rint' a SECOND time, after the race resolves. Every
+    // authenticated response rewrites 'rint' with path=/ (JwtManagerImpl), so any request already in
+    // flight when the pre-race clear ran — a dashboard poll, a messaging fetch, a prefetch — can
+    // land afterwards and re-establish the cookie with a fresh absolute deadline. Sibling tabs would
+    // then read a live 'rint', skip computeTimeUntilExpiry's fast-teardown branch, and keep
+    // rendering an authenticated UI. stopSessionMonitoring() has already run in this tab, so nothing
+    // else would re-clear it.
+    document.cookie = 'rint=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
     playerStore.resetSelfPlayerId();
     cleanup();
 

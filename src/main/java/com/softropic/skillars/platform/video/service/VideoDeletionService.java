@@ -23,6 +23,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashSet;
@@ -152,7 +153,18 @@ public class VideoDeletionService {
 
     /**
      * Account deletion cascade for a single ownerId. Batches video deletions, then resets quota.
-     * NOT @Transactional at the method level — each deleteVideo() runs in its own transaction.
+     * NOT @Transactional at the method level — each unit below runs in its own REQUIRES_NEW
+     * transaction via {@link #self}.
+     *
+     * <p>skillars-deferred-91 AC13: this cascade is reached from
+     * {@code AccountDeletionCascadeListener.onAccountDeleted}, a {@code @TransactionalEventListener}
+     * that runs inside the erasure transaction's {@code afterCommit} synchronization callback. In
+     * that window a plain {@code @Transactional} (REQUIRED) sub-call does not get a usable
+     * transaction — a direct {@code @Modifying} repository call threw
+     * {@code TransactionRequiredException} (caught + logged upstream, so the quota row was silently
+     * never reset), and an inner REQUIRED tx that never committed cleanly blocked the follow-up
+     * approval-cancel query on its own row locks. Every write here therefore goes through a
+     * {@code REQUIRES_NEW} boundary, the same shape {@code PendingBlobDeletionChunkProcessor} uses.
      */
     public void cascadeDeleteForAccount(String ownerId) {
         log.info("[VIDEO_ACCOUNT_DELETION] Starting cascade for ownerId={}", ownerId);
@@ -167,7 +179,7 @@ public class VideoDeletionService {
             for (Video video : page.getContent()) {
                 if (failedIds.contains(video.getId())) continue;
                 try {
-                    self.deleteVideo(video.getId(), LifecycleTrigger.ACCOUNT_DELETION, true);
+                    self.purgeVideoForCascade(video.getId());
                     totalQueued++;
                     anyProgress = true;
                     log.debug("[VIDEO_ACCOUNT_DELETION] Queued videoId={} for ownerId={}", video.getId(), ownerId);
@@ -183,13 +195,48 @@ public class VideoDeletionService {
         // reset here would zero the quota row for storage the failed video(s) still occupy, and no
         // retry path corrects it afterward (the failed ids aren't persisted anywhere).
         if (failedIds.isEmpty()) {
-            videoQuotaRepository.resetBytesForOwner(ownerId);
+            // AC13: own REQUIRES_NEW transaction — see the class-path note above.
+            self.resetQuotaForOwner(ownerId);
         } else {
             log.warn("[VIDEO_ACCOUNT_DELETION_INCOMPLETE userId={} videosQueued={} failed={}] " +
                 "quota NOT reset — {} video(s) failed to purge, reconciliation needed",
                 ownerId, totalQueued, failedIds.size(), failedIds.size());
         }
         log.info("[VIDEO_ACCOUNT_DELETION_COMPLETE userId={} videosQueued={} failed={}]", ownerId, totalQueued, failedIds.size());
+    }
+
+    /**
+     * skillars-deferred-91 AC13: one video's purge in its own committed transaction, invoked via
+     * {@link #self} from {@link #cascadeDeleteForAccount}. {@code REQUIRES_NEW} (not the plain
+     * {@code @Transactional} REQUIRED on {@link #deleteVideo}) so it commits even when the cascade
+     * runs inside the erasure tx's {@code afterCommit} callback — otherwise the row stays
+     * write-locked by an uncommitted inner tx and the follow-up approval-cancel query deadlocks on
+     * it. Preserves the existing per-video isolation the direct-call path already relied on.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void purgeVideoForCascade(UUID videoId) {
+        deleteVideo(videoId, LifecycleTrigger.ACCOUNT_DELETION, true);
+    }
+
+    /**
+     * skillars-deferred-91 AC13: the {@code @Modifying} quota-reset UPDATE in its own committed
+     * transaction. A direct {@code videoQuotaRepository.resetBytesForOwner(...)} on this cascade
+     * path threw {@code TransactionRequiredException} ("Executing an update/delete query"), caught +
+     * logged upstream so the quota row was silently never reset.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void resetQuotaForOwner(String ownerId) {
+        videoQuotaRepository.resetBytesForOwner(ownerId);
+    }
+
+    /**
+     * skillars-deferred-91 AC13: the {@code @Modifying} pending-approval cancellation issued by
+     * {@code AccountDeletionCascadeListener.onAccountDeleted} (also an AFTER_COMMIT, non-transactional
+     * path), in its own committed transaction. Same {@code TransactionRequiredException} class.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void cancelPendingApprovalsForOwners(java.util.List<String> ownerIds) {
+        approvalRequestRepository.cancelAllPendingForOwners(ownerIds);
     }
 
 }

@@ -17,6 +17,12 @@ public enum EmailTemplate {
     BOOKING_REQUESTED("email.booking.requested.title"),
     BOOKING_CONFIRMED("email.booking.confirmed.title"),
     BOOKING_DECLINED("email.booking.declined.title"),
+    /**
+     * The booking was abandoned with the payment outcome UNKNOWN (CAPTURE_ABANDONED). Distinct from
+     * BOOKING_DECLINED, which tells the parent their credits were not affected — a statement the
+     * platform cannot make here. skillars-deferred-91 code review, decision D10.
+     */
+    BOOKING_PAYMENT_UNRESOLVED("email.booking.payment_unresolved.title"),
     BOOKING_EXPIRED("email.booking.expired.title"),
     BOOKING_REMINDER("email.booking.reminder.title"),
     BOOKING_QUICK_COMPLETE_CONFIRM("email.booking.quick_complete_confirm.title"),

@@ -31,6 +31,9 @@ import static org.mockito.Mockito.when;
  */
 class JwtSecretBootstrapRunnerTest {
 
+    /** A loopback JDBC URL — the only kind under which the runner is allowed to act (AC18). */
+    private static final String LOCAL_DB_URL = "jdbc:postgresql://localhost/skillars?TimeZone=UTC";
+
     private SecretService secretService;
 
     @BeforeEach
@@ -38,10 +41,14 @@ class JwtSecretBootstrapRunnerTest {
         secretService = mock(SecretService.class);
     }
 
+    private JwtSecretBootstrapRunner runner(boolean enabled) {
+        return new JwtSecretBootstrapRunner(secretService, enabled, LOCAL_DB_URL);
+    }
+
     @Test
     @DisplayName("disabled by default — no interaction with SecretService at all")
     void disabledByDefault() {
-        new JwtSecretBootstrapRunner(secretService, false).run(null);
+        runner(false).run(null);
 
         verifyNoInteractions(secretService);
     }
@@ -52,7 +59,7 @@ class JwtSecretBootstrapRunnerTest {
         when(secretService.fetchSecret(JWT_VERSION, JWT_BUS_NAME))
             .thenThrow(new SecException("not found", SecError.KEY_NOT_FOUND));
 
-        new JwtSecretBootstrapRunner(secretService, true).run(null);
+        runner(true).run(null);
 
         verify(secretService).createActiveSecret(eq(JWT_VERSION), eq(JWT_BUS_NAME));
     }
@@ -62,7 +69,7 @@ class JwtSecretBootstrapRunnerTest {
     void enabledWithExistingSecretSkipsCreation() {
         when(secretService.fetchSecret(JWT_VERSION, JWT_BUS_NAME)).thenReturn(mock(Secret.class));
 
-        new JwtSecretBootstrapRunner(secretService, true).run(null);
+        runner(true).run(null);
 
         verify(secretService, never()).createActiveSecret(anyString(), anyString());
     }
@@ -73,7 +80,7 @@ class JwtSecretBootstrapRunnerTest {
         when(secretService.fetchSecret(JWT_VERSION, JWT_BUS_NAME))
             .thenThrow(new SecException("could not decrypt", SecError.DECR_ERROR));
 
-        JwtSecretBootstrapRunner runner = new JwtSecretBootstrapRunner(secretService, true);
+        JwtSecretBootstrapRunner runner = runner(true);
 
         assertThatThrownBy(() -> runner.run(null)).isInstanceOf(SecException.class);
         verify(secretService, never()).createActiveSecret(anyString(), anyString());
@@ -87,7 +94,7 @@ class JwtSecretBootstrapRunnerTest {
         when(secretService.createActiveSecret(JWT_VERSION, JWT_BUS_NAME))
             .thenThrow(new DataIntegrityViolationException("duplicate key value violates unique constraint"));
 
-        JwtSecretBootstrapRunner runner = new JwtSecretBootstrapRunner(secretService, true);
+        JwtSecretBootstrapRunner runner = runner(true);
 
         assertThatCode(() -> runner.run(null)).doesNotThrowAnyException();
     }
@@ -100,8 +107,90 @@ class JwtSecretBootstrapRunnerTest {
         when(secretService.createActiveSecret(JWT_VERSION, JWT_BUS_NAME))
             .thenThrow(new IllegalStateException("connection pool exhausted"));
 
-        JwtSecretBootstrapRunner runner = new JwtSecretBootstrapRunner(secretService, true);
+        JwtSecretBootstrapRunner runner = runner(true);
 
         assertThatThrownBy(() -> runner.run(null)).isInstanceOf(IllegalStateException.class);
+    }
+
+    // --- skillars-deferred-91 AC18: enforced local-only guard ---
+
+    @Test
+    @DisplayName("enabled against a NON-local datasource fails startup and never touches SecretService")
+    void enabledAgainstRemoteDatasourceFailsStartup() {
+        JwtSecretBootstrapRunner runner = new JwtSecretBootstrapRunner(
+            secretService, true, "jdbc:postgresql://prod-db.internal:5432/skillars");
+
+        assertThatThrownBy(() -> runner.run(null))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("LOCAL-DEVELOPMENT-ONLY");
+        verifyNoInteractions(secretService);
+    }
+
+    @Test
+    @DisplayName("disabled against a non-local datasource stays a silent no-op (guard only fires when enabled)")
+    void disabledAgainstRemoteDatasourceIsSilent() {
+        JwtSecretBootstrapRunner runner = new JwtSecretBootstrapRunner(
+            secretService, false, "jdbc:postgresql://prod-db.internal:5432/skillars");
+
+        assertThatCode(() -> runner.run(null)).doesNotThrowAnyException();
+        verifyNoInteractions(secretService);
+    }
+
+    @Test
+    @DisplayName("127.0.0.1 and [::1] loopback hosts are accepted")
+    void loopbackIpHostsAreLocal() {
+        when(secretService.fetchSecret(JWT_VERSION, JWT_BUS_NAME))
+            .thenThrow(new SecException("not found", SecError.KEY_NOT_FOUND));
+
+        assertThatCode(() -> new JwtSecretBootstrapRunner(
+            secretService, true, "jdbc:postgresql://127.0.0.1:5432/skillars").run(null))
+            .doesNotThrowAnyException();
+        assertThatCode(() -> new JwtSecretBootstrapRunner(
+            secretService, true, "jdbc:postgresql://[::1]:5432/skillars").run(null))
+            .doesNotThrowAnyException();
+    }
+
+    /**
+     * skillars-deferred-91 code review: the guard used {@code find()} over the WHOLE JDBC URL, so any
+     * string containing {@code //localhost} passed — including a pgjdbc multi-host failover URL whose
+     * driver may connect to the production host, and a URL carrying {@code //localhost} in a query
+     * parameter. It now matches the extracted authority with {@code matches()}.
+     */
+    @Test
+    @DisplayName("a multi-host failover URL listing localhost first is NOT treated as local")
+    void multiHostFailoverUrlIsNotLocal() {
+        JwtSecretBootstrapRunner runner = new JwtSecretBootstrapRunner(
+            secretService, true, "jdbc:postgresql://localhost:5432,prod-db.internal:5432/skillars");
+
+        assertThatThrownBy(() -> runner.run(null))
+            .as("the driver may connect to prod-db.internal; a leading localhost must not whitelist it")
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("LOCAL-DEVELOPMENT-ONLY");
+        verifyNoInteractions(secretService);
+    }
+
+    @Test
+    @DisplayName("a remote host with '//localhost' buried in a query parameter is NOT treated as local")
+    void localhostInsideAQueryParameterIsNotLocal() {
+        JwtSecretBootstrapRunner runner = new JwtSecretBootstrapRunner(
+            secretService, true,
+            "jdbc:postgresql://prod-db.internal:5432/skillars?options=-c%20search_path=//localhost");
+
+        assertThatThrownBy(() -> runner.run(null))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("LOCAL-DEVELOPMENT-ONLY");
+        verifyNoInteractions(secretService);
+    }
+
+    @Test
+    @DisplayName("a host that merely starts with 'localhost' is NOT treated as local")
+    void hostnamePrefixedWithLocalhostIsNotLocal() {
+        JwtSecretBootstrapRunner runner = new JwtSecretBootstrapRunner(
+            secretService, true, "jdbc:postgresql://localhost.evil.example.com:5432/skillars");
+
+        assertThatThrownBy(() -> runner.run(null))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("LOCAL-DEVELOPMENT-ONLY");
+        verifyNoInteractions(secretService);
     }
 }

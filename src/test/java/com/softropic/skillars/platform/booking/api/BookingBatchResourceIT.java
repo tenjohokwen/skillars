@@ -537,9 +537,18 @@ class BookingBatchResourceIT extends AbstractIntegrationTest {
                         .doesNotContain("MISSING_RIGHTS");
                 });
 
+            // skillars-deferred-91: scan the whole argument array rather than pinning index 0.
+            // AC12 reparameterised ErrorLog.log to fix a %-in-message crash inside the exception
+            // handler, so the call is now log.error("{} SUPPORT_ID: {}", msgTemplate, helpCode,
+            // entries(ctx), throwable) and the structured context sits at index 2, not 0. The
+            // context itself is unchanged — only its position was, and asserting on position made
+            // this test brittle to a change that did not alter behaviour.
             assertThat(logCapture.list)
                 .as("ApiAdvice.logError must have logged the batch id / per-booking results structured context")
-                .anySatisfy(event -> assertThat(event.getArgumentArray()[0].toString())
+                .anySatisfy(event -> assertThat(java.util.Arrays.stream(event.getArgumentArray())
+                        .filter(java.util.Objects::nonNull)
+                        .map(Object::toString)
+                        .collect(java.util.stream.Collectors.joining(" | ")))
                     .contains("batch id=" + batchId)
                     .contains("per-booking results="));
         } finally {

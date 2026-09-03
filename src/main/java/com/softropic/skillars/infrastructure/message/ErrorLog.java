@@ -64,11 +64,17 @@ public final class ErrorLog {
             helpCode = SQIDS.encode(List.of(Integer.toUnsignedLong(UUID.randomUUID().hashCode())));
         }
 
-        final String fullMsg = String.format(msgTemplate + " SUPPORT_ID: %s", helpCode);
+        // Parameterised, not String.format: msgTemplate is very often ex.getMessage() (passed at ~20
+        // ApiAdvice call sites + JWTAuthorizationFilter.writeUnauthorized). A '%' in that message
+        // (user input echoed by a validation message, a raw driver error) made String.format throw
+        // UnknownFormatConversionException / MissingFormatArgumentException *inside* the exception
+        // handler → a bare 500 with no ErrorDto body. SLF4J substitutes each {} with the argument
+        // verbatim and does not re-scan the substituted value, so a '%' — or a '{}' — in msgTemplate
+        // is now inert. Same failure class as skillars-deferred-90 AC1's NPE.
         if (asError) {
-            log.error(fullMsg, entries(ctx), throwable);
+            log.error("{} SUPPORT_ID: {}", msgTemplate, helpCode, entries(ctx), throwable);
         } else {
-            log.warn(fullMsg, entries(ctx));
+            log.warn("{} SUPPORT_ID: {}", msgTemplate, helpCode, entries(ctx));
         }
         return helpCode;
     }

@@ -13,7 +13,9 @@ public enum VideoErrorCode implements ErrorCode {
     TERMINAL_STATE_VIOLATION,
     DELETION_NOT_AUTHORISED,
     VIDEO_APPROVAL_NOT_FOUND,
-    VIDEO_APPROVAL_ALREADY_RESOLVED;
+    VIDEO_APPROVAL_ALREADY_RESOLVED,
+    /** The video is not in the operational state this transition requires (client-side race). */
+    VIDEO_STATE_CONFLICT;
 
     @Override
     public String getErrorCode() {

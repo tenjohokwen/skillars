@@ -4,7 +4,6 @@ import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.security.contract.AccountRole;
 import com.softropic.skillars.platform.security.contract.event.AccountDeletionRequestedEvent;
 import com.softropic.skillars.platform.security.repo.UserRepository;
-import com.softropic.skillars.platform.video.repo.VideoApprovalRequestRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -20,7 +19,6 @@ import java.util.List;
 public class AccountDeletionCascadeListener {
 
     private final VideoDeletionService videoDeletionService;
-    private final VideoApprovalRequestRepository approvalRequestRepository;
     private final UserRepository userRepository;
     private final ConfigService configService;
 
@@ -61,7 +59,10 @@ public class AccountDeletionCascadeListener {
         }
 
         if (configService.getBoolean("platform.video.approvalCancellation.enabled", true)) {
-            approvalRequestRepository.cancelAllPendingForOwners(affectedOwnerIds);
+            // skillars-deferred-91 AC13: through a @Transactional VideoDeletionService method — this
+            // listener is AFTER_COMMIT with no ambient transaction, so a direct @Modifying repo call
+            // here throws TransactionRequiredException (same class as the cascade's quota reset).
+            videoDeletionService.cancelPendingApprovalsForOwners(affectedOwnerIds);
         }
     }
 }

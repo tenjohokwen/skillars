@@ -273,9 +273,20 @@ docker exec "$APP_CID" wget -qO- http://localhost:8367/manage/health
 
 ## Scenario 4: A Booking Stuck in `CAPTURE_PENDING`
 
-**A `payment.booking_payments` row with `status = 'CAPTURE_PENDING'` has no automated exit.** It is
-deliberately the one case the platform will not resolve on its own, because only a human can read
-the Stripe side and decide whether money actually moved.
+**A `payment.booking_payments` row with `status = 'CAPTURE_PENDING'` still needs a human to reconcile
+the Stripe side** — only a person can read Stripe and decide whether money actually moved. The
+platform will never re-charge or auto-confirm on this state.
+
+**What is now automated (skillars-deferred-91 AC5 Part A):** `PaymentPendingSweeper` bounds the
+*slot-hold* harm. Once a `CAPTURE_PENDING` row is older than
+`booking.payment_pending.capture_pending_max_hours` (config, default **72h**, min 6, max 720) the
+sweeper moves it to the terminal **`CAPTURE_ABANDONED`** status, transitions the booking out of
+`PAYMENT_PENDING` (freeing the coach's slot and unblocking the parent's cancel), and emits
+`booking_payment_pending_unrecoverable_total{reason="CAPTURE_TIMEOUT"}` with a
+`[CAPTURE_TIMEOUT]` ERROR. **This does not resolve the payment** — `CAPTURE_ABANDONED` means "we
+stopped waiting; the Stripe side is unknown", and the reconciliation below still applies. A row
+with a null `reserved_at` (created before V124) is not aged and stays on the manual
+`CAPTURE_UNCONFIRMED` path indefinitely.
 
 ### Symptoms
 
@@ -308,16 +319,20 @@ this state; doing so risks double-charging the parent.
 ### Diagnosis
 
 ```bash
-# 1. List every outstanding reservation:
+# 1. List every outstanding reservation (both still-pending and timed-out):
 docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" \
   "$(docker compose -f /opt/skillars/docker-compose.yml ps -q postgres)" \
   psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-skillars}" -c \
-  "SELECT bp.booking_id, bp.batch_payment_intent_id, bp.credit_debited, bp.stripe_charged,
-          b.parent_id, b.coach_id, b.status, b.updated_at
+  "SELECT bp.booking_id, bp.status, bp.reserved_at, bp.batch_payment_intent_id,
+          bp.credit_debited, bp.stripe_charged, b.parent_id, b.coach_id, b.status AS booking_status
      FROM payment.booking_payments bp
      JOIN booking.bookings b ON b.id = bp.booking_id
-    WHERE bp.status = 'CAPTURE_PENDING';"
+    WHERE bp.status IN ('CAPTURE_PENDING', 'CAPTURE_ABANDONED');"
 ```
+
+A `CAPTURE_ABANDONED` row is one the sweeper already timed out: the booking is no longer holding a
+slot and the parent can cancel, but you still owe the Stripe reconciliation below. A
+`CAPTURE_PENDING` row is either younger than the timeout or has a null `reserved_at`.
 
 > **The `credit_debited` / `stripe_charged` columns on a CAPTURE_PENDING row are a reconciliation
 > hint, not an accounting record — do not reconcile against them as if they were.** For a **single**
@@ -337,23 +352,29 @@ docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" \
 
 ### Resolution — charge FOUND at Stripe
 
-The parent paid. Record it and confirm the booking:
+The parent paid. Record it and confirm the booking. Use the actual current status in the guard —
+`CAPTURE_PENDING` if the sweeper has not timed it out yet, `CAPTURE_ABANDONED` if it has:
 
 ```sql
 UPDATE payment.booking_payments
    SET status = 'CAPTURED',
        captured_at = now(),
        stripe_payment_intent_id = '<pi_... from the Stripe dashboard>'
- WHERE booking_id = '<booking-id>' AND status = 'CAPTURE_PENDING';
+ WHERE booking_id = '<booking-id>' AND status IN ('CAPTURE_PENDING', 'CAPTURE_ABANDONED');
 
+-- If CAPTURE_ABANDONED, the booking has already left PAYMENT_PENDING (it is DECLINED). Re-open it:
 UPDATE booking.bookings
    SET status = 'CONFIRMED', updated_at = now(), version = version + 1
- WHERE id = '<booking-id>' AND status = 'PAYMENT_PENDING';
+ WHERE id = '<booking-id>' AND status IN ('PAYMENT_PENDING', 'DECLINED');
 ```
+
+> If the slot the coach had was taken by another booking in the window between `CAPTURE_ABANDONED`
+> and your fix, re-confirming will fail V87's exclusion constraint. In that case refund the Stripe
+> charge instead (next section) and tell the parent.
 
 ### Resolution — NO charge at Stripe
 
-Nothing was taken. Decline the booking and hand the coach's slot back:
+Nothing was taken. If the row is still `CAPTURE_PENDING`, decline the booking and hand the slot back:
 
 ```sql
 UPDATE payment.booking_payments
@@ -365,7 +386,16 @@ UPDATE booking.bookings
  WHERE id = '<booking-id>' AND status = 'PAYMENT_PENDING';
 ```
 
-Both statements are guarded on the current status, so re-running one is a no-op rather than a
+If the row is already `CAPTURE_ABANDONED`, the sweeper has done both of those already — just tidy
+the payment status so the reconciliation is closed out:
+
+```sql
+UPDATE payment.booking_payments
+   SET status = 'CHARGE_FAILED'
+ WHERE booking_id = '<booking-id>' AND status = 'CAPTURE_ABANDONED';
+```
+
+All statements are guarded on the current status, so re-running one is a no-op rather than a
 second overwrite.
 
 ### Verification
@@ -384,3 +414,31 @@ docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" \
 > nothing; confirming could give away a session that was never paid for; re-charging could take the
 > money twice. The `booking_payments` row exists precisely so that a human has something durable to
 > reconcile against — before UAT.3 there was no record at all, and this situation was undetectable.
+
+---
+
+## Pre-production release gate: outstanding migration rewrites
+
+**Owner:** whoever prepares the first production deploy. **Trigger:** before that deploy, not after.
+
+Skillars has no production system yet, and several migrations lean on that fact rather than on
+rolling-deploy safety. `docs/deployment/migration-conventions.md` records the reasoning; this entry
+exists so the obligation survives independently of that document (skillars-deferred-91 code review,
+decision D7).
+
+Before the first production deploy, **all four items below must be closed**:
+
+| Item | What is wrong today | Required before production |
+| --- | --- | --- |
+| `V60` (`main.videos` CHECK re-add) | Validates the whole table under `ACCESS EXCLUSIVE`; `videos` grows | Redo as `ADD CONSTRAINT … NOT VALID` + a later `VALIDATE CONSTRAINT` |
+| `V94` (`payment.booking_payments` `chk_bp_status`) | Same — re-`ADD CONSTRAINT … CHECK` validates the whole table | Redo as `NOT VALID` + later `VALIDATE CONSTRAINT` |
+| `V117` (`marketplace.coach_radar_preferences` FK + index) | FK `ADD CONSTRAINT` validates under `ACCESS EXCLUSIVE`; the plain `CREATE INDEX` takes a `SHARE` lock | FK as `NOT VALID` + later `VALIDATE`; index as `CREATE INDEX CONCURRENTLY` |
+| `V124` (`CAPTURE_ABANDONED` CHECK widen) | The CHECK widen and its first write (`PaymentPendingSweeper.abandonCapture`) ship in the **same** release, deviating from convention rule 5 | Split into widen-then-write across two releases |
+
+Also outstanding, and cheap to close at the same time: `V125`/`V126`/`V127` create indexes without
+`CONCURRENTLY` because Flyway runs migrations in a transaction here. Once a production database
+exists, either move those to a non-transactional Flyway callback or accept and schedule the lock.
+
+**Verification:** `MigrationConventionLintTest` passes with the corresponding
+`-- migration-lint: allow-*` opt-outs **removed** from the affected files. If a migration still
+needs its opt-out, the item is not closed.

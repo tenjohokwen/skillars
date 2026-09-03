@@ -23,7 +23,7 @@ import static org.mockito.Mockito.verify;
 @ExtendWith(MockitoExtension.class)
 class CancellationRefundMatrixTest {
 
-    @Mock CreditWalletService creditWalletService;
+    @Mock RefundOutboxSupport refundOutboxSupport;
     @Mock PackSessionService packSessionService;
     @Mock CoachCancellationHistoryRepository cancellationHistoryRepository;
     @Mock ReliabilityStrikeService reliabilityStrikeService;
@@ -42,8 +42,8 @@ class CancellationRefundMatrixTest {
 
         service.onBookingCancelledByParent(event);
 
-        verify(creditWalletService).writeLedgerEntry(
-            eq(PARENT_ID), eq(SESSION_PRICE), eq("BOOKING_REFUND"), eq(BOOKING_ID), anyString());
+        verify(refundOutboxSupport).enqueueBookingRefund(
+            eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
         verify(packSessionService, never()).restoreSession(any());
     }
 
@@ -56,7 +56,7 @@ class CancellationRefundMatrixTest {
         service.onBookingCancelledByParent(event);
 
         verify(packSessionService).restoreSession(packId);
-        verify(creditWalletService, never()).writeLedgerEntry(any(), any(), any(), any(), any());
+        verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
     }
 
     // --- Parent cancel <= 24h, credit-based ---
@@ -66,7 +66,7 @@ class CancellationRefundMatrixTest {
 
         service.onBookingCancelledByParent(event);
 
-        verify(creditWalletService, never()).writeLedgerEntry(any(), any(), any(), any(), any());
+        verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
         verify(packSessionService, never()).restoreSession(any());
     }
 
@@ -79,7 +79,7 @@ class CancellationRefundMatrixTest {
         service.onBookingCancelledByParent(event);
 
         verify(packSessionService, never()).restoreSession(any());
-        verify(creditWalletService, never()).writeLedgerEntry(any(), any(), any(), any(), any());
+        verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
     }
 
     // --- Coach cancel excused (MUTUAL_AGREEMENT), credit-based ---
@@ -89,8 +89,8 @@ class CancellationRefundMatrixTest {
 
         service.onBookingCancelledByCoach(event);
 
-        verify(creditWalletService).writeLedgerEntry(
-            eq(PARENT_ID), eq(SESSION_PRICE), eq("BOOKING_REFUND"), eq(BOOKING_ID), anyString());
+        verify(refundOutboxSupport).enqueueBookingRefund(
+            eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
         verify(cancellationHistoryRepository).save(any());
         verify(reliabilityStrikeService, never()).issue(any(), any(), anyString());
     }
@@ -102,8 +102,8 @@ class CancellationRefundMatrixTest {
 
         service.onBookingCancelledByCoach(event);
 
-        verify(creditWalletService).writeLedgerEntry(
-            eq(PARENT_ID), eq(SESSION_PRICE), eq("BOOKING_REFUND"), eq(BOOKING_ID), anyString());
+        verify(refundOutboxSupport).enqueueBookingRefund(
+            eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
         verify(cancellationHistoryRepository).save(any());
         verify(reliabilityStrikeService).issue(COACH_ID, BOOKING_ID, "COACH_CANCELLATION_UNEXCUSED");
     }
@@ -127,7 +127,7 @@ class CancellationRefundMatrixTest {
         service.onBookingCancelledByCoach(event);
 
         verify(packSessionService).restoreSession(packId);
-        verify(creditWalletService, never()).writeLedgerEntry(any(), any(), any(), any(), any());
+        verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
     }
 
     // --- Coach cancel, pack expired ---
@@ -138,8 +138,8 @@ class CancellationRefundMatrixTest {
 
         service.onBookingCancelledByCoach(event);
 
-        verify(creditWalletService).writeLedgerEntry(
-            eq(PARENT_ID), eq(SESSION_PRICE), eq("BOOKING_REFUND"), eq(BOOKING_ID), anyString());
+        verify(refundOutboxSupport).enqueueBookingRefund(
+            eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
         verify(packSessionService, never()).restoreSession(any());
     }
 
@@ -150,8 +150,8 @@ class CancellationRefundMatrixTest {
 
         service.onCoachNoShow(event);
 
-        verify(creditWalletService).writeLedgerEntry(
-            eq(PARENT_ID), eq(SESSION_PRICE), eq("BOOKING_REFUND"), eq(BOOKING_ID), anyString());
+        verify(refundOutboxSupport).enqueueBookingRefund(
+            eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
         verify(reliabilityStrikeService).issue(COACH_ID, BOOKING_ID, "COACH_NO_SHOW");
     }
 
@@ -165,7 +165,7 @@ class CancellationRefundMatrixTest {
 
         verify(packSessionService).restoreSession(packId);
         verify(reliabilityStrikeService).issue(COACH_ID, BOOKING_ID, "COACH_NO_SHOW");
-        verify(creditWalletService, never()).writeLedgerEntry(any(), any(), any(), any(), any());
+        verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
     }
 
     // --- Coach no-show, pack expired ---
@@ -176,8 +176,8 @@ class CancellationRefundMatrixTest {
 
         service.onCoachNoShow(event);
 
-        verify(creditWalletService).writeLedgerEntry(
-            eq(PARENT_ID), eq(SESSION_PRICE), eq("BOOKING_REFUND"), eq(BOOKING_ID), anyString());
+        verify(refundOutboxSupport).enqueueBookingRefund(
+            eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
         verify(reliabilityStrikeService).issue(COACH_ID, BOOKING_ID, "COACH_NO_SHOW");
     }
 

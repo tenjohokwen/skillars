@@ -43,8 +43,18 @@ public class PlayerProfileService {
         if (playerIds == null || playerIds.isEmpty()) {
             return java.util.Map.of();
         }
-        return playerProfileRepository.findAllById(playerIds).stream()
-            .collect(java.util.stream.Collectors.toMap(PlayerProfile::getId, PlayerProfile::getName, (a, b) -> a));
+        // Null-tolerant on purpose (skillars-deferred-91 code review, decision D12):
+        // Collectors.toMap throws NPE on a null VALUE, which made this method unusable from
+        // MessagingService.buildSummaryContext — the one AC19 asked to route through it. A null name
+        // is SKIPPED rather than stored, because Map.getOrDefault returns the stored null when the
+        // key is present, which would defeat every caller's "Unknown Player" default.
+        java.util.Map<Long, String> namesById = new java.util.HashMap<>();
+        playerProfileRepository.findAllById(playerIds).forEach(pp -> {
+            if (pp.getName() != null) {
+                namesById.putIfAbsent(pp.getId(), pp.getName());
+            }
+        });
+        return namesById;
     }
 
     @Transactional(readOnly = true)

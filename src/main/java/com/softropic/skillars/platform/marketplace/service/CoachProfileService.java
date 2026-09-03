@@ -28,6 +28,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachPricing;
 import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.marketplace.repo.CoachPublicProfileFactsRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachReliabilityStrikeRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachSpecialty;
 import com.softropic.skillars.platform.marketplace.repo.CoachSpecialtyRepository;
@@ -75,6 +76,7 @@ public class CoachProfileService {
     private final CoachSubscriptionRepository coachSubscriptionRepository;
     private final ContactDetailSanitizer contactDetailSanitizer;
     private final CoachMediaItemRepository coachMediaItemRepository;
+    private final CoachPublicProfileFactsRepository coachPublicProfileFactsRepository;
     private final CoachCapabilityService coachCapabilityService;
     private final CoachReliabilityStrikeRepository coachReliabilityStrikeRepository;
     private final EntityManager entityManager;
@@ -327,33 +329,56 @@ public class CoachProfileService {
 
     private static final int STRIKE_WINDOW_DAYS = 90;
 
+    /**
+     * skillars-deferred-91 AC11 / code review decision D9: collapsed from 8 independent round trips
+     * to 4, which is AC11's threshold.
+     *
+     * <ol>
+     *   <li>profile + pricing — one ad-hoc {@code LEFT JOIN … ON} (one-to-one, no row multiplication)</li>
+     *   <li>specialties + age groups + availability count + strike count — one homogeneous
+     *       {@code (kind, value)} {@code UNION ALL}</li>
+     *   <li>session packs</li>
+     *   <li>media gallery</li>
+     * </ol>
+     *
+     * <p>The two remaining collection reads are left separate deliberately: folding them into the
+     * {@code UNION ALL} would require casting heterogeneous columns to text, and a {@code JOIN FETCH}
+     * across them would risk {@code MultipleBagFetchException} / a cartesian explosion — the hazards
+     * the original "left as-is" analysis correctly identified. The count remains constant in profile
+     * size; {@code CoachPublicProfileQueryCountIT} guards both the count and response parity.
+     */
     @Transactional(readOnly = true)
     public CoachProfileDto getPublicProfile(UUID coachId) {
-        CoachProfile profile = coachProfileRepository.findById(coachId)
-            .filter(p -> p.getStatus() == CoachProfileStatus.ACTIVE
-                      || p.getStatus() == CoachProfileStatus.REDUCED
-                      || p.getStatus() == CoachProfileStatus.PENDING_REVIEW)
+        // (1) profile + pricing
+        final Object[] profileAndPricing = coachProfileRepository.findByIdWithPricing(coachId).stream()
+            .findFirst()
+            .filter(row -> {
+                CoachProfileStatus status = ((CoachProfile) row[0]).getStatus();
+                return status == CoachProfileStatus.ACTIVE
+                    || status == CoachProfileStatus.REDUCED
+                    || status == CoachProfileStatus.PENDING_REVIEW;
+            })
             .orElseThrow(() -> new CoachProfileNotFoundException(coachId));
+        final CoachProfile profile = (CoachProfile) profileAndPricing[0];
+        final CoachPricing pricing = (CoachPricing) profileAndPricing[1];
 
-        List<String> specialties = coachSpecialtyRepository.findByCoachId(profile.getId())
-            .stream().map(CoachSpecialty::getSkill).toList();
+        // (2) specialties + age groups + availability existence + 90-day strike count
+        final OffsetDateTime since = OffsetDateTime.now().minusDays(STRIKE_WINDOW_DAYS);
+        final List<CoachPublicProfileFactsRepository.Fact> facts =
+            coachPublicProfileFactsRepository.findPublicProfileFacts(profile.getId(), since);
 
-        List<String> ageGroups = coachAgeGroupRepository.findByCoachId(profile.getId())
-            .stream().map(ag -> ag.getAgeTier().name()).toList();
+        final List<String> specialties = factValues(facts, CoachPublicProfileFactsRepository.KIND_SPECIALTY);
+        final List<String> ageGroups = factValues(facts, CoachPublicProfileFactsRepository.KIND_AGE_GROUP);
+        final boolean available = factCount(facts, CoachPublicProfileFactsRepository.KIND_AVAILABILITY_COUNT) > 0;
+        final int strikeCount = factCount(facts, CoachPublicProfileFactsRepository.KIND_STRIKE_COUNT);
 
-        CoachPricing pricing = coachPricingRepository.findByCoachId(profile.getId()).orElse(null);
-
+        // (3) session packs
         List<SessionPackDto> sessionPacks = sessionPackRepository.findByCoachId(profile.getId())
             .stream()
             .map(sp -> new SessionPackDto(sp.getSessionCount(), sp.getTotalPrice(), "EUR", sp.getLabel()))
             .toList();
 
-        boolean available = !coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(profile.getId()).isEmpty();
-
-        OffsetDateTime since = OffsetDateTime.now().minusDays(STRIKE_WINDOW_DAYS);
-        int strikeCount = Math.toIntExact(coachReliabilityStrikeRepository
-            .countByCoachIdAndCreatedAtAfter(profile.getId(), since));
-
+        // (4) media gallery
         List<CoachMediaItemDto> mediaGallery = coachMediaItemRepository
             .findByCoachIdOrderByDisplayOrderAsc(profile.getId())
             .stream().limit(6)
@@ -384,6 +409,30 @@ public class CoachProfileService {
             mediaGallery,
             null  // reviews enriched at controller level to avoid circular service dependency
         );
+    }
+
+    /** Values of one {@code kind}, in the order the UNION ALL branch returned them. */
+    private static List<String> factValues(List<CoachPublicProfileFactsRepository.Fact> facts, String kind) {
+        return facts.stream()
+            .filter(f -> kind.equals(f.getKind()))
+            .map(CoachPublicProfileFactsRepository.Fact::getValue)
+            .toList();
+    }
+
+    /** A count branch always returns exactly one row; absent or unparseable degrades to 0. */
+    private static int factCount(List<CoachPublicProfileFactsRepository.Fact> facts, String kind) {
+        return facts.stream()
+            .filter(f -> kind.equals(f.getKind()))
+            .map(CoachPublicProfileFactsRepository.Fact::getValue)
+            .findFirst()
+            .map(v -> {
+                try {
+                    return Integer.parseInt(v);
+                } catch (NumberFormatException e) {
+                    return 0;
+                }
+            })
+            .orElse(0);
     }
 
     @Transactional(readOnly = true)

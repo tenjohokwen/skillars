@@ -37,4 +37,11 @@ public interface ParentCreditLedgerRepository extends JpaRepository<ParentCredit
     BigDecimal sumTotalCashOuts(@Param("from") Instant from, @Param("to") Instant to);
 
     List<ParentCreditLedger> findAllByParentId(Long parentId);
+
+    /**
+     * skillars-deferred-91 AC2: the {@code CREDIT_WALLET_REFUND} outbox handler checks this before
+     * writing, so a re-drive of an already-applied refund is a documented no-op. Backed by the
+     * {@code uq_pcl_reference_type} partial unique index for the concurrent case.
+     */
+    boolean existsByReferenceIdAndType(UUID referenceId, String type);
 }
