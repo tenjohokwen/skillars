@@ -51,13 +51,9 @@
 			  Remove an override once the Boot parent's own managed version reaches or exceeds it.
 
 			  Most of what Trivy flagged on 3.5.11 is now carried by the 3.5.16 parent itself
-			  and needs no override here: spring-framework 6.2.19, spring-security 6.5.11,
-			  jackson 2.21.4, micrometer 1.15.12, spring-data 2025.0.13.
+			  and needs no override here: tomcat 10.1.55, spring-framework 6.2.19,
+			  spring-security 6.5.11, jackson 2.21.4, micrometer 1.15.12, spring-data 2025.0.13.
 
-			  tomcat     CVE-2026-65182 / CVE-2026-65905 / CVE-2026-68525 (all CRITICAL) against
-			             the 3.5.16 parent's managed tomcat-embed-core 10.1.55. Trivy reports the
-			             10.1.x fix as 10.1.58. Reachable: this is the embedded servlet container.
-			             Remove once the Boot parent manages >= 10.1.58.
 			  thymeleaf  CVE-2026-41901 / CVE-2026-40478 - server-side template injection.
 			             Trivy reports the fix as 3.1.5.RELEASE. Thymeleaf is genuinely used
 			             here (the registration/notification email templates), so this is a
@@ -76,7 +72,6 @@
 			             see the comment there; test scope stripped it from the shipped jar and
 			             broke every AWS SDK sync client at runtime.
 			-->
-			<tomcat.version>10.1.58</tomcat.version>
 			<thymeleaf.version>3.1.5.RELEASE</thymeleaf.version>
 			<netty.version>4.1.136.Final</netty.version>
 			<postgresql.version>42.7.12</postgresql.version>
