@@ -165,12 +165,17 @@ class RefundOutboxIT extends AbstractIntegrationTest {
             .isEqualTo(1);
 
         // Clear the backoff and replace the payload with a valid one: the re-drive now succeeds.
-        jdbcTemplate.update(
+        // Wrapped in transactionTemplate deliberately — this datasource runs with
+        // hikari.auto-commit: false (application.yaml:77, so Hibernate can group statements), which
+        // means a bare jdbcTemplate write outside a Spring transaction is NEVER committed: the
+        // connection goes back to the pool with the change still open and it is silently discarded.
+        // update() still reports 1 row affected, so the mistake is invisible without a read-back.
+        transactionTemplate.execute(status -> jdbcTemplate.update(
             "UPDATE main.outbox_messages SET next_attempt_at = now() - interval '1 minute', "
                 + "payload = ?::jsonb WHERE aggregate_type = ? AND payload->>'bookingId' = ?",
             "{\"parentId\":" + PARENT_ID + ",\"amount\":50.00,\"bookingId\":\"" + bookingId
                 + "\",\"description\":\"Coach no-show — full refund\"}",
-            RefundOutboxSupport.AGGREGATE_TYPE, bookingId.toString());
+            RefundOutboxSupport.AGGREGATE_TYPE, bookingId.toString()));
 
         outboxService.drain();
 

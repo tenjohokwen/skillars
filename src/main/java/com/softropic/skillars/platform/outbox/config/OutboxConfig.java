@@ -2,8 +2,10 @@ package com.softropic.skillars.platform.outbox.config;
 
 import com.softropic.skillars.infrastructure.threadpool.MdcDecorator;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.task.SyncTaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.concurrent.Executor;
@@ -26,7 +28,14 @@ import java.util.concurrent.ThreadPoolExecutor;
 @Configuration
 public class OutboxConfig {
 
+    /**
+     * Production and every non-test profile. {@code matchIfMissing = true} means the property must be
+     * explicitly set to {@code false} to disable async draining, which
+     * {@code src/test/resources/application-test.yaml} does and nothing else does — the same shape
+     * {@code infrastructure.config.SchedulingConfig} uses for {@code app.scheduling.enabled}.
+     */
     @Bean(name = "outboxDrainPool")
+    @ConditionalOnProperty(name = "app.outbox.drain-async", havingValue = "true", matchIfMissing = true)
     public Executor outboxDrainPool() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(1);
@@ -38,5 +47,27 @@ public class OutboxConfig {
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.DiscardPolicy());
         executor.initialize();
         return executor;
+    }
+
+    /**
+     * Test profile only: drain on the calling thread so the AFTER_COMMIT effect is visible the moment
+     * the producing transaction commits.
+     *
+     * <p>Integration tests assert on what an outbox drain produced — a credit-wallet ledger row, a
+     * weekly-snapshot delta — immediately after the call that triggered it. With a real executor
+     * every one of those assertions becomes a race that either needs Awaitility or flakes, and the
+     * suite already neutralises background work this way (see {@code SchedulingConfig} and the
+     * {@code outbox_initial_delay_ms} override in {@code application-test.yaml}).
+     *
+     * <p>The trade-off is explicit: the ITs no longer exercise the hand-off to a separate thread.
+     * What they do still exercise is everything that matters for correctness — the
+     * {@code @TransactionalEventListener(AFTER_COMMIT)} wiring, the per-row {@code REQUIRES_NEW}
+     * boundaries, SKIP LOCKED claiming, and the separate-transaction failure bookkeeping. The
+     * hand-off itself is one annotation, covered by {@code OutboxServiceAsyncWiringTest}.
+     */
+    @Bean(name = "outboxDrainPool")
+    @ConditionalOnProperty(name = "app.outbox.drain-async", havingValue = "false")
+    public Executor outboxDrainPoolSynchronous() {
+        return new SyncTaskExecutor();
     }
 }

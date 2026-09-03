@@ -125,6 +125,13 @@ class SluSnapshotOutboxIT extends AbstractIntegrationTest {
             BigDecimal.class, PLAYER_ID, skillCode, ISO_YEAR, ISO_WEEK);
     }
 
+    private int snapshotRowCount() {
+        return jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.player_slu_weekly_snapshot WHERE player_id = ? AND "
+            + "iso_year = ? AND iso_week = ?",
+            Integer.class, PLAYER_ID, ISO_YEAR, ISO_WEEK);
+    }
+
     private int markerCount() {
         return jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM development.player_slu_weekly_snapshot_applied WHERE session_id = ?",
@@ -190,9 +197,11 @@ class SluSnapshotOutboxIT extends AbstractIntegrationTest {
      */
     @Test
     void recoverPathProducerApi_enqueuesAndTheAfterCommitDrainRepairsTheSnapshot() {
-        assertThat(snapshotTotal("PAC"))
+        // snapshotTotal() uses queryForObject, which THROWS on zero rows rather than returning null,
+        // so the precondition is expressed as a count.
+        assertThat(snapshotRowCount())
             .as("precondition: the weekly snapshot under-reports before the re-drive")
-            .isNull();
+            .isZero();
 
         List<PlayerSkillStat> stats = jdbcTemplate.query(
             "SELECT session_id, player_id, skill_code, slu_value FROM development.player_skill_stats "

@@ -1084,7 +1084,17 @@ class RescheduleResourceIT extends AbstractIntegrationTest {
      */
     private void setBookingStatus(String status) {
         transactionTemplate.execute(s -> {
-            Instant newStart = Instant.now().minus(2, ChronoUnit.DAYS);
+            // skillars-deferred-91 code review: anchored to a safe local hour, exactly as
+            // safeProposedStart does. This was the last Instant.now()-preserves-wall-clock-time site
+            // in the file that skillars-deferred-69 AC2 missed. duplicateNextWeek advances this
+            // booking by 7 days, so on any CI run between roughly 23:00 and 24:00 Europe/Berlin the
+            // duplicate's 1-hour session ended after midnight and the request failed with
+            // SESSION_CROSSES_MIDNIGHT. Observed on the 2026-09-03 21:53 UTC run of PR #146.
+            Instant newStart = ZonedDateTime.now(ZoneId.of("Europe/Berlin"))
+                .minusDays(2)
+                .truncatedTo(ChronoUnit.DAYS)
+                .withHour(10)
+                .toInstant();
             jdbcTemplate.update(
                 "UPDATE booking.bookings SET status = ?, requested_start_time = ?, requested_end_time = ? WHERE id = ?",
                 status, Timestamp.from(newStart), Timestamp.from(newStart.plus(1, ChronoUnit.HOURS)), bookingId);

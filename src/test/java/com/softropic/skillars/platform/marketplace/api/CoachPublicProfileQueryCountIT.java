@@ -143,6 +143,24 @@ class CoachPublicProfileQueryCountIT extends AbstractIntegrationTest {
     void getPublicProfile_collapseDoesNotChangeTheResponse() {
         var dto = transactionTemplate.execute(status -> coachProfileService.getPublicProfile(coachId));
 
+        // Compared against the database, not hardcoded sizes: a sibling test in this class re-seeds
+        // with seedChildRows(4), so any fixed expectation here depends on execution order.
+        int expectedSpecialties = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM marketplace.coach_specialties WHERE coach_id = ?", Integer.class, coachId);
+        int expectedAgeGroups = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM marketplace.coach_age_groups WHERE coach_id = ?", Integer.class, coachId);
+        int expectedPacks = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM marketplace.session_packs WHERE coach_id = ?", Integer.class, coachId);
+        // getPublicProfile caps the gallery at 6 items.
+        int expectedMedia = Math.min(6, jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM marketplace.coach_media WHERE coach_id = ?", Integer.class, coachId));
+        int availabilityWindows = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM marketplace.coach_availability_windows WHERE coach_id = ?",
+            Integer.class, coachId);
+        int expectedStrikes = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM marketplace.coach_reliability_strikes WHERE coach_id = ? "
+                + "AND created_at > now() - interval '90 days'", Integer.class, coachId);
+
         assertThat(dto).isNotNull();
         assertThat(dto.id()).isEqualTo(coachId);
         assertThat(dto.perSessionPrice())
@@ -151,20 +169,20 @@ class CoachPublicProfileQueryCountIT extends AbstractIntegrationTest {
         assertThat(dto.currency()).isEqualTo("EUR");
         assertThat(dto.specialties())
             .as("specialties now arrive from the UNION ALL branch")
-            .hasSize(2)
+            .hasSize(expectedSpecialties)
             .doesNotContainNull();
         assertThat(dto.ageGroupsCoached())
             .as("age groups now arrive from the UNION ALL branch")
-            .hasSize(2)
+            .hasSize(expectedAgeGroups)
             .doesNotContainNull();
         assertThat(dto.available())
             .as("availability is now a COUNT(*) > 0 branch rather than a list read")
-            .isTrue();
+            .isEqualTo(availabilityWindows > 0);
         assertThat(dto.reliabilityStrikeCount())
             .as("the 90-day strike count is now a COUNT(*) branch parsed from text")
-            .isZero();
-        assertThat(dto.sessionPacks()).hasSize(2);
-        assertThat(dto.mediaGallery()).hasSize(2);
+            .isEqualTo(expectedStrikes);
+        assertThat(dto.sessionPacks()).hasSize(expectedPacks);
+        assertThat(dto.mediaGallery()).hasSize(expectedMedia);
     }
 
     private long measureGetPublicProfile() {
