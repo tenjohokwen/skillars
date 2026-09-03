@@ -10,6 +10,7 @@ import com.softropic.skillars.platform.booking.contract.BatchBookingRequestedEve
 import com.softropic.skillars.platform.booking.contract.BookingConfirmedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingDeclinedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingExpiredEvent;
+import com.softropic.skillars.platform.booking.contract.BookingPaymentUnresolvedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingReminderEvent;
 import com.softropic.skillars.platform.booking.contract.BookingRequestedEvent;
 import com.softropic.skillars.platform.booking.contract.DuplicateBookingProposedEvent;
@@ -20,12 +21,10 @@ import com.softropic.skillars.platform.booking.contract.RescheduleDeclinedEvent;
 import com.softropic.skillars.platform.booking.contract.RescheduleRequestedByCoachEvent;
 import com.softropic.skillars.platform.booking.contract.RescheduleRequestedEvent;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
-import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.contract.Recipient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
@@ -47,13 +46,14 @@ import static net.logstash.logback.argument.StructuredArguments.kv;
 @Component
 public class BookingEmailListener {
 
-    private final ApplicationEventPublisher publisher;
+    private final com.softropic.skillars.platform.notification.service.NotificationOutboxSupport notificationOutboxSupport;
     private final String appBaseUrl;
 
-    public BookingEmailListener(ApplicationEventPublisher publisher,
-                                @Value("${baseurl}") String baseUrl,
-                                @Value("${server.port}") String serverPort) {
-        this.publisher = publisher;
+    public BookingEmailListener(
+            com.softropic.skillars.platform.notification.service.NotificationOutboxSupport notificationOutboxSupport,
+            @Value("${baseurl}") String baseUrl,
+            @Value("${server.port}") String serverPort) {
+        this.notificationOutboxSupport = notificationOutboxSupport;
         this.appBaseUrl = baseUrl + ":" + serverPort;
     }
 
@@ -75,11 +75,8 @@ public class BookingEmailListener {
             recipient.setEmail(event.getCoachEmail());
             recipient.setLangKey("en");
 
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.BOOKING_REQUESTED,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.BOOKING_REQUESTED, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_REQUESTED),
                 kv("bookingId", event.getBookingId()), e);
@@ -103,11 +100,8 @@ public class BookingEmailListener {
             recipient.setEmail(event.getParentEmail());
             recipient.setLangKey("en");
 
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.BOOKING_CONFIRMED,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.BOOKING_CONFIRMED, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_CONFIRMED),
                 kv("bookingId", event.getBookingId()), e);
@@ -131,11 +125,8 @@ public class BookingEmailListener {
             recipient.setEmail(event.getParentEmail());
             recipient.setLangKey("en");
 
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.BOOKING_DECLINED,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.BOOKING_DECLINED, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_DECLINED),
                 kv("bookingId", event.getBookingId()), e);
@@ -159,11 +150,8 @@ public class BookingEmailListener {
             recipient.setEmail(event.getParentEmail());
             recipient.setLangKey("en");
 
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.BOOKING_EXPIRED,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.BOOKING_EXPIRED, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_EXPIRED),
                 kv("bookingId", event.getBookingId()), e);
@@ -184,11 +172,8 @@ public class BookingEmailListener {
             recipient.setEmail(event.getParentEmail());
             recipient.setLangKey("en");
 
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.BOOKING_QUICK_COMPLETE_CONFIRM,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.BOOKING_QUICK_COMPLETE_CONFIRM, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_QUICK_COMPLETE_CONFIRM),
                 kv("bookingId", event.getBookingId()), e);
@@ -213,11 +198,8 @@ public class BookingEmailListener {
             recipient.setEmail(event.getCoachEmail());
             recipient.setLangKey("en");
 
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_REQUESTED,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.BOOKING_RESCHEDULE_REQUESTED, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_RESCHEDULE_REQUESTED),
                 kv("bookingId", event.getBookingId()), e);
@@ -237,11 +219,8 @@ public class BookingEmailListener {
                 Recipient recipient = new Recipient();
                 recipient.setEmail(email);
                 recipient.setLangKey("en");
-                publisher.publishEvent(new Envelope(
-                    List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_ACCEPTED,
-                    Instant.now().plus(Duration.ofDays(1)), data,
-                    UUID.randomUUID().toString()
-                ));
+                notificationOutboxSupport.enqueueEmail(
+                    EmailTemplate.BOOKING_RESCHEDULE_ACCEPTED, recipient, data, UUID.randomUUID().toString());
             }
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_RESCHEDULE_ACCEPTED),
@@ -266,11 +245,8 @@ public class BookingEmailListener {
             recipient.setEmail(event.getParentEmail());
             recipient.setLangKey("en");
 
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_DECLINED,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.BOOKING_RESCHEDULE_DECLINED, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_RESCHEDULE_DECLINED),
                 kv("bookingId", event.getBookingId()), e);
@@ -295,11 +271,8 @@ public class BookingEmailListener {
             recipient.setEmail(event.getParentEmail());
             recipient.setLangKey("en");
 
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_REQUESTED_BY_COACH,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.BOOKING_RESCHEDULE_REQUESTED_BY_COACH, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_RESCHEDULE_REQUESTED_BY_COACH),
                 kv("bookingId", event.getBookingId()), e);
@@ -323,11 +296,8 @@ public class BookingEmailListener {
             recipient.setEmail(event.getCoachEmail());
             recipient.setLangKey("en");
 
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.BOOKING_RESCHEDULE_DECLINED_BY_PARENT,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.BOOKING_RESCHEDULE_DECLINED_BY_PARENT, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_RESCHEDULE_DECLINED_BY_PARENT),
                 kv("bookingId", event.getBookingId()), e);
@@ -355,11 +325,8 @@ public class BookingEmailListener {
             recipient.setEmail(event.getCoachEmail());
             recipient.setLangKey("en");
 
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.BOOKING_BATCH_REQUESTED,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.BOOKING_BATCH_REQUESTED, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_BATCH_REQUESTED),
                 kv("batchId", event.getBatchId()), e);
@@ -383,11 +350,8 @@ public class BookingEmailListener {
             recipient.setEmail(event.getParentEmail());
             recipient.setLangKey("en");
 
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.BOOKING_BATCH_ACCEPTED,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.BOOKING_BATCH_ACCEPTED, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_BATCH_ACCEPTED),
                 kv("batchId", event.getBatchId()), e);
@@ -411,11 +375,8 @@ public class BookingEmailListener {
             recipient.setEmail(event.getParentEmail());
             recipient.setLangKey("en");
 
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.BOOKING_DUPLICATE_PROPOSED,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.BOOKING_DUPLICATE_PROPOSED, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_DUPLICATE_PROPOSED),
                 kv("newBookingId", event.getNewBookingId()), e);
@@ -445,11 +406,8 @@ public class BookingEmailListener {
             recipient.setEmail(event.getCoachEmail());
             recipient.setLangKey("en");
 
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.BOOKING_CANCELLED_DUE_TO_PAUSE,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.BOOKING_CANCELLED_DUE_TO_PAUSE, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_CANCELLED_DUE_TO_PAUSE),
                 kv("bookingId", event.getBookingId()), e);
@@ -472,11 +430,8 @@ public class BookingEmailListener {
             recipient.setEmail(event.getCoachEmail());
             recipient.setLangKey("en");
 
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.BOOKING_CANCELLED_BY_PARENT,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.BOOKING_CANCELLED_BY_PARENT, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_CANCELLED_BY_PARENT),
                 kv("bookingId", event.getBookingId()), e);
@@ -499,11 +454,8 @@ public class BookingEmailListener {
             recipient.setEmail(event.getParentEmail());
             recipient.setLangKey("en");
 
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.BOOKING_CANCELLED_BY_COACH,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.BOOKING_CANCELLED_BY_COACH, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_CANCELLED_BY_COACH),
                 kv("bookingId", event.getBookingId()), e);
@@ -526,11 +478,8 @@ public class BookingEmailListener {
             recipient.setEmail(event.getParentEmail());
             recipient.setLangKey("en");
 
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.COACH_NO_SHOW,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.COACH_NO_SHOW, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.COACH_NO_SHOW),
                 kv("bookingId", event.getBookingId()), e);
@@ -553,34 +502,68 @@ public class BookingEmailListener {
             recipient.setEmail(event.getCoachEmail());
             recipient.setLangKey("en");
 
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.PLAYER_NO_SHOW,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.PLAYER_NO_SHOW, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.PLAYER_NO_SHOW),
                 kv("bookingId", event.getBookingId()), e);
         }
     }
 
-    public void onBookingReminder(BookingReminderEvent event) {
-        Map<String, Object> data = new HashMap<>();
-        data.put("coachDisplayName", event.getCoachDisplayName());
-        data.put("requestedStartTime", event.getRequestedStartTime().toString());
-        data.put("canonicalTimezone", event.getCanonicalTimezone());
-        data.put("reminderType", event.getReminderType());
+    /**
+     * skillars-deferred-91 code review D10: the CAPTURE_ABANDONED path. Deliberately NOT
+     * BOOKING_DECLINED — that template tells the parent their credits were not affected, which the
+     * platform cannot assert when the Stripe side is unknown.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onBookingPaymentUnresolved(BookingPaymentUnresolvedEvent event) {
+        try {
+            if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
+                log.warn("Cannot send payment-unresolved email: parent email is blank, bookingId={}",
+                    event.getBookingId());
+                return;
+            }
 
-        for (String email : List.of(event.getParentEmail(), event.getCoachEmail()).stream()
-                .filter(e -> e != null && !e.isBlank()).toList()) {
+            Map<String, Object> data = new HashMap<>();
+            data.put("coachDisplayName", event.getCoachDisplayName());
+            data.put("requestedStartTime", event.getRequestedStartTime().toString());
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+
             Recipient recipient = new Recipient();
-            recipient.setEmail(email);
+            recipient.setEmail(event.getParentEmail());
             recipient.setLangKey("en");
-            publisher.publishEvent(new Envelope(
-                List.of(recipient), EmailTemplate.BOOKING_REMINDER,
-                Instant.now().plus(Duration.ofDays(1)), data,
-                UUID.randomUUID().toString()
-            ));
+
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.BOOKING_PAYMENT_UNRESOLVED, recipient, data, UUID.randomUUID().toString());
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification",
+                kv("template", EmailTemplate.BOOKING_PAYMENT_UNRESOLVED),
+                kv("bookingId", event.getBookingId()), e);
+        }
+    }
+
+    public void onBookingReminder(BookingReminderEvent event) {
+        // skillars-deferred-91 code review: this was the one publish site with no try/catch, so an
+        // enqueue failure here propagated to the caller instead of being logged like every sibling.
+        // Guarded per recipient so one bad address cannot cost the other recipient their reminder.
+        try {
+            Map<String, Object> data = new HashMap<>();
+            data.put("coachDisplayName", event.getCoachDisplayName());
+            data.put("requestedStartTime", event.getRequestedStartTime().toString());
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+            data.put("reminderType", event.getReminderType());
+
+            for (String email : List.of(event.getParentEmail(), event.getCoachEmail()).stream()
+                    .filter(e -> e != null && !e.isBlank()).toList()) {
+                Recipient recipient = new Recipient();
+                recipient.setEmail(email);
+                recipient.setLangKey("en");
+                notificationOutboxSupport.enqueueEmail(
+                    EmailTemplate.BOOKING_REMINDER, recipient, data, UUID.randomUUID().toString());
+            }
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_REMINDER),
+                kv("bookingId", event.getBookingId()), e);
         }
     }
 }

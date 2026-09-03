@@ -138,7 +138,11 @@ public class ApiAdvice {
         "excl_bkg_coach_slot_overlap", "booking.slotUnavailable",
         // skillars-deferred-88 AC10: two concurrent OTP-issue calls for one user hit the partial
         // unique index; the retry is itself a resend, so a plain "try again" is the right UX.
-        "uq_pot_one_active_per_user", "security.otpResendInProgress"
+        "uq_pot_one_active_per_user", "security.otpResendInProgress",
+        // skillars-deferred-91 code review D4: V125/V127's partial unique index on
+        // parent_credit_ledger. Unmapped it surfaced as an untranslated 400 generic.dataError while
+        // silently rolling back the enclosing dispute resolution, with no indication of the cause.
+        "uq_pcl_booking_refund", "payment.refundAlreadyIssued"
     );
 
     // Unique constraints that represent idempotent-retry collisions → 409 Conflict (not 400 Bad Request)
@@ -149,7 +153,10 @@ public class ApiAdvice {
         "uq_sessions_booking_id",
         "idx_videos_provider_asset_id_unique",
         "excl_bkg_coach_slot_overlap",
-        "uq_pot_one_active_per_user"
+        "uq_pot_one_active_per_user",
+        // A second BOOKING_REFUND for a booking is an idempotent-retry collision, not bad input:
+        // the first refund stands and the caller should treat this as "already done".
+        "uq_pcl_booking_refund"
     );
 
     // PostgreSQL exclusion-constraint violations (SQLSTATE 23P01) are not in Hibernate's
@@ -592,11 +599,28 @@ public class ApiAdvice {
         return logErrorAndReturnDTO(enfe, defaultMsg, "generic.notFound");
     }
 
+    /**
+     * skillars-deferred-91 AC17: an {@link IllegalStateException} in this codebase always signals a
+     * server-side invariant breach or a missing / non-numeric {@code platform_config} key
+     * ({@code ConfigService.getBoundedLong / getLong / getString}) — never a client-caused conflict.
+     * Mapping {@code IllegalStateException} to {@code 409 CONFLICT} disguised a server
+     * misconfiguration as a client problem and kept it out of 5xx alerting; it now returns
+     * {@code 500} with an ERROR log + {@code helpCode} (via {@link ErrorLog}).
+     *
+     * <p>AC17's original claim — "an audit of every request-reachable
+     * {@code throw new IllegalStateException} confirmed none legitimately means 409" — was not
+     * accurate (skillars-deferred-91 code review, decision D11). Three video-state checks were
+     * request-reachable client races and are now their own {@code VideoStateConflictException}
+     * mapped to 409 by {@code VideoApiAdvice}. The rule here is therefore: an
+     * {@code IllegalStateException} that reaches this handler is a genuine server-state error. A
+     * condition the client can cause and recover from must get its own domain exception rather than
+     * being widened back into this one.
+     */
     @ExceptionHandler(IllegalStateException.class)
-    @ResponseStatus(HttpStatus.CONFLICT)
+    @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
     public ErrorDto illegalStateExceptionHandler(final IllegalStateException ise) {
-        final String defaultMsg = "The requested operation conflicts with current state";
-        return logErrorAndReturnDTO(ise, defaultMsg, "generic.conflict");
+        final String defaultMsg = "The server could not complete the request due to an internal state error";
+        return logErrorAndReturnDTO(ise, defaultMsg, "generic.unknown");
     }
 
     /**

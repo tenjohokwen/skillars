@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.payment.service;
 
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.booking.contract.BookingDeclinedEvent;
+import com.softropic.skillars.platform.booking.contract.BookingPaymentUnresolvedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingEvent;
 import com.softropic.skillars.platform.booking.contract.TransitionContext;
 import com.softropic.skillars.platform.booking.repo.Booking;
@@ -75,6 +76,8 @@ class PaymentPendingSweeperTest {
             .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
         lenient().when(configService.getBoundedLong(eq(PaymentPendingSweeper.GRACE_MINUTES_KEY),
             anyLong(), anyLong(), anyLong())).thenReturn(120L);
+        lenient().when(configService.getBoundedLong(eq(PaymentPendingSweeper.CAPTURE_PENDING_MAX_HOURS_KEY),
+            anyLong(), anyLong(), anyLong())).thenReturn(72L);
         lenient().when(transactionTemplate.execute(any())).thenAnswer(inv -> {
             TransactionCallback<?> callback = inv.getArgument(0);
             return callback.doInTransaction(null);
@@ -182,6 +185,60 @@ class PaymentPendingSweeperTest {
         verify(bookingPaymentRepository, never()).save(any());
         verify(bookingService, never()).transition(any(), any(), any());
         verify(eventPublisher, never()).publishEvent(any(BookingDeclinedEvent.class));
+    }
+
+    // ── skillars-deferred-91 AC5 Part A: CAPTURE_PENDING automated exit ──────────────────────────
+
+    @Test
+    void capturePendingRow_olderThanCapturePendingMaxHours_isMarkedCaptureAbandonedAndSlotReleased() {
+        Booking b = booking(null);
+        stage(b);
+        BookingPayment stale = paymentRow("CAPTURE_PENDING");
+        stale.setStripeCharged(new java.math.BigDecimal("40.00"));
+        stale.setReservedAt(Instant.now().minus(100, ChronoUnit.HOURS)); // > 72h
+        when(bookingPaymentRepository.findById(b.getId())).thenReturn(Optional.of(stale));
+
+        sweeper.sweepStrandedPayments();
+
+        ArgumentCaptor<BookingPayment> saved = ArgumentCaptor.forClass(BookingPayment.class);
+        verify(bookingPaymentRepository).save(saved.capture());
+        assertThat(saved.getValue().getStatus()).isEqualTo("CAPTURE_ABANDONED");
+        assertThat(saved.getValue().getStripeCharged()).isEqualByComparingTo("40.00"); // NOT zeroed
+        verify(bookingService).transition(eq(b.getId()), eq(BookingEvent.PAYMENT_FAILED), any());
+
+        // skillars-deferred-91 code review D10: NOT BookingDeclinedEvent. That renders
+        // BOOKING_DECLINED, which tells the parent their credits "have not been affected" — the very
+        // claim CAPTURE_ABANDONED exists to say we cannot make. Here stripeCharged is 40.00, i.e.
+        // the parent's card may well have been charged.
+        verify(eventPublisher).publishEvent(any(BookingPaymentUnresolvedEvent.class));
+        verify(eventPublisher, never()).publishEvent(any(BookingDeclinedEvent.class));
+    }
+
+    @Test
+    void capturePendingRow_youngerThanCapturePendingMaxHours_staysOnTheManualPath() {
+        Booking b = booking(null);
+        stage(b);
+        BookingPayment fresh = paymentRow("CAPTURE_PENDING");
+        fresh.setReservedAt(Instant.now().minus(1, ChronoUnit.HOURS)); // < 72h
+        when(bookingPaymentRepository.findById(b.getId())).thenReturn(Optional.of(fresh));
+
+        sweeper.sweepStrandedPayments();
+
+        verify(bookingPaymentRepository, never()).save(any());
+        verify(bookingService, never()).transition(any(), any(), any());
+    }
+
+    @Test
+    void capturePendingRow_withNullReservedAt_isNeverAged() {
+        Booking b = booking(null);
+        stage(b);
+        when(bookingPaymentRepository.findById(b.getId()))
+            .thenReturn(Optional.of(paymentRow("CAPTURE_PENDING"))); // reservedAt == null (pre-V124)
+
+        sweeper.sweepStrandedPayments();
+
+        verify(bookingPaymentRepository, never()).save(any());
+        verify(bookingService, never()).transition(any(), any(), any());
     }
 
     private BookingPayment paymentRow(String status) {

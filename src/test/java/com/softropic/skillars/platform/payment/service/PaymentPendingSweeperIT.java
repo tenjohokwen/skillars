@@ -263,6 +263,37 @@ class PaymentPendingSweeperIT extends BasePaymentIT {
     }
 
     /**
+     * skillars-deferred-91 AC5 Part A. A CAPTURE_PENDING row older than
+     * {@code booking.payment_pending.capture_pending_max_hours} is timed out: the sweeper marks it
+     * CAPTURE_ABANDONED (keeping {@code stripe_charged}), releases the booking from PAYMENT_PENDING
+     * so the slot frees and the parent can cancel, and still leaves an operator to reconcile Stripe.
+     */
+    @Test
+    void capturePendingReservation_pastTheCaptureTimeout_isMarkedCaptureAbandonedAndTheSlotFreed() {
+        UUID bookingId = seedStrandedBooking(null, 24 * 60);
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO payment.booking_payments (booking_id, credit_debited, stripe_charged, status, reserved_at) "
+                + "VALUES (?, 0, 50.00, 'CAPTURE_PENDING', now() - interval '100 hours')", bookingId);
+            return null;
+        });
+
+        sweep();
+
+        assertThat(statusOf(bookingId))
+            .as("the booking is released from PAYMENT_PENDING so the coach's slot frees")
+            .isEqualTo("DECLINED");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM payment.booking_payments WHERE booking_id = ?", String.class, bookingId))
+            .isEqualTo("CAPTURE_ABANDONED");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT stripe_charged FROM payment.booking_payments WHERE booking_id = ?", BigDecimal.class, bookingId))
+            .as("stripe_charged is kept — the amount may be real")
+            .isEqualByComparingTo("50.00");
+        assertThat(paymentRowCount(bookingId)).isEqualTo(1);
+    }
+
+    /**
      * UAT.3 review patch. Once the sweeper has declined a stranded booking, a settlement arriving
      * afterwards must refuse to reserve rather than charge a booking that no longer exists as a
      * live session — the sweeper hands the coach's slot back, so a later charge would take money

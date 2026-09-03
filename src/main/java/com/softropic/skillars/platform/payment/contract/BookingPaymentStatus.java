@@ -32,6 +32,17 @@ public final class BookingPaymentStatus {
     /** Funds held pending dispute resolution. */
     public static final String FROZEN = "FROZEN";
 
+    /**
+     * skillars-deferred-91 AC5 Part A: a {@link #CAPTURE_PENDING} row that stayed stuck past
+     * {@code booking.payment_pending.capture_pending_max_hours}. Terminal — the booking is released
+     * from {@code PAYMENT_PENDING} so the coach's slot frees and the parent can cancel. Distinct
+     * from {@link #CHARGE_FAILED}: {@code CHARGE_FAILED} asserts "no money moved"; this asserts "we
+     * stopped waiting; the Stripe side is unknown and an operator must reconcile it"
+     * ({@code stripe_charged} is kept as-is, not zeroed). See
+     * {@code docs/deployment/runbook.md} § CAPTURE_ABANDONED.
+     */
+    public static final String CAPTURE_ABANDONED = "CAPTURE_ABANDONED";
+
     private BookingPaymentStatus() {
     }
 

@@ -73,6 +73,7 @@ public class PlayerRegistrationService {
     private final ApplicationEventPublisher publisher;
     private final ContactDetailSanitizer sanitizer;
     private final RateLimitingService rateLimitingService;
+    private final RegistrationOtpResendSupport otpResendSupport;
     private final AgePolicyService agePolicyService;
 
     @Value("${app.frontend-url}")
@@ -246,39 +247,12 @@ public class PlayerRegistrationService {
     }
 
     // skillars-deferred-89 AC7 — /resend-otp parity with parent (skillars-deferred-43 added it for
-    // parent only; skillars-1-3 W8). Mirrors ParentRegistrationService.resendPhoneOtp exactly:
-    // HTTP-200 endpoint, OTP delivered by EMAIL (PlayerOtpEmailEvent — there is no SMS path), a bad
-    // userId throws (not an enumeration oracle — the endpoint already requires a valid id +
-    // EMAIL_VERIFIED, matching verifyPhone), a locked User is rejected before any state change
-    // (skillars-deferred-88 AC11), and saveAndFlush forces the INSERT so a uq_pot_one_active_per_user
-    // collision surfaces synchronously as a DataIntegrityViolationException -> 409
-    // security.otpResendInProgress via ApiAdvice's central handler.
+    // parent only; skillars-1-3 W8). skillars-deferred-91 AC16: the shared body now lives in
+    // RegistrationOtpResendSupport. The @RateLimited annotation is the per-IP bucket;
+    // "player_resend_otp_user" is the per-user bucket.
     @RateLimited(key = "player_resend_otp", capacity = 3, duration = 30)
     public void resendPhoneOtp(Long userId) {
-        // skillars-deferred-89 code review: @RateLimited above buckets per client IP only. Add a
-        // per-user cap (mirroring verifyPhone's tryConsume) so a distributed caller who knows a
-        // victim's userId cannot repeatedly delete their in-flight OTP / bomb their inbox from many
-        // IPs. Same vague OtpVerificationException as the other guards here — no rate-state oracle.
-        if (!rateLimitingService.tryConsume(String.valueOf(userId), "player_resend_otp_user", 3, 30, TimeUnit.MINUTES)) {
-            throw new OtpVerificationException("security.otpMismatch");
-        }
-        User user = userRepository.findOneById(userId)
-            .orElseThrow(() -> new OtpVerificationException("security.otpMismatch"));
-        if (user.isLocked()) {
-            throw new OtpVerificationException("security.accountLocked");
-        }
-        if (user.getVerificationStatus() != SkillarsVerificationStatus.EMAIL_VERIFIED) {
-            throw new OtpVerificationException("security.otpMismatch");
-        }
-        otpTokenRepository.deleteByUserIdAndUsedFalse(user.getId());
-        String otp = generateOtp();
-        PhoneOtpToken otpToken = new PhoneOtpToken();
-        otpToken.setUserId(user.getId());
-        otpToken.setOtpHash(hashOtp(otp, user.getId()));
-        otpToken.setExpiresAt(Instant.now().plus(10, ChronoUnit.MINUTES));
-        otpToken.setUsed(false);
-        otpTokenRepository.saveAndFlush(otpToken);
-        sendOtpEmail(user, otp);
+        otpResendSupport.resendPhoneOtp(userId, "player_resend_otp_user", PlayerOtpEmailEvent::new);
     }
 
     private void sendVerificationEmail(User user) {

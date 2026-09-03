@@ -11,6 +11,7 @@ import org.springframework.context.MessageSource;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ResponseStatus;
 
 import java.sql.SQLException;
 
@@ -113,6 +114,23 @@ class ApiAdviceTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody().getErrorMsg().errorKey()).isEqualTo("user.email.duplicate");
+    }
+
+    @Test
+    void illegalStateExceptionHandler_mapsTo500_notConflict_withHelpCode() throws NoSuchMethodException {
+        // AC17: IllegalStateException always signals a server invariant / missing platform_config
+        // key, never a client conflict — it must surface as 500 so 5xx alerting sees it.
+        ResponseStatus status = ApiAdvice.class
+            .getMethod("illegalStateExceptionHandler", IllegalStateException.class)
+            .getAnnotation(ResponseStatus.class);
+        assertThat(status).isNotNull();
+        assertThat(status.value()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+
+        ErrorDto[] holder = new ErrorDto[1];
+        assertThatCode(() -> holder[0] = apiAdvice.illegalStateExceptionHandler(
+            new IllegalStateException("Missing platform config key: platform.some.key")))
+            .doesNotThrowAnyException();
+        assertThat(holder[0].getHelpCode()).isNotBlank();
     }
 
     @Test

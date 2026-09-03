@@ -63,6 +63,7 @@ public class ParentRegistrationService {
     private final ApplicationEventPublisher publisher;
     private final ContactDetailSanitizer sanitizer;
     private final RateLimitingService rateLimitingService;
+    private final RegistrationOtpResendSupport otpResendSupport;
 
     @Value("${app.frontend-url}")
     private String frontendUrl;
@@ -223,39 +224,12 @@ public class ParentRegistrationService {
         });
     }
 
+    // skillars-deferred-91 AC16: the body (byte-identical across parent/coach/player bar this key and
+    // the event type) now lives in RegistrationOtpResendSupport. The @RateLimited annotation here is
+    // the per-IP bucket; "parent_resend_otp_user" is the per-user bucket.
     @RateLimited(key = "parent_resend_otp", capacity = 3, duration = 30)
     public void resendPhoneOtp(Long userId) {
-        // skillars-deferred-89 code review: @RateLimited above buckets per client IP only. Add a
-        // per-user cap (mirroring verifyPhone's tryConsume) so a distributed caller who knows a
-        // victim's userId cannot repeatedly delete their in-flight OTP / bomb their inbox from many
-        // IPs. Same vague OtpVerificationException as the other guards here — no rate-state oracle.
-        if (!rateLimitingService.tryConsume(String.valueOf(userId), "parent_resend_otp_user", 3, 30, TimeUnit.MINUTES)) {
-            throw new OtpVerificationException("security.otpMismatch");
-        }
-        User user = userRepository.findOneById(userId)
-            .orElseThrow(() -> new OtpVerificationException("security.otpMismatch"));
-        // AC11 / code-review decision (2026-08-31): a locked account cannot self-resume. This
-        // endpoint already needs a valid userId + EMAIL_VERIFIED status, so a specific message here
-        // is not an enumeration oracle (matches verifyPhone's locked guard).
-        if (user.isLocked()) {
-            throw new OtpVerificationException("security.accountLocked");
-        }
-        if (user.getVerificationStatus() != SkillarsVerificationStatus.EMAIL_VERIFIED) {
-            throw new OtpVerificationException("security.otpMismatch");
-        }
-        otpTokenRepository.deleteByUserIdAndUsedFalse(user.getId());
-        String otp = generateOtp();
-        PhoneOtpToken otpToken = new PhoneOtpToken();
-        otpToken.setUserId(user.getId());
-        otpToken.setOtpHash(hashOtp(otp, user.getId()));
-        otpToken.setExpiresAt(Instant.now().plus(10, ChronoUnit.MINUTES));
-        otpToken.setUsed(false);
-        // AC10 (skillars-deferred-88): saveAndFlush, not save — force the INSERT now so a
-        // collision with the uq_pot_one_active_per_user partial unique index surfaces here as a
-        // clean DataIntegrityViolationException (-> 409 security.otpResendInProgress via ApiAdvice),
-        // not a commit-time failure. @Tsid ids defer the INSERT to flush otherwise.
-        otpTokenRepository.saveAndFlush(otpToken);
-        sendOtpEmail(user, otp);
+        otpResendSupport.resendPhoneOtp(userId, "parent_resend_otp_user", ParentOtpEmailEvent::new);
     }
 
     private void sendVerificationEmail(User user) {

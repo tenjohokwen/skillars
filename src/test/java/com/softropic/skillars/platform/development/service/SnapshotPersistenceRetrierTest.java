@@ -23,12 +23,13 @@ class SnapshotPersistenceRetrierTest {
     private static final short ISO_WEEK = 35;
 
     @Mock private SnapshotBatchWriter snapshotBatchWriter;
+    @Mock private SluSnapshotOutboxSupport sluSnapshotOutboxSupport;
 
     private SnapshotPersistenceRetrier retrier;
 
     @org.junit.jupiter.api.BeforeEach
     void setUp() {
-        retrier = new SnapshotPersistenceRetrier(snapshotBatchWriter);
+        retrier = new SnapshotPersistenceRetrier(snapshotBatchWriter, sluSnapshotOutboxSupport);
     }
 
     @Test
@@ -47,9 +48,11 @@ class SnapshotPersistenceRetrierTest {
 
         // The @Recover method is the terminal handler after retries are exhausted — it must not
         // rethrow (matching the AOP contract: @Retryable's caller sees a clean return, not a
-        // propagated exception), only log for ops visibility that the snapshot rows were lost.
+        // propagated exception). skillars-deferred-91 AC4: it also enqueues the failed write onto
+        // the outbox for an idempotent re-drive instead of only logging the loss.
         assertThatCode(() -> retrier.recoverSnapshotWriteFailure(ex, stats, ISO_YEAR, ISO_WEEK))
             .doesNotThrowAnyException();
+        verify(sluSnapshotOutboxSupport).enqueueFailedSnapshotWrite(stats, ISO_YEAR, ISO_WEEK);
     }
 
     @Test
@@ -61,6 +64,7 @@ class SnapshotPersistenceRetrierTest {
         // transaction begin/commit failure — same no-rethrow contract as the DataAccessException one.
         assertThatCode(() -> retrier.recoverSnapshotWriteFailure(ex, stats, ISO_YEAR, ISO_WEEK))
             .doesNotThrowAnyException();
+        verify(sluSnapshotOutboxSupport).enqueueFailedSnapshotWrite(stats, ISO_YEAR, ISO_WEEK);
     }
 
     @Test

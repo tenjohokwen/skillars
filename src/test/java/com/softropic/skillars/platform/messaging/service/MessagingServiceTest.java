@@ -50,6 +50,7 @@ class MessagingServiceTest {
     @Mock private MessagingEmitterRegistry messagingEmitterRegistry;
     @Mock private ConversationCreationHelper conversationCreationHelper;
     @Mock private AgePolicyService agePolicyService;
+    @Mock private com.softropic.skillars.platform.marketplace.service.PlayerProfileService playerProfileService;
     @Mock private TransactionTemplate transactionTemplate;
     @Mock private EntityManager entityManager;
 
@@ -65,7 +66,7 @@ class MessagingServiceTest {
             conversationRepository, messageRepository, bookingRepository,
             playerProfileRepository, coachProfileRepository, moderationService,
             messagingEmitterRegistry, conversationCreationHelper, agePolicyService,
-            transactionTemplate, entityManager
+            playerProfileService, transactionTemplate, entityManager
         );
     }
 
@@ -108,8 +109,10 @@ class MessagingServiceTest {
 
         when(agePolicyService.findMessagingPoliciesByPlayerIds(any())).thenReturn(Map.of(
             10L, MessagingPolicy.unrestricted(), 11L, MessagingPolicy.unrestricted(), 12L, MessagingPolicy.unrestricted()));
-        when(playerProfileRepository.findAllById(any()))
-            .thenReturn(List.of(player(10L, "Ann A"), player(11L, "Bob B"), player(12L, "Cy C")));
+        // skillars-deferred-91 code review D12: names now come from the shared batch method rather
+        // than an inline playerProfileRepository.findAllById copy (AC19's actual instruction).
+        when(playerProfileService.getPlayerNamesByPlayerIds(any()))
+            .thenReturn(Map.of(10L, "Ann A", 11L, "Bob B", 12L, "Cy C"));
         when(coachProfileRepository.findAllById(any())).thenReturn(List.of(coach));
         when(messageRepository.findLatestApprovedPerConversation(any())).thenReturn(List.of());
         when(messageRepository.countUnreadPerConversation(any(), eq(coachUserId), eq("COACH"))).thenReturn(List.of());
@@ -121,7 +124,8 @@ class MessagingServiceTest {
         verify(messageRepository, times(1)).countUnreadPerConversation(any(), any(), any());
         verify(messageRepository, never()).countUnread(anyLong(), anyLong(), any());
         verify(agePolicyService, never()).findMessagingPolicy(any());
-        verify(playerProfileRepository, times(1)).findAllById(any());
+        verify(playerProfileService, times(1)).getPlayerNamesByPlayerIds(any());
+        verify(playerProfileRepository, never()).findAllById(any());
         verify(playerProfileRepository, never()).findById(any());
         verify(coachProfileRepository, times(1)).findAllById(any());
         verify(coachProfileRepository, never()).findById(any());
@@ -137,7 +141,7 @@ class MessagingServiceTest {
         // parentManaged() → parentHasAccess() true → both conversations survive the filter
         when(agePolicyService.findMessagingPoliciesByPlayerIds(any())).thenReturn(Map.of(
             20L, MessagingPolicy.parentManaged(), 21L, MessagingPolicy.parentManaged()));
-        when(playerProfileRepository.findAllById(any())).thenReturn(List.of(player(20L, "Dee"), player(21L, "Eve")));
+        when(playerProfileService.getPlayerNamesByPlayerIds(any())).thenReturn(Map.of(20L, "Dee", 21L, "Eve"));
         CoachProfile coach = new CoachProfile();
         coach.setId(coachId);
         coach.setDisplayName("Coach K");

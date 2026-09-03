@@ -10,6 +10,7 @@ import com.softropic.skillars.platform.video.contract.event.VideoApprovalOwnerNo
 import com.softropic.skillars.platform.video.contract.event.VideoApprovalParentNotificationEvent;
 import com.softropic.skillars.platform.video.contract.exception.VideoApprovalNotFoundException;
 import com.softropic.skillars.platform.video.contract.exception.VideoAlreadyResolvedException;
+import com.softropic.skillars.platform.video.contract.exception.VideoStateConflictException;
 import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.repo.VideoApprovalRequest;
 import com.softropic.skillars.platform.video.repo.VideoApprovalRequestRepository;
@@ -65,8 +66,9 @@ public class VideoApprovalService {
 
         Video video = videoRepository.findById(videoId).orElse(null);
         if (video == null || video.getOperationalState() != OperationalState.HIDDEN) {
-            throw new IllegalStateException(
-                "createApprovalRequest called but video is not HIDDEN — videoId=" + videoId);
+            // skillars-deferred-91 code review D11: a client-side race, not a server fault — 409.
+            throw new VideoStateConflictException(videoId, OperationalState.HIDDEN.name(),
+                video == null ? null : video.getOperationalState().name());
         }
 
         PlayerProfile profile = playerProfileRepository.findById(playerId).orElse(null);
@@ -154,8 +156,10 @@ public class VideoApprovalService {
             }
 
             if (video == null || video.getOperationalState() != OperationalState.HIDDEN) {
-                throw new IllegalStateException(
-                    "Video is not in HIDDEN state — cannot approve. videoId=" + approval.getVideoId());
+                // Two parents approving concurrently, or the video left HIDDEN between the list
+                // render and the click. The client needs a 409 so it can re-fetch and retry.
+                throw new VideoStateConflictException(approval.getVideoId(), OperationalState.HIDDEN.name(),
+                    video == null ? null : video.getOperationalState().name());
             }
 
             approval.setStatus("APPROVED");

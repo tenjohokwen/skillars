@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.booking.payment_unresolved.title}">Session Booking Could Not Be Completed</title>
+</head>
+<body>
+    <h2>Session Booking Could Not Be Completed</h2>
+    <p>We were unable to complete your session booking with <strong th:text="${map.coachDisplayName}">Coach</strong> for <strong th:text="${map.requestedStartTime}">date</strong>. The time slot has been released.</p>
+    <p>Your payment for this booking is being reviewed. If any amount was charged, our team is reconciling it and you do not need to do anything — we will follow up as soon as it is resolved.</p>
+    <p>If you have any questions about a charge, please contact support and quote your booking reference.</p>
+</body>
+</html>

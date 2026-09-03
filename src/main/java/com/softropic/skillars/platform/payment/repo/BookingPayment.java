@@ -35,7 +35,7 @@ public class BookingPayment {
     @Column(name = "stripe_charged", nullable = false, precision = 10, scale = 2)
     private BigDecimal stripeCharged = BigDecimal.ZERO;
 
-    @Column(nullable = false, length = 16)
+    @Column(nullable = false, length = 20)
     private String status;
 
     @Column(name = "captured_at")
@@ -43,4 +43,12 @@ public class BookingPayment {
 
     @Column(name = "frozen_at")
     private Instant frozenAt;
+
+    /**
+     * skillars-deferred-91 AC5 Part A: when {@code reserveCapture} wrote this CAPTURE_PENDING row.
+     * Nullable — a row from before V124 has no stamp and stays on the manual CAPTURE_UNCONFIRMED
+     * path (PaymentPendingSweeper only ages a row it can age).
+     */
+    @Column(name = "reserved_at")
+    private Instant reservedAt;
 }

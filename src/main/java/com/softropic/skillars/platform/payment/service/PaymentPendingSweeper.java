@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.payment.service;
 
 import com.softropic.skillars.platform.booking.contract.ActorRole;
 import com.softropic.skillars.platform.booking.contract.BookingDeclinedEvent;
+import com.softropic.skillars.platform.booking.contract.BookingPaymentUnresolvedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingEvent;
 import com.softropic.skillars.platform.booking.contract.TransitionContext;
 import com.softropic.skillars.platform.booking.repo.Booking;
@@ -79,6 +80,13 @@ public class PaymentPendingSweeper {
     private static final long GRACE_MIN_MINUTES = 15L;
     private static final long GRACE_MAX_MINUTES = 10080L; // 7 days
 
+    // skillars-deferred-91 AC5 Part A. A CAPTURE_PENDING row means money *may* have moved, so it
+    // gets a much longer, separately tunable grace than the no-row decline path above.
+    static final String CAPTURE_PENDING_MAX_HOURS_KEY = "booking.payment_pending.capture_pending_max_hours";
+    private static final long CAPTURE_PENDING_DEFAULT_HOURS = 72L;
+    private static final long CAPTURE_PENDING_MIN_HOURS = 6L;
+    private static final long CAPTURE_PENDING_MAX_HOURS = 720L; // 30 days
+
     private static final String SWEPT_COUNTER = "booking.payment_pending.swept";
     private static final String UNRECOVERABLE_COUNTER = "booking.payment_pending.unrecoverable";
 
@@ -147,8 +155,17 @@ public class PaymentPendingSweeper {
         // under the booking-row lock above, exactly as reserveCapture reads it.
         Optional<BookingPayment> existing = bookingPaymentRepository.findById(bookingId);
         if (existing.isPresent()) {
-            reportUnrecoverable(booking, BookingPaymentStatus.CAPTURE_PENDING.equals(existing.get().getStatus())
-                ? "CAPTURE_UNCONFIRMED" : "PAYMENT_ROW_PRESENT");
+            final BookingPayment bp = existing.get();
+            if (BookingPaymentStatus.CAPTURE_PENDING.equals(bp.getStatus())) {
+                if (isCapturePendingExpired(bp)) {
+                    abandonCapture(booking, bp);
+                } else {
+                    // Young, or unstamped (pre-V124) — still on the manual reconciliation path.
+                    reportUnrecoverable(booking, "CAPTURE_UNCONFIRMED");
+                }
+            } else {
+                reportUnrecoverable(booking, "PAYMENT_ROW_PRESENT");
+            }
             return;
         }
         // No row at all ⇒ UAT.3 AC1's invariant says no Stripe call was ever attempted for this
@@ -177,6 +194,50 @@ public class PaymentPendingSweeper {
                 + "sessionPackPurchaseId={} updatedAt={}",
             bookingId, booking.getBatchId(), booking.getParentId(),
             booking.getSessionPackPurchaseId(), booking.getUpdatedAt());
+    }
+
+    private boolean isCapturePendingExpired(BookingPayment bp) {
+        if (bp.getReservedAt() == null) {
+            return false; // pre-V124 row: cannot age it, leave it on the manual path
+        }
+        long maxHours = configService.getBoundedLong(CAPTURE_PENDING_MAX_HOURS_KEY,
+            CAPTURE_PENDING_DEFAULT_HOURS, CAPTURE_PENDING_MIN_HOURS, CAPTURE_PENDING_MAX_HOURS);
+        return bp.getReservedAt().isBefore(Instant.now().minus(Duration.ofHours(maxHours)));
+    }
+
+    /**
+     * skillars-deferred-91 AC5 Part A: a CAPTURE_PENDING row that stayed stuck past
+     * {@code capture_pending_max_hours}. Move it to the terminal CAPTURE_ABANDONED status (keeping
+     * {@code stripe_charged} — the amount may be real), release the booking from PAYMENT_PENDING so
+     * the coach's slot frees and the parent can cancel, and emit
+     * {@code booking.payment_pending.unrecoverable{reason="CAPTURE_TIMEOUT"}}. No automatic
+     * charge/confirm/refund — an operator still reconciles the Stripe side (runbook: CAPTURE_ABANDONED).
+     */
+    private void abandonCapture(Booking booking, BookingPayment bp) {
+        bp.setStatus(BookingPaymentStatus.CAPTURE_ABANDONED);
+        bookingPaymentRepository.save(bp);
+
+        bookingService.transition(booking.getId(), BookingEvent.PAYMENT_FAILED,
+            new TransitionContext(ActorRole.SYSTEM, null));
+
+        CoachProfile coach = coachProfileRepository.findById(booking.getCoachId()).orElse(null);
+        // skillars-deferred-91 code review D10: NOT BookingDeclinedEvent. That event renders
+        // BOOKING_DECLINED, which tells the parent their session credits "have not been affected" —
+        // the exact claim CAPTURE_ABANDONED exists to say we cannot make. The parent's card may have
+        // been charged; this template says the booking did not go ahead and any charge is being
+        // reconciled.
+        eventPublisher.publishEvent(new BookingPaymentUnresolvedEvent(
+            this, booking.getId(), booking.getParentId(),
+            resolveEmail(booking.getParentId(), booking.getId()),
+            coach != null ? coach.getDisplayName() : "Coach",
+            booking.getRequestedStartTime(), booking.getCanonicalTimezone()));
+
+        Counter.builder(UNRECOVERABLE_COUNTER).tag("reason", "CAPTURE_TIMEOUT")
+            .register(meterRegistry).increment();
+        log.error("[CAPTURE_TIMEOUT] booking {} was CAPTURE_PENDING past capture_pending_max_hours — "
+                + "marked CAPTURE_ABANDONED, slot released, parent cancel unblocked. Reconcile the "
+                + "Stripe side by hand (runbook: CAPTURE_ABANDONED). batchId={} parentId={} reservedAt={}",
+            booking.getId(), booking.getBatchId(), booking.getParentId(), bp.getReservedAt());
     }
 
     /**

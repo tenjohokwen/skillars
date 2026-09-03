@@ -6,7 +6,9 @@ import ch.qos.logback.core.read.ListAppender;
 
 import com.softropic.skillars.platform.booking.contract.PackPausedEvent;
 import com.softropic.skillars.platform.booking.contract.SessionPackExpiryWarningEvent;
-import com.softropic.skillars.platform.notification.contract.Envelope;
+import com.softropic.skillars.platform.notification.contract.EmailTemplate;
+import com.softropic.skillars.platform.notification.contract.Recipient;
+import com.softropic.skillars.platform.notification.service.NotificationOutboxSupport;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -15,14 +17,18 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.slf4j.LoggerFactory;
-import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Instant;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -31,19 +37,19 @@ import static org.mockito.Mockito.verify;
 class SessionPackEmailListenerTest {
 
     @Mock
-    private ApplicationEventPublisher publisher;
+    private NotificationOutboxSupport notificationOutboxSupport;
 
     @Captor
-    private ArgumentCaptor<Envelope> envelopeCaptor;
+    private ArgumentCaptor<String> sendIdCaptor;
 
     /**
      * Deferred-78 AC7: onPackPaused's data-prep (event.getCancelledBookingTimes().stream()) NPEs
      * when cancelledBookingTimes is null — a malformed event. Proves the method now returns
-     * normally, logs the failure, and never reaches publishEvent.
+     * normally, logs the failure, and never reaches the outbox enqueue.
      */
     @Test
     void onPackPaused_nullCancelledBookingTimes_catchesFailureInsteadOfPropagating() {
-        SessionPackEmailListener listener = new SessionPackEmailListener(publisher);
+        SessionPackEmailListener listener = new SessionPackEmailListener(notificationOutboxSupport);
         Logger listenerLogger = (Logger) LoggerFactory.getLogger(SessionPackEmailListener.class);
         ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
         logCapture.start();
@@ -59,7 +65,7 @@ class SessionPackEmailListenerTest {
             listenerLogger.detachAppender(logCapture);
         }
 
-        verify(publisher, never()).publishEvent(org.mockito.ArgumentMatchers.any(Envelope.class));
+        verify(notificationOutboxSupport, never()).enqueueEmail(any(), any(), anyMap(), anyString());
         assertThat(logCapture.list)
             .as("the NPE must be caught and logged, not propagated out of the AFTER_COMMIT listener")
             .anySatisfy(loggingEvent -> assertThat(loggingEvent.getFormattedMessage())
@@ -68,7 +74,7 @@ class SessionPackEmailListenerTest {
 
     @Test
     void sendId_hasNoCollisionAcross10kEmails() {
-        SessionPackEmailListener listener = new SessionPackEmailListener(publisher);
+        SessionPackEmailListener listener = new SessionPackEmailListener(notificationOutboxSupport);
 
         for (int i = 0; i < 10_000; i++) {
             SessionPackExpiryWarningEvent event = new SessionPackExpiryWarningEvent(
@@ -78,11 +84,9 @@ class SessionPackEmailListenerTest {
             listener.onExpiryWarning(event);
         }
 
-        verify(publisher, times(10_000)).publishEvent(envelopeCaptor.capture());
-        Set<String> sendIds = new HashSet<>();
-        for (Envelope envelope : envelopeCaptor.getAllValues()) {
-            sendIds.add(envelope.sendId());
-        }
+        verify(notificationOutboxSupport, times(10_000)).enqueueEmail(
+            eq(EmailTemplate.SESSION_PACK_EXPIRY_WARNING), any(Recipient.class), any(Map.class), sendIdCaptor.capture());
+        Set<String> sendIds = new HashSet<>(sendIdCaptor.getAllValues());
         assertThat(sendIds).hasSize(10_000);
     }
 }

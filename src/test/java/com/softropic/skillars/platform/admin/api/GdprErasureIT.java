@@ -420,6 +420,51 @@ class GdprErasureIT extends AbstractIntegrationTest {
         assertThat(count).isZero();
     }
 
+    // ── skillars-deferred-91 AC13: the account-deletion video cascade runs with a transaction ──────
+
+    @Test
+    void erase_playerUser_videoCascade_purgesVideos_resetsQuota_cancelsPendingApprovals() {
+        String ownerId = String.valueOf(PLAYER_ID);
+        UUID videoId = UUID.randomUUID();
+        UUID approvalId = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.video_quotas (user_id, storage_used_bytes, bandwidth_used_bytes) VALUES (?, 5000, 0)",
+                ownerId);
+            jdbcTemplate.update(
+                "INSERT INTO main.videos (id, owner_id, provider, provider_asset_id, operational_state, "
+                    + "access_state, title, storage_bytes, visibility, created_at, updated_at) "
+                    + "VALUES (?, ?, 'bunny', ?, 'READY', 'ACTIVE', 'GDPR Video', 5000, 'PRIVATE', ?, ?)",
+                videoId, ownerId, "asset-" + videoId,
+                Timestamp.from(Instant.now()), Timestamp.from(Instant.now()));
+            jdbcTemplate.update(
+                "INSERT INTO main.video_approval_requests (id, video_id, player_id, parent_id, status, created_at) "
+                    + "VALUES (?, ?, ?, ?, 'PENDING', ?)",
+                approvalId, videoId, PLAYER_ID, PARENT_ID, Timestamp.from(Instant.now()));
+            return null;
+        });
+
+        String cookies = loginAndGetCookies(PLAYER_EMAIL);
+        httpTestClient.makeHttpRequest(
+            baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class);
+
+        // Before the fix the @Modifying quota-reset UPDATE threw TransactionRequiredException on this
+        // AFTER_COMMIT path (caught + logged upstream), so the cascade silently stopped there: the
+        // video stayed READY and the quota row kept its 5000 bytes. All three now complete.
+        Map<String, Object> video = jdbcTemplate.queryForMap(
+            "SELECT operational_state, storage_bytes FROM main.videos WHERE id = ?", videoId);
+        assertThat(video.get("operational_state")).isEqualTo("PURGED");
+        assertThat(((Number) video.get("storage_bytes")).longValue()).isZero();
+
+        Long quotaUsed = jdbcTemplate.queryForObject(
+            "SELECT storage_used_bytes FROM main.video_quotas WHERE user_id = ?", Long.class, ownerId);
+        assertThat(quotaUsed).isZero();
+
+        String approvalStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM main.video_approval_requests WHERE id = ?", String.class, approvalId);
+        assertThat(approvalStatus).isEqualTo("CANCELLED");
+    }
+
     // ── helpers ──
 
     private String loginAndGetCookies(String email) {

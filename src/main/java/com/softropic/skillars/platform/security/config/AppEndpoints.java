@@ -21,23 +21,29 @@ public final class AppEndpoints {
     public static final List<String>          SECURED_ENDPOINTS; //"/api/register"
     public static final String FROM_CHROME = "/.well-known/appspecific/com.chrome.devtools.json"; //TODO investigate how to handle this
     public static final List<String> PUBLIC_STATIC_RESOURCES = List.of("/", "/assets/**", "/scripts/**", "/i18n/**", "/favicon.ico", "/icons/**", "/index.html", FROM_CHROME);
+    // skillars-deferred-91 AC15: every entry is anchored so it cannot match a same-segment sibling.
+    // A bare trailing `**` (no `/` before it) matches *within* a path segment, so
+    // `/api/security/coach/resend-otp**` also matched `/api/security/coach/resend-otp-admin` — a
+    // future controller under that prefix would be silently permitAll()'d with no review step. None
+    // of the registration / auth / account endpoints has sub-paths, so those are now exact patterns;
+    // only the genuine prefix matchers keep a `/`-preceded `/**`. Enforced by AppEndpointsConventionTest.
     public static final List<String> PUBLIC_ENDPOINTS = List.of(
-        "/v1/account/register**", "/v1/account/regislink**", "/v1/account/activate/**",
+        "/v1/account/register", "/v1/account/regislink", "/v1/account/activate",
         "/v1/account/reset_password/init", "/v1/account/reset_password/finish",
         "/api/v1/emails/**", "/authenticate",
-        "/api/security/coach/register**", "/api/security/coach/verify-email**",
-        "/api/security/coach/verify-phone**", "/api/security/coach/resend-verification**",
-        "/api/security/coach/resend-otp**",
-        "/api/security/parent/register**", "/api/security/parent/verify-email**",
-        "/api/security/parent/verify-phone**", "/api/security/parent/resend-verification**",
-        "/api/security/parent/resend-otp**",
-        "/api/security/player/register**", "/api/security/player/verify-email**",
-        "/api/security/player/verify-phone**", "/api/security/player/resend-verification**",
-        "/api/security/player/resend-otp**",
-        "/api/auth/login**",
-        "/api/auth/refresh**",
-        "/api/auth/logout**",
-        "/api/marketplace/coaches**",    // guests can browse the marketplace (FR-MKT-005)
+        "/api/security/coach/register", "/api/security/coach/verify-email",
+        "/api/security/coach/verify-phone", "/api/security/coach/resend-verification",
+        "/api/security/coach/resend-otp",
+        "/api/security/parent/register", "/api/security/parent/verify-email",
+        "/api/security/parent/verify-phone", "/api/security/parent/resend-verification",
+        "/api/security/parent/resend-otp",
+        "/api/security/player/register", "/api/security/player/verify-email",
+        "/api/security/player/verify-phone", "/api/security/player/resend-verification",
+        "/api/security/player/resend-otp",
+        "/api/auth/login",
+        "/api/auth/refresh",
+        "/api/auth/logout",
+        "/api/marketplace/coaches",       // guests can browse the marketplace list (FR-MKT-005)
         "/api/marketplace/coaches/**",   // guest access to individual coach profiles (FR-MKT-005)
         "/api/reviews/coaches/**",       // public review listing (method-level @PreAuthorize guards coach-only paths)
         "/api/video/webhooks/**",         // HMAC signature is the auth mechanism; no session required

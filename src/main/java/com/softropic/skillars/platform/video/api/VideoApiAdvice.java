@@ -12,6 +12,7 @@ import com.softropic.skillars.platform.video.contract.exception.TerminalStateVio
 import com.softropic.skillars.platform.video.contract.exception.VideoDeletionNotAuthorisedException;
 import com.softropic.skillars.platform.video.contract.exception.VideoApprovalNotFoundException;
 import com.softropic.skillars.platform.video.contract.exception.VideoAlreadyResolvedException;
+import com.softropic.skillars.platform.video.contract.exception.VideoStateConflictException;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import com.softropic.skillars.platform.video.contract.exception.VideoNotFoundException;
@@ -147,6 +148,19 @@ public class VideoApiAdvice {
     public ErrorDto videoAlreadyResolvedHandler(final VideoAlreadyResolvedException ex) {
         ErrorDto dto = logErrorAndReturnDTO(ex, "video.approvalAlreadyResolved", VideoErrorCode.VIDEO_APPROVAL_ALREADY_RESOLVED.getErrorCode());
         videoMetrics.recordError(operationFromMdc(), VideoErrorCode.VIDEO_APPROVAL_ALREADY_RESOLVED.getErrorCode());
+        return dto;
+    }
+
+    /**
+     * skillars-deferred-91 code review D11: a video whose operational state changed under the client
+     * is a conflict, not a server fault. Before this these paths threw {@code IllegalStateException}
+     * and AC17's handler turned them into 500s with ERROR logs.
+     */
+    @ExceptionHandler(VideoStateConflictException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ErrorDto videoStateConflictHandler(final VideoStateConflictException ex) {
+        ErrorDto dto = logErrorAndReturnDTO(ex, "video.stateConflict", VideoErrorCode.VIDEO_STATE_CONFLICT.getErrorCode());
+        videoMetrics.recordError(operationFromMdc(), VideoErrorCode.VIDEO_STATE_CONFLICT.getErrorCode());
         return dto;
     }
 

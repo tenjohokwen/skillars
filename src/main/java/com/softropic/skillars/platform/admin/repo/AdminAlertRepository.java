@@ -16,19 +16,34 @@ import java.util.UUID;
 
 public interface AdminAlertRepository extends JpaRepository<AdminAlert, UUID> {
 
-    @Query("""
-        SELECT a FROM AdminAlert a
-        WHERE (:type IS NULL OR a.type = :type)
-          AND a.status = :status
-        ORDER BY a.createdAt ASC
-        """)
-    Page<AdminAlert> findByTypeAndStatus(
-        @Param("type") @Nullable AdminAlertType type,
-        @Param("status") AdminAlertStatus status,
-        Pageable pageable);
+    /**
+     * skillars-deferred-91 AC6 (skillars-deferred-16 D4): raw-string reads for the two queue
+     * endpoints. During a rolling deploy an older instance can read a row whose {@code alert_type}
+     * carries a value the older {@code AdminAlertType} enum does not have yet ({@code
+     * MODERATION_UNRESOLVED} was the first). Entity hydration / a JPQL projection of {@code a.type}
+     * would then throw {@code IllegalArgumentException} and 500 the whole {@code /queue} or
+     * {@code /queue/summary} page. Selecting {@code type} as text lets the service skip the
+     * unmappable row with a WARN and render everything it can map. (These replaced the JPQL
+     * {@code findByTypeAndStatus} / {@code countOpenByType} the queue reads used before.)
+     */
+    @Query(value = """
+        SELECT alert_id, type, reference_id, reference_type, status, created_at, reason
+        FROM admin.admin_alerts
+        WHERE (CAST(:type AS text) IS NULL OR type = CAST(:type AS text))
+          AND status = 'OPEN'
+        ORDER BY created_at ASC
+        """,
+        countQuery = """
+        SELECT COUNT(*) FROM admin.admin_alerts
+        WHERE (CAST(:type AS text) IS NULL OR type = CAST(:type AS text))
+          AND status = 'OPEN'
+        """,
+        nativeQuery = true)
+    Page<Object[]> findOpenRawByType(@Param("type") @Nullable String type, Pageable pageable);
 
-    @Query("SELECT a.type, COUNT(a) FROM AdminAlert a WHERE a.status = 'OPEN' GROUP BY a.type")
-    List<Object[]> countOpenByType();
+    @Query(value = "SELECT type, COUNT(*) FROM admin.admin_alerts WHERE status = 'OPEN' GROUP BY type",
+        nativeQuery = true)
+    List<Object[]> countOpenByTypeRaw();
 
     Optional<AdminAlert> findFirstByReferenceIdAndTypeAndStatus(
         String referenceId, AdminAlertType type, AdminAlertStatus status);

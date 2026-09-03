@@ -62,6 +62,8 @@ public class MessagingService {
     private final MessagingEmitterRegistry messagingEmitterRegistry;
     private final ConversationCreationHelper conversationCreationHelper;
     private final AgePolicyService agePolicyService;
+    /** skillars-deferred-91 AC19: shared "id -> player name" batch read, instead of a local copy. */
+    private final com.softropic.skillars.platform.marketplace.service.PlayerProfileService playerProfileService;
     private final TransactionTemplate transactionTemplate;
     private final EntityManager entityManager;
 
@@ -73,6 +75,8 @@ public class MessagingService {
                 MessagingErrorCode.NO_BOOKING_RELATIONSHIP);
         }
 
+        // AC19: direct — needs the full PlayerProfile entity (not just id -> name), and an
+        // existence check that throws.
         var player = playerProfileRepository.findById(playerId)
             .orElseThrow(() -> new ResourceNotFoundException("Player not found", "player"));
 
@@ -361,6 +365,9 @@ public class MessagingService {
     }
 
     private void verifyIsParty(Conversation conv, Long callerUserId, String role) {
+        // skillars-deferred-91 code review D12: single-identity authorization lookups, NOT a batch
+        // "id -> name" read — PlayerProfileService.getPlayerNamesByPlayerIds does not apply here.
+        // Each branch resolves the CALLER's own profile by userId to test conversation membership.
         boolean isParty = switch (role) {
             case "COACH" -> {
                 var coach = coachProfileRepository.findByUserId(callerUserId);
@@ -424,14 +431,11 @@ public class MessagingService {
         // name columns are NOT NULL today so it is not currently reachable, but a batched read path
         // should not be the thing that turns a bad row into a 500 for the whole conversation list.
         // (Code review, 3-layer run.)
-        Map<Long, String> playerNameByPlayerId = new java.util.HashMap<>();
-        // Skip null names rather than storing them: Map.getOrDefault returns the stored null when the
-        // key is present, so a null entry would defeat the "Unknown Player"/"Unknown Coach" default.
-        playerProfileRepository.findAllById(playerIds).forEach(pp -> {
-            if (pp.getName() != null) {
-                playerNameByPlayerId.putIfAbsent(pp.getId(), pp.getName());
-            }
-        });
+        // skillars-deferred-91 AC19 (completed in the code review, decision D12): routed through the
+        // shared method as the AC asked. The blocker was real — getPlayerNamesByPlayerIds used
+        // Collectors.toMap, which NPEs on a null name value — so that method was made null-tolerant
+        // (skipping null names, not storing them) rather than this call site keeping its own copy.
+        Map<Long, String> playerNameByPlayerId = playerProfileService.getPlayerNamesByPlayerIds(playerIds);
         Map<UUID, String> coachNameByCoachId = new java.util.HashMap<>();
         coachProfileRepository.findAllById(coachIds).forEach(cp -> {
             if (cp.getDisplayName() != null) {

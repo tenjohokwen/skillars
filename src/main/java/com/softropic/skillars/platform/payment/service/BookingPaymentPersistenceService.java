@@ -116,6 +116,10 @@ public class BookingPaymentPersistenceService {
         bp.setStripePaymentIntentId(null);
         bp.setStatus(BookingPaymentStatus.CAPTURE_PENDING);
         bp.setCapturedAt(null);
+        // skillars-deferred-91 AC5 Part A: stamp when the reservation was made so
+        // PaymentPendingSweeper can age a stuck CAPTURE_PENDING row past
+        // booking.payment_pending.capture_pending_max_hours.
+        bp.setReservedAt(Instant.now());
         bookingPaymentRepository.save(bp);
         return CaptureReservation.RESERVED;
     }

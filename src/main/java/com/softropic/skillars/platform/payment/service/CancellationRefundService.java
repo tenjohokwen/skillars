@@ -26,10 +26,10 @@ public class CancellationRefundService {
     private static final Set<String> EXCUSED_REASONS =
         Set.of("MUTUAL_AGREEMENT", "HEALTH_MEDICAL", "FAMILY_EMERGENCY", "WEATHER");
 
-    private final CreditWalletService creditWalletService;
     private final PackSessionService packSessionService;
     private final CoachCancellationHistoryRepository cancellationHistoryRepository;
     private final ReliabilityStrikeService reliabilityStrikeService;
+    private final RefundOutboxSupport refundOutboxSupport;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -42,11 +42,9 @@ public class CancellationRefundService {
             // else: forfeited, no action — session consumed
         } else {
             if (event.isRefundEligible()) {
-                creditWalletService.writeLedgerEntry(
-                    event.getParentId(), event.getSessionPrice(),
-                    "BOOKING_REFUND", event.getBookingId(),
-                    "Parent cancellation >24h — full refund"
-                );
+                refundOutboxSupport.enqueueBookingRefund(
+                event.getParentId(), event.getSessionPrice(), event.getBookingId(),
+                "Parent cancellation >24h — full refund");
                 log.info("BOOKING_REFUND issued for parent cancellation: bookingId={}", event.getBookingId());
             }
             // else: forfeited, no action
@@ -58,20 +56,16 @@ public class CancellationRefundService {
     public void onBookingCancelledByCoach(BookingCancelledByCoachEvent event) {
         if (event.getSessionPackPurchaseId() != null) {
             if (event.isPackExpiredAtCancellation()) {
-                creditWalletService.writeLedgerEntry(
-                    event.getParentId(), event.getSessionPrice(),
-                    "BOOKING_REFUND", event.getBookingId(),
-                    "Coach cancellation — expired pack refund"
-                );
+                refundOutboxSupport.enqueueBookingRefund(
+                event.getParentId(), event.getSessionPrice(), event.getBookingId(),
+                "Coach cancellation — expired pack refund");
             } else {
                 packSessionService.restoreSession(event.getSessionPackPurchaseId());
             }
         } else {
-            creditWalletService.writeLedgerEntry(
-                event.getParentId(), event.getSessionPrice(),
-                "BOOKING_REFUND", event.getBookingId(),
-                "Coach cancellation — full refund"
-            );
+            refundOutboxSupport.enqueueBookingRefund(
+                event.getParentId(), event.getSessionPrice(), event.getBookingId(),
+                "Coach cancellation — full refund");
         }
 
         // Always record cancellation history — ALL coach cancellations (excused AND unexcused)
@@ -90,20 +84,16 @@ public class CancellationRefundService {
     public void onCoachNoShow(CoachNoShowEvent event) {
         if (event.getSessionPackPurchaseId() != null) {
             if (event.isPackExpiredAtCancellation()) {
-                creditWalletService.writeLedgerEntry(
-                    event.getParentId(), event.getSessionPrice(),
-                    "BOOKING_REFUND", event.getBookingId(),
-                    "Coach no-show — expired pack refund"
-                );
+                refundOutboxSupport.enqueueBookingRefund(
+                event.getParentId(), event.getSessionPrice(), event.getBookingId(),
+                "Coach no-show — expired pack refund");
             } else {
                 packSessionService.restoreSession(event.getSessionPackPurchaseId());
             }
         } else {
-            creditWalletService.writeLedgerEntry(
-                event.getParentId(), event.getSessionPrice(),
-                "BOOKING_REFUND", event.getBookingId(),
-                "Coach no-show — full refund"
-            );
+            refundOutboxSupport.enqueueBookingRefund(
+                event.getParentId(), event.getSessionPrice(), event.getBookingId(),
+                "Coach no-show — full refund");
         }
 
         reliabilityStrikeService.issue(event.getCoachId(), event.getBookingId(), "COACH_NO_SHOW");
@@ -117,11 +107,9 @@ public class CancellationRefundService {
             packSessionService.restoreSession(event.getSessionPackPurchaseId());
             log.info("Pack session restored for admin suspension: bookingId={}", event.getBookingId());
         } else {
-            creditWalletService.writeLedgerEntry(
-                event.getParentId(), event.getSessionPrice(),
-                "BOOKING_REFUND", event.getBookingId(),
-                "Admin coach suspension — full refund"
-            );
+            refundOutboxSupport.enqueueBookingRefund(
+                event.getParentId(), event.getSessionPrice(), event.getBookingId(),
+                "Admin coach suspension — full refund");
             log.info("BOOKING_REFUND issued for admin suspension: bookingId={}", event.getBookingId());
         }
     }

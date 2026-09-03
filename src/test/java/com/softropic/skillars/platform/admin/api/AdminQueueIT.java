@@ -334,6 +334,114 @@ class AdminQueueIT extends AbstractIntegrationTest {
         assertThat(summary).isEqualTo("a" + "😀".repeat(99));
     }
 
+    // ── skillars-deferred-91 AC6 (skillars-deferred-16 D4): rolling-deploy enum-read tolerance ──────
+
+    /**
+     * Read from the catalog, never hardcoded. skillars-deferred-91 code review: this used to restore
+     * a hand-typed copy of the CHECK definition, so any drift between that literal and the migrations
+     * would silently leave every later IT in this shared container running against a different schema.
+     */
+    private static final String READ_TYPE_CHECK_DEF =
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+        + "WHERE conname = 'admin_alerts_type_check' AND conrelid = 'admin.admin_alerts'::regclass";
+
+    @Test
+    void queue_withRowCarryingAnUnknownAlertType_returns200_rendersEveryMappableRow() {
+        UUID futureAlertId = UUID.randomUUID();
+        // AC6 also requires proof that the skip was OBSERVABLE, not silent. Added by the
+        // skillars-deferred-91 code review — neither original IT asserted the WARN.
+        ch.qos.logback.classic.Logger serviceLogger = (ch.qos.logback.classic.Logger)
+            org.slf4j.LoggerFactory.getLogger(
+                com.softropic.skillars.platform.admin.service.AdminQueueService.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+            new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        serviceLogger.addAppender(appender);
+
+        withUnknownAlertTypeRow(futureAlertId, () -> {
+            String cookies = loginAndGetCookies(ADMIN_EMAIL);
+            ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
+                baseUrl() + QUEUE_URL, HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+            // The whole page still renders (not a 500), and every alert this instance can map is there.
+            assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> content = (List<Map<String, Object>>) resp.getBody().get("content");
+            assertThat(content).anyMatch(e -> messageAlertId.toString().equals(e.get("alertId")));
+            assertThat(content).anyMatch(e -> moderationHeldAlertId.toString().equals(e.get("alertId")));
+            // …but the unmappable row is skipped, not rendered.
+            assertThat(content).noneMatch(e -> futureAlertId.toString().equals(e.get("alertId")));
+
+            // The total must not count the row the page dropped, or pagination arithmetic is wrong
+            // (skillars-deferred-91 code review). Compared against the raw OPEN count rather than
+            // content.size(), which would only coincide on a single, non-full page.
+            long total = ((Number) resp.getBody().get("totalElements")).longValue();
+            long openRowsInDb = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM admin.admin_alerts WHERE status = 'OPEN'", Long.class);
+            assertThat(total)
+                .as("totalElements must exclude the one row this instance could not map")
+                .isEqualTo(openRowsInDb - 1);
+        });
+
+        serviceLogger.detachAppender(appender);
+        assertThat(appender.list)
+            .as("AC6 requires the skip to be observable")
+            .anySatisfy(event -> {
+                assertThat(event.getLevel()).isEqualTo(ch.qos.logback.classic.Level.WARN);
+                assertThat(event.getFormattedMessage()).contains("ADMIN_QUEUE_UNKNOWN_ALERT_TYPE");
+            });
+    }
+
+    @Test
+    void queueSummary_withRowCarryingAnUnknownAlertType_returns200_countsOnlyMappableTypes() {
+        UUID futureAlertId = UUID.randomUUID();
+        withUnknownAlertTypeRow(futureAlertId, () -> {
+            String cookies = loginAndGetCookies(ADMIN_EMAIL);
+            ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
+                baseUrl() + SUMMARY_URL, HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+            assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(((Number) resp.getBody().get("messageReports")).longValue()).isGreaterThanOrEqualTo(1L);
+            assertThat(((Number) resp.getBody().get("moderationHolds")).longValue()).isGreaterThanOrEqualTo(1L);
+        });
+    }
+
+    /**
+     * Simulates a rolling deploy: a newer instance widened the {@code admin_alerts_type_check} CHECK
+     * and wrote a row with an {@code alert_type} value this (older) instance's {@code AdminAlertType}
+     * enum does not have. Restores the real CHECK + removes the row afterwards.
+     */
+    private void withUnknownAlertTypeRow(UUID alertId, Runnable body) {
+        // Capture the REAL definition before touching anything, so the restore is byte-identical to
+        // whatever the migrations produced rather than a literal that can drift away from them.
+        final String originalDef = jdbcTemplate.queryForObject(READ_TYPE_CHECK_DEF, String.class);
+        assertThat(originalDef)
+            .as("admin_alerts_type_check must exist before this test manipulates it")
+            .isNotBlank();
+
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.execute("ALTER TABLE admin.admin_alerts DROP CONSTRAINT admin_alerts_type_check");
+            jdbcTemplate.update(
+                "INSERT INTO admin.admin_alerts (alert_id, type, reference_id, reference_type, status, created_at) "
+                + "VALUES (?, 'FUTURE_ALERT_TYPE', ?, 'MESSAGE', 'OPEN', ?)",
+                alertId, String.valueOf(MESSAGE_ID), Timestamp.from(Instant.now()));
+            return null;
+        });
+        try {
+            body.run();
+        } finally {
+            // Restore in its own transaction so a failure inside body.run() cannot leave the shared
+            // schema without its CHECK for every subsequent IT in this container.
+            transactionTemplate.execute(status -> {
+                jdbcTemplate.update("DELETE FROM admin.admin_alerts WHERE alert_id = ?", alertId);
+                jdbcTemplate.execute("ALTER TABLE admin.admin_alerts DROP CONSTRAINT IF EXISTS admin_alerts_type_check");
+                jdbcTemplate.execute(
+                    "ALTER TABLE admin.admin_alerts ADD CONSTRAINT admin_alerts_type_check " + originalDef);
+                return null;
+            });
+        }
+    }
+
     // ── helpers ──
 
     private String loginAndGetCookies(String email) {
