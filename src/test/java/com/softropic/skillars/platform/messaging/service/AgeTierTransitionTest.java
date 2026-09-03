@@ -30,6 +30,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -195,7 +196,9 @@ class AgeTierTransitionTest {
     @Test
     void getConversations_parentRole_unrestrictedConversationExcluded() {
         when(conversationRepository.findActiveByParentId(PARENT_ID)).thenReturn(List.of(conversation));
-        when(agePolicyService.findMessagingPolicy(PLAYER_ID)).thenReturn(Optional.of(MessagingPolicy.unrestricted()));
+        // skillars-deferred-90 AC13 batched the PARENT pre-filter policy lookup.
+        when(agePolicyService.findMessagingPoliciesByPlayerIds(any()))
+            .thenReturn(Map.of(PLAYER_ID, MessagingPolicy.unrestricted()));
 
         List<ConversationSummaryDto> result = messagingService.getConversations(PARENT_ID, "PARENT");
 
@@ -206,7 +209,8 @@ class AgeTierTransitionTest {
     void getConversations_parentRole_orphanedPlayerProfile_excludedFromList_notThrown() {
         // AC4: an orphaned player_profiles row must cost this one conversation, not crash the list.
         when(conversationRepository.findActiveByParentId(PARENT_ID)).thenReturn(List.of(conversation));
-        when(agePolicyService.findMessagingPolicy(PLAYER_ID)).thenReturn(Optional.empty());
+        // skillars-deferred-90 AC13: batched lookup returns no entry for an orphaned player id.
+        when(agePolicyService.findMessagingPoliciesByPlayerIds(any())).thenReturn(Map.of());
 
         List<ConversationSummaryDto> result = messagingService.getConversations(PARENT_ID, "PARENT");
 
