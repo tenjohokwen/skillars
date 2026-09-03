@@ -106,7 +106,7 @@ import SessionDNAChart from 'src/components/booking/SessionDNAChart.vue'
 
 defineOptions({ name: 'SessionTemplateVault' })
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const $q = useQuasar()
 const templateStore = useSessionTemplateStore()
 
@@ -123,7 +123,7 @@ const defaultDna = { technical: 0, physical: 0, cognitive: 0, matchRealism: 0, w
 onMounted(() => templateStore.fetchTemplates())
 
 function formatDate(iso) {
-  return new Date(iso).toLocaleDateString()
+  return new Date(iso).toLocaleDateString(locale.value)
 }
 
 function startRename(tmpl) {

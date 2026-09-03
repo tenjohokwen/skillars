@@ -6,6 +6,7 @@ import {
   secondsRemaining,
   minutesRemaining,
   isRefreshing,
+  refreshFailed,
   warningThresholdSeconds,
   startSessionMonitoring,
   stopSessionMonitoring,
@@ -25,6 +26,7 @@ import { usePlayerStore } from 'src/stores/playerStore';
  *   secondsRemaining: import('vue').ComputedRef<number>,
  *   minutesRemaining: import('vue').ComputedRef<number>,
  *   isRefreshing: import('vue').ComputedRef<boolean>,
+ *   refreshFailed: import('vue').ComputedRef<boolean>,
  *   warningThresholdSeconds: import('vue').ComputedRef<number>,
  *   handleRefresh: () => Promise<void>,
  *   handleLogout: () => Promise<void>,
@@ -46,6 +48,7 @@ export function useSession() {
   const secondsRemainingComputed = computed(() => secondsRemaining.value);
   const minutesRemainingComputed = computed(() => minutesRemaining.value);
   const isRefreshingComputed = computed(() => isRefreshing.value);
+  const refreshFailedComputed = computed(() => refreshFailed.value);
   const warningThresholdSecondsComputed = computed(() => warningThresholdSeconds.value);
 
   /**
@@ -111,6 +114,7 @@ export function useSession() {
     secondsRemaining: secondsRemainingComputed,
     minutesRemaining: minutesRemainingComputed,
     isRefreshing: isRefreshingComputed,
+    refreshFailed: refreshFailedComputed,
     warningThresholdSeconds: warningThresholdSecondsComputed,
     handleRefresh,
     handleLogout,

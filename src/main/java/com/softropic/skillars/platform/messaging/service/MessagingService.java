@@ -25,7 +25,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -38,9 +37,12 @@ import com.softropic.skillars.platform.security.contract.MessagingPolicy;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -104,18 +106,22 @@ public class MessagingService {
             conversations = conversationRepository.findActiveByCoachId(coach.getId());
         } else if ("PARENT".equals(role)) {
             List<Conversation> all = conversationRepository.findActiveByParentId(callerUserId);
-            // N+1 note: getMessagingPolicy is called once here to filter, then again in resolveOtherPartyName —
-            // 2 lookups per surviving conversation. Acceptable for MVP; reduce in a later optimisation story.
+            // skillars-deferred-90 AC13: batch the age-policy lookup for the whole list ONCE, before
+            // the filter (was one findMessagingPolicy per row here, then again per row in toSummary).
             // Read path: an orphaned player_profiles row must cost this one conversation, not the
-            // whole list — findMessagingPolicy degrades locally instead of 404-ing the caller.
+            // whole list — an absent policy degrades locally instead of 404-ing the caller.
+            Map<Long, MessagingPolicy> parentPolicyByPlayer = agePolicyService.findMessagingPoliciesByPlayerIds(
+                all.stream().map(Conversation::getPlayerId).collect(Collectors.toSet()));
             conversations = all.stream()
-                .filter(c -> agePolicyService.findMessagingPolicy(c.getPlayerId())
-                    .map(policy -> AgeMessagingPolicy.from(policy).parentHasAccess())
-                    .orElseGet(() -> {
+                .filter(c -> {
+                    MessagingPolicy policy = parentPolicyByPlayer.get(c.getPlayerId());
+                    if (policy == null) {
                         log.error("getConversations: no player profile for playerId={} (conversationId={}) "
                                 + "— excluding from parent's list", c.getPlayerId(), c.getId());
                         return false;
-                    }))
+                    }
+                    return AgeMessagingPolicy.from(policy).parentHasAccess();
+                })
                 .toList();
         } else if ("PLAYER".equals(role)) {
             // PLAYER: resolve the caller's own player-profile id once — Conversation.playerId and
@@ -147,8 +153,12 @@ public class MessagingService {
                 MessagingErrorCode.NOT_A_PARTY);
         }
 
+        if (conversations.isEmpty()) {
+            return List.of();
+        }
+        SummaryContext ctx = buildSummaryContext(conversations, callerUserId, role);
         return conversations.stream()
-            .map(c -> toSummary(c, callerUserId, role))
+            .map(c -> toSummary(c, callerUserId, role, ctx))
             .sorted(Comparator.comparing(ConversationSummaryDto::lastMessageAt,
                 Comparator.nullsLast(Comparator.reverseOrder())))
             .toList();
@@ -377,20 +387,83 @@ public class MessagingService {
         }
     }
 
+    /**
+     * skillars-deferred-90 AC13: everything {@link #toSummary} needs for a whole conversation list,
+     * fetched in a fixed number of queries instead of ~4 per conversation.
+     */
+    private record SummaryContext(
+        Map<Long, MessagingPolicy> policyByPlayerId,
+        Map<Long, String> playerNameByPlayerId,
+        Map<UUID, String> coachNameByCoachId,
+        Map<Long, Message> lastApprovedByConversationId,
+        Map<Long, Long> unreadByConversationId) {
+
+        String playerName(Long playerId) {
+            return playerNameByPlayerId.getOrDefault(playerId, "Unknown Player");
+        }
+
+        String coachName(UUID coachId) {
+            return coachNameByCoachId.getOrDefault(coachId, "Unknown Coach");
+        }
+    }
+
+    private SummaryContext buildSummaryContext(List<Conversation> conversations, Long callerUserId, String role) {
+        // Code review of skillars-deferred-90: was `resolveLastReadAt(conversations.get(0), role)`,
+        // i.e. a getter called purely for its throw. Behaviourally identical (resolveLastReadAt is a
+        // pure switch on role) but it would silently stop validating if that method ever gained a
+        // non-throwing default, so the intent is now named.
+        validateRole(role);
+
+        Set<Long> playerIds = conversations.stream().map(Conversation::getPlayerId).collect(Collectors.toSet());
+        Set<UUID> coachIds = conversations.stream().map(Conversation::getCoachId).collect(Collectors.toSet());
+        Set<Long> conversationIds = conversations.stream().map(Conversation::getId).collect(Collectors.toSet());
+
+        Map<Long, MessagingPolicy> policyByPlayerId = agePolicyService.findMessagingPoliciesByPlayerIds(playerIds);
+        // Null-tolerant on purpose: Collectors.toMap throws NPE on a null VALUE, where the per-row
+        // code this replaced degraded to "Unknown Player"/"Unknown Coach" via .orElse(...). Both
+        // name columns are NOT NULL today so it is not currently reachable, but a batched read path
+        // should not be the thing that turns a bad row into a 500 for the whole conversation list.
+        // (Code review, 3-layer run.)
+        Map<Long, String> playerNameByPlayerId = new java.util.HashMap<>();
+        // Skip null names rather than storing them: Map.getOrDefault returns the stored null when the
+        // key is present, so a null entry would defeat the "Unknown Player"/"Unknown Coach" default.
+        playerProfileRepository.findAllById(playerIds).forEach(pp -> {
+            if (pp.getName() != null) {
+                playerNameByPlayerId.putIfAbsent(pp.getId(), pp.getName());
+            }
+        });
+        Map<UUID, String> coachNameByCoachId = new java.util.HashMap<>();
+        coachProfileRepository.findAllById(coachIds).forEach(cp -> {
+            if (cp.getDisplayName() != null) {
+                coachNameByCoachId.putIfAbsent(cp.getId(), cp.getDisplayName());
+            }
+        });
+        Map<Long, Message> lastApprovedByConversationId = messageRepository
+            .findLatestApprovedPerConversation(conversationIds).stream()
+            .collect(Collectors.toMap(Message::getConversationId, m -> m, (a, b) -> a));
+        Map<Long, Long> unreadByConversationId = messageRepository
+            .countUnreadPerConversation(conversationIds, callerUserId, role).stream()
+            .collect(Collectors.toMap(r -> ((Number) r[0]).longValue(), r -> ((Number) r[1]).longValue()));
+
+        return new SummaryContext(policyByPlayerId, playerNameByPlayerId, coachNameByCoachId,
+            lastApprovedByConversationId, unreadByConversationId);
+    }
+
     private ConversationSummaryDto toSummary(Conversation conv, Long callerUserId, String role) {
-        String otherPartyName = resolveOtherPartyName(conv, role);
+        return toSummary(conv, callerUserId, role, buildSummaryContext(List.of(conv), callerUserId, role));
+    }
+
+    private ConversationSummaryDto toSummary(Conversation conv, Long callerUserId, String role, SummaryContext ctx) {
+        String otherPartyName = resolveOtherPartyName(conv, role, ctx);
 
         String lastMessagePreview = null;
-        Page<Message> lastApproved = messageRepository.findLastApproved(conv.getId(), PageRequest.of(0, 1));
-        if (lastApproved.hasContent()) {
-            String msgContent = lastApproved.getContent().get(0).getContent();
+        Message lastApproved = ctx.lastApprovedByConversationId().get(conv.getId());
+        if (lastApproved != null) {
+            String msgContent = lastApproved.getContent();
             lastMessagePreview = msgContent.length() > 60 ? msgContent.substring(0, 60) : msgContent;
         }
 
-        Instant rawLastReadAt = resolveLastReadAt(conv, role);
-        // Null means never read: treat all messages as unread by using epoch as sentinel
-        Instant since = rawLastReadAt != null ? rawLastReadAt : Instant.EPOCH;
-        long unreadCount = messageRepository.countUnread(conv.getId(), callerUserId, since);
+        long unreadCount = ctx.unreadByConversationId().getOrDefault(conv.getId(), 0L);
 
         return new ConversationSummaryDto(
             conv.getId(),
@@ -402,61 +475,57 @@ public class MessagingService {
         );
     }
 
-    private String resolveOtherPartyName(Conversation conv, String role) {
+    private String resolveOtherPartyName(Conversation conv, String role, SummaryContext ctx) {
         if ("COACH".equals(role)) {
-            String playerName = playerProfileRepository.findById(conv.getPlayerId())
-                .map(p -> p.getName()).orElse("Unknown Player");
-            String playerFirstName = playerName.contains(" ")
-                ? playerName.substring(0, playerName.indexOf(' '))
-                : playerName;
-            Optional<MessagingPolicy> policy = agePolicyService.findMessagingPolicy(conv.getPlayerId());
-            if (policy.isEmpty()) {
+            String playerFirstName = firstName(ctx.playerName(conv.getPlayerId()));
+            MessagingPolicy policy = ctx.policyByPlayerId().get(conv.getPlayerId());
+            if (policy == null) {
                 log.error("resolveOtherPartyName: no player profile for playerId={} (conversationId={}) "
                         + "— falling back to Unknown Player label", conv.getPlayerId(), conv.getId());
                 return "Unknown Player";
             }
-            AgeMessagingPolicy agePolicy = AgeMessagingPolicy.from(policy.get());
+            AgeMessagingPolicy agePolicy = AgeMessagingPolicy.from(policy);
             return switch (agePolicy) {
                 case PROHIBITED, PARENT_MANAGED -> "Parent of " + playerFirstName;
                 case SUPERVISED -> playerFirstName + " & parent";
                 case UNRESTRICTED -> playerFirstName;
             };
         } else if ("PARENT".equals(role)) {
-            Optional<MessagingPolicy> policyOpt = agePolicyService.findMessagingPolicy(conv.getPlayerId());
-            if (policyOpt.isEmpty()) {
+            MessagingPolicy policy = ctx.policyByPlayerId().get(conv.getPlayerId());
+            if (policy == null) {
                 log.error("resolveOtherPartyName: no player profile for playerId={} (conversationId={}) "
                         + "— falling back to Unknown Player label", conv.getPlayerId(), conv.getId());
                 return "Unknown Player";
             }
-            AgeMessagingPolicy agePolicy = AgeMessagingPolicy.from(policyOpt.get());
+            AgeMessagingPolicy agePolicy = AgeMessagingPolicy.from(policy);
             return switch (agePolicy) {
-                case PROHIBITED, PARENT_MANAGED ->
-                    coachProfileRepository.findById(conv.getCoachId())
-                        .map(CoachProfile::getDisplayName).orElse("Unknown Coach");
-                case SUPERVISED -> {
-                    String playerName = playerProfileRepository.findById(conv.getPlayerId())
-                        .map(p -> p.getName()).orElse("Unknown Player");
-                    String playerFirstName = playerName.contains(" ")
-                        ? playerName.substring(0, playerName.indexOf(' '))
-                        : playerName;
-                    String coachName = coachProfileRepository.findById(conv.getCoachId())
-                        .map(CoachProfile::getDisplayName).orElse("Unknown Coach");
-                    yield playerFirstName + "'s conversation with " + coachName;
-                }
-                case UNRESTRICTED -> {
+                case PROHIBITED, PARENT_MANAGED -> ctx.coachName(conv.getCoachId());
+                case SUPERVISED -> firstName(ctx.playerName(conv.getPlayerId()))
+                    + "'s conversation with " + ctx.coachName(conv.getCoachId());
+                case UNRESTRICTED ->
                     // initiateConversation() gates this path; safe fallback if reached unexpectedly
-                    String playerName = playerProfileRepository.findById(conv.getPlayerId())
-                        .map(p -> p.getName()).orElse("Unknown Player");
-                    yield playerName.contains(" ")
-                        ? playerName.substring(0, playerName.indexOf(' '))
-                        : playerName;
-                }
+                    firstName(ctx.playerName(conv.getPlayerId()));
             };
         } else {
             // PLAYER role: show coach name
-            return coachProfileRepository.findById(conv.getCoachId())
-                .map(CoachProfile::getDisplayName)
-                .orElse("Unknown Coach");
+            return ctx.coachName(conv.getCoachId());
+        }
+    }
+
+    private static String firstName(String fullName) {
+        return fullName.contains(" ") ? fullName.substring(0, fullName.indexOf(' ')) : fullName;
+    }
+
+    /**
+     * Rejects a caller whose role is not a recognised messaging role. Same contract (and same
+     * exception) as the per-row {@link #resolveLastReadAt} call this replaced in the batched
+     * summary path — see verifyIsParty for why it is OperationNotAllowedException.
+     */
+    private void validateRole(String role) {
+        if (!"COACH".equals(role) && !"PARENT".equals(role) && !"PLAYER".equals(role)) {
+            throw new OperationNotAllowedException(
+                "Caller does not hold a recognised messaging role",
+                MessagingErrorCode.NOT_A_PARTY);
         }
     }
 

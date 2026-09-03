@@ -50,7 +50,7 @@ import { useQuasar } from 'quasar'
 import { useRouter } from 'vue-router'
 import { videoApi } from 'src/api/video.api'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const $q = useQuasar()
 const router = useRouter()
 
@@ -117,7 +117,7 @@ async function onReject(approval) {
 
 function formatDate(isoString) {
   if (!isoString) return ''
-  return new Date(isoString).toLocaleDateString()
+  return new Date(isoString).toLocaleDateString(locale.value)
 }
 
 onMounted(fetchApprovals)

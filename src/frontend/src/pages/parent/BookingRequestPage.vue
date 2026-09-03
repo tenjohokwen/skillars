@@ -369,6 +369,8 @@ const ownBlockingStatuses = ref([
 
 /** Milliseconds a zone is offset from UTC at a given instant. */
 function zoneOffsetMs(ts, timeZone) {
+  // skillars-deferred-90 AC11 exclusion: 'en-US' is a MACHINE format — the numeric parts are
+  // parsed back out to compute a UTC offset, never displayed. Do NOT localize.
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat('en-US', {
       timeZone,

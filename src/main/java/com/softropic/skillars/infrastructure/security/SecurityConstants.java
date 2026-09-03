@@ -86,6 +86,14 @@ public final class SecurityConstants {
     public static final String B_COOKIE                  = "bcookie";
     public static final String F_COOKIE = "fcookie"; //fingerprint cookie. Set by browser
     public static final String USER_COOKIE = "user"; //username cookie
+    /**
+     * skillars-deferred-90 AC2: written into {@link #USER_COOKIE} in place of a blank display name
+     * so a valid session is never represented by an empty cookie value. An empty value is read as
+     * "authenticated" by a naive presence check and as "session dead" by a liveness check — both
+     * wrong. Frontend readers (see {@code utils/sessionCookies.js}) must treat this value, and a
+     * blank value, as "no display name" and fall back to their generic greeting.
+     */
+    public static final String BLANK_DISPLAY_NAME_SENTINEL = "__blank__";
     public static final String ADMIN_COOKIE = "admin"; //admin cookie
     public static final String JAVA_SESSION_COOKIE = "JSESSIONID";
     public static final String JWT_SESSION_COOKIE = "ION"; //jwt session id cookie

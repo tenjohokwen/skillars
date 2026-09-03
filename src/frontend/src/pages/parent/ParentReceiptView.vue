@@ -59,7 +59,7 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { fetchParentReceipt } from 'src/api/payment.api'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const route = useRoute()
 
 const loading = ref(true)
@@ -83,7 +83,7 @@ function fmt(val) {
 
 function formatDate(iso) {
   if (!iso) return '—'
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'long', timeStyle: 'short' }).format(new Date(iso))
+  return new Intl.DateTimeFormat(locale.value, { dateStyle: 'long', timeStyle: 'short' }).format(new Date(iso))
 }
 </script>
 

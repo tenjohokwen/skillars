@@ -79,7 +79,7 @@ import { useQuasar } from 'quasar'
 import { usePaymentStore } from 'src/stores/payment.store'
 import { getProfileBuilderStatus } from 'src/api/marketplace.api'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const $q = useQuasar()
 const paymentStore = usePaymentStore()
 
@@ -120,6 +120,6 @@ function formatReason(reason) {
 
 function formatDate(isoString) {
   if (!isoString) return ''
-  return new Date(isoString).toLocaleDateString()
+  return new Date(isoString).toLocaleDateString(locale.value)
 }
 </script>

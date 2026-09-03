@@ -73,6 +73,7 @@ import static com.softropic.skillars.infrastructure.security.SecurityConstants.R
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.SESSION_ID;
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.SESSION_REFRESH_COUNTDOWN;
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.USER_COOKIE;
+import static com.softropic.skillars.infrastructure.security.SecurityConstants.BLANK_DISPLAY_NAME_SENTINEL;
 import static com.softropic.skillars.infrastructure.security.SecurityError.MISSING_JWT_DB_REFRESH_TOKEN;
 import static com.softropic.skillars.platform.security.contract.util.AuthoritiesConstants.ANONYMOUS;
 import static io.jsonwebtoken.Claims.SUBJECT;
@@ -314,6 +315,32 @@ public class JwtManagerImplTest {
 
         String adminCookie = extractCookie(mockResponse, ADMIN_COOKIE);
         assertThat(adminCookie).isEqualTo("admin");
+    }
+
+    // skillars-deferred-90 AC2: a blank display name must not produce an empty `user` cookie value
+    // (App.vue would read that as an authenticated session; the liveness check would read it as a
+    // dead one). The sentinel is written instead, and frontend readers map it back to "no name".
+    @Test
+    void testCreateLoginToken_blankDisplayName_writesSentinelToUserCookie() throws JsonProcessingException {
+        HttpServletResponse mockResponse = new MockHttpServletResponse();
+        initRequestMetadata();
+
+        Principal principal = new Principal.Builder()
+                .accountNonExpired(true)
+                .accountNonLocked(true)
+                .authorities(Set.of(new SimpleGrantedAuthority(ROLE_USER)))
+                .username("blankNameUser")
+                .password("password")
+                .enabled(true)
+                .otpEnabled(true)
+                .gender(Gender.FEMALE)
+                .displayName("   ")
+                .businessId("bus123")
+                .build();
+
+        jwtManager.createLoginToken(mockResponse, principal);
+
+        assertThat(extractCookie(mockResponse, USER_COOKIE)).isEqualTo(BLANK_DISPLAY_NAME_SENTINEL);
     }
 
     private static String extractCookie(HttpServletResponse mockResponse, String cookieName) {

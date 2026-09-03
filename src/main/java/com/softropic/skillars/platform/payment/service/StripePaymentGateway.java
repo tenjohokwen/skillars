@@ -22,6 +22,8 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Currency;
+import java.util.Locale;
 import java.util.UUID;
 
 @Service
@@ -44,7 +46,7 @@ public class StripePaymentGateway implements PaymentGateway {
         String currency;
         try {
             commissionRate = new BigDecimal(configService.getString("platform.commission.rate"));
-            currency = configService.getString("platform.payment.currency");
+            currency = resolveCurrency();
         } catch (IllegalStateException | NumberFormatException e) {
             log.error("Payment configuration unavailable: error={}", e.getMessage());
             throw new PaymentGatewayException("payment.configurationUnavailable", e);
@@ -186,5 +188,28 @@ public class StripePaymentGateway implements PaymentGateway {
 
     private long toCents(BigDecimal amount) {
         return amount.multiply(BigDecimal.valueOf(100)).setScale(0, RoundingMode.HALF_UP).longValueExact();
+    }
+
+    /**
+     * skillars-deferred-90 AC6: validate {@code platform.payment.currency} as an ISO-4217 code
+     * before it reaches Stripe. {@code configService.getString} throws {@link IllegalStateException}
+     * for a missing key (handled by the caller's catch); {@link Currency#getInstance} throws
+     * {@link IllegalArgumentException} for a blank / unknown code and {@link NullPointerException}
+     * for {@code null} — and {@code IllegalArgumentException} is the SUPERTYPE of
+     * {@code NumberFormatException}, so the caller's {@code catch (IllegalStateException |
+     * NumberFormatException)} would NOT catch it. Map both to the same
+     * {@code payment.configurationUnavailable} failure the caller already raises.
+     * Stripe wants the lower-cased code.
+     */
+    private String resolveCurrency() {
+        final String raw = configService.getString("platform.payment.currency");
+        try {
+            final Currency currency = Currency.getInstance(
+                raw == null ? null : raw.strip().toUpperCase(Locale.ROOT));
+            return currency.getCurrencyCode().toLowerCase(Locale.ROOT);
+        } catch (IllegalArgumentException | NullPointerException e) {
+            log.error("Payment configuration invalid: platform.payment.currency='{}' is not a valid ISO-4217 code", raw);
+            throw new PaymentGatewayException("payment.configurationUnavailable", e);
+        }
     }
 }

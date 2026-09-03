@@ -6,6 +6,7 @@ import com.softropic.skillars.infrastructure.util.TestClockProvider;
 import com.softropic.skillars.platform.security.contract.LoginData;
 import com.softropic.skillars.platform.security.repo.LoginInfo;
 import com.softropic.skillars.platform.security.contract.exception.SecException;
+import com.softropic.skillars.infrastructure.security.RequestMetadataProvider;
 import com.softropic.skillars.infrastructure.security.TestRequestMetadataProvider;
 import com.softropic.skillars.platform.security.repo.LoginInfoRepository;
 
@@ -66,6 +67,11 @@ class LoginInfoServiceIT extends AbstractIntegrationTest {
     @AfterEach
     void tearDown() {
         TestClockProvider.setSystemClock();
+        // skillars-deferred-90 AC8: setUp() populates the RequestMetadataProvider ThreadLocal
+        // (apiKey/sessionId/requestId/ipAddress). Without clearing it, a wildcard module-bundle run
+        // that lands LoginAttemptsServiceTest on the same Surefire thread inherits the stale apiKey
+        // and its client-/IP-keyed cache assertions break ("12/14"). Mirror JwtManagerImplTest.
+        RequestMetadataProvider.cleanup();
         transactionTemplate.execute(status -> {
             jdbcTemplate.execute("DELETE FROM main.sec");
             return null;

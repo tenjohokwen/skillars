@@ -316,6 +316,7 @@ export default {
     continueQuestion: 'Would you like to continue your session?',
     continueSession: 'Continue Session',
     refreshed: 'Session refreshed successfully',
+    refreshFailed: "We couldn't extend your session. Check your connection and select Continue Session to try again.",
     expired: 'Your session has expired. Please log in again.',
     drillLibrary: {
       title: 'Drill Library',

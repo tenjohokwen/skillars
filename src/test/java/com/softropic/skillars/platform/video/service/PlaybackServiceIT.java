@@ -140,10 +140,13 @@ class PlaybackServiceIT extends BaseVideoIT {
         log.info("authorizePlayback latency over {} iterations (measurement only, not a gate): "
             + "p50={}ms p95={}ms p99={}ms", iterations, p50, p95, p99);
 
-        // Loose pathology ceiling only — catches a real regression (something O(n) per call, a lock,
-        // a missing index), not CI jitter.
-        assertThat(p99).as("p99 latency %dms indicates a genuine pathology, not jitter", p99)
-            .isLessThan(5_000L);
+        // skillars-deferred-90 AC9: gate p99 against the run's OWN p50 rather than a fixed 5s
+        // wall-clock. A uniform slowdown (accidental N+1, a dropped index, a sync provider call)
+        // multiplies every percentile, so p99 >> 20*p50 catches it; the max(200ms, …) floor keeps
+        // a sub-millisecond p50 from making the ceiling flaky-tight on a fast CI box.
+        long p99Ceiling = Math.max(200L, p50 * 20);
+        assertThat(p99).as("p99 %dms >> 20*p50 (%dms) indicates a genuine pathology, not jitter", p99, p50)
+            .isLessThan(p99Ceiling);
     }
 
     // Nearest-rank percentile via integer ceiling division (avoids floating-point rounding pitfalls

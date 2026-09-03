@@ -216,8 +216,12 @@ public class JwtManagerImpl implements LoginTokenManager {
         final String clientId = (String) claims.get(CLIENT_ID);
         CookieUtil.addCookie(res, B_COOKIE, clientId, true, browserSessionTtl);
 
+        // skillars-deferred-90 AC2: never emit an empty `user` cookie for a real session — a blank
+        // value is read as "logged in" by App.vue's presence check and as "session dead" by the
+        // liveness check. Write a documented sentinel that frontend readers map back to "no name".
         final String subject = (String) claims.get(DISPLAY_NAME);
-        CookieUtil.addCookie(res, USER_COOKIE, subject, false, (int) JWT_TTL.toSeconds());
+        final String userCookieValue = StringUtils.isBlank(subject) ? BLANK_DISPLAY_NAME_SENTINEL : subject;
+        CookieUtil.addCookie(res, USER_COOKIE, userCookieValue, false, (int) JWT_TTL.toSeconds());
 
         final String sessionId = (String) claims.get(SESSION_ID);
         CookieUtil.addCookie(res, JWT_SESSION_COOKIE, sessionId, true, browserSessionTtl);

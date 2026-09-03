@@ -71,6 +71,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 ### Development Workflow Rules
 
 - **Database Migrations:** All schema changes must use Flyway scripts in `src/main/resources/db/migration`.
+- **Rolling-deploy migration safety:** Every migration with version `> V121` must follow `docs/deployment/migration-conventions.md` (expand/contract: additive first; guarded `DROP` last with `IF EXISTS`; FK/`CHECK` on non-trivial tables added `NOT VALID` then `VALIDATE`d in a later migration; indexes on hot/large tables use `CREATE INDEX CONCURRENTLY`; enum/`CHECK` widening one release ahead of the first write; batched backfills). `MigrationConventionLintTest` (runs in the `test` phase, no container) fails the build on the mechanical subset; an `-- migration-lint: allow-*` opt-out must carry a real reason.
 - **Auditing:** Use Hibernate Envers for entity auditing.
 
 ### Critical Don't-Miss Rules

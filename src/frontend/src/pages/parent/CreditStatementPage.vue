@@ -75,7 +75,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { usePaymentStore } from 'src/stores/payment.store'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const router = useRouter()
 const paymentStore = usePaymentStore()
 
@@ -123,6 +123,6 @@ function fmtBalance(val) {
 
 function formatDate(iso) {
   if (!iso) return '—'
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso))
+  return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso))
 }
 </script>

@@ -11,6 +11,20 @@
       <q-card-section class="q-pt-none">
         <p>{{ $t('session.continueQuestion') }}</p>
 
+        <!-- skillars-deferred-90 AC4: a failed refresh is surfaced here instead of silently
+             re-enabling "Continue session". The button below doubles as the retry affordance. -->
+        <q-banner
+          v-if="refreshFailed"
+          dense
+          class="bg-negative text-white q-mb-md rounded-borders"
+          role="alert"
+        >
+          <template #avatar>
+            <q-icon name="error" />
+          </template>
+          {{ $t('session.refreshFailed') }}
+        </q-banner>
+
         <!-- Visual countdown display -->
         <div class="text-center q-my-lg">
           <div class="countdown-display text-h2 text-weight-bold" :class="countdownClass">
@@ -58,6 +72,7 @@ const {
   secondsRemaining,
   minutesRemaining,
   isRefreshing,
+  refreshFailed,
   warningThresholdSeconds,
   handleRefresh,
   handleLogout,
