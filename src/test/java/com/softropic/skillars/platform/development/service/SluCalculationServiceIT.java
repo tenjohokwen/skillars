@@ -70,6 +70,8 @@ class SluCalculationServiceIT extends AbstractIntegrationTest {
     @Autowired private SnapshotBatchWriter snapshotBatchWriter;
     @Autowired private SluWeeklySnapshotRepository snapshotRepository;
     @Autowired private SluPersistenceRetrier sluPersistenceRetrier;
+    @Autowired private SluPersistenceDispatcher sluPersistenceDispatcher;
+    @Autowired private javax.sql.DataSource dataSource;
 
     @MockitoBean
     VideoProviderAdapter videoProviderAdapter;
@@ -279,18 +281,163 @@ class SluCalculationServiceIT extends AbstractIntegrationTest {
         cleanSession(bookingId);
     }
 
-    // ── AC1 (skillars-deferred-89): concurrent-delivery collision on the EXISTING V47 index ──────
+    // ── skillars-deferred-90 AC9 (3-layer review): concurrent-delivery collision on V47, driven
+    //    through the real dispatch path ──
     //
-    // The integration-level proof of the AC1 catch (two BookingCompletedEvent deliveries race, the
-    // loser's saveAll hits V47's uq_player_skill_stats_session_skill / PG 23505, saveSluWithRetry
-    // returns ALREADY_PERSISTED instead of the pre-AC1 "3 retries + false 'rows lost' ERROR") was
-    // removed here: its worker thread could outlive the assertions on a slow CI runner, and
-    // pool.shutdownNow() does not wait for it, so the worker's blocked INSERT committed rows for the
-    // shared TEST_PLAYER_ID *after* @AfterEach had cleaned up — polluting sibling tests'
-    // countStats()==0 assertions (seen on master CI as onBookingCompleted_draftSession_writesNoRows
-    // "expected: 0 but was: 2"). AC1's catch → ALREADY_PERSISTED behaviour is covered by
-    // SluPersistenceRetrierTest (unit) and its effect on the snapshot write by SluPersistenceDispatcherTest.
-    // A hardened, orphan-free concurrency IT is filed as a skillars-deferred-89 residual.
+    // Two BookingCompletedEvent deliveries for one session both pass the non-locking
+    // existsBySessionId / findBySessionId guards, both reach saveAll, and the loser's INSERT collides
+    // with V47's uq_player_skill_stats_session_skill (PG 23505). saveSluWithRetry must catch that
+    // specific constraint and return ALREADY_PERSISTED (a clean idempotent no-op), NOT retry 3× and
+    // log a false "rows lost … manual recovery needed" @Recover ERROR.
+    //
+    // The loser is submitted through SluPersistenceDispatcher.dispatchSluPersistence(...) — the same
+    // @Async gating bean SluCalculationService.onBookingCompleted invokes — NOT saveSluWithRetry
+    // directly. That is what makes the "no snapshot-applied marker" assertion meaningful: it proves
+    // the dispatcher observed ALREADY_PERSISTED and deliberately SKIPPED writeAllWithRetry, rather
+    // than being trivially zero because the snapshot path was never entered. (The SLU computation in
+    // onBookingCompleted is orthogonal to the delivery race and is covered by the onBookingCompleted_*
+    // tests above.)
+    //
+    // Orphan-free (this IT was backed out once, master run 33479590672, for a worker thread that
+    // outlived @AfterEach): the "winner" JDBC connection is hand-managed so the finally block can
+    // rollback() it before we wait for the async task to finish; we always wait for the dispatcher's
+    // terminal log line before the cleanup DELETE, so no row/marker is written after cleanup; a hard
+    // DELETE ... WHERE session_id = ? runs regardless of outcome.
+    //
+    // Determinism: the winner inserts the (session_id, skill_code) rows and holds its tx OPEN; the
+    // async task's saveAll flush blocks on that uncommitted unique key. We wait via pg_blocking_pids()
+    // until a backend is blocked *specifically by the winner's backend PID* (not a fuzzy query-text
+    // match that unrelated backends could satisfy), THEN commit the winner, so the task
+    // deterministically takes the 23505 path (never the existsBySessionId short-circuit).
+    @Test
+    void dispatchSluPersistence_concurrentDeliveryCollisionOnV47_skipsSnapshotWrite_noRecoverError() throws Exception {
+        final UUID sessionId = UUID.randomUUID();
+        final List<PlayerSkillStat> losingDelivery = buildStats(sessionId, "PAC", "10.0000", "SHO", "4.0000");
+        final ZonedDateTime now = ZonedDateTime.ofInstant(Instant.now(), ZoneOffset.UTC);
+        final short isoYear = (short) now.get(IsoFields.WEEK_BASED_YEAR);
+        final short isoWeek = (short) now.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
+
+        // One appender across both loggers: the retrier logs "already persisted by a concurrent
+        // delivery" and the false "rows lost" @Recover ERROR; the dispatcher logs the terminal
+        // skip/finish line we wait on.
+        final ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
+        logCapture.start();
+        final Logger retrierLogger = (Logger) LoggerFactory.getLogger(SluPersistenceRetrier.class);
+        final Logger dispatcherLogger = (Logger) LoggerFactory.getLogger(SluPersistenceDispatcher.class);
+        retrierLogger.addAppender(logCapture);
+        dispatcherLogger.addAppender(logCapture);
+
+        final java.sql.Connection winner = dataSource.getConnection();
+        boolean winnerCommitted = false;
+        // End-state facts captured inside the finally, BEFORE the hard cleanup DELETE removes them.
+        final int[] statRowsForSession = {-1};
+        final int[] markersForSession = {-1};
+        try {
+            winner.setAutoCommit(false);
+            final int winnerPid;
+            try (java.sql.Statement st = winner.createStatement();
+                 java.sql.ResultSet rs = st.executeQuery("SELECT pg_backend_pid()")) {
+                rs.next();
+                winnerPid = rs.getInt(1);
+            }
+            try (java.sql.PreparedStatement ps = winner.prepareStatement(
+                "INSERT INTO development.player_skill_stats "
+                    + "(id, player_id, session_id, coach_id, skill_code, slu_value, calculated_at) "
+                    + "VALUES (gen_random_uuid(), ?, ?, ?, ?, ?, now())")) {
+                for (String skillCode : List.of("PAC", "SHO")) {
+                    ps.setLong(1, TEST_PLAYER_ID);
+                    ps.setObject(2, sessionId);
+                    ps.setObject(3, TEST_COACH_ID);
+                    ps.setString(4, skillCode);
+                    ps.setBigDecimal(5, new BigDecimal("1.0000"));
+                    ps.addBatch();
+                }
+                ps.executeBatch(); // winner's rows written, NOT committed
+            }
+
+            // Fire the loser through the real @Async dispatch chain (runs on sluRetryExecutor).
+            sluPersistenceDispatcher.dispatchSluPersistence(losingDelivery, isoYear, isoWeek);
+
+            // Wait until a backend is blocked specifically by the winner, then release it.
+            await().atMost(20, SECONDS).until(() -> {
+                Integer blocked = jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM pg_stat_activity WHERE ? = ANY(pg_blocking_pids(pid))",
+                    Integer.class, winnerPid);
+                return blocked != null && blocked > 0;
+            });
+            winner.commit();
+            winnerCommitted = true;
+
+            // The async task's terminal log line = it returned.
+            awaitDispatcherTerminalLine(logCapture);
+        } finally {
+            try {
+                if (!winnerCommitted) {
+                    winner.rollback();
+                }
+            } catch (java.sql.SQLException ignored) {
+                // best effort
+            } finally {
+                winner.close();
+            }
+            // Make sure the async task has finished (and written whatever it was going to) BEFORE we
+            // snapshot + delete, so nothing lands in the table after cleanup — even on a failure path
+            // where the winner was rolled back and the loser therefore won.
+            try {
+                awaitDispatcherTerminalLine(logCapture);
+            } catch (RuntimeException ignored) {
+                // timed out — cleanup below still runs; the assertions report the real failure
+            }
+            retrierLogger.detachAppender(logCapture);
+            dispatcherLogger.detachAppender(logCapture);
+            transactionTemplate.execute(status -> {
+                Integer stats = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM development.player_skill_stats WHERE session_id = ?",
+                    Integer.class, sessionId);
+                Integer markers = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM development.player_slu_weekly_snapshot_applied WHERE session_id = ?",
+                    Integer.class, sessionId);
+                statRowsForSession[0] = stats != null ? stats : -1;
+                markersForSession[0] = markers != null ? markers : -1;
+                jdbcTemplate.update("DELETE FROM development.player_slu_weekly_snapshot_applied WHERE session_id = ?", sessionId);
+                jdbcTemplate.update("DELETE FROM development.player_skill_stats WHERE session_id = ?", sessionId);
+                return null;
+            });
+        }
+
+        // The dispatcher observed ALREADY_PERSISTED and skipped the snapshot write …
+        assertThat(logCapture.list)
+            .anyMatch(e -> e.getFormattedMessage().contains("already persisted by a concurrent delivery"));
+        assertThat(logCapture.list)
+            .anyMatch(e -> e.getFormattedMessage().contains("skipping this task's weekly-snapshot write"));
+        // … it did NOT take the SAVED branch (which would have written a marker) …
+        assertThat(logCapture.list)
+            .noneMatch(e -> e.getFormattedMessage().contains("persistence chain finished"));
+        // … and the false @Recover "rows lost" ERROR did NOT fire.
+        assertThat(logCapture.list)
+            .noneMatch(e -> e.getLevel() == Level.ERROR && e.getFormattedMessage().contains("rows lost"));
+        // Exactly the winner's two detail rows for the session — the losing saveAll added nothing.
+        assertThat(statRowsForSession[0]).isEqualTo(2);
+        // No snapshot-applied marker for the losing delivery → the weekly total can never gain a
+        // value the winner's single delivery does not back. Meaningful now: the dispatch chain ran.
+        assertThat(markersForSession[0]).isZero();
+    }
+
+    /** Awaits the one terminal log line {@code SluPersistenceDispatcher} emits per invocation. */
+    private static void awaitDispatcherTerminalLine(ListAppender<ILoggingEvent> logCapture) {
+        await().atMost(20, SECONDS).until(() -> {
+            final List<ILoggingEvent> snapshot;
+            try {
+                snapshot = new ArrayList<>(logCapture.list);
+            } catch (java.util.ConcurrentModificationException retryNextPoll) {
+                return false;
+            }
+            return snapshot.stream().anyMatch(e -> {
+                final String m = e.getFormattedMessage();
+                return m.contains("weekly-snapshot write") || m.contains("persistence chain finished");
+            });
+        });
+    }
 
     @Test
     void upsertAddIdempotent_firstCallAppliesDeltaAndMarker_secondCallIsNoOp() {

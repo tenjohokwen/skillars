@@ -5,6 +5,7 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.time.Instant;
 import java.util.List;
@@ -12,6 +13,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 // Boundary coverage for BookingRepository.findOverlappingBookings' half-open interval logic
 // (Story 3.11 review patch) — bookings.coach_id/parent_id/player_id carry no FK constraints, so
@@ -144,6 +146,48 @@ class BookingRepositoryIT extends AbstractIntegrationTest {
         assertThat(reloaded.get().getPlayerId()).isEqualTo(originalPlayerId);
         assertThat(reloaded.get().getCoachId()).isEqualTo(originalCoachId);
         assertThat(reloaded.get().getStatus()).isEqualTo("DECLINED");
+    }
+
+    // skillars-deferred-90 AC1: pins the premise that a V87 excl_bkg_coach_slot_overlap breach
+    // reaches the app as a Hibernate ConstraintViolationException with a NULL constraint name and
+    // SQLSTATE 23P01 (PostgreSQLDialect's templated extractor only names 23502/23503/23505/23514).
+    // ApiAdvice.integrityViolationHandler recovers this to a clean 409 booking.slotUnavailable;
+    // if the driver/Hibernate ever starts populating the name this test flips and we can simplify.
+    @Test
+    void overlappingAcceptedBookings_tripExclusionConstraint_withNullNameAnd23P01State() {
+        coachId = UUID.randomUUID();
+        Instant start = Instant.now().plusSeconds(172_800);
+        Instant end = start.plusSeconds(3600);
+
+        Booking first = new Booking();
+        first.setParentId(1L);
+        first.setPlayerId(1L);
+        first.setCoachId(coachId);
+        first.setRequestedStartTime(start);
+        first.setRequestedEndTime(end);
+        first.setCanonicalTimezone("Europe/Berlin");
+        first.setStatus("ACCEPTED");
+        bookingRepository.save(first);
+
+        Booking overlapping = new Booking();
+        overlapping.setParentId(2L);
+        overlapping.setPlayerId(2L);
+        overlapping.setCoachId(coachId);
+        overlapping.setRequestedStartTime(start.plusSeconds(1800));
+        overlapping.setRequestedEndTime(end.plusSeconds(1800));
+        overlapping.setCanonicalTimezone("Europe/Berlin");
+        overlapping.setStatus("ACCEPTED");
+
+        Throwable thrown = catchThrowable(() -> bookingRepository.save(overlapping));
+
+        assertThat(thrown).isInstanceOf(DataIntegrityViolationException.class);
+        Throwable cause = thrown.getCause();
+        assertThat(cause).isInstanceOf(org.hibernate.exception.ConstraintViolationException.class);
+        org.hibernate.exception.ConstraintViolationException cve =
+            (org.hibernate.exception.ConstraintViolationException) cause;
+        assertThat(cve.getConstraintName()).as("PostgreSQLDialect does not template a 23P01 name").isNull();
+        assertThat(cve.getSQLState()).isEqualTo("23P01");
+        assertThat(cve.getSQLException().getMessage()).contains("excl_bkg_coach_slot_overlap");
     }
 
     private Booking seedExisting() {

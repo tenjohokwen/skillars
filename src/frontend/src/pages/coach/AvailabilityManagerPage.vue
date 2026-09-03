@@ -297,7 +297,9 @@ function localDateTimeToUtc(dateStr, timeStr, tz) {
   // Parse the date+time as a wall-clock time in the coach's canonical timezone,
   // then convert to UTC ISO string. Uses Intl to determine the UTC offset at that instant.
   const naiveIso = `${dateStr}T${timeStr}:00`
-  // Find the UTC offset for this wall-clock time in the target timezone
+  // Find the UTC offset for this wall-clock time in the target timezone.
+  // skillars-deferred-90 AC11 exclusion: 'en-CA' is a MACHINE format (ISO date parts consumed
+  // arithmetically for the offset calc), never user-facing. Do NOT localize.
   const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone: tz,
     year: 'numeric',

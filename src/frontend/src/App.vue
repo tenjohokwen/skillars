@@ -12,14 +12,16 @@ import SessionWarningDialog from 'src/components/common/SessionWarningDialog.vue
 import { startSessionMonitoring, stopSessionMonitoring, cleanup } from 'src/plugins/sessionManager';
 import { useAuthStore } from 'src/stores/auth.store';
 import { usePlayerStore } from 'src/stores/playerStore';
+import { hasUserSession } from 'src/utils/sessionCookies';
 
 const router = useRouter();
 const authStore = useAuthStore();
 const playerStore = usePlayerStore();
 
 function isAuthenticated() {
-  // Exact cookie-name match: a bare `.includes('user=')` would also match e.g. `xuser=...`
-  return document.cookie.split(';').some((c) => c.trim().startsWith('user='));
+  // Exact cookie-name match AND a non-empty, non-sentinel value: a bare `user=` (empty value) is
+  // not a session. See utils/sessionCookies.js (skillars-deferred-90 AC2).
+  return hasUserSession();
 }
 
 function handleSessionExpired() {

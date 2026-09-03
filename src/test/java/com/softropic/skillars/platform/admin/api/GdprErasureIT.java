@@ -31,6 +31,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
@@ -57,6 +58,7 @@ class GdprErasureIT extends AbstractIntegrationTest {
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private HttpTestClient httpTestClient;
     @Autowired private PasswordEncoder passwordEncoder;
+    @Autowired private com.softropic.skillars.platform.filestorage.service.PendingBlobDeletionService pendingBlobDeletionService;
 
     @LocalServerPort private int randomServerPort;
 
@@ -326,6 +328,72 @@ class GdprErasureIT extends AbstractIntegrationTest {
         int count = jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM development.performance_reports WHERE id = ?", Integer.class, reportId);
         assertThat(count).isZero();
+    }
+
+    // ── skillars-deferred-90 AC13: durable pending-deletion outbox + AFTER_COMMIT drain ──────────
+
+    @Test
+    void erase_playerUser_reportKeyGoesThroughPendingOutbox_thenDrainClearsIt() {
+        UUID reportId = UUID.randomUUID();
+        String storageKey = "reports/" + reportId + "/report.pdf";
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO development.performance_reports "
+                    + "(id, coach_id, player_id, generated_at, storage_key, next_steps) "
+                    + "VALUES (?, ?, ?, ?, ?, 'x')",
+                reportId, coachProfileId, PLAYER_ID, Timestamp.from(Instant.now()), storageKey);
+            return null;
+        });
+
+        String cookies = loginAndGetCookies(PLAYER_EMAIL);
+        httpTestClient.makeHttpRequest(
+            baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class);
+
+        // The AFTER_COMMIT drain ran the S3 delete for the enqueued key, and — on success — removed
+        // its outbox row, so the table holds nothing for this key.
+        verify(fileStorageService).deleteRawBytes(storageKey);
+        assertThat(pendingRowCount(storageKey)).isZero();
+    }
+
+    @Test
+    void erase_playerUser_s3DeleteFails_leavesPendingRow_reDrivableOnNextDrain() {
+        UUID reportId = UUID.randomUUID();
+        String storageKey = "reports/" + reportId + "/report.pdf";
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO development.performance_reports "
+                    + "(id, coach_id, player_id, generated_at, storage_key, next_steps) "
+                    + "VALUES (?, ?, ?, ?, ?, 'x')",
+                reportId, coachProfileId, PLAYER_ID, Timestamp.from(Instant.now()), storageKey);
+            return null;
+        });
+        doThrow(new RuntimeException("simulated S3 failure")).when(fileStorageService).deleteRawBytes(storageKey);
+
+        String cookies = loginAndGetCookies(PLAYER_EMAIL);
+        httpTestClient.makeHttpRequest(
+            baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class);
+
+        // Erasure still completed (DB row gone) …
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.performance_reports WHERE id = ?", Integer.class, reportId)).isZero();
+        // … and the failed S3 delete left its outbox row behind with attempts incremented.
+        Integer attempts = jdbcTemplate.queryForObject(
+            "SELECT attempts FROM main.pending_blob_deletions WHERE storage_key = ?", Integer.class, storageKey);
+        // Exactly one AFTER_COMMIT drain runs in this scenario (the scheduled sweep is disabled
+        // under the test profile), so >= 1 could not fail where it mattered — it also passed if the
+        // sweep mis-fired and retried the row repeatedly, which is the thing worth catching.
+        assertThat(attempts).isEqualTo(1);
+
+        // Re-drivable: with S3 healthy again, a plain drain empties the table.
+        reset(fileStorageService);
+        pendingBlobDeletionService.drain();
+        assertThat(pendingRowCount(storageKey)).isZero();
+    }
+
+    private int pendingRowCount(String storageKey) {
+        Integer c = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM main.pending_blob_deletions WHERE storage_key = ?", Integer.class, storageKey);
+        return c != null ? c : -1;
     }
 
     @Test

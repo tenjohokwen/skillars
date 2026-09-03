@@ -28,14 +28,14 @@ const props = defineProps({
   currency: { type: String, default: 'EUR' },
 })
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 const hasContent = computed(
   () => props.sessionPacks.length > 0 || props.perSessionPrice != null,
 )
 
 function formatPrice(value) {
-  return new Intl.NumberFormat(undefined, { style: 'currency', currency: props.currency }).format(Number(value))
+  return new Intl.NumberFormat(locale.value, { style: 'currency', currency: props.currency }).format(Number(value))
 }
 
 function packLabel(pack) {

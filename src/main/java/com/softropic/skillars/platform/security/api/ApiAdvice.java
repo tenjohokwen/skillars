@@ -5,6 +5,7 @@ import com.softropic.skillars.infrastructure.exception.ApplicationException;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.message.EmailTokenErrorDto;
 import com.softropic.skillars.infrastructure.message.ErrorDto;
+import com.softropic.skillars.infrastructure.message.ErrorLog;
 import com.softropic.skillars.infrastructure.message.ErrorMsg;
 import com.softropic.skillars.infrastructure.blobstore.contract.BlobstoreErrorCode;
 import com.softropic.skillars.infrastructure.blobstore.contract.exception.StorageObjectNotFoundException;
@@ -65,22 +66,18 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
-import org.sqids.Sqids;
-
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.UUID;
 
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 
-import static net.logstash.logback.argument.StructuredArguments.entries;
 import static net.logstash.logback.argument.StructuredArguments.kv;
 
 /**
@@ -92,7 +89,6 @@ import static net.logstash.logback.argument.StructuredArguments.kv;
 @Slf4j
 @RestControllerAdvice
 public class ApiAdvice {
-    private static final Sqids SQIDS = Sqids.builder().alphabet("ZG8K7aeb9hALF3OcTw5SNMQqC1oVJvtEsljDnIfx0zyH2rdRpmYUkP46guXiBW").build();
 
     private final MessageSource messageSource;
 
@@ -156,17 +152,31 @@ public class ApiAdvice {
         "uq_pot_one_active_per_user"
     );
 
+    // PostgreSQL exclusion-constraint violations (SQLSTATE 23P01) are not in Hibernate's
+    // TemplatedViolatedConstraintNameExtractor lookupswitch, so the dialect maps the name to null.
+    // Recover it from the driver message so the V87 double-booking backstop still maps cleanly.
+    private static final java.util.regex.Pattern EXCLUSION_CONSTRAINT_NAME =
+        java.util.regex.Pattern.compile("violates exclusion constraint \"([^\"]+)\"");
+
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<ErrorDto> integrityViolationHandler(final DataIntegrityViolationException dive) {
         final Throwable throwable = dive.getCause();
         if (throwable instanceof org.hibernate.exception.ConstraintViolationException cve) {
-            final String constraintName = cve.getConstraintName();
-            final String messageKey = CONSTRAINT_MAPPINGS.getOrDefault(constraintName, "generic.dataError");
+            final String constraintName = resolveConstraintName(cve);
 
             // Log the raw constraint name for internal debugging, but return a sanitized DTO
             log.warn("Database constraint violation", kv("constraint", constraintName));
 
-            HttpStatus status = CONFLICT_CONSTRAINTS.contains(constraintName)
+            // Null-guard: Hibernate's PostgreSQLDialect only templates a constraint name for
+            // SQLSTATE 23502/23503/23505/23514. Exclusion violations (23P01, recovered above) and
+            // RESTRICT (23001) otherwise arrive null; a still-null name is genuinely unmappable and
+            // must not be handed to Map.of/Set.of (which NPE on a null key) — it falls through to
+            // the generic 400 branch instead.
+            final String messageKey = constraintName != null
+                ? CONSTRAINT_MAPPINGS.getOrDefault(constraintName, "generic.dataError")
+                : "generic.dataError";
+
+            final HttpStatus status = constraintName != null && CONFLICT_CONSTRAINTS.contains(constraintName)
                 ? HttpStatus.CONFLICT
                 : HttpStatus.BAD_REQUEST;
             return ResponseEntity.status(status)
@@ -174,6 +184,34 @@ public class ApiAdvice {
         }
         return ResponseEntity.badRequest()
             .body(logErrorAndReturnDTO(throwable, "Data integrity error", "generic.dataError"));
+    }
+
+    /**
+     * Returns the violated constraint's name, recovering the PostgreSQL exclusion-constraint
+     * (SQLSTATE 23P01) case that Hibernate's templated extractor converts to {@code null}
+     * ({@code Integer.parseInt("23P01")} throws inside {@code TemplatedViolatedConstraintNameExtractor}
+     * and the result is swallowed). All other null names (e.g. 23001 RESTRICT) stay {@code null}
+     * and fall through to the generic data-error branch.
+     */
+    private static String resolveConstraintName(final org.hibernate.exception.ConstraintViolationException cve) {
+        final String name = cve.getConstraintName();
+        if (name != null) {
+            return name;
+        }
+        if ("23P01".equals(cve.getSQLState())) {
+            final java.sql.SQLException sqlException = cve.getSQLException();
+            final String detail = sqlException != null ? sqlException.getMessage() : cve.getMessage();
+            if (detail != null) {
+                final java.util.regex.Matcher m = EXCLUSION_CONSTRAINT_NAME.matcher(detail);
+                if (m.find()) {
+                    return m.group(1);
+                }
+            }
+            // This codebase declares exactly one exclusion constraint (V87). If the driver message
+            // format ever changes, still map the 23P01 to it rather than leaking an unmapped 500.
+            return "excl_bkg_coach_slot_overlap";
+        }
+        return null;
     }
 
     /**
@@ -639,19 +677,8 @@ public class ApiAdvice {
     }
 
     private String logError(Throwable throwable, String msgTemplate)  {
-        String errorCode;
-        Map<String, Object> ctx = new HashMap<>();
-        if(throwable instanceof ApplicationException applicationException) {
-            errorCode = applicationException.getSupportId();
-            //Get and log the context as well
-            ctx = applicationException.getLogContext();
-        } else {
-            errorCode = SQIDS.encode(List.of(Integer.toUnsignedLong(UUID.randomUUID().hashCode())));
-        }
-
-        final String templateWithSupportId = msgTemplate + " SUPPORT_ID: %s";
-        final String fullMsg = String.format(templateWithSupportId, errorCode);
-        log.error(fullMsg, entries(ctx), throwable);
-        return errorCode;
+        // Shared with JWTAuthorizationFilter.writeUnauthorized (skillars-deferred-90 AC5). `log` is
+        // passed through so the line keeps this class's logger category.
+        return ErrorLog.logError(log, throwable, msgTemplate);
     }
 }

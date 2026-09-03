@@ -15,7 +15,7 @@ import com.softropic.skillars.platform.development.repo.RadarAssessmentRepositor
 import com.softropic.skillars.platform.development.repo.SluRepository;
 import com.softropic.skillars.platform.development.repo.SluTargetRepository;
 import com.softropic.skillars.platform.development.repo.SluWeeklySnapshotRepository;
-import com.softropic.skillars.platform.filestorage.service.FileStorageService;
+import com.softropic.skillars.platform.filestorage.service.PendingBlobDeletionService;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.messaging.repo.MessageRepository;
 import com.softropic.skillars.platform.reviews.repo.CoachReviewRepository;
@@ -39,6 +39,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -67,7 +68,7 @@ public class GdprErasureService {
     private final PerformanceReportRepository performanceReportRepository;
     private final PlayerTimelineRepository playerTimelineRepository;
     private final HomeworkCompletionRepository homeworkCompletionRepository;
-    private final FileStorageService fileStorageService;
+    private final PendingBlobDeletionService pendingBlobDeletionService;
     private final RefreshTokenRepository refreshTokenRepository;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -115,11 +116,18 @@ public class GdprErasureService {
         coachReviewRepository.deleteNonApprovedByAuthorId(userId, ReviewModerationStatus.APPROVED);
         coachReviewRepository.anonymiseApprovedReviews(userId);
 
+        // skillars-deferred-90 AC13: collect every S3 storage key that needs deleting into a durable
+        // outbox row instead of issuing N blocking deleteObject calls inside this transaction. The
+        // AFTER_COMMIT drain in PendingBlobDeletionService deletes them off this request path and
+        // retries failures on the next drain.
+        List<String> blobKeysToDelete = new ArrayList<>();
+
         // Delete player development data
         if (role == SkillarsRole.PLAYER) {
-            deletePlayerDevelopmentData(userId);
+            deletePlayerDevelopmentData(userId, blobKeysToDelete);
         } else if (role == SkillarsRole.PARENT) {
-            playerProfileRepository.findByParentId(userId).forEach(pp -> deletePlayerDevelopmentData(pp.getId()));
+            playerProfileRepository.findByParentId(userId)
+                .forEach(pp -> deletePlayerDevelopmentData(pp.getId(), blobKeysToDelete));
         }
 
         // Revoke all refresh tokens so existing sessions are rejected on the next request
@@ -128,16 +136,15 @@ public class GdprErasureService {
         // Delete old GDPR requests (>30 days)
         gdprRequestRepository.deleteExpiredByUserId(userId, Instant.now().minus(30, ChronoUnit.DAYS));
 
-        // Delete S3 files from previously COMPLETED export requests
+        // S3 files from previously COMPLETED export requests — enqueued, not deleted inline.
         gdprRequestRepository.findByUserIdAndRequestTypeAndStatus(userId, "EXPORT", "COMPLETED")
-            .forEach(completedExport -> {
-                try {
-                    fileStorageService.deleteRawBytes("gdpr/exports/" + completedExport.getId() + ".zip");
-                } catch (Exception e) {
-                    log.warn("[GDPR_ERASURE_S3_DELETE_WARN] Failed to delete export zip for requestId={} userId={}",
-                        completedExport.getId(), userId, e);
-                }
-            });
+            .forEach(completedExport ->
+                blobKeysToDelete.add("gdpr/exports/" + completedExport.getId() + ".zip"));
+
+        // Persist the pending-deletion rows inside THIS transaction (so a post-commit S3 failure is
+        // re-drivable) and ask for the drain to run once, after this transaction commits.
+        pendingBlobDeletionService.enqueue(blobKeysToDelete);
+        pendingBlobDeletionService.requestDrainAfterCommit();
 
         // Mark erasure complete
         request.setStatus("COMPLETED");
@@ -184,7 +191,7 @@ public class GdprErasureService {
         });
     }
 
-    private void deletePlayerDevelopmentData(Long playerId) {
+    private void deletePlayerDevelopmentData(Long playerId, List<String> blobKeysToDelete) {
         playerTimelineRepository.deleteByPlayerId(playerId);
         sluRepository.deleteAllByPlayerId(playerId);
         sluWeeklySnapshotRepository.deleteAllByPlayerId(playerId);
@@ -196,14 +203,9 @@ public class GdprErasureService {
         radarAssessmentRepository.deleteAllByPlayerId(playerId);
         performanceReportRepository.findByPlayerIdOrderByGeneratedAtDesc(playerId).forEach(report -> {
             // Deferred-77 AC2: a PENDING_UPLOAD/UPLOAD_FAILED report may have no storage_key yet.
-            if (report.getStorageKey() == null) {
-                return;
-            }
-            try {
-                fileStorageService.deleteRawBytes(report.getStorageKey());
-            } catch (Exception e) {
-                log.warn("[GDPR_ERASURE_S3_DELETE_WARN] Failed to delete performance report PDF: "
-                    + "reportId={} playerId={}", report.getId(), playerId, e);
+            // skillars-deferred-90 AC13: enqueue the key, don't delete from S3 inside this transaction.
+            if (report.getStorageKey() != null) {
+                blobKeysToDelete.add(report.getStorageKey());
             }
         });
         performanceReportRepository.deleteAllByPlayerId(playerId);

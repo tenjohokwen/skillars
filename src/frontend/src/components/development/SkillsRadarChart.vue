@@ -146,7 +146,7 @@
 
         <!-- Last-updated tooltip -->
         <q-tooltip v-if="node.skill.lastUpdatedAt">
-          {{ $t('development.radar.lastUpdatedTooltip', { date: new Date(node.skill.lastUpdatedAt).toLocaleDateString() }) }}
+          {{ $t('development.radar.lastUpdatedTooltip', { date: new Date(node.skill.lastUpdatedAt).toLocaleDateString(locale.value) }) }}
         </q-tooltip>
       </g>
     </svg>
@@ -178,6 +178,10 @@
 
 <script setup>
 import { computed, toRefs } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+// skillars-deferred-90 AC11: render dates in the active app locale, not the visitor's browser locale.
+const { locale } = useI18n()
 
 const props = defineProps({
   skills: { type: Array, required: true },

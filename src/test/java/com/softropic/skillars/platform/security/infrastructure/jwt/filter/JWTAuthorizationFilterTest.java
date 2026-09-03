@@ -5,8 +5,10 @@ import com.softropic.skillars.infrastructure.security.AuthorizationException;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.infrastructure.security.event.PreAuthEvent;
 import com.softropic.skillars.platform.security.contract.Principal;
+import com.softropic.skillars.platform.security.contract.event.SecurityAlertEvent;
 import com.softropic.skillars.platform.security.contract.exception.InvalidJWTDataException;
 import com.softropic.skillars.platform.security.contract.exception.JWTExpiredException;
+import com.softropic.skillars.platform.security.contract.exception.JWTTheftException;
 import com.softropic.skillars.platform.security.infrastructure.SecuredHttpEndpointGuard;
 import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.service.DaoAuthProvider;
@@ -354,6 +356,76 @@ class JWTAuthorizationFilterTest {
         verify(eventPublisher).publishEvent(any(PreAuthEvent.class)); // Or a more specific custom event
         verify(securedHttpEndpointGuard).isUnrestricted(request);
         verify(loginTokenManager, never()).extendTtlOfToken(any(), any());
+    }
+
+    // --- skillars-deferred-90 AC5: helpCode + scoped SecurityAlertEvent -------------------------
+
+    @Test
+    @DisplayName("AC5: filter-origin 401 body now carries a non-null helpCode")
+    void testWriteUnauthorized_populatesHelpCode() throws ServletException, IOException {
+        when(loginTokenManager.extractPrincipal(request)).thenReturn(null); // MissingAuthenticationException
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        assertTrue(responseBody.toString().matches("(?s).*\"helpCode\":\"[^\"]+\".*"),
+                "401 body must carry a non-null helpCode, was: " + responseBody);
+    }
+
+    @Test
+    @DisplayName("AC5: no SecurityAlertEvent for a tokenless request (MissingAuthenticationException)")
+    void testNoSecurityAlert_forMissingToken() throws ServletException, IOException {
+        when(loginTokenManager.extractPrincipal(request)).thenReturn(null);
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        verify(eventPublisher, never()).publishEvent(any(SecurityAlertEvent.class));
+    }
+
+    @Test
+    @DisplayName("AC5: no SecurityAlertEvent for an expired JWT")
+    void testNoSecurityAlert_forExpiredJwt() throws ServletException, IOException {
+        when(loginTokenManager.extractPrincipal(request))
+                .thenThrow(new JWTExpiredException("Token expired", null, null));
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        verify(eventPublisher, never()).publishEvent(any(SecurityAlertEvent.class));
+    }
+
+    @Test
+    @DisplayName("AC5: SecurityAlertEvent IS fired for token fixation (JWTTheftException)")
+    void testSecurityAlert_forTokenFixation() throws ServletException, IOException {
+        when(loginTokenManager.extractPrincipal(request)).thenReturn(principal);
+        when(loadUserByUserNameService.loadUserByUsername("testuser")).thenReturn(userDetails);
+        when(loginTokenManager.isTokenFixed(request)).thenReturn(true);
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        verify(eventPublisher).publishEvent(any(SecurityAlertEvent.class));
+    }
+
+    @Test
+    @DisplayName("AC5: SecurityAlertEvent IS fired for an invalid-signature token (InvalidJWTDataException)")
+    void testSecurityAlert_forInvalidJwtData() throws ServletException, IOException {
+        when(loginTokenManager.extractPrincipal(request))
+                .thenThrow(new InvalidJWTDataException("Invalid signature", null));
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        verify(eventPublisher).publishEvent(any(SecurityAlertEvent.class));
+    }
+
+    @Test
+    @DisplayName("AC5: SecurityAlertEvent IS fired for a locked account (AccountStatusException)")
+    void testSecurityAlert_forLockedAccount() throws ServletException, IOException {
+        when(loginTokenManager.extractPrincipal(request)).thenReturn(principal);
+        when(loginTokenManager.isTokenFixed(request)).thenReturn(false);
+        when(loginTokenManager.hasDbRefreshTokenExpired(request)).thenReturn(true);
+        when(daoAuthProvider.authorize(any(), any())).thenThrow(new LockedException("Account is locked"));
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        verify(eventPublisher).publishEvent(any(SecurityAlertEvent.class));
     }
 
 }

@@ -7,6 +7,7 @@ import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagReposi
 import com.softropic.skillars.platform.development.repo.SluTargetRepository;
 import com.softropic.skillars.platform.development.repo.SluWeeklySnapshotRepository;
 import com.softropic.skillars.platform.security.SecurityIT;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -20,6 +21,7 @@ import java.time.ZonedDateTime;
 import java.time.temporal.IsoFields;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -32,13 +34,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
 class NeglectedSkillDetectionServiceIT extends AbstractIntegrationTest {
 
-    private static final long PLAYER_ID = 9360000001L;
+    // skillars-deferred-90 AC8: was a hardcoded literal (9360000001L) reused against the shared
+    // SecurityIT.SEC_DATA_SQL_PATH bundle — a per-run id + explicit teardown removes the collision.
+    private final long playerId = ThreadLocalRandom.current().nextLong(8_000_000_000L, 8_999_999_999L);
     private static final String SKILL_CODE = "PAC";
     // threshold=0.30 → lowerBound = maxTarget * 0.70
     private static final BigDecimal THRESHOLD = new BigDecimal("0.30");
-    // Story Deferred-76 AC9: this IT never seeds development.player_skill_stats rows for PLAYER_ID
-    // (only slu_targets and player_slu_weekly_snapshot, written directly via JDBC), so
-    // countDistinctSessions(PLAYER_ID) is 0 here — 0 keeps the new warmup gate a no-op so this IT's
+    // Story Deferred-76 AC9: this IT never seeds development.player_skill_stats rows for playerId
+    // (only player_slu_targets and player_slu_weekly_snapshot, written directly via JDBC), so
+    // countDistinctSessions(playerId) is 0 here — 0 keeps the new warmup gate a no-op so this IT's
     // actual subject (the MAX-across-coaches query) is unaffected by warmup behavior.
     private static final long WARMUP_SESSION_COUNT = 0L;
 
@@ -51,6 +55,16 @@ class NeglectedSkillDetectionServiceIT extends AbstractIntegrationTest {
 
     private short evalYear;
     private short evalWeek;
+
+    @AfterEach
+    void cleanupPlayerRows() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update("DELETE FROM development.neglected_skill_flags WHERE player_id = ?", playerId);
+            jdbcTemplate.update("DELETE FROM development.player_slu_weekly_snapshot WHERE player_id = ?", playerId);
+            jdbcTemplate.update("DELETE FROM development.player_slu_targets WHERE player_id = ?", playerId);
+            return null;
+        });
+    }
 
 
     @Test
@@ -68,7 +82,7 @@ class NeglectedSkillDetectionServiceIT extends AbstractIntegrationTest {
 
         // actual = 5 → below both possible lower bounds → flagged (sanity baseline)
         setSnapshotTotal(new BigDecimal("5"));
-        processor.processPlayer(PLAYER_ID, THRESHOLD, WARMUP_SESSION_COUNT, evalYear, evalWeek);
+        processor.processPlayer(playerId, THRESHOLD, WARMUP_SESSION_COUNT, evalYear, evalWeek);
         assertOpenFlagExists();
 
         // actual = 10 → ABOVE coach1's lower bound (7.0) but BELOW the highest lower bound (14.0).
@@ -76,24 +90,24 @@ class NeglectedSkillDetectionServiceIT extends AbstractIntegrationTest {
         // single coach_id (e.g. only coach1), this would incorrectly resolve the flag (10 >= 7.0).
         // With the real MAX-across-coaches query, the flag correctly stays open (10 < 14.0).
         setSnapshotTotal(new BigDecimal("10"));
-        processor.processPlayer(PLAYER_ID, THRESHOLD, WARMUP_SESSION_COUNT, evalYear, evalWeek);
+        processor.processPlayer(playerId, THRESHOLD, WARMUP_SESSION_COUNT, evalYear, evalWeek);
         assertOpenFlagExists();
 
         // actual = 14 → EXACTLY the highest lower bound. NeglectedSkillProcessor uses a strict
         // `actual.compareTo(lowerBound) < 0` check, so equality is NOT neglected — pins this
         // boundary so a future `<=` regression would be caught.
         setSnapshotTotal(new BigDecimal("14"));
-        processor.processPlayer(PLAYER_ID, THRESHOLD, WARMUP_SESSION_COUNT, evalYear, evalWeek);
+        processor.processPlayer(playerId, THRESHOLD, WARMUP_SESSION_COUNT, evalYear, evalWeek);
         assertNoOpenFlag();
 
         // actual = 20 → above the highest lower bound (14.0) → resolved
         setSnapshotTotal(new BigDecimal("20"));
-        processor.processPlayer(PLAYER_ID, THRESHOLD, WARMUP_SESSION_COUNT, evalYear, evalWeek);
+        processor.processPlayer(playerId, THRESHOLD, WARMUP_SESSION_COUNT, evalYear, evalWeek);
         assertNoOpenFlag();
     }
 
     private void seedTarget(UUID coachId, BigDecimal target) {
-        sluTargetRepository.upsert(coachId, PLAYER_ID, SKILL_CODE, target, Instant.now());
+        sluTargetRepository.upsert(coachId, playerId, SKILL_CODE, target, Instant.now());
     }
 
     private void setSnapshotTotal(BigDecimal total) {
@@ -104,19 +118,19 @@ class NeglectedSkillDetectionServiceIT extends AbstractIntegrationTest {
                 "VALUES (?, ?, ?, ?, ?) " +
                 "ON CONFLICT (player_id, skill_code, iso_year, iso_week) " +
                 "DO UPDATE SET total_slu = EXCLUDED.total_slu",
-                PLAYER_ID, SKILL_CODE, evalYear, evalWeek, total
+                playerId, SKILL_CODE, evalYear, evalWeek, total
             );
             return null;
         });
     }
 
     private void assertOpenFlagExists() {
-        List<NeglectedSkillFlag> flags = flagRepository.findByPlayerIdAndResolvedAtIsNull(PLAYER_ID);
+        List<NeglectedSkillFlag> flags = flagRepository.findByPlayerIdAndResolvedAtIsNull(playerId);
         assertThat(flags).anyMatch(f -> SKILL_CODE.equals(f.getSkillCode()));
     }
 
     private void assertNoOpenFlag() {
-        List<NeglectedSkillFlag> flags = flagRepository.findByPlayerIdAndResolvedAtIsNull(PLAYER_ID);
+        List<NeglectedSkillFlag> flags = flagRepository.findByPlayerIdAndResolvedAtIsNull(playerId);
         assertThat(flags).noneMatch(f -> SKILL_CODE.equals(f.getSkillCode()));
     }
 }

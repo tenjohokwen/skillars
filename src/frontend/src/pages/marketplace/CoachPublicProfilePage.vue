@@ -381,7 +381,7 @@ import SessionPackTracker from 'src/components/booking/SessionPackTracker.vue'
 
 const route = useRoute()
 const router = useRouter()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const $q = useQuasar()
 const authStore = useAuthStore()
 const bookingStore = useBookingStore()
@@ -522,7 +522,7 @@ function handleCta() {
 }
 
 function formatCurrency(value, currency = 'EUR') {
-  return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(Number(value))
+  return new Intl.NumberFormat(locale.value, { style: 'currency', currency }).format(Number(value))
 }
 
 function openLightbox(item) {
@@ -610,7 +610,7 @@ async function submitReviewDialog() {
 
 function formatDate(isoString) {
   if (!isoString) return ''
-  return new Date(isoString).toLocaleDateString()
+  return new Date(isoString).toLocaleDateString(locale.value)
 }
 </script>
 

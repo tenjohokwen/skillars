@@ -150,7 +150,7 @@ import { useRoute } from 'vue-router'
 import { usePaymentStore } from 'src/stores/payment.store'
 import PaymentMethodCard from 'src/components/payment/PaymentMethodCard.vue'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const $q = useQuasar()
 const route = useRoute()
 const paymentStore = usePaymentStore()
@@ -252,7 +252,7 @@ async function handleCancel() {
 
 function formatDate(iso) {
   if (!iso) return '—'
-  return new Date(iso).toLocaleDateString()
+  return new Date(iso).toLocaleDateString(locale.value)
 }
 </script>
 

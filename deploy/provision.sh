@@ -520,21 +520,61 @@ if [ -b "${VOLUME_DEVICE}" ]; then
   # line and would append a SECOND entry for the same mount point (double `mount -a` on next
   # reboot). So purge any non-matching line for this mount point first (mirrors install-crons.sh's
   # stale-cron purge), then add the by-id entry if absent.
-  # Match ONLY an active, non-comment line for ${MOUNT_POINT} whose device field is a real token
-  # (first non-whitespace char is not `#`): delete an operator's stale non-canonical mount line,
-  # never their commented-out alternate entry (skillars-deferred-88 AC4). One regex, used
-  # identically in the guard and the sed address so they cannot diverge. `,` is the sed address
-  # delimiter — `#` can't be (it appears inside the bracket expression) and `/` can't be (it is in
-  # ${MOUNT_POINT}). The sed also deletes the canonical FSTAB_ENTRY if present; the add-block just
-  # below re-adds it, so the net effect stays idempotent.
-  _fstab_stale_re="^[[:space:]]*[^#[:space:]][^[:space:]]*[[:space:]]+${MOUNT_POINT}[[:space:]]"
-  if grep -vFx "${FSTAB_ENTRY}" /etc/fstab | grep -qE "${_fstab_stale_re}"; then
+  # Match ONLY an active, non-comment fstab line whose mount-point field (column 2) is exactly
+  # ${MOUNT_POINT}: delete an operator's stale non-canonical mount line, never their commented-out
+  # alternate entry (skillars-deferred-88 AC4).
+  #
+  # skillars-deferred-90 AC7 (F18): field-equality via awk, NOT interpolating ${MOUNT_POINT} into a
+  # `grep -E` / `sed -E` pattern. ${MOUNT_POINT} derives from the operator-supplied ${DEPLOY_ROOT};
+  # a `.`, `[`, `+` etc. would alter the regex, and a `,` would break the `sed -i -E "\\,...,d"`
+  # address (its delimiter) — the exact failure class this block exists to prevent. awk's `$2 == mp`
+  # is a literal string compare with no metacharacter surface.
+  _fstab_active_lines_for_mount() {
+    awk -v mp="${MOUNT_POINT}" '
+      /^[[:space:]]*#/ { next }
+      /^[[:space:]]*$/ { next }
+      $2 == mp { print }
+    ' /etc/fstab
+  }
+  # true iff some active line for this mount point is not byte-identical to the canonical entry.
+  # Code review (3-layer run): capture first rather than piping straight into `grep -q`. Under
+  # `set -o pipefail` (line 5) `grep -q` exits on its first match, awk can then take SIGPIPE (141),
+  # and pipefail propagates that as the pipeline status — silently skipping the purge.
+  _fstab_active_for_mount="$(_fstab_active_lines_for_mount)"
+  if printf '%s\n' "${_fstab_active_for_mount}" | grep -qvFx "${FSTAB_ENTRY}" && [ -n "${_fstab_active_for_mount}" ]; then
     # Back up /etc/fstab ONLY on the run that actually mutates it (inside this `if`, not before it)
     # so an idempotent steady-state re-run does not drop a fresh /etc/fstab.bak.<ts> every time.
     _fstab_bak="/etc/fstab.bak.$(date +%Y%m%d%H%M%S)"
     cp -p /etc/fstab "${_fstab_bak}"
     log "Backed up /etc/fstab to ${_fstab_bak} before editing it."
-    sed -i -E "\\,${_fstab_stale_re},d" /etc/fstab
+    # Drop every active line for this mount point (the add-block just below re-adds the canonical
+    # one, so the net effect stays idempotent); comments and other mounts are left untouched.
+    # `cat tmp > file` rather than `mv` so /etc/fstab keeps its inode, owner and mode.
+    _fstab_tmp="/etc/fstab.tmp.$$"
+    awk -v mp="${MOUNT_POINT}" '
+      /^[[:space:]]*#/ { print; next }
+      $2 == mp { next }
+      { print }
+    ' /etc/fstab > "${_fstab_tmp}"
+    # Code review of skillars-deferred-90: `cat > /etc/fstab` preserves the inode/owner/mode (the
+    # reason it is used instead of `mv`) but truncates in place, so a partial write leaves the host
+    # with a mangled boot-critical file. /etc/fstab always has at least the root entry, so an empty
+    # or absent temp file means awk produced nothing and we must not write it. A backup was taken a
+    # few lines above; bail loudly rather than half-write.
+    if [ ! -s "${_fstab_tmp}" ]; then
+      rm -f "${_fstab_tmp}"
+      err "refusing to rewrite /etc/fstab: the filtered output was empty (backup at ${_fstab_bak})"
+      exit 1
+    fi
+    # Code review (3-layer run): restore from the backup if the in-place rewrite fails part-way,
+    # rather than leaving a truncated boot-critical file behind and still logging success.
+    if ! cat "${_fstab_tmp}" > /etc/fstab; then
+      cp -p "${_fstab_bak}" /etc/fstab
+      rm -f "${_fstab_tmp}"
+      err "failed to rewrite /etc/fstab; restored from ${_fstab_bak}"
+      exit 1
+    fi
+    rm -f "${_fstab_tmp}"
     log "Removed a stale /etc/fstab entry for ${MOUNT_POINT} (Volume is now referenced by its stable by-id path)."
   fi
   if ! grep -qF "${FSTAB_ENTRY}" /etc/fstab; then

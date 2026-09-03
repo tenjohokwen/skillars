@@ -217,6 +217,77 @@ class StripePaymentGatewayTest {
             .createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class));
     }
 
+    // --- skillars-deferred-90 AC6: ISO-4217 validation of platform.payment.currency ---------------
+
+    private void stubCoachAndCommissionOnly() {
+        CoachStripeAccount account = new CoachStripeAccount();
+        account.setStripeAccountId("acct_test");
+        account.setOnboardingStatus("COMPLETE");
+        account.setChargesEnabled(true);
+        when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
+        when(configService.getString("platform.commission.rate")).thenReturn("0.10");
+    }
+
+    @Test
+    void chargeAndCapture_currencyConfigWithWhitespaceAndCase_isNormalisedForStripe() throws StripeException {
+        stubCoachAndCommission();
+        stubStripeCustomer(1001L, "cus_1001");
+        when(configService.getString("platform.payment.currency")).thenReturn("  EUR ");
+        when(stripeClient.createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class)))
+            .thenReturn(mockIntent("pi_1"));
+
+        stripePaymentGateway.chargeAndCapture(PACK_TIER_ID, 1001L, COACH_ID, AMOUNT);
+
+        ArgumentCaptor<PaymentIntentCreateParams> paramsCaptor =
+            ArgumentCaptor.forClass(PaymentIntentCreateParams.class);
+        org.mockito.Mockito.verify(stripeClient)
+            .createPaymentIntent(paramsCaptor.capture(), any(String.class));
+        assertThat(paramsCaptor.getValue().getCurrency()).isEqualTo("eur");
+    }
+
+    @Test
+    void chargeAndCapture_unknownCurrencyCode_throwsPaymentGatewayException_notRaw500() throws StripeException {
+        stubCoachAndCommissionOnly();
+        when(configService.getString("platform.payment.currency")).thenReturn("US Dollars");
+
+        assertThatThrownBy(() -> stripePaymentGateway.chargeAndCapture(PACK_TIER_ID, 1001L, COACH_ID, AMOUNT))
+            .isInstanceOf(PaymentGatewayException.class)
+            .satisfies(e -> assertThat(((PaymentGatewayException) e).getErrorCode())
+                .isEqualTo("payment.configurationUnavailable"))
+            .satisfies(e -> assertThat(e.getCause()).isInstanceOf(IllegalArgumentException.class));
+
+        org.mockito.Mockito.verify(stripeClient, org.mockito.Mockito.never())
+            .createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class));
+    }
+
+    @Test
+    void chargeAndCapture_blankCurrencyConfig_throwsPaymentGatewayException() throws StripeException {
+        stubCoachAndCommissionOnly();
+        when(configService.getString("platform.payment.currency")).thenReturn("   ");
+
+        assertThatThrownBy(() -> stripePaymentGateway.chargeAndCapture(PACK_TIER_ID, 1001L, COACH_ID, AMOUNT))
+            .isInstanceOf(PaymentGatewayException.class)
+            .satisfies(e -> assertThat(((PaymentGatewayException) e).getErrorCode())
+                .isEqualTo("payment.configurationUnavailable"));
+
+        org.mockito.Mockito.verify(stripeClient, org.mockito.Mockito.never())
+            .createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class));
+    }
+
+    @Test
+    void chargeAndCapture_nullCurrencyConfig_throwsPaymentGatewayException() throws StripeException {
+        stubCoachAndCommissionOnly();
+        when(configService.getString("platform.payment.currency")).thenReturn(null);
+
+        assertThatThrownBy(() -> stripePaymentGateway.chargeAndCapture(PACK_TIER_ID, 1001L, COACH_ID, AMOUNT))
+            .isInstanceOf(PaymentGatewayException.class)
+            .satisfies(e -> assertThat(((PaymentGatewayException) e).getErrorCode())
+                .isEqualTo("payment.configurationUnavailable"));
+
+        org.mockito.Mockito.verify(stripeClient, org.mockito.Mockito.never())
+            .createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class));
+    }
+
     @Test
     void chargeAndCapture_malformedCommissionRateConfig_throwsPaymentGatewayException() throws StripeException {
         // Review finding: new BigDecimal(...) parsing a non-numeric config value must fail the same

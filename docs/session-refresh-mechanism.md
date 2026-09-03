@@ -408,14 +408,20 @@ Things worth knowing before you integrate against it:
 - **The status is always 401**, deliberately. The filter uses `setStatus` + `objectMapper.writeValue`
   rather than `sendError`, and does **not** defer to `@RestControllerAdvice` — which would remap
   some of these to 403. That also means the container's error-page dispatch does not run for these.
-- **`helpCode` is always `null`** and no error log line or `SecurityAlertEvent` is produced.
-  Every `ApiAdvice` path routes through `toErrorDTO`, which generates a help code and logs; the
-  filter constructs the `ErrorDto` directly. Field names and nesting still match `ApiAdvice`, and
-  no frontend consumer reads `helpCode` on a 401 — but do not rely on one being present.
-- **`message` is always English.** `messageSource.getMessage(errorKey, null, defaultMsg, locale)`
-  is called, but no `security.sessionExpired` / `security.unauthorized` key exists in any bundle,
-  so it always falls through to the hardcoded default. Same pre-existing gap as `ApiAdvice`.
-  Gate on `errorKey`, never on `message`.
+- **`helpCode` is populated** (skillars-deferred-90 AC5). `writeUnauthorized` routes through the
+  shared `ErrorLog` mechanism — the same one `ApiAdvice` uses — so a filter-origin 401 now carries
+  a support help code and emits one log line: **WARN without a stack trace** for expected causes
+  (`MissingAuthenticationException`, `JWTExpiredException` — every tokenless request and every
+  ordinary idle-out, on an unauthenticated unrate-limited path), **ERROR with a stack trace** for
+  genuine denials. A `SecurityAlertEvent` (one
+  `AuditTrail` DB row) is published **only** for genuine denial signals — `JWTTheftException`,
+  `InvalidJWTDataException`, `AccountStatusException` — and deliberately **not** for
+  `MissingAuthenticationException` (every tokenless request) or `JWTExpiredException` (every
+  idle-out), which would flood the audit trail. Field names and nesting match `ApiAdvice`.
+- **`message` is localized.** `messageSource.getMessage(errorKey, null, defaultMsg, locale)` now
+  resolves against real `security.sessionExpired` / `security.unauthorized` entries in all four
+  backend bundles (`messages{,_en,_de,_fr}.properties`), so DE/FR clients get native text. Still
+  gate on `errorKey`, never on `message`.
 - **⚠️ `security.unauthorized` also triggers the SPA's hard redirect.** The interceptor gate matches
   *both* keys, so **every** auth failure caught by this filter — not just an expired JWT — now
   performs a full `window.location.href` navigation to `/login`, discarding unsaved page state.

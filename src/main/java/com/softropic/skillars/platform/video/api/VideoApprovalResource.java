@@ -20,8 +20,13 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.softropic.skillars.platform.video.repo.Video;
+
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Observed(name = "video.approvals")
 @RestController
@@ -41,16 +46,21 @@ public class VideoApprovalResource {
     public ResponseEntity<List<VideoApprovalResponse>> listPendingApprovals() {
         Long parentId = currentParentId();
         List<VideoApprovalRequest> requests = videoApprovalService.getPendingApprovalsForParent(parentId);
+
+        // skillars-deferred-90 AC13: resolve player names and video types in two batched queries
+        // instead of two per row.
+        Set<Long> playerIds = requests.stream().map(VideoApprovalRequest::getPlayerId).collect(Collectors.toSet());
+        Set<UUID> videoIds = requests.stream().map(VideoApprovalRequest::getVideoId).collect(Collectors.toSet());
+        Map<Long, String> playerNames = playerProfileService.getPlayerNamesByPlayerIds(playerIds);
+        Map<UUID, Video> videosById = videoRepository.findAllById(videoIds).stream()
+            .collect(Collectors.toMap(Video::getId, v -> v, (a, b) -> a));
+
         List<VideoApprovalResponse> responses = requests.stream()
             .map(r -> {
-                // TODO: batch player name resolution if list grows beyond single-family use case
-                String playerName = playerProfileService.getPlayerNameByPlayerId(r.getPlayerId());
-                if (playerName == null) {
-                    playerName = "Player " + r.getPlayerId();
-                }
-                String videoType = videoRepository.findById(r.getVideoId())
-                    .map(v -> v.getVideoType() != null ? v.getVideoType().name() : null)
-                    .orElse(null);
+                String playerName = playerNames.getOrDefault(r.getPlayerId(), "Player " + r.getPlayerId());
+                Video video = videosById.get(r.getVideoId());
+                String videoType = video != null && video.getVideoType() != null
+                    ? video.getVideoType().name() : null;
                 return new VideoApprovalResponse(
                     r.getId(), r.getVideoId(), r.getPlayerId(), playerName, videoType,
                     r.getStatus(), r.getCreatedAt());

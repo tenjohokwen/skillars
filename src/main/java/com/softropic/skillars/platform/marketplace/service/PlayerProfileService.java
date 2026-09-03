@@ -33,6 +33,20 @@ public class PlayerProfileService {
             .orElse("Unknown Player");
     }
 
+    /**
+     * skillars-deferred-90 AC13: batched {@link #getPlayerNameByPlayerId}. One {@code findAllById}
+     * instead of one lookup per id. Ids with no profile row are absent from the map; callers
+     * substitute their own fallback label.
+     */
+    @Transactional(readOnly = true)
+    public java.util.Map<Long, String> getPlayerNamesByPlayerIds(java.util.Collection<Long> playerIds) {
+        if (playerIds == null || playerIds.isEmpty()) {
+            return java.util.Map.of();
+        }
+        return playerProfileRepository.findAllById(playerIds).stream()
+            .collect(java.util.stream.Collectors.toMap(PlayerProfile::getId, PlayerProfile::getName, (a, b) -> a));
+    }
+
     @Transactional(readOnly = true)
     public int getPlayerAgeByPlayerId(Long playerId) {
         return playerProfileRepository.findById(playerId)

@@ -89,7 +89,7 @@ import { fetchCoachSessionPackTiers } from 'src/api/payment.api'
 
 const route = useRoute()
 const router = useRouter()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const bookingStore = useBookingStore()
 const paymentStore = usePaymentStore()
 
@@ -136,7 +136,7 @@ const currentCredits = computed(() => currentPack.value?.creditsRemaining ?? 0)
 const currentSessionCount = computed(() => currentPack.value?.sessionCount ?? 0)
 
 function formatPrice(value) {
-  return new Intl.NumberFormat(undefined, {
+  return new Intl.NumberFormat(locale.value, {
     style: 'currency',
     currency: pricingCurrency.value,
   }).format(Number(value))

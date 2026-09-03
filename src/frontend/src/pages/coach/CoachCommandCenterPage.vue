@@ -330,15 +330,19 @@ const activeClients = computed(() => {
     .map((b) => ({ id: b.playerId, name: b.playerName }))
 })
 
-// Deliberately hardcoded 'en': the result is matched against the hardcoded English weekday
-// array below via .indexOf. Localizing the formatter alone without also rewriting that array
-// would make every non-English user's schedule silently misbucket into the wrong day column.
+// skillars-deferred-90 AC11: weekday index (0=Monday … 6=Sunday) of `instant` as seen in
+// `timezone`, computed NUMERICALLY so there is no hardcoded-English formatter paired with a
+// hardcoded-English array to keep in sync. 'en-CA' here is a machine format (ISO YYYY-MM-DD
+// used only as an intermediate), not user-facing text — same allowed pattern as WeeklyCalendar.
 function getDayIndex(instant, timezone) {
-  const parts = new Intl.DateTimeFormat('en', { timeZone: timezone, weekday: 'long' }).formatToParts(
-    new Date(instant),
-  )
-  const day = parts.find((p) => p.type === 'weekday').value
-  return ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].indexOf(day)
+  const isoDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(instant))
+  const utcDow = new Date(`${isoDate}T00:00:00Z`).getUTCDay() // 0=Sunday … 6=Saturday
+  return (utcDow + 6) % 7 // shift to 0=Monday … 6=Sunday
 }
 
 function dayLabel(index) {

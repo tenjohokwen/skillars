@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.security.infrastructure.jwt.filter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.infrastructure.message.ErrorDto;
+import com.softropic.skillars.infrastructure.message.ErrorLog;
 import com.softropic.skillars.infrastructure.message.ErrorMsg;
 import com.softropic.skillars.infrastructure.security.CookieUtil;
 import com.softropic.skillars.infrastructure.security.RequestMetadataProvider;
@@ -12,6 +13,8 @@ import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.service.LoginTokenManager;
 import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.infrastructure.security.AuthorizationException;
+import com.softropic.skillars.platform.security.contract.event.SecurityAlertEvent;
+import com.softropic.skillars.platform.security.contract.exception.InvalidJWTDataException;
 import com.softropic.skillars.platform.security.contract.exception.JWTExpiredException;
 import com.softropic.skillars.platform.security.contract.exception.JWTTheftException;
 import com.softropic.skillars.platform.security.contract.exception.MissingAuthenticationException;
@@ -32,6 +35,8 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.filter.OncePerRequestFilter;
+
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.time.Instant;
@@ -90,6 +95,7 @@ import static com.softropic.skillars.infrastructure.security.SecurityConstants.R
  * For full token rotation (issuing a new refresh-token pair) use {@code POST /api/auth/refresh}
  * ({@link com.softropic.skillars.platform.security.api.AuthResource}) instead.
  */
+@Slf4j
 public class JWTAuthorizationFilter extends OncePerRequestFilter {
     private final ApplicationEventPublisher publisher;
     private final DaoAuthProvider          daoAuthProvider;
@@ -100,6 +106,14 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
     private final RefreshTokenRepository refreshTokenRepository;
     private final MessageSource     messageSource;
     private final ObjectMapper      objectMapper;
+    /**
+     * Code review (3-layer run): {@link SecurityAlertEvent} writes one {@code AuditTrail} DB row per
+     * event. AC5/F22 scoped it away from the two highest-volume causes, but the remaining three are
+     * still per-request: a tampered JWT cookie is attacker-drivable at any rate, and a
+     * locked/disabled account emits one on EVERY request once its ~15-min DB refresh token lapses.
+     * Collapse a repeating denial state to one row per window per client+cause.
+     */
+    private final SecurityAlertThrottle alertThrottle = new SecurityAlertThrottle();
 
     public JWTAuthorizationFilter(DaoAuthProvider daoAuthProvider,
                                   ApplicationEventPublisher applicationEventPublisher,
@@ -138,7 +152,13 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
                     // Emit an ErrorDto body (not a bare sendError) so the SPA's axios interceptor
                     // can read errorMsg.errorKey and route to /login. Status stays 401 for every
                     // caught type; the key is 'security.sessionExpired' only for an expired JWT.
-                    writeUnauthorized(res, e);
+                    // Code review (3-layer run): mint the helpCode and publish the alert BEFORE the
+                    // response is written. Publishing afterwards let a slow or throwing synchronous
+                    // listener act on an already-committed response, and its exception propagated
+                    // out of doFilterInternal with the 401 body half-sent.
+                    final String helpCode = mintHelpCode(e);
+                    maybePublishSecurityAlert(e, helpCode);
+                    writeUnauthorized(res, e, helpCode);
                     return;
                 }
             } else {
@@ -227,7 +247,33 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
      * cases &mdash; this filter deliberately does not defer to {@code @RestControllerAdvice}
      * (which would remap some of these to 403).
      */
-    private void writeUnauthorized(final HttpServletResponse res, final Exception cause) throws IOException {
+    /**
+     * Logs {@code cause} and returns its support help code, without touching the response.
+     * Split out of {@link #writeUnauthorized} so the {@code SecurityAlertEvent} can carry the code
+     * and be published before the response is committed.
+     */
+    private String mintHelpCode(final Exception cause) {
+        final boolean expired = cause instanceof JWTExpiredException;
+        final String errorKey = expired ? "security.sessionExpired" : "security.unauthorized";
+        // skillars-deferred-90 AC5: route through the same ErrorLog mechanism @RestControllerAdvice
+        // uses, so a filter-origin 401 also gets a log line and a support helpCode (was null).
+        //
+        // Code review D2: level is split by cause. A tokenless request (MissingAuthenticationException
+        // — crawlers, stale bookmarks, pre-login SPA routes) and an ordinary idle-out
+        // (JWTExpiredException) are expected traffic on an unauthenticated, unrate-limited path;
+        // ERROR + a full stack trace for those is the same volume problem that made AC5 scope
+        // SecurityAlertEvent away from them (maybePublishSecurityAlert below). Genuine denials keep
+        // ERROR + stack trace. The helpCode is minted and returned either way.
+        final String logMsg = "Filter-origin 401 (" + errorKey + ")";
+        final boolean expectedTraffic = cause instanceof MissingAuthenticationException
+                || cause instanceof JWTExpiredException;
+        return expectedTraffic
+                ? ErrorLog.logExpected(log, cause, logMsg)
+                : ErrorLog.logError(log, cause, logMsg);
+    }
+
+    private void writeUnauthorized(final HttpServletResponse res, final Exception cause,
+                                   final String helpCode) throws IOException {
         final boolean expired = cause instanceof JWTExpiredException;
         final String errorKey = expired ? "security.sessionExpired" : "security.unauthorized";
         final String defaultMsg = expired
@@ -237,11 +283,60 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
         final Locale locale = StringUtils.isNotBlank(lang) ? Locale.forLanguageTag(lang) : Locale.getDefault();
         final String message = messageSource.getMessage(errorKey, null, defaultMsg, locale);
 
-        final ErrorDto body = new ErrorDto(null, new ErrorMsg(errorKey, message));
+        final ErrorDto body = new ErrorDto(helpCode, new ErrorMsg(errorKey, message));
         res.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         res.setContentType("application/json");
         res.setCharacterEncoding("UTF-8");
         objectMapper.writeValue(res.getWriter(), body);
+    }
+
+    /**
+     * skillars-deferred-90 AC5 (F22): a {@link SecurityAlertEvent} writes one {@code AuditTrail} DB
+     * row per event, so it is fired ONLY for genuine denial signals. It is deliberately NOT fired
+     * for {@link MissingAuthenticationException} (thrown for every tokenless request to a secured
+     * URL — crawlers, stale bookmarks, lapsed 15-min sessions, pre-login SPA routes) nor for
+     * {@link JWTExpiredException} (every idle-out) — alerting on those would turn an
+     * unauthenticated, unrate-limited path into an audit-trail flood / DB-write amplifier.
+     */
+    private void maybePublishSecurityAlert(final Exception cause, final String helpCode) {
+        final boolean genuineDenial = cause instanceof JWTTheftException
+                || cause instanceof InvalidJWTDataException
+                || cause instanceof AccountStatusException;
+        if (genuineDenial && alertThrottle.shouldPublish(cause)) {
+            publisher.publishEvent(new SecurityAlertEvent(cause, helpCode));
+        }
+    }
+
+    /**
+     * Per-client, per-cause dedup window for {@link SecurityAlertEvent}. Bounded, self-evicting,
+     * and deliberately tiny — this is volume control, not a security decision: every denial is still
+     * logged by {@link #mintHelpCode}, only the audit-trail row is collapsed.
+     */
+    static final class SecurityAlertThrottle {
+
+        private static final long WINDOW_MS = 60_000L;
+        private static final int MAX_TRACKED = 10_000;
+
+        private final java.util.concurrent.ConcurrentHashMap<String, Long> lastPublished =
+                new java.util.concurrent.ConcurrentHashMap<>();
+
+        boolean shouldPublish(final Exception cause) {
+            final String client = StringUtils.defaultIfBlank(
+                    RequestMetadataProvider.getClientInfo().getClientIdentifier(),
+                    StringUtils.defaultString(RequestMetadataProvider.getClientInfo().getIpAddress(), "unknown"));
+            final String key = cause.getClass().getSimpleName() + "|" + client;
+            final long now = System.currentTimeMillis();
+
+            // Unbounded growth guard: a rotating-client attacker would otherwise mint a new key per
+            // request. Dropping the map costs at most one extra audit row per tracked client.
+            if (lastPublished.size() > MAX_TRACKED) {
+                lastPublished.clear();
+            }
+
+            final Long previous = lastPublished.merge(key, now,
+                    (prev, candidate) -> candidate - prev >= WINDOW_MS ? candidate : prev);
+            return previous == now;
+        }
     }
 
 }

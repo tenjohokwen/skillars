@@ -125,6 +125,8 @@ function blocksForDay(dayDate) {
     const startDt = new Date(b.startDatetime)
     const endDt = new Date(b.endDatetime)
     if (isNaN(startDt.getTime()) || isNaN(endDt.getTime())) return false
+    // skillars-deferred-90 AC11 exclusion: 'en-CA' here is a MACHINE format — the ISO YYYY-MM-DD
+    // string is used only as a day-bucket lookup key, never shown to a user. Do NOT localize.
     const start = new Intl.DateTimeFormat('en-CA', {
       timeZone: props.coachTimezone,
       year: 'numeric', month: '2-digit', day: '2-digit',
@@ -173,6 +175,9 @@ function getBlockStyle(blk) {
   const startDt = new Date(blk.startDatetime)
   const endDt = new Date(blk.endDatetime)
 
+  // skillars-deferred-90 AC11 exclusion: 'en' is load-bearing — Number() parses the numeric
+  // hour/minute out of the result for pixel geometry. A localized formatter could emit digits or
+  // separators Number() cannot parse. Do NOT localize.
   const fmt = (dt, field) => Number(new Intl.DateTimeFormat('en', {
     [field]: 'numeric', hour12: false, timeZone: tz,
   }).format(dt))

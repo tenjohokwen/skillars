@@ -134,7 +134,7 @@ import { useBookingStore } from 'src/stores/booking.store'
 import { getCoachProfile } from 'src/api/marketplace.api'
 
 const route = useRoute()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const $q = useQuasar()
 const bookingStore = useBookingStore()
 
@@ -169,12 +169,12 @@ watch(() => bookingStore.sessionPacks, (packs) => {
 
 function formatDate(isoString) {
   if (!isoString) return ''
-  return new Date(isoString).toLocaleDateString(undefined, { dateStyle: 'medium' })
+  return new Date(isoString).toLocaleDateString(locale.value, { dateStyle: 'medium' })
 }
 
 function formatDateTime(isoString, timezone) {
   if (!isoString) return ''
-  return new Date(isoString).toLocaleString(undefined, {
+  return new Date(isoString).toLocaleString(locale.value, {
     timeZone: timezone,
     dateStyle: 'medium',
     timeStyle: 'short',

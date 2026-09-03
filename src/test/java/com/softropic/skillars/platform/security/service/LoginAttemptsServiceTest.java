@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.security.service;
 import com.google.common.base.Ticker;
 import com.google.common.testing.FakeTicker;
 
+import com.softropic.skillars.infrastructure.security.RequestMetadataProvider;
 import com.softropic.skillars.infrastructure.security.TestRequestMetadataProvider;
 
 import org.apache.commons.lang3.RandomStringUtils;
@@ -43,6 +44,12 @@ class LoginAttemptsServiceTest {
     }
 
     private void resetTestRequestMetadataProvider() {
+        // skillars-deferred-90 AC8: drop the whole ThreadLocal first — this reset only re-set
+        // userName/browserCookie/ipAddress, NOT apiKey, and the cache key prefers apiKey
+        // (RequestMetadata.getClientIdentifier). A stale apiKey leaked by an earlier IT on the same
+        // Surefire thread (e.g. LoginInfoServiceIT) otherwise displaces `defaultClient` in every
+        // client-/IP-keyed assertion. Defensive: immune to any upstream leak, not only that one.
+        RequestMetadataProvider.cleanup();
         TestRequestMetadataProvider.setUserName(DEFAULT_TEST_USERNAME);
         TestRequestMetadataProvider.setBrowserCookie(DEFAULT_TEST_CLIENT_ID);
         TestRequestMetadataProvider.setIpAddress(DEFAULT_TEST_IP_ADDRESS);

@@ -12,7 +12,10 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
 import java.time.Period;
+import java.util.Collection;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -64,6 +67,20 @@ public class AgePolicyService {
      */
     public Optional<MessagingPolicy> findMessagingPolicy(Long playerId) {
         return playerProfileRepository.findById(playerId).map(this::resolvePolicy);
+    }
+
+    /**
+     * skillars-deferred-90 AC13: batched {@link #findMessagingPolicy}. One {@code findAllById}
+     * instead of one lookup per player id. Player ids with no profile row are simply absent from
+     * the returned map — same "degrade this one row, not the whole caller" contract as the
+     * single-id read variant.
+     */
+    public Map<Long, MessagingPolicy> findMessagingPoliciesByPlayerIds(Collection<Long> playerIds) {
+        if (playerIds == null || playerIds.isEmpty()) {
+            return Map.of();
+        }
+        return playerProfileRepository.findAllById(playerIds).stream()
+            .collect(Collectors.toMap(PlayerProfile::getId, this::resolvePolicy, (a, b) -> a));
     }
 
     private MessagingPolicy resolvePolicy(PlayerProfile player) {

@@ -10,6 +10,7 @@ import com.softropic.skillars.platform.security.repo.Authority;
 import com.softropic.skillars.platform.security.contract.UserDto;
 import com.softropic.skillars.platform.security.contract.exception.ProfileActionException;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import com.softropic.skillars.infrastructure.security.RequestMetadataProvider;
 import com.softropic.skillars.infrastructure.security.TestRequestMetadataProvider;
 import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.utils.TestMailManager;
@@ -65,6 +66,9 @@ class AccountManagementFacadeIT extends AbstractIntegrationTest {
     @AfterEach
     void tearDown() {
         SecurityContextHolder.clearContext();
+        // skillars-deferred-90 AC8: setUp() populates the RequestMetadataProvider ThreadLocal; clear
+        // it so a later test on the same Surefire thread does not inherit a stale request context.
+        RequestMetadataProvider.cleanup();
         transactionTemplate.execute(status -> {
             jdbcTemplate.execute("DELETE FROM main.sec");
             return null;

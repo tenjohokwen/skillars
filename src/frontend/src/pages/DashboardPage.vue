@@ -40,17 +40,12 @@
 import { computed, onMounted } from 'vue'
 import { useBookingStore } from 'src/stores/booking.store'
 import { useAuthStore } from 'src/stores/auth.store'
+import { readUserDisplayName } from 'src/utils/sessionCookies'
 import TimezoneNotice from 'src/components/booking/TimezoneNotice.vue'
 
-function getUsernameFromCookie() {
-  const match = document.cookie.match(/user=([^;]+)/);
-  if (match) {
-    try { return decodeURIComponent(match[1]); } catch { return match[1]; }
-  }
-  return 'User';
-}
-
-const username = computed(() => getUsernameFromCookie())
+// readUserDisplayName() returns null for a blank / sentinel `user` cookie value
+// (skillars-deferred-90 AC2), so the greeting falls through to the generic default.
+const username = computed(() => readUserDisplayName() ?? 'User')
 
 const bookingStore = useBookingStore()
 const authStore = useAuthStore()

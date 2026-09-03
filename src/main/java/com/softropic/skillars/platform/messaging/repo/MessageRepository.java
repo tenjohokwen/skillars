@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -90,4 +91,45 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
 
     @Query("SELECT m FROM Message m WHERE m.senderId = :senderId AND m.deletedAt IS NULL ORDER BY m.createdAt ASC, m.id ASC")
     List<Message> findNonDeletedBySenderId(@Param("senderId") Long senderId);
+
+    // skillars-deferred-90 AC13: batched replacements for the per-conversation findLastApproved /
+    // countUnread calls in MessagingService.toSummary (was O(conversations) queries).
+
+    /** Latest APPROVED, non-deleted message for each of the given conversations (one row per conv). */
+    @Query(value = """
+        SELECT DISTINCT ON (m.conversation_id) m.*
+        FROM messaging.messages m
+        WHERE m.conversation_id IN (:conversationIds)
+          AND m.moderation_status = 'APPROVED'
+          AND m.deleted_at IS NULL
+        ORDER BY m.conversation_id, m.created_at DESC, m.id DESC
+        """, nativeQuery = true)
+    List<Message> findLatestApprovedPerConversation(@Param("conversationIds") Collection<Long> conversationIds);
+
+    /**
+     * Unread APPROVED message count per conversation for {@code userId} in role {@code role}
+     * ('COACH' | 'PARENT' | 'PLAYER'), against that role's own last-read column on the conversation.
+     * Returns {@code [conversationId (bigint), count (bigint)]} rows; conversations with zero unread
+     * are absent from the result.
+     */
+    @Query(value = """
+        SELECT m.conversation_id, COUNT(*)
+        FROM messaging.messages m
+        JOIN messaging.conversations c ON c.id = m.conversation_id
+        WHERE m.conversation_id IN (:conversationIds)
+          AND m.deleted_at IS NULL
+          AND m.moderation_status = 'APPROVED'
+          AND m.sender_id <> :userId
+          AND m.created_at > COALESCE(
+                CASE :role
+                    WHEN 'COACH'  THEN c.coach_last_read_at
+                    WHEN 'PARENT' THEN c.parent_last_read_at
+                    WHEN 'PLAYER' THEN c.player_last_read_at
+                END,
+                TIMESTAMP WITH TIME ZONE 'epoch')
+        GROUP BY m.conversation_id
+        """, nativeQuery = true)
+    List<Object[]> countUnreadPerConversation(@Param("conversationIds") Collection<Long> conversationIds,
+                                              @Param("userId") Long userId,
+                                              @Param("role") String role);
 }

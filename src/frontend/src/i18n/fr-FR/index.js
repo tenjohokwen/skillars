@@ -324,6 +324,8 @@ export default {
     continueQuestion: 'Voulez-vous continuer votre session ?',
     continueSession: 'Continuer la session',
     refreshed: 'Session actualisee avec succes',
+    refreshFailed:
+      "Impossible de prolonger votre session. Vérifiez votre connexion et sélectionnez « Continuer la session » pour réessayer.",
     expired: 'Votre session a expire. Veuillez vous reconnecter.',
     drillLibrary: {
       title: "Bibliothèque d'exercices",
