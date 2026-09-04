@@ -46,7 +46,7 @@ public class SluCalculationService {
     private final SluPersistenceDispatcher sluPersistenceDispatcher;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    @Async
+    @Async("taskExecutor")
     public void onBookingCompleted(BookingCompletedEvent event) {
         // No-show: player did not attend — SLU is only earned for attended sessions (AC 8)
         if (!event.isPlayerAttended()) {

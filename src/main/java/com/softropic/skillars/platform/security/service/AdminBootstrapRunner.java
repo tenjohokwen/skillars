@@ -134,11 +134,25 @@ public class AdminBootstrapRunner implements ApplicationRunner {
         // is wrong with it.
         validateAgainstEntityConstraints(login);
 
-        if (userRepository.findOneByEmail(login).isPresent()) {
-            log.info("Admin bootstrap skipped — account already exists",
+        var existing = userRepository.findOneByEmail(login);
+        if (existing.isPresent()) {
+            // skillars-deferred-92 AC23: WARN, not INFO, and it says what did NOT happen.
+            //
+            // The skip itself is correct and stays — elevating a pre-existing coach/parent/player
+            // to ROLE_ADMIN is a different, riskier feature and is deliberately not implemented
+            // here. But the operator who typo'd an existing user's address into
+            // `app.admin.bootstrap.login` gets NO administrator, and the only trace of that was an
+            // INFO line reading "SUCCESS" — which they will neither see nor disbelieve. Naming the
+            // existing role is what turns "why can't I log in as admin?" into a two-second answer.
+            log.warn("Admin bootstrap skipped — NO ADMINISTRATOR WAS CREATED. The configured "
+                    + "bootstrap login already belongs to an existing {} account. This runner never "
+                    + "elevates an existing user; either configure an unused address or grant "
+                    + "ROLE_ADMIN manually.",
+                existing.get().getSkillarsRole(),
                 kv("operation", "admin_bootstrap"),
                 kv("action", "skip_existing"),
-                kv("status", "SUCCESS"),
+                kv("status", "NO_ADMIN_CREATED"),
+                kv("existingRole", String.valueOf(existing.get().getSkillarsRole())),
                 kv("login", login));
             return;
         }

@@ -52,7 +52,7 @@ public class RadarCompositeCalculationService {
     private RadarCompositeCalculationService self;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    @Async
+    @Async("taskExecutor")
     public void onRadarEntrySubmitted(RadarEntrySubmittedEvent event) {
         Long playerId    = event.playerId();
         Long parentId    = event.parentId();

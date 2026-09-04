@@ -47,7 +47,7 @@ public class VideoSseService {
         return emitter;
     }
 
-    @Async
+    @Async("taskExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onStatusChanged(VideoStatusChangedEvent event) {
         boolean terminal = TERMINAL_STATES.contains(event.newState());
@@ -70,7 +70,7 @@ public class VideoSseService {
         }
     }
 
-    @Async
+    @Async("taskExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onVideoPurged(VideoPurgedEvent event) {
         CopyOnWriteArrayList<SseEmitter> list = emitters.remove(event.videoId());

@@ -163,7 +163,7 @@ public class SessionPlanService {
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    @Async
+    @Async("taskExecutor")
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void handleBookingCompleted(BookingCompletedEvent event) {
         sessionRepository.findByBookingId(event.getBookingId()).ifPresentOrElse(session -> {

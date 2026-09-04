@@ -44,9 +44,4 @@ public interface VideoApprovalRequestRepository extends JpaRepository<VideoAppro
     // Minor gate idempotency check — prevent duplicate PENDING rows for the same video
     Optional<VideoApprovalRequest> findByVideoIdAndStatus(UUID videoId, String status);
 
-    // Future auto-reject (NOT WIRED — no scheduler calls this; do not call directly)
-    @Modifying
-    @Transactional
-    @Query("UPDATE VideoApprovalRequest var SET var.status = 'REJECTED', var.resolvedAt = current_timestamp WHERE var.status = 'PENDING' AND var.createdAt < :cutoff")
-    int autoRejectExpired(@Param("cutoff") Instant cutoff);
 }

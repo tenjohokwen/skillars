@@ -25,6 +25,7 @@ import com.softropic.skillars.platform.security.service.DaoAuthProvider;
 
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.http.HttpHeaders;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.MessageSource;
 import org.springframework.core.env.Environment;
@@ -287,6 +288,16 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
         res.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         res.setContentType("application/json");
         res.setCharacterEncoding("UTF-8");
+        // skillars-deferred-92 AC19. This response carries a per-request help code and a
+        // locale-resolved message, and it is produced OUTSIDE Spring Security's filter chain
+        // response handling, so none of the framework's default cache headers apply to it. Without
+        // these an intermediary is free to cache a 401 and serve it to a later, authenticated
+        // request. The body holds no secret, so the impact is low — this is a one-line correctness
+        // fix on an auth response, not a vulnerability patch.
+        // Pragma is included because the project's other error paths emit it and a shared proxy may
+        // still be HTTP/1.0-era; Cache-Control alone is what modern caches honour.
+        res.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
+        res.setHeader(HttpHeaders.PRAGMA, "no-cache");
         objectMapper.writeValue(res.getWriter(), body);
     }
 

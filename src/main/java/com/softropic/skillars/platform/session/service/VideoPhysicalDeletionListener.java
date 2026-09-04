@@ -16,7 +16,7 @@ public class VideoPhysicalDeletionListener {
 
     private final AdminVideoService adminVideoService;
 
-    @Async
+    @Async("taskExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onVideoPhysicalDeletion(VideoPhysicalDeletionEvent event) {
         try {
@@ -26,7 +26,7 @@ public class VideoPhysicalDeletionListener {
         }
     }
 
-    @Async
+    @Async("taskExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onVideoPurged(com.softropic.skillars.platform.video.contract.event.VideoPurgedEvent event) {
         // Video marked PURGED via user/cascade deletion path.

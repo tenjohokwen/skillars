@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.mockito.Spy;
+import org.springframework.http.HttpHeaders;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.env.Environment;
 import org.springframework.security.authentication.DisabledException;
@@ -202,6 +203,11 @@ class JWTAuthorizationFilterTest {
         // too, so dropping the objectMapper.writeValue call cannot pass this test.
         assertTrue(responseBody.toString().contains("\"errorKey\":\"security.unauthorized\""),
                 "missing-token 401 body must carry errorKey=security.unauthorized, was: " + responseBody);
+        // skillars-deferred-92 AC19: this 401 is written outside Spring Security's own response
+        // handling, so none of the framework's default cache headers reach it. Without these an
+        // intermediary is free to cache the 401 and replay it to a later authenticated request.
+        verify(response).setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
+        verify(response).setHeader(HttpHeaders.PRAGMA, "no-cache");
     }
 
     @Test
