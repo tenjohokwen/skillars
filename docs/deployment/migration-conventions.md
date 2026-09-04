@@ -25,6 +25,20 @@ check are still your responsibility in review.
    `DROP COLUMN`, and `DROP INDEX` carries `IF EXISTS`. A migration that performs any
    drop carries a header comment block explaining which release removed the last
    reader/writer.
+   - **Name that release in a machine-readable marker** (skillars-deferred-92 AC7):
+     `-- migration-lint: drop-prepared-in: V123` in the header block.
+     `MigrationLint.Rule.DROP_WITHOUT_PRIOR_RELEASE_PREP` fails the build without it, and
+     — this is the half that makes the marker more than decoration — it also searches
+     `src/main/java` and `src/main/resources` for the dropped identifier and fails if a
+     live reference remains. A marker that claims preparation while the code still reads
+     the column is the failure mode worth catching.
+   - The search is **qualified**, not a bare grep: a hit needs the `snake_case`
+     identifier (or its camelCase JPA form) *and* the owning table's name in the same
+     file, because column names like `id`, `status` and `amount` are far too generic to
+     match on alone. It therefore **cannot** see a reader that never mentions the table —
+     a raw SQL string assembled from fragments, say. For those the marker alone is the
+     guarantee. `-- migration-lint: allow-drop-reference-scan <reason>` suppresses the
+     search when its output is noise; the marker requirement still stands.
 
 3. **Constraints validate in two steps** on any table that is not trivially small:
    `ALTER TABLE … ADD CONSTRAINT … FOREIGN KEY|CHECK … NOT VALID` in one migration,
@@ -68,11 +82,67 @@ check are still your responsibility in review.
    reject it otherwise. (This is the `AdminAlertType.MODERATION_UNRESOLVED` failure mode.)
 
 6. **Long `UPDATE` backfills are batched / chunked** (see `V98` and the `Def10`
-   precedent in `skillars-6-1`), with `SET lock_timeout` / `SET statement_timeout` set
-   where a full scan is unavoidable, so a slow backfill cannot hold a lock indefinitely
+   precedent in `skillars-6-1`), so a slow backfill cannot hold a lock indefinitely
    or wedge the deploy.
+   - `MigrationLint.Rule.UNBATCHED_DML` (skillars-deferred-92 AC9) fails an `UPDATE` or
+     `DELETE` with **no** `WHERE`, or with a tautological one (`WHERE TRUE`, `WHERE 1=1`).
+     Opt out with `-- migration-lint: allow-full-table-dml <reason>` immediately above the
+     statement.
+   - **What that rule does not do:** decide whether a *present* `WHERE` actually bounds
+     anything. `WHERE status = 'X'` may match three rows or three million, and no
+     text-level check can tell. Review still owns that half.
+   - The same applies to application code, not just migrations.
+     `BandwidthResetService.resetMonthlyBandwidth` was a single unpartitioned `UPDATE` over
+     every `video_quotas` row at the month boundary — it locked all of them and blocked
+     every concurrent `QuotaService.reserve()` for the duration. It is now a bounded loop
+     of chunks, **each committed in its own transaction** by a separate
+     `BandwidthResetChunkProcessor` bean. Two non-obvious requirements come with that
+     shape: the driving method must **not** be `@Transactional` (one enclosing transaction
+     holds every row lock to the end, which is strictly worse than the statement it
+     replaced), and the chunk predicate must be **self-excluding** so the loop terminates
+     and a crashed run resumes rather than double-applying.
 
-7. **Every DDL migration that takes `ACCESS EXCLUSIVE` on a table with expected
+7. **`SET lock_timeout` on every lock-taking DDL statement** (skillars-deferred-92 AC8).
+   Verified during that story: only **2** of 121 migrations set one.
+
+   **Why this matters more than it looks.** The danger is not that the `ALTER` itself is
+   slow — it is usually instant. It is that a *blocked* `ALTER` sits in the lock queue, and
+   **every subsequent query on that table queues behind it**. So one long-running `SELECT`
+   holding a conflicting lock is enough to stall the entire table and exhaust the
+   connection pool, for as long as that `SELECT` runs. A bounded wait turns that outage
+   into a failed migration, which is the far better outcome. The doc previously gave the
+   rule without this reason, which is most of why it was ignored.
+
+   Put `SET lock_timeout = '5s';` near the top of the migration (it is a session/transaction
+   setting, so one statement covers the whole script), or opt out with
+   `-- migration-lint: allow-unbounded-lock-wait <reason>`.
+
+   **The lock levels are not all the same, and the rule does not pretend they are:**
+
+   | Statement | Lock | Blocks |
+   |---|---|---|
+   | `ALTER TABLE … ADD/DROP COLUMN`, `ADD/DROP CONSTRAINT`, `DROP TABLE`, `DROP INDEX` | `ACCESS EXCLUSIVE` | reads **and** writes |
+   | `CREATE INDEX` (non-`CONCURRENTLY`) | `SHARE` | writes and other DDL; **reads continue** |
+   | `CREATE INDEX CONCURRENTLY` | `SHARE UPDATE EXCLUSIVE` | other DDL / index builds only |
+
+   All three are covered, because all three can wait indefinitely for a conflicting lock.
+   They are not equally disruptive and the rule's message does not claim they are.
+
+8. **`main.platform_config` seeds omit `id`** (skillars-deferred-92 AC10). `V128` attached
+   `GENERATED BY DEFAULT AS IDENTITY` to the column and seeded the sequence from the live
+   maximum. Before that, every seeding migration hand-picked the next free id, and because
+   the seeds use `ON CONFLICT (key)` — a *different* unique constraint from the primary key
+   — an id collision raised a PK violation the `ON CONFLICT` clause never saw, failing
+   Flyway on every database that had already used that id. `V99`'s header spends six lines
+   on this; the ledger records five separate brushes with it.
+   `MigrationLint.Rule.PLATFORM_CONFIG_EXPLICIT_ID` now fails the build on any
+   `INSERT INTO main.platform_config (id, …)`.
+
+   `BY DEFAULT` rather than `ALWAYS` is deliberate: `ALWAYS` rejects an explicit `id`, which
+   would break every historical seed the moment Flyway replayed it on a fresh database —
+   breaking CI and every new environment while continuing to look fine on migrated ones.
+
+9. **Every DDL migration that takes `ACCESS EXCLUSIVE` on a table with expected
    production volume carries a header comment** naming the lock it takes and the
    online-safe alternative that was considered and why it was or wasn't used.
 
@@ -82,6 +152,24 @@ Skillars has **no production system yet**. The migrations that predate this conv
 `V60`, `V89`, `V94`, `V97`, `V98`, `V117`, and the `AdminAlertType` enum widen — are
 **applied and immutable**; they are not rewritten. The convention and its guard bind
 **new** migrations only (version `> V121`).
+
+### Two baselines (skillars-deferred-92)
+
+The rules added by skillars-deferred-92 — `DROP_WITHOUT_PRIOR_RELEASE_PREP`,
+`MISSING_LOCK_TIMEOUT`, `UNBATCHED_DML`, `PLATFORM_CONFIG_EXPLICIT_ID` — bind from
+**`V128`**, not `V122`, and `MigrationLint` carries a second constant
+(`DEFERRED_92_BASELINE = 127`) for exactly that.
+
+The reason is mechanical rather than editorial: **Flyway checksums a migration's whole
+file, comments included.** `V122`–`V127` are already applied, so they cannot be edited —
+not even to add an opt-out marker — without breaking `flyway validate` on every
+environment that has run them. Several of them would trip the new rules. The choice was
+between rewriting applied migrations (which the first sentence of this section forbids)
+and grandfathering once more; grandfathering is the same call this project already made at
+`V121`, applied a second time.
+
+Anyone adding a rule in future should expect to add a third baseline rather than edit
+history.
 
 ### Per-migration disposition (skillars-deferred-91 AC8)
 
@@ -153,24 +241,59 @@ The three blind spots this section used to name are now checked by `MigrationLin
   `DROP TABLE`/`COLUMN`/`INDEX`. `V124`'s own `DROP CONSTRAINT chk_bp_status` was unlinted until
   then and would have failed hard on any environment where the constraint was already absent.
 
+### Added by skillars-deferred-92 (AC7–AC11)
+
+- **expand/contract ORDERING**, not just statement shape — `DROP_WITHOUT_PRIOR_RELEASE_PREP`.
+  A `DROP TABLE`/`DROP COLUMN` must carry `-- migration-lint: drop-prepared-in: V<n>`, **and**
+  no live reference to the dropped identifier may remain in `src/main`. Rule 2 above states
+  exactly what the reference search can and cannot see.
+- **`SET lock_timeout`** on lock-taking DDL — `MISSING_LOCK_TIMEOUT`. See rule 7 for the
+  queue-behind-the-blocked-`ALTER` mechanism and the per-statement lock levels.
+  *Implementation note:* the check strips comments before looking for `SET lock_timeout`.
+  Without that, a migration whose header merely **discusses** `lock_timeout` silences the rule
+  for its own DDL — which is not hypothetical, it is how the first version of the rule passed
+  its own negative fixture.
+- **Unbatched full-table DML** — `UNBATCHED_DML`, for an `UPDATE`/`DELETE` with no `WHERE` or a
+  tautological one. Rule 6 states the half it cannot decide.
+- **Hand-picked `platform_config` ids** — `PLATFORM_CONFIG_EXPLICIT_ID`. See rule 8.
+- **Per-clause `NOT VALID` evaluation** (AC11.1). `ALTER TABLE t ADD CONSTRAINT a CHECK (…) NOT
+  VALID, ADD CONSTRAINT b CHECK (…);` used to pass, because the rule asked only whether
+  `NOT VALID` appeared *somewhere* in the statement. Clauses are now split on **top-level**
+  commas with balanced-paren tracking — necessary because a `CHECK` body carries its own commas
+  (`CHECK (x IN (1,2,3))`), which a naive split would tear in half.
+- **Statement-scoped opt-outs** (AC11.2). A `-- migration-lint: allow-*` marker used to match
+  against the whole file, so one opt-out silenced that rule for every statement in the
+  migration. A marker now covers only the statement that follows it.
+
 **Still not covered:** rule 5 (enum / `CHECK` widening one release ahead of the first write) has
 no lint rule. `V124` deviates from it knowingly under the pre-production clause below and carries
 a `-- migration-lint: allow-enum-widen-same-release` marker for the day the rule is implemented.
 
 ## What the guard still cannot catch
 
-The lint is a **text-level backstop, not a proof**. It does not catch:
+The lint is a **text-level backstop, not a proof**. The two items this section used to name —
+a second validating constraint in the same statement, and an opt-out leaking to every other
+statement in the file — were both closed by skillars-deferred-92 AC11 and now appear above.
 
-- a **second validating constraint in the same statement** — the `NOT VALID` rule splits on
-  `;` and asks only whether `NOT VALID` appears *somewhere* in the statement, so
-  `ALTER TABLE t ADD CONSTRAINT a CHECK (…) NOT VALID, ADD CONSTRAINT b CHECK (…);`
-  passes even though `b` validates. Add one constraint per statement and the rule is exact;
-- a **second blocking index in a file that already carries an opt-out** — the
-  `-- migration-lint: allow-*` markers are matched against the whole file, so one opt-out
-  silences that rule for every statement in the migration. Keep opt-outs in single-purpose
-  migrations.
+What genuinely remains:
 
-Review still owns these.
+- **Whether a present `WHERE` actually bounds anything.** `UNBATCHED_DML` sees a missing or
+  tautological `WHERE`; it cannot know that `WHERE status = 'X'` matches three rows rather than
+  three million.
+- **A reader that never names its table.** `DROP_WITHOUT_PRIOR_RELEASE_PREP`'s reference search
+  requires the identifier and the table name in the same file, so a raw SQL string assembled
+  from fragments, or a column accessed purely by index, is invisible to it. The
+  `drop-prepared-in` marker is the guarantee for those; the search is what stops the marker
+  being a rubber stamp.
+- **Enum / `CHECK` widening one release ahead of the first write** (rule 5) — no rule yet.
+- **A committed backport below the baseline.** `BACKPORT_BELOW_BASELINE` is a pre-commit,
+  working-tree guard; in CI every migration already exists at `HEAD`, so it cannot fire there.
+- **Anything requiring a database**: actual table sizes, actual lock contention, whether an
+  index is really needed. The lint reads text.
+
+Review still owns these. They are listed rather than implied because this project has three
+recorded instances of a guard believed stronger than it was, and an overstated guard is worse
+than a missing one.
 
 ## PR checklist
 
@@ -182,5 +305,14 @@ Before merging a PR that adds or changes a file under
       `VALIDATE` for FK/CHECK on non-trivial tables, `CONCURRENTLY` for indexes on
       hot/large tables, enum/CHECK widening one release ahead of the first write,
       batched backfills).
+- [ ] Any `DROP TABLE` / `DROP COLUMN` carries `-- migration-lint: drop-prepared-in: V<n>`
+      naming the release that removed the last reader — and that release really did ship.
+- [ ] Any lock-taking DDL is preceded by `SET lock_timeout` (see rule 7 for why), or carries
+      `-- migration-lint: allow-unbounded-lock-wait <reason>`.
+- [ ] Any `UPDATE` / `DELETE` bounds its row count, or carries
+      `-- migration-lint: allow-full-table-dml <reason>`.
+- [ ] Any `INSERT INTO main.platform_config` **omits `id`** — the column has an identity as of
+      `V128`.
 - [ ] `MigrationConventionLintTest` passes (it runs in the `test` phase).
-- [ ] Any `-- migration-lint: allow-*` opt-out carries a real reason.
+- [ ] Any `-- migration-lint: allow-*` opt-out carries a real reason **and sits immediately above
+      the statement it covers** — markers are statement-scoped, not file-scoped.

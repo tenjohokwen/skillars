@@ -66,9 +66,45 @@ class SchedulerLockTransactionOrderingIT extends AbstractIntegrationTest {
         assertShedLockOutermost(bookingReminderScheduler, "processReminderWindows");
     }
 
+    /**
+     * skillars-deferred-92 AC9.2 changed this bean's shape, so the assertion changed with it.
+     *
+     * <p>{@code resetMonthlyBandwidth} no longer stacks {@code @Transactional} — it must not. It is
+     * now a loop of independently-committed chunks, and wrapping that loop in one transaction would
+     * hold every row lock it takes until the very end: the same total lock footprint as the single
+     * {@code UPDATE} it replaced, held for longer, which is strictly worse than doing nothing. The
+     * per-chunk boundary lives in {@code BandwidthResetChunkProcessor}.
+     *
+     * <p>So the advisor-ordering question no longer applies here (the other two beans still pin it).
+     * What is worth pinning instead is the <em>absence</em> of {@code @Transactional}, because it is
+     * exactly the kind of thing a later reader re-adds while tidying up — it looks like an oversight
+     * next to its two annotated siblings, and nothing else would notice.
+     */
     @Test
-    void bandwidthResetService_shedLockAdvisorIsOutsideTheTransactionAdvisor() {
-        assertShedLockOutermost(bandwidthResetService, "resetMonthlyBandwidth");
+    void bandwidthResetService_isNotTransactional_soChunksCommitIndependently() {
+        Class<?> target = AopUtils.getTargetClass(bandwidthResetService);
+        Method scheduled = Arrays.stream(target.getMethods())
+            .filter(m -> m.getName().equals("resetMonthlyBandwidth"))
+            .findFirst()
+            .orElseThrow();
+
+        assertThat(scheduled.getAnnotation(org.springframework.transaction.annotation.Transactional.class))
+            .as("""
+                BandwidthResetService.resetMonthlyBandwidth must NOT be @Transactional \
+                (skillars-deferred-92 AC9.2). It drives a chunked loop; one enclosing transaction \
+                would hold every row lock until the end and block QuotaService.reserve() for the whole \
+                run — worse than the single UPDATE the chunking replaced. The transaction boundary \
+                belongs to BandwidthResetChunkProcessor.resetChunk(), one per chunk.""")
+            .isNull();
+        assertThat(target.getAnnotation(org.springframework.transaction.annotation.Transactional.class))
+            .as("nor may the class carry a type-level @Transactional")
+            .isNull();
+
+        assertThat(Arrays.stream(target.getMethods())
+                .anyMatch(m -> m.getName().equals("resetMonthlyBandwidth")
+                            && m.getAnnotation(net.javacrumbs.shedlock.spring.annotation.SchedulerLock.class) != null))
+            .as("@SchedulerLock must stay — a second node running a concurrent reset is still wrong")
+            .isTrue();
     }
 
     private static void assertShedLockOutermost(Object bean, String scheduledMethodName) {
