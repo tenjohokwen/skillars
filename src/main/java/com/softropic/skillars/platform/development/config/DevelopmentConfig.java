@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.development.config;
 
 import com.softropic.skillars.infrastructure.exception.AppSetupException;
+import com.softropic.skillars.infrastructure.threadpool.ExecutorShutdown;
 import com.softropic.skillars.infrastructure.threadpool.MdcDecorator;
 import jakarta.annotation.PostConstruct;
 import jakarta.persistence.EntityManager;
@@ -59,8 +60,10 @@ public class DevelopmentConfig {
      * on the calling ({@code taskExecutor} listener) thread — a deliberate fall-back to the
      * pre-story behaviour (backpressure, not dropped SLU writes; {@code AbortPolicy} would drop them).
      */
+    // public (skillars-deferred-92 AC3) so ExecutorShutdownConfigurationTest can build the real pool
+    // without a Spring context, exactly as it does for the other four. Matches its four siblings.
     @Bean(name = "sluRetryExecutor")
-    ThreadPoolTaskExecutor sluRetryExecutor() {
+    public ThreadPoolTaskExecutor sluRetryExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(2);
         executor.setMaxPoolSize(4);
@@ -69,6 +72,10 @@ public class DevelopmentConfig {
         executor.setThreadNamePrefix("slu-retry-");
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.setTaskDecorator(task -> new MdcDecorator().decorate(task));
+        // skillars-deferred-92 AC3: without this, shutdownNow() interrupted the @Backoff sleep of an
+        // in-flight retry with an InterruptedException that matches no retryFor/@Recover, so the SLU
+        // write was lost through a code path that reported nothing. See ExecutorShutdown.
+        ExecutorShutdown.configureGracefulShutdown(executor, ExecutorShutdown.SLU_RETRY_SECONDS);
         executor.initialize();
         return executor;
     }

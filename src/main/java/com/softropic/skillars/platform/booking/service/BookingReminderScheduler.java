@@ -25,6 +25,31 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+/**
+ * Drives the 24-hour (primary) and 2-hour (secondary) booking reminders.
+ *
+ * <h2>What {@code primaryReminderSentAt} / {@code secondaryReminderSentAt} mean (skillars-deferred-92 AC29.4)</h2>
+ *
+ * They are stamped <em>before</em> the event is published, and that ordering is deliberate rather
+ * than incidental. {@code BookingEmailListener.onBookingReminder} is
+ * {@code @TransactionalEventListener(BEFORE_COMMIT)}, so its outbox write happens inside this
+ * method's own {@code @Transactional} boundary: the stamp and the outbox row commit together or
+ * neither does. The columns therefore mean <strong>"a reminder was durably queued for this
+ * booking"</strong>, not "an SMTP server accepted it" — delivery itself is the outbox drain's job
+ * and is tracked by the outbox row's {@code attempts} / {@code last_error} and the
+ * {@code [OUTBOX_STUCK]} alert.
+ *
+ * <p>Stamping <em>after</em> a confirmed send was considered and rejected: it would need the stamp
+ * to be written from the drain, i.e. from a different transaction than the one that selected the
+ * booking, reintroducing the double-send window the {@code IS NULL} filter on
+ * {@link com.softropic.skillars.platform.booking.repo.BookingRepository#findUpcomingWithin2hWindow}
+ * exists to close.
+ *
+ * <p><strong>History.</strong> Before skillars-deferred-92 AC29 the listener carried no annotation
+ * at all, so these columns recorded reminders that were never sent. {@code V129} resets
+ * {@code secondary_reminder_sent_at} for still-future bookings so they are re-picked; see that
+ * migration for why the primary column is deliberately left alone.
+ */
 @Component
 @RequiredArgsConstructor
 @Slf4j
@@ -57,7 +82,12 @@ public class BookingReminderScheduler {
                     new TransitionContext(ActorRole.SYSTEM, null));
                 b.setPrimaryReminderSentAt(now);
                 eventPublisher.publishEvent(buildReminderEvent(b, "PRIMARY"));
-                log.info("Transitioned booking {} to UPCOMING and sent primary reminder", b.getId());
+                // skillars-deferred-92 AC29.4: says "queued", not "sent". The old wording asserted a
+                // delivery this method has never performed — it publishes an event that
+                // BookingEmailListener turns into an outbox row; the actual SMTP send happens later,
+                // in the drain, and can still fail there. A log line that claims more than the code
+                // did is how AC29's bug survived a full story and a 3-layer review.
+                log.info("Transitioned booking {} to UPCOMING and queued primary reminder", b.getId());
             } catch (Exception e) {
                 log.error("Failed to process primary reminder for booking {}", b.getId(), e);
             }
@@ -71,7 +101,7 @@ public class BookingReminderScheduler {
                 b.setSecondaryReminderSentAt(now);
                 bookingRepository.save(b);
                 eventPublisher.publishEvent(buildReminderEvent(b, "SECONDARY"));
-                log.info("Sent secondary reminder for booking {}", b.getId());
+                log.info("Queued secondary reminder for booking {}", b.getId());
             } catch (Exception e) {
                 log.error("Failed to process secondary reminder for booking {}", b.getId(), e);
             }

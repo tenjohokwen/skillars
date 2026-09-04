@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.outbox.config;
 
+import com.softropic.skillars.infrastructure.threadpool.ExecutorShutdown;
 import com.softropic.skillars.infrastructure.threadpool.MdcDecorator;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -45,6 +46,11 @@ public class OutboxConfig {
         executor.setTaskDecorator(new MdcDecorator());
         // Drop, do not run on the caller: the sweeper is the safety net and no row is ever lost.
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.DiscardPolicy());
+        // skillars-deferred-92 AC3. The longest slice of the shutdown budget: every queued task here
+        // is a drain of a DURABLE outbox — refunds, transactional emails, SLU deltas. shutdownNow()
+        // used to discard them silently; the sweeper still recovered the rows, but "recovered on the
+        // next boot" is not what an outbox promises. See ExecutorShutdown for the 45 s arithmetic.
+        ExecutorShutdown.configureGracefulShutdown(executor, ExecutorShutdown.OUTBOX_DRAIN_SECONDS);
         executor.initialize();
         return executor;
     }

@@ -1,5 +1,6 @@
 package com.softropic.skillars.infrastructure.blobstore.config;
 
+import com.softropic.skillars.infrastructure.threadpool.ExecutorShutdown;
 import com.softropic.skillars.infrastructure.blobstore.service.LocalFileSystemStorageService;
 import com.softropic.skillars.infrastructure.blobstore.service.S3StorageService;
 import com.softropic.skillars.infrastructure.blobstore.service.StorageMetrics;
@@ -56,15 +57,24 @@ public class BlobstoreConfig {
         return DefaultCredentialsProvider.create();
     }
 
+    /**
+     * skillars-deferred-92 AC3 — the sixth executor pool, which the story's inventory missed because
+     * it is a raw {@link ThreadPoolExecutor} rather than a {@code ThreadPoolTaskExecutor}.
+     *
+     * <p>{@code destroyMethod = "shutdown"} was already better than the other five pools'
+     * {@code shutdownNow()}: queued uploads were kept rather than discarded. But
+     * {@code ExecutorService.shutdown()} is explicitly non-blocking, so {@code destroy()} returned
+     * immediately and the JVM exited with S3 uploads still in flight, leaving orphaned multipart
+     * uploads behind. {@link ExecutorShutdown#gracefulFixedPool} keeps the same shape and the same
+     * {@code CallerRunsPolicy}, and adds a bounded wait — see that class for the whole shutdown
+     * budget and how it fits inside docker-compose's {@code stop_grace_period}.
+     */
     @Bean(destroyMethod = "shutdown")
     public ExecutorService storageUploadExecutor(BlobstoreProperties properties) {
         BlobstoreProperties.Executor cfg = properties.getExecutor();
-        return new ThreadPoolExecutor(
-                cfg.getPoolSize(),
-                cfg.getPoolSize(),
-                60L, TimeUnit.SECONDS,
-                new ArrayBlockingQueue<>(cfg.getQueueCapacity()),
-                new ThreadPoolExecutor.CallerRunsPolicy());
+        return ExecutorShutdown.gracefulFixedPool(
+            cfg.getPoolSize(), cfg.getQueueCapacity(), "storage-upload-",
+            ExecutorShutdown.STORAGE_UPLOAD_SECONDS);
     }
 
     @Bean

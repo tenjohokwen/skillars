@@ -2,8 +2,6 @@ package com.softropic.skillars.platform.video.service;
 
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.video.contract.OperationalState;
-import com.softropic.skillars.platform.video.contract.event.VideoModerationAdminAlertEvent;
-import com.softropic.skillars.platform.video.contract.event.VideoModerationRetryEvent;
 import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -13,7 +11,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -24,6 +21,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.*;
 
@@ -33,7 +31,9 @@ class ModerationSlaMonitorServiceTest {
     @Mock VideoRepository videoRepository;
     @Mock VideoLifecycleService videoLifecycleService;
     @Mock ConfigService configService;
-    @Mock ApplicationEventPublisher publisher;
+    // skillars-deferred-92 AC5: the service no longer publishes directly — both intents go
+    // onto the durable outbox, inside the same transaction as the state change they describe.
+    @Mock ModerationOutboxSupport moderationOutboxSupport;
     @Mock TransactionTemplate transactionTemplate;
 
     @InjectMocks
@@ -62,7 +62,8 @@ class ModerationSlaMonitorServiceTest {
 
         service.detectSlaViolations();
 
-        verify(publisher, never()).publishEvent(any());
+        verify(moderationOutboxSupport, never()).enqueueRetry(any(), any());
+        verify(moderationOutboxSupport, never()).enqueueAdminAlert(any(), any(), any(), any(), anyBoolean());
         verify(videoLifecycleService, never()).transitionOperationalState(any(), any());
     }
 
@@ -75,11 +76,8 @@ class ModerationSlaMonitorServiceTest {
 
         service.detectSlaViolations();
 
-        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-        verify(publisher).publishEvent(captor.capture());
-        assertThat(captor.getValue()).isInstanceOf(VideoModerationRetryEvent.class);
-        VideoModerationRetryEvent event = (VideoModerationRetryEvent) captor.getValue();
-        assertThat(event.videoId()).isEqualTo(video.getId());
+        verify(moderationOutboxSupport).enqueueRetry(video.getId(), video.getOwnerId());
+        verify(moderationOutboxSupport, never()).enqueueAdminAlert(any(), any(), any(), any(), anyBoolean());
     }
 
     @Test
@@ -90,11 +88,11 @@ class ModerationSlaMonitorServiceTest {
         service.detectSlaViolations();
 
         verify(videoLifecycleService).transitionOperationalState(video.getId(), OperationalState.FAILED);
-        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-        verify(publisher).publishEvent(captor.capture());
-        assertThat(captor.getValue()).isInstanceOf(VideoModerationAdminAlertEvent.class);
-        VideoModerationAdminAlertEvent alert = (VideoModerationAdminAlertEvent) captor.getValue();
-        assertThat(alert.urgent()).isTrue();
+        ArgumentCaptor<Boolean> urgent = ArgumentCaptor.forClass(Boolean.class);
+        verify(moderationOutboxSupport).enqueueAdminAlert(
+            eq(video.getId()), eq(video.getOwnerId()), any(), any(), urgent.capture());
+        assertThat(urgent.getValue()).isTrue();
+        verify(moderationOutboxSupport, never()).enqueueRetry(any(), any());
     }
 
     @Test
@@ -123,11 +121,9 @@ class ModerationSlaMonitorServiceTest {
         verify(videoLifecycleService).transitionOperationalState(atLimit.getId(), OperationalState.FAILED);
         verify(videoLifecycleService, never()).transitionOperationalState(eq(belowLimit.getId()), any());
 
-        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-        verify(publisher, times(2)).publishEvent(captor.capture());
-        assertThat(captor.getAllValues())
-            .anyMatch(e -> e instanceof VideoModerationRetryEvent r && r.videoId().equals(belowLimit.getId()))
-            .anyMatch(e -> e instanceof VideoModerationAdminAlertEvent);
+        verify(moderationOutboxSupport).enqueueRetry(belowLimit.getId(), belowLimit.getOwnerId());
+        verify(moderationOutboxSupport).enqueueAdminAlert(
+            eq(atLimit.getId()), eq(atLimit.getOwnerId()), any(), any(), eq(true));
     }
 
     private Video stuckVideo(int retryCount) {

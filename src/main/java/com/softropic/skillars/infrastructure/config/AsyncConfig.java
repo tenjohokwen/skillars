@@ -1,5 +1,6 @@
 package com.softropic.skillars.infrastructure.config;
 
+import com.softropic.skillars.infrastructure.threadpool.ExecutorShutdown;
 import com.softropic.skillars.infrastructure.threadpool.MdcDecorator;
 
 import org.slf4j.LoggerFactory;
@@ -39,6 +40,10 @@ public class AsyncConfig implements AsyncConfigurer {
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
 
         executor.setTaskDecorator(task -> new MdcDecorator().decorate(task));
+        // skillars-deferred-92 AC3. Short, but not zero: this is the pool every bare @Async in the
+        // application resolves to (see AC17 / DefaultAsyncExecutorResolutionTest), so whatever lands
+        // here inherits this shutdown behaviour. See ExecutorShutdown for the budget.
+        ExecutorShutdown.configureGracefulShutdown(executor, ExecutorShutdown.SHARED_ASYNC_SECONDS);
 
         executor.initialize();
         return executor;

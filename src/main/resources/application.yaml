@@ -1,6 +1,11 @@
 baseurl: http://localhost
 server:
   port: "${port:9990}"
+  # skillars-deferred-92 AC3.2. Lets in-flight HTTP requests finish instead of being cut mid-response
+  # on SIGTERM. This is NOT what bounds the executor pools -- ExecutorConfigurationSupport is a
+  # DisposableBean, not a SmartLifecycle, so its destroy() runs during ordinary bean destruction,
+  # after this phase and outside its timeout (see infrastructure.threadpool.ExecutorShutdown).
+  shutdown: graceful
   error:
     whitelabel:
       enabled: false
@@ -35,6 +40,12 @@ quartz:
     org.quartz.jobStore.misfireThreshold: 60000
 
 spring:
+  # skillars-deferred-92 AC3.2. Bounds the SmartLifecycle stop phases, of which the only meaningful
+  # one here is server.shutdown=graceful's in-flight HTTP drain. Pinned rather than left at Spring's
+  # 30s default because 30s alone would consume two thirds of docker-compose's stop_grace_period
+  # before bean destruction -- where the executor awaits actually live -- had begun.
+  lifecycle:
+    timeout-per-shutdown-phase: 8s
   mvc:
     async:
       request-timeout: -1
