@@ -2,7 +2,11 @@
   <div class="drill-suggestion-panel">
     <div class="row items-center q-mb-sm">
       <div class="text-subtitle2 col">
-        {{ isPersonalized ? t('session.suggestions.personalizedTitle') : t('session.suggestions.fallbackTitle') }}
+        {{
+          isPersonalized
+            ? t('session.suggestions.personalizedTitle')
+            : t('session.suggestions.fallbackTitle')
+        }}
       </div>
       <q-btn flat dense round icon="close" size="xs" @click="emit('close')" />
     </div>

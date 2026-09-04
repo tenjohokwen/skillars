@@ -1,14 +1,14 @@
 <template>
   <q-layout view="lHh Lpr lFf">
-
     <!-- ── Header ──────────────────────────────────────────── -->
     <q-header>
       <q-toolbar class="header-toolbar">
-
         <!-- Hamburger (authenticated only) -->
         <q-btn
           v-if="authStore.isAuthenticated"
-          flat round dense
+          flat
+          round
+          dense
           icon="menu"
           class="header-btn"
           aria-label="Menu"
@@ -26,12 +26,19 @@
         <ParentChildSwitcher />
 
         <!-- Language switcher -->
-        <q-btn-dropdown flat no-caps :label="currentLanguageLabel" icon="language" class="header-btn">
+        <q-btn-dropdown
+          flat
+          no-caps
+          :label="currentLanguageLabel"
+          icon="language"
+          class="header-btn"
+        >
           <q-list class="dropdown-list">
             <q-item
               v-for="lang in languages"
               :key="lang.value"
-              clickable v-close-popup
+              clickable
+              v-close-popup
               @click="changeLanguage(lang.value)"
               class="dropdown-item"
             >
@@ -47,7 +54,9 @@
 
         <!-- Theme toggle -->
         <q-btn
-          flat round dense
+          flat
+          round
+          dense
           :icon="darkMode ? 'light_mode' : 'dark_mode'"
           class="header-btn"
           :aria-label="darkMode ? t('theme.toggle') : t('theme.toggle')"
@@ -58,7 +67,13 @@
 
         <!-- Authenticated: user menu -->
         <template v-if="authStore.isAuthenticated">
-          <q-btn-dropdown flat no-caps :label="authStore.displayName" icon="person" class="header-btn">
+          <q-btn-dropdown
+            flat
+            no-caps
+            :label="authStore.displayName"
+            icon="person"
+            class="header-btn"
+          >
             <q-list class="dropdown-list">
               <q-item clickable v-close-popup to="/profile" class="dropdown-item">
                 <q-item-section avatar>
@@ -74,7 +89,9 @@
                   <q-icon name="logout" style="color: var(--accent-danger)" />
                 </q-item-section>
                 <q-item-section>
-                  <q-item-label style="color: var(--accent-danger)">{{ t('auth.logout') }}</q-item-label>
+                  <q-item-label style="color: var(--accent-danger)">{{
+                    t('auth.logout')
+                  }}</q-item-label>
                 </q-item-section>
               </q-item>
             </q-list>
@@ -85,7 +102,6 @@
         <template v-else>
           <q-btn flat no-caps :label="t('auth.login')" to="/login" class="btn-accent q-px-md" />
         </template>
-
       </q-toolbar>
     </q-header>
 
@@ -244,108 +260,107 @@
     <q-page-container>
       <router-view />
     </q-page-container>
-
   </q-layout>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue';
-import { useRouter } from 'vue-router';
-import { useI18n } from 'vue-i18n';
-import { useSession } from 'src/composables/useSession';
-import { toggleTheme as bootToggleTheme, isDarkMode } from 'src/boot/theme';
-import ParentChildSwitcher from 'src/components/ParentChildSwitcher.vue';
-import { useAuthStore } from 'src/stores/auth.store';
-import { usePlayerStore } from 'src/stores/playerStore';
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
+import { useSession } from 'src/composables/useSession'
+import { toggleTheme as bootToggleTheme, isDarkMode } from 'src/boot/theme'
+import ParentChildSwitcher from 'src/components/ParentChildSwitcher.vue'
+import { useAuthStore } from 'src/stores/auth.store'
+import { usePlayerStore } from 'src/stores/playerStore'
 
-const router = useRouter();
-const { t, locale } = useI18n();
-const { destroySession } = useSession();
-const authStore = useAuthStore();
-const playerStore = usePlayerStore();
+const router = useRouter()
+const { t, locale } = useI18n()
+const { destroySession } = useSession()
+const authStore = useAuthStore()
+const playerStore = usePlayerStore()
 
-const leftDrawerOpen = ref(false);
-const darkMode = ref(isDarkMode());
+const leftDrawerOpen = ref(false)
+const darkMode = ref(isDarkMode())
 
 // Deferred-82 AC3: resolved for a self-registered player caller so the pack-dashboard nav item
 // can bind its route once resolved, rather than to an unresolved/undefined playerId.
-const selfPlayerId = ref(null);
+const selfPlayerId = ref(null)
 const packsRoute = computed(() =>
   selfPlayerId.value ? `/parent/players/${selfPlayerId.value}/packs` : null,
-);
+)
 
 const languages = [
   { label: 'English', value: 'en-US' },
   { label: 'Français', value: 'fr-FR' },
   { label: 'Deutsch', value: 'de-DE' },
-];
+]
 
 const currentLanguageLabel = computed(() => {
-  const lang = languages.find(l => l.value === locale.value);
-  return lang ? lang.label : 'English';
-});
+  const lang = languages.find((l) => l.value === locale.value)
+  return lang ? lang.label : 'English'
+})
 
 function changeLanguage(lang) {
-  locale.value = lang;
-  localStorage.setItem('locale', lang);
+  locale.value = lang
+  localStorage.setItem('locale', lang)
 }
 
 function loadLanguagePreference() {
-  const savedLocale = localStorage.getItem('locale');
-  if (savedLocale && languages.some(l => l.value === savedLocale)) {
-    locale.value = savedLocale;
+  const savedLocale = localStorage.getItem('locale')
+  if (savedLocale && languages.some((l) => l.value === savedLocale)) {
+    locale.value = savedLocale
   }
 }
 
 function onToggleTheme() {
-  bootToggleTheme();
-  darkMode.value = isDarkMode();
+  bootToggleTheme()
+  darkMode.value = isDarkMode()
 }
 
 function onStorageThemeChange(event) {
   if (event.key === 'skillars-theme') {
-    darkMode.value = isDarkMode();
+    darkMode.value = isDarkMode()
   }
 }
 
 function deleteUserCookie() {
-  document.cookie = 'user=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+  document.cookie = 'user=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
 }
 
 async function handleLogout() {
-  await authStore.logout();
-  playerStore.resetSelfPlayerId();
-  destroySession();
-  deleteUserCookie();
-  router.push('/login');
+  await authStore.logout()
+  playerStore.resetSelfPlayerId()
+  destroySession()
+  deleteUserCookie()
+  router.push('/login')
 }
 
 function toggleLeftDrawer() {
-  leftDrawerOpen.value = !leftDrawerOpen.value;
+  leftDrawerOpen.value = !leftDrawerOpen.value
 }
 
 onMounted(async () => {
-  loadLanguagePreference();
+  loadLanguagePreference()
   // Automatic session-expiry handling (cookie/state clearing + redirect) is owned
   // by App.vue, which is always mounted — avoids a race between two listeners.
-  window.addEventListener('storage', onStorageThemeChange);
+  window.addEventListener('storage', onStorageThemeChange)
 
   if (authStore.isPlayer) {
     try {
-      selfPlayerId.value = await playerStore.fetchSelfPlayerId();
+      selfPlayerId.value = await playerStore.fetchSelfPlayerId()
     } catch (err) {
       // A 404 is the expected, silent case: verified but never finished the profile-builder
       // step (same precedent as CoachPublicProfilePage.vue). Anything else is surfaced.
       if (err.response?.status !== 404) {
-        console.error('Failed to resolve self player id for nav', err);
+        console.error('Failed to resolve self player id for nav', err)
       }
     }
   }
-});
+})
 
 onUnmounted(() => {
-  window.removeEventListener('storage', onStorageThemeChange);
-});
+  window.removeEventListener('storage', onStorageThemeChange)
+})
 </script>
 
 <style lang="scss" scoped>
@@ -439,7 +454,9 @@ onUnmounted(() => {
     background: var(--surface-glass-hover) !important;
     color: var(--text-primary);
 
-    .nav-icon { color: var(--accent-primary); }
+    .nav-icon {
+      color: var(--accent-primary);
+    }
   }
 
   // Quasar active router-link class
@@ -447,8 +464,13 @@ onUnmounted(() => {
     background: var(--nav-active-bg) !important;
     color: var(--nav-active-color);
 
-    .nav-icon { color: var(--nav-active-color); }
-    .nav-label { color: var(--nav-active-color); font-weight: 600; }
+    .nav-icon {
+      color: var(--nav-active-color);
+    }
+    .nav-label {
+      color: var(--nav-active-color);
+      font-weight: 600;
+    }
   }
 }
 
@@ -463,8 +485,14 @@ onUnmounted(() => {
   color: inherit;
 }
 
-.nav-icon--danger { color: var(--accent-danger); }
-.nav-label--danger { color: var(--accent-danger); font-size: 14px; font-weight: 500; }
+.nav-icon--danger {
+  color: var(--accent-danger);
+}
+.nav-label--danger {
+  color: var(--accent-danger);
+  font-size: 14px;
+  font-weight: 500;
+}
 
 .drawer-footer {
   padding: 8px;

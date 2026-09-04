@@ -61,6 +61,50 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+  # skillars-deferred-92 AC1: the Prettier mandate in `_bmad-output/project-context.md` had never
+  # been enforced by any workflow, which is why 130 of ~150 frontend source files had drifted out of
+  # conformance over the life of the repo (re-recorded three separate times before anyone gated it).
+  # `mvn verify` builds the frontend via frontend-maven-plugin but runs neither Prettier nor ESLint
+  # (`npm test` is a stub), so this is the only place either check happens.
+  # Kept as its own job, not a step in `test`: it needs no JDK, no containers and no Maven cache, and
+  # a formatting failure should be visible in ~1 minute rather than behind a 15-minute test suite.
+  frontend-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38  # v6.5.0
+        with:
+          # Pinned to <node.version> in pom.xml, so CI formats/lints with the same toolchain the
+          # frontend-maven-plugin build uses. Keep the two in step.
+          node-version: '22.16.0'
+          cache: npm
+          cache-dependency-path: src/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: src/frontend
+        run: npm ci
+
+      # Both checks run even if the first fails, so one push surfaces both classes of problem
+      # rather than one per round-trip. The `conclusion != 'skipped'` guard keeps ESLint from
+      # running when `npm ci` itself failed (the Prettier step is skipped in that case, and an
+      # ESLint run with no node_modules only adds a second, misleading failure).
+      - name: Prettier check
+        id: prettier
+        working-directory: src/frontend
+        run: npx prettier --check "src/**/*.{js,vue,scss,json}"
+
+      - name: ESLint
+        if: ${{ !cancelled() && steps.prettier.conclusion != 'skipped' }}
+        working-directory: src/frontend
+        run: npx eslint .
+
   build-and-push:
     needs: test
     runs-on: ubuntu-latest

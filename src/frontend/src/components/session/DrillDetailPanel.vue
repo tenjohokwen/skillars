@@ -1,6 +1,11 @@
 <template>
   <!-- Mobile: bottom sheet — max-height applied here so Quasar's chrome is included in the 75vh cap -->
-  <q-bottom-sheet v-if="isMobile" v-model="open" @hide="emit('close')" class="drill-detail-panel__sheet">
+  <q-bottom-sheet
+    v-if="isMobile"
+    v-model="open"
+    @hide="emit('close')"
+    class="drill-detail-panel__sheet"
+  >
     <div class="drill-detail-panel__content">
       <template v-if="drill">
         <div class="drill-detail-panel__video-area q-mb-md">
@@ -92,8 +97,10 @@
         />
 
         <!-- Upload section (PRIVATE drills only, INSTRUCTOR+ tier) -->
-        <div v-if="props.drill.libraryType === 'PRIVATE' && sessionStore.canUploadVideo === true"
-             class="detail-panel__upload q-mt-md">
+        <div
+          v-if="props.drill.libraryType === 'PRIVATE' && sessionStore.canUploadVideo === true"
+          class="detail-panel__upload q-mt-md"
+        >
           <template v-if="!props.drill.hasVideo">
             <q-file
               v-model="selectedVideoFile"
@@ -240,8 +247,10 @@
             />
 
             <!-- Upload section (PRIVATE drills only, INSTRUCTOR+ tier) -->
-            <div v-if="props.drill.libraryType === 'PRIVATE' && sessionStore.canUploadVideo === true"
-                 class="detail-panel__upload q-mt-md">
+            <div
+              v-if="props.drill.libraryType === 'PRIVATE' && sessionStore.canUploadVideo === true"
+              class="detail-panel__upload q-mt-md"
+            >
               <template v-if="!props.drill.hasVideo">
                 <q-file
                   v-model="selectedVideoFile"
@@ -313,14 +322,24 @@ const isMobile = computed(() => $q.screen.lt.sm)
 
 // Local ref avoids Quasar's sheet snapping back while the parent processes the close event
 const open = ref(props.isOpen)
-watch(() => props.isOpen, (val) => { open.value = val })
+watch(
+  () => props.isOpen,
+  (val) => {
+    open.value = val
+  },
+)
 
 // Story Deferred-75 AC9: this panel stays mounted and is reused for whichever drill is currently
 // selected (props.drill swaps without a remount) — so the once-per-mount emit guard must reset
 // whenever the displayed drill changes, or a video error on one drill would permanently suppress
 // recovery for every drill viewed afterward.
 const videoErrorEmitted = ref(false)
-watch(() => props.drill?.id, () => { videoErrorEmitted.value = false })
+watch(
+  () => props.drill?.id,
+  () => {
+    videoErrorEmitted.value = false
+  },
+)
 function handleVideoError() {
   if (videoErrorEmitted.value) return
   videoErrorEmitted.value = true
@@ -374,8 +393,14 @@ function readVideoDuration(file) {
     const url = URL.createObjectURL(file)
     const video = document.createElement('video')
     video.preload = 'metadata'
-    video.onloadedmetadata = () => { URL.revokeObjectURL(url); resolve(video.duration) }
-    video.onerror = () => { URL.revokeObjectURL(url); reject(new Error('metadata read failed')) }
+    video.onloadedmetadata = () => {
+      URL.revokeObjectURL(url)
+      resolve(video.duration)
+    }
+    video.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('metadata read failed'))
+    }
     video.src = url
   })
 }

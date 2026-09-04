@@ -15,7 +15,11 @@
 
     <q-inner-loading :showing="store.reportsLoading" />
 
-    <q-banner v-if="store.reportsError && !store.reportsLoading" class="bg-negative text-white q-mb-sm" rounded>
+    <q-banner
+      v-if="store.reportsError && !store.reportsLoading"
+      class="bg-negative text-white q-mb-sm"
+      rounded
+    >
       <template #avatar><q-icon name="error" /></template>
       {{ store.reportsError }}
     </q-banner>
@@ -26,7 +30,9 @@
           <q-icon name="description" color="primary" />
         </q-item-section>
         <q-item-section>
-          <q-item-label>{{ $t('development.report.byCoach', { coach: report.coachName }) }}</q-item-label>
+          <q-item-label>{{
+            $t('development.report.byCoach', { coach: report.coachName })
+          }}</q-item-label>
           <q-item-label caption>{{ formatDate(report.generatedAt) }}</q-item-label>
         </q-item-section>
         <q-item-section side>

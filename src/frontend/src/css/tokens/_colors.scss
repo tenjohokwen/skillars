@@ -21,7 +21,7 @@
 
   // Borders
   --border-soft: rgba(255, 255, 255, 0.06);
-  --border-medium: rgba(255, 255, 255, 0.10);
+  --border-medium: rgba(255, 255, 255, 0.1);
   --border-accent: rgba(0, 255, 180, 0.25);
 
   // Accents — neon for dark bg
@@ -51,13 +51,13 @@
   --input-border: rgba(255, 255, 255, 0.08);
   --input-focus-border: rgba(0, 255, 180, 0.35);
   --input-focus-shadow: rgba(0, 255, 180, 0.08);
-  --badge-bg: rgba(0, 255, 180, 0.10);
+  --badge-bg: rgba(0, 255, 180, 0.1);
   --badge-color: var(--accent-primary);
-  --nav-active-bg: rgba(0, 255, 180, 0.10);
+  --nav-active-bg: rgba(0, 255, 180, 0.1);
   --nav-active-color: var(--accent-primary);
   --table-row-border: rgba(255, 255, 255, 0.04);
   --table-row-hover: rgba(255, 255, 255, 0.03);
-  --modal-backdrop: rgba(0, 0, 0, 0.60);
+  --modal-backdrop: rgba(0, 0, 0, 0.6);
   --surface-danger-hover: rgba(255, 95, 122, 0.08);
   --surface-warning: rgba(255, 184, 77, 0.12);
 }
@@ -65,7 +65,7 @@
 // ============================================================
 // Light mode overrides — only tokens that differ from dark
 // ============================================================
-:root[data-theme="light"] {
+:root[data-theme='light'] {
   --bg-primary: #f0f4f8;
   --bg-secondary: #e4eaf3;
   --bg-tertiary: #d8e2ef;
@@ -79,7 +79,7 @@
 
   --border-soft: rgba(30, 60, 120, 0.08);
   --border-medium: rgba(30, 60, 120, 0.14);
-  --border-accent: rgba(0, 122, 88, 0.30);
+  --border-accent: rgba(0, 122, 88, 0.3);
 
   // Accessible accents — WCAG AA compliant on light backgrounds
   --accent-primary: #007a58;
@@ -91,23 +91,23 @@
   --text-on-accent: #ffffff;
   --text-primary: #0d1a2e;
   --text-secondary: rgba(13, 26, 46, 0.72);
-  --text-muted: rgba(13, 26, 46, 0.50);
-  --text-disabled: rgba(13, 26, 46, 0.30);
+  --text-muted: rgba(13, 26, 46, 0.5);
+  --text-disabled: rgba(13, 26, 46, 0.3);
 
   --hero-gradient: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
 
-  --card-shadow: 0 10px 40px rgba(30, 60, 120, 0.10);
-  --progress-track: rgba(30, 60, 120, 0.10);
+  --card-shadow: 0 10px 40px rgba(30, 60, 120, 0.1);
+  --progress-track: rgba(30, 60, 120, 0.1);
   --btn-bg: rgba(255, 255, 255, 0.75);
   --btn-border: rgba(30, 60, 120, 0.14);
   --btn-hover: rgba(255, 255, 255, 0.95);
   --input-bg: rgba(255, 255, 255, 0.82);
   --input-border: rgba(30, 60, 120, 0.14);
   --input-focus-border: rgba(0, 122, 88, 0.45);
-  --input-focus-shadow: rgba(0, 122, 88, 0.10);
-  --badge-bg: rgba(0, 122, 88, 0.10);
+  --input-focus-shadow: rgba(0, 122, 88, 0.1);
+  --badge-bg: rgba(0, 122, 88, 0.1);
   --badge-color: var(--accent-primary);
-  --nav-active-bg: rgba(0, 122, 88, 0.10);
+  --nav-active-bg: rgba(0, 122, 88, 0.1);
   --nav-active-color: var(--accent-primary);
   --table-row-border: rgba(30, 60, 120, 0.06);
   --table-row-hover: rgba(30, 60, 120, 0.04);

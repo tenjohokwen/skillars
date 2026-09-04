@@ -61,7 +61,8 @@ export const acknowledgeStrike = (strikeId) =>
 // Coach subscriptions
 export const fetchCoachTiers = () => api.get('/api/payment/subscriptions/coach/tiers')
 export const fetchMyCoachSubscription = () => api.get('/api/payment/subscriptions/coach/me')
-export const subscribeCoach = (payload) => api.post('/api/payment/subscriptions/coach/subscribe', payload)
+export const subscribeCoach = (payload) =>
+  api.post('/api/payment/subscriptions/coach/subscribe', payload)
 export const changeCoachTier = (payload) =>
   api.post('/api/payment/subscriptions/coach/change-tier', payload)
 export const cancelCoachSubscription = () => api.delete('/api/payment/subscriptions/coach')

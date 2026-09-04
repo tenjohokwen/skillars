@@ -34,7 +34,13 @@
       <q-card-section>
         <div v-if="!hasActivePacks" class="text-body2" style="color: var(--text-secondary)">
           {{ $t('development.portal.noPacksState') }}
-          <q-btn flat dense color="primary" :label="$t('development.portal.findCoachCta')" :to="{ name: 'marketplace' }" />
+          <q-btn
+            flat
+            dense
+            color="primary"
+            :label="$t('development.portal.findCoachCta')"
+            :to="{ name: 'marketplace' }"
+          />
         </div>
         <q-list v-if="bookingStore.sessionPacks.length > 0" dense>
           <q-item v-for="pack in bookingStore.sessionPacks" :key="pack.id" class="q-py-xs">
@@ -53,10 +59,7 @@
     </q-card>
 
     <!-- Coach contribution narrative -->
-    <CoachContributionSection
-      :contributions="store.coachContributions"
-      class="q-mb-md"
-    />
+    <CoachContributionSection :contributions="store.coachContributions" class="q-mb-md" />
 
     <!-- Skill exposure bar chart -->
     <q-card class="q-mb-md">
@@ -74,11 +77,7 @@
     </q-card>
 
     <!-- Neglected skill alert -->
-    <q-banner
-      v-if="store.neglectedCodes.length > 0"
-      class="bg-warning text-white q-mb-md"
-      rounded
-    >
+    <q-banner v-if="store.neglectedCodes.length > 0" class="bg-warning text-white q-mb-md" rounded>
       {{ $t('development.portal.neglectedAlert', { skills: neglectedSkillNames }) }}
     </q-banner>
 
@@ -129,24 +128,20 @@ const loading = ref(false)
 
 // True only when at least one pack is ACTIVE — exhausted/expired packs still appear in
 // the list, but the "Find a coach" CTA must show whenever no active credits exist (AC4).
-const hasActivePacks = computed(() =>
-  bookingStore.sessionPacks.some(p => p.status === 'ACTIVE')
-)
+const hasActivePacks = computed(() => bookingStore.sessionPacks.some((p) => p.status === 'ACTIVE'))
 
 // Map raw skill codes to human-readable names so the neglected alert is parent-friendly.
 const neglectedSkillNames = computed(() =>
   store.neglectedCodes
-    .map(c => store.skillDefinitions.find(s => s.code === c)?.displayName ?? c)
-    .join(', ')
+    .map((c) => store.skillDefinitions.find((s) => s.code === c)?.displayName ?? c)
+    .join(', '),
 )
 
 // Collect all non-null error strings so no failure is silently hidden by the ?? chain.
 const pageError = computed(() => {
-  const errors = [
-    store.error,
-    bookingStore.packsError,
-    store.coachContributionsError,
-  ].filter(Boolean)
+  const errors = [store.error, bookingStore.packsError, store.coachContributionsError].filter(
+    Boolean,
+  )
   return errors.length > 0 ? errors[0] : null
 })
 
@@ -176,17 +171,23 @@ onMounted(() => loadPortal(playerId.value))
 
 // Reloads the portal when Vue Router reuses this component with a different playerId
 // (param-only navigation does not trigger onMounted again).
-watch(() => route.params.playerId, (newRaw, oldRaw) => {
-  if (newRaw !== oldRaw) loadPortal(playerId.value)
-})
+watch(
+  () => route.params.playerId,
+  (newRaw, oldRaw) => {
+    if (newRaw !== oldRaw) loadPortal(playerId.value)
+  },
+)
 
 // Handles bookmark/direct-URL re-entry where the store's activePlayerId differs from
 // the route param. ParentChildSwitcher already calls router.push directly — this watch
 // does NOT fire in the normal switch flow (the page isn't mounted when the switcher
 // navigates away). Kept narrow: only fires when newId !== current route param.
-watch(() => playerStore.activePlayerId, (newId) => {
-  if (newId && newId !== playerId.value) {
-    router.push({ name: 'parent-development', params: { playerId: newId } })
-  }
-})
+watch(
+  () => playerStore.activePlayerId,
+  (newId) => {
+    if (newId && newId !== playerId.value) {
+      router.push({ name: 'parent-development', params: { playerId: newId } })
+    }
+  },
+)
 </script>

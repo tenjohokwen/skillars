@@ -1,33 +1,33 @@
-import { ref, computed } from 'vue';
-import { hasUserSession } from 'src/utils/sessionCookies';
+import { ref, computed } from 'vue'
+import { hasUserSession } from 'src/utils/sessionCookies'
 
 // --- Constants -------------------------------------------------------------
-const SESSION_CHECK_INTERVAL = 30 * 1000; // main monitor tick
-const COUNTDOWN_INTERVAL = 1000; // 1s tick while the warning dialog is visible
+const SESSION_CHECK_INTERVAL = 30 * 1000 // main monitor tick
+const COUNTDOWN_INTERVAL = 1000 // 1s tick while the warning dialog is visible
 // Show the warning this long before the session expires. Pure client-side UX choice,
 // independent of the backend JWT_TTL (Story 1.7b).
-const WARNING_THRESHOLD = 5 * 60 * 1000; // 5 minutes
+const WARNING_THRESHOLD = 5 * 60 * 1000 // 5 minutes
 // Legacy fallback: only used when the 'rint' cookie is absent (e.g. a session issued
 // before this contract shipped, or the cookie was stripped). Keep loosely in sync with
 // SecurityConstants.JWT_TTL. Under the normal path the absolute 'rint' timestamp is used
 // instead and this value is never consulted.
-const LEGACY_SESSION_TTL = 15 * 60 * 1000;
-const RINT_COOKIE_NAME = 'rint'; // SecurityConstants.SESSION_REFRESH_COUNTDOWN
+const LEGACY_SESSION_TTL = 15 * 60 * 1000
+const RINT_COOKIE_NAME = 'rint' // SecurityConstants.SESSION_REFRESH_COUNTDOWN
 // Any 'rint' below this is not an absolute epoch-ms timestamp. Pre-1.7b builds wrote a fixed
 // delta (600000) as a *browser-session* cookie, so it can still be sitting in a browser that
 // was signed in across the deploy; read as an absolute time it lands in 1970 and would expire
 // the session instantly. Treat sub-threshold values as "no cookie" and use the legacy fallback.
-const MIN_PLAUSIBLE_EPOCH_MS = 1_000_000_000_000; // 2001-09-09
+const MIN_PLAUSIBLE_EPOCH_MS = 1_000_000_000_000 // 2001-09-09
 
 // skillars-deferred-90 AC3: a per-tab, reload-surviving marker that this tab has seen a real
 // absolute-'rint' cookie at least once — i.e. the backend is on the 1.7b contract, not a legacy
 // build. sessionStorage (not a module variable) so it survives a reload of a sibling tab after
 // another tab logged out; it dies with the tab, which is the desired lifetime.
-const RINT_SEEN_STORAGE_KEY = 'skillars.session.rintSeen';
+const RINT_SEEN_STORAGE_KEY = 'skillars.session.rintSeen'
 
 function markRintSeen() {
   try {
-    sessionStorage.setItem(RINT_SEEN_STORAGE_KEY, '1');
+    sessionStorage.setItem(RINT_SEEN_STORAGE_KEY, '1')
   } catch {
     // sessionStorage unavailable (privacy mode / disabled) — degrade to the legacy fallback path.
   }
@@ -35,37 +35,37 @@ function markRintSeen() {
 
 function hasSeenRintThisTab() {
   try {
-    return sessionStorage.getItem(RINT_SEEN_STORAGE_KEY) === '1';
+    return sessionStorage.getItem(RINT_SEEN_STORAGE_KEY) === '1'
   } catch {
-    return false;
+    return false
   }
 }
 
 // --- Reactive state -----------------------------------------------------------
-const lastActivityTime = ref(Date.now()); // only feeds the legacy fallback
-const showWarning = ref(false);
-const timeUntilExpiry = ref(LEGACY_SESSION_TTL);
-const isRefreshing = ref(false);
+const lastActivityTime = ref(Date.now()) // only feeds the legacy fallback
+const showWarning = ref(false)
+const timeUntilExpiry = ref(LEGACY_SESSION_TTL)
+const isRefreshing = ref(false)
 // skillars-deferred-90 AC4: true after a refreshSession() call failed, so SessionWarningDialog can
 // show an error surface instead of silently re-enabling "Continue session" and ticking to 0:00.
-const refreshFailed = ref(false);
+const refreshFailed = ref(false)
 
 // --- Computed display values ------------------------------------------------
-const secondsRemaining = computed(() => Math.max(0, Math.ceil(timeUntilExpiry.value / 1000)));
-const minutesRemaining = computed(() => Math.ceil(timeUntilExpiry.value / 60000));
+const secondsRemaining = computed(() => Math.max(0, Math.ceil(timeUntilExpiry.value / 1000)))
+const minutesRemaining = computed(() => Math.ceil(timeUntilExpiry.value / 60000))
 // Kept as an exported name (consumed by useSession/SessionWarningDialog); now a constant.
-const warningThresholdSeconds = computed(() => Math.round(WARNING_THRESHOLD / 1000));
+const warningThresholdSeconds = computed(() => Math.round(WARNING_THRESHOLD / 1000))
 
 // --- Internal timer IDs (not reactive) -------------------------------------
-let checkIntervalId = null;
-let countdownIntervalId = null;
+let checkIntervalId = null
+let countdownIntervalId = null
 
 /**
  * Record user activity. Only relevant to the legacy fallback path (see computeTimeUntilExpiry);
  * under the absolute-'rint' contract the server timestamp is authoritative.
  */
 export function recordActivity() {
-  lastActivityTime.value = Date.now();
+  lastActivityTime.value = Date.now()
 }
 
 /**
@@ -76,14 +76,14 @@ export function recordActivity() {
  * MIN_PLAUSIBLE_EPOCH_MS), in which case callers fall back to the legacy elapsed-time estimate.
  */
 function readSessionExpiryFromCookie() {
-  const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${RINT_COOKIE_NAME}=([^;]*)`));
-  if (!match) return null;
-  const epochMs = Number(decodeURIComponent(match[1]));
+  const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${RINT_COOKIE_NAME}=([^;]*)`))
+  if (!match) return null
+  const epochMs = Number(decodeURIComponent(match[1]))
   if (Number.isFinite(epochMs) && epochMs >= MIN_PLAUSIBLE_EPOCH_MS) {
-    markRintSeen();
-    return epochMs;
+    markRintSeen()
+    return epochMs
   }
-  return null;
+  return null
 }
 
 /**
@@ -114,8 +114,8 @@ function readSessionExpiryFromCookie() {
  * recorded API activity against the legacy TTL.
  */
 function computeTimeUntilExpiry() {
-  const localEstimate = LEGACY_SESSION_TTL - (Date.now() - lastActivityTime.value);
-  const expiresAt = readSessionExpiryFromCookie();
+  const localEstimate = LEGACY_SESSION_TTL - (Date.now() - lastActivityTime.value)
+  const expiresAt = readSessionExpiryFromCookie()
   if (expiresAt === null) {
     // skillars-deferred-90 AC3: "the shared session was torn down" branch. Fires ONLY when all of:
     //   1. monitoring is actually active (checkIntervalId !== null) — never on the public
@@ -131,14 +131,14 @@ function computeTimeUntilExpiry() {
     // The 60s grace window (rint maxAge = JWT_TTL + 60s) is unaffected: while 'rint' is still
     // present this branch is not reached and the existing `remaining <= 0` path owns it.
     if (checkIntervalId !== null && hasSeenRintThisTab() && !hasUserSession()) {
-      return 0;
+      return 0
     }
-    return localEstimate;
+    return localEstimate
   }
 
-  const remaining = expiresAt - Date.now();
-  if (remaining <= 0 && localEstimate > 0) return localEstimate;
-  return remaining;
+  const remaining = expiresAt - Date.now()
+  if (remaining <= 0 && localEstimate > 0) return localEstimate
+  return remaining
 }
 
 /**
@@ -151,7 +151,7 @@ function computeTimeUntilExpiry() {
  * Called by boot/axios.js after every API response, so an in-flight extension shows immediately.
  */
 export function refreshExpiryState() {
-  tick();
+  tick()
 }
 
 /**
@@ -163,42 +163,42 @@ export function refreshExpiryState() {
  *   is about to arm a timer must not do so.
  */
 function tick() {
-  timeUntilExpiry.value = computeTimeUntilExpiry();
+  timeUntilExpiry.value = computeTimeUntilExpiry()
 
   if (timeUntilExpiry.value <= 0) {
-    window.dispatchEvent(new CustomEvent('session:expired'));
-    cleanup();
-    return true;
+    window.dispatchEvent(new CustomEvent('session:expired'))
+    cleanup()
+    return true
   }
 
-  const wasWarning = showWarning.value;
-  showWarning.value = timeUntilExpiry.value <= WARNING_THRESHOLD;
+  const wasWarning = showWarning.value
+  showWarning.value = timeUntilExpiry.value <= WARNING_THRESHOLD
 
-  if (showWarning.value && !wasWarning) startCountdown();
+  if (showWarning.value && !wasWarning) startCountdown()
   if (!showWarning.value && wasWarning) {
-    stopCountdown();
+    stopCountdown()
     // Code review (3-layer run): the warning band was left (a sibling tab's activity extended the
     // session, or a refresh succeeded), so a previous failure is no longer relevant. Without this
     // the flag was only cleared by refreshSession() and cleanup(), so the next idle-into-warning
     // showed "we couldn't extend your session" when nothing had failed.
-    refreshFailed.value = false;
+    refreshFailed.value = false
   }
 
-  return false;
+  return false
 }
 
 /**
  * Start the 1-second countdown timer (visual updates while the warning dialog is shown).
  */
 function startCountdown() {
-  if (countdownIntervalId) return;
-  countdownIntervalId = setInterval(tick, COUNTDOWN_INTERVAL);
+  if (countdownIntervalId) return
+  countdownIntervalId = setInterval(tick, COUNTDOWN_INTERVAL)
 }
 
 function stopCountdown() {
   if (countdownIntervalId) {
-    clearInterval(countdownIntervalId);
-    countdownIntervalId = null;
+    clearInterval(countdownIntervalId)
+    countdownIntervalId = null
   }
 }
 
@@ -206,19 +206,19 @@ function stopCountdown() {
  * Start session monitoring (30-second interval checks).
  */
 export function startSessionMonitoring() {
-  if (checkIntervalId) clearInterval(checkIntervalId);
-  stopCountdown();
+  if (checkIntervalId) clearInterval(checkIntervalId)
+  stopCountdown()
 
   // A fresh monitoring session (login, or a re-arm) must not inherit a stale failure banner:
   // re-login calls startSessionMonitoring() without going through cleanup().
-  refreshFailed.value = false;
-  recordActivity();
+  refreshFailed.value = false
+  recordActivity()
   // Evaluate immediately rather than only priming the state: a tab resumed from sleep, or an
   // app loaded already inside the warning band, must be handled now instead of up to
   // SESSION_CHECK_INTERVAL later. tick() returning true means it already cleaned up.
-  if (tick()) return;
+  if (tick()) return
 
-  checkIntervalId = setInterval(tick, SESSION_CHECK_INTERVAL);
+  checkIntervalId = setInterval(tick, SESSION_CHECK_INTERVAL)
 }
 
 /**
@@ -226,10 +226,10 @@ export function startSessionMonitoring() {
  */
 export function stopSessionMonitoring() {
   if (checkIntervalId) {
-    clearInterval(checkIntervalId);
-    checkIntervalId = null;
+    clearInterval(checkIntervalId)
+    checkIntervalId = null
   }
-  stopCountdown();
+  stopCountdown()
 }
 
 /**
@@ -237,31 +237,31 @@ export function stopSessionMonitoring() {
  * Uses dynamic import to avoid circular dependency with the axios boot file.
  */
 export async function refreshSession() {
-  isRefreshing.value = true;
-  refreshFailed.value = false;
+  isRefreshing.value = true
+  refreshFailed.value = false
   try {
     // Dynamic import to break the cycle: axios.js → sessionManager.js → session.api.js → axios.js
-    const { sessionApi } = await import('src/api/session.api');
+    const { sessionApi } = await import('src/api/session.api')
     // Record activity BEFORE the call, not after. The request interceptor deliberately skips
     // recordActivity() for GET /refresh, and the response interceptor now runs a full tick() —
     // so on the no-'rint' fallback path a *successful* refresh would otherwise be evaluated
     // against a stale lastActivityTime and could fire 'session:expired' on its own success.
-    recordActivity();
-    await sessionApi.refresh();
+    recordActivity()
+    await sessionApi.refresh()
     // The response set a fresh 'rint'. Re-evaluate and let tick() clear the warning, so its
     // warning-edge handling also stops the 1s countdown interval. Assigning showWarning=false
     // directly here would destroy that edge and leak the interval for the rest of the session.
-    recordActivity();
-    refreshExpiryState();
+    recordActivity()
+    refreshExpiryState()
   } catch (e) {
     // skillars-deferred-90 AC4: surface the failure. Without this the catch only logs, isRefreshing
     // returns to false so "Continue session" re-enables as though it worked, the countdown keeps
     // ticking, and at 0:00 the user is logged out with no explanation. A genuine 401 is still
     // handled by the axios interceptor's errorKey gate.
-    console.error('Session refresh failed:', e);
-    refreshFailed.value = true;
+    console.error('Session refresh failed:', e)
+    refreshFailed.value = true
   } finally {
-    isRefreshing.value = false;
+    isRefreshing.value = false
   }
 }
 
@@ -269,12 +269,12 @@ export async function refreshSession() {
  * Clean up session state and stop monitoring.
  */
 export function cleanup() {
-  stopSessionMonitoring();
-  lastActivityTime.value = Date.now();
-  showWarning.value = false;
-  timeUntilExpiry.value = LEGACY_SESSION_TTL;
-  isRefreshing.value = false;
-  refreshFailed.value = false;
+  stopSessionMonitoring()
+  lastActivityTime.value = Date.now()
+  showWarning.value = false
+  timeUntilExpiry.value = LEGACY_SESSION_TTL
+  isRefreshing.value = false
+  refreshFailed.value = false
 }
 
 // Export reactive refs for composable use
@@ -286,4 +286,4 @@ export {
   isRefreshing,
   refreshFailed,
   warningThresholdSeconds,
-};
+}

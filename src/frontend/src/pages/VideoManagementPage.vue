@@ -36,7 +36,7 @@
       ref="fileInputRef"
       type="file"
       accept="video/*"
-      style="display:none"
+      style="display: none"
       @change="onFileSelected"
     />
 
@@ -86,7 +86,12 @@ const router = useRouter()
 
 const videos = ref([])
 const videosLoading = ref(true)
-const quota = ref({ storageUsedBytes: 0, storageLimitBytes: 0, bandwidthUsedBytes: 0, bandwidthLimitBytes: 0 })
+const quota = ref({
+  storageUsedBytes: 0,
+  storageLimitBytes: 0,
+  bandwidthUsedBytes: 0,
+  bandwidthLimitBytes: 0,
+})
 const quotaLoading = ref(true)
 
 const fileInputRef = ref(null)
@@ -201,7 +206,9 @@ async function confirmDelete(videoId) {
       message: t('video.management.deleteConfirm'),
       cancel: true,
       persistent: true,
-    }).onOk(() => resolve(true)).onCancel(() => resolve(false))
+    })
+      .onOk(() => resolve(true))
+      .onCancel(() => resolve(false))
   })
   if (!confirmed) return
 

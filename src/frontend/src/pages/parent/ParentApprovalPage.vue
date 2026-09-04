@@ -11,11 +11,7 @@
     </div>
 
     <div v-else class="q-gutter-md">
-      <q-card
-        v-for="approval in approvals"
-        :key="approval.id"
-        class="glass-card"
-      >
+      <q-card v-for="approval in approvals" :key="approval.id" class="glass-card">
         <q-card-section>
           <div class="text-subtitle2">{{ approval.playerName }}</div>
           <div class="text-caption text-secondary">
@@ -77,7 +73,9 @@ async function onApprove(approval) {
       title: t('video.approval.approveButton'),
       message: t('video.approval.confirmApprove'),
       cancel: true,
-    }).onOk(() => resolve(true)).onCancel(() => resolve(false))
+    })
+      .onOk(() => resolve(true))
+      .onCancel(() => resolve(false))
   })
   if (!confirmed) return
 
@@ -99,7 +97,9 @@ async function onReject(approval) {
       title: t('video.approval.rejectButton'),
       message: t('video.approval.confirmReject'),
       cancel: true,
-    }).onOk(() => resolve(true)).onCancel(() => resolve(false))
+    })
+      .onOk(() => resolve(true))
+      .onCancel(() => resolve(false))
   })
   if (!confirmed) return
 

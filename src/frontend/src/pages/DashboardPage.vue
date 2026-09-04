@@ -5,7 +5,6 @@
       :pitch-timezone="dashboardPitchTimezone"
     />
     <div class="app-page fade-in">
-
       <!-- Page header -->
       <div class="page-header q-mb-xl">
         <div class="text-page-title">Dashboard</div>
@@ -31,7 +30,6 @@
           </div>
         </div>
       </div>
-
     </div>
   </q-page>
 </template>
@@ -65,7 +63,7 @@ const metrics = [
   { label: 'Active Users', value: '—', sub: 'No data yet' },
   { label: 'Uptime', value: '99.9%', sub: 'Last 30 days' },
   { label: 'Response Time', value: '—', sub: 'Average ms' },
-];
+]
 </script>
 
 <style lang="scss" scoped>

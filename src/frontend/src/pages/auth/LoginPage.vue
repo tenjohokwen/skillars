@@ -1,7 +1,6 @@
 <template>
   <q-page class="auth-page">
     <div class="auth-card-container fade-in">
-
       <!-- Brand mark -->
       <div class="auth-brand q-mb-xl">
         <div class="gradient-text auth-brand-name">Skillars</div>
@@ -9,7 +8,6 @@
       </div>
 
       <div class="glass-card--static auth-card">
-
         <div class="text-section-title q-mb-xs">{{ t('auth.login') }}</div>
         <div class="text-meta q-mb-lg">Welcome back. Sign in to continue.</div>
 
@@ -23,20 +21,12 @@
         </q-banner>
 
         <!-- Account not verified banner -->
-        <q-banner
-          v-if="accountNotVerified"
-          class="q-mb-md auth-banner auth-banner--error"
-          rounded
-        >
+        <q-banner v-if="accountNotVerified" class="q-mb-md auth-banner auth-banner--error" rounded>
           {{ t('auth.accountNotVerified') }}
         </q-banner>
 
         <!-- Rate limit banner -->
-        <q-banner
-          v-if="rateLimited"
-          class="q-mb-md auth-banner auth-banner--error"
-          rounded
-        >
+        <q-banner v-if="rateLimited" class="q-mb-md auth-banner auth-banner--error" rounded>
           {{ t('auth.accountLocked') }}
         </q-banner>
 
@@ -116,73 +106,79 @@
             {{ t('auth.registerAsPlayer') }}
           </router-link>
         </div>
-
       </div>
     </div>
   </q-page>
 </template>
 
 <script setup>
-import { ref } from 'vue';
-import { useRouter, useRoute } from 'vue-router';
-import { useI18n } from 'vue-i18n';
-import { authApi } from 'src/api/auth.api';
-import { useErrorHandler } from 'src/composables/useErrorHandler';
-import { useAuthStore } from 'src/stores/auth.store';
-import { useSession } from 'src/composables/useSession';
+import { ref } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
+import { authApi } from 'src/api/auth.api'
+import { useErrorHandler } from 'src/composables/useErrorHandler'
+import { useAuthStore } from 'src/stores/auth.store'
+import { useSession } from 'src/composables/useSession'
 
-const router = useRouter();
-const route = useRoute();
-const { t } = useI18n();
-const authStore = useAuthStore();
-const { initSession } = useSession();
+const router = useRouter()
+const route = useRoute()
+const { t } = useI18n()
+const authStore = useAuthStore()
+const { initSession } = useSession()
 
 const {
-  setError, clearError, hasError, errorMessage,
-  isValidationError, helpCode, hasFieldError, getFieldError
-} = useErrorHandler();
+  setError,
+  clearError,
+  hasError,
+  errorMessage,
+  isValidationError,
+  helpCode,
+  hasFieldError,
+  getFieldError,
+} = useErrorHandler()
 
 const ROLE_ROUTES = {
   COACH: '/coach/command-center',
   PARENT: '/parent/dashboard',
   PLAYER: '/player/home', // resolves the caller's own playerId, then redirects to /player/locker-room/:playerId
   ADMIN: '/admin/health-dashboard',
-};
+}
 
-const form = ref({ email: '', password: '' });
-const isPwd = ref(true);
-const isSubmitting = ref(false);
-const accountNotVerified = ref(false);
-const rateLimited = ref(false);
+const form = ref({ email: '', password: '' })
+const isPwd = ref(true)
+const isSubmitting = ref(false)
+const accountNotVerified = ref(false)
+const rateLimited = ref(false)
 
-const required = val => !!val || t('validation.required');
-const validEmail = val => /.+@.+\..+/.test(val) || t('validation.email');
+const required = (val) => !!val || t('validation.required')
+const validEmail = (val) => /.+@.+\..+/.test(val) || t('validation.email')
 
 async function handleLogin() {
-  clearError();
-  accountNotVerified.value = false;
-  rateLimited.value = false;
-  isSubmitting.value = true;
+  clearError()
+  accountNotVerified.value = false
+  rateLimited.value = false
+  isSubmitting.value = true
   try {
-    const response = await authApi.skillarsLogin(form.value.email, form.value.password);
-    authStore.setUser(response);
-    initSession();
+    const response = await authApi.skillarsLogin(form.value.email, form.value.password)
+    authStore.setUser(response)
+    initSession()
     const redirect = route.query.redirect
-    const safePath = typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')
-      ? redirect
-      : ROLE_ROUTES[response.role] || '/dashboard'
+    const safePath =
+      typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')
+        ? redirect
+        : ROLE_ROUTES[response.role] || '/dashboard'
     router.push(safePath)
   } catch (err) {
-    const status = err?.response?.status;
+    const status = err?.response?.status
     if (status === 403) {
-      accountNotVerified.value = true;
+      accountNotVerified.value = true
     } else if (status === 429) {
-      rateLimited.value = true;
+      rateLimited.value = true
     } else {
-      setError(err);
+      setError(err)
     }
   } finally {
-    isSubmitting.value = false;
+    isSubmitting.value = false
   }
 }
 </script>
@@ -206,20 +202,29 @@ async function handleLogin() {
   font-size: 14px;
   font-weight: 500;
   transition: opacity 0.15s ease;
-  &:hover { opacity: 0.8; }
+  &:hover {
+    opacity: 0.8;
+  }
 }
 .auth-banner {
   border-radius: 12px !important;
   font-size: 14px;
-  &--warning { background: rgba(255, 184, 77, 0.12) !important; color: var(--accent-warning) !important; }
-  &--error   { background: rgba(255, 95, 122, 0.12) !important; color: var(--accent-danger) !important; }
+  &--warning {
+    background: rgba(255, 184, 77, 0.12) !important;
+    color: var(--accent-warning) !important;
+  }
+  &--error {
+    background: rgba(255, 95, 122, 0.12) !important;
+    color: var(--accent-danger) !important;
+  }
 }
 .auth-divider {
   display: flex;
   align-items: center;
   gap: 12px;
   margin: 20px 0;
-  &::before, &::after {
+  &::before,
+  &::after {
     content: '';
     flex: 1;
     height: 1px;

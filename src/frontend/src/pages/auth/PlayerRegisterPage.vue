@@ -1,14 +1,12 @@
 <template>
   <q-page class="auth-page">
     <div class="auth-card-container--wide fade-in">
-
       <div class="auth-brand q-mb-xl">
         <div class="gradient-text auth-brand-name">Skillars</div>
         <div class="text-meta">{{ t('auth.player.registerSubtitle') }}</div>
       </div>
 
       <div class="glass-card--static auth-card">
-
         <div class="text-section-title q-mb-xs">{{ t('auth.player.registerTitle') }}</div>
 
         <q-banner
@@ -19,11 +17,15 @@
           {{ emailInUse ? t('auth.player.emailInUse') : errorMessage }}
           <template v-if="emailInUse">
             <span>&nbsp;</span>
-            <router-link to="/login" class="auth-link">{{ t('auth.player.signInInstead') }}</router-link>
+            <router-link to="/login" class="auth-link">{{
+              t('auth.player.signInInstead')
+            }}</router-link>
           </template>
           <template v-else-if="mustBeAdult">
             <span>&nbsp;</span>
-            <router-link to="/parent-register" class="auth-link">{{ t('auth.player.registerParentInstead') }}</router-link>
+            <router-link to="/parent-register" class="auth-link">{{
+              t('auth.player.registerParentInstead')
+            }}</router-link>
           </template>
           <template v-else-if="helpCode">
             <br /><small>{{ t('error.helpCode') }}: {{ helpCode }}</small>
@@ -32,22 +34,18 @@
 
         <q-form @submit.prevent="handleRegister">
           <div class="row q-col-gutter-md">
-
             <div class="col-12 col-md-6">
               <div>
                 <q-input
                   v-model="form.firstName"
                   :label="t('auth.firstName')"
-                  outlined lazy-rules
+                  outlined
+                  lazy-rules
                   :rules="[required, maxLen50]"
                   :error="hasFieldError('firstName')"
                   :error-message="getFieldError('firstName')"
                 />
-                <q-banner
-                  v-if="firstNameHasContact"
-                  class="contact-warning q-mt-xs"
-                  rounded dense
-                >
+                <q-banner v-if="firstNameHasContact" class="contact-warning q-mt-xs" rounded dense>
                   {{ t('auth.player.contactDetailWarning') }}
                 </q-banner>
               </div>
@@ -58,16 +56,13 @@
                 <q-input
                   v-model="form.lastName"
                   :label="t('auth.lastName')"
-                  outlined lazy-rules
+                  outlined
+                  lazy-rules
                   :rules="[required, maxLen50]"
                   :error="hasFieldError('lastName')"
                   :error-message="getFieldError('lastName')"
                 />
-                <q-banner
-                  v-if="lastNameHasContact"
-                  class="contact-warning q-mt-xs"
-                  rounded dense
-                >
+                <q-banner v-if="lastNameHasContact" class="contact-warning q-mt-xs" rounded dense>
                   {{ t('auth.player.contactDetailWarning') }}
                 </q-banner>
               </div>
@@ -78,7 +73,8 @@
                 v-model="form.email"
                 type="email"
                 :label="t('auth.email')"
-                outlined lazy-rules
+                outlined
+                lazy-rules
                 :rules="[required, validEmail]"
                 :error="hasFieldError('email')"
                 :error-message="getFieldError('email')"
@@ -90,7 +86,8 @@
                 v-model="form.phone"
                 type="tel"
                 :label="t('auth.phone')"
-                outlined lazy-rules
+                outlined
+                lazy-rules
                 :rules="[required]"
                 :error="hasFieldError('phone')"
                 :error-message="getFieldError('phone')"
@@ -102,7 +99,8 @@
                 v-model="form.dateOfBirth"
                 type="date"
                 :label="t('auth.dateOfBirth')"
-                outlined lazy-rules
+                outlined
+                lazy-rules
                 :rules="[required, adult18]"
                 :error="hasFieldError('dateOfBirth')"
                 :error-message="getFieldError('dateOfBirth')"
@@ -114,7 +112,8 @@
                 v-model="form.password"
                 :type="isPwd ? 'password' : 'text'"
                 :label="t('auth.password')"
-                outlined lazy-rules
+                outlined
+                lazy-rules
                 :rules="[required, minLen8]"
                 :error="hasFieldError('password')"
                 :error-message="getFieldError('password')"
@@ -129,20 +128,22 @@
                 </template>
               </q-input>
             </div>
-
           </div>
 
-          <q-banner v-if="form.dateOfBirth && !isAdult" class="contact-warning q-mt-md" rounded dense>
+          <q-banner
+            v-if="form.dateOfBirth && !isAdult"
+            class="contact-warning q-mt-md"
+            rounded
+            dense
+          >
             {{ t('auth.player.mustBeAdult') }}
-            <router-link to="/parent-register" class="auth-link">{{ t('auth.player.registerParentInstead') }}</router-link>
+            <router-link to="/parent-register" class="auth-link">{{
+              t('auth.player.registerParentInstead')
+            }}</router-link>
           </q-banner>
 
           <div class="q-mt-md q-gutter-y-sm">
-            <q-checkbox
-              v-model="tosAccepted"
-              :label="t('auth.player.tosLabel')"
-              color="primary"
-            />
+            <q-checkbox v-model="tosAccepted" :label="t('auth.player.tosLabel')" color="primary" />
             <q-checkbox
               v-model="privacyAccepted"
               :label="t('auth.player.privacyLabel')"
@@ -156,7 +157,8 @@
             :label="t('auth.createAccount')"
             :loading="isSubmitting"
             :disable="!tosAccepted || !privacyAccepted || isSubmitting || !isAdult"
-            unelevated size="md"
+            unelevated
+            size="md"
           />
 
           <div class="text-center q-mt-md">
@@ -182,11 +184,25 @@ import { useContactDetector } from 'src/composables/useContactDetector'
 const router = useRouter()
 const { t, locale } = useI18n()
 const {
-  setError, clearError, hasError, hasFieldErrors, errorMessage,
-  helpCode, hasFieldError, getFieldError, errorKey,
+  setError,
+  clearError,
+  hasError,
+  hasFieldErrors,
+  errorMessage,
+  helpCode,
+  hasFieldError,
+  getFieldError,
+  errorKey,
 } = useErrorHandler()
 
-const form = ref({ firstName: '', lastName: '', email: '', password: '', phone: '', dateOfBirth: '' })
+const form = ref({
+  firstName: '',
+  lastName: '',
+  email: '',
+  password: '',
+  phone: '',
+  dateOfBirth: '',
+})
 const isPwd = ref(true)
 const isSubmitting = ref(false)
 const tosAccepted = ref(false)
@@ -216,11 +232,11 @@ function calculateAge(dob) {
   return age
 }
 
-const required = val => !!val || t('validation.required')
-const validEmail = val => /.+@.+\..+/.test(val) || t('validation.email')
-const minLen8 = val => val.length >= 8 || t('validation.minLength', { min: 8 })
-const maxLen50 = val => !val || val.length <= 50 || t('validation.maxLength', { max: 50 })
-const adult18 = val => !val || calculateAge(val) >= 18 || t('auth.player.mustBeAdult')
+const required = (val) => !!val || t('validation.required')
+const validEmail = (val) => /.+@.+\..+/.test(val) || t('validation.email')
+const minLen8 = (val) => val.length >= 8 || t('validation.minLength', { min: 8 })
+const maxLen50 = (val) => !val || val.length <= 50 || t('validation.maxLength', { max: 50 })
+const adult18 = (val) => !val || calculateAge(val) >= 18 || t('auth.player.mustBeAdult')
 
 async function handleRegister() {
   clearError()
@@ -247,25 +263,34 @@ async function handleRegister() {
 </script>
 
 <style lang="scss" scoped>
-.auth-brand { text-align: center; }
+.auth-brand {
+  text-align: center;
+}
 .auth-brand-name {
   font-size: 32px;
   font-weight: 800;
   font-family: 'Inter', sans-serif;
   letter-spacing: -1px;
 }
-.auth-card { padding: 32px; }
+.auth-card {
+  padding: 32px;
+}
 .auth-link {
   color: var(--accent-primary);
   text-decoration: none;
   font-size: 14px;
   font-weight: 500;
-  &:hover { opacity: 0.8; }
+  &:hover {
+    opacity: 0.8;
+  }
 }
 .auth-banner {
   border-radius: 12px !important;
   font-size: 14px;
-  &--error { background: rgba(255, 95, 122, 0.12) !important; color: var(--accent-danger) !important; }
+  &--error {
+    background: rgba(255, 95, 122, 0.12) !important;
+    color: var(--accent-danger) !important;
+  }
 }
 .contact-warning {
   background: var(--surface-warning) !important;

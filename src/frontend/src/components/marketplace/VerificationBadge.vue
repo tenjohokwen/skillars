@@ -21,18 +21,24 @@ const props = defineProps({
 
 const { t } = useI18n()
 
-const badgeColor = computed(() => ({
-  BASIC:    'grey-6',
-  TRUSTED:  'blue-6',
-  FEATURED: 'amber-8',
-}[props.tier] ?? 'grey-6'))
+const badgeColor = computed(
+  () =>
+    ({
+      BASIC: 'grey-6',
+      TRUSTED: 'blue-6',
+      FEATURED: 'amber-8',
+    })[props.tier] ?? 'grey-6',
+)
 
-const badgeIcon = computed(() => ({
-  BASIC:    'verified',
-  TRUSTED:  'verified_user',
-  FEATURED: 'star',
-}[props.tier] ?? 'verified'))
+const badgeIcon = computed(
+  () =>
+    ({
+      BASIC: 'verified',
+      TRUSTED: 'verified_user',
+      FEATURED: 'star',
+    })[props.tier] ?? 'verified',
+)
 
-const badgeLabel  = computed(() => t(`marketplace.tier${props.tier}`))
+const badgeLabel = computed(() => t(`marketplace.tier${props.tier}`))
 const tooltipText = computed(() => t(`marketplace.tierTooltip${props.tier}`))
 </script>

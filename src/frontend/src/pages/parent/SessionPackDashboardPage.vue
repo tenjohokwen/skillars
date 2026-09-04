@@ -35,7 +35,12 @@
                 {{ t('booking.packs.sessionsBundle', { count: pack.sessionCount }) }}
               </div>
               <div class="text-caption q-mt-xs">
-                {{ t('booking.packs.creditsRemainingLabel', { remaining: pack.creditsRemaining, total: pack.sessionCount }) }}
+                {{
+                  t('booking.packs.creditsRemainingLabel', {
+                    remaining: pack.creditsRemaining,
+                    total: pack.sessionCount,
+                  })
+                }}
               </div>
               <div v-if="pack.expiresAt" class="text-caption q-mt-xs" :class="expiryClass(pack)">
                 {{ t('booking.packs.expiresLabel', { date: formatDate(pack.expiresAt) }) }}
@@ -45,21 +50,24 @@
               </div>
               <q-btn
                 v-if="pack.status === 'ACTIVE' && pack.creditsRemaining > 0 && !pack.pausedUntil"
-                flat dense size="sm" color="primary" class="q-mt-xs q-px-none"
+                flat
+                dense
+                size="sm"
+                color="primary"
+                class="q-mt-xs q-px-none"
                 :label="t('booking.packs.pauseCta')"
                 @click="openPauseDialog(pack)"
               />
               <div
-                v-else-if="pack.status === 'ACTIVE' && pack.creditsRemaining > 0 && pack.pausedUntil"
+                v-else-if="
+                  pack.status === 'ACTIVE' && pack.creditsRemaining > 0 && pack.pausedUntil
+                "
                 class="text-caption q-mt-xs text-grey"
               >
                 {{ t('booking.packs.alreadyPausedLabel') }}
               </div>
             </div>
-            <q-badge
-              :color="packBadgeColor(pack)"
-              :label="packBadgeLabel(pack)"
-            />
+            <q-badge :color="packBadgeColor(pack)" :label="packBadgeLabel(pack)" />
           </div>
         </q-card-section>
       </q-card>
@@ -90,11 +98,15 @@
           />
         </q-card-section>
         <q-card-section v-if="bookingStore.packPauseConflicts.length > 0">
-          <div class="text-subtitle2 text-negative q-mb-sm">{{ t('booking.packs.pauseConflictsTitle') }}</div>
+          <div class="text-subtitle2 text-negative q-mb-sm">
+            {{ t('booking.packs.pauseConflictsTitle') }}
+          </div>
           <q-list dense bordered separator>
             <q-item v-for="b in bookingStore.packPauseConflicts" :key="b.id">
               <q-item-section>
-                <q-item-label>{{ formatDateTime(b.requestedStartTime, b.canonicalTimezone) }}</q-item-label>
+                <q-item-label>{{
+                  formatDateTime(b.requestedStartTime, b.canonicalTimezone)
+                }}</q-item-label>
                 <q-item-label caption>{{ b.status }}</q-item-label>
               </q-item-section>
             </q-item>
@@ -113,9 +125,11 @@
           <q-btn
             unelevated
             color="warning"
-            :label="bookingStore.packPauseConflicts.length > 0
-              ? t('booking.packs.pauseConfirmWithCancellations')
-              : t('booking.packs.pauseConfirm')"
+            :label="
+              bookingStore.packPauseConflicts.length > 0
+                ? t('booking.packs.pauseConfirmWithCancellations')
+                : t('booking.packs.pauseConfirm')
+            "
             :loading="bookingStore.packPauseLoading"
             @click="submitPause"
           />
@@ -163,9 +177,12 @@ async function resolveCoachNames(packs) {
   coachNames.value = resolved
 }
 
-watch(() => bookingStore.sessionPacks, (packs) => {
-  if (packs.length > 0) resolveCoachNames(packs)
-})
+watch(
+  () => bookingStore.sessionPacks,
+  (packs) => {
+    if (packs.length > 0) resolveCoachNames(packs)
+  },
+)
 
 function formatDate(isoString) {
   if (!isoString) return ''
@@ -223,7 +240,10 @@ async function submitPause() {
   if (conflicts.length > 0) {
     try {
       const result = await bookingStore.confirmPausePack(
-        playerId, packId, pauseStartDate, pauseDurationDays,
+        playerId,
+        packId,
+        pauseStartDate,
+        pauseDurationDays,
         conflicts.map((b) => b.id),
       )
       if (result.pauseApplied) {
@@ -235,9 +255,7 @@ async function submitPause() {
     }
   } else {
     try {
-      const result = await bookingStore.initiatePausePack(
-        packId, pauseStartDate, pauseDurationDays,
-      )
+      const result = await bookingStore.initiatePausePack(packId, pauseStartDate, pauseDurationDays)
       if (result.pauseApplied) {
         pauseDialogOpen.value = false
         $q.notify({ message: t('booking.packs.pauseSuccess'), type: 'positive' })

@@ -5,9 +5,9 @@
 </template>
 
 <script setup>
-import { useLoading } from 'src/composables/useLoading';
+import { useLoading } from 'src/composables/useLoading'
 
-const { isLoading } = useLoading();
+const { isLoading } = useLoading()
 </script>
 
 <style scoped>

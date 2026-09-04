@@ -1,4 +1,4 @@
-import { api } from 'src/boot/axios';
+import { api } from 'src/boot/axios'
 
 export const accountApi = {
   /**
@@ -7,7 +7,7 @@ export const accountApi = {
    * @returns {Promise} Registration result
    */
   register(userData) {
-    return api.post('/v1/account/register', userData);
+    return api.post('/v1/account/register', userData)
   },
 
   /**
@@ -18,8 +18,8 @@ export const accountApi = {
    */
   resendActivation(login, password) {
     return api.post('/v1/account/regislink', null, {
-      params: { login, password }
-    });
+      params: { login, password },
+    })
   },
 
   /**
@@ -29,8 +29,8 @@ export const accountApi = {
    */
   activate(key) {
     return api.post('/v1/account/activate', null, {
-      params: { key }
-    });
+      params: { key },
+    })
   },
 
   /**
@@ -42,8 +42,10 @@ export const accountApi = {
    */
   requestPasswordReset(loginId, dob, currentEmail) {
     return api.post('/v1/account/reset_password/init', {
-      loginId, dob, currentEmail
-    });
+      loginId,
+      dob,
+      currentEmail,
+    })
   },
 
   /**
@@ -54,8 +56,9 @@ export const accountApi = {
    */
   resetPassword(key, password) {
     return api.post('/v1/account/reset_password/finish', {
-      key, password
-    });
+      key,
+      password,
+    })
   },
 
   /**
@@ -63,6 +66,6 @@ export const accountApi = {
    * @returns {Promise} Account data
    */
   getAccount() {
-    return api.get('/v1/account/');
-  }
-};
+    return api.get('/v1/account/')
+  },
+}

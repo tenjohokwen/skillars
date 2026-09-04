@@ -1,13 +1,11 @@
 <template>
   <q-page class="auth-page">
     <div class="auth-card-container fade-in">
-
       <div class="auth-brand q-mb-xl">
         <div class="gradient-text auth-brand-name">Skillars</div>
       </div>
 
       <div class="glass-card--static auth-card">
-
         <div v-if="isVerifying" class="flex flex-center q-pa-xl">
           <q-spinner-dots size="48px" style="color: var(--accent-primary)" />
         </div>
@@ -24,7 +22,8 @@
 
           <div v-if="canResend" class="text-center q-mt-lg">
             <q-btn
-              flat no-caps
+              flat
+              no-caps
               :label="t('auth.parent.resendEmail')"
               style="color: var(--accent-primary)"
               @click="handleResendFromVerify"
@@ -37,7 +36,6 @@
             <q-spinner-dots size="48px" style="color: var(--accent-success)" />
           </div>
         </template>
-
       </div>
     </div>
   </q-page>
@@ -67,7 +65,9 @@ onMounted(async () => {
   const token = route.query.token
   if (!token) {
     isVerifying.value = false
-    setError({ response: { data: { message: 'No verification token found. Please check your email link.' } } })
+    setError({
+      response: { data: { message: 'No verification token found. Please check your email link.' } },
+    })
     return
   }
   try {
@@ -88,17 +88,24 @@ async function handleResendFromVerify() {
 </script>
 
 <style lang="scss" scoped>
-.auth-brand { text-align: center; }
+.auth-brand {
+  text-align: center;
+}
 .auth-brand-name {
   font-size: 32px;
   font-weight: 800;
   font-family: 'Inter', sans-serif;
   letter-spacing: -1px;
 }
-.auth-card { padding: 32px; }
+.auth-card {
+  padding: 32px;
+}
 .auth-banner {
   border-radius: 12px !important;
   font-size: 14px;
-  &--error { background: rgba(255, 95, 122, 0.12) !important; color: var(--accent-danger) !important; }
+  &--error {
+    background: rgba(255, 95, 122, 0.12) !important;
+    color: var(--accent-danger) !important;
+  }
 }
 </style>

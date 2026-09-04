@@ -18,7 +18,11 @@
         :label="t('booking.wrapUp.step1Label') + ': ' + playerName"
         class="q-mb-xl"
         size="xl"
-        @update:model-value="() => { attendanceTouched = true }"
+        @update:model-value="
+          () => {
+            attendanceTouched = true
+          }
+        "
       />
       <q-btn
         unelevated
@@ -42,11 +46,16 @@
           icon="star_border"
           icon-selected="star"
           :max="5"
-          @update:model-value="(v) => { if (v === 5) currentRating = 'focus' }"
+          @update:model-value="
+            (v) => {
+              if (v === 5) currentRating = 'focus'
+            }
+          "
         />
         <q-btn
           v-if="effortRating > 0 && effortRating < 5"
-          flat dense
+          flat
+          dense
           :label="t('common.next')"
           class="q-mt-md"
           @click="currentRating = 'focus'"
@@ -62,11 +71,16 @@
           icon="star_border"
           icon-selected="star"
           :max="5"
-          @update:model-value="(v) => { if (v === 5) currentRating = 'technique' }"
+          @update:model-value="
+            (v) => {
+              if (v === 5) currentRating = 'technique'
+            }
+          "
         />
         <q-btn
           v-if="focusRating > 0 && focusRating < 5"
-          flat dense
+          flat
+          dense
           :label="t('common.next')"
           class="q-mt-md"
           @click="currentRating = 'technique'"
@@ -82,11 +96,19 @@
           icon="star_border"
           icon-selected="star"
           :max="5"
-          @update:model-value="(v) => { if (v === 5) setTimeout(() => { if (techniqueRating === 5) step = 3 }, 200) }"
+          @update:model-value="
+            (v) => {
+              if (v === 5)
+                setTimeout(() => {
+                  if (techniqueRating === 5) step = 3
+                }, 200)
+            }
+          "
         />
         <q-btn
           v-if="techniqueRating > 0 && techniqueRating < 5"
-          flat dense
+          flat
+          dense
           :label="t('common.next')"
           class="q-mt-md"
           @click="step = 3"
@@ -163,13 +185,25 @@
         <div v-if="dnaError" class="text-grey-6 text-center q-pa-md">{{ dnaError }}</div>
         <SessionDNAChart
           v-else
-          :session-dna="sessionDnaData ?? { technical: 0, physical: 0, cognitive: 0, matchRealism: 0, weakFootFocus: 0 }"
+          :session-dna="
+            sessionDnaData ?? {
+              technical: 0,
+              physical: 0,
+              cognitive: 0,
+              matchRealism: 0,
+              weakFootFocus: 0,
+            }
+          "
           variant="full"
           :show-confirmation="true"
         />
       </div>
 
-      <div v-if="drillSuggestions.length === 0" class="text-body2 q-mb-lg" style="color: var(--text-secondary)">
+      <div
+        v-if="drillSuggestions.length === 0"
+        class="text-body2 q-mb-lg"
+        style="color: var(--text-secondary)"
+      >
         {{ t('booking.wrapUp.step4NoSuggestions') }}
       </div>
       <div v-else class="wrap-up__drills q-mb-lg">
@@ -264,7 +298,11 @@ async function startRecording() {
           tags: {},
         })
         const { key, uploadUrl } = signRes
-        await fetch(uploadUrl, { method: 'PUT', body: blob, headers: { 'Content-Type': 'audio/webm' } })
+        await fetch(uploadUrl, {
+          method: 'PUT',
+          body: blob,
+          headers: { 'Content-Type': 'audio/webm' },
+        })
         await confirmUpload(key, {})
         voiceNoteText.value = '[Voice note recorded — transcription pending]'
       } catch (e) {

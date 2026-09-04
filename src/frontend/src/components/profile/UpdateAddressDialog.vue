@@ -1,6 +1,6 @@
 <template>
   <q-dialog v-model="dialogVisible" persistent>
-    <q-card style="min-width: 500px; max-width: 600px;">
+    <q-card style="min-width: 500px; max-width: 600px">
       <q-card-section>
         <div class="text-h6">{{ $t('profile.updateAddress') }}</div>
       </q-card-section>
@@ -114,7 +114,11 @@
           </div>
 
           <!-- Error banner -->
-          <q-banner v-if="hasError && !isValidationError" class="bg-negative text-white q-mt-md" rounded>
+          <q-banner
+            v-if="hasError && !isValidationError"
+            class="bg-negative text-white q-mt-md"
+            rounded
+          >
             {{ errorMessage }}
             <template v-if="helpCode">
               <br />
@@ -126,34 +130,39 @@
 
       <q-card-actions align="right">
         <q-btn flat :label="$t('common.cancel')" @click="close" />
-        <q-btn color="primary" :label="$t('common.save')" :loading="isSubmitting" @click="handleSubmit" />
+        <q-btn
+          color="primary"
+          :label="$t('common.save')"
+          :loading="isSubmitting"
+          @click="handleSubmit"
+        />
       </q-card-actions>
     </q-card>
   </q-dialog>
 </template>
 
 <script setup>
-import { ref, watch, computed } from 'vue';
-import { useI18n } from 'vue-i18n';
-import { useQuasar } from 'quasar';
-import { profileApi } from 'src/api/profile.api';
-import { useErrorHandler } from 'src/composables/useErrorHandler';
+import { ref, watch, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { useQuasar } from 'quasar'
+import { profileApi } from 'src/api/profile.api'
+import { useErrorHandler } from 'src/composables/useErrorHandler'
 
 const props = defineProps({
   modelValue: {
     type: Boolean,
-    default: false
+    default: false,
   },
   currentAddress: {
     type: Object,
-    default: null
-  }
-});
+    default: null,
+  },
+})
 
-const emit = defineEmits(['update:modelValue', 'updated']);
+const emit = defineEmits(['update:modelValue', 'updated'])
 
-const { t } = useI18n();
-const $q = useQuasar();
+const { t } = useI18n()
+const $q = useQuasar()
 
 const {
   setError,
@@ -163,14 +172,14 @@ const {
   isValidationError,
   helpCode,
   hasFieldError,
-  getFieldError
-} = useErrorHandler();
+  getFieldError,
+} = useErrorHandler()
 
 // Dialog visibility
 const dialogVisible = computed({
   get: () => props.modelValue,
-  set: (val) => emit('update:modelValue', val)
-});
+  set: (val) => emit('update:modelValue', val),
+})
 
 // Form state
 const form = ref({
@@ -182,64 +191,68 @@ const form = ref({
   city: '',
   stateProvince: '',
   postalCode: '',
-  country: ''
-});
+  country: '',
+})
 
-const isSubmitting = ref(false);
+const isSubmitting = ref(false)
 
 // Address name options
 const addressNameOptions = computed(() => [
   { label: 'HOME', value: 'HOME' },
   { label: 'WORK', value: 'WORK' },
-  { label: 'OTHER', value: 'OTHER' }
-]);
+  { label: 'OTHER', value: 'OTHER' },
+])
 
 // Pre-fill from currentAddress prop
-watch(() => props.currentAddress, (addr) => {
-  if (addr) {
-    form.value = {
-      name: addr.name || null,
-      companyName: addr.companyName || '',
-      addressLine1: addr.addressLine1 || '',
-      addressLine2: addr.addressLine2 || '',
-      addressLine3: addr.addressLine3 || '',
-      city: addr.city || '',
-      stateProvince: addr.stateProvince || '',
-      postalCode: addr.postalCode || '',
-      country: addr.country || ''
-    };
-  }
-}, { immediate: true });
+watch(
+  () => props.currentAddress,
+  (addr) => {
+    if (addr) {
+      form.value = {
+        name: addr.name || null,
+        companyName: addr.companyName || '',
+        addressLine1: addr.addressLine1 || '',
+        addressLine2: addr.addressLine2 || '',
+        addressLine3: addr.addressLine3 || '',
+        city: addr.city || '',
+        stateProvince: addr.stateProvince || '',
+        postalCode: addr.postalCode || '',
+        country: addr.country || '',
+      }
+    }
+  },
+  { immediate: true },
+)
 
 // Validation rules
-const required = (val) => !!val || t('validation.required');
-const maxLen25 = (val) => !val || val.length <= 25 || t('validation.maxLength', { max: 25 });
-const maxLen50 = (val) => !val || val.length <= 50 || t('validation.maxLength', { max: 50 });
-const maxLen250 = (val) => !val || val.length <= 250 || t('validation.maxLength', { max: 250 });
+const required = (val) => !!val || t('validation.required')
+const maxLen25 = (val) => !val || val.length <= 25 || t('validation.maxLength', { max: 25 })
+const maxLen50 = (val) => !val || val.length <= 50 || t('validation.maxLength', { max: 50 })
+const maxLen250 = (val) => !val || val.length <= 250 || t('validation.maxLength', { max: 250 })
 
 function close() {
-  clearError();
-  emit('update:modelValue', false);
+  clearError()
+  emit('update:modelValue', false)
 }
 
 async function handleSubmit() {
-  clearError();
-  isSubmitting.value = true;
+  clearError()
+  isSubmitting.value = true
 
   try {
-    await profileApi.updateAddress(form.value);
+    await profileApi.updateAddress(form.value)
 
     $q.notify({
       type: 'positive',
-      message: t('success.addressChanged')
-    });
+      message: t('success.addressChanged'),
+    })
 
-    emit('updated');
-    close();
+    emit('updated')
+    close()
   } catch (err) {
-    setError(err);
+    setError(err)
   } finally {
-    isSubmitting.value = false;
+    isSubmitting.value = false
   }
 }
 </script>

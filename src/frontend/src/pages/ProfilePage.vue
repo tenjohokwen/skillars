@@ -1,7 +1,6 @@
 <template>
   <q-page>
     <div class="app-page fade-in">
-
       <!-- Page header -->
       <div class="page-header q-mb-xl">
         <div class="text-page-title">{{ t('profile.title') }}</div>
@@ -26,7 +25,6 @@
       <!-- Profile sections -->
       <template v-else-if="profile">
         <div class="profile-grid">
-
           <div class="glass-card profile-section">
             <div class="text-label q-mb-lg">Account</div>
 
@@ -45,7 +43,14 @@
                 <div class="text-label">{{ t('profile.password') }}</div>
                 <div class="text-body q-mt-xs">{{ t('profile.passwordMasked') }}</div>
               </div>
-              <q-btn flat dense icon="edit" round class="edit-btn" @click="showPasswordDialog = true">
+              <q-btn
+                flat
+                dense
+                icon="edit"
+                round
+                class="edit-btn"
+                @click="showPasswordDialog = true"
+              >
                 <q-tooltip>{{ t('profile.edit') }}</q-tooltip>
               </q-btn>
             </div>
@@ -100,99 +105,129 @@
             <div class="profile-row">
               <div>
                 <div class="text-label">{{ t('profile.address') }}</div>
-                <div class="text-body q-mt-xs">{{ formattedAddress || t('profile.noAddress') }}</div>
+                <div class="text-body q-mt-xs">
+                  {{ formattedAddress || t('profile.noAddress') }}
+                </div>
               </div>
-              <q-btn flat dense icon="edit" round class="edit-btn" @click="showAddressDialog = true">
+              <q-btn
+                flat
+                dense
+                icon="edit"
+                round
+                class="edit-btn"
+                @click="showAddressDialog = true"
+              >
                 <q-tooltip>{{ t('profile.edit') }}</q-tooltip>
               </q-btn>
             </div>
           </div>
-
         </div>
       </template>
-
     </div>
 
     <!-- Dialogs -->
-    <UpdateEmailDialog v-model="showEmailDialog" :current-email="profile?.email" @updated="loadProfile" />
+    <UpdateEmailDialog
+      v-model="showEmailDialog"
+      :current-email="profile?.email"
+      @updated="loadProfile"
+    />
     <UpdatePasswordDialog v-model="showPasswordDialog" @updated="loadProfile" />
-    <UpdatePhoneDialog v-model="showPhoneDialog" :current-phone="profile?.phone" @updated="loadProfile" />
-    <UpdateAddressDialog v-model="showAddressDialog" :current-address="profile?.address" @updated="loadProfile" />
+    <UpdatePhoneDialog
+      v-model="showPhoneDialog"
+      :current-phone="profile?.phone"
+      @updated="loadProfile"
+    />
+    <UpdateAddressDialog
+      v-model="showAddressDialog"
+      :current-address="profile?.address"
+      @updated="loadProfile"
+    />
     <UpdateInfoDialog v-model="showInfoDialog" :current-info="currentInfo" @updated="loadProfile" />
-    <Toggle2faDialog v-model="show2faDialog" :current-enabled="profile?.otpEnabled" @updated="loadProfile" />
+    <Toggle2faDialog
+      v-model="show2faDialog"
+      :current-enabled="profile?.otpEnabled"
+      @updated="loadProfile"
+    />
   </q-page>
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue';
-import { useI18n } from 'vue-i18n';
-import { profileApi } from 'src/api/profile.api';
-import { useErrorHandler } from 'src/composables/useErrorHandler';
-import UpdateEmailDialog from 'src/components/profile/UpdateEmailDialog.vue';
-import UpdatePasswordDialog from 'src/components/profile/UpdatePasswordDialog.vue';
-import UpdatePhoneDialog from 'src/components/profile/UpdatePhoneDialog.vue';
-import UpdateAddressDialog from 'src/components/profile/UpdateAddressDialog.vue';
-import UpdateInfoDialog from 'src/components/profile/UpdateInfoDialog.vue';
-import Toggle2faDialog from 'src/components/profile/Toggle2faDialog.vue';
+import { ref, onMounted, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { profileApi } from 'src/api/profile.api'
+import { useErrorHandler } from 'src/composables/useErrorHandler'
+import UpdateEmailDialog from 'src/components/profile/UpdateEmailDialog.vue'
+import UpdatePasswordDialog from 'src/components/profile/UpdatePasswordDialog.vue'
+import UpdatePhoneDialog from 'src/components/profile/UpdatePhoneDialog.vue'
+import UpdateAddressDialog from 'src/components/profile/UpdateAddressDialog.vue'
+import UpdateInfoDialog from 'src/components/profile/UpdateInfoDialog.vue'
+import Toggle2faDialog from 'src/components/profile/Toggle2faDialog.vue'
 
-const { t } = useI18n();
-const { setError, clearError, hasError, errorMessage, helpCode } = useErrorHandler();
+const { t } = useI18n()
+const { setError, clearError, hasError, errorMessage, helpCode } = useErrorHandler()
 
-const profile = ref(null);
-const isLoading = ref(false);
+const profile = ref(null)
+const isLoading = ref(false)
 
-const showEmailDialog = ref(false);
-const showPasswordDialog = ref(false);
-const showPhoneDialog = ref(false);
-const showAddressDialog = ref(false);
-const showInfoDialog = ref(false);
-const show2faDialog = ref(false);
+const showEmailDialog = ref(false)
+const showPasswordDialog = ref(false)
+const showPhoneDialog = ref(false)
+const showAddressDialog = ref(false)
+const showInfoDialog = ref(false)
+const show2faDialog = ref(false)
 
-onMounted(async () => { await loadProfile(); });
+onMounted(async () => {
+  await loadProfile()
+})
 
 async function loadProfile() {
-  isLoading.value = true;
-  clearError();
+  isLoading.value = true
+  clearError()
   try {
-    profile.value = await profileApi.getProfile();
+    profile.value = await profileApi.getProfile()
   } catch (err) {
-    setError(err);
+    setError(err)
   } finally {
-    isLoading.value = false;
+    isLoading.value = false
   }
 }
 
 const formattedAddress = computed(() => {
-  if (!profile.value?.address) return null;
-  const a = profile.value.address;
-  const lines = [a.addressLine1, a.addressLine2, a.addressLine3].filter(Boolean);
-  const parts = [lines.join(', '), a.city, a.stateProvince, a.postalCode, a.country].filter(Boolean);
-  return parts.join(', ');
-});
+  if (!profile.value?.address) return null
+  const a = profile.value.address
+  const lines = [a.addressLine1, a.addressLine2, a.addressLine3].filter(Boolean)
+  const parts = [lines.join(', '), a.city, a.stateProvince, a.postalCode, a.country].filter(Boolean)
+  return parts.join(', ')
+})
 
 const fullName = computed(() => {
-  if (!profile.value) return '';
-  return [profile.value.title, profile.value.firstName, profile.value.lastName].filter(Boolean).join(' ');
-});
+  if (!profile.value) return ''
+  return [profile.value.title, profile.value.firstName, profile.value.lastName]
+    .filter(Boolean)
+    .join(' ')
+})
 
 const genderLabel = computed(() => {
-  const m = { MALE: t('auth.male'), FEMALE: t('auth.female'), OTHER: t('auth.other') };
-  return m[profile.value?.gender] || profile.value?.gender || '';
-});
+  const m = { MALE: t('auth.male'), FEMALE: t('auth.female'), OTHER: t('auth.other') }
+  return m[profile.value?.gender] || profile.value?.gender || ''
+})
 
 const languageLabel = computed(() => {
-  const m = { en: t('auth.languageEnglish'), fr: t('auth.languageFrench') };
-  return m[profile.value?.langKey] || profile.value?.langKey || '';
-});
+  const m = { en: t('auth.languageEnglish'), fr: t('auth.languageFrench') }
+  return m[profile.value?.langKey] || profile.value?.langKey || ''
+})
 
 const currentInfo = computed(() => {
-  if (!profile.value) return null;
+  if (!profile.value) return null
   return {
-    title: profile.value.title, firstName: profile.value.firstName,
-    lastName: profile.value.lastName, nationalId: profile.value.nationalId,
-    gender: profile.value.gender, langKey: profile.value.langKey,
-  };
-});
+    title: profile.value.title,
+    firstName: profile.value.firstName,
+    lastName: profile.value.lastName,
+    nationalId: profile.value.nationalId,
+    gender: profile.value.gender,
+    langKey: profile.value.langKey,
+  }
+})
 </script>
 
 <style lang="scss" scoped>

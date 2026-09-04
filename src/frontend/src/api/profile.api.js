@@ -1,4 +1,4 @@
-import { api } from 'src/boot/axios';
+import { api } from 'src/boot/axios'
 
 export const profileApi = {
   /**
@@ -6,7 +6,7 @@ export const profileApi = {
    * @returns {Promise} UserDto (email, phone, firstName, lastName, title, gender, nationalId, langKey, otpEnabled, etc.)
    */
   getProfile() {
-    return api.get('/api/account/profile');
+    return api.get('/api/account/profile')
   },
 
   /**
@@ -17,7 +17,7 @@ export const profileApi = {
    * @returns {Promise} Email update initiation result
    */
   updateEmail(oldEmail, newEmail, password) {
-    return api.put('/api/account/email', { oldEmail, newEmail, password });
+    return api.put('/api/account/email', { oldEmail, newEmail, password })
   },
 
   /**
@@ -27,7 +27,7 @@ export const profileApi = {
    * @returns {Promise} Password update result
    */
   updatePassword(currentPassword, newPassword) {
-    return api.put('/api/account/password', { currentPassword, newPassword });
+    return api.put('/api/account/password', { currentPassword, newPassword })
   },
 
   /**
@@ -36,7 +36,7 @@ export const profileApi = {
    * @returns {Promise} Phone update result
    */
   updatePhone(phone) {
-    return api.put('/api/account/phone', { phone });
+    return api.put('/api/account/phone', { phone })
   },
 
   /**
@@ -54,7 +54,7 @@ export const profileApi = {
    * @returns {Promise} Address update result
    */
   updateAddress(addressData) {
-    return api.put('/api/account/address', addressData);
+    return api.put('/api/account/address', addressData)
   },
 
   /**
@@ -69,7 +69,7 @@ export const profileApi = {
    * @returns {Promise} Info update result
    */
   updateInfo(infoData) {
-    return api.put('/api/account/info', infoData);
+    return api.put('/api/account/info', infoData)
   },
 
   /**
@@ -79,6 +79,6 @@ export const profileApi = {
    * @returns {Promise} 2FA toggle result
    */
   toggle2fa(enabled, password) {
-    return api.put('/api/account/2fa', { enabled, password });
-  }
-};
+    return api.put('/api/account/2fa', { enabled, password })
+  },
+}

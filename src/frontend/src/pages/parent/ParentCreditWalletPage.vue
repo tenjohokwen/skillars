@@ -47,10 +47,19 @@
               color="primary"
               unelevated
               :loading="cashingOut"
-              :disable="!cashoutAmount || cashoutAmount <= 0 || balance === null || cashoutAmount > balance"
+              :disable="
+                !cashoutAmount || cashoutAmount <= 0 || balance === null || cashoutAmount > balance
+              "
               @click="handleCashOut"
             />
-            <q-banner v-if="cashoutError" class="q-mt-md" dense rounded inline-actions type="negative">
+            <q-banner
+              v-if="cashoutError"
+              class="q-mt-md"
+              dense
+              rounded
+              inline-actions
+              type="negative"
+            >
               {{ cashoutError }}
             </q-banner>
           </q-card-section>
@@ -87,9 +96,12 @@ async function handleCashOut() {
   cashoutError.value = null
   try {
     await cashOut(cashoutAmount.value)
-    $q.notify({ type: 'positive', message: t('payment.credits.cashoutSuccess', {
-      amount: Number(cashoutAmount.value).toFixed(2),
-    }) })
+    $q.notify({
+      type: 'positive',
+      message: t('payment.credits.cashoutSuccess', {
+        amount: Number(cashoutAmount.value).toFixed(2),
+      }),
+    })
     cashoutAmount.value = null
     await store.fetchCreditBalance()
   } catch (err) {

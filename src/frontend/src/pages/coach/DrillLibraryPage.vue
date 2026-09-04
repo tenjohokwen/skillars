@@ -289,7 +289,12 @@ async function handleEditClone(cloneId) {
   selectedLibrary.value = 'PRIVATE'
   localSearchQuery.value = ''
   sessionStore.searchQuery = ''
-  sessionStore.activeFilters = { skill: null, difficultyTier: null, equipment: null, weakFootBias: null }
+  sessionStore.activeFilters = {
+    skill: null,
+    difficultyTier: null,
+    equipment: null,
+    weakFootBias: null,
+  }
   localFilters.value = { skill: null, difficultyTier: null, equipment: null, weakFootBias: null }
   await sessionStore.fetchDrills('PRIVATE')
   const clone = sessionStore.drills.find((d) => d.id === cloneId)

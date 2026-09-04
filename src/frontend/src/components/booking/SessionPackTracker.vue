@@ -2,7 +2,10 @@
   <div class="session-pack-tracker" :class="stateClass">
     <div class="tracker-credits">{{ creditsLabel }}</div>
     <div class="tracker-bar">
-      <div class="tracker-bar__fill" :style="{ width: progressPercent + '%', background: progressColor }" />
+      <div
+        class="tracker-bar__fill"
+        :style="{ width: progressPercent + '%', background: progressColor }"
+      />
     </div>
     <div v-if="showCta" class="tracker-cta">
       <q-btn flat dense :label="ctaLabel" @click="$emit('buy-sessions')" />
@@ -23,7 +26,9 @@ defineEmits(['buy-sessions'])
 const { t } = useI18n()
 
 const progressPercent = computed(() =>
-  props.sessionCount > 0 ? Math.min(100, Math.round((props.creditsRemaining / props.sessionCount) * 100)) : 0
+  props.sessionCount > 0
+    ? Math.min(100, Math.round((props.creditsRemaining / props.sessionCount) * 100))
+    : 0,
 )
 
 const state = computed(() => {
@@ -36,7 +41,7 @@ const state = computed(() => {
 const stateClass = computed(() => `tracker--${state.value}`)
 const showCta = computed(() => state.value === 'critical' || state.value === 'exhausted')
 const ctaLabel = computed(() =>
-  state.value === 'exhausted' ? t('booking.packs.buySessions') : t('booking.packs.buyMoreSessions')
+  state.value === 'exhausted' ? t('booking.packs.buySessions') : t('booking.packs.buyMoreSessions'),
 )
 
 const progressColor = computed(() => {

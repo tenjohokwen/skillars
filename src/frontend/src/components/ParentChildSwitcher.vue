@@ -2,7 +2,9 @@
   <div v-if="playerStore.players.length > 0">
     <q-btn flat no-caps class="switcher-btn" @click="drawerOpen = true">
       <div class="switcher-avatar">{{ activeInitials }}</div>
-      <span class="switcher-name q-ml-xs">{{ playerStore.activePlayer?.name || t('player.switcher.title') }}</span>
+      <span class="switcher-name q-ml-xs">{{
+        playerStore.activePlayer?.name || t('player.switcher.title')
+      }}</span>
       <q-icon name="expand_more" size="16px" class="q-ml-xs" />
     </q-btn>
 
@@ -55,7 +57,12 @@ const activeInitials = computed(() => initials(playerStore.activePlayer?.name ||
 
 function initials(name) {
   if (!name) return '?'
-  return name.split(' ').map(p => p[0]).join('').toUpperCase().slice(0, 2)
+  return name
+    .split(' ')
+    .map((p) => p[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2)
 }
 
 function selectPlayer(id) {
@@ -75,7 +82,8 @@ function selectPlayer(id) {
     color: var(--text-primary) !important;
   }
 }
-.switcher-avatar, .player-avatar {
+.switcher-avatar,
+.player-avatar {
   width: 28px;
   height: 28px;
   border-radius: 50%;

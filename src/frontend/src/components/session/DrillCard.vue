@@ -65,7 +65,10 @@
       </ul>
 
       <!-- Tags (private drills only, and not in the read-only locker-room view) -->
-      <div v-if="drill.libraryType === 'PRIVATE' && context !== 'locker-room'" class="drill-card__tags q-mt-sm">
+      <div
+        v-if="drill.libraryType === 'PRIVATE' && context !== 'locker-room'"
+        class="drill-card__tags q-mt-sm"
+      >
         <q-chip
           v-for="tag in drill.tags"
           :key="tag"
@@ -118,7 +121,10 @@
       </div>
 
       <!-- Clone indicator for PLATFORM drills — not shown in locker-room context -->
-      <div v-if="drill.libraryType === 'PLATFORM' && context !== 'locker-room'" class="drill-card__clone-row q-mt-sm">
+      <div
+        v-if="drill.libraryType === 'PLATFORM' && context !== 'locker-room'"
+        class="drill-card__clone-row q-mt-sm"
+      >
         <template v-if="drill.isClonedByMe">
           <q-badge color="positive" class="q-mr-sm">
             {{ t('session.drillLibrary.inYourLibrary') }}
@@ -173,7 +179,14 @@ const props = defineProps({
   context: { type: String, default: 'library' },
 })
 
-const emit = defineEmits(['open-detail', 'clone', 'edit-clone', 'add-to-session', 'assign', 'video-error'])
+const emit = defineEmits([
+  'open-detail',
+  'clone',
+  'edit-clone',
+  'add-to-session',
+  'assign',
+  'video-error',
+])
 
 const { t } = useI18n()
 const $q = useQuasar()

@@ -50,7 +50,8 @@ export default {
       emailInUse: 'Diese E-Mail-Adresse ist bereits registriert.',
       contactDetailWarning: 'Kontaktdaten werden beim Speichern entfernt',
       profileBuilderTitle: 'Profil vervollständigen',
-      profileBuilderBody: 'Schließen Sie diese 5 Schritte ab, um auf dem Marktplatz sichtbar zu werden.',
+      profileBuilderBody:
+        'Schließen Sie diese 5 Schritte ab, um auf dem Marktplatz sichtbar zu werden.',
       stepOfTotal: 'Schritt {current} von {total}',
       step1Title: 'Identität & Standort',
       step1Short: 'Profil',
@@ -269,7 +270,8 @@ export default {
       acceptError: 'Buchung konnte nicht angenommen werden. Bitte erneut versuchen.',
       declineError: 'Buchung konnte nicht abgelehnt werden. Bitte erneut versuchen.',
       submitError: 'Ihre Anfrage konnte nicht gesendet werden. Bitte erneut versuchen.',
-      bookingsLoadError: 'Ihre Buchungen konnten nicht geladen werden. Bitte laden Sie die Seite neu.',
+      bookingsLoadError:
+        'Ihre Buchungen konnten nicht geladen werden. Bitte laden Sie die Seite neu.',
       statusRequested: 'Warten auf Trainerantwort',
       statusAccepted: 'Angenommen',
       statusConfirmed: 'Bestätigt',
@@ -449,7 +451,8 @@ export default {
         'Dadurch wird die Sitzung storniert. Je nachdem, wie nah der geplante Termin ist, besteht eventuell kein Anspruch auf Rückerstattung.',
       confirm: 'Sitzung stornieren',
       success: 'Sitzung storniert',
-      paymentInProgress: 'Für diese Sitzung läuft bereits eine Zahlung. Bitte versuchen Sie es in Kürze erneut.',
+      paymentInProgress:
+        'Für diese Sitzung läuft bereits eine Zahlung. Bitte versuchen Sie es in Kürze erneut.',
       failed: 'Diese Sitzung konnte nicht storniert werden. Bitte erneut versuchen.',
     },
     batch: {
@@ -470,22 +473,25 @@ export default {
       acceptAll: 'Alle {n} Sitzungen annehmen',
       acceptedAll: 'Alle Sitzungen angenommen',
       acceptError: 'Nicht alle Sitzungen konnten angenommen werden. Bitte erneut versuchen.',
-      partiallyAccepted:
-        '{accepted} von {total} Sitzungen angenommen. Details siehe unten.',
+      partiallyAccepted: '{accepted} von {total} Sitzungen angenommen. Details siehe unten.',
       itemNotAccepted: 'Konnte nicht angenommen werden.',
     },
     errors: {
       coachUnavailable: 'Dieser Coach ist derzeit nicht verfügbar.',
       slotUnavailable: 'Dieses Zeitfenster ist nicht mehr verfügbar.',
-      startTimeInPast: 'Dieser Zeitpunkt liegt bereits in der Vergangenheit. Bitte wählen Sie einen späteren Termin.',
+      startTimeInPast:
+        'Dieser Zeitpunkt liegt bereits in der Vergangenheit. Bitte wählen Sie einen späteren Termin.',
       invalidTimeRange: 'Das Ende der Sitzung muss nach ihrem Beginn liegen.',
-      slotOutsideAvailability: 'Dieser Zeitpunkt liegt außerhalb der verfügbaren Zeiten dieses Coaches.',
+      slotOutsideAvailability:
+        'Dieser Zeitpunkt liegt außerhalb der verfügbaren Zeiten dieses Coaches.',
       slotBlockedByCoach: 'Dieser Coach hat diese Zeit blockiert.',
       blockOverlapsBooking:
         'Sie haben bereits eine Buchung zu dieser Zeit — stornieren oder verschieben Sie diese zuerst, wenn Sie diese Zeit blockieren möchten.',
       sessionCrossesMidnight: 'Eine Sitzung darf nicht über Mitternacht hinausgehen.',
-      availabilityChanged: 'Die Verfügbarkeit dieses Coaches hat sich seit dem Laden dieser Seite geändert. Bitte wählen Sie eine neue Zeit.',
-      weekStartOutOfRange: 'Diese Woche liegt zu weit in der Vergangenheit oder Zukunft, um sie anzuzeigen.',
+      availabilityChanged:
+        'Die Verfügbarkeit dieses Coaches hat sich seit dem Laden dieser Seite geändert. Bitte wählen Sie eine neue Zeit.',
+      weekStartOutOfRange:
+        'Diese Woche liegt zu weit in der Vergangenheit oder Zukunft, um sie anzuzeigen.',
       batchAlreadyProcessed: 'Diese Anfragen wurden bereits bearbeitet.',
       batchNoneAccepted: 'Keine der Sitzungen in dieser Anfrage konnte angenommen werden.',
       notReschedulable: 'Diese Sitzung kann nicht mehr verschoben werden.',
@@ -570,7 +576,8 @@ export default {
     searchByCityPlaceholder: 'z.B. Frankfurt, Berlin, München',
     search: 'Suchen',
     enterCityPrompt: 'Suchen Sie nach Trainern in Ihrer Stadt',
-    enterCitySubtitle: 'Geben Sie oben eine Stadt ein, um verfügbare Trainer in Ihrer Nähe zu finden',
+    enterCitySubtitle:
+      'Geben Sie oben eine Stadt ein, um verfügbare Trainer in Ihrer Nähe zu finden',
     filterDistrict: 'Bezirk',
     filterAgeGroup: 'Altersgruppe',
     filterLanguage: 'Sprache',
@@ -637,8 +644,7 @@ export default {
     submit: 'Bewertung absenden',
     save: 'Änderungen speichern',
     loadMore: 'Weitere Bewertungen laden',
-    pendingModeration:
-      'Ihre Bewertung wird geprüft und ist noch nicht öffentlich sichtbar.',
+    pendingModeration: 'Ihre Bewertung wird geprüft und ist noch nicht öffentlich sichtbar.',
     blocked: 'Ihre Bewertung wurde durch die Moderation entfernt.',
     coachResponseLabel: 'Antwort des Trainers',
     noRecentSession:

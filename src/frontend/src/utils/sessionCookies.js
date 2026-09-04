@@ -11,21 +11,21 @@
 // instead of an empty value when the display name is blank; readers here treat the sentinel — and a
 // blank value — as "no usable display name".
 
-export const USER_COOKIE_SENTINEL = '__blank__';
+export const USER_COOKIE_SENTINEL = '__blank__'
 
 // Anchored: the capture only fires for a cookie actually named `user`.
-const USER_COOKIE_RE = /(?:^|;\s*)user=([^;]*)/;
+const USER_COOKIE_RE = /(?:^|;\s*)user=([^;]*)/
 
 /** Raw decoded value of the `user` cookie, or null when the cookie is absent. */
 export function readUserCookie() {
-  const match = document.cookie.match(USER_COOKIE_RE);
+  const match = document.cookie.match(USER_COOKIE_RE)
   if (!match) {
-    return null;
+    return null
   }
   try {
-    return decodeURIComponent(match[1]);
+    return decodeURIComponent(match[1])
   } catch {
-    return match[1];
+    return match[1]
   }
 }
 
@@ -44,15 +44,15 @@ export function readUserCookie() {
  * function — when you need a name to render.
  */
 export function hasUserSession() {
-  const value = readUserCookie();
-  return value !== null && value !== '';
+  const value = readUserCookie()
+  return value !== null && value !== ''
 }
 
 /** The display name to greet the user by, or null when there is no usable one. */
 export function readUserDisplayName() {
-  const value = readUserCookie();
+  const value = readUserCookie()
   if (!value || value === USER_COOKIE_SENTINEL) {
-    return null;
+    return null
   }
-  return value;
+  return value
 }

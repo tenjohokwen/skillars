@@ -1,15 +1,25 @@
 <template>
   <div>
-    <div class="text-subtitle1 text-weight-medium q-mb-md">{{ $t('development.timeline.title') }}</div>
+    <div class="text-subtitle1 text-weight-medium q-mb-md">
+      {{ $t('development.timeline.title') }}
+    </div>
 
     <q-inner-loading :showing="store.timelineLoading" />
 
-    <q-banner v-if="store.timelineError && !store.timelineLoading" class="bg-negative text-white q-mb-md" rounded>
+    <q-banner
+      v-if="store.timelineError && !store.timelineLoading"
+      class="bg-negative text-white q-mb-md"
+      rounded
+    >
       <template #avatar><q-icon name="error" /></template>
       {{ store.timelineError }}
     </q-banner>
 
-    <q-banner v-else-if="store.timeline?.accessExpired" class="bg-orange-1 text-orange-9 q-mb-md" rounded>
+    <q-banner
+      v-else-if="store.timeline?.accessExpired"
+      class="bg-orange-1 text-orange-9 q-mb-md"
+      rounded
+    >
       <template #avatar>
         <q-icon name="lock_clock" />
       </template>
@@ -26,7 +36,11 @@
           :subtitle="formatDate(event.occurredAt)"
         >
           <template #title>
-            {{ $te(`development.timeline.eventType.${event.eventType}`) ? $t(`development.timeline.eventType.${event.eventType}`) : event.eventType }}
+            {{
+              $te(`development.timeline.eventType.${event.eventType}`)
+                ? $t(`development.timeline.eventType.${event.eventType}`)
+                : event.eventType
+            }}
           </template>
         </q-timeline-entry>
       </q-timeline>

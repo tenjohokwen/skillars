@@ -13,7 +13,15 @@ const SSE_BACKOFF_DELAYS = [1000, 2000, 4000, 8000]
 // PURGED: defensive backstop — the server translates PURGED to DELETED before it ever reaches the
 //   client (VideoSseService.onVideoPurged for SSE, VideoEventResource.computeDisplayState for this
 //   polling fallback), but if that translation is ever bypassed, PURGED must still stop polling.
-const TERMINAL_SSE_STATES = new Set(['READY', 'LOCKED', 'REJECTED', 'FAILED', 'DELETED', 'ARCHIVED', 'PURGED'])
+const TERMINAL_SSE_STATES = new Set([
+  'READY',
+  'LOCKED',
+  'REJECTED',
+  'FAILED',
+  'DELETED',
+  'ARCHIVED',
+  'PURGED',
+])
 const POLLING_INTERVAL_MS = 2000
 
 export function useVideoStatusSse(videoId, { onStatusChange, onTerminal } = {}) {
@@ -111,7 +119,11 @@ export const useVideoStore = defineStore('video', () => {
   async function initiateAndUpload({ file, videoType, onProgress, onSuccess, onError }) {
     // Guard against concurrent uploads — a second call while uploading orphans the first TUS session
     if (uploadState.value !== 'idle') {
-      onError?.(new Error('An upload is already in progress — cancel the current upload before starting a new one'))
+      onError?.(
+        new Error(
+          'An upload is already in progress — cancel the current upload before starting a new one',
+        ),
+      )
       return
     }
     try {
@@ -122,12 +134,15 @@ export const useVideoStore = defineStore('video', () => {
       const controller = new AbortController()
       currentAbortController.value = controller
 
-      const data = await videoApi.initiateUpload({
-        fileName: file.name,
-        fileSizeBytes: file.size,
-        mimeType: file.type,
-        videoType,
-      }, controller.signal)
+      const data = await videoApi.initiateUpload(
+        {
+          fileName: file.name,
+          fileSizeBytes: file.size,
+          mimeType: file.type,
+          videoType,
+        },
+        controller.signal,
+      )
 
       // Guard: cancelUpload() was called while we were awaiting the initiate POST.
       // The store is already reset to 'idle'; bail without starting a TUS upload.
@@ -147,9 +162,7 @@ export const useVideoStore = defineStore('video', () => {
         tusAuthorizationExpire: data.tusAuthorizationExpire,
         tusLibraryId: data.tusLibraryId,
         onProgress(bytesUploaded, bytesTotal) {
-          uploadProgress.value = bytesTotal > 0
-            ? Math.round((bytesUploaded / bytesTotal) * 100)
-            : 0
+          uploadProgress.value = bytesTotal > 0 ? Math.round((bytesUploaded / bytesTotal) * 100) : 0
           onProgress?.(uploadProgress.value)
         },
         onSuccess() {

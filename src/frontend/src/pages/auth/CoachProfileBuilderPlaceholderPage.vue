@@ -34,7 +34,9 @@
             <div
               v-if="step.n < steps.length"
               class="profile-builder__rail-connector"
-              :class="{ 'profile-builder__rail-connector--done': store.lastCompletedStep >= step.n }"
+              :class="{
+                'profile-builder__rail-connector--done': store.lastCompletedStep >= step.n,
+              }"
             />
           </template>
         </div>
@@ -49,10 +51,26 @@
         </q-banner>
 
         <div class="profile-builder__panel">
-          <ProfileBuilderStep1 v-if="store.currentStep === 1" :loading="store.loading" @submit="onStep1" />
-          <ProfileBuilderStep2 v-else-if="store.currentStep === 2" :loading="store.loading" @submit="onStep2" />
-          <ProfileBuilderStep3 v-else-if="store.currentStep === 3" :loading="store.loading" @submit="onStep3" />
-          <ProfileBuilderStep4 v-else-if="store.currentStep === 4" :loading="store.loading" @submit="onStep4" />
+          <ProfileBuilderStep1
+            v-if="store.currentStep === 1"
+            :loading="store.loading"
+            @submit="onStep1"
+          />
+          <ProfileBuilderStep2
+            v-else-if="store.currentStep === 2"
+            :loading="store.loading"
+            @submit="onStep2"
+          />
+          <ProfileBuilderStep3
+            v-else-if="store.currentStep === 3"
+            :loading="store.loading"
+            @submit="onStep3"
+          />
+          <ProfileBuilderStep4
+            v-else-if="store.currentStep === 4"
+            :loading="store.loading"
+            @submit="onStep4"
+          />
           <ProfileBuilderStep5
             v-else-if="store.currentStep === 5"
             :loading="store.loading"
@@ -85,10 +103,20 @@ const authStore = useAuthStore()
 
 const steps = [
   { n: 1, icon: 'person', titleKey: 'auth.coach.step1Title', shortKey: 'auth.coach.step1Short' },
-  { n: 2, icon: 'sports_soccer', titleKey: 'auth.coach.step2Title', shortKey: 'auth.coach.step2Short' },
+  {
+    n: 2,
+    icon: 'sports_soccer',
+    titleKey: 'auth.coach.step2Title',
+    shortKey: 'auth.coach.step2Short',
+  },
   { n: 3, icon: 'euro', titleKey: 'auth.coach.step3Title', shortKey: 'auth.coach.step3Short' },
   { n: 4, icon: 'schedule', titleKey: 'auth.coach.step4Title', shortKey: 'auth.coach.step4Short' },
-  { n: 5, icon: 'photo_camera', titleKey: 'auth.coach.step5Title', shortKey: 'auth.coach.step5Short' },
+  {
+    n: 5,
+    icon: 'photo_camera',
+    titleKey: 'auth.coach.step5Title',
+    shortKey: 'auth.coach.step5Short',
+  },
 ]
 
 const currentStep = computed(() => steps[store.currentStep - 1] ?? steps[0])
@@ -164,18 +192,25 @@ async function publishAndRedirect() {
 </script>
 
 <style lang="scss" scoped>
-.auth-brand { text-align: center; }
+.auth-brand {
+  text-align: center;
+}
 .auth-brand-name {
   font-size: 32px;
   font-weight: 800;
   font-family: 'Inter', sans-serif;
   letter-spacing: -1px;
 }
-.auth-card { padding: 32px; }
+.auth-card {
+  padding: 32px;
+}
 .auth-banner {
   border-radius: 12px !important;
   font-size: 14px;
-  &--error { background: rgba(255, 95, 122, 0.12) !important; color: var(--accent-danger) !important; }
+  &--error {
+    background: rgba(255, 95, 122, 0.12) !important;
+    color: var(--accent-danger) !important;
+  }
 }
 
 .profile-builder__rail {
@@ -190,7 +225,9 @@ async function publishAndRedirect() {
   gap: 8px;
   min-width: 64px;
 
-  &--reachable { cursor: pointer; }
+  &--reachable {
+    cursor: pointer;
+  }
 }
 
 .profile-builder__rail-dot {
@@ -248,8 +285,15 @@ async function publishAndRedirect() {
 }
 
 @media (max-width: 600px) {
-  .profile-builder__rail-label { display: none; }
-  .profile-builder__rail-dot { width: 32px; height: 32px; }
-  .profile-builder__rail-connector { margin-top: 15px; }
+  .profile-builder__rail-label {
+    display: none;
+  }
+  .profile-builder__rail-dot {
+    width: 32px;
+    height: 32px;
+  }
+  .profile-builder__rail-connector {
+    margin-top: 15px;
+  }
 }
 </style>

@@ -23,7 +23,9 @@
               </q-item-section>
               <q-item-section>
                 <q-item-label lines="1">{{ conv.otherPartyName }}</q-item-label>
-                <q-item-label caption lines="1">{{ conv.lastMessagePreview ?? t('messaging.noMessages') }}</q-item-label>
+                <q-item-label caption lines="1">{{
+                  conv.lastMessagePreview ?? t('messaging.noMessages')
+                }}</q-item-label>
               </q-item-section>
               <q-item-section side>
                 <q-badge v-if="conv.unreadCount > 0" color="primary" :label="conv.unreadCount" />
@@ -60,7 +62,8 @@
               <q-input
                 v-model="newMessage"
                 :placeholder="t('messaging.typeMessage')"
-                outlined dense
+                outlined
+                dense
                 class="col"
                 @keyup.enter="submitMessage"
                 :maxlength="2000"

@@ -87,15 +87,15 @@
 
         <!-- Reviews -->
         <div class="glass-card q-pa-md q-mb-md">
-          <div v-if="reviewsTotalElements === 0" class="text-body2" style="color: var(--text-secondary)">
+          <div
+            v-if="reviewsTotalElements === 0"
+            class="text-body2"
+            style="color: var(--text-secondary)"
+          >
             {{ t('marketplace.noReviewsYet') }}
           </div>
           <template v-else>
-            <div
-              v-for="review in reviews"
-              :key="review.reviewId"
-              class="review-item q-mb-md"
-            >
+            <div v-for="review in reviews" :key="review.reviewId" class="review-item q-mb-md">
               <div class="row items-center q-gutter-sm q-mb-xs">
                 <q-rating :model-value="review.rating" readonly size="16px" color="amber" />
                 <span class="text-caption" style="color: var(--text-secondary)">
@@ -106,10 +106,7 @@
               <div v-if="review.body" class="text-body2" style="color: var(--text-primary)">
                 {{ review.body }}
               </div>
-              <div
-                v-if="review.coachResponseBody?.trim()"
-                class="coach-response q-mt-sm q-pa-sm"
-              >
+              <div v-if="review.coachResponseBody?.trim()" class="coach-response q-mt-sm q-pa-sm">
                 <div class="text-caption text-weight-bold" style="color: var(--text-secondary)">
                   {{ t('reviews.coachResponseLabel') }}
                 </div>
@@ -130,10 +127,7 @@
         </div>
 
         <!-- Write / edit review (eligible parent or player only) -->
-        <div
-          v-if="authStore.isParent || authStore.isPlayer"
-          class="glass-card q-pa-md q-mb-md"
-        >
+        <div v-if="authStore.isParent || authStore.isPlayer" class="glass-card q-pa-md q-mb-md">
           <template v-if="myReview">
             <div class="text-subtitle1 q-mb-xs" style="color: var(--text-primary)">
               {{ t('reviews.yourReview') }}
@@ -149,7 +143,10 @@
               {{ myReview.body }}
             </div>
             <div
-              v-if="myReview.moderationStatus === 'PENDING' || myReview.moderationStatus === 'UNDER_REVIEW'"
+              v-if="
+                myReview.moderationStatus === 'PENDING' ||
+                myReview.moderationStatus === 'UNDER_REVIEW'
+              "
               class="text-caption q-mb-sm"
               style="color: var(--text-secondary)"
             >
@@ -367,7 +364,12 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { getCoachProfile } from 'src/api/marketplace.api'
-import { listCoachReviews, getMyReviewForCoach, submitReview, updateReview } from 'src/api/reviews.api'
+import {
+  listCoachReviews,
+  getMyReviewForCoach,
+  submitReview,
+  updateReview,
+} from 'src/api/reviews.api'
 import { parseApiError } from 'src/utils/errorHandler'
 import { useErrorHandler } from 'src/composables/useErrorHandler'
 import { useAuthStore } from 'src/stores/auth.store'

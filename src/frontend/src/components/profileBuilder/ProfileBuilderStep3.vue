@@ -7,7 +7,7 @@
       outlined
       type="number"
       prefix="€"
-      :rules="[v => !!v && v > 0 || t('validation.required')]"
+      :rules="[(v) => (!!v && v > 0) || t('validation.required')]"
       class="q-mb-lg"
     />
 
@@ -32,7 +32,11 @@
       {{ t('auth.coach.step3PackEmpty') }}
     </div>
 
-    <div v-for="(pack, i) in form.sessionPacks" :key="i" class="profile-builder__entry-card q-mb-sm">
+    <div
+      v-for="(pack, i) in form.sessionPacks"
+      :key="i"
+      class="profile-builder__entry-card q-mb-sm"
+    >
       <div class="row q-col-gutter-sm">
         <div class="col-12 col-sm-4">
           <q-input
@@ -118,7 +122,7 @@ const DURATION_CHOICES = [30, 45, 60, 90, 120]
 const durationOptions = computed(() => {
   const options = [
     { value: null, label: t('auth.coach.step3SessionDurationDefault') },
-    ...DURATION_CHOICES.map(minutes => ({
+    ...DURATION_CHOICES.map((minutes) => ({
       value: minutes,
       label: t('auth.coach.step3SessionDurationMinutes', { minutes }),
     })),
@@ -143,11 +147,13 @@ function submit() {
   emit('submit', {
     perSessionPrice: form.perSessionPrice,
     sessionDurationMinutes: form.sessionDurationMinutes,
-    sessionPacks: form.sessionPacks.filter(p => p.sessionCount > 0 && p.totalPrice > 0).map(p => ({
-      sessionCount: p.sessionCount,
-      totalPrice: p.totalPrice,
-      label: p.label || null,
-    })),
+    sessionPacks: form.sessionPacks
+      .filter((p) => p.sessionCount > 0 && p.totalPrice > 0)
+      .map((p) => ({
+        sessionCount: p.sessionCount,
+        totalPrice: p.totalPrice,
+        label: p.label || null,
+      })),
   })
 }
 </script>

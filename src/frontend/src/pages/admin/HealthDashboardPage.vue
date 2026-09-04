@@ -1,7 +1,6 @@
 <template>
   <q-page>
     <div class="app-page fade-in">
-
       <div class="page-header q-mb-xl">
         <div class="text-page-title">System Health</div>
         <div class="text-meta">Real-time infrastructure status</div>
@@ -46,11 +45,7 @@
               </span>
             </div>
             <div v-if="component.details" class="component-details q-mt-md">
-              <div
-                v-for="(val, key) in component.details"
-                :key="key"
-                class="detail-row"
-              >
+              <div v-for="(val, key) in component.details" :key="key" class="detail-row">
                 <span class="text-label">{{ key }}</span>
                 <span class="text-meta">{{ val }}</span>
               </div>
@@ -58,7 +53,6 @@
           </div>
         </div>
       </template>
-
     </div>
   </q-page>
 </template>
@@ -120,9 +114,9 @@ onMounted(async () => {
 }
 
 .health-banner {
-  background: rgba(255, 184, 77, 0.10) !important;
+  background: rgba(255, 184, 77, 0.1) !important;
   color: var(--accent-warning) !important;
-  border: 1px solid rgba(255, 184, 77, 0.20) !important;
+  border: 1px solid rgba(255, 184, 77, 0.2) !important;
 }
 
 .components-grid {

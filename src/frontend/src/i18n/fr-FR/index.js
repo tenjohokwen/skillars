@@ -305,7 +305,8 @@ export default {
     submit: "Envoyer l'avis",
     save: 'Enregistrer les modifications',
     loadMore: "Charger plus d'avis",
-    pendingModeration: "Votre avis est en cours de modération et n'est pas encore visible publiquement.",
+    pendingModeration:
+      "Votre avis est en cours de modération et n'est pas encore visible publiquement.",
     blocked: 'Votre avis a été retiré par la modération.',
     coachResponseLabel: 'Réponse du coach',
     noRecentSession:
@@ -313,9 +314,9 @@ export default {
     alreadySubmitted: 'Vous avez déjà soumis un avis pour ce coach.',
     bodyTooLong: 'Votre avis est trop long — 1000 caractères maximum.',
     updateTooSoon: "Vous ne pouvez modifier un avis qu'une fois par an.",
-    editNotPermitted: "Cet avis ne peut pas être modifié pour le moment.",
-    authorMismatch: "Cet avis ne vous appartient pas.",
-    authorRoleNotAllowed: 'Les coachs ne peuvent pas soumettre d\'avis.',
+    editNotPermitted: 'Cet avis ne peut pas être modifié pour le moment.',
+    authorMismatch: 'Cet avis ne vous appartient pas.',
+    authorRoleNotAllowed: "Les coachs ne peuvent pas soumettre d'avis.",
     validationError: 'Veuillez vérifier votre avis et réessayer.',
   },
   session: {
@@ -325,7 +326,7 @@ export default {
     continueSession: 'Continuer la session',
     refreshed: 'Session actualisée avec succès',
     refreshFailed:
-      "Impossible de prolonger votre session. Vérifiez votre connexion et sélectionnez « Continuer la session » pour réessayer.",
+      'Impossible de prolonger votre session. Vérifiez votre connexion et sélectionnez « Continuer la session » pour réessayer.',
     expired: 'Votre session a expiré. Veuillez vous reconnecter.',
     drillLibrary: {
       title: "Bibliothèque d'exercices",
@@ -1214,7 +1215,8 @@ export default {
         "Cela annulera la séance. Selon la proximité de l'horaire prévu, elle pourrait ne pas être éligible à un remboursement.",
       confirm: 'Annuler la séance',
       success: 'Séance annulée',
-      paymentInProgress: 'Un paiement pour cette séance est déjà en cours. Veuillez réessayer sous peu.',
+      paymentInProgress:
+        'Un paiement pour cette séance est déjà en cours. Veuillez réessayer sous peu.',
       failed: "Impossible d'annuler cette séance. Veuillez réessayer.",
     },
     batch: {
@@ -1248,18 +1250,19 @@ export default {
       blockOverlapsBooking:
         "Vous avez déjà une réservation à cet horaire — annulez-la ou reprogrammez-la d'abord si vous souhaitez bloquer ce créneau.",
       sessionCrossesMidnight: "Une séance ne peut pas s'étendre au-delà de minuit.",
-      availabilityChanged: "La disponibilité de ce coach a changé depuis le chargement de cette page. Veuillez choisir un nouveau créneau.",
-      weekStartOutOfRange: "Cette semaine est trop éloignée dans le passé ou le futur pour être affichée.",
+      availabilityChanged:
+        'La disponibilité de ce coach a changé depuis le chargement de cette page. Veuillez choisir un nouveau créneau.',
+      weekStartOutOfRange:
+        'Cette semaine est trop éloignée dans le passé ou le futur pour être affichée.',
       batchAlreadyProcessed: 'Ces demandes ont déjà été traitées.',
-      batchNoneAccepted:
-        "Aucune des séances de cette demande n'a pu être acceptée.",
+      batchNoneAccepted: "Aucune des séances de cette demande n'a pu être acceptée.",
       notReschedulable: 'Cette séance ne peut plus être reprogrammée.',
       rescheduleAlreadyPending:
         'Une demande de report est déjà en attente de réponse pour cette séance.',
       rescheduleNotPending: 'Cette demande de report a déjà été traitée.',
       listMayBeStale:
-        "Cette liste n’est peut-être plus à jour. Rechargez la page pour voir les dernières données.",
-      requestNotAllowed: "Vous n’avez pas la permission d’effectuer cette action.",
+        'Cette liste n’est peut-être plus à jour. Rechargez la page pour voir les dernières données.',
+      requestNotAllowed: 'Vous n’avez pas la permission d’effectuer cette action.',
       invalidSessionDuration:
         'La durée de séance demandée ne correspond pas à la durée de séance de ce coach.',
       batchSizeExceeded: 'Vous pouvez demander jusqu’à {max} séances dans un même lot.',

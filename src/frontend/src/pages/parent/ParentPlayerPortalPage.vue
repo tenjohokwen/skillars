@@ -31,7 +31,11 @@
     </div>
 
     <q-list v-else bordered separator>
-      <q-item v-for="session in bookingStore.parentSchedule.sessions" :key="session.bookingId" class="q-py-md">
+      <q-item
+        v-for="session in bookingStore.parentSchedule.sessions"
+        :key="session.bookingId"
+        class="q-py-md"
+      >
         <q-item-section>
           <q-item-label class="text-weight-bold">{{ session.coachDisplayName }}</q-item-label>
           <q-item-label caption>
@@ -78,11 +82,14 @@ async function loadForPlayer(id) {
 
 onMounted(() => loadForPlayer(playerId))
 
-watch(() => playerStore.activePlayerId, (newId) => {
-  if (newId && newId !== playerId) {
-    loadForPlayer(newId)
-  }
-})
+watch(
+  () => playerStore.activePlayerId,
+  (newId) => {
+    if (newId && newId !== playerId) {
+      loadForPlayer(newId)
+    }
+  },
+)
 
 const firstBookingTimezone = computed(() => {
   return bookingStore.parentSchedule?.sessions?.[0]?.canonicalTimezone ?? null

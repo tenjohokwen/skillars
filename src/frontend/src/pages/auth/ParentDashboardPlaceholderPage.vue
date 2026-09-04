@@ -50,8 +50,12 @@
           <div class="text-card-title q-mt-sm">{{ t('auth.parent.upcomingSessionsTitle') }}</div>
           <div class="text-meta q-mt-xs">
             <q-spinner-dots v-if="bookingStore.bookingsLoading" size="18px" />
-            <template v-else-if="bookingStore.bookingsError">{{ t('auth.parent.tileUnavailable') }}</template>
-            <template v-else>{{ t('auth.parent.upcomingSessionsCount', { count: upcomingSessionsCount }) }}</template>
+            <template v-else-if="bookingStore.bookingsError">{{
+              t('auth.parent.tileUnavailable')
+            }}</template>
+            <template v-else>{{
+              t('auth.parent.upcomingSessionsCount', { count: upcomingSessionsCount })
+            }}</template>
           </div>
         </router-link>
 
@@ -61,7 +65,10 @@
           <div class="text-meta q-mt-xs">{{ t('auth.parent.browseCoachesBody') }}</div>
         </router-link>
 
-        <router-link to="/parent/credit-wallet" class="glass-card soft-hover parent-dashboard__tile">
+        <router-link
+          to="/parent/credit-wallet"
+          class="glass-card soft-hover parent-dashboard__tile"
+        >
           <q-icon name="account_balance_wallet" size="24px" style="color: var(--accent-primary)" />
           <div class="text-card-title q-mt-sm">{{ t('auth.parent.creditWalletTitle') }}</div>
           <div class="text-meta q-mt-xs">
@@ -108,7 +115,7 @@ const playersLoading = ref(true)
 
 const UPCOMING_STATUSES = ['CONFIRMED', 'UPCOMING']
 const upcomingSessionsCount = computed(
-  () => bookingStore.parentBookings.filter(b => UPCOMING_STATUSES.includes(b.status)).length,
+  () => bookingStore.parentBookings.filter((b) => UPCOMING_STATUSES.includes(b.status)).length,
 )
 
 const creditLoading = ref(true)
@@ -134,14 +141,26 @@ onMounted(async () => {
 
   bookingStore.loadParentBookings()
 
-  paymentStore.fetchCreditBalance()
-    .catch(() => { creditError.value = true })
-    .finally(() => { creditLoading.value = false })
+  paymentStore
+    .fetchCreditBalance()
+    .catch(() => {
+      creditError.value = true
+    })
+    .finally(() => {
+      creditLoading.value = false
+    })
 
-  videoApi.getMyApprovals()
-    .then(data => { approvals.value = data })
-    .catch(() => { approvalsError.value = true })
-    .finally(() => { approvalsLoading.value = false })
+  videoApi
+    .getMyApprovals()
+    .then((data) => {
+      approvals.value = data
+    })
+    .catch(() => {
+      approvalsError.value = true
+    })
+    .finally(() => {
+      approvalsLoading.value = false
+    })
 })
 </script>
 

@@ -8,8 +8,7 @@
 
     <div
       v-else-if="
-        bookingStore.coachBookingRequests.length === 0 &&
-        bookingStore.coachBatchGroups.length === 0
+        bookingStore.coachBookingRequests.length === 0 && bookingStore.coachBatchGroups.length === 0
       "
       class="flex flex-center column q-gutter-md q-py-xl"
       style="min-height: 40vh"
@@ -22,11 +21,7 @@
 
     <template v-else>
       <!-- Batch groups -->
-      <div
-        v-for="group in bookingStore.coachBatchGroups"
-        :key="group.batchId"
-        class="q-mb-md"
-      >
+      <div v-for="group in bookingStore.coachBatchGroups" :key="group.batchId" class="q-mb-md">
         <q-card flat bordered>
           <q-card-section class="q-pb-xs">
             <div class="text-subtitle2">
@@ -39,11 +34,7 @@
             </div>
           </q-card-section>
           <q-list bordered separator>
-            <q-item
-              v-for="booking in group.bookings"
-              :key="booking.id"
-              class="q-py-sm"
-            >
+            <q-item v-for="booking in group.bookings" :key="booking.id" class="q-py-sm">
               <q-item-section>
                 <q-item-label>{{ booking.playerName }}</q-item-label>
                 <q-item-label caption>{{

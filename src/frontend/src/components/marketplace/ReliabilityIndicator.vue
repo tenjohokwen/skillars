@@ -1,6 +1,10 @@
 <template>
   <span
-    :class="['reliability-indicator', stateClass, { 'reliability-indicator--clickable': props.coachContext }]"
+    :class="[
+      'reliability-indicator',
+      stateClass,
+      { 'reliability-indicator--clickable': props.coachContext },
+    ]"
     @click="handleClick"
   >
     <q-icon :name="iconName" size="14px" class="q-mr-xs" />
@@ -41,7 +45,8 @@ const iconName = computed(() => {
 
 const label = computed(() => {
   if (props.strikeCount === 0) return t('marketplace.reliabilityOk')
-  if (props.strikeCount <= 2) return t('marketplace.reliabilityWarning', { count: props.strikeCount })
+  if (props.strikeCount <= 2)
+    return t('marketplace.reliabilityWarning', { count: props.strikeCount })
   return t('marketplace.reliabilityDanger')
 })
 </script>
@@ -53,9 +58,17 @@ const label = computed(() => {
   font-size: 12px;
   font-weight: 500;
 
-  &--ok      { color: var(--accent-success); }
-  &--warning { color: var(--accent-warning); }
-  &--danger  { color: var(--accent-danger); }
-  &--clickable { cursor: pointer; }
+  &--ok {
+    color: var(--accent-success);
+  }
+  &--warning {
+    color: var(--accent-warning);
+  }
+  &--danger {
+    color: var(--accent-danger);
+  }
+  &--clickable {
+    cursor: pointer;
+  }
 }
 </style>

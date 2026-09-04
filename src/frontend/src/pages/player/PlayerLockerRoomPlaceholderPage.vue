@@ -8,7 +8,10 @@
       <q-spinner-dots size="36px" color="primary" />
     </div>
 
-    <div v-else-if="!homeworkStore.assignments.length" class="locker-room__empty text-center q-pa-xl">
+    <div
+      v-else-if="!homeworkStore.assignments.length"
+      class="locker-room__empty text-center q-pa-xl"
+    >
       <q-icon name="sports_soccer" size="64px" color="grey-5" />
       <div class="text-h6 q-mt-md">{{ t('player.homeworkEmptyTitle') }}</div>
       <div class="text-body2 text-secondary q-mt-sm">{{ t('player.homeworkEmptySubtitle') }}</div>
@@ -16,7 +19,10 @@
 
     <template v-else>
       <div v-for="(group, coachId) in groupedByCoach" :key="coachId" class="q-mb-xl">
-        <div v-if="Object.keys(groupedByCoach).length > 1" class="text-subtitle2 q-mb-sm text-secondary">
+        <div
+          v-if="Object.keys(groupedByCoach).length > 1"
+          class="text-subtitle2 q-mb-sm text-secondary"
+        >
           {{ t('player.assignedBy', { coach: group[0].coachDisplayName }) }}
         </div>
         <div class="locker-room__drills">
@@ -34,7 +40,9 @@
             <div class="locker-room__completion-row row items-center q-mt-xs q-px-sm">
               <q-checkbox
                 :model-value="item.completed"
-                :label="item.completed ? t('player.homeworkCompleted') : t('player.homeworkMarkDone')"
+                :label="
+                  item.completed ? t('player.homeworkCompleted') : t('player.homeworkMarkDone')
+                "
                 :color="item.completed ? 'positive' : 'primary'"
                 :disable="item.completed"
                 @update:model-value="() => handleMarkComplete(item.assignmentId)"
@@ -81,7 +89,13 @@ async function handleMarkComplete(assignmentId) {
   }
 }
 
-watch(playerId, val => { if (val) homeworkStore.fetchDrills(val) }, { immediate: true })
+watch(
+  playerId,
+  (val) => {
+    if (val) homeworkStore.fetchDrills(val)
+  },
+  { immediate: true },
+)
 
 // Story Deferred-75 AC9: on a video playback error (e.g. an expired signed URL), refetch this
 // player's homework drills to get a fresh URL. Unlike the coach-facing pages, this page's drills

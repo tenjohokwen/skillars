@@ -4,48 +4,51 @@ import { searchCoaches } from 'src/api/marketplace.api'
 
 // Note: Do NOT import useRouter/useRoute here — URL sync is handled in MarketplacePage.vue
 export const useMarketplaceStore = defineStore('marketplace', () => {
-  const coaches     = ref([])
-  const loading     = ref(false)
+  const coaches = ref([])
+  const loading = ref(false)
   const loadingMore = ref(false)
-  const error       = ref(null)
+  const error = ref(null)
 
   // Pagination state
-  const currentPage   = ref(0)
-  const totalPages    = ref(0)
+  const currentPage = ref(0)
+  const totalPages = ref(0)
   const totalElements = ref(0)
-  const hasNext       = ref(false)
+  const hasNext = ref(false)
 
   const filters = ref({
-    city:     '',   // primary — search does not fire without a city value
+    city: '', // primary — search does not fire without a city value
     district: '',
     language: '',
     minPrice: null,
     maxPrice: null,
     ageGroup: '',
-    skill:    '',
-    sortBy:   'displayName',
+    skill: '',
+    sortBy: 'displayName',
   })
 
   // hasActiveFilters excludes city (city is not an optional "filter", it's the search entry)
   const hasActiveFilters = computed(() =>
     ['district', 'language', 'minPrice', 'maxPrice', 'ageGroup', 'skill'].some(
-      k => filters.value[k] !== '' && filters.value[k] !== null
-    )
+      (k) => filters.value[k] !== '' && filters.value[k] !== null,
+    ),
   )
 
   const cityEntered = computed(() => filters.value.city.trim().length > 0)
 
   function syncFiltersFromRoute(query) {
-    const parseNumber = (v) => { const n = Number(v); return v && !isNaN(n) ? n : null }
+    const parseNumber = (v) => {
+      const n = Number(v)
+      return v && !isNaN(n) ? n : null
+    }
     filters.value = {
-      city:     query.city     || '',
+      city: query.city || '',
       district: query.district || '',
       language: query.language || '',
       minPrice: parseNumber(query.minPrice),
       maxPrice: parseNumber(query.maxPrice),
       ageGroup: query.ageGroup || '',
-      skill:    query.skill    || '',
-      sortBy:   query.sortBy   || 'displayName',
+      skill: query.skill || '',
+      sortBy: query.sortBy || 'displayName',
     }
   }
 
@@ -58,12 +61,12 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
   }
 
   async function fetchCoaches() {
-    if (!cityEntered.value) return  // guard: no search without city
+    if (!cityEntered.value) return // guard: no search without city
     loading.value = true
     error.value = null
     currentPage.value = 0
     coaches.value = []
-    hasNext.value = false      // reset so stale "Load More" never shows during loading
+    hasNext.value = false // reset so stale "Load More" never shows during loading
     totalElements.value = 0
     try {
       const params = buildApiParams(0)
@@ -82,11 +85,11 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
     try {
       const params = buildApiParams(currentPage.value + 1)
       const res = await searchCoaches(params)
-      coaches.value = [...coaches.value, ...res.coaches]  // append for infinite-scroll UX
-      currentPage.value   = res.page
-      totalPages.value    = res.totalPages
+      coaches.value = [...coaches.value, ...res.coaches] // append for infinite-scroll UX
+      currentPage.value = res.page
+      totalPages.value = res.totalPages
       totalElements.value = res.totalElements
-      hasNext.value       = res.hasNext
+      hasNext.value = res.hasNext
     } catch (e) {
       error.value = e
     } finally {
@@ -103,19 +106,24 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
   }
 
   function applyPage(data) {
-    coaches.value       = data.coaches
-    currentPage.value   = data.page
-    totalPages.value    = data.totalPages
+    coaches.value = data.coaches
+    currentPage.value = data.page
+    totalPages.value = data.totalPages
     totalElements.value = data.totalElements
-    hasNext.value       = data.hasNext
+    hasNext.value = data.hasNext
   }
 
   function clearFilters() {
     // Clears secondary filters only — city is preserved (it is the search entry point)
     filters.value = {
       ...filters.value,
-      district: '', language: '', minPrice: null,
-      maxPrice: null, ageGroup: '', skill: '', sortBy: 'displayName',
+      district: '',
+      language: '',
+      minPrice: null,
+      maxPrice: null,
+      ageGroup: '',
+      skill: '',
+      sortBy: 'displayName',
     }
     fetchCoaches()
   }
@@ -123,8 +131,14 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
   function resetSearch() {
     coaches.value = []
     filters.value = {
-      city: '', district: '', language: '', minPrice: null,
-      maxPrice: null, ageGroup: '', skill: '', sortBy: 'displayName',
+      city: '',
+      district: '',
+      language: '',
+      minPrice: null,
+      maxPrice: null,
+      ageGroup: '',
+      skill: '',
+      sortBy: 'displayName',
     }
     currentPage.value = 0
     totalPages.value = 0
@@ -132,10 +146,22 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
   }
 
   return {
-    coaches, loading, loadingMore, error,
-    currentPage, totalPages, totalElements, hasNext,
-    filters, hasActiveFilters, cityEntered,
-    syncFiltersFromRoute, buildRouteQuery,
-    fetchCoaches, fetchNextPage, clearFilters, resetSearch,
+    coaches,
+    loading,
+    loadingMore,
+    error,
+    currentPage,
+    totalPages,
+    totalElements,
+    hasNext,
+    filters,
+    hasActiveFilters,
+    cityEntered,
+    syncFiltersFromRoute,
+    buildRouteQuery,
+    fetchCoaches,
+    fetchNextPage,
+    clearFilters,
+    resetSearch,
   }
 })

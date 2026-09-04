@@ -29,7 +29,7 @@ const defaultErrorKeyByStatus = {
   401: 'security.unauthorized',
   403: 'security.opForbidden',
   404: 'error.notFound',
-};
+}
 
 /**
  * Parse API error into structured object.
@@ -55,57 +55,57 @@ export function parseApiError(error) {
       fieldErrors: {},
       isValidationError: false,
       status: 0,
-    };
+    }
   }
 
-  const { status, data } = error.response;
+  const { status, data } = error.response
 
   // Extract helpCode
-  const helpCode = data?.helpCode || null;
+  const helpCode = data?.helpCode || null
 
   // Extract errorKey - from errorMsg or derive from status
-  let errorKey = data?.errorMsg?.errorKey;
+  let errorKey = data?.errorMsg?.errorKey
   if (!errorKey) {
     if (status >= 500) {
-      errorKey = 'error.unknown';
+      errorKey = 'error.unknown'
     } else {
-      errorKey = defaultErrorKeyByStatus[status] || 'error.unknown';
+      errorKey = defaultErrorKeyByStatus[status] || 'error.unknown'
     }
   }
 
   // Extract message - from errorMsg or provide default
-  let message = data?.errorMsg?.message;
+  let message = data?.errorMsg?.message
   if (!message) {
     switch (status) {
       case 400:
-        message = 'Bad request';
-        break;
+        message = 'Bad request'
+        break
       case 401:
-        message = 'Unauthorized';
-        break;
+        message = 'Unauthorized'
+        break
       case 403:
-        message = 'Forbidden';
-        break;
+        message = 'Forbidden'
+        break
       case 404:
-        message = 'Not found';
-        break;
+        message = 'Not found'
+        break
       default:
-        message = status >= 500 ? 'Server error' : 'An error occurred';
+        message = status >= 500 ? 'Server error' : 'An error occurred'
     }
   }
 
   // Convert fieldErrors array to object { fieldName: message }
-  const fieldErrors = {};
+  const fieldErrors = {}
   if (Array.isArray(data?.fieldErrors)) {
     data.fieldErrors.forEach((fe) => {
       if (fe.field && fe.errorMsg?.message) {
-        fieldErrors[fe.field] = fe.errorMsg.message;
+        fieldErrors[fe.field] = fe.errorMsg.message
       }
-    });
+    })
   }
 
   // Determine if this is a validation error
-  const isValidationError = errorKey.startsWith('validation.');
+  const isValidationError = errorKey.startsWith('validation.')
 
   return {
     helpCode,
@@ -114,7 +114,7 @@ export function parseApiError(error) {
     fieldErrors,
     isValidationError,
     status,
-  };
+  }
 }
 
 /**
@@ -124,8 +124,8 @@ export function parseApiError(error) {
  * @returns {boolean}
  */
 export function isValidationError(error) {
-  const parsed = parseApiError(error);
-  return parsed.isValidationError;
+  const parsed = parseApiError(error)
+  return parsed.isValidationError
 }
 
 /**
@@ -136,8 +136,8 @@ export function isValidationError(error) {
  * @returns {string|null} Error message or null if no error for field
  */
 export function getFieldError(error, fieldName) {
-  const parsed = parseApiError(error);
-  return parsed.fieldErrors[fieldName] || null;
+  const parsed = parseApiError(error)
+  return parsed.fieldErrors[fieldName] || null
 }
 
 /**
@@ -147,8 +147,8 @@ export function getFieldError(error, fieldName) {
  * @returns {Object.<string, string>} Object mapping field names to error messages
  */
 export function getFieldErrors(error) {
-  const parsed = parseApiError(error);
-  return parsed.fieldErrors;
+  const parsed = parseApiError(error)
+  return parsed.fieldErrors
 }
 
 /**
@@ -158,8 +158,8 @@ export function getFieldErrors(error) {
  * @returns {string} Error message
  */
 export function getErrorMessage(error) {
-  const parsed = parseApiError(error);
-  return parsed.message;
+  const parsed = parseApiError(error)
+  return parsed.message
 }
 
 /**
@@ -169,6 +169,6 @@ export function getErrorMessage(error) {
  * @returns {string|null} Help code or null
  */
 export function getHelpCode(error) {
-  const parsed = parseApiError(error);
-  return parsed.helpCode;
+  const parsed = parseApiError(error)
+  return parsed.helpCode
 }

@@ -105,7 +105,9 @@
           fill="var(--text-primary)"
           font-size="7"
           font-weight="600"
-        >{{ node.skill.skillCode }}</text>
+        >
+          {{ node.skill.skillCode }}
+        </text>
 
         <!-- Score value -->
         <text
@@ -115,14 +117,20 @@
           dominant-baseline="middle"
           fill="var(--accent-primary)"
           font-size="7"
-        >{{ node.skill.compositeScore != null ? node.skill.compositeScore : '—' }}</text>
+        >
+          {{ node.skill.compositeScore != null ? node.skill.compositeScore : '—' }}
+        </text>
 
         <!-- Confidence dot -->
         <circle
           :cx="node.x + 14"
           :cy="node.y - 10"
           r="4"
-          :fill="confidenceDotFill(node.skill.distinctCoachCount) === 'filled' ? 'var(--accent-primary)' : 'none'"
+          :fill="
+            confidenceDotFill(node.skill.distinctCoachCount) === 'filled'
+              ? 'var(--accent-primary)'
+              : 'none'
+          "
           :stroke="'var(--accent-primary)'"
           stroke-width="1.5"
           :opacity="confidenceDotFill(node.skill.distinctCoachCount) === 'empty' ? 0.4 : 1"
@@ -142,11 +150,17 @@
           text-anchor="middle"
           font-size="7"
           :fill="deltaColor(node.skill)"
-        >{{ deltaText(node.skill) }}</text>
+        >
+          {{ deltaText(node.skill) }}
+        </text>
 
         <!-- Last-updated tooltip -->
         <q-tooltip v-if="node.skill.lastUpdatedAt">
-          {{ $t('development.radar.lastUpdatedTooltip', { date: new Date(node.skill.lastUpdatedAt).toLocaleDateString(locale.value) }) }}
+          {{
+            $t('development.radar.lastUpdatedTooltip', {
+              date: new Date(node.skill.lastUpdatedAt).toLocaleDateString(locale.value),
+            })
+          }}
         </q-tooltip>
       </g>
     </svg>

@@ -11,7 +11,9 @@
       <div class="quota-row q-mb-md">
         <div class="row items-center justify-between q-mb-xs">
           <span class="text-caption text-secondary">{{ t('video.quota.storage') }}</span>
-          <span class="text-caption">{{ formatBytes(storageUsedBytes) }} / {{ formatBytes(storageLimitBytes) }}</span>
+          <span class="text-caption"
+            >{{ formatBytes(storageUsedBytes) }} / {{ formatBytes(storageLimitBytes) }}</span
+          >
         </div>
         <q-linear-progress
           :value="storagePercent / 100"
@@ -20,9 +22,14 @@
           size="8px"
           aria-label="Storage usage"
         />
-        <div v-if="storagePercent >= 95 && showUpgradePrompt" class="text-caption text-negative q-mt-xs">
+        <div
+          v-if="storagePercent >= 95 && showUpgradePrompt"
+          class="text-caption text-negative q-mt-xs"
+        >
           <!-- TODO Story 7.x: replace with real upgrade route -->
-          <router-link to="/upgrade" class="text-negative">{{ t('video.quota.upgradePrompt') }}</router-link>
+          <router-link to="/upgrade" class="text-negative">{{
+            t('video.quota.upgradePrompt')
+          }}</router-link>
         </div>
       </div>
 
@@ -30,7 +37,9 @@
       <div class="quota-row">
         <div class="row items-center justify-between q-mb-xs">
           <span class="text-caption text-secondary">{{ t('video.quota.bandwidth') }}</span>
-          <span class="text-caption">{{ formatBytes(bandwidthUsedBytes) }} / {{ formatBytes(bandwidthLimitBytes) }}</span>
+          <span class="text-caption"
+            >{{ formatBytes(bandwidthUsedBytes) }} / {{ formatBytes(bandwidthLimitBytes) }}</span
+          >
         </div>
         <q-linear-progress
           :value="bandwidthPercent / 100"
@@ -63,11 +72,15 @@ const props = defineProps({
 const { t } = useI18n()
 
 const storagePercent = computed(() =>
-  props.storageLimitBytes > 0 ? Math.min(100, (props.storageUsedBytes / props.storageLimitBytes) * 100) : 0,
+  props.storageLimitBytes > 0
+    ? Math.min(100, (props.storageUsedBytes / props.storageLimitBytes) * 100)
+    : 0,
 )
 
 const bandwidthPercent = computed(() =>
-  props.bandwidthLimitBytes > 0 ? Math.min(100, (props.bandwidthUsedBytes / props.bandwidthLimitBytes) * 100) : 0,
+  props.bandwidthLimitBytes > 0
+    ? Math.min(100, (props.bandwidthUsedBytes / props.bandwidthLimitBytes) * 100)
+    : 0,
 )
 
 function barColor(percent) {

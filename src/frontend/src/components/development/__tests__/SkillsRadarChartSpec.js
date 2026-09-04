@@ -84,10 +84,7 @@ describe('SkillsRadarChart', () => {
   })
 
   it('baseline ghost polygon rendered when showBaseline is true and baseline exists', () => {
-    const skills = [
-      makeSkill('PAC', 65, 50, 3),
-      makeSkill('SHO', 70, 60, 3),
-    ]
+    const skills = [makeSkill('PAC', 65, 50, 3), makeSkill('SHO', 70, 60, 3)]
     const wrapper = mount(SkillsRadarChart, {
       props: { skills, showBaseline: true },
       ...globalConfig,

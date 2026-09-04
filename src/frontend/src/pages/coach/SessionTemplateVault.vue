@@ -12,7 +12,9 @@
     <div v-else-if="!templateStore.templates.length" class="text-center q-pa-xl">
       <q-icon name="bookmark_border" size="64px" color="grey-5" />
       <div class="text-h6 q-mt-md">{{ t('session.templates.emptyTitle') }}</div>
-      <div class="text-body2 text-secondary q-mt-sm">{{ t('session.templates.emptySubtitle') }}</div>
+      <div class="text-body2 text-secondary q-mt-sm">
+        {{ t('session.templates.emptySubtitle') }}
+      </div>
     </div>
 
     <q-list v-else separator>
@@ -41,7 +43,9 @@
                   <q-item-section>{{ t('session.templates.rename') }}</q-item-section>
                 </q-item>
                 <q-item clickable v-close-popup @click="confirmDelete(tmpl)">
-                  <q-item-section class="text-negative">{{ t('session.templates.delete') }}</q-item-section>
+                  <q-item-section class="text-negative">{{
+                    t('session.templates.delete')
+                  }}</q-item-section>
                 </q-item>
               </q-list>
             </q-menu>
@@ -57,7 +61,12 @@
           <div class="text-subtitle1">{{ t('session.templates.nameDialogTitle') }}</div>
         </q-card-section>
         <q-card-section>
-          <q-input v-model="renameValue" dense autofocus :label="t('session.templates.nameLabel')" />
+          <q-input
+            v-model="renameValue"
+            dense
+            autofocus
+            :label="t('session.templates.nameLabel')"
+          />
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat :label="t('common.cancel')" v-close-popup />
@@ -71,7 +80,9 @@
       <q-card style="min-width: 320px">
         <q-card-section>
           <div class="text-subtitle1">{{ t('session.templates.deployDialogTitle') }}</div>
-          <div class="text-caption text-secondary q-mt-xs">{{ t('session.templates.deployDialogSubtitle') }}</div>
+          <div class="text-caption text-secondary q-mt-xs">
+            {{ t('session.templates.deployDialogSubtitle') }}
+          </div>
         </q-card-section>
         <q-card-section>
           <q-input

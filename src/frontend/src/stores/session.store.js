@@ -33,7 +33,10 @@ export const useSessionStore = defineStore('session', () => {
       drills.value = response
     } catch (err) {
       if (requestId !== drillsRequestSequence) {
-        console.warn('Discarding failure from a superseded drill-list request:', err?.message || err)
+        console.warn(
+          'Discarding failure from a superseded drill-list request:',
+          err?.message || err,
+        )
         return
       }
       error.value = err

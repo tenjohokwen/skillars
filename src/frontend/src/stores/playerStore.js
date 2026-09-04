@@ -6,7 +6,9 @@ import { playerRegistrationApi } from 'src/api/playerRegistration.api'
 export const usePlayerStore = defineStore('player', () => {
   const players = ref([])
   const activePlayerId = ref(null)
-  const activePlayer = computed(() => players.value.find(p => p.id === activePlayerId.value) ?? null)
+  const activePlayer = computed(
+    () => players.value.find((p) => p.id === activePlayerId.value) ?? null,
+  )
   const selfPlayerId = ref(null)
   let selfPlayerIdRequest = null
   let selfPlayerIdGeneration = 0
@@ -27,7 +29,8 @@ export const usePlayerStore = defineStore('player', () => {
     if (selfPlayerId.value !== null) return selfPlayerId.value
     if (!selfPlayerIdRequest) {
       const requestGeneration = selfPlayerIdGeneration
-      const request = playerRegistrationApi.getMyProfile()
+      const request = playerRegistrationApi
+        .getMyProfile()
         .then((profile) => {
           // Only apply the write if resetSelfPlayerId() hasn't fired since this
           // request started — otherwise a slow pre-logout fetch could resolve after

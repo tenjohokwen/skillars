@@ -5,7 +5,9 @@
       <div class="text-center q-pa-xl">
         <q-icon name="lock" size="64px" color="grey-5" />
         <div class="text-h6 q-mt-md">{{ t('session.builder.gatedTitle') }}</div>
-        <div class="text-body2 text-secondary q-mt-sm">{{ t('session.builder.gatedSubtitle') }}</div>
+        <div class="text-body2 text-secondary q-mt-sm">
+          {{ t('session.builder.gatedSubtitle') }}
+        </div>
       </div>
     </div>
 
@@ -131,21 +133,27 @@
               class="text-caption col text-primary"
               style="text-decoration: none"
             >
-              {{ t('session.templates.templateIndicator', { name: builderStore.sourceTemplateName }) }}
+              {{
+                t('session.templates.templateIndicator', { name: builderStore.sourceTemplateName })
+              }}
             </router-link>
-            <q-btn flat dense round icon="close" size="xs"
-                   @click="builderStore.templateBannerDismissed = true" />
+            <q-btn
+              flat
+              dense
+              round
+              icon="close"
+              size="xs"
+              @click="builderStore.templateBannerDismissed = true"
+            />
           </div>
 
-          <draggable
-            v-model="builderStore.blocks"
-            item-key="_uid"
-            handle="[data-drag-handle]"
-          >
+          <draggable v-model="builderStore.blocks" item-key="_uid" handle="[data-drag-handle]">
             <template #item="{ element, index }">
               <div
                 class="cursor-pointer"
-                :class="{ 'session-builder-page__block--active': builderStore.activeBlockIndex === index }"
+                :class="{
+                  'session-builder-page__block--active': builderStore.activeBlockIndex === index,
+                }"
                 @click="builderStore.setActiveBlock(index)"
               >
                 <SessionBlockView
@@ -159,7 +167,10 @@
             </template>
           </draggable>
 
-          <div v-if="builderStore.blocks.length === 0" class="text-secondary text-body2 text-center q-pa-xl">
+          <div
+            v-if="builderStore.blocks.length === 0"
+            class="text-secondary text-body2 text-center q-pa-xl"
+          >
             {{ t('session.builder.noBlocks') }}
           </div>
         </div>
@@ -174,14 +185,24 @@
           <q-separator />
           <q-tab-panels v-model="sidebarTab" animated class="q-pa-md">
             <q-tab-panel name="dna" class="q-pa-none">
-              <SessionDNAChart :session-dna="builderStore.sessionDna" variant="full" :highlight-axes="highlightAxes" />
+              <SessionDNAChart
+                :session-dna="builderStore.sessionDna"
+                variant="full"
+                :highlight-axes="highlightAxes"
+              />
             </q-tab-panel>
             <q-tab-panel name="focus" class="q-pa-none">
               <DevelopmentFocusSelector v-model="builderStore.developmentFocus" />
             </q-tab-panel>
             <q-tab-panel name="equipment" class="q-pa-none">
               <div v-if="builderStore.equipmentList.length" class="row q-gutter-xs">
-                <q-chip v-for="item in builderStore.equipmentList" :key="item" dense outline color="grey-7">
+                <q-chip
+                  v-for="item in builderStore.equipmentList"
+                  :key="item"
+                  dense
+                  outline
+                  color="grey-7"
+                >
                   {{ item }}
                 </q-chip>
               </div>
@@ -211,7 +232,12 @@
           <div class="text-subtitle1">{{ t('session.templates.nameDialogTitle') }}</div>
         </q-card-section>
         <q-card-section>
-          <q-input v-model="templateNameInput" dense autofocus :label="t('session.templates.nameLabel')" />
+          <q-input
+            v-model="templateNameInput"
+            dense
+            autofocus
+            :label="t('session.templates.nameLabel')"
+          />
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat :label="t('common.cancel')" v-close-popup />
@@ -266,9 +292,9 @@ const focusAxisMap = {
   weakFoot: 'weakFootFocus',
   possession: 'cognitive',
 }
-const highlightAxes = computed(() =>
-  [...new Set(builderStore.developmentFocus.map(f => focusAxisMap[f]).filter(Boolean))]
-)
+const highlightAxes = computed(() => [
+  ...new Set(builderStore.developmentFocus.map((f) => focusAxisMap[f]).filter(Boolean)),
+])
 
 onMounted(async () => {
   await builderStore.fetchExistingPlan(bookingId)
@@ -368,7 +394,10 @@ function handleBack() {
       message: t('session.builder.unsavedChangesMsg'),
       ok: { label: t('common.leave'), color: 'negative' },
       cancel: { label: t('common.stay') },
-    }).onOk(() => { hasUnsavedChanges = false; router.back() })
+    }).onOk(() => {
+      hasUnsavedChanges = false
+      router.back()
+    })
   } else {
     router.back()
   }

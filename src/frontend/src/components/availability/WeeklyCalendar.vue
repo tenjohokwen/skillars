@@ -3,11 +3,7 @@
     <!-- Header row: time label + Mon–Sun -->
     <div class="cal-header">
       <div class="time-col-label"></div>
-      <div
-        v-for="(day, idx) in weekDays"
-        :key="idx"
-        class="day-col-header"
-      >
+      <div v-for="(day, idx) in weekDays" :key="idx" class="day-col-header">
         <div class="day-name">{{ day.label }}</div>
         <div class="day-date">{{ day.date }}</div>
       </div>
@@ -16,25 +12,11 @@
     <!-- Calendar body: time slots x 7 days -->
     <div class="cal-body">
       <div class="time-col">
-        <div
-          v-for="slot in timeSlots"
-          :key="slot"
-          class="time-label"
-        >{{ slot }}</div>
+        <div v-for="slot in timeSlots" :key="slot" class="time-label">{{ slot }}</div>
       </div>
 
-      <div
-        v-for="(day, dayIdx) in weekDays"
-        :key="dayIdx"
-        class="day-col"
-        @click="onDayClick(day)"
-      >
-        <div
-          v-for="slot in timeSlots"
-          :key="slot"
-          class="time-cell"
-          :class="getCellClass()"
-        ></div>
+      <div v-for="(day, dayIdx) in weekDays" :key="dayIdx" class="day-col" @click="onDayClick(day)">
+        <div v-for="slot in timeSlots" :key="slot" class="time-cell" :class="getCellClass()"></div>
 
         <!-- Availability window overlays -->
         <div
@@ -44,7 +26,9 @@
           :style="getWindowStyle(win)"
           @click.stop="onEditWindow(win)"
         >
-          <span class="overlay-label">{{ formatTime(win.startTime) }}–{{ formatTime(win.endTime) }}</span>
+          <span class="overlay-label"
+            >{{ formatTime(win.startTime) }}–{{ formatTime(win.endTime) }}</span
+          >
           <button class="overlay-delete" @click.stop="$emit('delete-window', win.id)">✕</button>
         </div>
 
@@ -102,7 +86,8 @@ const weekDays = computed(() => {
       timeZone: props.coachTimezone,
     }).format(d)
     const date = new Intl.DateTimeFormat(locale.value, {
-      month: 'short', day: 'numeric',
+      month: 'short',
+      day: 'numeric',
       timeZone: props.coachTimezone,
     }).format(d)
     days.push({
@@ -116,11 +101,11 @@ const weekDays = computed(() => {
 })
 
 function windowsForDay(isoDay) {
-  return props.windows.filter(w => w.dayOfWeek === isoDay)
+  return props.windows.filter((w) => w.dayOfWeek === isoDay)
 }
 
 function blocksForDay(dayDate) {
-  return props.blocks.filter(b => {
+  return props.blocks.filter((b) => {
     if (!b.startDatetime || !b.endDatetime) return false
     const startDt = new Date(b.startDatetime)
     const endDt = new Date(b.endDatetime)
@@ -129,11 +114,15 @@ function blocksForDay(dayDate) {
     // string is used only as a day-bucket lookup key, never shown to a user. Do NOT localize.
     const start = new Intl.DateTimeFormat('en-CA', {
       timeZone: props.coachTimezone,
-      year: 'numeric', month: '2-digit', day: '2-digit',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
     }).format(startDt)
     const end = new Intl.DateTimeFormat('en-CA', {
       timeZone: props.coachTimezone,
-      year: 'numeric', month: '2-digit', day: '2-digit',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
     }).format(endDt)
     return start <= dayDate && end >= dayDate
   })
@@ -178,9 +167,14 @@ function getBlockStyle(blk) {
   // skillars-deferred-90 AC11 exclusion: 'en' is load-bearing — Number() parses the numeric
   // hour/minute out of the result for pixel geometry. A localized formatter could emit digits or
   // separators Number() cannot parse. Do NOT localize.
-  const fmt = (dt, field) => Number(new Intl.DateTimeFormat('en', {
-    [field]: 'numeric', hour12: false, timeZone: tz,
-  }).format(dt))
+  const fmt = (dt, field) =>
+    Number(
+      new Intl.DateTimeFormat('en', {
+        [field]: 'numeric',
+        hour12: false,
+        timeZone: tz,
+      }).format(dt),
+    )
 
   const startH = fmt(startDt, 'hour')
   const startM = fmt(startDt, 'minute')
@@ -217,7 +211,7 @@ function onDayClick(day) {
   display: flex;
   flex-direction: column;
   width: 100%;
-  border: 1px solid var(--glass-border, rgba(255,255,255,0.15));
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.15));
   border-radius: 8px;
   overflow: hidden;
 }
@@ -225,7 +219,7 @@ function onDayClick(day) {
 .cal-header {
   display: grid;
   grid-template-columns: 60px repeat(7, 1fr);
-  border-bottom: 1px solid var(--glass-border, rgba(255,255,255,0.15));
+  border-bottom: 1px solid var(--glass-border, rgba(255, 255, 255, 0.15));
 }
 
 .time-col-label {
@@ -239,8 +233,12 @@ function onDayClick(day) {
   font-weight: 600;
 }
 
-.day-name { opacity: 0.7; }
-.day-date { font-size: 0.75rem; }
+.day-name {
+  opacity: 0.7;
+}
+.day-date {
+  font-size: 0.75rem;
+}
 
 .cal-body {
   display: grid;
@@ -259,18 +257,18 @@ function onDayClick(day) {
   font-size: 0.7rem;
   padding: 2px 4px;
   opacity: 0.6;
-  border-top: 1px solid var(--glass-border, rgba(255,255,255,0.08));
+  border-top: 1px solid var(--glass-border, rgba(255, 255, 255, 0.08));
 }
 
 .day-col {
   position: relative;
-  border-left: 1px solid var(--glass-border, rgba(255,255,255,0.08));
+  border-left: 1px solid var(--glass-border, rgba(255, 255, 255, 0.08));
   cursor: pointer;
 }
 
 .time-cell {
   height: 48px;
-  border-top: 1px solid var(--glass-border, rgba(255,255,255,0.08));
+  border-top: 1px solid var(--glass-border, rgba(255, 255, 255, 0.08));
 }
 
 .window-overlay,
@@ -316,5 +314,7 @@ function onDayClick(day) {
   flex-shrink: 0;
 }
 
-.overlay-delete:hover { opacity: 1; }
+.overlay-delete:hover {
+  opacity: 1;
+}
 </style>

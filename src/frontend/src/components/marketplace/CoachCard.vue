@@ -24,7 +24,8 @@
             :key="badge"
             color="primary"
             class="q-mr-xs"
-          >{{ badge }}</q-badge>
+            >{{ badge }}</q-badge
+          >
         </div>
       </div>
 
@@ -39,13 +40,7 @@
 
       <!-- Specialties -->
       <div v-if="coach.topSpecialties.length" class="coach-card__specialties q-mt-xs">
-        <q-chip
-          v-for="s in coach.topSpecialties"
-          :key="s"
-          dense
-          outline
-          size="sm"
-        >{{ s }}</q-chip>
+        <q-chip v-for="s in coach.topSpecialties" :key="s" dense outline size="sm">{{ s }}</q-chip>
       </div>
 
       <!-- Star rating -->
@@ -91,7 +86,9 @@ const { t } = useI18n()
   cursor: pointer;
   transition: transform 0.15s ease;
 
-  &:hover { transform: translateY(-2px); }
+  &:hover {
+    transform: translateY(-2px);
+  }
 
   &__photo-wrap {
     height: 180px;
@@ -109,7 +106,9 @@ const { t } = useI18n()
     object-fit: cover;
   }
 
-  &__body { padding: 12px 16px 16px; }
+  &__body {
+    padding: 12px 16px 16px;
+  }
 
   &__trust-row {
     display: flex;
@@ -124,9 +123,15 @@ const { t } = useI18n()
     line-height: 1.2;
   }
 
-  &__location { color: var(--text-secondary); }
+  &__location {
+    color: var(--text-secondary);
+  }
 
-  &__specialties { display: flex; flex-wrap: wrap; gap: 4px; }
+  &__specialties {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
 
   &__rating {
     display: flex;
@@ -134,6 +139,8 @@ const { t } = useI18n()
     color: var(--text-secondary);
   }
 
-  &__price { color: var(--text-primary); }
+  &__price {
+    color: var(--text-primary);
+  }
 }
 </style>

@@ -8,7 +8,7 @@
       outlined
       multiple
       use-chips
-      :rules="[v => (v && v.length > 0) || t('validation.required')]"
+      :rules="[(v) => (v && v.length > 0) || t('validation.required')]"
       class="q-mb-md"
     />
     <div class="text-label q-mb-sm">{{ t('auth.coach.step2AgeGroups') }}</div>
@@ -38,8 +38,16 @@ defineProps({ loading: Boolean })
 const emit = defineEmits(['submit'])
 
 const specialtyOptions = [
-  'Dribbling', 'Shooting', 'Passing', 'Defending', 'Goalkeeping',
-  'Fitness', 'Tactics', 'Set Pieces', 'Heading', 'First Touch',
+  'Dribbling',
+  'Shooting',
+  'Passing',
+  'Defending',
+  'Goalkeeping',
+  'Fitness',
+  'Tactics',
+  'Set Pieces',
+  'Heading',
+  'First Touch',
 ]
 
 const form = reactive({

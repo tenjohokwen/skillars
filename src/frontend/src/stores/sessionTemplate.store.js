@@ -28,7 +28,7 @@ export const useSessionTemplateStore = defineStore('sessionTemplate', () => {
   async function renameTemplate(templateId, name) {
     try {
       await sessionApi.renameTemplate(templateId, { name })
-      const t = templates.value.find(t => t.id === templateId)
+      const t = templates.value.find((t) => t.id === templateId)
       if (t) t.name = name
     } catch (e) {
       error.value = e
@@ -39,7 +39,7 @@ export const useSessionTemplateStore = defineStore('sessionTemplate', () => {
   async function deleteTemplate(templateId) {
     try {
       await sessionApi.deleteTemplate(templateId)
-      templates.value = templates.value.filter(t => t.id !== templateId)
+      templates.value = templates.value.filter((t) => t.id !== templateId)
     } catch (e) {
       error.value = e
       throw e
@@ -49,7 +49,7 @@ export const useSessionTemplateStore = defineStore('sessionTemplate', () => {
   async function deployTemplate(templateId, bookingId) {
     try {
       const res = await sessionApi.deployTemplate(templateId, bookingId)
-      const t = templates.value.find(t => t.id === templateId)
+      const t = templates.value.find((t) => t.id === templateId)
       if (t) {
         t.deployCount = (t.deployCount ?? 0) + 1
         t.lastDeployedAt = new Date().toISOString()
@@ -61,5 +61,14 @@ export const useSessionTemplateStore = defineStore('sessionTemplate', () => {
     }
   }
 
-  return { templates, loading, error, fetchTemplates, createTemplate, renameTemplate, deleteTemplate, deployTemplate }
+  return {
+    templates,
+    loading,
+    error,
+    fetchTemplates,
+    createTemplate,
+    renameTemplate,
+    deleteTemplate,
+    deployTemplate,
+  }
 })

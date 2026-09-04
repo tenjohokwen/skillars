@@ -316,7 +316,8 @@ export default {
     continueQuestion: 'Would you like to continue your session?',
     continueSession: 'Continue Session',
     refreshed: 'Session refreshed successfully',
-    refreshFailed: "We couldn't extend your session. Check your connection and select Continue Session to try again.",
+    refreshFailed:
+      "We couldn't extend your session. Check your connection and select Continue Session to try again.",
     expired: 'Your session has expired. Please log in again.',
     drillLibrary: {
       title: 'Drill Library',
@@ -361,10 +362,12 @@ export default {
         removeConfirm: 'Remove',
         uploadStarted: 'Video upload started — processing may take a few minutes',
         videoRemoved: 'Video removed',
-        quotaExceeded: 'Upload would exceed your video storage quota. Upgrade your plan to upload more.',
+        quotaExceeded:
+          'Upload would exceed your video storage quota. Upgrade your plan to upload more.',
         rateLimited: 'Too many uploads. Wait a moment and try again.',
         constraintViolated: 'Video exceeds the 120-second or 500 MB limit for drill demos.',
-        videoAlreadyLinked: 'A video is already linked to this drill. Remove it before uploading a new one.',
+        videoAlreadyLinked:
+          'A video is already linked to this drill. Remove it before uploading a new one.',
         notOwned: 'You do not have permission to upload video to this drill.',
         uploadFailed: 'Upload failed. Please try again.',
         removeFailed: 'Could not remove video. Please try again.',
@@ -932,7 +935,8 @@ export default {
         'This will cancel the session. Depending on how close it is to the scheduled time, it may not be eligible for a refund.',
       confirm: 'Cancel session',
       success: 'Session cancelled',
-      paymentInProgress: 'A payment for this session is already in progress. Please try again shortly.',
+      paymentInProgress:
+        'A payment for this session is already in progress. Please try again shortly.',
       failed: 'Could not cancel this session. Please try again.',
     },
     batch: {
@@ -965,7 +969,8 @@ export default {
       blockOverlapsBooking:
         'You already have a booking during this time — cancel or reschedule it first if you need to block this time out.',
       sessionCrossesMidnight: 'A session cannot cross midnight.',
-      availabilityChanged: "This coach's availability changed since you loaded this page. Please pick a new time.",
+      availabilityChanged:
+        "This coach's availability changed since you loaded this page. Please pick a new time.",
       weekStartOutOfRange: 'That week is too far in the past or future to view.',
       batchAlreadyProcessed: 'These requests have already been handled.',
       batchNoneAccepted: 'None of the sessions in this request could be accepted.',
