@@ -417,6 +417,37 @@ docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" \
 
 ---
 
+## Config change appears to have no effect
+
+**Symptom.** You changed a value in `main.platform_config` and the application is still using the
+old one. Reported during UAT for `booking.session.defaultDurationMinutes`, where it read as a bug.
+
+**It is not a bug — it is a cache, and which path you used decides the behaviour.**
+
+| How the value was changed | When it takes effect |
+|---|---|
+| `PUT /api/config/values/{key}` (admin API) | **Immediately.** `ConfigService.updateConfig` invalidates the cache as part of the write. |
+| Directly in the database — `psql`, a migration, a manual fix | **Up to `app.config.cache-ttl-seconds` (default 300s / 5 minutes).** |
+
+`ConfigService` keeps an in-memory cache refreshed by
+`@Scheduled(fixedDelayString = "${app.config.cache-ttl-seconds:300}")`. A direct database write has
+no way to invalidate it, so the node keeps serving the cached value until the next refresh.
+
+**On more than one node, each caches independently**, so a direct DB edit is live everywhere only
+after the slowest node's next refresh. This is the reason to prefer the API even when psql is
+quicker to reach.
+
+**What to do**
+
+1. Prefer the admin API. That is the whole answer in the normal case.
+2. If the value was already changed directly in the database: wait out the TTL, or restart the
+   application, or re-apply the same value through the API (which invalidates the cache immediately).
+3. Do not lower `app.config.cache-ttl-seconds` to work around this. It would add polling on every
+   node, permanently, for a table that changes a handful of times a year. The TTL was reviewed under
+   skillars-deferred-92 AC24 and deliberately left at 300s.
+
+---
+
 ## Pre-production release gate: outstanding migration rewrites
 
 **Owner:** whoever prepares the first production deploy. **Trigger:** before that deploy, not after.

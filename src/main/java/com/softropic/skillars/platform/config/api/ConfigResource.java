@@ -33,6 +33,31 @@ public class ConfigResource {
         return ResponseEntity.ok(configService.findResponse(key));
     }
 
+    /**
+     * Updates one platform config value.
+     *
+     * <p><strong>Two paths change a config value, and they behave differently</strong>
+     * (skillars-deferred-92 AC24; project-owner decision 6 was to document this, not change the TTL):
+     *
+     * <ul>
+     *   <li><strong>Through this endpoint — immediate.</strong> {@code ConfigService.updateConfig}
+     *       invalidates the cache as part of the write, so the new value is live on this node before
+     *       the response returns.</li>
+     *   <li><strong>Directly in the database (psql, a migration, a manual fix) — up to
+     *       {@code app.config.cache-ttl-seconds} (default 300s / 5 minutes).</strong>
+     *       {@code ConfigService} holds an in-memory cache refreshed by
+     *       {@code @Scheduled(fixedDelayString = "${app.config.cache-ttl-seconds:300}")}, and a direct
+     *       DB write cannot invalidate it. The value looks like it did not take effect.</li>
+     * </ul>
+     *
+     * <p>That second case is what made {@code booking.session.defaultDurationMinutes} read as broken
+     * during UAT. It is not a bug and the TTL is deliberately unchanged — a shorter TTL means more
+     * polling for a table that changes a few times a year. <strong>Prefer this endpoint.</strong> If
+     * you must edit the database directly, wait out the TTL or restart the app; on more than one node,
+     * each caches independently, so wait for the slowest.
+     *
+     * <p>Also in {@code docs/deployment/runbook.md} § "Config change appears to have no effect".
+     */
     @PutMapping("/values/{key}")
     @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
     public ResponseEntity<ConfigValueResponse> updateValue(
