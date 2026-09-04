@@ -153,6 +153,7 @@ export default {
       tileUnavailable: 'Indisponible',
     },
     player: {
+      resendOtp: 'Renvoyer le code',
       registerTitle: 'Créer un compte joueur',
       registerSubtitle: 'Suivez votre propre progression et réservez des séances',
       emailPendingTitle: 'Vérifiez votre e-mail',
@@ -179,6 +180,7 @@ export default {
       finishSetup: 'Terminer',
     },
     coach: {
+      resendOtp: 'Renvoyer le code',
       registerTitle: 'Créer un compte coach',
       registerSubtitle: 'Rejoignez Skillars et commencez à coacher',
       emailPendingTitle: 'Vérifiez votre e-mail',

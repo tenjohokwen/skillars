@@ -69,6 +69,7 @@ export default {
     languageEnglish: 'English',
     languageFrench: 'French',
     coach: {
+      resendOtp: 'Resend Code',
       registerTitle: 'Create Coach Account',
       registerSubtitle: 'Join Skillars and start coaching',
       emailPendingTitle: 'Check your email',
@@ -176,6 +177,7 @@ export default {
       tileUnavailable: 'Unavailable',
     },
     player: {
+      resendOtp: 'Resend Code',
       registerTitle: 'Create Player Account',
       registerSubtitle: 'Track your own development and book sessions',
       emailPendingTitle: 'Check your email',

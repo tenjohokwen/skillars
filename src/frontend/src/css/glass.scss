@@ -12,7 +12,16 @@
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
   box-shadow: var(--card-shadow);
-  transition: all 0.2s ease;
+  // skillars-deferred-92 AC25.1: the four properties the :hover block below actually changes,
+  // not `all`. Story 1.2 narrowed .hover-lift for exactly this reason; these four were missed.
+  // `transition: all` animates EVERY property change, including layout ones the browser cannot
+  // cheaply interpolate, so an unrelated width/padding change from another class arrives as a
+  // 200ms animation nobody asked for.
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease,
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
 
   &:hover {
     border-color: var(--border-accent);
@@ -39,7 +48,8 @@
 }
 
 .soft-hover {
-  transition: all 0.2s ease;
+  // AC25.1: transform is the only property this :hover changes.
+  transition: transform 0.2s ease;
 
   &:hover {
     transform: translateY(-2px);
@@ -53,7 +63,10 @@
   border: none !important;
   border-radius: 14px !important;
   font-weight: 600;
-  transition: all 0.2s ease;
+  // AC25.1: transform + box-shadow, matching the :hover block.
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
 
   &:hover {
     transform: translateY(-1px);
@@ -67,7 +80,10 @@
   border: 1px solid var(--btn-border) !important;
   color: var(--text-primary) !important;
   border-radius: 14px !important;
-  transition: all 0.2s ease;
+  // AC25.1: background + transform, matching the :hover block.
+  transition:
+    background 0.2s ease,
+    transform 0.2s ease;
 
   &:hover {
     background: var(--btn-hover) !important;

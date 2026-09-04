@@ -60,6 +60,7 @@ export default {
     accountLocked: 'Zu viele Anmeldeversuche. Versuchen Sie es in einigen Minuten erneut.',
     invalidCredentials: 'Ungültige E-Mail-Adresse oder Passwort.',
     coach: {
+      resendOtp: 'Code erneut senden',
       registerTitle: 'Trainer-Konto erstellen',
       registerSubtitle: 'Bei Skillars registrieren und mit dem Training beginnen',
       emailPendingTitle: 'E-Mail prüfen',
@@ -176,6 +177,7 @@ export default {
       tileUnavailable: 'Nicht verfügbar',
     },
     player: {
+      resendOtp: 'Code erneut senden',
       registerTitle: 'Spielerkonto erstellen',
       registerSubtitle: 'Verfolgen Sie Ihre eigene Entwicklung und buchen Sie Sitzungen',
       emailPendingTitle: 'E-Mail prüfen',

@@ -1,5 +1,7 @@
 // Quasar SCSS variables — aligned with the design system.
-// Runtime theme switching is handled by CSS custom properties in variables.scss.
+// Runtime theme switching is handled by CSS custom properties in tokens/_colors.scss,
+// imported once by app.scss (skillars-deferred-92 AC25.2 deleted the variables.scss forwarder,
+// which nothing imported and which made tokens/colors reachable by two paths).
 // These SCSS variables set Quasar's compile-time defaults.
 
 $primary: #00ffb4;

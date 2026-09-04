@@ -42,6 +42,20 @@
         </q-banner>
 
         <div class="text-center q-mt-md">
+          <q-btn
+            flat
+            no-caps
+            dense
+            class="auth-link q-mr-md"
+            :label="
+              resendCooldown > 0
+                ? t('auth.coach.resendCooldown', { seconds: resendCooldown })
+                : t('auth.coach.resendOtp')
+            "
+            :disable="resendCooldown > 0 || isResending"
+            :loading="isResending"
+            @click="handleResendOtp"
+          />
           <router-link to="/login" class="auth-link">
             &larr; {{ t('auth.coach.signInInstead') }}
           </router-link>
@@ -52,7 +66,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { coachRegistrationApi } from 'src/api/coachRegistration.api'
@@ -66,6 +80,42 @@ const { setError, clearError, hasError, errorMessage, helpCode } = useErrorHandl
 const digits = ref(['', '', '', '', '', ''])
 const otpInputs = ref([])
 const isSubmitting = ref(false)
+const isResending = ref(false)
+const resendCooldown = ref(0)
+let cooldownTimer = null
+
+// Mirrors ParentPhoneVerifyPage exactly (skillars-deferred-92 AC28.2) — same 60s cooldown,
+// same disabled state, same silent catch. The parent flow is the reference implementation;
+// a second pattern here would be a second thing to keep in step.
+function startCooldown() {
+  resendCooldown.value = 60
+  cooldownTimer = setInterval(() => {
+    resendCooldown.value--
+    if (resendCooldown.value <= 0) {
+      clearInterval(cooldownTimer)
+      cooldownTimer = null
+    }
+  }, 1000)
+}
+
+onUnmounted(() => {
+  if (cooldownTimer) clearInterval(cooldownTimer)
+})
+
+async function handleResendOtp() {
+  if (!userId.value) return
+  isResending.value = true
+  try {
+    await coachRegistrationApi.resendOtp(userId.value)
+    startCooldown()
+  } catch {
+    // Silent, as in the parent flow: the backend's 409 / 400 responses distinguish
+    // "already sending", "locked" and "bad user", and surfacing that difference to an
+    // unauthenticated caller is account enumeration. The cooldown simply does not start.
+  } finally {
+    isResending.value = false
+  }
+}
 
 const userId = computed(() => (route.query.userId ? Number(route.query.userId) : null))
 

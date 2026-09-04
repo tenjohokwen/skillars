@@ -121,6 +121,7 @@ import { authApi } from 'src/api/auth.api'
 import { useErrorHandler } from 'src/composables/useErrorHandler'
 import { useAuthStore } from 'src/stores/auth.store'
 import { useSession } from 'src/composables/useSession'
+import { routeForRole } from 'src/router/roleRoutes'
 
 const router = useRouter()
 const route = useRoute()
@@ -138,13 +139,6 @@ const {
   hasFieldError,
   getFieldError,
 } = useErrorHandler()
-
-const ROLE_ROUTES = {
-  COACH: '/coach/command-center',
-  PARENT: '/parent/dashboard',
-  PLAYER: '/player/home', // resolves the caller's own playerId, then redirects to /player/locker-room/:playerId
-  ADMIN: '/admin/health-dashboard',
-}
 
 const form = ref({ email: '', password: '' })
 const isPwd = ref(true)
@@ -168,7 +162,7 @@ async function handleLogin() {
     const safePath =
       typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')
         ? redirect
-        : ROLE_ROUTES[response.role] || '/dashboard'
+        : routeForRole(response.role)
     router.push(safePath)
   } catch (err) {
     const status = err?.response?.status

@@ -450,7 +450,15 @@ onMounted(async () => {
     const response = await getCoachProfile(coachId)
     profile.value = response
 
-    await fetchReviews(0)
+    // AC22: seed from the profile payload instead of re-fetching what it already contains.
+    // The else-branch is deliberate rather than defensive noise: an older backend
+    // (or a future one that drops the enrichment) simply returns no `reviews` field, and the page
+    // keeps working through the original path instead of rendering an empty review list.
+    if (response?.reviews) {
+      applyReviewPage(response.reviews, 0)
+    } else {
+      await fetchReviews(0)
+    }
     if (authStore.isParent || authStore.isPlayer) {
       await fetchMyReview()
     }
@@ -532,13 +540,32 @@ function openLightbox(item) {
   lightboxOpen.value = true
 }
 
+/**
+ * Applies one page of reviews to the local state.
+ *
+ * skillars-deferred-92 AC22: page 0 is NOT fetched. `GET /api/marketplace/coaches/{id}` already
+ * embeds it — `CoachMarketplaceResource` builds `CoachProfileDto.reviews` from
+ * `reviewQueryService.getFirstPageForCoach(coachId)`, which is literally
+ * `listApprovedReviews(coachId, 0, "newest")`: the same call, the same `ReviewListResponse`, the
+ * same 10 rows in the same order as `listCoachReviews(coachId, 0)`. Verified against source before
+ * removing either side. `onMounted` fired both, so every profile view cost a wholly redundant
+ * second round trip.
+ *
+ * Of AC22's two options, this keeps the server-side enrichment and drops the client's duplicate
+ * request, rather than the reverse. Reason: the profile response already carries the data, so this
+ * direction removes a round trip from FIRST PAINT — the one that matters — whereas dropping the
+ * enrichment would have preserved it. `listCoachReviews` is still the only path for page 1+.
+ */
+function applyReviewPage(res, page) {
+  reviews.value = page === 0 ? res.reviews : reviews.value.concat(res.reviews)
+  reviewsTotalElements.value = res.totalElements
+  reviewsHasNext.value = res.hasNext
+  reviewsCurrentPage.value = res.page
+}
+
 async function fetchReviews(page = 0) {
   try {
-    const res = await listCoachReviews(coachId, page)
-    reviews.value = page === 0 ? res.reviews : reviews.value.concat(res.reviews)
-    reviewsTotalElements.value = res.totalElements
-    reviewsHasNext.value = res.hasNext
-    reviewsCurrentPage.value = res.page
+    applyReviewPage(await listCoachReviews(coachId, page), page)
   } catch (err) {
     console.error('Failed to load reviews', err)
     $q.notify({ type: 'negative', message: t('common.errorGeneric') })
