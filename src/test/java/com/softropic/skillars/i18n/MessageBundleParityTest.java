@@ -18,7 +18,8 @@ import java.util.regex.Pattern;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * skillars-deferred-90 AC12 (F23): the key-set check alone proves nothing about translation
+ * skillars-deferred-90 AC12 (F23), extended by skillars-deferred-92 AC12 to cover the
+ * <strong>default</strong> bundle: the key-set check alone proves nothing about translation
  * fidelity. This adds a <strong>placeholder-integrity</strong> gate: for every key,
  * {@code messages_de.properties} and {@code messages_fr.properties} must carry
  * <em>exactly</em> the same {@code {name}} / {@code {0}} placeholder token multiset and the same
@@ -41,6 +42,35 @@ class MessageBundleParityTest {
     @Test
     void frenchBundle_matchesEnglishKeysAndPlaceholders() throws IOException {
         assertParity("messages_fr.properties");
+    }
+
+    /**
+     * skillars-deferred-92 AC12 — the case whose absence was a <strong>live 500</strong>, not hygiene.
+     *
+     * <p>{@code messages.properties} carries no locale suffix, so it is the bundle
+     * {@code ReloadableResourceBundleMessageSource} falls back to when a key is missing from the
+     * resolved locale's bundle. It held <strong>86</strong> keys against {@code messages_en}'s 130.
+     * The 46 absentees included {@code security.accountLocked} and <em>every</em> {@code email.*}
+     * template key, so any client resolving to a locale other than {@code de}, {@code fr} or
+     * {@code en} — {@code CookieLocaleResolver} falls through to {@code Accept-Language} when no
+     * locale cookie is set — got a {@code NoSuchMessageException}: a 500 on the account-lockout
+     * response, and a template failure on every transactional email.
+     *
+     * <p>The two tests above covered {@code messages_de} and {@code messages_fr} against
+     * {@code messages_en} and nothing covered this file, which is the whole reason it drifted.
+     *
+     * <p>The drift ran <em>both</em> ways, which the story did not anticipate: this file also held two
+     * keys {@code messages_en} did not ({@code email.platform_config_changed.title} /
+     * {@code .preheader}, reading "Platform MSISDN Changed"). They belonged to
+     * {@code mails/platformConfigChanged.html}, inherited from the {@code javatemplate} origin project
+     * — no {@code EmailTemplate} constant, no sender, nothing in {@code src} referencing it, and no
+     * MSISDN concept anywhere in a Stripe platform. Template and keys were deleted rather than
+     * translated. {@code assertParity}'s existing "foreign keys" assertion is what would have caught
+     * them, and now does.
+     */
+    @Test
+    void defaultBundle_matchesEnglishKeysAndPlaceholders() throws IOException {
+        assertParity("messages.properties");
     }
 
     private void assertParity(String translatedFile) throws IOException {
