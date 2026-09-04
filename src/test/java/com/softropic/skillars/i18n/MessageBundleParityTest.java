@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -105,6 +106,51 @@ class MessageBundleParityTest {
         assertThat(placeholderMismatch)
             .as("%s placeholder / pluralization-pipe drift vs messages_en", translatedFile)
             .isEmpty();
+    }
+
+    /**
+     * skillars-deferred-92 AC13 — a value identical to the English is almost certainly untranslated.
+     *
+     * <p>Key parity and placeholder parity both pass happily on a bundle that simply repeats the
+     * English, which is exactly what had shipped: {@code email.booking.quick_complete_confirm.title},
+     * {@code .reschedule_declined_by_parent.title} and {@code .reschedule_requested_by_coach.title}
+     * were English in <strong>both</strong> {@code messages_de} and {@code messages_fr}, so a French
+     * or German parent received "Please confirm your session" as an email subject line. It survived
+     * skillars-deferred-91 AC9's whole de-DE register pass, which looked for informal forms rather
+     * than for English.
+     *
+     * <p>The allowlist is empty and should stay small. A genuine cognate belongs in it with a reason —
+     * but note that short cognates are excluded by the length floor already, so anything reaching this
+     * assertion is a sentence, and a whole sentence identical across two languages is a translation
+     * that never happened.
+     */
+    private static final Set<String> LEGITIMATELY_IDENTICAL_TO_ENGLISH = Set.of();
+
+    @Test
+    @DisplayName("no translated value is left as untouched English")
+    void translatedBundles_containNoUntranslatedEnglish() throws IOException {
+        for (String bundle : List.of("messages_de.properties", "messages_fr.properties")) {
+            Map<String, String> en = load(I18N.resolve("messages_en.properties"));
+            Map<String, String> tr = load(I18N.resolve(bundle));
+
+            List<String> untranslated = en.entrySet().stream()
+                .filter(e -> !LEGITIMATELY_IDENTICAL_TO_ENGLISH.contains(e.getKey()))
+                // Short values are frequently genuine cognates (Status, Name, Position, Date...);
+                // only a substantial value repeated verbatim is evidence of a missing translation.
+                .filter(e -> e.getValue().strip().length() > 15)
+                .filter(e -> e.getValue().strip().equalsIgnoreCase(
+                    String.valueOf(tr.get(e.getKey())).strip()))
+                .map(e -> e.getKey() + " == \"" + e.getValue().strip() + "\"")
+                .sorted()
+                .toList();
+
+            assertThat(untranslated)
+                .as("""
+                    %s repeats messages_en verbatim for these keys, so a user of that locale reads \
+                    English. Translate them, or add the key to LEGITIMATELY_IDENTICAL_TO_ENGLISH with \
+                    a reason if the two languages really do share the string.""", bundle)
+                .isEmpty();
+        }
     }
 
     /** Sorted multiset of {@code {...}} tokens in a value. */

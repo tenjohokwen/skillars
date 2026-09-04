@@ -18,7 +18,9 @@
           />
           <div v-else class="drill-detail-panel__no-video text-center q-pa-md">
             <q-icon name="videocam_off" size="48px" class="q-mb-sm" />
-            <div class="text-caption text-secondary">Video preview available after upload</div>
+            <div class="text-caption text-secondary">
+              {{ $t('session.drillLibrary.videoPreviewAfterUpload') }}
+            </div>
           </div>
         </div>
 
@@ -29,15 +31,27 @@
             </q-item-section>
           </q-item>
           <q-item>
-            <q-item-section><q-item-label caption>Difficulty</q-item-label></q-item-section>
+            <q-item-section
+              ><q-item-label caption>{{
+                $t('session.drillLibrary.metaDifficulty')
+              }}</q-item-label></q-item-section
+            >
             <q-item-section side>{{ drill.metadata?.difficultyTier }}</q-item-section>
           </q-item>
           <q-item>
-            <q-item-section><q-item-label caption>Group Size</q-item-label></q-item-section>
+            <q-item-section
+              ><q-item-label caption>{{
+                $t('session.drillLibrary.metaGroupSize')
+              }}</q-item-label></q-item-section
+            >
             <q-item-section side>{{ drill.metadata?.recommendedGroupSize }}</q-item-section>
           </q-item>
           <q-item>
-            <q-item-section><q-item-label caption>Equipment</q-item-label></q-item-section>
+            <q-item-section
+              ><q-item-label caption>{{
+                $t('session.drillLibrary.metaEquipment')
+              }}</q-item-label></q-item-section
+            >
             <q-item-section side>{{
               (drill.metadata?.equipmentRequired ?? []).join(', ')
             }}</q-item-section>
@@ -59,7 +73,7 @@
         <div v-if="drill.metadata?.setupDiagram" class="q-mb-md">
           <img
             :src="drill.metadata.setupDiagram"
-            alt="Setup diagram"
+            :alt="$t('session.drillLibrary.setupDiagram')"
             style="width: 100%; border-radius: 8px"
           />
         </div>
@@ -80,7 +94,7 @@
         </div>
 
         <div v-if="drill.tags?.length" class="q-mb-md">
-          <div class="text-subtitle2 q-mb-sm">Tags</div>
+          <div class="text-subtitle2 q-mb-sm">{{ $t('session.drillLibrary.tags') }}</div>
           <div class="row q-gutter-xs">
             <q-chip v-for="tag in drill.tags" :key="tag" size="sm">{{ tag }}</q-chip>
           </div>
@@ -166,7 +180,9 @@
               />
               <div v-else class="drill-detail-panel__no-video text-center q-pa-md">
                 <q-icon name="videocam_off" size="48px" class="q-mb-sm" />
-                <div class="text-caption text-secondary">Video preview available after upload</div>
+                <div class="text-caption text-secondary">
+                  {{ $t('session.drillLibrary.videoPreviewAfterUpload') }}
+                </div>
               </div>
             </div>
 
@@ -179,15 +195,27 @@
                 </q-item-section>
               </q-item>
               <q-item>
-                <q-item-section><q-item-label caption>Difficulty</q-item-label></q-item-section>
+                <q-item-section
+                  ><q-item-label caption>{{
+                    $t('session.drillLibrary.metaDifficulty')
+                  }}</q-item-label></q-item-section
+                >
                 <q-item-section side>{{ drill.metadata?.difficultyTier }}</q-item-section>
               </q-item>
               <q-item>
-                <q-item-section><q-item-label caption>Group Size</q-item-label></q-item-section>
+                <q-item-section
+                  ><q-item-label caption>{{
+                    $t('session.drillLibrary.metaGroupSize')
+                  }}</q-item-label></q-item-section
+                >
                 <q-item-section side>{{ drill.metadata?.recommendedGroupSize }}</q-item-section>
               </q-item>
               <q-item>
-                <q-item-section><q-item-label caption>Equipment</q-item-label></q-item-section>
+                <q-item-section
+                  ><q-item-label caption>{{
+                    $t('session.drillLibrary.metaEquipment')
+                  }}</q-item-label></q-item-section
+                >
                 <q-item-section side>{{
                   (drill.metadata?.equipmentRequired ?? []).join(', ')
                 }}</q-item-section>
@@ -209,7 +237,7 @@
             <div v-if="drill.metadata?.setupDiagram" class="q-mb-md">
               <img
                 :src="drill.metadata.setupDiagram"
-                alt="Setup diagram"
+                :alt="$t('session.drillLibrary.setupDiagram')"
                 style="width: 100%; border-radius: 8px"
               />
             </div>
@@ -230,7 +258,7 @@
             </div>
 
             <div v-if="drill.tags?.length" class="q-mb-md">
-              <div class="text-subtitle2 q-mb-sm">Tags</div>
+              <div class="text-subtitle2 q-mb-sm">{{ $t('session.drillLibrary.tags') }}</div>
               <div class="row q-gutter-xs">
                 <q-chip v-for="tag in drill.tags" :key="tag" size="sm">{{ tag }}</q-chip>
               </div>

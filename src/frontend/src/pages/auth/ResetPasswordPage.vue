@@ -3,16 +3,16 @@
     <div class="auth-card-container fade-in">
       <div class="auth-brand q-mb-xl">
         <div class="gradient-text auth-brand-name">Skillars</div>
-        <div class="text-meta">Password reset</div>
+        <div class="text-meta">{{ $t('auth.resetTitle') }}</div>
       </div>
 
       <div class="glass-card--static auth-card">
         <div class="text-section-title q-mb-xs">{{ t('auth.resetPassword') }}</div>
-        <div class="text-meta q-mb-lg">Choose a strong new password.</div>
+        <div class="text-meta q-mb-lg">{{ $t('auth.resetBody') }}</div>
 
         <!-- Invalid key -->
         <div v-if="!resetKey" class="auth-banner auth-banner--error q-pa-md q-mb-md">
-          Invalid or missing reset key. Please request a new password reset.
+          {{ $t('auth.resetKeyMissing') }}
         </div>
 
         <q-form v-else @submit.prevent="handleSubmit" class="q-gutter-md">

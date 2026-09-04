@@ -3,7 +3,7 @@
     <div class="auth-card-container fade-in">
       <div class="auth-brand q-mb-xl">
         <div class="gradient-text auth-brand-name">Skillars</div>
-        <div class="text-meta">Account activation</div>
+        <div class="text-meta">{{ $t('auth.activationTitle') }}</div>
       </div>
 
       <div class="glass-card--static auth-card text-center">
@@ -17,7 +17,7 @@
 
         <!-- No key -->
         <div v-else-if="!activationKey" class="auth-banner auth-banner--error q-pa-md q-mt-md">
-          Invalid or missing activation key.
+          {{ $t('auth.activationKeyMissing') }}
         </div>
 
         <!-- Success -->
@@ -29,7 +29,7 @@
             class="q-mb-md"
           />
           <div class="text-card-title q-mb-sm">{{ t('success.activated') }}</div>
-          <div class="text-meta">Redirecting in {{ countdown }}...</div>
+          <div class="text-meta">{{ $t('auth.activateRedirecting', { seconds: countdown }) }}</div>
         </div>
 
         <!-- Error -->

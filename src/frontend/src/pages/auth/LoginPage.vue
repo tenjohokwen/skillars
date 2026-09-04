@@ -4,12 +4,12 @@
       <!-- Brand mark -->
       <div class="auth-brand q-mb-xl">
         <div class="gradient-text auth-brand-name">Skillars</div>
-        <div class="text-meta">Analytics Platform</div>
+        <div class="text-meta">{{ $t('nav.tagline') }}</div>
       </div>
 
       <div class="glass-card--static auth-card">
         <div class="text-section-title q-mb-xs">{{ t('auth.login') }}</div>
-        <div class="text-meta q-mb-lg">Welcome back. Sign in to continue.</div>
+        <div class="text-meta q-mb-lg">{{ $t('auth.loginWelcome') }}</div>
 
         <!-- Session expired banner -->
         <q-banner
@@ -90,7 +90,9 @@
           </router-link>
         </div>
 
-        <div class="auth-divider"><span>or</span></div>
+        <div class="auth-divider">
+          <span>{{ $t('common.or') }}</span>
+        </div>
 
         <div class="text-center">
           <div class="text-meta q-mb-xs">{{ t('auth.noAccount') }}</div>

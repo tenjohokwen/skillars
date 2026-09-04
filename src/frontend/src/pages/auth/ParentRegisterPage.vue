@@ -115,11 +115,7 @@
             <div>
               <div ref="tosBoxRef" class="policy-scroll-box" @scroll="onScroll('tos', $event)">
                 <p>
-                  {{ t('auth.parent.tosLabel') }} — Lorem ipsum dolor sit amet, consectetur
-                  adipiscing elit. By using Skillars, you agree to our terms and conditions. These
-                  terms govern your use of the platform, including booking sessions, payments, and
-                  data handling. You must be at least 18 years old to register as a parent. All
-                  accounts are subject to our acceptable use policy.
+                  {{ t('auth.parentTosBody') }}
                 </p>
               </div>
               <q-checkbox
@@ -137,11 +133,7 @@
                 @scroll="onScroll('privacy', $event)"
               >
                 <p>
-                  {{ t('auth.parent.privacyLabel') }} — We collect personal data to provide our
-                  services. Your data is processed in accordance with GDPR and applicable data
-                  protection laws. We do not sell your personal data to third parties. You may
-                  request deletion of your data at any time. Session recordings and coaching data
-                  are retained for the period specified in our privacy policy.
+                  {{ t('auth.parentPrivacyBody') }}
                 </p>
               </div>
               <q-checkbox
@@ -159,11 +151,7 @@
                 @scroll="onScroll('parentConsent', $event)"
               >
                 <p>
-                  {{ t('auth.parent.parentConsentLabel') }} — As the legal guardian of the player(s)
-                  you register, you consent to Skillars collecting and processing data about your
-                  child for coaching purposes. You confirm you are the legal parent or guardian. You
-                  are responsible for ensuring your child's participation is appropriate. You may
-                  withdraw consent at any time by contacting support.
+                  {{ t('auth.parentConsentBody') }}
                 </p>
               </div>
               <q-checkbox

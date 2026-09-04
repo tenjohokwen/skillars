@@ -169,7 +169,7 @@
     <!-- NOTE: the confidence dot is driven by distinctCoachCount (distinct coaches who have logged an
          assessment), not entryCount (total assessment rows) — a single coach logging many assessments
          no longer misrepresents multi-coach agreement (skillars-deferred-40 AC3). -->
-    <table class="sr-only" aria-label="Skills Radar Data">
+    <table class="sr-only" :aria-label="$t('development.radar.chartAriaLabel')">
       <thead>
         <tr>
           <th>{{ $t('development.radar.accessibleTable.skill') }}</th>

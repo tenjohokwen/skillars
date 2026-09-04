@@ -11,7 +11,7 @@
           dense
           icon="menu"
           class="header-btn"
-          aria-label="Menu"
+          :aria-label="$t('nav.menu')"
           @click="toggleLeftDrawer"
         />
 
@@ -116,19 +116,19 @@
       <!-- Drawer header -->
       <div class="drawer-header">
         <div class="drawer-brand gradient-text">Skillars</div>
-        <div class="text-meta">Analytics Platform</div>
+        <div class="text-meta">{{ $t('nav.tagline') }}</div>
       </div>
 
       <q-list padding class="drawer-nav">
         <!-- Main navigation -->
-        <div class="text-label q-px-md q-mb-sm">Main</div>
+        <div class="text-label q-px-md q-mb-sm">{{ $t('nav.sectionMain') }}</div>
 
         <q-item clickable to="/dashboard" class="nav-item">
           <q-item-section avatar>
             <q-icon name="dashboard" class="nav-icon" />
           </q-item-section>
           <q-item-section>
-            <q-item-label class="nav-label">Dashboard</q-item-label>
+            <q-item-label class="nav-label">{{ $t('nav.dashboard') }}</q-item-label>
           </q-item-section>
         </q-item>
 
@@ -230,14 +230,14 @@
 
         <!-- Admin section -->
         <template v-if="authStore.isAdmin">
-          <div class="text-label q-px-md q-mt-lg q-mb-sm">Admin</div>
+          <div class="text-label q-px-md q-mt-lg q-mb-sm">{{ $t('nav.admin') }}</div>
 
           <q-item clickable to="/admin/health-dashboard" class="nav-item">
             <q-item-section avatar>
               <q-icon name="monitor_heart" class="nav-icon" />
             </q-item-section>
             <q-item-section>
-              <q-item-label class="nav-label">Health Dashboard</q-item-label>
+              <q-item-label class="nav-label">{{ $t('nav.healthDashboard') }}</q-item-label>
             </q-item-section>
           </q-item>
         </template>

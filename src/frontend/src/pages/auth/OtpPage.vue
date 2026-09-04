@@ -3,12 +3,12 @@
     <div class="auth-card-container fade-in">
       <div class="auth-brand q-mb-xl">
         <div class="gradient-text auth-brand-name">Skillars</div>
-        <div class="text-meta">Two-factor authentication</div>
+        <div class="text-meta">{{ $t('auth.twoFactorTitle') }}</div>
       </div>
 
       <div class="glass-card--static auth-card">
         <div class="text-section-title q-mb-xs">{{ t('auth.enterOtp') }}</div>
-        <div class="text-meta q-mb-lg">{{ t('auth.otpSent') }} — code expires in 30 minutes.</div>
+        <div class="text-meta q-mb-lg">{{ t('auth.otpSent') }} — {{ t('auth.otpCodeExpiry') }}</div>
 
         <!-- OTP digit inputs -->
         <div class="otp-row q-mb-lg">
@@ -47,7 +47,7 @@
 
         <!-- Resend -->
         <div class="text-center q-mt-lg">
-          <div class="text-meta q-mb-sm">Didn't receive the code?</div>
+          <div class="text-meta q-mb-sm">{{ $t('auth.otpNotReceived') }}</div>
           <q-btn
             flat
             no-caps

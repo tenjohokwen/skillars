@@ -60,7 +60,7 @@
           {{ point }}
         </li>
         <li v-if="extraPointsCount > 0" class="text-caption text-grey">
-          +{{ extraPointsCount }} more
+          {{ $t('session.drillLibrary.moreItems', { count: extraPointsCount }) }}
         </li>
       </ul>
 

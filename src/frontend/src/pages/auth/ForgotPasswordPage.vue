@@ -3,7 +3,7 @@
     <div class="auth-card-container fade-in">
       <div class="auth-brand q-mb-xl">
         <div class="gradient-text auth-brand-name">Skillars</div>
-        <div class="text-meta">Account recovery</div>
+        <div class="text-meta">{{ $t('auth.recoveryTitle') }}</div>
       </div>
 
       <div class="glass-card--static auth-card">
@@ -11,7 +11,7 @@
           {{ t('auth.forgotPassword').replace('?', '') }}
         </div>
         <div class="text-meta q-mb-lg">
-          Enter your email and date of birth to reset your password.
+          {{ $t('auth.recoveryBody') }}
         </div>
 
         <!-- Success state -->
@@ -23,7 +23,7 @@
               style="color: var(--accent-primary)"
               class="q-mb-md"
             />
-            <div class="text-card-title q-mb-sm">Email sent</div>
+            <div class="text-card-title q-mb-sm">{{ $t('auth.recoveryEmailSent') }}</div>
             <div class="text-meta">{{ t('success.emailSent') }}</div>
           </div>
           <router-link to="/login" class="auth-link block-link">

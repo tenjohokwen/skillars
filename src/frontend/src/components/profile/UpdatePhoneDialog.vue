@@ -18,7 +18,7 @@
             :error="hasFieldError('phone')"
             :error-message="getFieldError('phone')"
             mask="#########"
-            hint="9 digits starting with 6 (e.g., 670123456)"
+            :hint="$t('auth.phoneHintFormat')"
           />
 
           <!-- Error banner -->

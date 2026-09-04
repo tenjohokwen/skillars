@@ -3,12 +3,12 @@
     <div class="auth-card-container--wide fade-in">
       <div class="auth-brand q-mb-xl">
         <div class="gradient-text auth-brand-name">Skillars</div>
-        <div class="text-meta">Create your account</div>
+        <div class="text-meta">{{ $t('auth.registerTitle') }}</div>
       </div>
 
       <div class="glass-card--static auth-card">
         <div class="text-section-title q-mb-xs">{{ t('auth.register') }}</div>
-        <div class="text-meta q-mb-lg">Fill in your details to get started.</div>
+        <div class="text-meta q-mb-lg">{{ $t('auth.registerBody') }}</div>
 
         <q-banner
           v-if="hasError && (!isValidationError || !hasFieldErrors)"

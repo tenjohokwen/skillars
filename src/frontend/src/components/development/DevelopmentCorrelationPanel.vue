@@ -12,6 +12,10 @@
               <q-item-label>{{
                 $t('development.radar.correlation.insight.highSluImprovement')
               }}</q-item-label>
+              <!-- Sample figures inside the blurred upsell teaser: not user data and not prose.
+                   'SLU' is a product acronym and the numbers are illustrative, so translating
+                   them would imply they mean something. -->
+              <!-- eslint-disable-next-line vue/no-bare-strings-in-template -->
               <q-item-label caption>SLU: 120.00 | Score: 75.00</q-item-label>
             </q-item-section>
           </q-item>

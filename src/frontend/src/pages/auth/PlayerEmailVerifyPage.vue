@@ -66,7 +66,7 @@ onMounted(async () => {
   if (!token) {
     isVerifying.value = false
     setError({
-      response: { data: { message: 'No verification token found. Please check your email link.' } },
+      response: { data: { message: t('auth.verifyTokenMissing') } },
     })
     return
   }

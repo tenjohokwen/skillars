@@ -20,7 +20,7 @@
           :color="barColor(storagePercent)"
           rounded
           size="8px"
-          aria-label="Storage usage"
+          :aria-label="$t('video.quota.storage')"
         />
         <div
           v-if="storagePercent >= 95 && showUpgradePrompt"
@@ -46,7 +46,7 @@
           :color="barColor(bandwidthPercent)"
           rounded
           size="8px"
-          aria-label="Bandwidth usage"
+          :aria-label="$t('video.quota.bandwidth')"
         />
       </div>
     </template>

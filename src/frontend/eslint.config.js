@@ -54,6 +54,48 @@ export default [
     // add your custom rules here
     rules: {
       'prefer-promise-reject-errors': 'off',
+      // skillars-deferred-92 AC14.4: catches user-visible text that never reached the i18n
+      // bundles. The allowlist is only for strings that are genuinely not translatable —
+      // the brand name, symbols, and product acronyms. Anything else belongs in
+      // src/i18n/{en-US,de-DE,fr-FR}/index.js.
+      'vue/no-bare-strings-in-template': [
+        'error',
+        {
+          allowlist: [
+            'Skillars',
+            'SLU',
+            'Stripe',
+            'EUR',
+            '€',
+            '$',
+            '404',
+            '—',
+            '–',
+            '✕',
+            '✓',
+            '←',
+            '→',
+            '&larr;',
+            '·',
+            '|',
+            '/',
+            '(',
+            ')',
+            ':',
+            '-',
+            '+',
+            '*',
+            ',',
+            '.',
+            '&',
+            '#',
+            '%',
+            '@',
+            '…',
+            '...',
+          ],
+        },
+      ],
 
       // allow debugger during development only
       'no-debugger': process.env.NODE_ENV === 'production' ? 'error' : 'off',

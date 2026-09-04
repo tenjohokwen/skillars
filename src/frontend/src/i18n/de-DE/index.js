@@ -29,6 +29,32 @@ export default {
     light: 'Hellmodus',
   },
   auth: {
+    parentPrivacyBody:
+      'Wir erheben personenbezogene Daten, um unsere Dienste bereitzustellen. Ihre Daten werden gemäß DSGVO und den geltenden Datenschutzgesetzen verarbeitet. Wir verkaufen Ihre personenbezogenen Daten nicht an Dritte. Sie können jederzeit die Löschung Ihrer Daten verlangen. Aufzeichnungen von Trainingseinheiten und Coaching-Daten werden für den in unserer Datenschutzerklärung genannten Zeitraum aufbewahrt.',
+    parentConsentBody:
+      'Als Erziehungsberechtigte(r) der von Ihnen registrierten Spieler stimmen Sie zu, dass Skillars Daten über Ihr Kind zu Coaching-Zwecken erhebt und verarbeitet. Sie bestätigen, dass Sie der gesetzliche Elternteil oder Vormund sind. Sie sind dafür verantwortlich, dass die Teilnahme Ihres Kindes angemessen ist. Sie können Ihre Einwilligung jederzeit widerrufen, indem Sie den Support kontaktieren.',
+    activateRedirecting: 'Weiterleitung in {seconds}…',
+    otpCodeExpiry: 'der Code läuft in 30 Minuten ab.',
+    parentTosBody:
+      'Mit der Nutzung von Skillars stimmen Sie unseren Allgemeinen Geschäftsbedingungen zu. Diese regeln Ihre Nutzung der Plattform, einschließlich der Buchung von Trainingseinheiten, Zahlungen und des Umgangs mit Daten. Für die Registrierung als Elternteil müssen Sie mindestens 18 Jahre alt sein. Für alle Konten gilt unsere Richtlinie zur zulässigen Nutzung.',
+    activationTitle: 'Kontoaktivierung',
+    activationKeyMissing: 'Ungültiger oder fehlender Aktivierungsschlüssel.',
+    recoveryTitle: 'Kontowiederherstellung',
+    recoveryBody:
+      'Geben Sie Ihre E-Mail-Adresse und Ihr Geburtsdatum ein, um Ihr Passwort zurückzusetzen.',
+    recoveryEmailSent: 'E-Mail gesendet',
+    loginWelcome: 'Willkommen zurück. Melden Sie sich an, um fortzufahren.',
+    twoFactorTitle: 'Zwei-Faktor-Authentifizierung',
+    otpNotReceived: 'Code nicht erhalten?',
+    registerTitle: 'Erstellen Sie Ihr Konto',
+    registerBody: 'Geben Sie Ihre Daten ein, um zu starten.',
+    resetTitle: 'Passwort zurücksetzen',
+    resetBody: 'Wählen Sie ein starkes neues Passwort.',
+    resetKeyMissing:
+      'Ungültiger oder fehlender Zurücksetzungsschlüssel. Bitte fordern Sie eine neue Zurücksetzung an.',
+    verifyTokenMissing:
+      'Kein Bestätigungstoken gefunden. Bitte prüfen Sie den Link in Ihrer E-Mail.',
+    phoneHintFormat: '9 Ziffern, beginnend mit 6 (z. B. 670123456)',
     accountNotVerified:
       'Ihr Konto ist noch nicht verifiziert. Bitte schließen Sie zunächst die Telefonverifizierung ab.',
     accountLocked: 'Zu viele Anmeldeversuche. Versuchen Sie es in einigen Minuten erneut.',
@@ -659,6 +685,16 @@ export default {
   },
   session: {
     drillLibrary: {
+      moreItems: '+{count} weitere',
+      setupDiagram: 'Aufbauskizze',
+      tags: 'Tags',
+      videoPreviewAfterUpload: 'Videovorschau nach dem Hochladen verfügbar',
+      metaDifficulty: 'Schwierigkeit',
+      metaGroupSize: 'Gruppengröße',
+      metaEquipment: 'Ausrüstung',
+      filterDifficulty: 'Schwierigkeitsstufe',
+      filterWeakFootOnly: 'Nur mit Schwachfuß-Fokus',
+      cloneFailed: 'Übung konnte nicht kopiert werden',
       title: 'Übungsbibliothek',
       loadError: 'Übungen konnten nicht geladen werden. Bitte versuchen Sie es erneut.',
       videoLoadFailed: 'Video konnte nicht geladen werden — wird aktualisiert…',
@@ -912,6 +948,7 @@ export default {
       decreased: '{skill}-Exposition ist diesen Monat um {percent}% gesunken',
     },
     radar: {
+      chartAriaLabel: 'Daten des Fähigkeiten-Radars',
       addAssessmentLabel: 'Radar-Bewertung hinzufügen',
       assessmentPanelTitle: 'Skills-Radar-Bewertung',
       assessmentTypeLabelObjective: 'Objektiver Test',
@@ -1060,7 +1097,14 @@ export default {
       unavailable: 'Kartenzahlungen sind derzeit nicht verfügbar',
     },
   },
-  admin: {},
+  admin: {
+    health: {
+      title: 'Systemzustand',
+      subtitle: 'Infrastrukturstatus in Echtzeit',
+      accessDenied: 'Für die Statusdetails sind Administratorrechte erforderlich.',
+      loadError: 'Systemstatus konnte nicht geladen werden',
+    },
+  },
   featureGate: {
     requiredTier: 'Erfordert {tier}-Plan',
     description:
@@ -1217,6 +1261,9 @@ export default {
     unread: '{count} ungelesen',
   },
   profile: {
+    subtitle: 'Verwalten Sie Ihre Kontodaten und Einstellungen.',
+    sectionAccount: 'Konto',
+    sectionPersonal: 'Persönliche Daten',
     title: 'Mein Profil',
     email: 'E-Mail-Adresse',
     password: 'Passwort',
@@ -1295,6 +1342,33 @@ export default {
     sameEmail: 'Die neue E-Mail-Adresse muss sich von der aktuellen unterscheiden',
     samePassword: 'Das neue Passwort muss sich vom aktuellen Passwort unterscheiden',
     samePhone: 'Die neue Telefonnummer muss sich von der aktuellen unterscheiden',
+  },
+  errorPage: {
+    notFoundTitle: 'Seite nicht gefunden',
+    notFoundBody: 'Die gesuchte Seite existiert nicht oder wurde verschoben.',
+    goHome: 'Zur Startseite',
+  },
+  dashboard: {
+    title: 'Übersicht',
+    welcomeBack: 'Willkommen zurück, {name}',
+    defaultUser: 'Benutzer',
+    loggedIn: 'Sie sind erfolgreich angemeldet',
+    operational: 'Alle Systeme sind betriebsbereit.',
+    metricSessionsToday: 'Einheiten heute',
+    metricActiveUsers: 'Aktive Nutzer',
+    metricUptime: 'Verfügbarkeit',
+    metricResponseTime: 'Antwortzeit',
+    metricNoData: 'Noch keine Daten',
+    metricLast30Days: 'Letzte 30 Tage',
+    metricAverageMs: 'Durchschnitt (ms)',
+  },
+  nav: {
+    sectionMain: 'Allgemein',
+    menu: 'Menü',
+    tagline: 'Analyseplattform',
+    dashboard: 'Übersicht',
+    admin: 'Administration',
+    healthDashboard: 'Systemstatus',
   },
 }
 // TODO: translate

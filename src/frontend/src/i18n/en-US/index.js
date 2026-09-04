@@ -1,5 +1,28 @@
 export default {
   auth: {
+    parentPrivacyBody:
+      'We collect personal data to provide our services. Your data is processed in accordance with GDPR and applicable data protection laws. We do not sell your personal data to third parties. You may request deletion of your data at any time. Session recordings and coaching data are retained for the period specified in our privacy policy.',
+    parentConsentBody:
+      "As the legal guardian of the player(s) you register, you consent to Skillars collecting and processing data about your child for coaching purposes. You confirm you are the legal parent or guardian. You are responsible for ensuring your child's participation is appropriate. You may withdraw consent at any time by contacting support.",
+    activateRedirecting: 'Redirecting in {seconds}…',
+    otpCodeExpiry: 'the code expires in 30 minutes.',
+    parentTosBody:
+      'By using Skillars, you agree to our terms and conditions. These terms govern your use of the platform, including booking sessions, payments, and data handling. You must be at least 18 years old to register as a parent. All accounts are subject to our acceptable use policy.',
+    activationTitle: 'Account activation',
+    activationKeyMissing: 'Invalid or missing activation key.',
+    recoveryTitle: 'Account recovery',
+    recoveryBody: 'Enter your email and date of birth to reset your password.',
+    recoveryEmailSent: 'Email sent',
+    loginWelcome: 'Welcome back. Sign in to continue.',
+    twoFactorTitle: 'Two-factor authentication',
+    otpNotReceived: "Didn't receive the code?",
+    registerTitle: 'Create your account',
+    registerBody: 'Fill in your details to get started.',
+    resetTitle: 'Password reset',
+    resetBody: 'Choose a strong new password.',
+    resetKeyMissing: 'Invalid or missing reset key. Please request a new password reset.',
+    verifyTokenMissing: 'No verification token found. Please check your email link.',
+    phoneHintFormat: '9 digits starting with 6 (e.g., 670123456)',
     accountNotVerified:
       'Your account is not yet verified. Please complete phone verification first.',
     accountLocked: 'Too many login attempts. Please try again in a few minutes.',
@@ -320,6 +343,16 @@ export default {
       "We couldn't extend your session. Check your connection and select Continue Session to try again.",
     expired: 'Your session has expired. Please log in again.',
     drillLibrary: {
+      moreItems: '+{count} more',
+      setupDiagram: 'Setup diagram',
+      tags: 'Tags',
+      videoPreviewAfterUpload: 'Video preview available after upload',
+      metaDifficulty: 'Difficulty',
+      metaGroupSize: 'Group Size',
+      metaEquipment: 'Equipment',
+      filterDifficulty: 'Difficulty Tier',
+      filterWeakFootOnly: 'Weak Foot Bias only',
+      cloneFailed: 'Failed to clone drill',
       title: 'Drill Library',
       loadError: 'Failed to load drills. Please try again.',
       videoLoadFailed: 'Video failed to load — refreshing…',
@@ -559,6 +592,9 @@ export default {
     errorGeneric: 'Something went wrong. Please try again.',
   },
   profile: {
+    subtitle: 'Manage your account details and preferences.',
+    sectionAccount: 'Account',
+    sectionPersonal: 'Personal Info',
     title: 'My Profile',
     email: 'Email Address',
     password: 'Password',
@@ -614,6 +650,7 @@ export default {
       decreased: '{skill} exposure decreased {percent}% this month',
     },
     radar: {
+      chartAriaLabel: 'Skills Radar Data',
       addAssessmentLabel: 'Add Radar Assessment',
       assessmentPanelTitle: 'Skills Radar Assessment',
       assessmentTypeLabelObjective: 'Objective Test',
@@ -768,7 +805,14 @@ export default {
   parent: {
     nav: 'Parent',
   },
-  admin: {},
+  admin: {
+    health: {
+      title: 'System Health',
+      subtitle: 'Real-time infrastructure status',
+      accessDenied: 'Admin access required to view health details.',
+      loadError: 'Failed to load health status',
+    },
+  },
   booking: {
     requests: {
       statusRequested: 'Awaiting coach response',
@@ -1265,5 +1309,32 @@ export default {
     send: 'Send',
     loadMore: 'Load more',
     unread: '{count} unread',
+  },
+  errorPage: {
+    notFoundTitle: 'Page not found',
+    notFoundBody: "The page you're looking for doesn't exist or has been moved.",
+    goHome: 'Go Home',
+  },
+  dashboard: {
+    title: 'Dashboard',
+    welcomeBack: 'Welcome back, {name}',
+    defaultUser: 'User',
+    loggedIn: 'You are successfully logged in',
+    operational: 'All systems are operational.',
+    metricSessionsToday: 'Sessions Today',
+    metricActiveUsers: 'Active Users',
+    metricUptime: 'Uptime',
+    metricResponseTime: 'Response Time',
+    metricNoData: 'No data yet',
+    metricLast30Days: 'Last 30 days',
+    metricAverageMs: 'Average ms',
+  },
+  nav: {
+    sectionMain: 'Main',
+    menu: 'Menu',
+    tagline: 'Analytics Platform',
+    dashboard: 'Dashboard',
+    admin: 'Admin',
+    healthDashboard: 'Health Dashboard',
   },
 }

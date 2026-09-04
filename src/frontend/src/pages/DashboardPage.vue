@@ -7,8 +7,8 @@
     <div class="app-page fade-in">
       <!-- Page header -->
       <div class="page-header q-mb-xl">
-        <div class="text-page-title">Dashboard</div>
-        <div class="text-meta">Welcome back, {{ username }}</div>
+        <div class="text-page-title">{{ $t('dashboard.title') }}</div>
+        <div class="text-meta">{{ $t('dashboard.welcomeBack', { name: username }) }}</div>
       </div>
 
       <!-- Metric cards -->
@@ -25,8 +25,8 @@
         <div class="status-inner">
           <q-icon name="check_circle" size="40px" style="color: var(--accent-primary)" />
           <div>
-            <div class="text-card-title">You are successfully logged in</div>
-            <div class="text-meta">All systems are operational.</div>
+            <div class="text-card-title">{{ $t('dashboard.loggedIn') }}</div>
+            <div class="text-meta">{{ $t('dashboard.operational') }}</div>
           </div>
         </div>
       </div>
@@ -36,6 +36,7 @@
 
 <script setup>
 import { computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useBookingStore } from 'src/stores/booking.store'
 import { useAuthStore } from 'src/stores/auth.store'
 import { readUserDisplayName } from 'src/utils/sessionCookies'
@@ -43,8 +44,9 @@ import TimezoneNotice from 'src/components/booking/TimezoneNotice.vue'
 
 // readUserDisplayName() returns null for a blank / sentinel `user` cookie value
 // (skillars-deferred-90 AC2), so the greeting falls through to the generic default.
-const username = computed(() => readUserDisplayName() ?? 'User')
+const username = computed(() => readUserDisplayName() ?? t('dashboard.defaultUser'))
 
+const { t } = useI18n()
 const bookingStore = useBookingStore()
 const authStore = useAuthStore()
 
@@ -58,12 +60,13 @@ const dashboardPitchTimezone = computed(() => {
   return bookingStore.parentBookings[0]?.canonicalTimezone ?? null
 })
 
-const metrics = [
-  { label: 'Sessions Today', value: '—', sub: 'No data yet' },
-  { label: 'Active Users', value: '—', sub: 'No data yet' },
-  { label: 'Uptime', value: '99.9%', sub: 'Last 30 days' },
-  { label: 'Response Time', value: '—', sub: 'Average ms' },
-]
+// computed, not a plain array: the labels must re-render when the locale changes.
+const metrics = computed(() => [
+  { label: t('dashboard.metricSessionsToday'), value: '—', sub: t('dashboard.metricNoData') },
+  { label: t('dashboard.metricActiveUsers'), value: '—', sub: t('dashboard.metricNoData') },
+  { label: t('dashboard.metricUptime'), value: '99.9%', sub: t('dashboard.metricLast30Days') },
+  { label: t('dashboard.metricResponseTime'), value: '—', sub: t('dashboard.metricAverageMs') },
+])
 </script>
 
 <style lang="scss" scoped>

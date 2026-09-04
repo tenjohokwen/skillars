@@ -4,7 +4,7 @@
       <!-- Page header -->
       <div class="page-header q-mb-xl">
         <div class="text-page-title">{{ t('profile.title') }}</div>
-        <div class="text-meta">Manage your account details and preferences.</div>
+        <div class="text-meta">{{ $t('profile.subtitle') }}</div>
       </div>
 
       <!-- Loading -->
@@ -26,7 +26,7 @@
       <template v-else-if="profile">
         <div class="profile-grid">
           <div class="glass-card profile-section">
-            <div class="text-label q-mb-lg">Account</div>
+            <div class="text-label q-mb-lg">{{ $t('profile.sectionAccount') }}</div>
 
             <div class="profile-row">
               <div>
@@ -71,7 +71,7 @@
           </div>
 
           <div class="glass-card profile-section">
-            <div class="text-label q-mb-lg">Personal Info</div>
+            <div class="text-label q-mb-lg">{{ $t('profile.sectionPersonal') }}</div>
 
             <div class="profile-row">
               <div>

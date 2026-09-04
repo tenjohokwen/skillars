@@ -1,3 +1,5 @@
+import { i18n } from 'boot/i18n'
+
 /**
  * Error handling utilities for parsing backend ErrorDto responses.
  *
@@ -51,7 +53,11 @@ export function parseApiError(error) {
     return {
       helpCode: null,
       errorKey: 'error.network',
-      message: 'Network error. Please check your connection.',
+      // skillars-deferred-92 AC14: this is the message the UI actually renders
+      // (useErrorHandler exposes error.message), so an English literal here reached a
+      // French or German user verbatim. `error.network` already existed in all three
+      // bundles. i18n.global.t is the documented way to translate outside a component.
+      message: i18n.global.t('error.network'),
       fieldErrors: {},
       isValidationError: false,
       status: 0,
