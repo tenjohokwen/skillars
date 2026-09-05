@@ -9,14 +9,16 @@
           v-model="fromDate"
           :label="t('common.startDate')"
           type="date"
-          outlined dense
+          outlined
+          dense
           class="col"
         />
         <q-input
           v-model="toDate"
           :label="t('common.endDate')"
           type="date"
-          outlined dense
+          outlined
+          dense
           class="col"
         />
         <q-btn
@@ -85,7 +87,9 @@
         <template #body-cell-actions="props">
           <q-td :props="props">
             <q-btn
-              flat dense size="sm"
+              flat
+              dense
+              size="sm"
               :label="t('revenue.viewReceipt')"
               @click="openReceipt(props.row.bookingId)"
             />
@@ -93,7 +97,10 @@
         </template>
       </q-table>
 
-      <div v-if="transactionPage && transactionPage.totalPages > 1" class="q-mt-md flex flex-center">
+      <div
+        v-if="transactionPage && transactionPage.totalPages > 1"
+        class="q-mt-md flex flex-center"
+      >
         <q-pagination
           v-model="currentPage"
           :max="transactionPage.totalPages"
@@ -128,7 +135,12 @@ const columns = [
   { name: 'playerName', label: t('revenue.player'), field: 'playerName', align: 'left' },
   { name: 'sessionDate', label: t('revenue.date'), field: 'sessionDate', align: 'left' },
   { name: 'grossAmount', label: t('revenue.gross'), field: 'grossAmount', align: 'right' },
-  { name: 'commissionAmount', label: t('revenue.commission'), field: 'commissionAmount', align: 'right' },
+  {
+    name: 'commissionAmount',
+    label: t('revenue.commission'),
+    field: 'commissionAmount',
+    align: 'right',
+  },
   { name: 'netAmount', label: t('revenue.net'), field: 'netAmount', align: 'right' },
   { name: 'creditUsed', label: t('revenue.creditUsed'), field: 'creditUsed', align: 'right' },
   { name: 'status', label: t('revenue.status'), field: 'status', align: 'center' },
@@ -160,7 +172,9 @@ function fmt(val) {
 
 function formatDate(iso) {
   if (!iso) return '—'
-  return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso))
+  return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }).format(
+    new Date(iso),
+  )
 }
 </script>
 

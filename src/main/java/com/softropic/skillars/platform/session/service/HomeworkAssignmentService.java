@@ -51,7 +51,7 @@ public class HomeworkAssignmentService {
     private static final String LOCKER_ROOM_DRILLS_LATENCY = "session.homework.locker_room_drills.latency";
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    @Async
+    @Async("taskExecutor")
     public void handleBookingCompleted(BookingCompletedEvent event) {
         if (event.getHomeworkDrillIds() == null || event.getHomeworkDrillIds().isEmpty()) {
             return;

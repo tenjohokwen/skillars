@@ -1,6 +1,6 @@
-import { ref, computed, readonly } from 'vue';
-import { useI18n } from 'vue-i18n';
-import { parseApiError } from 'src/utils/errorHandler';
+import { ref, computed, readonly } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { parseApiError } from 'src/utils/errorHandler'
 
 /**
  * Composable for handling API errors with reactive state.
@@ -23,44 +23,44 @@ import { parseApiError } from 'src/utils/errorHandler';
  * }}
  */
 export function useErrorHandler() {
-  const { t, te } = useI18n();
+  const { t, te } = useI18n()
 
   // Internal state - parsed error object
-  const error = ref(null);
+  const error = ref(null)
 
   // Computed properties for easy access
-  const fieldErrors = computed(() => error.value?.fieldErrors || {});
-  const hasError = computed(() => error.value !== null);
-  const errorKey = computed(() => error.value?.errorKey || null);
-  const helpCode = computed(() => error.value?.helpCode || null);
-  const isValidationError = computed(() => error.value?.isValidationError || false);
-  const hasFieldErrors = computed(() => Object.keys(fieldErrors.value).length > 0);
+  const fieldErrors = computed(() => error.value?.fieldErrors || {})
+  const hasError = computed(() => error.value !== null)
+  const errorKey = computed(() => error.value?.errorKey || null)
+  const helpCode = computed(() => error.value?.helpCode || null)
+  const isValidationError = computed(() => error.value?.isValidationError || false)
+  const hasFieldErrors = computed(() => Object.keys(fieldErrors.value).length > 0)
 
   // Translated error message - uses errorKey for translation, falls back to raw message
   const errorMessage = computed(() => {
-    if (!error.value) return null;
+    if (!error.value) return null
 
-    const key = error.value.errorKey;
+    const key = error.value.errorKey
     if (key && te(key)) {
-      return t(key);
+      return t(key)
     }
     // Fallback to raw message from server
-    return error.value.message || null;
-  });
+    return error.value.message || null
+  })
 
   /**
    * Set error from API error object.
    * @param {Error} err - Axios error object
    */
   function setError(err) {
-    error.value = parseApiError(err);
+    error.value = parseApiError(err)
   }
 
   /**
    * Clear the current error state.
    */
   function clearError() {
-    error.value = null;
+    error.value = null
   }
 
   /**
@@ -69,7 +69,7 @@ export function useErrorHandler() {
    * @returns {boolean}
    */
   function hasFieldError(fieldName) {
-    return Boolean(fieldErrors.value[fieldName]);
+    return Boolean(fieldErrors.value[fieldName])
   }
 
   /**
@@ -78,7 +78,7 @@ export function useErrorHandler() {
    * @returns {string|null}
    */
   function getFieldError(fieldName) {
-    return fieldErrors.value[fieldName] || null;
+    return fieldErrors.value[fieldName] || null
   }
 
   return {
@@ -94,5 +94,5 @@ export function useErrorHandler() {
     clearError,
     hasFieldError,
     getFieldError,
-  };
+  }
 }

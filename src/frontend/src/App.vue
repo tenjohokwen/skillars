@@ -5,38 +5,38 @@
 </template>
 
 <script setup>
-import { onMounted, onUnmounted } from 'vue';
-import { useRouter } from 'vue-router';
-import GlobalLoadingBar from 'src/components/common/GlobalLoadingBar.vue';
-import SessionWarningDialog from 'src/components/common/SessionWarningDialog.vue';
-import { startSessionMonitoring, stopSessionMonitoring, cleanup } from 'src/plugins/sessionManager';
-import { useAuthStore } from 'src/stores/auth.store';
-import { usePlayerStore } from 'src/stores/playerStore';
-import { hasUserSession } from 'src/utils/sessionCookies';
+import { onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
+import GlobalLoadingBar from 'src/components/common/GlobalLoadingBar.vue'
+import SessionWarningDialog from 'src/components/common/SessionWarningDialog.vue'
+import { startSessionMonitoring, stopSessionMonitoring, cleanup } from 'src/plugins/sessionManager'
+import { useAuthStore } from 'src/stores/auth.store'
+import { usePlayerStore } from 'src/stores/playerStore'
+import { hasUserSession } from 'src/utils/sessionCookies'
 
-const router = useRouter();
-const authStore = useAuthStore();
-const playerStore = usePlayerStore();
+const router = useRouter()
+const authStore = useAuthStore()
+const playerStore = usePlayerStore()
 
 function isAuthenticated() {
   // Exact cookie-name match AND a non-empty, non-sentinel value: a bare `user=` (empty value) is
   // not a session. See utils/sessionCookies.js (skillars-deferred-90 AC2).
-  return hasUserSession();
+  return hasUserSession()
 }
 
 function handleSessionExpired() {
   // Clear all session cookies and in-memory auth state synchronously, before
   // navigating, so the router's requiresGuest guard doesn't see a stale
   // authenticated state and bounce the redirect back into the app.
-  document.cookie = 'user=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
-  authStore.logout(); // best-effort backend call fires in background; cookie/state already cleared
-  playerStore.resetSelfPlayerId();
-  cleanup();
-  const currentPath = window.location.pathname + window.location.search;
+  document.cookie = 'user=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
+  authStore.logout() // best-effort backend call fires in background; cookie/state already cleared
+  playerStore.resetSelfPlayerId()
+  cleanup()
+  const currentPath = window.location.pathname + window.location.search
   router.push({
     path: '/login',
-    query: { redirect: currentPath, expired: 'true' }
-  });
+    query: { redirect: currentPath, expired: 'true' },
+  })
 }
 
 onMounted(() => {
@@ -46,15 +46,15 @@ onMounted(() => {
   // With the old ordering that event landed before this listener existed and was silently
   // dropped, and because the monitor also declines to arm its interval for an expired session
   // the app was left with no session handling at all until the next API call 401'd.
-  window.addEventListener('session:expired', handleSessionExpired);
+  window.addEventListener('session:expired', handleSessionExpired)
 
   if (isAuthenticated()) {
-    startSessionMonitoring();
+    startSessionMonitoring()
   }
-});
+})
 
 onUnmounted(() => {
-  stopSessionMonitoring();
-  window.removeEventListener('session:expired', handleSessionExpired);
-});
+  stopSessionMonitoring()
+  window.removeEventListener('session:expired', handleSessionExpired)
+})
 </script>

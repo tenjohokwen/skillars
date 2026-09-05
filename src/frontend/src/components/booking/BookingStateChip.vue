@@ -13,11 +13,12 @@ const props = defineProps({
 })
 const { t } = useI18n()
 
-const sse = props.bookingId && !TERMINAL_BOOKING_STATUSES.has(props.status)
-  ? useBookingSse(props.bookingId)
-  : null
+const sse =
+  props.bookingId && !TERMINAL_BOOKING_STATUSES.has(props.status)
+    ? useBookingSse(props.bookingId)
+    : null
 
-const liveStatus = computed(() => sse ? (sse.status.value ?? props.status) : props.status)
+const liveStatus = computed(() => (sse ? (sse.status.value ?? props.status) : props.status))
 
 const statusMap = {
   REQUESTED: { key: 'booking.requests.statusRequested', cls: 'chip--warning' },
@@ -27,7 +28,10 @@ const statusMap = {
   UPCOMING: { key: 'booking.requests.statusUpcoming', cls: 'chip--primary' },
   IN_PROGRESS: { key: 'booking.requests.statusInProgress', cls: 'chip--primary' },
   PAUSED: { key: 'booking.requests.statusPaused', cls: 'chip--warning' },
-  COMPLETED_PENDING_CONFIRMATION: { key: 'booking.requests.statusCompletingPending', cls: 'chip--warning' },
+  COMPLETED_PENDING_CONFIRMATION: {
+    key: 'booking.requests.statusCompletingPending',
+    cls: 'chip--warning',
+  },
   DECLINED: { key: 'booking.requests.statusDeclined', cls: 'chip--error' },
   COMPLETED: { key: 'booking.requests.statusCompleted', cls: 'chip--neutral' },
   CANCELLED: { key: 'booking.requests.statusCancelled', cls: 'chip--neutral' },

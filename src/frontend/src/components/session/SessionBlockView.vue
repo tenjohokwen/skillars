@@ -77,10 +77,7 @@
           </div>
         </template>
         <template #footer>
-          <div
-            v-if="!localDrills.length"
-            class="text-caption text-secondary text-center q-pa-md"
-          >
+          <div v-if="!localDrills.length" class="text-caption text-secondary text-center q-pa-md">
             {{ t('session.builder.dropDrillsHere') }}
           </div>
         </template>
@@ -124,12 +121,16 @@ const localBlockName = ref(props.block.blockName)
 const localDuration = ref(props.block.durationMinutes)
 const localDrills = ref([...(props.block.drills ?? [])])
 
-watch(() => props.block, (b) => {
-  localBlockType.value = b.blockType
-  localBlockName.value = b.blockName
-  localDuration.value = b.durationMinutes
-  localDrills.value = [...(b.drills ?? [])]
-}, { deep: true })
+watch(
+  () => props.block,
+  (b) => {
+    localBlockType.value = b.blockType
+    localBlockName.value = b.blockName
+    localDuration.value = b.durationMinutes
+    localDrills.value = [...(b.drills ?? [])]
+  },
+  { deep: true },
+)
 
 function emitMeta() {
   emit('update:block', {

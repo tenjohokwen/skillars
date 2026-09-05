@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.development.service;
 
+import com.softropic.skillars.platform.security.contract.exception.LoginRateLimitedException;
 import com.softropic.skillars.platform.development.contract.PlayerTimelineEventType;
 import com.softropic.skillars.platform.development.contract.ReportGeneratedEvent;
 import com.softropic.skillars.platform.development.contract.ReportStatus;
@@ -69,6 +70,11 @@ class ReportGenerationServiceTest {
     @Mock private SecurityUtil securityUtil;
     @Mock private CoachPlayerAuthorizationService coachPlayerAuthorizationService;
     @Mock private PlayerProfileRepository playerProfileRepository;
+    // skillars-deferred-92 AC18: a real instance, not a mock. The per-coach limit is the
+    // point of the AC, and a mock would return false for tryConsume and silently reject
+    // every call, or be stubbed to always allow and prove nothing.
+    private final com.softropic.skillars.infrastructure.security.RateLimitingService rateLimitingService =
+        new com.softropic.skillars.infrastructure.security.RateLimitingService();
 
     private ReportGenerationService service;
 
@@ -83,7 +89,7 @@ class ReportGenerationServiceTest {
             sluRepository, skillDefinitionRepository, compositeRepository, baselineRepository,
             reportRepository, brandingRepository, fileStorageService,
             timelineEventListener, publisher, securityUtil, coachPlayerAuthorizationService,
-            playerProfileRepository
+            playerProfileRepository, rateLimitingService
         );
         ReflectionTestUtils.setField(service, "baseUrl", "http://app.test");
     }
@@ -114,6 +120,55 @@ class ReportGenerationServiceTest {
         saved.setStatus(ReportStatus.PENDING_UPLOAD);
         saved.setNextSteps("Keep practicing dribbling.");
         when(reportRepository.saveAndFlush(any())).thenReturn(saved);
+    }
+
+    // ---- skillars-deferred-92 AC18: the per-coach rate limit ----
+
+    /**
+     * The bound that actually matters. {@code @RateLimited} keys on the client IP, so before this
+     * every coach behind one office or school NAT shared a single 10/minute budget -- and any caller
+     * whose IP could not be resolved shared one global {@code "report_generate:unknown"} bucket with
+     * every other such caller.
+     */
+    @Test
+    void generateReport_perCoachLimitExhausted_isRejected() {
+        stubGenerateReport(CoachSubscriptionTier.INSTRUCTOR);
+
+        for (int i = 0; i < 10; i++) {
+            service.generateReport(COACH_USER_ID, PLAYER_ID, "Keep practicing dribbling.");
+        }
+
+        assertThatThrownBy(() -> service.generateReport(COACH_USER_ID, PLAYER_ID, "One too many"))
+            .as("the 11th report inside the window must be refused for this coach")
+            .isInstanceOf(LoginRateLimitedException.class)
+            .hasMessageContaining("Report generation limit");
+    }
+
+    /**
+     * The half that proves the limit is really per-coach. Under the IP-keyed aspect alone these two
+     * coaches would share one budget, so the second would be refused once the first had spent the
+     * quota -- which is the defect, not the guard.
+     */
+    @Test
+    void generateReport_twoCoachesOnOneIp_doNotExhaustEachOther() {
+        Long otherCoachUserId = COACH_USER_ID + 1;
+        UUID otherCoachId = UUID.randomUUID();
+        stubGenerateReport(CoachSubscriptionTier.INSTRUCTOR);
+        when(coachProfileService.getCoachIdByUserId(otherCoachUserId)).thenReturn(otherCoachId);
+        when(coachProfileService.getCoachSubscriptionTier(otherCoachId)).thenReturn(CoachSubscriptionTier.INSTRUCTOR);
+        when(sluRepository.findLastSessionDate(PLAYER_ID, otherCoachId)).thenReturn(Instant.now().minusSeconds(3600));
+        when(coachProfileService.getPublicProfile(otherCoachId)).thenReturn(coachDto());
+
+        for (int i = 0; i < 10; i++) {
+            service.generateReport(COACH_USER_ID, PLAYER_ID, "Keep practicing dribbling.");
+        }
+        assertThatThrownBy(() -> service.generateReport(COACH_USER_ID, PLAYER_ID, "One too many"))
+            .isInstanceOf(LoginRateLimitedException.class);
+
+        assertThatCode(() -> service.generateReport(otherCoachUserId, PLAYER_ID, "First for this coach"))
+            .as("A second coach must have their own budget. If this throws, the limit is keyed on "
+                + "something shared - which is exactly the IP-keyed behaviour AC18 supplements.")
+            .doesNotThrowAnyException();
     }
 
     // ---- generateReport (synchronous: authz, PDF build, PENDING_UPLOAD save, event publish) ----

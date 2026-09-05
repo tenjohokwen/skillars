@@ -8,7 +8,6 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -44,9 +43,4 @@ public interface VideoApprovalRequestRepository extends JpaRepository<VideoAppro
     // Minor gate idempotency check — prevent duplicate PENDING rows for the same video
     Optional<VideoApprovalRequest> findByVideoIdAndStatus(UUID videoId, String status);
 
-    // Future auto-reject (NOT WIRED — no scheduler calls this; do not call directly)
-    @Modifying
-    @Transactional
-    @Query("UPDATE VideoApprovalRequest var SET var.status = 'REJECTED', var.resolvedAt = current_timestamp WHERE var.status = 'PENDING' AND var.createdAt < :cutoff")
-    int autoRejectExpired(@Param("cutoff") Instant cutoff);
 }

@@ -7,10 +7,18 @@ export function toggleTheme() {
   const isLight = document.documentElement.getAttribute('data-theme') === 'light'
   if (isLight) {
     document.documentElement.removeAttribute('data-theme')
-    try { localStorage.setItem(STORAGE_KEY, 'dark') } catch { /* private browsing */ }
+    try {
+      localStorage.setItem(STORAGE_KEY, 'dark')
+    } catch {
+      /* private browsing */
+    }
   } else {
     document.documentElement.setAttribute('data-theme', 'light')
-    try { localStorage.setItem(STORAGE_KEY, 'light') } catch { /* private browsing */ }
+    try {
+      localStorage.setItem(STORAGE_KEY, 'light')
+    } catch {
+      /* private browsing */
+    }
   }
 }
 
@@ -27,7 +35,9 @@ export default defineBoot(() => {
       if (saved === 'light') {
         document.documentElement.setAttribute('data-theme', 'light')
       }
-    } catch { /* private browsing */ }
+    } catch {
+      /* private browsing */
+    }
     document.body.classList.add('app-bg')
   }
 })

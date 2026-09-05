@@ -1,6 +1,6 @@
 <template>
   <q-dialog v-model="dialogVisible" persistent>
-    <q-card style="min-width: 400px;">
+    <q-card style="min-width: 400px">
       <q-card-section>
         <div class="text-h6">{{ t('profile.updatePassword') }}</div>
       </q-card-section>
@@ -68,11 +68,7 @@
           </q-input>
 
           <!-- Error banner -->
-          <q-banner
-            v-if="hasError && !isValidationError"
-            class="bg-negative text-white"
-            rounded
-          >
+          <q-banner v-if="hasError && !isValidationError" class="bg-negative text-white" rounded>
             {{ errorMessage }}
             <template v-if="helpCode">
               <br />
@@ -96,23 +92,23 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue';
-import { useQuasar } from 'quasar';
-import { useI18n } from 'vue-i18n';
-import { profileApi } from 'src/api/profile.api';
-import { useErrorHandler } from 'src/composables/useErrorHandler';
+import { ref, watch } from 'vue'
+import { useQuasar } from 'quasar'
+import { useI18n } from 'vue-i18n'
+import { profileApi } from 'src/api/profile.api'
+import { useErrorHandler } from 'src/composables/useErrorHandler'
 
 const props = defineProps({
   modelValue: {
     type: Boolean,
-    default: false
-  }
-});
+    default: false,
+  },
+})
 
-const emit = defineEmits(['update:modelValue', 'updated']);
+const emit = defineEmits(['update:modelValue', 'updated'])
 
-const $q = useQuasar();
-const { t } = useI18n();
+const $q = useQuasar()
+const { t } = useI18n()
 const {
   setError,
   clearError,
@@ -121,68 +117,71 @@ const {
   helpCode,
   isValidationError,
   hasFieldError,
-  getFieldError
-} = useErrorHandler();
+  getFieldError,
+} = useErrorHandler()
 
 // Local dialog visibility for v-model sync
-const dialogVisible = ref(props.modelValue);
+const dialogVisible = ref(props.modelValue)
 
 // Form state
 const form = ref({
   currentPassword: '',
   newPassword: '',
-  confirmPassword: ''
-});
-const isPwdCurrent = ref(true);
-const isPwdNew = ref(true);
-const isPwdConfirm = ref(true);
-const isSubmitting = ref(false);
+  confirmPassword: '',
+})
+const isPwdCurrent = ref(true)
+const isPwdNew = ref(true)
+const isPwdConfirm = ref(true)
+const isSubmitting = ref(false)
 
 // Validation rules
-const required = val => !!val || t('validation.required');
-const minLen5 = val => val.length >= 5 || t('validation.minLength', { min: 5 });
-const passwordMatch = val => val === form.value.newPassword || t('validation.passwordMatch');
-const notSamePassword = val => val !== form.value.currentPassword || t('validation.samePassword');
+const required = (val) => !!val || t('validation.required')
+const minLen5 = (val) => val.length >= 5 || t('validation.minLength', { min: 5 })
+const passwordMatch = (val) => val === form.value.newPassword || t('validation.passwordMatch')
+const notSamePassword = (val) => val !== form.value.currentPassword || t('validation.samePassword')
 
 // Watch for external changes to modelValue
-watch(() => props.modelValue, (newVal) => {
-  dialogVisible.value = newVal;
-  if (newVal) {
-    // Reset form when dialog opens
-    form.value.currentPassword = '';
-    form.value.newPassword = '';
-    form.value.confirmPassword = '';
-    isPwdCurrent.value = true;
-    isPwdNew.value = true;
-    isPwdConfirm.value = true;
-    clearError();
-  }
-});
+watch(
+  () => props.modelValue,
+  (newVal) => {
+    dialogVisible.value = newVal
+    if (newVal) {
+      // Reset form when dialog opens
+      form.value.currentPassword = ''
+      form.value.newPassword = ''
+      form.value.confirmPassword = ''
+      isPwdCurrent.value = true
+      isPwdNew.value = true
+      isPwdConfirm.value = true
+      clearError()
+    }
+  },
+)
 
 // Watch for internal changes to sync back to parent
 watch(dialogVisible, (newVal) => {
-  emit('update:modelValue', newVal);
-});
+  emit('update:modelValue', newVal)
+})
 
 function close() {
-  dialogVisible.value = false;
+  dialogVisible.value = false
 }
 
 async function handleSubmit() {
-  clearError();
-  isSubmitting.value = true;
+  clearError()
+  isSubmitting.value = true
   try {
-    await profileApi.updatePassword(form.value.currentPassword, form.value.newPassword);
+    await profileApi.updatePassword(form.value.currentPassword, form.value.newPassword)
     $q.notify({
       type: 'positive',
-      message: t('success.passwordChanged')
-    });
-    emit('updated');
-    close();
+      message: t('success.passwordChanged'),
+    })
+    emit('updated')
+    close()
   } catch (err) {
-    setError(err);
+    setError(err)
   } finally {
-    isSubmitting.value = false;
+    isSubmitting.value = false
   }
 }
 </script>

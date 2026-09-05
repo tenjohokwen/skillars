@@ -29,11 +29,38 @@ export default {
     light: 'Hellmodus',
   },
   auth: {
+    parentPrivacyBody:
+      'Wir erheben personenbezogene Daten, um unsere Dienste bereitzustellen. Ihre Daten werden gemäß DSGVO und den geltenden Datenschutzgesetzen verarbeitet. Wir verkaufen Ihre personenbezogenen Daten nicht an Dritte. Sie können jederzeit die Löschung Ihrer Daten verlangen. Aufzeichnungen von Trainingseinheiten und Coaching-Daten werden für den in unserer Datenschutzerklärung genannten Zeitraum aufbewahrt.',
+    parentConsentBody:
+      'Als Erziehungsberechtigte(r) der von Ihnen registrierten Spieler stimmen Sie zu, dass Skillars Daten über Ihr Kind zu Coaching-Zwecken erhebt und verarbeitet. Sie bestätigen, dass Sie der gesetzliche Elternteil oder Vormund sind. Sie sind dafür verantwortlich, dass die Teilnahme Ihres Kindes angemessen ist. Sie können Ihre Einwilligung jederzeit widerrufen, indem Sie den Support kontaktieren.',
+    activateRedirecting: 'Weiterleitung in {seconds}…',
+    otpCodeExpiry: 'der Code läuft in 10 Minuten ab.',
+    parentTosBody:
+      'Mit der Nutzung von Skillars stimmen Sie unseren Allgemeinen Geschäftsbedingungen zu. Diese regeln Ihre Nutzung der Plattform, einschließlich der Buchung von Trainingseinheiten, Zahlungen und des Umgangs mit Daten. Für die Registrierung als Elternteil müssen Sie mindestens 18 Jahre alt sein. Für alle Konten gilt unsere Richtlinie zur zulässigen Nutzung.',
+    activationTitle: 'Kontoaktivierung',
+    activationKeyMissing: 'Ungültiger oder fehlender Aktivierungsschlüssel.',
+    recoveryTitle: 'Kontowiederherstellung',
+    recoveryBody:
+      'Geben Sie Ihre E-Mail-Adresse und Ihr Geburtsdatum ein, um Ihr Passwort zurückzusetzen.',
+    recoveryEmailSent: 'E-Mail gesendet',
+    loginWelcome: 'Willkommen zurück. Melden Sie sich an, um fortzufahren.',
+    twoFactorTitle: 'Zwei-Faktor-Authentifizierung',
+    otpNotReceived: 'Code nicht erhalten?',
+    registerTitle: 'Erstellen Sie Ihr Konto',
+    registerBody: 'Geben Sie Ihre Daten ein, um zu starten.',
+    resetTitle: 'Passwort zurücksetzen',
+    resetBody: 'Wählen Sie ein starkes neues Passwort.',
+    resetKeyMissing:
+      'Ungültiger oder fehlender Zurücksetzungsschlüssel. Bitte fordern Sie eine neue Zurücksetzung an.',
+    verifyTokenMissing:
+      'Kein Bestätigungstoken gefunden. Bitte prüfen Sie den Link in Ihrer E-Mail.',
+    phoneHintFormat: '9 Ziffern, beginnend mit 6 (z. B. 670123456)',
     accountNotVerified:
       'Ihr Konto ist noch nicht verifiziert. Bitte schließen Sie zunächst die Telefonverifizierung ab.',
     accountLocked: 'Zu viele Anmeldeversuche. Versuchen Sie es in einigen Minuten erneut.',
     invalidCredentials: 'Ungültige E-Mail-Adresse oder Passwort.',
     coach: {
+      resendOtp: 'Code erneut senden',
       registerTitle: 'Trainer-Konto erstellen',
       registerSubtitle: 'Bei Skillars registrieren und mit dem Training beginnen',
       emailPendingTitle: 'E-Mail prüfen',
@@ -50,7 +77,8 @@ export default {
       emailInUse: 'Diese E-Mail-Adresse ist bereits registriert.',
       contactDetailWarning: 'Kontaktdaten werden beim Speichern entfernt',
       profileBuilderTitle: 'Profil vervollständigen',
-      profileBuilderBody: 'Schließen Sie diese 5 Schritte ab, um auf dem Marktplatz sichtbar zu werden.',
+      profileBuilderBody:
+        'Schließen Sie diese 5 Schritte ab, um auf dem Marktplatz sichtbar zu werden.',
       stepOfTotal: 'Schritt {current} von {total}',
       step1Title: 'Identität & Standort',
       step1Short: 'Profil',
@@ -66,6 +94,10 @@ export default {
       step2Short: 'Spezialisierungen',
       step2Specialties: 'Spezialisierungen',
       step2AgeGroups: 'Altersgruppen',
+      ageGroupU10: 'U10',
+      ageGroup10to12: '10–12',
+      ageGroup13to17: '13–17',
+      ageGroupAdult: '18+',
       step3Title: 'Preise',
       step3Short: 'Preise',
       step3PerSessionPrice: 'Preis pro Einheit (EUR)',
@@ -104,6 +136,13 @@ export default {
       step4Start: 'Start',
       step4End: 'Ende',
       step4RemoveWindow: 'Fenster entfernen',
+      weekdayMonday: 'Montag',
+      weekdayTuesday: 'Dienstag',
+      weekdayWednesday: 'Mittwoch',
+      weekdayThursday: 'Donnerstag',
+      weekdayFriday: 'Freitag',
+      weekdaySaturday: 'Samstag',
+      weekdaySunday: 'Sonntag',
       step5Title: 'Profilfoto',
       step5Short: 'Foto',
       step5PhotoLabel: 'Profilfoto',
@@ -149,6 +188,7 @@ export default {
       tileUnavailable: 'Nicht verfügbar',
     },
     player: {
+      resendOtp: 'Code erneut senden',
       registerTitle: 'Spielerkonto erstellen',
       registerSubtitle: 'Verfolgen Sie Ihre eigene Entwicklung und buchen Sie Sitzungen',
       emailPendingTitle: 'E-Mail prüfen',
@@ -269,7 +309,8 @@ export default {
       acceptError: 'Buchung konnte nicht angenommen werden. Bitte erneut versuchen.',
       declineError: 'Buchung konnte nicht abgelehnt werden. Bitte erneut versuchen.',
       submitError: 'Ihre Anfrage konnte nicht gesendet werden. Bitte erneut versuchen.',
-      bookingsLoadError: 'Ihre Buchungen konnten nicht geladen werden. Bitte laden Sie die Seite neu.',
+      bookingsLoadError:
+        'Ihre Buchungen konnten nicht geladen werden. Bitte laden Sie die Seite neu.',
       statusRequested: 'Warten auf Trainerantwort',
       statusAccepted: 'Angenommen',
       statusConfirmed: 'Bestätigt',
@@ -336,6 +377,7 @@ export default {
       blockAdded: 'Zeitblock erfolgreich gespeichert.',
       windowAdded: 'Verfügbarkeitsfenster erfolgreich gespeichert.',
       blocked: 'Blockiert',
+      noSlotsAvailable: 'Diese Woche keine Termine verfügbar',
     },
     schedule: {
       weekOf: 'Woche vom {date}',
@@ -449,7 +491,8 @@ export default {
         'Dadurch wird die Sitzung storniert. Je nachdem, wie nah der geplante Termin ist, besteht eventuell kein Anspruch auf Rückerstattung.',
       confirm: 'Sitzung stornieren',
       success: 'Sitzung storniert',
-      paymentInProgress: 'Für diese Sitzung läuft bereits eine Zahlung. Bitte versuchen Sie es in Kürze erneut.',
+      paymentInProgress:
+        'Für diese Sitzung läuft bereits eine Zahlung. Bitte versuchen Sie es in Kürze erneut.',
       failed: 'Diese Sitzung konnte nicht storniert werden. Bitte erneut versuchen.',
     },
     batch: {
@@ -470,22 +513,25 @@ export default {
       acceptAll: 'Alle {n} Sitzungen annehmen',
       acceptedAll: 'Alle Sitzungen angenommen',
       acceptError: 'Nicht alle Sitzungen konnten angenommen werden. Bitte erneut versuchen.',
-      partiallyAccepted:
-        '{accepted} von {total} Sitzungen angenommen. Details siehe unten.',
+      partiallyAccepted: '{accepted} von {total} Sitzungen angenommen. Details siehe unten.',
       itemNotAccepted: 'Konnte nicht angenommen werden.',
     },
     errors: {
       coachUnavailable: 'Dieser Coach ist derzeit nicht verfügbar.',
       slotUnavailable: 'Dieses Zeitfenster ist nicht mehr verfügbar.',
-      startTimeInPast: 'Dieser Zeitpunkt liegt bereits in der Vergangenheit. Bitte wählen Sie einen späteren Termin.',
+      startTimeInPast:
+        'Dieser Zeitpunkt liegt bereits in der Vergangenheit. Bitte wählen Sie einen späteren Termin.',
       invalidTimeRange: 'Das Ende der Sitzung muss nach ihrem Beginn liegen.',
-      slotOutsideAvailability: 'Dieser Zeitpunkt liegt außerhalb der verfügbaren Zeiten dieses Coaches.',
+      slotOutsideAvailability:
+        'Dieser Zeitpunkt liegt außerhalb der verfügbaren Zeiten dieses Coaches.',
       slotBlockedByCoach: 'Dieser Coach hat diese Zeit blockiert.',
       blockOverlapsBooking:
         'Sie haben bereits eine Buchung zu dieser Zeit — stornieren oder verschieben Sie diese zuerst, wenn Sie diese Zeit blockieren möchten.',
       sessionCrossesMidnight: 'Eine Sitzung darf nicht über Mitternacht hinausgehen.',
-      availabilityChanged: 'Die Verfügbarkeit dieses Coaches hat sich seit dem Laden dieser Seite geändert. Bitte wählen Sie eine neue Zeit.',
-      weekStartOutOfRange: 'Diese Woche liegt zu weit in der Vergangenheit oder Zukunft, um sie anzuzeigen.',
+      availabilityChanged:
+        'Die Verfügbarkeit dieses Coaches hat sich seit dem Laden dieser Seite geändert. Bitte wählen Sie eine neue Zeit.',
+      weekStartOutOfRange:
+        'Diese Woche liegt zu weit in der Vergangenheit oder Zukunft, um sie anzuzeigen.',
       batchAlreadyProcessed: 'Diese Anfragen wurden bereits bearbeitet.',
       batchNoneAccepted: 'Keine der Sitzungen in dieser Anfrage konnte angenommen werden.',
       notReschedulable: 'Diese Sitzung kann nicht mehr verschoben werden.',
@@ -570,7 +616,8 @@ export default {
     searchByCityPlaceholder: 'z.B. Frankfurt, Berlin, München',
     search: 'Suchen',
     enterCityPrompt: 'Suchen Sie nach Trainern in Ihrer Stadt',
-    enterCitySubtitle: 'Geben Sie oben eine Stadt ein, um verfügbare Trainer in Ihrer Nähe zu finden',
+    enterCitySubtitle:
+      'Geben Sie oben eine Stadt ein, um verfügbare Trainer in Ihrer Nähe zu finden',
     filterDistrict: 'Bezirk',
     filterAgeGroup: 'Altersgruppe',
     filterLanguage: 'Sprache',
@@ -637,8 +684,7 @@ export default {
     submit: 'Bewertung absenden',
     save: 'Änderungen speichern',
     loadMore: 'Weitere Bewertungen laden',
-    pendingModeration:
-      'Ihre Bewertung wird geprüft und ist noch nicht öffentlich sichtbar.',
+    pendingModeration: 'Ihre Bewertung wird geprüft und ist noch nicht öffentlich sichtbar.',
     blocked: 'Ihre Bewertung wurde durch die Moderation entfernt.',
     coachResponseLabel: 'Antwort des Trainers',
     noRecentSession:
@@ -653,6 +699,19 @@ export default {
   },
   session: {
     drillLibrary: {
+      moreItems: '+{count} weitere',
+      setupDiagram: 'Aufbauskizze',
+      tags: 'Tags',
+      videoPreviewAfterUpload: 'Videovorschau nach dem Hochladen verfügbar',
+      metaDifficulty: 'Schwierigkeit',
+      metaGroupSize: 'Gruppengröße',
+      metaEquipment: 'Ausrüstung',
+      filterDifficulty: 'Schwierigkeitsstufe',
+      filterSkill: 'Fähigkeit',
+      filterEquipment: 'Ausrüstung',
+      filterWeakFootOnly: 'Nur mit Schwachfuß-Fokus',
+      apply: 'Anwenden',
+      cloneFailed: 'Übung konnte nicht kopiert werden',
       title: 'Übungsbibliothek',
       loadError: 'Übungen konnten nicht geladen werden. Bitte versuchen Sie es erneut.',
       videoLoadFailed: 'Video konnte nicht geladen werden — wird aktualisiert…',
@@ -906,6 +965,7 @@ export default {
       decreased: '{skill}-Exposition ist diesen Monat um {percent}% gesunken',
     },
     radar: {
+      chartAriaLabel: 'Daten des Fähigkeiten-Radars',
       addAssessmentLabel: 'Radar-Bewertung hinzufügen',
       assessmentPanelTitle: 'Skills-Radar-Bewertung',
       assessmentTypeLabelObjective: 'Objektiver Test',
@@ -916,7 +976,7 @@ export default {
       notesLabel: 'Notizen (optional)',
       assessmentTypeLabel: 'Bewertungstyp',
       scoreTierReference:
-        'Punktereferenz: Elite 90–100 | Ausgezeichnet 80–89 | Gut 70–79 | Überdurchschnittlich 60–69 | Durchschnittlich 50–59 | Unterdurchschnittlich 40–49 | Sehr schwach <40',
+        'Punktereferenz: Elite 90–100 • Ausgezeichnet 80–89 • Gut 70–79 • Überdurchschnittlich 60–69 • Durchschnittlich 50–59 • Unterdurchschnittlich 40–49 • Sehr schwach <40',
       submitLabel: 'Bewertung einreichen',
       historyTitle: 'Mein Bewertungsverlauf',
       noEntriesYet: 'Noch keine Bewertungen erfasst',
@@ -948,7 +1008,7 @@ export default {
         noInsightsYet:
           'Noch keine Korrelationserkenntnisse — protokollieren Sie mehr Einheiten mit verschiedenen Fähigkeiten.',
         excludedSkills:
-          '{count} Fähigkeit | {count} Fähigkeiten nicht angezeigt — noch keine Trainingsdaten erfasst.',
+          '{count} Fähigkeit nicht angezeigt — noch keine Trainingsdaten erfasst. | {count} Fähigkeiten nicht angezeigt — noch keine Trainingsdaten erfasst.',
         insight: {
           highSluImprovement: 'Hohes Trainingsvolumen → Punktzahl verbessert sich',
           highSluNoImprovement:
@@ -1054,7 +1114,14 @@ export default {
       unavailable: 'Kartenzahlungen sind derzeit nicht verfügbar',
     },
   },
-  admin: {},
+  admin: {
+    health: {
+      title: 'Systemzustand',
+      subtitle: 'Infrastrukturstatus in Echtzeit',
+      accessDenied: 'Für die Statusdetails sind Administratorrechte erforderlich.',
+      loadError: 'Systemstatus konnte nicht geladen werden',
+    },
+  },
   featureGate: {
     requiredTier: 'Erfordert {tier}-Plan',
     description:
@@ -1211,6 +1278,9 @@ export default {
     unread: '{count} ungelesen',
   },
   profile: {
+    subtitle: 'Verwalten Sie Ihre Kontodaten und Einstellungen.',
+    sectionAccount: 'Konto',
+    sectionPersonal: 'Persönliche Daten',
     title: 'Mein Profil',
     email: 'E-Mail-Adresse',
     password: 'Passwort',
@@ -1232,6 +1302,9 @@ export default {
     toggle2fa: 'Zwei-Faktor-Authentifizierung',
     addressName: 'Adressbezeichnung',
     addressNameHint: 'z.B. ZUHAUSE, ARBEIT',
+    addressTypeHome: 'Zuhause',
+    addressTypeWork: 'Arbeit',
+    addressTypeOther: 'Sonstiges',
     companyName: 'Firmenname',
     addressLine1: 'Adresszeile 1',
     addressLine2: 'Adresszeile 2',
@@ -1290,5 +1363,31 @@ export default {
     samePassword: 'Das neue Passwort muss sich vom aktuellen Passwort unterscheiden',
     samePhone: 'Die neue Telefonnummer muss sich von der aktuellen unterscheiden',
   },
+  errorPage: {
+    notFoundTitle: 'Seite nicht gefunden',
+    notFoundBody: 'Die gesuchte Seite existiert nicht oder wurde verschoben.',
+    goHome: 'Zur Startseite',
+  },
+  dashboard: {
+    title: 'Übersicht',
+    welcomeBack: 'Willkommen zurück, {name}',
+    defaultUser: 'Benutzer',
+    loggedIn: 'Sie sind erfolgreich angemeldet',
+    operational: 'Alle Systeme sind betriebsbereit.',
+    metricSessionsToday: 'Einheiten heute',
+    metricActiveUsers: 'Aktive Nutzer',
+    metricUptime: 'Verfügbarkeit',
+    metricResponseTime: 'Antwortzeit',
+    metricNoData: 'Noch keine Daten',
+    metricLast30Days: 'Letzte 30 Tage',
+    metricAverageMs: 'Durchschnitt (ms)',
+  },
+  nav: {
+    sectionMain: 'Allgemein',
+    menu: 'Menü',
+    tagline: 'Analyseplattform',
+    dashboard: 'Übersicht',
+    admin: 'Administration',
+    healthDashboard: 'Systemstatus',
+  },
 }
-// TODO: translate

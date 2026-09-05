@@ -89,7 +89,7 @@
         </q-list>
 
         <div v-else class="text-body2 text-secondary q-py-md text-center">
-          {{ t('booking.availability.noSlotsAvailable', 'No available slots this week') }}
+          {{ t('booking.availability.noSlotsAvailable') }}
         </div>
       </q-card-section>
     </q-card>
@@ -660,7 +660,9 @@ onMounted(async () => {
     if (Array.isArray(res.activeSlotStatuses) && res.activeSlotStatuses.length > 0) {
       ownBlockingStatuses.value = res.activeSlotStatuses
     } else {
-      console.warn('Booking request config response had an unexpected shape, using default active-slot statuses')
+      console.warn(
+        'Booking request config response had an unexpected shape, using default active-slot statuses',
+      )
     }
   } catch {
     console.warn('Could not load booking request config, using default active-slot statuses')

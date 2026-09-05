@@ -1,5 +1,5 @@
-import { computed } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   showWarning,
   timeUntilExpiry,
@@ -12,9 +12,9 @@ import {
   stopSessionMonitoring,
   refreshSession,
   cleanup,
-} from 'src/plugins/sessionManager';
-import { useAuthStore } from 'src/stores/auth.store';
-import { usePlayerStore } from 'src/stores/playerStore';
+} from 'src/plugins/sessionManager'
+import { useAuthStore } from 'src/stores/auth.store'
+import { usePlayerStore } from 'src/stores/playerStore'
 
 /**
  * Composable for session management.
@@ -35,27 +35,27 @@ import { usePlayerStore } from 'src/stores/playerStore';
  * }}
  */
 // Longest we block the logout teardown on the backend revocation call before proceeding anyway.
-const LOGOUT_BACKEND_WAIT_MS = 3000;
+const LOGOUT_BACKEND_WAIT_MS = 3000
 
 export function useSession() {
-  const router = useRouter();
-  const authStore = useAuthStore();
-  const playerStore = usePlayerStore();
+  const router = useRouter()
+  const authStore = useAuthStore()
+  const playerStore = usePlayerStore()
 
   // Re-export reactive refs as computed for component use
-  const showWarningComputed = computed(() => showWarning.value);
-  const timeUntilExpiryComputed = computed(() => timeUntilExpiry.value);
-  const secondsRemainingComputed = computed(() => secondsRemaining.value);
-  const minutesRemainingComputed = computed(() => minutesRemaining.value);
-  const isRefreshingComputed = computed(() => isRefreshing.value);
-  const refreshFailedComputed = computed(() => refreshFailed.value);
-  const warningThresholdSecondsComputed = computed(() => warningThresholdSeconds.value);
+  const showWarningComputed = computed(() => showWarning.value)
+  const timeUntilExpiryComputed = computed(() => timeUntilExpiry.value)
+  const secondsRemainingComputed = computed(() => secondsRemaining.value)
+  const minutesRemainingComputed = computed(() => minutesRemaining.value)
+  const isRefreshingComputed = computed(() => isRefreshing.value)
+  const refreshFailedComputed = computed(() => refreshFailed.value)
+  const warningThresholdSecondsComputed = computed(() => warningThresholdSeconds.value)
 
   /**
    * Handle session refresh.
    */
   async function handleRefresh() {
-    await refreshSession();
+    await refreshSession()
   }
 
   /**
@@ -68,9 +68,9 @@ export function useSession() {
    * back into the app after the /login redirect (M2 from the review).
    */
   async function handleLogout() {
-    stopSessionMonitoring();
+    stopSessionMonitoring()
 
-    document.cookie = 'user=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+    document.cookie = 'user=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
     // skillars-deferred-91 AC14: clear 'rint' client-side too. sessionManager's fast-teardown
     // branch (computeTimeUntilExpiry, skillars-deferred-90 AC3) fires only when 'rint' is absent,
     // but 'rint' is otherwise removed solely by the backend logout Set-Cookie — which is
@@ -79,7 +79,7 @@ export function useSession() {
     // deadline fires. 'rint' is not HttpOnly (sessionManager reads it via document.cookie), so
     // expiring it here makes every sibling tab's next tick() enter the fast-teardown branch
     // regardless of the backend call's fate.
-    document.cookie = 'rint=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+    document.cookie = 'rint=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
     // Awaited so callers of handleLogout() get a real guarantee that the backend revocation was
     // attempted before the promise resolves (the 'rtkn' refresh token has a 7-day TTL). This
     // does not delay the guard: authStore.logout() clears the skp cookie and the Pinia state
@@ -93,7 +93,7 @@ export function useSession() {
     await Promise.race([
       authStore.logout(), // clears skp + Pinia userId/role/displayName, then backend logout
       new Promise((resolve) => setTimeout(resolve, LOGOUT_BACKEND_WAIT_MS)),
-    ]);
+    ])
     // skillars-deferred-91 code review: clear 'rint' a SECOND time, after the race resolves. Every
     // authenticated response rewrites 'rint' with path=/ (JwtManagerImpl), so any request already in
     // flight when the pre-race clear ran — a dashboard poll, a messaging fetch, a prefetch — can
@@ -101,11 +101,11 @@ export function useSession() {
     // then read a live 'rint', skip computeTimeUntilExpiry's fast-teardown branch, and keep
     // rendering an authenticated UI. stopSessionMonitoring() has already run in this tab, so nothing
     // else would re-clear it.
-    document.cookie = 'rint=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
-    playerStore.resetSelfPlayerId();
-    cleanup();
+    document.cookie = 'rint=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
+    playerStore.resetSelfPlayerId()
+    cleanup()
 
-    router.push('/login');
+    router.push('/login')
   }
 
   /**
@@ -113,7 +113,7 @@ export function useSession() {
    * Call this when user becomes authenticated.
    */
   function initSession() {
-    startSessionMonitoring();
+    startSessionMonitoring()
   }
 
   /**
@@ -121,8 +121,8 @@ export function useSession() {
    * Call this when user logs out or session expires.
    */
   function destroySession() {
-    stopSessionMonitoring();
-    cleanup();
+    stopSessionMonitoring()
+    cleanup()
   }
 
   return {
@@ -137,5 +137,5 @@ export function useSession() {
     handleLogout,
     initSession,
     destroySession,
-  };
+  }
 }

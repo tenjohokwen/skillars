@@ -1,0 +1,2169 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 1e4eaea..c572a10 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -61,6 +61,50 @@ jobs:
+           retention-days: 14
+           if-no-files-found: warn
+ 
++  # skillars-deferred-92 AC1: the Prettier mandate in `_bmad-output/project-context.md` had never
++  # been enforced by any workflow, which is why 130 of ~150 frontend source files had drifted out of
++  # conformance over the life of the repo (re-recorded three separate times before anyone gated it).
++  # `mvn verify` builds the frontend via frontend-maven-plugin but runs neither Prettier nor ESLint
++  # (`npm test` is a stub), so this is the only place either check happens.
++  # Kept as its own job, not a step in `test`: it needs no JDK, no containers and no Maven cache, and
++  # a formatting failure should be visible in ~1 minute rather than behind a 15-minute test suite.
++  frontend-quality:
++    runs-on: ubuntu-latest
++    timeout-minutes: 10
++    permissions:
++      contents: read
++
++    steps:
++      - name: Checkout
++        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
++
++      - name: Set up Node
++        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38  # v6.5.0
++        with:
++          # Pinned to <node.version> in pom.xml, so CI formats/lints with the same toolchain the
++          # frontend-maven-plugin build uses. Keep the two in step.
++          node-version: '22.16.0'
++          cache: npm
++          cache-dependency-path: src/frontend/package-lock.json
++
++      - name: Install frontend dependencies
++        working-directory: src/frontend
++        run: npm ci
++
++      # Both checks run even if the first fails, so one push surfaces both classes of problem
++      # rather than one per round-trip. The `conclusion != 'skipped'` guard keeps ESLint from
++      # running when `npm ci` itself failed (the Prettier step is skipped in that case, and an
++      # ESLint run with no node_modules only adds a second, misleading failure).
++      - name: Prettier check
++        id: prettier
++        working-directory: src/frontend
++        run: npx prettier --check "src/**/*.{js,vue,scss,json}"
++
++      - name: ESLint
++        if: ${{ !cancelled() && steps.prettier.conclusion != 'skipped' }}
++        working-directory: src/frontend
++        run: npx eslint .
++
+   build-and-push:
+     needs: test
+     runs-on: ubuntu-latest
+diff --git a/.github/workflows/pr-build.yml b/.github/workflows/pr-build.yml
+index d387890..3819037 100644
+--- a/.github/workflows/pr-build.yml
++++ b/.github/workflows/pr-build.yml
+@@ -101,3 +101,39 @@ jobs:
+           severity: CRITICAL,HIGH
+           exit-code: '1'
+           trivyignores: .trivyignore
++
++  # skillars-deferred-92 AC1. The AC names ci.yml, but ci.yml's own comment records that "the
++  # enforcement gates live in pr-build, which is where regressions should be caught" — a gate that
++  # only runs on push-to-master reports the drift after it has already landed. The job is duplicated
++  # rather than shared because reusable-workflow indirection for ~20 lines costs more than it saves;
++  # keep the two copies in step.
++  frontend-quality:
++    runs-on: ubuntu-latest
++    timeout-minutes: 10
++    permissions:
++      contents: read
++
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
++
++      - name: Set up Node
++        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38  # v6.5.0
++        with:
++          # Pinned to <node.version> in pom.xml — same toolchain the frontend-maven-plugin build uses.
++          node-version: '22.16.0'
++          cache: npm
++          cache-dependency-path: src/frontend/package-lock.json
++
++      - name: Install frontend dependencies
++        working-directory: src/frontend
++        run: npm ci
++
++      - name: Prettier check
++        id: prettier
++        working-directory: src/frontend
++        run: npx prettier --check "src/**/*.{js,vue,scss,json}"
++
++      - name: ESLint
++        if: ${{ !cancelled() && steps.prettier.conclusion != 'skipped' }}
++        working-directory: src/frontend
++        run: npx eslint .
+diff --git a/_bmad-output/implementation-artifacts/deferred-work.md b/_bmad-output/implementation-artifacts/deferred-work.md
+index 587a423..39ef353 100644
+--- a/_bmad-output/implementation-artifacts/deferred-work.md
++++ b/_bmad-output/implementation-artifacts/deferred-work.md
+@@ -17,6 +17,81 @@ One bullet = one open item. Grouped by the review that raised it; the heading ca
+   Verify against the code before trusting an unannotated forward-reference.
+ - **File paths and line numbers age fast.** They were accurate at the review date in the heading.
+ 
++## Last audit: 2026-09-04 (deferred-work.md prune + first-ever `deploy-*` re-audit)
++
++Two passes, both run during `skillars-deferred-92` story creation at `c2c47c1`.
++
++### Pass 1 — prune, per this file's own stated convention
++
++Every bullet carrying a `[CLOSED by ...]`, `[STALE ...]` or `[WITHDRAWN ...]` tag was deleted outright
++(19 bullets), and the 12 `## Deferred from:` headers left with zero content were deleted with them.
++Verified before writing by a line-for-line reconstruction check: every surviving line appears in the
++pre-prune file, in the same order, with nothing added or reworded. File: 1343 -> 1295 lines.
++
++**Deliberately NOT deleted:** `[DISMISSED ...]` and `[DECIDED ...]` bullets. These are not *done* — they
++are declined or decided-wont-fix, and the file keeps them precisely so the decision is not re-litigated
++(the 2026-08-24 pruning pass drew the same line for the same reason). 24 `DISMISSED` and 10 `DECIDED`
++bullets remain by design. `[PICKED UP by ...]` bullets (claimed by a story, not yet shipped) also remain.
++
++**One residual was rescued from a deleted bullet rather than lost with it** — see the new section below.
++
++### Pass 2 — the `deploy-*` sections, re-audited against the current scripts
++
++**Every prior full-file audit in this file (2026-08-04, three on 2026-08-05, 2026-08-24, 2026-08-24) closed
++with the same sentence: the `deploy-*` sections were not read.** Six audits running. This pass reads them.
++Every item below was checked against the live file at `c2c47c1`, not against the ledger's own text.
++
++| Item | Verdict |
++|---|---|
++| `deploy-3-4` DROP DATABASE / open connections | open, **narrowed** — `app` is the only container with a datasource; the real blocker is a human `psql` session. Citation corrected to the script. |
++| `deploy-3-4` hardcoded container UIDs 65534/10001/472 | open, unchanged — `provision.sh:597-603`, `restore-from-volume-backup.sh:96-99` |
++| `deploy-3-4` APP_CID capture race | open, **partly mitigated** — now fails fast with a diagnostic instead of a 90 s timeout. Citation corrected. |
++| `deploy-3-4` WebhookPermanentFailure Admin API | **STALE, deleted** — the alert no longer exists |
++| `deploy-3-4` CallbackRateZero endpoint undocumented | **STALE, deleted** — the alert no longer exists |
++| `deploy-3-3` double notification if Alertmanager added | open — no Alertmanager anywhere, and the duplicate-definition premise is confirmed live (`alerts.yml` and `grafana-alerts.yml` both define the infra alerts) |
++| `deploy-3-3` node_exporter network isolation | open, **substantially narrowed** by `skillars-deferred-88` AC8 — see the corrected bullet |
++| `deploy-3-3` DiskDataVolumeHigh needs the Volume mounted | open, verified — `alerts.yml:62-68` keys on `mountpoint="/opt/skillars/data"` |
++| `deploy-3-1` PGPASSWORD via `docker exec -e` | open and **wider than recorded** — 3 further occurrences the entry never covered |
++| `deploy-3-1` credentials in `/proc/<pid>/environ` | open, unchanged, project-wide |
++| `deploy-3-1` awscli v1 from Ubuntu apt | open, unchanged — `provision.sh:131` |
++| `deploy-2-2` `Fail workflow` unreachable | open, **citation stale** — `:139-143` -> `:184-188`, four notification steps now precede it |
++| `deploy-1-5` repo cloned before the Volume is mounted | open, unchanged |
++| `deploy-1-5` repo cloned as root, `.git` beside runtime data | open, unchanged |
++| `deploy-1-5` no rollback / DR documentation | **CLOSED, deleted** — `rollback.md`, `backup-restore.md` and `runbook.md` all shipped with Epic 3, exactly as the item predicted |
++| `deploy-1-5` `git clean` vs the data subdirectory | open, **narrowed** — `.gitignore` now covers `/data/`; only `git clean -fdx` still reaches it |
++| `deploy-1-3` Prometheus has no `depends_on: app` | open, verified — `docker-compose.yml:217-235` has no `depends_on`; `grafana` at `:328` does |
++| `deploy-1-3` LGTM `mkdir -p` gated inside the `[ -b ]` check | open, verified — `provision.sh:594-603` sits inside the `if [ -b "${VOLUME_DEVICE}" ]` branch |
++
++Net: 18 items examined, **3 closed or stale and deleted**, 6 corrected in place (stale citations, narrowed or
++widened scope), 9 confirmed unchanged, **2 new findings filed** below.
++
++**Scope of this audit, so the gaps stay explicit.** It covered every `## Deferred from: deploy-*` section
++and every file those items name. It did **not** re-check the deployment items filed under non-`deploy-*`
++headings (`skillars-uat-6`, `skillars-deferred-20`/`-87`/`-88`) — those were written between 2026-08-13 and
++2026-08-31 and are recent enough to trust. It did not review the `deploy/` scripts for defects nobody has
++filed yet; it verified the filed claims only.
++
++## Deferred from: skillars-deferred-92 story creation and the 2026-09-04 deploy-* re-audit
++
++- **Booking reminder emails have never been sent — `EmailTemplate.BOOKING_REMINDER` is unreachable.**
++  `BookingEmailListener.onBookingReminder` (`:545`) carries **no annotation at all** — not `@EventListener`,
++  not `@TransactionalEventListener` — and `BookingEmailListener` is a bare `@Component` that does not
++  implement `ApplicationListener`, so Spring never dispatches to it. Meanwhile
++  `BookingReminderScheduler.processReminderWindows()` (`@Scheduled(fixedDelay = 5, MINUTES)`,
++  `@SchedulerLock`, `@Transactional`) publishes `BookingReminderEvent` at `:59` and `:73` every cycle, and
++  `EmailTemplate.BOOKING_REMINDER` is referenced in exactly one place in `src/main` — that unreachable
++  method. No 24-hour or 2-hour reminder has ever reached a parent or a coach. Three things kept it silent:
++  `BookingReminderScheduler:60` logs `"… and sent primary reminder"`; `:58` stamps
++  `primaryReminderSentAt` on a managed entity inside the transaction, so **the database records the
++  reminder as sent**; and `BookingEmailListenerTest:101-125` invokes the method **directly**, so the unit
++  tests pass while proving nothing about wiring. `skillars-deferred-91`'s `OutboxService` javadoc (`:65`)
++  names `onBookingReminder` as a live producer, so the assumption has already propagated through one prior
++  review. Found by the `skillars-deferred-92` story review (2026-09-04) and confirmed by its audit; it is
++  the only unannotated `public void on*` method across both email listeners.
++  **[PICKED UP by skillars-deferred-92 AC29]**
++  [`BookingEmailListener.java:545`, `BookingReminderScheduler.java:58-60,72-73`,
++  `EmailTemplate.java:27`, `src/test/.../BookingEmailListenerTest.java:101-125`]
++
+ ## Last audit: 2026-08-24 (deferred-work.md pruning pass)
+ 
+ This file's own first rule above says closed items are **deleted outright, not kept with a tag** — but
+@@ -602,8 +677,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
+ - `PaymentMethodCard.vue`'s `stripeUnavailable` state has no retry affordance short of a full page reload — AC2 only requires the unavailable message + disabled submit, which is satisfied; a retry action would be a UX enhancement beyond spec scope. [`PaymentMethodCard.vue:86-106`]
+ - No frontend tests (Vitest/Vue Test Utils) were added for `PaymentMethodCard.vue` or the new `payment.store.js` actions (`fetchStripeConfig`, `fetchSavedPaymentMethod`) — real coverage gap on a component with non-trivial lifecycle logic. [`PaymentMethodCard.vue`, `payment.store.js`]
+ 
+-## Deferred from: code review of skillars-deferred-9-frontend-ux-polish (2026-07-02)
+-
+ ## Deferred from: code review of skillars-deferred-1-config-securityutil-hardening (2026-07-01)
+ - D1: Test coverage is thin relative to the diff's size — no unit test covers `NeglectedSkillDetectionService.isInValidRange()`'s boundary values (0, 1, and just inside/outside), and none of the 15 `Resource` classes refactored to use `SecurityUtil.requireCurrentUserId()` have a test asserting the actual 401 response when it throws; only one E2E smoke test (`ConfigGuardIT`) was added for a ~1080-line diff. [various]
+ - D2: `ConfigGuardIT.java` mutates the shared `main.platform_config` row directly (`setUp`/`tearDown`) and depends on `@AfterEach` running to restore the original value and invalidate the `ConfigService` cache — real but low-probability test-isolation hazard if the test run is interrupted before teardown. [ConfigGuardIT.java]
+@@ -692,9 +765,7 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
+ - W6: `SessionTemplate.blocks` null risk if `session.getBlocks()` null — `Session.blocks` is NOT NULL in DB so sessions should never have null blocks; constraint prevents [`SessionTemplateService.java:createTemplate`]
+ 
+ ## Deferred from: code review of skillars-4-3-custom-drill-uploads (2026-06-17)
+-- W2: `existsByVideoId` timing in concurrent `deleteVideo` for shared-video drills — both concurrent deletes may pass the check before either commits, publishing deletion event twice; double-delete is idempotent at Bunny.net; near-impossible in normal usage [`DrillUploadService.java`] `[CLOSED (same-drill variant only) by skillars-deferred-75 AC5 — DrillUploadServiceConcurrencyIT.deleteVideo_concurrentCallsOnSameDrill_doesNotDoublePublishDeletionEvent proves two concurrent deleteVideo calls on the SAME drillId now serialize correctly via the new per-Drill-row PessimisticWrite lock. This item's own wording ("shared-video drills", i.e. two DIFFERENT drills whose drill_video_refs rows point at the same videoId, reachable via DrillLibraryService.cloneDrill:134-136) describes a different race the per-Drill lock does NOT close — two different drillIds acquire two different row locks and do not serialize against each other. That cross-drill variant remains open; a real fix needs a videoId-scoped lock, not a drillId-scoped one.]` `[CLOSED by skillars-deferred-81 AC3 — DrillUploadService.initiateUpload AND .deleteVideo both take videoRepository.findByIdForUpdate(videoId) inside the existing lockRetryer.withBoundedRetry block, lock order Drill→Video documented in-code; proven by DrillUploadServiceConcurrencyIT.deleteVideo_concurrentCallsOnTwoClonesSharingOneVideoId_doesNotDoublePublishDeletionEvent, strengthened with lock-causality timing by skillars-deferred-83 AC2. Found stale during skillars-deferred-87 creation.]`
+ - W3: Transaction rollback after `videoService.initializeUpload` — provider video created, DB transaction rolls back (including UploadSession), so reconciliation worker cannot find the orphaned provider asset [`DrillUploadService.java`] `[Note 2026-08-27: skillars-deferred-75 AC5 closed the concurrent-request race (W1/W2's same-drill variant) via PessimisticLockRetryer; this item's own scenario (a crash/rollback mid-request, not a concurrent second caller) is a different, still-open gap — needs a reconciliation worker, not a lock.]`
+-- W6: `@Async` on `VideoPhysicalDeletionListener` uses default `SimpleAsyncTaskExecutor` (unbounded threads) — low volume expected; add named executor if burst deletion scenarios emerge [`VideoPhysicalDeletionListener.java`]
+ - W8: AC 3 "configurable 60-min timeout" not specifically wired to drill uploads — inherits pre-existing `UploadSession.expiresAt` scheduler; not changed by this story [`platform.video` scheduler]
+ - W9: `@TransactionalEventListener` silently drops events if called outside a transaction — hypothetical only; `DrillUploadService` is `@Transactional` so all call paths have a transaction [`VideoPhysicalDeletionListener.java`]
+ 
+@@ -723,10 +794,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
+ ## Deferred from: code review of skillars-3-4-booking-state-machine-sse (2026-06-15)
+ - Polling fallback has no exponential backoff — 2 s fixed interval is spec-prescribed degraded mode; add backoff if hammering becomes observable in production [booking.store.js]
+ 
+-## Deferred from: code review of skillars-3-3-booking-request-approval-workflow Group B (2026-06-15)
+-
+-## Deferred from: code review of skillars-3-3-booking-request-approval-workflow Group A (2026-06-15)
+-
+ ## Deferred from: code review of skillars-3-1-coach-availability-management (2026-06-13)
+ - No date-range guard on `weekStart` GET parameter — far past/future dates are harmless for a 7-day view; address if API is ever exposed to untrusted external callers [AvailabilityResource.java:421]
+ 
+@@ -739,7 +806,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
+ ## Deferred from: code review of skillars-1-5-authentication-jwt-security (2026-06-12)
+ - Tests use raw `jdbcTemplate` inserts instead of Instancio for test data — project rule violation but tests are functionally correct [AuthResourceIT.java]
+ - `@Observed` at class level vs per-method on `AuthResource` — class-level is a valid Micrometer pattern; no metric data lost [AuthResource.java]
+-- `ROLE_ROUTES` duplicated across `LoginPage.vue` and `router/index.js` — DRY violation; divergence would cause infinite redirect loop, but no current divergence
+ - `hydrated` flag in router factory is closure-scoped — SSR-unsafe but app is SPA only [src/frontend/src/router/index.js]
+ - Client-side `skp` clear in `auth.store.logout()` is redundant — server `logout()` already sends `Set-Cookie: skp=; Max-Age=0`; the `document.cookie` write is belt-and-suspenders [auth.store.js]
+ 
+@@ -798,13 +864,10 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
+ - W5: `ContactDetailSanitizer.PHONE_PATTERN` may redact digit-heavy name segments (e.g. "Type 2 Analyst") — pattern is spec-prescribed; refine when real-world false positives are observed [ContactDetailSanitizer.java]
+ - W6: `RateLimitingService` uses in-process `ConcurrentHashMap` — not cluster-safe, no eviction; pre-existing infrastructure issue not introduced by this story
+ - W7: `TokenErrorResponse.errorKey` field alignment with `useErrorHandler` composable — confirm when applying patches; likely aligned by naming convention [ApiAdvice.java]
+-- W8: `EMAIL_VERIFIED` users have no path to re-request phone OTP via `/resend-verification` — resend endpoint intentionally scoped to email verification only; add dedicated `/resend-otp` endpoint in a later story `[CLOSED by skillars-deferred-89 AC7 — `/resend-otp` + `resendPhoneOtp(userId)` added to coach and player registration (resource + service), mirroring the parent implementation from skillars-deferred-43 exactly: HTTP 200, OTP delivered by email (`*OtpEmailEvent`, no SMS path), `@RateLimited(capacity 3 / 30min, per-role key)`, `saveAndFlush` so a V121 `uq_pot_one_active_per_user` collision → 409 `security.otpResendInProgress` via `ApiAdvice`, locked user → 400 `security.accountLocked`, bad/`!= EMAIL_VERIFIED` → 400 `security.otpMismatch`. `AppEndpoints.PUBLIC_ENDPOINTS` extended with both new paths. Frontend still has no resend-OTP button (standing coverage gap).]`
+ 
+ ## Deferred from: code review of skillars-1-2-skillars-design-system-foundation (2026-06-11)
+-- W1: `.glass-card` still uses `transition: all` — inconsistent with `.hover-lift` narrowed to `transform + box-shadow` in this story; pre-existing in glass.scss, out of story scope [src/frontend/src/css/glass.scss]
+ - W3: `app-bg` class has no boot-failure fallback in `App.vue` — boot file is the canonical owner per spec design; fallback in App.vue would duplicate logic; acceptable exceptional-case gap
+ - W4: `onSessionExpired` in MainLayout clears username but does not redirect to `/login` — pre-existing behaviour not introduced by this story
+-- W5: `variables.scss` dual import path — `app.scss` imports `tokens/colors` directly AND `variables.scss` also forwards to `tokens/colors`; any file that @imports `variables.scss` picks up colour tokens twice; latent build-warning risk
+ - W6: Rapid double-click theme toggle can briefly desync DOM attribute and `darkMode` ref — `toggleTheme` is synchronous so window is negligible in practice; acceptable
+ - W7: No CSP header coverage for `fonts.googleapis.com` — infrastructure/deployment concern outside story scope
+ 
+@@ -814,33 +877,29 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
+ - IT test fixture hardcodes bcrypt hash for test user seed SQL; follows existing project IT test pattern [ConfigResourceIT.java:setUp]
+ 
+ ## Deferred from: code review of deploy-3-4-operational-documentation-suite (2026-06-05)
+-- DROP DATABASE may fail if services other than `app` hold open DB connections — script stops only `app` before drop; pre-existing script limitation [docs/deployment/backup-restore.md]
++- DROP DATABASE may fail if anything other than `app` holds an open DB connection — `restore-from-dump.sh:108` stops `app` only. **[AUDIT 2026-09-04: still open, but narrower than written.** `app` is the only service in `docker-compose.yml` with a datasource, so no *container* peer exists; the realistic blocker is a human `psql` session or an ad-hoc tool an operator left open, which is exactly the state a restore is run in. `DROP DATABASE` has no `FORCE` and no `pg_terminate_backend` sweep, so it fails outright rather than waiting. Citation corrected: the code is the script, not `backup-restore.md`.]** [`deploy/backup/restore-from-dump.sh:108,135`]
+ - Hardcoded container UIDs (65534/10001/472) not tied to Docker image versions — upstream UID changes (historically seen with Grafana) would silently break subdirectory ownership after snapshot restore [docs/deployment/backup-restore.md] `[AUDIT 2026-08-27: re-verified, still open, still a legitimate low-probability accepted tradeoff — hardcoded UIDs remain untied to image versions in provision.sh/restore-from-volume-backup.sh; monitor upstream image changelogs rather than fix now]`
+-- APP_CID capture races container registration immediately after `docker compose start app` — health-wait loop can time out on a healthy app; pre-existing script race condition [docs/deployment/backup-restore.md]
+-- WebhookPermanentFailure Admin API re-trigger has no endpoint or auth reference — Admin API not defined in this story's scope; needs dedicated API documentation [docs/deployment/monitoring.md]
+-- CallbackRateZero public callback endpoint undocumented — application-specific URL not defined in deployment docs; needs a secrets-reference or application guide entry [docs/deployment/monitoring.md]
++- APP_CID capture races container registration immediately after `docker compose start app` — a single non-retried `docker compose ps -q app` right after the start. **[AUDIT 2026-09-04: still open, partly mitigated.** `restore-from-dump.sh:197-199` now fails fast with an explicit diagnostic when `APP_CID` is empty instead of burning the 90 s health-wait timeout, so the symptom is no longer a confusing timeout — but the unretried capture itself is unchanged, and a slow registration still aborts a restore that in fact succeeded. Citation corrected: the code is `deploy/backup/restore-from-dump.sh`, not `backup-restore.md`.]** [`deploy/backup/restore-from-dump.sh:197-199`]
+ 
+ ## Deferred from: code review of deploy-3-3-external-uptime-monitoring-alert-rules (2026-06-05)
+ - Double notification risk if Alertmanager added later — Prometheus rules and Grafana alerting both evaluate the same infra alerts; currently no Alertmanager so only Grafana notifies, but future Alertmanager addition would cause duplicate ops notifications for every infra alert
+-- node_exporter network isolation — shares `skillars-internal` network with app containers; port 9100 reachable by any compromised container; FR-9 required this topology, changing it is out of scope
++- node_exporter network isolation — port 9100 reachable from co-networked containers. **[AUDIT 2026-09-04: substantially narrowed by `skillars-deferred-88` AC8, not closed.** node_exporter now sits on `skillars-observability` alone (`internal: true`, no gateway attached) and publishes no host ports, so it is unreachable from off-host and a compromised prometheus/loki/tempo/redis cannot exfiltrate. But `app` and `grafana` join **both** networks by design (they need egress), so a compromised `app` container still reaches `node_exporter:9100` and its full host-level metrics. The original wording — "any compromised container" — is now wrong; the exposure is `app` and `grafana` only.]** [`docker-compose.yml` networks block]
+ - DiskDataVolumeHigh requires Hetzner Volume mounted at `/opt/skillars/data` — if volume not provisioned, no metrics series exists and alert never fires; infrastructure provisioning dependency
+ 
+ ## Deferred from: code review of deploy-3-1-postgresql-backup-automation (2026-06-04)
+-- PGPASSWORD exposed via docker exec `-e` flag (visible in `ps aux` for duration of call) — spec-prescribed pattern; would require Docker secrets or a wrapper script to fix [deploy/backup/pg-backup.sh:22]
++- PGPASSWORD exposed via `docker exec -e` (visible in `ps aux` for the duration of the call) — spec-prescribed pattern; fixing it needs Docker secrets or a wrapper script. **[AUDIT 2026-09-04: still open and WIDER than recorded.** The cited line has moved (`pg-backup.sh:22` -> `:32`), and the same pattern occurs three more times in `restore-from-dump.sh` (`:135`, `:138`, `:142` — DROP DATABASE, CREATE DATABASE and the dump replay), which the original entry did not cover.]** [`deploy/backup/pg-backup.sh:32`, `deploy/backup/restore-from-dump.sh:135,138,142`]
+ - Credentials visible in `/proc/<pid>/environ` when `.env` is sourced — project-wide pattern, not introduced by this story
+ - awscli v1 from Ubuntu apt may have `--endpoint-url` edge cases with Hetzner Object Storage — spec-approved as sufficient; revisit if upload failures occur in production
+ 
+ ## Deferred from: code review of deploy-2-2-manual-production-deploy-workflow-with-smoke-test-auto-revert (2026-06-04)
+-- `Fail workflow` step is unreachable if a notification step throws — job still fails (attributed to the notification step instead), same end outcome, low severity diagnostic issue [`.github/workflows/deploy.yml`:139-143].
++- `Fail workflow` step is unreachable if a notification step throws — the job still fails, but the failure is attributed to the notification step, hiding "smoke test failed, deploy reverted" as the real cause. **[AUDIT 2026-09-04: still open, citation stale.** Now `.github/workflows/deploy.yml:184-188`, not `:139-143`. Four notification steps (Slack success/failure at `:128`/`:139`, Email success/failure at `:150`/`:166`) all precede it, so any one of them throwing — an unset `SMTP_HOST`, a Slack webhook 5xx — pre-empts the explicit failure marker.]** [`.github/workflows/deploy.yml:184-188`]
+ 
+ ## Deferred from: code review of deploy-1-5-first-time-setup-documentation (2026-06-04)
+ - Repo cloned to `/opt/skillars` before Hetzner Volume mounted — volume mount overlays `/opt/skillars/data`; benign today since repo has no `data/` content, but fragile if repo structure changes.
+ 
+ ## Deferred from: code review of deploy-1-5-first-time-setup-documentation (2026-06-03)
+-- Firewall applied after provisioning — SSH port 22 is open to all internet IPs during the provisioning window. Deliberate ordering constraint (Hetzner firewall requires local hcloud CLI run, user may not have local clone yet). Consider documenting the exposure window or restructuring for users who already have a local clone. `[CLOSED by skillars-deferred-89 AC8 — the Step 3 → Step 4 window is documented in `first-time-setup.md` (`#### SSH exposure window`); `provision.sh` section 5 accepts an optional `SSH_ALLOWLIST_IP`, validated with `apply-firewall.sh`'s exact IPv4 regex, cross-checked against the live SSH session's client IP (`$SSH_CLIENT`/`$SSH_CONNECTION`), with explicit `ufw delete allow 22/tcp` before adding the scoped rule for re-run idempotency. Any malformed/mismatched/absent case fails OPEN to `ufw allow 22/tcp` with a warning — never bricks the session. Re-run asymmetry documented.]`
+ - Repo cloned as root into `/opt/skillars` — `.git` directory sits alongside runtime data and secrets. Pre-existing architectural decision; would require a deploy-user or sparse-checkout approach to change.
+-- No rollback / disaster-recovery documentation — explicitly out of scope for Story 1.5; belongs to Epic 3 (Stories 3.2 and 3.4).
+-- git clone root (`/opt/skillars`) contains the volume data subdirectory (`/opt/skillars/data`) — `git clean` could interact with data dirs if `.gitignore` coverage lapses. Pre-existing architecture.
++- git clone root (`/opt/skillars`) contains the volume data subdirectory (`/opt/skillars/data`). **[AUDIT 2026-09-04: still open, narrowed.** `.gitignore:86-89` now carries an explicit `/data/` entry with a comment naming the Hetzner Volume mount, so the "if `.gitignore` coverage lapses" premise no longer holds and `git clean -fd` is safe. `git clean -fdx` still deletes the entire production data tree — PostgreSQL, Redis AOF, the LGTM stack and Traefik's `acme.json` — because `-x` ignores `.gitignore` by definition. The hazard is now one specific flag on a root shell in `/opt/skillars`, not a general one.]** [`.gitignore:86-89`, `deploy/provision.sh:12`]
+ 
+ ## Deferred from: code review of deploy-1-3-lgtm-observability-stack (2026-06-03)
+ - Prometheus has no `depends_on: app` in compose — cold-start scrape failures on first `docker compose up`. Acceptable gap; scrapes recover once app is healthy.
+@@ -869,7 +928,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
+ 
+ ## Deferred from: code review of skillars-6-1-video-module-foundation-quota-system Run 2 (2026-06-20)
+ - Def9: `sumActiveReservedBytes` includes expired-but-unreaped ACTIVE rows — brief (<60s) window between expiry and reaper firing causes conservative over-reporting; intentional design. [`VideoQuotaReservationRepository.java:22`]
+-- Def10: `BandwidthResetService` full-table lock risk at month boundary — single unpartitioned UPDATE locks all video_quotas rows, blocking concurrent `reserve()` calls; scaling concern. [`BandwidthResetService.java`]
+ - Def17: `AdminVideoService.deleteVideo()` — `release()` exception inside `TransactionTemplate` kills delete transaction — pre-existing. [`AdminVideoService.java`]
+ - Def18: V53 platform_config IDs 117-132 hardcoded — verify against all intermediate migrations (V43–V52) before deploying; any ID conflict causes Flyway failure. [`V53__video_quota_system.sql:32-50`]
+ - Def19: `sumActiveReservedBytes` theoretical `ClassCastException` — PostgreSQL BIGINT SUM typically maps to Long via JDBC but no compile-time guarantee. [`VideoQuotaReservationRepository.java:22`]
+@@ -882,8 +940,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
+ 
+ - W1: Feature flags default false in all environments — the spec explicitly documents this as the sprint completion criterion: "story is complete for sprint purposes when the placeholder compiles and the feature flag gates it off in all environments." Deployment enablement is an ops concern outside this story's scope. [`application.yaml`, `AppFeature.java`]
+ - W2: VideoIntelClientImpl blocking RestTemplate thread exhaustion — if VideoIntelClientImpl is ever implemented using RestTemplate (synchronous polling of a 5-minute GCP async operation), it will hold async thread pool threads for the full duration. This concern is subsumed by D2 (VideoIntelClientImpl scope decision); if D2 resolves to implement in Story 6.3, a proper non-blocking implementation must address thread exhaustion. [`VideoIntelClientImpl.java`, `VideoIntelConfig.java`]
+-- W3: SLA monitor re-queues via Spring events, not outbox — `ModerationSlaMonitorService` publishes `VideoModerationRetryEvent` directly via `ApplicationEventPublisher`. If the app crashes after `findScanningOlderThan()` returns but before events publish, retry intents for that cycle are lost; next cycle recovers. Full outbox support deferred to a future hardening story. [`ModerationSlaMonitorService.java`]
+-
+ ## Deferred from: post-implementation review of skillars-6-3 (2026-06-22)
+ 
+ - RW1: SSE subscribe → onStatusChanged race — state transition committed between `videoService.findById()` and `emitter.send(currentStatus)` is missed. Polling fallback mitigates. Architectural limitation of SSE without event sourcing. [`VideoSseService.java:39`, `VideoEventResource.java:39`]
+@@ -891,7 +947,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
+ 
+ ## Deferred from: code review of skillars-6-6-player-video-management-portal (2026-06-24)
+ - W3: V60 DDL ACCESS EXCLUSIVE lock risk — `ALTER TABLE main.videos DROP CONSTRAINT / ADD CONSTRAINT` takes table-level ACCESS EXCLUSIVE lock with no `SET lock_timeout`; can cause connection pile-up under concurrent video uploads. [`V60__video_approval_portal.sql`]
+-- W4: `autoRejectExpired` JPQL uses `current_timestamp` (returns `java.util.Date`) on an `Instant`-typed field — type mismatch; method is explicitly NOT WIRED (comment says so); safe until a scheduler is added. [`VideoApprovalRequestRepository.java:autoRejectExpired()`]
+ - W5: `@GeneratedValue(AUTO)` on `VideoApprovalRequest` entity vs `UUID DEFAULT gen_random_uuid()` in SQL — Hibernate 6 AUTO may allocate a sequence-based Long for AUTO strategy on non-Long PK; pre-existing entity pattern; verify Hibernate dialect resolves UUID correctly. [`VideoApprovalRequest.java`]
+ 
+ ## Deferred from: code review of skillars-7-2-session-payment-lifecycle-credit-wallet (2026-06-24)
+@@ -912,20 +967,8 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
+ ## Deferred from: code review of skillars-7-5-revenue-dashboard-financial-reporting (2026-06-26)
+ - D1: Running balance incorrect when two ParentCreditLedger entries share an identical createdAt instant and straddle a page boundary — the strict-less-than predicate in sumByParentIdAndCreatedAtBefore excludes the prior-page twin from the opening balance, understating the running balance for the current page by that twin's amount; extremely rare in practice; inherent in the chosen pagination anchor design [RevenueReportingService.java:211]
+ 
+-## Deferred from: code review of skillars-8-1-messaging-module-foundation-conversation-threads (2026-06-26)
+-
+-## Deferred from: code review of skillars-deferred-3 (2026-07-01)
+-- D1: V76 partial index predicate hardcodes status literals (`'EXHAUSTED', 'EXPIRED'`) with no in-diff verification against the full status enum — a future added status could silently fall inside the "active" partial index instead of being excluded. [`src/main/resources/db/migration/V76__missing_indexes.sql`] `[CLOSED by skillars-deferred-89 AC6 (generalised). The original target is gone: `V89__drop_legacy_session_packs.sql` (Story Deferred-15 / skillars-11-3) dropped `booking.session_packs_purchased` along with `chk_spp_status` and `idx_session_packs_purchased_coach_expires` (V76, whitelist-converted by V83); the replacement `payment.session_pack_purchases` has no status column. Story creation and the dab5b88 audit both missed V88/V89/V90. Rather than guard a dropped object, AC6 delivers `StatusScopedPartialIndexConventionIT` — a live-schema sweep asserting every status-scoped partial index is a whitelist (`=` / `= ANY`), with an explicit allowlist for V74's intentional `idx_disputes_unique_open_per_booking` blacklist. Project-owner decision 2026-09-01.]`
+-
+-## Deferred from: code review of skillars-deferred-4 (2026-07-02)
+-- D3: `@SchedulerLock` and `@Transactional` are stacked on the same method with no explicit `@Order`, so their AOP advisor nesting order (lock vs. transaction boundary) is unspecified — plausible but unconfirmed risk that the distributed lock could release before the DB transaction commits. [`src/main/java/com/softropic/skillars/platform/booking/service/BookingExpiryScheduler.java:40`, `BookingReminderScheduler.java`, `src/main/java/com/softropic/skillars/platform/video/service/BandwidthResetService.java`] `[STALE — the advisor order is already pinned in production by `AsyncConfig.@EnableSchedulerLock(order = Ordered.LOWEST_PRECEDENCE - 100)` against a bare `@EnableTransactionManagement` in `DataSourceConfig`, shipped `7e697d4` (2026-07-02), the same day as this review, with an 8-line comment stating the exact guarantee. ShedLock sorts outermost → lock released only after commit. All three methods also carry `lockAtLeastFor` PT1M–PT2M. skillars-deferred-89 AC4 adds `SchedulerLockTransactionOrderingIT` as a regression guard (asserts a `net.javacrumbs.shedlock` advisor precedes `TransactionInterceptor` on each of the 3 beans); no production change.]`
+-
+-## Deferred from: code review of skillars-deferred-8 (2026-07-02)
+-
+ ## Deferred from: code review of skillars-11-3-remove-legacy-session-pack-system (2026-08-04)
+ - D1: `V89__drop_legacy_session_packs.sql`'s `DROP TABLE` has no `IF EXISTS` guard — not blocking (Flyway won't re-run an applied migration, table confirmed empty at this dev/UAT stage), but there's no prior DROP TABLE in this codebase to establish a convention either way; adopt `IF EXISTS` for future destructive migrations. [`src/main/resources/db/migration/V89__drop_legacy_session_packs.sql`]
+-- D2: Code deletion and the destructive `DROP TABLE` migration ship together with no staged rollout (remove references first, verify, drop table in a later release). Not applicable now — no live/production system exists yet — but relevant once this app has real deployed traffic and rolling deploys. [`src/main/resources/db/migration/V89__drop_legacy_session_packs.sql`]
+-
+ ## Deferred from: code review of skillars-11-1-payment-path-parity-gaps (2026-08-03)
+ - D1: Partial/mismatched `confirmedCancellationIds` lets `PackSessionService.pausePack()` apply the pause even when not all currently-conflicting bookings are confirmed for cancellation (or the confirmed ids don't match any real conflict) — verified byte-for-byte identical to legacy `SessionPackService.pausePack()`; AC4 explicitly requires mirroring legacy here. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`]
+ - D2: Silent `.orElse(null)`/`.orElse("")` defaulting for missing coach/parent records in `pausePack` and `SessionPackForfeitureScheduler` (blank email, `"Coach"` placeholder) — identical to legacy's own resolution pattern. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`, `SessionPackForfeitureScheduler.java`]
+@@ -947,11 +990,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
+ ## Deferred from: code review of skillars-deferred-17-booking-request-slot-payload-timezone-integrity (2026-08-06)
+ 
+ - **D6 — Zero frontend regression coverage for deferred-17's headline fix.** There is no frontend test suite in this repo (no `*.spec.js` outside `node_modules`, no `src/frontend/test`). Every test added or touched by deferred-17 is backend-only, so reverting the `.vue` and `booking.store.js` changes — the edits that actually made booking submission work at all — would leave the entire suite green. The story explicitly forbids introducing a test framework as part of its scope; this restates the standing gap already recorded for `skillars-5-4` W9.
+-- **D8 — Reconcile the two `canonical_timezone` columns to a single source of truth.** `coach_profiles.canonical_timezone` (`V26__marketplace_coach_profiles.sql:11`) and `coach_availability_windows.canonical_timezone` (`V26:55`) are independently writable — `CoachProfileService.java:90` sets the profile's from Step 1 and `:173` sets each window's from its own Step 4 payload, and `AvailabilityService.updateWindow` never re-syncs a window after a profile-level change. Deferred-17 AC4 worked around the divergence for one page by making display read the profile column; it did not remove the divergence. Deferred from the deferred-17 code review's D1 decision (Mbah, 2026-08-06: accept and document). Real fix needs a migration, a backfill rule for which value wins on existing rows, and a product decision on whether per-window zones are a deliberate feature (a coach who coaches across zones) or an accident of the profile-builder form. `[PARTIALLY ADDRESSED by skillars-deferred-63 AC6, still open]` `[CLOSED by cross-reference (skillars-deferred-70): the "still open" write-path half of this item was decided one day later under the skillars-deferred-63 story-review heading below — see that section's own CoachProfileService.saveStep4 bullet, tagged DECIDED 2026-08-25. Per-window coach timezone is a deliberate feature; saveStep4 keeps trusting the request payload; no further action planned.]` Product decision made (profile is sole source of truth, not a deliberate per-window feature) and existing diverged rows backfilled via `V103__availability_window_timezone_backfill.sql` — but `saveStep4` still writes each window's `canonicalTimezone` from the request payload rather than the profile, so new divergence can still occur going forward; story-review found `ProfileBuilderStep4.vue` ships a real, coach-editable per-window timezone picker that a `saveStep4` write-path fix would need to be coordinated with (see the new item filed below). Note the display-side risk is largely contained once the slot label carries `timeZoneName` — instants are absolute, so no wrong moment is ever transmitted, only a differently-labelled one.
+-
+-## Deferred from: code review of skillars-deferred-18-availability-slot-timezone-integrity (2026-08-07)
+-
+-- **D2 — `blocks` week-scoping and the fetch bounds both hang off an unordered `findByCoachId`.** `AvailabilityService.java:85-86` derives `weekStartExact`/`weekEndExact` from `zoneId`, i.e. from `windows.get(0)`, and `CoachAvailabilityWindowRepository.findByCoachId` issues no `ORDER BY`. For a coach with windows in two zones, two identical requests can therefore return different `blocks` sets and use different fetch bounds purely from row-order variation; and a block that visibly punches a hole in a divergent-zone window's slot is absent from the response's `blocks` array, so `AvailabilityManagerPage.vue` renders a gap it cannot explain. This story narrowed the outer zone's role from a fetch bound to a response filter but did not remove the arbitrariness, which is the same divergence class as D8 below and is not independently fixable — picking a deterministic zone requires deciding *which* column is authoritative. Adding `ORDER BY id` to `findByCoachId` would make it deterministic-but-still-arbitrary, which is arguably worse (it hides the problem). Blocked on D8. `[CLOSED by skillars-deferred-65 AC3, for week-scoping only: AvailabilityService.getAvailabilityCalendar now derives weekStartInstant/weekEndInstant/weekStartExact/weekEndExact from the coach profile's own canonical_timezone instead of windows.get(0), so week-scoping bounds are no longer row-order-dependent. CoachAvailabilityWindowRepository.findByCoachId still issues no ORDER BY, so per-window display order in the response's windowResponses is unaffected and remains a separate, still-open display-order nondeterminism — not fully resolved by this fix]`
+ 
+ ## Deferred from: skillars-uat-1-admin-bootstrap-and-onboarding-unblock (2026-08-10)
+ 
+@@ -959,8 +997,6 @@ Found while implementing the story. Each was examined and deliberately left alon
+ 
+ - **D2 — two of AC6's four rewritten `default` arms are unreachable and therefore untested.** `resolveLastReadAt` (`MessagingService.java:439`) and `updateLastRead` (`:456`) both sit behind a `verifyIsParty` call that throws first — `updateLastRead` runs after the guard inside `getMessages`, and `resolveLastReadAt` is reached only from the summary mapper. No caller can drive either with an unrecognised role. Changing them was still correct (all four now raise the same type, so whichever a future caller reaches first behaves identically), but `MessagingAccessControlIT.unrecognisedRole_yields403NotFatal` deliberately asserts only the two reachable arms — `MessagingService.verifyIsParty` and `MessagingReportService.verifyIsParty` — rather than faking a reachability that does not exist. Recorded so a later reviewer does not read the gap as an oversight.
+ 
+-- **D3 — `AdminBootstrapRunner` cannot elevate an existing account, by design.** If the configured email already belongs to a coach, parent or player, the runner skips rather than granting `ROLE_ADMIN` to that row. This is deliberate (an "upgrade this user to admin" path is a different and riskier feature), but it means an operator who typos the address into an existing user's email gets a silent skip with only an INFO line to explain it. If admin provisioning ever becomes routine, it needs a real admin-management surface, not a wider bootstrap.
+-
+ ## Deferred from: skillars-uat-2-session-duration-and-booking-slot-integrity (2026-08-10)
+ 
+ Found or deliberately left while implementing the story. None blocks UAT.
+@@ -969,18 +1005,10 @@ Found or deliberately left while implementing the story. None blocks UAT.
+ 
+ - **D4 — the batch path still has no create-time cross-booking overlap check.** The single path has one (`BookingService.createBookingRequest`); `createBatch` does not, and AC4 deliberately left it that way. Batch rows are created `REQUESTED`, and `V87`'s exclusion constraint deliberately excludes `REQUESTED` — its own comment records that two overlapping `REQUESTED` bookings competing for a slot is expected in-band behaviour that the accept-time re-check resolves, and `acceptAll` already runs that re-check against `ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED`. Adding a create-time check would reject legitimate competing requests. Recorded so a later reviewer does not read the asymmetry as an oversight. AC4 *did* add the intra-batch overlap check (two slots in the same batch overlapping each other), which is a different and unambiguous case.
+ 
+-- **D5 — `ConfigService`'s 5-minute cache TTL makes a platform-default change look like it did nothing.** `booking.session.defaultDurationMinutes` is read through `ConfigService.getBoundedLong`, and `ConfigService` refreshes on a `@Scheduled(fixedDelayString = "${app.config.cache-ttl-seconds:300}")`. An admin who changes the value and immediately reloads the availability calendar sees the old slot length and will reasonably conclude the setting is broken. `updateConfig` does call `invalidate()`, so a change made *through the config API* is immediate; a change made directly in the database is not. Documented in the V93 migration comment; a real fix is either an admin-UI note or narrowing the TTL, both of which are wider than this story.
+-
+ - **D6 — no frontend test coverage for any of this story's `.vue` changes.** Standing gap (`skillars-deferred-17` D6, `skillars-5-4` W9, `skillars-uat-1`): there is no frontend test suite in this repo, so `ProfileBuilderStep3.vue`'s duration select, `BookingRequestPage.vue`'s merged own-booking rows and coach-timezone week bounds, and `ParentBookingsPage.vue`'s derived read-only reschedule end are verified by code reading and a successful production build only. Reverting all three would leave the entire suite green.
+ 
+ - **D7 — `docker-compose.local.yml` now needs a `redis` override it did not need before.** AC6 replaced the `redis-data` named volume with a bind mount at `/opt/skillars/data/redis`, which is a production path. `docker-compose.local.yml` overrides the volume of every other stateful service but had never needed one for redis, so without the new `skillars-local-redis` override added here, running the local stack would have created `/opt/skillars/data/redis` on a developer's own machine. Fixed in this story; recorded because it is the general hazard of putting absolute host paths in the base compose file — any future service that moves onto the Volume needs the same treatment, and nothing enforces it.
+ 
+-## Deferred from: code review of skillars-uat-2-session-duration-and-booking-slot-integrity — Group A (2026-08-10)
+-
+-Backend duration-model files only (`SessionDurationResolver`, `V93` migration, `AvailabilityService`, `BookingService`, `BookingBatchService`, `RescheduleService`, `BookingError`, `ProfileBuilderStep3Request`, `CoachPricing`, `CoachProfileService`), reviewed against AC1–AC4. Group B (backend tests) also reviewed, no additional defers there. Group D (ops/infra/docs) pending.
+-
+-- **Session duration / availability windows are resolved once and not re-validated before persistence.** `[CLOSED (partially) by skillars-deferred-69 AC7: BookingBatchService.createBatch now re-fetches requiredDuration and windows fresh and re-validates every slot's duration+availability immediately before the batch/booking rows are persisted, inside the same transaction — this narrows the window from "the whole request" to "between the two resolves," it does NOT eliminate it. CoachAvailabilityWindow/CoachAvailabilityBlock carry no @Version and no locked-read method exists for them anywhere in the codebase, so a coach edit landing between the re-check and the actual commit remains unseen; full elimination would require lock support on CoachAvailabilityWindow, out of this story's scope. The separate GET-availability-calendar-vs-POST-booking staleness (AvailabilityService.getAvailabilityCalendar) is unrelated and remains fully open.]` `BookingBatchService.createBatch` resolves `requiredDuration` and fetches `windows` once before the per-slot loop and reuses both for the whole batch; the actual writes happen afterward via `TransactionTemplate`. Separately, `AvailabilityService.getAvailabilityCalendar`'s resolved `slotLength` and the later `BookingService`/`BookingBatchService` calls that independently re-resolve `requiredDuration` have no version or ETag tying a GET availability response to a subsequent POST booking — a coach changing their session length in between can turn a slot the parent just saw into a rejection. Both are the same underlying class of read-then-write staleness that already exists elsewhere in the booking module (e.g. availability windows/blocks changing between GET and POST); not newly introduced by this story and not actionable within its scope. `[CLOSED (further) by skillars-deferred-71 AC2, for single-booking creation only: CoachAvailabilityResponse now carries an availabilitySignature (a deterministic string built from the current windows + resolved session duration, no schema change), which CreateBookingRequest can optionally echo back; BookingService.createBookingRequest compares it against a freshly-recomputed signature before the existing window/duration checks and throws a dedicated BookingError.AVAILABILITY_CHANGED (distinct from the generic rejection) on mismatch, and the frontend re-fetches availability on that specific error. RescheduleService and BookingBatchService remain unwired — see this AC's own scope note for why — so the GET-vs-POST staleness gap for those two paths is not part of this closure.]` `[CLOSED (further, for BookingBatchService specifically) by skillars-deferred-72 (confirmed during skillars-deferred-81 story creation, 2026-08-28): CreateBatchRequest carries availabilitySignature, BookingBatchService.createBatch:142-147 compares it and throws AVAILABILITY_CHANGED on mismatch, and booking.store.js's submitBatch (:558) sends the value end-to-end from the frontend. This landed unannotated over a week before skillars-deferred-81's creation pass found it live in code rather than trusting this ledger entry's stale "unwired" text. RescheduleService remains genuinely out of scope per AC2's own scope note (no GET-then-POST seam exists for reschedule) — not a gap, by design.]`
+-
+ ## Deferred from: skillars-uat-3-payment-capture-integrity-and-backup-retention (2026-08-11)
+ 
+ Found or deliberately left while implementing the story. The first item is an **operational finding, not a code defect, and it is the most consequential thing in this list.**
+@@ -1009,10 +1037,6 @@ All 13 patch findings were applied; these are the review's own deferrals plus on
+ 
+ - **D14 — `reserveCapture`'s `REQUIRES_NEW` + `PESSIMISTIC_WRITE` opens a second pooled connection per attempted reservation**, held up to the 5 s lock timeout under contention, with no pool-sizing analysis behind it. On the batch path that is one extra connection per credit-funded booking, taken sequentially. Load-dependent and speculative without a concurrency/load test, but it is a new resource pattern on the busiest path and should be measured before the platform carries real volume. [`BookingPaymentPersistenceService.java:73-105`]
+ 
+-## Deferred from: skillars-uat-4-i18n-locale-and-message-resolution-integrity (2026-08-12)
+-
+-## Deferred from: code review of skillars-uat-4-i18n-locale-and-message-resolution-integrity (2026-08-12)
+-
+ ## Deferred from: skillars-uat-5-player-self-booking story creation (2026-08-12)
+ 
+ Recorded per AC5 — items explicitly excluded from this story's scope, not fixed.
+@@ -1041,11 +1065,8 @@ Recorded per AC4 — items explicitly excluded from this story's coach-subscript
+ 
+ ## Deferred from: code review of skillars-deferred-22-messaging-role-guard-payment-idempotency-and-resource-integrity-fixes (2026-08-14)
+ 
+-- **`initiateUpload`'s new orphaned-reservation release doesn't confirm the video row itself still exists before publishing `VideoPhysicalDeletionEvent`.** Pre-existing pattern — mirrors `deleteVideo`'s own unmodified check-and-publish shape exactly, which has always published on `!existsByVideoId(...)` alone. [`src/main/java/com/softropic/skillars/platform/session/service/DrillUploadService.java:92-93`, `:118-119`] `[CLOSED by skillars-deferred-89 AC3 — `lockedVideo.isPresent()` added to the publish condition in both `initiateUpload` (hoisted `Optional`) and `deleteVideo` (captured `findByIdForUpdate` result). Defence-in-depth: `drill_video_refs.video_id` has no FK (V38). The motivating "already physically deleted" scenarios are in fact unreachable today — `AdminVideoService.deleteVideo` soft-deletes and there is no hard-delete of `videos` in `src/main`; today's worst case was a caught `VideoNotFoundException` + log noise.]`
+ - **`SessionPlanService.buildResponse`'s new response-map derivation relies on `session.getBlocks()` matching the pre-save `blocks` list used to build it.** Pre-existing coupling — the pre-diff code had the same pre-save-metaMap/post-save-`session.getBlocks()` relationship; this story's refactor only changed how the drill-lookup maps are built, not this dependency. [`src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java:186-234`]
+ 
+-## Deferred from: code review of skillars-deferred-23-flaky-perf-test-dead-code-and-ops-hygiene-fixes (2026-08-14)
+-
+ ## Deferred from: code review of skillars-deferred-24-dead-subscription-column-stripe-metadata-and-backup-guard-fixes (2026-08-15)
+ 
+ - **The new `GUARD_PATH` existence/readability guard block is duplicated verbatim across all 5 caller scripts** rather than factored into one shared function. Spec-directed (AC4's code block explicitly prescribes this exact per-caller shape); a DRY refactor would need its own sign-off, not a silent deviation from the story's prescribed fix. [`deploy/backup/pg-backup.sh`, `volume-backup.sh`, `restore-from-dump.sh`, `restore-from-volume-backup.sh`, `prune-backups.sh`]
+@@ -1054,10 +1075,6 @@ Recorded per AC4 — items explicitly excluded from this story's coach-subscript
+ 
+ - **D1 — `DrillMetadata.repDensity` cannot represent "coach never set this" at all — it is a Java primitive `int`, not `Integer`.** Found during this story's AC4 spec audit (adversarial review of the story's own AC text, pre-implementation): a missing key in the incoming JSON payload deserializes silently to `0` via Jackson, and an explicit JSON `null` would throw a deserialization exception rather than pass through — so a `repDensity != null` guard anywhere downstream (frontend or backend) can never observe the "unset" case as `null`; it is indistinguishable from a legitimately-zero drill today and will remain so under the current contract. AC4 of this story added a frontend-only defensive guard (protects against `undefined`/`null` arriving from a stale cache, a manually-edited dev fixture, or a future API contract change) but explicitly could not close this gap — doing so needs a backend change: make `repDensity` a nullable `Integer` (propagating through `DrillMetadata`, its JSONB Hibernate mapping, and every backend site that reads it arithmetically) or add an explicit "no density data" signal, plus a decision on whether that is a real product need (do coaches uploading custom drills currently have any path that leaves `repDensity` unset, or does upload validation already require it?). [`src/main/java/com/softropic/skillars/platform/session/contract/DrillMetadata.java:12`, `src/frontend/src/components/session/DrillDetailPanel.vue`] **[AUDIT 2026-08-24: skillars-deferred-63 story creation investigated this live.** No live path constructs a `Drill` with coach-submitted metadata today — `grep -rn "new Drill(\|Drill.builder()\|new DrillMetadata(" src/main/java` finds exactly one non-test construction site, `DrillLibraryService.java:129`'s `clone.setMetadata(source.getMetadata())`, which copies an already-persisted drill's metadata rather than deserializing a fresh payload; `DrillUploadService`/`DrillUploadResource` (the only "drill upload" surface) handle the drill video file only — `DrillUploadInitiateRequest` has no `DrillMetadata` field at all. Every `Drill.metadata` is populated exclusively by migration/seed data under full app-team control. The "coach never set repDensity" scenario has no reachable trigger today — not picked up as an AC by skillars-deferred-63. Re-open if a future story adds a real coach-facing metadata-submitting endpoint.]**
+ 
+-## Deferred from: code review of skillars-deferred-30-error-toast-mapping-and-repository-boundary-test-coverage-fixes (2026-08-18)
+-
+-- **[OWNED BY skillars-deferred-31 AC7] `CoachBookingRequestsPage.vue`'s `handleAccept` calls its post-failure refresh unguarded — a rejecting refresh throws an unhandled promise rejection out of the catch block.** Found by a second, independent code review pass (2026-08-18): `await bookingStore.loadCoachBookingRequests()` at `CoachBookingRequestsPage.vue:164` sits inside `handleAccept`'s `catch` block with no try/catch of its own. If the accept call fails AND the immediately-following refresh call also fails (e.g. a transient network blip right after a real rejection), the refresh's rejection propagates unhandled rather than being absorbed — the coach's toast for the original failure still fires (it's already been queued before the `await`), but the unhandled rejection is a latent robustness gap a browser console/error-monitoring integration would surface as noise at best, an uncaught exception at worst. Pre-existing pattern, not introduced by `skillars-deferred-30`'s edits (which only added `errorKey` branching before this line). A one-line `.catch(() => {})` closes it. [`src/frontend/src/pages/coach/CoachBookingRequestsPage.vue:164`] `[WITHDRAWN by skillars-deferred-31 AC7 — the described defect cannot occur]` The item rests on the premise that `loadCoachBookingRequests()` can reject. It cannot: `booking.store.js:302-314` wraps the whole call in `try { … } catch (e) { coachRequestsError.value = e }` with **no rethrow**, so the `await` at `CoachBookingRequestsPage.vue:164` always resolves and no unhandled rejection is possible. The prescribed `.catch(() => {})` would be dead code, and a future reader would have to re-derive why it is there. The identical unguarded pattern in `handleDecline` (`:176`) is harmless for exactly the same reason and was likewise not "fixed". This is the **same false premise** the `skillars-deferred-30` code review withdrew a sibling item for on the same day, reached independently by a different review pass hours later — the store's swallow-and-never-rethrow contract is evidently not obvious from the call sites, so AC7 also added a CONTRACT comment above `loadCoachBookingRequests`/`loadCoachSchedule` in `booking.store.js` stating that neither loader ever rethrows and callers therefore need no guard. The live residual these two withdrawn items were both circling — a silent failed refresh — is closed by AC1.
+-
+ ## Deferred from: code review of skillars-deferred-33-messaging-lock-ordering-booking-status-mapping-and-german-video-i18n-gap (2026-08-18)
+ 
+ - **`V97__drop_booking_refund_eligibility_and_amount.sql` drops two columns with a bare, uncommented `DROP COLUMN` pair under an `ACCESS EXCLUSIVE` lock, and its "nothing reads these columns" justification was verified only via grep of `src/main/java`**, not any SQL views/reporting/export tooling outside the Java codebase. Deferred rather than patched: `V96` (this story's own cited precedent) has identical zero commentary, and the `ACCESS EXCLUSIVE`-lock-class concern is already tracked in this ledger against `V94` as an accepted, not-yet-actionable gap at current table size. [`src/main/resources/db/migration/V97__drop_booking_refund_eligibility_and_amount.sql`]
+@@ -1116,10 +1133,6 @@ above rather than duplicated here. This section holds only what the story-creati
+   `src/main/java/com/softropic/skillars/platform/video/service/WebhookEventProcessorScheduler.java:171-236`,
+   `src/main/java/com/softropic/skillars/platform/video/service/UploadSessionExpiryScheduler.java:40-53`] `[DECIDED 2026-08-28 (skillars-deferred-81 story creation): leave as-is, no automatic retry infrastructure. All four call sites already fail gracefully with logging (AdminVideoService.deleteVideo's own comment documents manual retry-by-recall; the other three rely on their own scheduled re-run or accept the swallow); no live incident has been reported. Building retry infra now would be speculative engineering against a working, if imperfect, accepted pattern.]`
+ 
+-## Deferred from: code review of skillars-deferred-53-concurrency-race-test-determinism-and-hardcoded-currency-configuration (2026-08-21)
+-
+-- `main.platform_config.id` remains a hand-assigned `PRIMARY KEY` with no sequence/identity column, requiring every migration that seeds this table (including `V99`) to manually track and document the next free id — a systemic schema design decision pre-dating this story (established at `V20__platform_config.sql`), out of scope for a bundled small-fix story to redesign. [`src/main/resources/db/migration/V20__platform_config.sql`, `src/main/resources/db/migration/V99__payment_currency_config.sql`]
+-
+ ## Deferred from: code review of skillars-deferred-56-drill-upload-error-code-assertions-and-pack-deduction-exception-safety (2026-08-22)
+ 
+ - `handlePackBasedBooking`'s catch clause widening from `PaymentGatewayException` to bare `RuntimeException`
+@@ -1140,13 +1153,6 @@ above rather than duplicated here. This section holds only what the story-creati
+ 
+ ## Deferred from: code review of skillars-deferred-57-gdpr-report-file-cleanup-report-generation-rate-limiting-and-stripe-customer-id-format-guard (2026-08-22)
+ 
+-- Rate-limit bucket for the new `report_generate` key is IP-keyed, not per-coach — coaches sharing an
+-  office/NAT IP share one 10/minute bucket, and any caller whose IP lookup fails collapses onto a shared
+-  `"report_generate:unknown"` bucket. Deferred: inherited from the established `@RateLimited` IP-keying
+-  mechanism already in use at 6 other call sites (`CoachRegistrationService`,
+-  `PlayerRegistrationService`, `ParentRegistrationService`); not introduced by this story, and changing
+-  the keying strategy is a shared-aspect change with a wider blast radius than one call site.
+-  [`src/main/java/com/softropic/skillars/infrastructure/security/RateLimitingAspect.java`]
+ - AC3's `V101__stripe_customer_id_format_guard_validate.sql` (`VALIDATE CONSTRAINT`) has no remediation
+   path for a pre-existing non-conforming row: if any live `payment.stripe_customers` row ever failed the
+   `cus_%` check, `V101` (and the deploy) would hard-fail with no backfill/quarantine step in either `V100`
+@@ -1175,19 +1181,6 @@ above rather than duplicated here. This section holds only what the story-creati
+   the whole project, out of scope for any single story.
+   [`_bmad-output/implementation-artifacts/deferred-work.md`, `_bmad-output/implementation-artifacts/sprint-status.yaml`]
+ 
+-## Deferred from: skillars-deferred-63 story creation (2026-08-24)
+-
+-Filed during a multi-round product-decision discussion (2026-08-24) covering nine `deferred-work.md`
+-items the project owner explicitly decided, split across `skillars-deferred-62` (the
+-`jakarta.persistence.lock.timeout` fix, too large to bundle) and `skillars-deferred-63` (the other seven).
+-Two items surfaced during that discussion that neither story implements — one filed fresh here and picked
+-up in the same pass per the `skillars-deferred-53` precedent, one filed fresh and deliberately left open.
+-The escrow / completion-gated-payout item was taken up as **skillars-deferred-91 AC5**: Part A (the
+-`CAPTURE_PENDING` → `CAPTURE_ABANDONED` timeout + slot release) shipped; Part B (completion-gated payout
+-proper) is a Stripe-Connect model change filed as its own story — see the skillars-deferred-91 residuals
+-section below and `docs/architecture/payout-and-capture-pending.md`. `BookingService.recordNoShowCoach`
+-(`:739-758`) stays `UPCOMING`-only per the same 2026-08-24 owner decision.
+-
+ ## Deferred from: code review of skillars-deferred-62-postgres-lock-timeout-bounded-wait-fix (2026-08-24)
+ 
+ - **`PessimisticLockRetryer`'s retry loop sleeps while still holding the transaction's pooled JDBC connection.** Up to ~3.2s (the documented default retry budget) of connection-pool time is spent purely sleeping under contention per call. A consciously-chosen tradeoff of the savepoint-based retry-in-place design — the Dev Agent Record documents that Spring's declarative `Propagation.NESTED` was investigated and found unavailable (`DefaultJpaDialect` has no savepoint support), which is why retry happens in-place rather than via a connection-releasing mechanism. Worth tracking if connection-pool pressure becomes visible under real load. [`src/main/java/com/softropic/skillars/infrastructure/persistence/PessimisticLockRetryer.java`]
+@@ -1216,10 +1209,6 @@ Code review (parallel adversarial layers: Blind Hunter, Edge Case Hunter, Accept
+ 
+ - **Video Error Handling UX** — When a video load fails (e.g., expired signed URL), code silently refetches drill data in background. Video element remains broken with no user notification. May be intentional design; requires product/UX decision. [`DrillCard.vue`, `DrillDetailPanel.vue`, and page handlers]
+ 
+-## Deferred from: code review of skillars-deferred-77 (2026-08-27)
+-
+-Items found during this story's own investigation or during its full-module regression sweep, not fixed because they are out of the story's ACs' scope:
+-
+ ## Deferred from: code review of skillars-deferred-81-parent-name-batching-cross-drill-video-lock-video-error-toast-and-self-booking-packs (2026-08-28)
+ 
+ Four pre-existing issues identified during code review:
+@@ -1233,29 +1222,20 @@ Four pre-existing issues identified during code review:
+ ## Deferred from: code review of skillars-deferred-83-video-deletion-transaction-isolation-cross-drill-lock-causality-and-review-submission-ui (2026-08-30)
+ 
+ - **`DrillUploadServiceConcurrencyIT`'s new lock-causality test asserts on wall-clock timing.** `deleteVideo_videoRowHeldByAnotherTransaction_waitsOutTheLockBeforeCompleting` asserts `elapsedMillis >= holdMillis - 200` after a hardcoded ~1200ms external lock hold — a known CI-timing-flakiness risk class. Deferred, not fixed: this was a documented, deliberate trade-off after the story's originally spec'd Mockito-based approach proved technically infeasible against a Spring Data JPA repository interface (confirmed by two live failures), and the 200ms tolerance matches this same test file's own pre-existing timing-based tests (`initiateUpload_briefContention_succeedsAfterBoundedRetry` et al.). [`src/test/java/com/softropic/skillars/platform/session/api/DrillUploadServiceConcurrencyIT.java`]
+-- **`CoachPublicProfilePage.vue` redundantly re-fetches the first page of reviews that `getCoachProfile` already returned.** `CoachProfileDto.reviews` (built server-side via `reviewQueryService.getFirstPageForCoach`, `CoachMarketplaceResource.java:70-81`) is byte-for-byte the same data `listCoachReviews(coachId)`'s default call (`page=0, sort='newest'`) fetches — but the new `onMounted` hook ignores `profile.value.reviews` and fires a second, wholly redundant `GET /api/reviews/coaches/{coachId}` request on every page view. Deferred, not fixed: AC3 explicitly directed calling `listCoachReviews(coachId)` on mount, so the diff is spec-compliant; a fix would mean reading `profile.value.reviews` directly (or dropping the backend's own now-redundant enrichment field) — a small architectural call worth a future cleanup pass rather than a blocking defect. [`src/frontend/src/pages/marketplace/CoachPublicProfilePage.vue`, `src/main/java/com/softropic/skillars/platform/marketplace/api/CoachMarketplaceResource.java`]
+-
+ ## Deferred from: code review of skillars-deferred-84-coach-radar-preferences-fk-hardening-slu-snapshot-persistence-resilience-and-skill-toggle-debounce (2026-08-31)
+ 
+ - **V117 (like the `V113` / `V109` precedents it mirrors) is not written for online-safe deploys.** `ADD CONSTRAINT fk_crp_player_id FOREIGN KEY (player_id) REFERENCES main.player_profiles(id)` takes a validating lock that scans `development.coach_radar_preferences` and locks `main.player_profiles` (a core table) for the scan; `CREATE INDEX ix_crp_player_id` (no `CONCURRENTLY` — Flyway's transactional migration can't use it anyway) then blocks writes to `coach_radar_preferences`. The lower-impact pattern (`ADD CONSTRAINT ... NOT VALID`, then `VALIDATE CONSTRAINT` in a later migration; `CREATE INDEX CONCURRENTLY` outside a transaction) is not used anywhere in this project's migration history. Low impact for this specific small table, but a codebase-wide convention worth revisiting if any of these late-FK migrations ever targets a large table. [`src/main/resources/db/migration/V117__coach_radar_preferences_player_fk.sql`]
+ 
+ ## Deferred from: code review of skillars-deferred-86-slu-snapshot-write-idempotency-async-retry-bulkhead-and-coach-radar-preferences-coach-fk (2026-08-31)
+ 
+-- **`development.player_skill_stats` has no unique constraint on `(session_id, skill_code)`, so the SLU *detail* write is only idempotent against the `@Retryable` retry, not against concurrent duplicate event delivery.** Two `BookingCompletedEvent` deliveries for the same session can both pass `SluCalculationService.onBookingCompleted`'s `findBySessionId(...).isEmpty()` guard (line 80) before either commits, both `dispatchSluPersistence` tasks run concurrently on `sluRetryExecutor`, and both `SluPersistenceRetrier.saveSluWithRetry` calls see `existsBySessionId(...) == false` (each in its own tx) and call `saveAll` — two full sets of `player_skill_stats` rows. The new V119 marker table serializes the *snapshot* writers, so `player_slu_weekly_snapshot.total_slu` is applied once while the detail rows are doubled: `SUM(player_skill_stats.slu_value)` and the snapshot total diverge permanently for that player. Pre-existing (the line-80 TOCTOU exists today); skillars-deferred-86 AC2 was explicitly scoped by the project owner as intent-documentation + a saved round-trip + a future backstop, **not** a bug fix, and the merge-on-detached retry path is genuinely safe. Closing the concurrency gap would need a DB uniqueness key on the detail side (mirroring the snapshot marker) — a follow-up story on its own merits. Flagged independently by all three review layers. [`src/main/java/com/softropic/skillars/platform/development/service/SluPersistenceRetrier.java`, `src/main/java/com/softropic/skillars/platform/development/service/SluCalculationService.java`] `[STALE — the `(session_id, skill_code)` partial unique index already exists as `V47__player_skill_stats_unique_constraint.sql` (Story 5.1 review): column-for-column and predicate-for-predicate. Never dropped. Story creation and all three deferred-86 review layers missed it, so the "would need a DB uniqueness key … a follow-up story" clause was already satisfied when it was written. The permanent double-write cannot happen — the losing `saveAll` hits PG 23505. skillars-deferred-89 AC1 instead makes that collision a clean idempotent no-op: a constraint-name-scoped catch in `SluPersistenceRetrier.saveSluWithRetry` (no migration) — no retry storm, no false "rows lost" @Recover ERROR.]`
+-- **`sluRetryExecutor` has no graceful-drain configuration.** The bean sets core/max/queue/timeout/decorator/rejection but not `setWaitForTasksToCompleteOnShutdown(true)` / `setAwaitTerminationSeconds(...)`, so on context close `ThreadPoolTaskExecutor.destroy()` calls `shutdownNow()`: up to 10 queued + 4 in-flight SLU+snapshot batches are abandoned, in-flight `@Backoff` sleeps get `InterruptedException` (matches no `retryFor` / `@Recover`), and `MdcDecorator` swallows the result with a generic "Exception thrown from detached thread" log — no `@Recover`, no re-drive. This exactly mirrors the shared `taskExecutor` / `moderationTaskExecutor` / `sendMailPool` (none of which set graceful-shutdown either), so it is a pre-existing project-wide convention now extended to a fourth pool, not a regression. Worth a single project-wide pass if any of these pools is ever made durable. [`src/main/java/com/softropic/skillars/platform/development/config/DevelopmentConfig.java`, `src/main/java/com/softropic/skillars/infrastructure/config/AsyncConfig.java`]
+-- **`SluPersistenceDispatcher.dispatchSluPersistence` runs `writeAllWithRetry` even when `saveSluWithRetry` exhausted its retries.** `SluPersistenceRetrier`'s `@Recover` returns `void`, so the chained method falls through to the snapshot write: `player_slu_weekly_snapshot` (and its V119 marker rows) can gain deltas for a session that has **no** rows in `player_skill_stats` — the dashboard fast-path then shows SLU the detail queries cannot reproduce. Pre-existing sequencing: the two calls were already sequential-with-no-guard in `onBookingCompleted` before the dispatcher extracted them; carried across unchanged. A fix would gate the snapshot write on the SLU save having actually succeeded (return value / flag from the retrier). [`src/main/java/com/softropic/skillars/platform/development/service/SluPersistenceDispatcher.java`] `[CLOSED by skillars-deferred-89 AC2 — `saveSluWithRetry` now returns `boolean` (false only from its `@Recover` paths); `dispatchSluPersistence` calls `writeAllWithRetry` only when it returned true, else ERROR-logs the skip. Closes the *over-report* direction only; the *under-report* direction (detail rows saved, snapshot write exhausts) is filed as a new residual below.]`
+ - **`development.player_slu_weekly_snapshot_applied` has no retention or pruning tied to session lifecycle.** Its only non-PK relationship is `player_id -> main.player_profiles(id) ON DELETE CASCADE`; there is no FK to the session and no job that trims markers when a session is deleted or ages out. Rows (5-column PK led by a random session UUID) accumulate for the lifetime of the deployment, removed only by the per-player GDPR-erasure `deleteAllByPlayerId` cascade. Growth rate is low (one row per session × skill × ISO-week) and matches the append-only pattern of the sibling `player_skill_stats` / `player_slu_weekly_snapshot` tables, so this is a long-horizon housekeeping item, not a defect. [`src/main/resources/db/migration/V119__player_slu_weekly_snapshot_applied.sql`]
+ 
+ ## Deferred from: code review of skillars-deferred-87-backup-upload-verification-hardening-provision-volume-device-and-pre-volume-data-migration-ci-latest-ordering-guard (2026-08-31)
+ 
+ 3-layer adversarial review (Blind Hunter / Edge Case Hunter / Acceptance Auditor). All 7 ACs satisfied to spec, 0 AC violations. 1 decision-needed + 7 patches handled on the story; the items below are real but pre-existing or spec-accepted design and out of this story's scope:
+ 
+-- **Pre-Volume migration does not run on a host where a prior run already mounted the Volume over the pre-Volume `data/` tree.** `provision.sh` section 7's `mountpoint -q "${MOUNT_POINT}"` short-circuit skips the staging branch entirely and `${STAGING}` is never created, so `settle_pre_volume_migration` finds nothing and returns — the root-disk tree (TLS certs, pre-Volume LGTM/Redis data) stays shadowed under the mount forever. The realistic path this AC targets (new script runs *before* the Volume, Volume attached, script re-run) is handled; an already-shadowed host is not. AC5 step 6 explicitly accepts already-shadowed data as manual-reclaim-only (unmount `${MOUNT_POINT}`, `rm -rf` its root-disk contents, remount), and `first-time-setup.md` documents that manual reclaim. [`deploy/provision.sh:289-311`] `[CLOSED by skillars-deferred-89 AC9(a) — re-scoped to the genuinely-uncovered case: the Volume mounted OUTSIDE provision.sh (manual `mount` / `/etc/fstab`) before the script ever ran, so nothing was ever staged. (A prior provision.sh run instead leaves a verified duplicate safely on the Volume — not loss.) `provision.sh` now logs a one-line pointer on the already-mounted path to `first-time-setup.md` → "Reclaim shadowed pre-Volume data" (new stable heading, 5-step procedure). No bind-mount probe, no steady-state multi-line WARNING.]`
+ - **CI `:latest` freezes permanently after a `master` history rewrite.** Once the commit in `:latest`'s `org.opencontainers.image.revision` label is unreachable (force-push / rebased-away branch), `git merge-base --is-ancestor "${published_rev}" "$GITHUB_SHA"` returns 1 or 128 on *every* subsequent run, so `:latest` is never advanced again and there is no manual-override path. This is a direct consequence of AC6's explicit fail-safe design (exit ≠ 0 → publish the `sha-` tag only, never abort). `master` force-push is outside normal operations; recovery is a manual `docker buildx imagetools create`/re-tag of `:latest`. A `workflow_dispatch` "force-publish :latest" escape hatch would be a separate follow-up. [`.github/workflows/ci.yml:137-144`] `[PARTIALLY CLOSED by skillars-deferred-88 AC6 — a workflow_dispatch force_publish_latest input now force-publishes :latest for the current commit without the ancestor check (master-ref-gated: ::error:: + exit 1 on any other ref). The automatic ancestor check still cannot self-recover from a history rewrite, by design.]`
+ - **Pre-Volume migration verify is stat-only on the armed paths; `postgres/` is migrated but never verified before `rm -rf "${STAGING}"`.** `migrate_pre_volume_data` compares only `stat -c '%a %u:%g'` on each armed top-level dir (`traefik/acme.json` + `redis|grafana|loki|tempo|prometheus/`) — never inner files, never `postgres/`, never a content/checksum re-check. A torn `rsync` (SIGKILL / Volume ENOSPC after the dirs exist but before their contents finish) passes verification, `${STAGING}` is deleted, and the incomplete copy is the only one left. Matches the story-review-approved AC5 scope ("verify only source paths"). Surfaced as a decision-needed item on the story; the project owner's resolution is recorded there. [`deploy/provision.sh:233-264`]
+-- **A `build-and-push` run cancelled while *pending* in the `build-and-push-${{ github.ref }}` concurrency group publishes no tags at all — not even `sha-<short>`.** GitHub keeps only one run pending per group and cancels a previously-pending one when a newer queues, so in a ≥3-push burst the middle commit's image is never built and `docs/deployment/rollback.md` has no rollback target for it until its CI is manually re-run. `cancel-in-progress: false` protects only the *running* run. Acknowledged in the shipped `ci.yml` comment and the story's M2 caveat; AC6 neither introduces nor fixes it. [`.github/workflows/ci.yml:52-54`] `[CLOSED by skillars-deferred-89 AC9(b) — `docs/deployment/rollback.md` gains a "If the commit has no `sha-<short>` image in GHCR" subsection with the *Re-run all jobs* remedy + a roll-back-to-nearest-older-image fallback. The `ci.yml` comment this originally asked for already existed at `ci.yml:103-105` and `:217-218` (confirmed). A code fix (a separate always-runs `sha-`-only job outside the concurrency group) is explicitly out of scope.]`
+-- **`chown_if_needed`'s `find -maxdepth 2` walks grandchildren, not just the "immediate children" the comment describes, and only `-quit`s on a mismatch.** On a clean idempotent re-run it stat-walks the directory plus two levels of each observability dir (`loki/chunks/*`, tempo blocks, prometheus WAL) with no early exit. Matches the spec's literal `-maxdepth 2`; revisit if provision runtime regresses on a Volume with real retention. [`deploy/provision.sh:43`] `[CLOSED by skillars-deferred-89 AC9(c) — comment-only fix: `-maxdepth 2` KEPT (narrowing to `-maxdepth 1` would skip the repair for a single-child dir like `loki/` → `chunks/` that `chown -R` descended into before an interruption); the comment now reads "the directory, its children and its grandchildren", and the LIMITATION sentence + `-quit` + the deferred-87 AC3 recovery logic are unchanged. Matching wording fix in `first-time-setup.md`. Perf-watch note stands: revisit if provision runtime regresses.]`
+-- **First-ever `:latest` publish where GHCR returns `denied` / `name unknown` instead of a `not found` / `MANIFEST_UNKNOWN` message.** `grep -qiE 'not ?found|MANIFEST_UNKNOWN|manifest unknown'` misses those phrasings → the step falls to the generic "read failed, publish `sha-` only" branch → `:latest` is not created on the first push, appearing only on a later run once the package exists and the registry returns a true 404. Self-heals; one-run delay on a brand-new repo. [`.github/workflows/ci.yml:109`] `[CLOSED by skillars-deferred-88 AC6 — for the `name unknown` phrasing only; the grep now matches not ?found|manifest ?unknown|MANIFEST_UNKNOWN|name ?unknown. `denied` is deliberately NOT reclassified as absent — GHCR also returns it for a permission failure on an existing package, so moving it would let a transient denied trigger an older-overwrites-newer :latest overwrite.]`
+ 
+ ## Deferred from: code review of skillars-deferred-88-review-moderation-epoch-provision-concurrency-and-fstab-safety-ci-latest-recovery-grafana-single-channel-receiver-egress-firewall-and-auth-otp-hardening (2026-08-31)
+ 
+@@ -1267,8 +1247,6 @@ Four pre-existing issues identified during code review:
+ 
+ Surfaced by the story-creation audit and by implementation (2026-09-01). One residual + one observation, none owed an AC by this story:
+ 
+-- **[CLOSED by skillars-deferred-91 AC4, 2026-09-03] SLU weekly-snapshot *under*-report direction.** `SnapshotPersistenceRetrier`'s two `@Recover` methods now enqueue the exhausted snapshot write onto the generic outbox (`SluSnapshotOutboxSupport` → `SLU_SNAPSHOT_WRITE` handler → `SnapshotBatchWriter.writeAllDeltas`), so a `@Recover`-swallowed write is re-driven off the request path and is idempotent through the `V119` marker (no over-report). Proven by `SluSnapshotOutboxIT`.
+-- **[CLOSED by skillars-deferred-89 code review, 2026-09-01] SLU over-report via a concurrent-delivery collision across a week boundary.** The AC2 review found a second over-report mechanism the original AC missed: on the V47 collision path (and the pre-existing `existsBySessionId` short-circuit) `saveSluWithRetry` returned `true`, so the dispatcher still ran `writeAllWithRetry` with the losing delivery's list and *its own* per-invocation `isoYear`/`isoWeek` — two deliveries seconds apart across Monday 00:00 UTC land in different week buckets, and the loser's delta hit a bucket the winner never marked (plus the skill-subset trigger AC1 had recorded as residual). Fixed by making `saveSluWithRetry` return `SluSaveOutcome` and having the dispatcher run the snapshot write **only** on `SAVED`. Guarded by `SluPersistenceDispatcherTest.dispatchSluPersistence_rowsAlreadyPersistedByConcurrentDelivery_skipsSnapshotWrite_noError` + `SluPersistenceRetrierTest.saveSluWithRetry_isNotTransactional_…`.
+ - **No non-gating perf-trend signal for `authorizePlayback`.** skillars-deferred-89 AC5 removed the flaky `p99 < 200ms` merge gate and left a `log.info` of p50/p95/p99 in Failsafe output that nothing scrapes. The deferred-23 bullet's own suggested remedy — a dedicated non-gating perf-tracking job that records the distribution over time — is not built. [`src/test/java/com/softropic/skillars/platform/video/service/PlaybackServiceIT.java`]
+ - **Observation (not a residual):** skillars-deferred-89 AC7 takes the count of `permitAll()` OTP-email endpoints from 1 (parent) to 3 (parent + coach + player). Each is `@RateLimited(capacity = 3, duration = 30)` (per client IP) and V121's `uq_pot_one_active_per_user` blocks a concurrent second active token. The AC7 code review flagged that the IP bucket alone lets a distributed caller who knows a victim's `userId` repeatedly delete their in-flight OTP / bomb their inbox — so a **per-user** `rateLimitingService.tryConsume(userId, "<role>_resend_otp_user", 3, 30, MINUTES)` guard was added to `resendPhoneOtp` in all three services (parent included, to keep parity), mirroring the existing `verifyPhone` per-user limit. Cross-role misuse (`/player/resend-otp` with a coach's id) is still possible but low-value — both endpoints require a valid id + `EMAIL_VERIFIED` and only ever mail the account's own address; left as-is (parent has no role check either). [`CoachRegistrationService.java`, `PlayerRegistrationService.java`, `ParentRegistrationService.java`, `AppEndpoints.java`]
+ 
+@@ -1281,7 +1259,6 @@ Six items triaged `defer` by `bmad-code-review`. Two (`resendPhoneOtp` triplicat
+ ## Deferred from: code review of 1-7-session-refresh-mechanism-fix (2026-09-02)
+ 
+ - **Three sibling docs still assert `rint` TTL = 15 min.** The rewritten `docs/session-refresh-mechanism.md` correctly documents `rint` as a browser-session cookie (`maxAge=-1`) holding a fixed 600000 ms, but the surrounding doc set was not updated and still carries the old claim. `frontend-integration-guide.md:3684` links straight to the rewritten doc, so a reader lands on two contradictory TTLs in one hop. Outside AC scope, which named only `session-refresh-mechanism.md`. [`docs/frontend-integration-guide.md:1164`, `docs/security-api-endpoints.md:252`, `docs/frontend-implementation-spec.md:243`]
+-- **`dev-docs` index summary is stale.** Still describes `session-refresh-mechanism.md` as a "deep dive on the JWT refresh-token rotation flow" — the rewritten doc is about the sliding-window keep-alive mechanism; rotation is `POST /api/auth/refresh`, a different endpoint the doc now explicitly distinguishes. [`docs/dev-docs/index.html:152`]
+ - **Prettier fails on the two touched frontend files at `HEAD` as well as in the working tree.** `project-context.md` makes Prettier mandatory for all `.js`/`.vue`/`.scss`/`.json`. Not introduced by this change (verified failing at `HEAD` too), and disclosed in the story's Completion Notes, but the repo-wide rule stays violated. [`src/frontend/src/App.vue`, `src/frontend/src/boot/axios.js`]
+ - **"5 minutes before expiry" is stated as exact but the monitor ticks every 30 s.** `SESSION_CHECK_INTERVAL` = 30 s, so both the warning and the client-side expiry fire up to 30 s late. The doc's key-timeouts table and the new `SecurityConstants` JavaDoc both present the figure as precise, which makes any acceptance test written against it flaky by construction. [`docs/session-refresh-mechanism.md:67`, `plugins/sessionManager.js`]
+ - **1.7b promoted to `ready-for-dev` with its stated prerequisite unclosed.** `1-7-REVIEW-UPDATES.md:165` requires a manual JWT-expiry observation "before 1.7b starts — 5 minute check de-risks B3", and it is not recorded as performed. B3's diagnosis was independently confirmed correct during this review (`JWTAuthorizationFilter.java:115-119` sends a bodyless `sendError(SC_UNAUTHORIZED)`; the only producer of `security.sessionExpired` is `ApiAdvice.java:303-308`, which a servlet filter never reaches), so the premise holds — only the checklist item is open. [`_bmad-output/implementation-artifacts/1-7-REVIEW-UPDATES.md:165`]
+@@ -1290,15 +1267,11 @@ Six items triaged `defer` by `bmad-code-review`. Two (`resendPhoneOtp` triplicat
+ 
+ ## Deferred from: code review of 1-7b-session-refresh-rint-contract-fix (2026-09-02)
+ 
+-- **401 JSON body carries no `Cache-Control: no-store`.** `writeUnauthorized` sets status, content-type and charset but no cache directives, so a misconfigured intermediary could in principle cache the 401 response. The body contains no secrets (an `errorKey` and a generic message), so impact is low. Pre-existing shape — `ApiAdvice` responses rely on Spring's defaults. [`JWTAuthorizationFilter.java:writeUnauthorized`]
+ - **`sessionManager.js` state machine rewritten with zero frontend tests.** The diff replaces the whole expiry/warning/countdown state machine (`computeTimeUntilExpiry`, the legacy-fallback branch, `tick()`'s warning edges and expiry dispatch, the `refreshSession()` interaction) and adds backend tests only. Three of the confirmed patch findings in this review — the stale-`rint` parse, the countdown-timer leak, and the unevaluated-state window — are each a one-line unit test with a faked `document.cookie` and `Date.now()`. The repo has no frontend unit-test infrastructure, which the story disclosed, so this is a standing gap rather than a story miss. [`src/frontend/src/plugins/sessionManager.js`]
+ 
+ ## Deferred from: code review (round 2) of 1-7b-session-refresh-rint-contract-fix (2026-09-02)
+ 
+ - **`startSessionMonitoring()`'s early return leaves no timer armed if the expiry navigation is swallowed.** When the first `tick()` reports an expired session, monitoring returns without arming the 30 s interval and relies entirely on `App.vue`'s `handleSessionExpired` → `router.push()`. That push is not awaited or `.catch()`ed, and Vue Router 4 rejects on an aborted/redirected navigation. If it is aborted, `cleanup()` has already reset the state to look healthy (`showWarning = false`, `timeUntilExpiry = LEGACY_SESSION_TTL`, `checkIntervalId = null`) and nothing re-arms monitoring — `startSessionMonitoring()` is only called from `App.vue` mount and `initSession()`. Deliberately left as-is rather than patched: the alternative (arm the interval anyway) makes the failure noisy instead of silent but re-dispatches `session:expired` — and therefore a backend logout call — every 30 s until navigation completes. Both options have real costs and the abort path is unverified. [`src/frontend/src/plugins/sessionManager.js:startSessionMonitoring`]
+-- **[CLOSED 2026-09-02]** ~~Three sibling docs still describe `rint` as a countdown with a 15-minute TTL.~~ Fixed in the same session: all three cookie tables corrected (absolute epoch ms, `maxAge` 960 s) and each now defers to `session-refresh-mechanism.md` instead of restating the contract. Three further errors were found and fixed while there: `frontend-integration-guide.md` carried a ~120-line `sessionManager.js` listing that never matched the real module (hardcoded `SESSION_TTL`, 2-minute warning, a `readonly` `sessionState` object and a `resetTimers()` helper — none of which exist), replaced with a summary plus pointer; the `admin` cookie was compared against `'true'` when its value is the literal `"admin"`; and the per-row `Secure` column was wrong for every row, since `CookieUtil` derives `Secure` from the request scheme. Two reference 401 interceptors that gated only on `security.sessionExpired` now gate on `security.unauthorized` too, matching the real code. Original entry: **Three sibling docs still describe `rint` as a countdown with a 15-minute TTL.** `docs/security-api-endpoints.md:252`, `docs/frontend-integration-guide.md:1164` and `docs/frontend-implementation-spec.md:243` all predate the contract change; both facts are now wrong (`rint` is absolute epoch ms with `maxAge` 960 s). Flagged once during the 1.7a review and not re-recorded for 1.7b, which made them more wrong. Outside this story's AC scope, which named only `docs/session-refresh-mechanism.md`. [`docs/security-api-endpoints.md`, `docs/frontend-integration-guide.md`, `docs/frontend-implementation-spec.md`]
+-- **Prettier still fails on every changed frontend file, and this story widened the gap.** `project-context.md` makes Prettier mandatory for `.js`/`.vue`/`.scss`/`.json`; `.prettierrc` sets `semi: false` while the files use semicolons, so `npx prettier --check` warns on `sessionManager.js`, `useSession.js`, `boot/axios.js` and `App.vue`. Verified failing at `HEAD` too, so not introduced here — but 1.7b added roughly 100 net new non-conforming lines to `sessionManager.js`, and neither the story's Verification section nor the review claimed or checked Prettier (only ESLint). Already recorded for 1.7a; re-recorded because the surface grew. [`src/frontend/src/`]
+-
+ ## Deferred from: skillars-deferred-90 story creation and implementation (2026-09-02)
+ 
+ - **`sessionManager.js` `startSessionMonitoring()`'s early-return-with-no-timer path** — left as documented (project-owner decision). See the round-2 1-7b bullet above; not re-fixed here.
+@@ -1318,10 +1291,6 @@ The following ledger items were verified against current source and found alread
+ - `skillars-deferred-88` fstab "no `[ -n "${VOLUME_LINK}" ]` precondition" — moot; `provision.sh:366-368` always sets a non-empty device field.
+ - `boot/axios.js` reference to the 401 interceptor gating only `security.sessionExpired` — the code interceptor (`:151`) already gates on both keys.
+ 
+-## Deferred from: 3-layer adversarial code review of skillars-deferred-90 (2026-09-03)
+-
+-- **AC8's before/after "12/14" wildcard-bundle reproduction was never run.** `LoginInfoServiceIT`, `LoginAttemptsServiceTest`, `NeglectedSkillDetectionServiceIT` and `AccountManagementFacadeIT` were each run in isolation (green) but never together in the order that produced the reported failure, so the "bug reproduced / bug gone in the same run" evidence the AC asks for does not exist. The fix itself (`RequestMetadataProvider.cleanup()` in both `tearDown()`s + defensive cleanup in `LoginAttemptsServiceTest`) is sound. Author verification task, not a code change. [`skillars-deferred-90` Task 8]
+-
+ ## Deferred from: skillars-deferred-91 story creation and implementation (2026-09-03)
+ 
+ skillars-deferred-91 closed the genuine one-off bugs (AC12–AC19), the rolling-deploy bucket (AC6–AC8), the i18n bucket (AC9–AC10), the N+1 bucket (AC11), a generic transactional outbox (AC1) wired onto the money / notification / SLU AFTER_COMMIT paths (AC2–AC4), and `CAPTURE_PENDING`'s slot-hold harm (AC5 Part A). The following residuals remain:
+@@ -1331,12 +1300,78 @@ skillars-deferred-91 closed the genuine one-off bugs (AC12–AC19), the rolling-
+ - **`getPublicProfile` — leave as-is, measured.** AC11 measured `CoachProfileService.getPublicProfile` at exactly **8** JDBC round-trips, **constant** in profile size (`CoachPublicProfileQueryCountIT` doubles every collection → still 8). Every read is index-covered on `coach_id`; there is no N+1 and the endpoint is a single page view. A `JOIN FETCH` / `@EntityGraph` collapse across the six `@OneToMany` collections would risk `MultipleBagFetchException` / a cartesian row explosion for no measurable gain. The IT stays as the regression guard.
+ - **SLU non-gating perf-trend signal** — still not built (carried from `skillars-deferred-89`, `deferred-work.md` line ~1290): the weekly SLU snapshot has no separate "is this player's trend improving / declining" signal that does not gate anything. AC4 only closed the *under-report* (a `@Recover`-exhausted snapshot write is now re-driven idempotently through the outbox + the `V119` marker).
+ - **No frontend test framework.** ~6 recorded coverage gaps (`5-4` W9, `deferred-17`/`-18`/`-30`/`-37`/`-38`/`-43` D6) depend on standing up Vitest / Vue Test Utils. Out of scope — its own initiative. Every `.vue` / `.js` change in skillars-deferred-91 (AC14 `handleLogout`, AC9/AC10 i18n) was verified by ESLint + `quasar build` + code reading.
+-- **`AFTER_COMMIT` reliability catalogue — remaining un-migrated listeners.** AC1–AC4 wired the refund (`CancellationRefundService` × 4 `BOOKING_REFUND` calls — AC2), notification-email (`BookingEmailListener` × 18 + `SessionPackEmailListener` × 3 — AC3, wider scope per owner) and SLU-snapshot (`SnapshotPersistenceRetrier.@Recover` — AC4) paths onto the generic outbox. Deliberately **not** migrated: `PendingBlobDeletionService` (its own just-shipped, just-reviewed outbox — a "re-express on the generic outbox" refactor is a nice-to-have, not required); `CancellationRefundService`'s `packSessionService.restoreSession(...)` calls (a pack-session-restore idempotency concern distinct from the money refund); registration-email listeners (`{Parent,Coach,Player}RegistrationEmailListener` — publish inside a live transaction, work today); SSE / video / development / admin / reviews / session `@TransactionalEventListener` sites that are not money- or compliance-relevant.
++- **`AFTER_COMMIT` reliability catalogue — corrected by `skillars-deferred-92` AC6 (2026-09-04).** The list below supersedes the skillars-deferred-91 version, which is now wrong in two places: it described the email listeners as merely "wired onto the outbox" (they are now `BEFORE_COMMIT`, so the enqueue is *atomic* with the business work — AC4), and it listed `ModerationSlaMonitorService` as not migrated (it now is — AC5). **On the generic outbox and enqueuing inside the producing transaction:** the refund path (`CancellationRefundService` × 4 `BOOKING_REFUND` — deferred-91 AC2), transactional email (`BookingEmailListener` × 20 + `SessionPackEmailListener` × 3, all 23 now `@TransactionalEventListener(BEFORE_COMMIT)` with `enqueueEmail` on `Propagation.MANDATORY` — deferred-92 AC4/AC29), the SLU snapshot (`SnapshotPersistenceRetrier.@Recover` — deferred-91 AC4), and video-moderation retry + admin alert (`ModerationSlaMonitorService`, each enqueued inside the same `REQUIRES_NEW` chunk as the state change it describes — deferred-92 AC5). **Deliberately NOT migrated, unchanged from deferred-91:** `PendingBlobDeletionService` (its own reviewed outbox; re-expressing it on the generic one is a nice-to-have); `CancellationRefundService`'s `packSessionService.restoreSession(...)` calls (a pack-session-restore idempotency concern, distinct from the money refund); the registration-email listeners (`{Parent,Coach,Player}RegistrationEmailListener` — they publish inside a live transaction and work today); and the SSE / video / development / admin / reviews / session `@TransactionalEventListener` sites that are neither money- nor compliance-relevant.
+ - **`CancellationRefundService` credit-wallet refund via the outbox — the `uq_pcl_reference_type` partial unique index (V125) assumes one `BOOKING_REFUND` per booking across the cancellation *and* dispute paths.** `DisputeService` also writes `BOOKING_REFUND` keyed on the booking id; a booking that is both cancelled-with-refund and later dispute-refunded (not reachable today — a cancelled booking is terminal and not disputed) would collide. If a future flow legitimately double-refunds a booking, narrow the index to exclude the dispute path.
+ 
+-## Deferred from: code review of skillars-deferred-91 (2026-09-03)
+-
+-- **`AppEndpointsConventionTest` may validate a different request matcher than production.** The test evaluates the `permitAll` patterns with `PathPatternRequestMatcher`, while `SecurityConfiguration.java:231` passes raw strings to `requestMatchers(String...)`. Under `PathPattern` semantics the pre-AC15 patterns (`resend-otp**`) are not valid at all, which implies production was matching with Ant semantics — so AC15's anchoring fix is correct, but the convention test's guarantee does not necessarily transfer to the matcher that actually secures the app. Confirm which matcher `requestMatchers(String...)` resolves to on this Spring Security version and align the test. Deferred: test-fidelity concern, does not affect the shipped fix.
+-- **The transactional-email `data` map is now type-lossy across the outbox.** `NotificationOutboxSupport.enqueueEmail` serialises `Map<String,Object>` to JSON and `NotificationEmailOutboxHandler` deserialises it back, so any non-string value returns as `String`/`Integer`/`Double`/`List`/`Map`. Verified a non-issue today: all 69 `data.put(...)` call sites across `BookingEmailListener` and `SessionPackEmailListener` put a `String` or a `List<String>`. Deferred: latent — the first `Instant`/`BigDecimal` value added to a template will silently degrade (ISO blob, or `40.0` for `40.00`) with no test to catch it. Consider a typed payload record or a serialisation round-trip assertion when a typed value is first added.
+-
+-- **The transactional-email outbox enqueue still runs after the producing commit.** skillars-deferred-91 AC3 routed all 19 `BookingEmailListener` + 3 `SessionPackEmailListener` publish sites through the durable outbox, which closed the nested-`AFTER_COMMIT` silent drop (`MailManager`'s own `@TransactionalEventListener(AFTER_COMMIT, fallbackExecution=false)` had no transaction to hang off, so the email was never sent at all). But those listeners are themselves `AFTER_COMMIT`, so `NotificationOutboxSupport.enqueueEmail`'s `REQUIRES_NEW` transaction starts *after* the business transaction has already committed — AC1 requires the producer to enqueue *inside* it. A crash or DB failure in that window still loses the email, and the failure is swallowed by the listeners' `catch (Exception e) { log.error(...) }`. Closing it means moving the enqueue into each of the 22 producing transactions (booking, session-pack and notification paths) — a large refactor, deliberately not attempted in the code-review pass. Contrast AC2's `RefundOutboxSupport`, which *is* called inside the listener's own `REQUIRES_NEW` and is correct. [`NotificationOutboxSupport.java:45`]
++## Deferred from: skillars-deferred-92 story creation and implementation (2026-09-04)
++
++skillars-deferred-92 closed 30 ACs: Prettier conformance + a CI gate (AC1), outbox enqueue atomicity
++and executor graceful shutdown (AC2–AC5), five new migration-lint rules and the two blind spots the
++conventions doc admitted (AC7–AC11), the default-message-bundle parity hole (AC12), the fr-FR idiom
++pass and the frontend hardcoded-English sweep (AC13–AC14), fourteen genuine one-off bugs (AC15–AC28),
++and the booking-reminder blocker (AC29). What genuinely remains:
++
++- **de-DE wording is AI-authored to native quality, not yet human-verified by a native German speaker.**
++  Unchanged and carried forward for the third story running. skillars-deferred-91 AC9 brought the whole
++  bundle to consistent formal `Sie` (54 replacement groups, 0 informal forms) and parity holds at
++  1083/1083 with 0 `{placeholder}` drift, but register/idiom verification needs a native speaker. **No
++  dev agent can close this** — do not re-open it as an implementable item.
++- **fr-FR wording is likewise AI-authored, not native-verified.** New, from AC13. That pass fixed what is
++  mechanically checkable — seven accent/spelling defects, one semantic error (`Télécharger` = *download*
++  on an upload button), six football-terminology errors (a "step-over" was translated as *petit pont*,
++  which is a **nutmeg**), and bundle-wide consistency (coach/entraîneur, séance/session, email/e-mail,
++  optionnel/facultatif). Register was already correct and was not touched: 0 informal forms before and
++  after. What remains is the same class of judgement the de-DE item names: a native French speaker
++  reading it as prose.
++- **`skillars-4-3` W6's premise was wrong, and the correction is worth keeping** (AC17.5). That entry
++  claimed a bare `@Async` falls back to `SimpleAsyncTaskExecutor` and was therefore an unbounded
++  thread-creation vector. It never did here: a bean named exactly `taskExecutor` exists, so
++  `AsyncExecutionAspectSupport#getDefaultExecutor` matched it at step two of its resolution. The entry was
++  probably true when this codebase had fewer executor beans, which is why it is recorded rather than
++  silently dropped. The real risk — correctness resting on a bean-*name* string — is closed: all 11 sites
++  now carry `@Async("taskExecutor")` and `AsyncExecutorQualifierTest` fails on a new bare one.
++- **`components.scss` still has two `transition: all` declarations.** AC25 named only `glass.scss`'s four
++  and those are done. Widening the change unasked would have put untested hover behaviour into a commit
++  whose diff claims to be about `glass.scss`. Same fix, same reasoning, next time someone is in that file.
++- **`i18n/error-messages.properties` is very nearly vestigial** (AC12.3, recorded so the audit is visibly
++  complete rather than ambiguous). `MvcConfig.messageSource()` registers it as a basename, but it holds
++  exactly **one** key (`security.msg.unauthorized`) with **no locale variants at all**, so every non-English
++  client resolving it gets English regardless. Folding that key into `messages*.properties` and dropping
++  the basename is the obvious follow-up; it was not done here because removing a registered basename is a
++  behaviour change for a key that may still be resolved somewhere, and this story had no mandate for it.
++- **`validation.phone.*` and `auth.nationalId` still describe Cameroon.** Found while sweeping the bundles
++  for AC13. The **English** source strings say a phone number must be "exactly 9 digits", must "start with
++  digit 6", and must match "(MTN, Orange, NextTel)"; `auth.nationalId` renders as "Numéro CNI". This is
++  origin-project drift of the same family as AC27's Orange/MTN alert catalogue, but it is a **product**
++  question (what numbering plan does Skillars accept?), not a translation one, so AC13/AC14 correctly did
++  not touch it. Filed for whoever owns the phone-validation rules.
++- **`marketplace.sortRatingStub` renders "Rating (Epic 9)" to end users**, in all three locales. A
++  development artifact in shipped UI copy. Not a translation defect — the English source says it — so it
++  was out of AC13/AC14's scope, but it should not survive to production.
++- **Booking rows stamped `primary_reminder_sent_at` before AC29 are known-bad history.** `V129` resets
++  `secondary_reminder_sent_at` for still-future bookings (that column gates
++  `findUpcomingWithin2hWindow`, so leaving it would have kept the bug alive for exactly the bookings
++  closest to starting). `primary_reminder_sent_at` gates nothing and is deliberately left as the only
++  record of which bookings were affected. Past bookings keep their inaccurate stamp — re-reminding
++  someone about a session that already happened is worse than the missing reminder.
++- **Nothing from AC4 had to stay on `AFTER_COMMIT`.** All 22 flippable listeners moved to `BEFORE_COMMIT`;
++  the audit found all 28 publish sites across twelve producers already inside `@Transactional` or a
++  `TransactionTemplate`, so the "fix the producer or record why" branch was never needed. Recorded because
++  its *absence* is the finding: the ledger's claim that `SessionPackExpiryNotifier` is the known-bad
++  transactionless producer is **stale** — deferred-15 AC6 fixed it, and its own javadoc says so.
++- **AC14's sweep deliberately excluded** the brand name (`Skillars`), currency and symbol glyphs, product
++  acronyms (`SLU`), `console.*` output, enum values used as lookup keys, and the illustrative figures in
++  `DevelopmentCorrelationPanel`'s blurred upsell teaser (one targeted `eslint-disable` with a reason).
++  `vue/no-bare-strings-in-template` is now an **error** in `eslint.config.js`, so a new bare string fails
++  the build rather than joining a backlog.
++- **AC15 found no live security-surface difference.** `requestMatchers(String...)` resolves to
++  `PathPatternRequestMatcher` only when a unique `PathPatternRequestMatcher.Builder` bean exists
++  (spring-security-config 6.5.11, `AbstractRequestMatcherRegistry:201-231`), which a context-free test
++  cannot see. `AppEndpointsConventionTest` now asserts both candidate semantics agree on every pattern
++  across 11 probe paths — they do — so the guarantee holds whichever Spring picks. If they ever diverge
++  that assertion fails and names the pattern.
++- **The new lint rules bind `V128+`, not `V122+`.** Flyway checksums whole files, so `V122`–`V127` are
++  applied and cannot be edited to carry the markers `MISSING_LOCK_TIMEOUT` / `UNBATCHED_DML` /
++  `DROP_WITHOUT_PRIOR_RELEASE_PREP` / `PLATFORM_CONFIG_EXPLICIT_ID` demand. `MigrationLint` carries a
++  second constant (`DEFERRED_92_BASELINE`) for this. The pre-production trigger for `V60`/`V94`/`V117`
++  in `docs/deployment/migration-conventions.md` is unaffected and still owed.
+diff --git a/docs/deployment/runbook.md b/docs/deployment/runbook.md
+index e19d160..68cac94 100644
+--- a/docs/deployment/runbook.md
++++ b/docs/deployment/runbook.md
+@@ -417,6 +417,37 @@ docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" \
+ 
+ ---
+ 
++## Config change appears to have no effect
++
++**Symptom.** You changed a value in `main.platform_config` and the application is still using the
++old one. Reported during UAT for `booking.session.defaultDurationMinutes`, where it read as a bug.
++
++**It is not a bug — it is a cache, and which path you used decides the behaviour.**
++
++| How the value was changed | When it takes effect |
++|---|---|
++| `PUT /api/config/values/{key}` (admin API) | **Immediately.** `ConfigService.updateConfig` invalidates the cache as part of the write. |
++| Directly in the database — `psql`, a migration, a manual fix | **Up to `app.config.cache-ttl-seconds` (default 300s / 5 minutes).** |
++
++`ConfigService` keeps an in-memory cache refreshed by
++`@Scheduled(fixedDelayString = "${app.config.cache-ttl-seconds:300}")`. A direct database write has
++no way to invalidate it, so the node keeps serving the cached value until the next refresh.
++
++**On more than one node, each caches independently**, so a direct DB edit is live everywhere only
++after the slowest node's next refresh. This is the reason to prefer the API even when psql is
++quicker to reach.
++
++**What to do**
++
++1. Prefer the admin API. That is the whole answer in the normal case.
++2. If the value was already changed directly in the database: wait out the TTL, or restart the
++   application, or re-apply the same value through the API (which invalidates the cache immediately).
++3. Do not lower `app.config.cache-ttl-seconds` to work around this. It would add polling on every
++   node, permanently, for a table that changes a handful of times a year. The TTL was reviewed under
++   skillars-deferred-92 AC24 and deliberately left at 300s.
++
++---
++
+ ## Pre-production release gate: outstanding migration rewrites
+ 
+ **Owner:** whoever prepares the first production deploy. **Trigger:** before that deploy, not after.
+diff --git a/docs/dev-docs/index.html b/docs/dev-docs/index.html
+index c2b550a..d844d28 100644
+--- a/docs/dev-docs/index.html
++++ b/docs/dev-docs/index.html
+@@ -147,9 +147,9 @@ flowchart LR
+     <h2>Getting Started</h2>
+     <div class="card-grid">
+       <div class="card"><h4>Run it locally</h4><p><a href="../deployment/local-deployment.md">docs/deployment/local-deployment.md</a> — Docker Compose stack, env vars, and the local Grafana/Prometheus observability setup.</p></div>
+-      <div class="card"><h4>Observability</h4><p><a href="../lgtm-observability.md">docs/lgtm-observability.md</a> — Loki/Grafana/Tempo/Prometheus stack. Note: log shipping to Loki is a known gap, see <a href="monitoring/index.html">Monitoring</a>.</p></div>
++      <div class="card"><h4>Observability</h4><p><a href="../lgtm-observability.md">docs/lgtm-observability.md</a> — how to query the Loki/Grafana/Tempo/Prometheus stack. The authoritative <strong>alert inventory and response actions</strong> live in <a href="../deployment/monitoring.md">docs/deployment/monitoring.md</a>, not here. Note: log shipping to Loki is a known gap, see <a href="monitoring/index.html">Monitoring</a>.</p></div>
+       <div class="card"><h4>Security API reference</h4><p><a href="../security-api-endpoints.md">docs/security-api-endpoints.md</a> — endpoint-level reference for the auth/registration surface documented in <a href="security/index.html">Security</a>.</p></div>
+-      <div class="card"><h4>Session refresh mechanism</h4><p><a href="../session-refresh-mechanism.md">docs/session-refresh-mechanism.md</a> — deep dive on the JWT refresh-token rotation flow.</p></div>
++      <div class="card"><h4>Session refresh mechanism</h4><p><a href="../session-refresh-mechanism.md">docs/session-refresh-mechanism.md</a> — the sliding-window keep-alive that extends an active session in place. Note this is <em>not</em> refresh-token rotation: that is <code>POST /api/auth/refresh</code>, a different endpoint the doc explicitly distinguishes.</p></div>
+       <div class="card"><h4>Time handling conventions</h4><p><a href="../handling-time.md">docs/handling-time.md</a> — how the codebase handles timezones/dates.</p></div>
+       <div class="card"><h4>Frontend integration</h4><p><a href="../frontend-integration-guide.md">docs/frontend-integration-guide.md</a> and <a href="../frontend-implementation-spec.md">docs/frontend-implementation-spec.md</a>.</p></div>
+       <div class="card"><h4>Writing integration tests</h4><p><a href="../testing/readme.md">docs/testing/</a> — why tests extend <code>AbstractIntegrationTest</code> instead of copying <code>@Import(TestConfig.class)</code>, how the shared Testcontainers instances work, and the per-test database reset. <strong>Read before adding an <code>*IT</code> class.</strong></p></div>
+diff --git a/docs/lgtm-observability.md b/docs/lgtm-observability.md
+index 89d5151..37b7e3e 100644
+--- a/docs/lgtm-observability.md
++++ b/docs/lgtm-observability.md
+@@ -1,1143 +1,288 @@
+ # Skillars — LGTM Stack Observability Guide
+ 
+-> **⚠️ STALE — describes a payment domain this app no longer has.** Every payment-specific query and
+-> alert below (Orange Money, MTN MoMo, circuit breakers, callback/reconciliation metrics) was written for
+-> a Mobile Money payment orchestration design this application never actually used in production — the
+-> live app is Stripe-only (`payment/service/StripePaymentGateway.java`). None of the metrics or log
+-> patterns referenced below (`payment_provider_latency_seconds`, `OrangeTokenService`, etc.) exist in the
+-> running application. For the real, current alert inventory, see `deploy/lgtm/alerts.yml`,
+-> `deploy/lgtm/grafana-alerts.yml`, and [`docs/deployment/monitoring.md`](deployment/monitoring.md). The
+-> LGTM stack setup/architecture sections below (§0, §1's general reasoning, §3.6 JVM & Infrastructure)
+-> remain accurate; the payment-specific query examples throughout do not.
+-
+-**Stack:** Loki · Grafana · Tempo · Mimir/Prometheus  
+-**Application:** Skillars — Mobile Money Payment Orchestration (Orange Money + MTN MoMo) — **superseded by
+-Stripe; see warning above**
++**Stack:** Loki (logs) · Grafana (dashboards + alerting) · Tempo (traces) · Prometheus (metrics)
++**Application:** Skillars — a youth-football coaching marketplace. Payments are **Stripe**.
++
++> **What this document is, and is not.**
++> This is a *how to query the stack* guide: LogQL / PromQL / TraceQL patterns against the signals
++> this application actually emits.
++>
++> It is **not** the alert inventory. That lives in
++> [`docs/deployment/monitoring.md`](deployment/monitoring.md) § *Alert Inventory and Response
++> Actions*, generated from `deploy/lgtm/alerts.yml` and `deploy/lgtm/grafana-alerts.yml`. It is
++> deliberately not duplicated here — the previous version of this file duplicated it and then drifted
++> for a whole project pivot (see *History* at the bottom), which is exactly the failure a
++> cross-reference avoids. `AlertDocumentationParityTest` fails the build if the rules and that doc
++> disagree.
+ 
+ ---
+ 
+-## 0. Quick Start
++## 0. Quick start
+ 
+-To spin up the observability stack locally, ensure Docker is running and execute:
++The observability services are part of the **main** compose file — there is no separate LGTM stack
++file:
+ 
+ ```bash
+-# From the project root
+-docker-compose -f docker-compose-lgtm.yaml up -d
++docker compose up -d prometheus loki tempo grafana node_exporter
+ ```
+ 
+-- **Grafana:** [http://localhost:3000](http://localhost:3000) (Default datasource: Prometheus)
+-- **Prometheus:** [http://localhost:9090](http://localhost:9090)
+-- **Loki:** [http://localhost:3100](http://localhost:3100)
+-- **Tempo:** [http://localhost:3200](http://localhost:3200)
++| Service | Local URL | Notes |
++|---|---|---|
++| Grafana | <http://localhost:3000> | Datasources and alert rules are provisioned from `deploy/lgtm/` |
++| Prometheus | <http://localhost:9090> | Scrapes the app's `/manage/prometheus` |
++| Loki | <http://localhost:3100> | See the log-shipping caveat below |
++| Tempo | <http://localhost:3200> | OTLP ingest |
+ 
+----
++> **Log shipping to Loki is OFF by default.** `application.yaml` sets `loki.enabled` from
++> `LOKI_ENABLED`, defaulting to **`false`**, and `config/logback-spring.xml` only installs the
++> `Loki4jAppender` when it is `true`. With it off, logs go to the console JSON appender only and
++> **every LogQL query in §2 returns nothing**. Set `LOKI_ENABLED=true` and `LOKI_URL` first. See
++> [dev-docs → Monitoring](dev-docs/monitoring/index.html) for the wider gap.
+ 
+-## 1. Why Observability Matters Here
++---
+ 
+-Skillars orchestrates real-money payments across two live provider APIs (Orange Money and MTN MoMo) on behalf of multiple merchant tenants. A payment is not a simple request/response — it spans multiple async hops: the initial provider dispatch, an inbound callback (or status poll), a webhook delivery to the merchant, and a daily reconciliation. Failures at any hop can result in funds collected but not acknowledged, phantom charges, or missed fraud signals.
++## 1. What each pillar is for
+ 
+-The four LGTM pillars serve distinct incident-response needs:
++| Pillar | Use it when you are asking |
++|---|---|
++| **Loki** (logs) | *What exactly failed, for which booking / video / user?* |
++| **Prometheus** (metrics) | *Is the system healthy right now, and is this rate normal?* |
++| **Tempo** (traces) | *Why was this one request slow, hop by hop?* |
++| **Grafana** | *Tell me before a user does.* |
+ 
+-| Pillar | Primary Use Case |
+-|--------|-----------------|
+-| **Loki** (logs) | Exact error context — what failed, for which tenant/transaction/provider |
+-| **Prometheus/Mimir** (metrics) | Rate and volume signals — is the system healthy overall right now? |
+-| **Tempo** (traces) | Causal chain — why did this specific transaction fail, step by step? |
+-| **Grafana** (dashboards + alerts) | Unified view + automated alerting before users notice |
++Skillars' failure modes are mostly **asynchronous**: an outbox row that never drains, a scheduled
++sweep that skipped a cycle, a Stripe webhook that arrived twice. Those are invisible to a
++request-scoped view, which is why the log markers in §2 matter more here than endpoint latency.
+ 
+ ---
+ 
+-## 2. Log Queries (LogQL — Loki)
+-
+-All logs are emitted in structured JSON (the console uses `logstash-logback-encoder` while the Loki appender uses the native `Loki4j.JsonLayout`). Both formats ensure that every log line sent to Loki includes the **stream labels** `service`, `environment`, `version`, `host`, and `level` (these are indexed and low-cardinality). Business context fields (`traceId`, `transactionId`, `externalReference`, `tenantId`, `provider`, `errorCode`, etc.) are **log body fields** emitted via MDC/key-values — they are not stream labels and must be extracted with `| json` before filtering or aggregating on them.
++## 2. Log queries (LogQL — Loki)
+ 
+-### 2.1 Payment Flow Errors
++Application logs are JSON, so extract fields with `| json` before filtering.
+ 
+-**All ERROR-level logs from the payment service**
+-```logql
+-{service="skillars", level="error"}
+-```
++### 2.1 The durable outbox
+ 
+-**Payment initiation failures (any cause)**
+-```logql
+-{service="skillars", level="error"} |= "initiate_payment"
+-```
++The generic outbox (`main.outbox_messages`) carries refunds, transactional emails, SLU snapshot
++writes and moderation retries. A row is **never dropped**, so a stuck row is a real operation that
++has not happened yet.
+ 
+-**Provider dispatch failures only (PROVIDER_ERROR / PROVIDER_UNAVAILABLE)**
+ ```logql
+-{service="skillars", level="error"}
+-  | json
+-  | operation="initiate_payment"
+-  | errorCode=~"PROVIDER_ERROR|PROVIDER_UNAVAILABLE"
+-```
+-> Useful to separate provider-side issues from local validation failures.
++# The alert-grade signal: rows that have failed >= 10 times and still hold a promised operation.
++{app="skillars"} |= "[OUTBOX_STUCK]"
+ 
+-**Fraud-blocked payments**
+-```logql
+-{service="skillars", level="error"}
+-  | json
+-  | errorCode="FRAUD_BLOCKED"
+-  | line_format "tenant={{.tenantId}} tx={{.transactionId}} score={{.riskScore}} reason={{.fraudReason}}"
+-```
++# Drain outcomes over time — `processed` and `failed` counts per drain.
++{app="skillars"} |= "[OUTBOX_DRAIN]" | json
+ 
+-**Subscriber inactive rejections (Orange or MTN account not found)**
+-```logql
+-{service="skillars", level="error"}
+-  | json
+-  | errorCode="SUBSCRIBER_INACTIVE"
+-  | line_format "provider={{.provider}} msisdn_suffix={{.msisdn}} tenant={{.tenantId}}"
+-```
++# A drain that aborted mid-way. Rows stay in the table with their backoff, so this is not data loss,
++# but a sustained rate here means the sweeper is doing all the work.
++{app="skillars"} |= "[OUTBOX_DRAIN_FAILED]"
+ 
+-**Unknown MSISDN prefix (routing failure)**
+-```logql
+-{service="skillars", level="error"}
+-  | json
+-  | errorCode="UNKNOWN_MSISDN_PREFIX"
+-```
+-
+-### 2.2 Callback & Webhook Logs
+-
+-**All inbound Orange callbacks**
+-```logql
+-{service="skillars"} |= "orange-callback"
+-```
+-
+-**Orange callbacks that failed to match a transaction**
+-```logql
+-{service="skillars", level="error"} |= "orange-callback"
+-```
+-
+-**All inbound MTN callbacks**
+-```logql
+-{service="skillars"} |= "mtn-callback"
++# Producer-side enqueue failures, per domain support class.
++{app="skillars"} |~ "\\[(NOTIFICATION_EMAIL|CREDIT_WALLET_REFUND|SLU_SNAPSHOT_OUTBOX|MODERATION_OUTBOX)_ENQUEUE_FAILED\\]"
+ ```
+ 
+-**Duplicate callback received (dedup hit — expected, but monitor volume)**
+-```logql
+-{service="skillars"} |= "duplicate_callback"
+-```
++### 2.2 Transactional email
+ 
+-**Outbound webhook delivery failures**
+ ```logql
+-{service="skillars", level="error"} |= "webhook_delivery"
+-  | json
+-  | line_format "tenant={{.tenantId}} tx={{.transactionId}} attempt={{.retryCount}} url={{.webhookUrl}}"
+-```
++# Delivered.
++{app="skillars"} |= "[NOTIFICATION_EMAIL]" | json | line_format "{{.template}} -> {{.toAddress}}"
+ 
+-**Outbound webhooks that exhausted all retries (FAILED_PERMANENT)**
+-```logql
+-{service="skillars", level="error"} |= "FAILED_PERMANENT"
++# Permanently undeliverable — a malformed address; no re-drive can help, so the row is released.
++{app="skillars"} |= "[NOTIFICATION_EMAIL_UNDELIVERABLE]"
+ ```
+ 
+-### 2.3 Provider Token & Auth Errors
++### 2.3 Video moderation
+ 
+-**Orange token refresh failures**
+ ```logql
+-{service="skillars", level="error"} |= "OrangeTokenService"
+-```
++# SLA monitor re-queued a video stuck in SCANNING.
++{app="skillars"} |= "[VIDEO_MODERATION_RETRY]"
+ 
+-**MTN token refresh failures**
+-```logql
+-{service="skillars", level="error"} |= "MtnTokenService"
+-```
++# Moderation permanently failed — an operator must review this video by hand.
++{app="skillars"} |= "[VIDEO_MODERATION_ADMIN_ALERT]"
+ 
+-**Any 401/403 from a provider (stale token)**
+-```logql
+-{service="skillars", level="error"}
+-  | json
+-  | httpStatusCode=~"401|403"
++# Bypass counter (also a Micrometer counter: video_moderation_bypass_total).
++{app="skillars"} |= "moderation" | json | eventType != ""
+ ```
+ 
+-### 2.4 Reconciliation Logs
++### 2.4 GDPR erasure and export
+ 
+-**Reconciliation job start and end**
+-```logql
+-{service="skillars"} |= "ReconciliationJob"
+-```
++Compliance-relevant and worth alerting on if it fails, because a failed erasure is a legal
++obligation left unmet:
+ 
+-**Reconciliation discrepancies found**
+ ```logql
+-{service="skillars", level="error"} |= "ReconciliationService"
+-  | json
+-  | line_format "date={{.reconciliationDate}} type={{.discrepancyType}} severity={{.severity}} provider={{.provider}} txId={{.transactionId}}"
++{app="skillars"} |~ "\\[GDPR_(ERASURE|EXPORT)_(REQUESTED|COMPLETED|FAILED)\\]" | json
+ ```
+ 
+-**HIGH severity reconciliation discrepancies only**
+-```logql
+-{service="skillars", level="error"}
+-  | json
+-  | severity="HIGH"
+-  | line_format "type={{.discrepancyType}} txId={{.transactionId}} localAmount={{.localAmount}} providerAmount={{.providerAmount}}"
+-```
++### 2.5 Subscriptions and payments
+ 
+-### 2.5 Fraud Detection Logs
+-
+-**All fraud evaluations that resulted in a block**
+-```logql
+-{service="skillars"} |= "FRAUD_BLOCKED"
+-  | json
+-  | line_format "tenant={{.tenantId}} score={{.riskScore}} signal={{.triggeringSignal}} msisdn={{.msisdn}}"
+-```
+-
+-**Velocity limit hits per signal type**
+ ```logql
+-{service="skillars"} |= "velocity_limit_exceeded"
+-  | json
+-  | line_format "signal={{.fraudSignal}} count={{.observedCount}} limit={{.ruleLimit}} window={{.windowSeconds}}s"
++{app="skillars"} |= "[SUB_LIFECYCLE]" | json
++{app="skillars"} |= "[SUBSCRIPTION_GRACE_PERIOD_CHECKER]"
++{app="skillars"} |= "[CAPTURE_TIMEOUT]"
++{app="skillars"} |= "[CREDIT_WALLET_REFUND]" | json
+ ```
+ 
+-### 2.6 Circuit Breaker Logs
++### 2.6 Rates over time
+ 
+-**Circuit breaker transitions (open/half-open/closed)**
+ ```logql
+-{service="skillars"} |= "CallNotPermittedException"
+-```
++# Error rate per minute.
++sum(rate({app="skillars"} | json | level="ERROR" [1m]))
+ 
+-**Orange circuit breaker open**
+-```logql
+-{service="skillars", level="error"}
+-  | json
+-  | provider="ORANGE"
+-  | errorCode="PROVIDER_UNAVAILABLE"
+-```
+-
+-**MTN circuit breaker open**
+-```logql
+-{service="skillars", level="error"}
+-  | json
+-  | provider="MTN"
+-  | errorCode="PROVIDER_UNAVAILABLE"
+-```
+-
+-### 2.7 Idempotency & Replay
+-
+-**Idempotency key collisions (payment already in flight)**
+-```logql
+-{service="skillars"} |= "PAYMENT_ALREADY_PROCESSING"
+-  | json
+-  | line_format "tenant={{.tenantId}} key={{.idempotencyKey}}"
+-```
+-
+-**Idempotency cache misses (Redis unavailable)**
+-```logql
+-{service="skillars", level="error"} |= "IdempotencyService"
+-```
+-
+-### 2.8 Rates and Volume Over Time
+-
+-**Error rate per minute (all payment errors)**
+-```logql
+-sum(rate({service="skillars", level="error"} |= "initiate_payment" [1m]))
+-```
+-
+-**Callback receipt rate per minute by provider**
+-```logql
+-sum by (provider) (
+-  rate({service="skillars"} |= "callback" | json [1m])
+-)
+-```
+-
+-**Payment errors by error code (top-N bar chart)**
+-```logql
+-sum by (errorCode) (
+-  count_over_time({service="skillars", level="error"} | json | __error__="" [5m])
+-)
++# Which markers are firing most — the fastest way to characterise an incident.
++topk(10, sum by (marker) (count_over_time({app="skillars"} |~ "\\[[A-Z_]+\\]" | regexp "(?P<marker>\\[[A-Z_]+\\])" [15m])))
+ ```
+ 
+ ---
+ 
+-## 3. Metrics Queries (PromQL — Prometheus / Mimir)
++## 3. Metric queries (PromQL — Prometheus)
+ 
+-Skillars exposes metrics via Micrometer at `/manage/prometheus`. All metrics carry the tag `application="skillars"`.
++### 3.1 Booking payments
+ 
+-### 3.1 Payment Success & Failure Rates
++These are the metrics behind the `BookingPaymentSettleFailureRateHigh` rule, so the query below is
++the alert's own expression — useful for confirming a page before acting on it:
+ 
+-**Total payments succeeded (all time)**
+ ```promql
+-payment_success_total
++(rate(booking_payment_settle_failed_total[15m]) + rate(booking_payment_settle_error_total[15m]))
++/ (rate(booking_payment_settle_success_total[15m]) + rate(booking_payment_settle_failed_total[15m]) + rate(booking_payment_settle_error_total[15m]))
+ ```
+ 
+-**Total payments failed (all time)**
+-```promql
+-payment_failed_total
+-```
++### 3.2 Subscriptions
+ 
+-**Payment success rate over 5-minute window**
+ ```promql
+-rate(payment_success_total[5m])
++increase(subscription_payment_invoice_failed_total[1h])
+ ```
+ 
+-**Payment failure rate over 5-minute window**
+-```promql
+-rate(payment_failed_total[5m])
+-```
++### 3.3 HTTP endpoints (Spring Actuator / `@Observed`)
+ 
+-**Fraud-blocked rate over 5-minute window**
+-```promql
+-rate(payment_fraud_blocked_total[5m])
+-```
++Resources are annotated `@Observed(name = "...")` — e.g. `booking.availability`, `booking.batch`,
++`marketplace.profile`, `admin.queue`, `reviews.list` — which produces `http_server_requests_seconds`
++plus an observation timer per name.
+ 
+-**Failure ratio (fraction of all payments that failed)**
+ ```promql
+-rate(payment_failed_total[5m])
+-  /
+-(rate(payment_success_total[5m]) + rate(payment_failed_total[5m]) + rate(payment_fraud_blocked_total[5m]))
+-```
+-> Alert when this exceeds 0.05 (5%) for more than 2 minutes.
++# p95 latency by endpoint.
++histogram_quantile(0.95, sum by (le, uri) (rate(http_server_requests_seconds_bucket[5m])))
+ 
+-**TPS — transactions per second (combined success + failure)**
+-```promql
+-rate(payment_success_total[1m]) + rate(payment_failed_total[1m])
++# 5xx rate by endpoint.
++sum by (uri) (rate(http_server_requests_seconds_count{status=~"5.."}[5m]))
+ ```
+ 
+-### 3.2 Callback Metrics
++### 3.4 JVM and pools
+ 
+-**Inbound callback rate by provider**
+-```promql
+-rate(callback_received_total[5m])
+-```
+-
+-**Callback failure rate (no matching transaction found)**
+-```promql
+-rate(callback_failed_total[5m])
+-```
+-
+-**Callback failure ratio**
+-```promql
+-rate(callback_failed_total[5m]) / rate(callback_received_total[5m])
+-```
+-> Alert when this exceeds 0.10 (10%) — indicates provider is sending callbacks with unknown references.
+-
+-### 3.3 Provider Latency
+-
+-**95th percentile provider call latency by provider**
+-```promql
+-histogram_quantile(0.95,
+-  sum by (le, provider) (
+-    rate(payment_provider_latency_seconds_bucket[5m])
+-  )
+-)
+-```
+-
+-**99th percentile provider call latency by provider**
+-```promql
+-histogram_quantile(0.99,
+-  sum by (le, provider) (
+-    rate(payment_provider_latency_seconds_bucket[5m])
+-  )
+-)
+-```
+-
+-**Mean provider latency by provider**
+-```promql
+-sum by (provider) (rate(payment_provider_latency_seconds_sum[5m]))
+-  /
+-sum by (provider) (rate(payment_provider_latency_seconds_count[5m]))
+-```
+-
+-**Orange vs MTN latency comparison (p95)**
+-```promql
+-histogram_quantile(0.95,
+-  sum by (le, provider) (
+-    rate(payment_provider_latency_seconds_bucket{provider=~"ORANGE|MTN"}[5m])
+-  )
+-)
+-```
+-
+-### 3.4 Circuit Breaker State
+-
+-> **How Resilience4J exposes state:** One time series is emitted per state per circuit breaker, each with a `state` label (`closed`, `open`, `half_open`). The value is `1` when the circuit breaker is currently in that state, `0` otherwise. There is no single numeric encoding like 0/1/2.
+-
+-**All state series for both circuit breakers**
+-```promql
+-resilience4j_circuitbreaker_state{name=~"orange|mtn"}
+-```
+-
+-**Check whether Orange circuit is OPEN**
+-```promql
+-resilience4j_circuitbreaker_state{name="orange", state="open"} == 1
+-```
+-
+-**Check whether MTN circuit is OPEN**
+-```promql
+-resilience4j_circuitbreaker_state{name="mtn", state="open"} == 1
+-```
+-
+-**Circuit breaker failure rate (sliding window)**
+-```promql
+-resilience4j_circuitbreaker_failure_rate{name=~"orange|mtn"}
+-```
+-
+-**Circuit breaker call count by state**
+-```promql
+-increase(resilience4j_circuitbreaker_calls_total{name=~"orange|mtn"}[5m])
+-```
+-
+-**Circuit breaker transitions to OPEN (alert candidate)**
+-```promql
+-changes(resilience4j_circuitbreaker_state{name=~"orange|mtn", state="open"}[5m]) > 0
+-```
+-> Alert when the Orange or MTN circuit opens — indicates sustained provider failures.
+-
+-### 3.5 HTTP Endpoint Metrics (Spring Actuator)
+-
+-**Payment endpoint request rate**
+-```promql
+-rate(http_server_requests_seconds_count{uri="/v1/payments"}[5m])
+-```
+-
+-**Payment endpoint error rate (4xx + 5xx)**
+-```promql
+-rate(http_server_requests_seconds_count{uri="/v1/payments", status=~"4..|5.."}[5m])
+-```
+-
+-**Payment endpoint p95 response latency**
+-```promql
+-histogram_quantile(0.95,
+-  sum by (le) (
+-    rate(http_server_requests_seconds_bucket{uri="/v1/payments"}[5m])
+-  )
+-)
+-```
+-
+-**Callback endpoint request rate by provider**
+-```promql
+-rate(http_server_requests_seconds_count{uri=~"/v1/callbacks/.*"}[5m])
+-```
+-
+-**HTTP 503 rate from payment endpoint (circuit breaker open → client-facing)**
+-```promql
+-rate(http_server_requests_seconds_count{uri="/v1/payments", status="503"}[5m])
+-```
+-
+-### 3.6 JVM & Infrastructure
+-
+-> All metrics carry `application="skillars"` because `management.metrics.tags.application` is set in `application.yaml`. If you copied this config without that property, drop the `application` label filter.
+-
+-**JVM heap used**
+-```promql
+-jvm_memory_used_bytes{area="heap", application="skillars"}
+-```
+-
+-**JVM heap utilisation (used / max)**
+-```promql
+-jvm_memory_used_bytes{area="heap"} / jvm_memory_max_bytes{area="heap"}
+-```
+-
+-**Live thread count**
+-```promql
+-jvm_threads_live_threads{application="skillars"}
+-```
+-
+-**Database connection pool active / max**
+-```promql
+-hikaricp_connections_active{application="skillars"}
+-hikaricp_connections_max{application="skillars"}
+-```
+-
+-**Connection pool utilisation**
+ ```promql
++# The two infrastructure alerts' own expressions.
+ hikaricp_connections_active / hikaricp_connections_max
+-```
+-> Alert when pool utilisation exceeds 0.80 sustained — indicates connection starvation under load.
+-
+-**Redis active connections (Lettuce connection pool)**
+-```promql
+-lettuce_connections_active{application="skillars"}
+-```
+-> Requires `spring.data.redis.lettuce.pool.enabled=true` (enabled automatically when `commons-pool2` is on the classpath). `lettuce_connections_active / lettuce_connections_max` gives pool utilisation.
+-
+-**Quartz scheduler job execution time**
+-```promql
+-histogram_quantile(0.95,
+-  rate(quartz_job_execution_seconds_bucket[5m])
+-)
+-```
+-
+-### 3.7 SLO Queries
+-
+-**Payment availability SLO — fraction of time success rate > 95%**
+-```promql
+-(
+-  rate(payment_success_total[30m])
+-  /
+-  (rate(payment_success_total[30m]) + rate(payment_failed_total[30m]))
+-) >= 0.95
+-```
+-
+-**Latency SLO — fraction of provider calls completing under 3 s**
+-```promql
+-sum(rate(payment_provider_latency_seconds_bucket{le="3"}[5m]))
+-  /
+-sum(rate(payment_provider_latency_seconds_count[5m]))
+-```
+-
+----
+-
+-## 4. Trace Queries (TraceQL — Tempo)
+-
+-All spans are exported to Tempo via OpenTelemetry OTLP (port 4318). Span names follow `@Observed` annotations; every payment carries a `traceId` that is also stored on the `Transaction` entity.
+-
+-### 4.1 Finding Traces for a Specific Transaction
+-
+-**By transactionId (stored as span attribute)**
+-```traceql
+-{ .transactionId = "txn-uuid-here" }
+-```
+-
+-**By externalReference (merchant's reference)**
+-```traceql
+-{ .externalReference = "merchant-ref-here" }
+-```
+-
+-**By traceId directly** — paste the traceId from the `Transaction` table or from Loki log output into Grafana → Explore → Tempo datasource → **"TraceID"** search field. TraceQL cannot filter by trace ID; the Tempo UI search field is the correct tool for this lookup.
+-
+-### 4.2 Slow Payment Traces
+-
+-**Payment orchestration spans taking longer than 5 seconds**
+-```traceql
+-{ name = "http.payment" && duration > 5s }
+-```
+-
+-**Orange provider calls taking longer than 3 seconds**
+-```traceql
+-{ name =~ "orange.*" && duration > 3s }
+-```
+-
+-**MTN provider calls taking longer than 3 seconds**
+-```traceql
+-{ name =~ "mtn.*" && duration > 3s }
+-```
+-
+-### 4.3 Error Traces
+-
+-**All payment spans that resulted in an error**
+-```traceql
+-{ name = "http.payment" && status = error }
+-```
+-
+-**All callback spans that resulted in an error**
+-```traceql
+-{ name =~ "http\\..*-callback" && status = error }
+-```
+-
+-**Reconciliation job traces with errors**
+-```traceql
+-{ name = "quartz.reconciliation" && status = error }
+-```
+-
+-### 4.4 Span-Level Drilldown
+-
+-**Full causal chain for a given traceId** — Use Grafana's Tempo datasource Explore panel, paste the traceId from a Loki log line (field `traceId`) into the TraceID field. Grafana renders the full waterfall including:
+-- `http.payment` root span
+-- `FraudScoringService` child span
+-- `OrangeMoneyPort.initiateMerchantPayment` child span
+-- `OrangeTokenService.getAccessToken` nested child
+-- `OrangeMoneyClient.initTransaction` HTTP client span
+-- `OrangeMoneyClient.pay` HTTP client span
+-
+-**Correlating a Loki log line to its trace:** In Grafana, enable the Loki → Tempo derived field. Map the log field `traceId` to the Tempo datasource. Clicking a log line opens the full trace waterfall in one click.
+-
+----
+-
+-## 5. Incident-Specific Runbooks
+-
+-### Incident: Provider Down (Circuit Breaker Open)
+-
+-**Symptoms:** Spike in HTTP 503 from `/v1/payments`; `resilience4j_circuitbreaker_state` for Orange or MTN = 1.
+-
+-**Step 1 — Confirm the circuit is open (Prometheus)**
+-```promql
+-resilience4j_circuitbreaker_state{name="orange"}
+-```
+-
+-**Step 2 — Measure failure rate in the sliding window**
+-```promql
+-resilience4j_circuitbreaker_failure_rate{name="orange"}
+-```
+-
+-**Step 3 — Find triggering errors in Loki**
+-```logql
+-{service="skillars", level="error"}
+-  | json
+-  | provider="ORANGE"
+-  | errorCode="PROVIDER_ERROR"
+-  | line_format "{{.timestamp}} tenant={{.tenantId}} txId={{.transactionId}} httpStatus={{.httpStatusCode}} msg={{.message}}"
+-```
+-
+-**Step 4 — Check duration of the outage**
+-```promql
+-changes(resilience4j_circuitbreaker_state{name="orange"}[1h])
+-```
+-
+-**Step 5 — Count transactions stuck in PROCESSING (need manual poll or retry)**
+-```logql
+-{service="skillars"} |= "status_poller" |= "PROCESSING"
+-```
+-
+-**Step 6 — Trace a failed payment**  
+-From the Loki error line, copy `traceId`, open Tempo, and inspect the span for the root cause HTTP error.
+-
+----
+-
+-### Incident: Elevated Payment Failure Rate
+-
+-**Symptoms:** `payment_failed_total` rate is rising; merchant reports rejections.
+-
+-**Step 1 — Overall failure ratio**
+-```promql
+-rate(payment_failed_total[5m])
+-  /
+-(rate(payment_success_total[5m]) + rate(payment_failed_total[5m]))
+-```
+-
+-**Step 2 — Break down by error code (Loki)**
+-```logql
+-sum by (errorCode) (
+-  count_over_time(
+-    {service="skillars", level="error"} | json | __error__="" [5m]
+-  )
+-)
+-```
+-
+-**Step 3 — Is fraud blocking too aggressively?**
+-```promql
+-rate(payment_fraud_blocked_total[5m]) / rate(payment_success_total[5m])
+-```
+-
+-**Step 4 — Is it subscriber-inactive errors (bad phone numbers)?**
+-```logql
+-{service="skillars", level="error"}
+-  | json
+-  | errorCode="SUBSCRIBER_INACTIVE"
+-  | line_format "provider={{.provider}} tenant={{.tenantId}}"
+-```
+-
+-**Count by provider and tenant:**
+-```logql
+-sum by (provider, tenantId) (
+-  count_over_time({service="skillars", level="error"} | json | errorCode="SUBSCRIBER_INACTIVE" [5m])
+-)
+-```
++jvm_memory_used_bytes{area="heap"} / jvm_memory_max_bytes{area="heap"}
+ 
+-**Step 5 — Is it a specific tenant flooding bad requests?**
+-```logql
+-sum by (tenantId) (
+-  count_over_time({service="skillars", level="error"} | json | __error__="" [5m])
+-)
++# Executor saturation. Six pools exist — see infrastructure/threadpool/ExecutorShutdown for the
++# inventory and the shutdown budget. A queue that never drains is the signal that matters.
++executor_queued_tasks{name=~"outbox-drain-|slu-retry-|smPool|modPool|skillars-async-"}
++executor_active_threads
++sendmail_queue_size
+ ```
+ 
+----
+-
+-### Incident: Callbacks Not Arriving (Silent Payments)
+-
+-Payments stay in `PROCESSING` state; neither callback nor poller updates them.
++### 3.5 Host
+ 
+-**Step 1 — Confirm callback rate has dropped**
+ ```promql
+-rate(callback_received_total[5m])
+-```
+-
+-**Step 2 — Check status poller activity in Loki**
+-```logql
+-{service="skillars"} |= "StatusPollerJob"
+-```
+-
+-**Step 3 — Check for IP whitelist rejections (callbacks blocked before reaching controller)**
+-```logql
+-{service="skillars"} |= "ip_whitelist" |= "rejected"
+-```
+-
+-**Step 4 — Check for Orange payToken expiry (payToken valid 60 min; polled transactions might be expired)**
+-```logql
+-{service="skillars", level="error"} |= "PayTokenExpiredException"
+-```
+-
+-**Step 5 — Count PROCESSING transactions by age (SQL to cross-reference — Loki for logs)**
+-```logql
+-{service="skillars"} |= "poll_attempts" | json
+-  | line_format "txId={{.transactionId}} attempts={{.pollAttempts}} provider={{.provider}}"
++up{job="spring-boot-app"}
++up{job="node-exporter"}
+ ```
+ 
+ ---
+ 
+-### Incident: Reconciliation Discrepancy
++## 4. Trace queries (TraceQL — Tempo)
+ 
+-**Symptoms:** Reconciliation job reports HIGH-severity discrepancies.
+-
+-**Step 1 — Find the job run log**
+-```logql
+-{service="skillars"} |= "ReconciliationJob"
+-```
+-
+-**Step 2 — List all HIGH-severity discrepancies for the last run**
+-```logql
+-{service="skillars", level="error"}
+-  | json
+-  | severity="HIGH"
+-  | line_format "type={{.discrepancyType}} txId={{.transactionId}} provider={{.provider}} localStatus={{.localStatus}} providerStatus={{.providerStatus}} localAmount={{.localAmount}} providerAmount={{.providerAmount}}"
+-```
+-
+-**Step 3 — Filter for transactions missing from local records**
+-```logql
+-{service="skillars", level="error"}
+-  | json
+-  | discrepancyType="MISSING_FROM_LOCAL"
+-```
+-
+-**Step 4 — Filter for amount mismatches**
+-```logql
+-{service="skillars", level="error"}
+-  | json
+-  | discrepancyType="AMOUNT_MISMATCH"
+-  | line_format "txId={{.transactionId}} localAmount={{.localAmount}} providerAmount={{.providerAmount}} diff={{.amountDelta}}"
+-```
+-
+-**Step 5 — Trace a discrepant transaction end-to-end in Tempo**  
+-Copy the `transactionId` from the discrepancy log, search Tempo with:
+ ```traceql
+-{ .transactionId = "discrepant-txn-id" }
+-```
+-
+----
++# Slow requests to a named endpoint.
++{ name = "GET /api/marketplace/coaches/{coachId}" && duration > 1s }
+ 
+-### Incident: Fraud Engine Blocking Legitimate Traffic
++# Everything that errored.
++{ status = error }
+ 
+-**Symptoms:** Legitimate merchants report payments being blocked; `payment_fraud_blocked_total` rate spike.
+-
+-**Step 1 — Fraud block rate relative to total traffic**
+-```promql
+-rate(payment_fraud_blocked_total[5m]) / rate(payment_success_total[5m])
++# One trace, end to end, from a traceId found in a log line.
++{ trace:id = "<traceId>" }
+ ```
+ 
+-**Step 2 — Which fraud signals are firing most?**
+-
+-Display recent hits:
+-```logql
+-{service="skillars"} |= "velocity_limit_exceeded"
+-  | json
+-  | line_format "signal={{.fraudSignal}} count={{.observedCount}} window={{.windowSeconds}}s tenant={{.tenantId}}"
+-```
+-
+-Count by signal type (use for bar chart):
+-```logql
+-sum by (fraudSignal) (
+-  count_over_time({service="skillars"} |= "velocity_limit_exceeded" | json [10m])
+-)
+-```
+-
+-**Step 3 — Is a specific tenant the source?**
+-```logql
+-{service="skillars"} |= "FRAUD_BLOCKED"
+-  | json
+-  | line_format "tenant={{.tenantId}} score={{.riskScore}} signal={{.triggeringSignal}}"
+-```
+-
+-**Step 4 — Distribution of risk scores for blocked transactions**
+-```logql
+-{service="skillars"} |= "FRAUD_BLOCKED"
+-  | json
+-  | unwrap riskScore
+-  | quantile_over_time(0.50, [1h])
+-```
+-
+----
+-
+-### Incident: Webhook Delivery Backlog
+-
+-**Symptoms:** Merchants not receiving payment status updates; webhook jobs retrying repeatedly.
+-
+-**Step 1 — Webhook delivery failure rate**
+-```logql
+-count_over_time(
+-  {service="skillars", level="error"} |= "webhook_delivery" [5m]
+-)
+-```
+-
+-**Step 2 — Permanently failed webhooks (alert condition)**
+-```logql
+-{service="skillars", level="error"} |= "FAILED_PERMANENT"
+-  | json
+-  | line_format "tenant={{.tenantId}} txId={{.transactionId}} url={{.webhookUrl}} attempts={{.retryCount}}"
+-```
+-
+-**Step 3 — Which merchant URLs are failing?**
+-
+-Display recent failures:
+-```logql
+-{service="skillars", level="error"} |= "webhook_delivery"
+-  | json
+-  | line_format "url={{.webhookUrl}} httpStatus={{.httpStatusCode}}"
+-```
+-
+-Count by URL (use for bar chart):
+-```logql
+-sum by (webhookUrl) (
+-  count_over_time({service="skillars", level="error"} |= "webhook_delivery" | json [10m])
+-)
+-```
+-
+-**Step 4 — Is it a single tenant's webhook endpoint being unreachable?**
+-```logql
+-{service="skillars", level="error"} |= "webhook_delivery"
+-  | json
+-  | tenantId="specific-tenant-id"
+-```
+-
+----
+-
+-### Incident: Token Refresh Failure (Auth Loop)
+-
+-**Symptoms:** All payments to Orange or MTN failing with 401; token service logs showing errors.
+-
+-**Step 1 — Orange token errors**
+-```logql
+-{service="skillars", level="error"} |= "OrangeTokenService"
+-  | line_format "{{.message}}"
+-```
+-
+-**Step 2 — MTN token errors**
+-```logql
+-{service="skillars", level="error"} |= "MtnTokenService"
+-  | line_format "{{.message}}"
+-```
+-
+-**Step 3 — Rate of 401/403 responses from providers**
+-```logql
+-count_over_time(
+-  {service="skillars", level="error"}
+-  | json
+-  | httpStatusCode=~"401|403"
+-  [5m]
+-)
+-```
+-
+----
+-
+-## 6. Grafana Dashboards
+-
+-### 6.1 Skillars — Operations Overview (Golden Signals)
+-
+-**Purpose:** Primary on-call dashboard. Answers "is the system healthy right now?" in under 10 seconds.
+-
+-**Panels:**
+-
+-| Panel | Query | Visualization |
+-|-------|-------|---------------|
+-| Payment Success Rate | `rate(payment_success_total[5m])` | Stat (green > 10/min) |
+-| Payment Failure Rate | `rate(payment_failed_total[5m])` | Stat (red if > 0) |
+-| Fraud Block Rate | `rate(payment_fraud_blocked_total[5m])` | Stat |
+-| TPS | `rate(payment_success_total[1m]) + rate(payment_failed_total[1m])` | Stat |
+-| Failure Ratio (%) | `rate(payment_failed_total[5m]) / (rate(payment_success_total[5m]) + rate(payment_failed_total[5m])) * 100` | Gauge (red > 5%) |
+-| Success vs Failure over time | Both rates | Time series |
+-| Provider p95 Latency | `histogram_quantile(0.95, sum by (le, provider) (rate(payment_provider_latency_seconds_bucket[5m])))` | Time series |
+-| Circuit Breaker State | `resilience4j_circuitbreaker_state{name=~"orange\|mtn", state="open"}` | State timeline (1=OPEN) |
+-| Callback Received Rate | `rate(callback_received_total[5m])` | Time series |
+-| Callback Failure Rate | `rate(callback_failed_total[5m])` | Stat |
+-| JVM Heap Utilisation | `jvm_memory_used_bytes{area="heap"} / jvm_memory_max_bytes{area="heap"} * 100` | Gauge |
+-| DB Connection Pool Utilisation | `hikaricp_connections_active / hikaricp_connections_max * 100` | Gauge |
+-| Recent Error Logs | LogQL: `{service="skillars", level="error"}` | Logs panel |
+-
+----
+-
+-### 6.2 Provider Health — Orange & MTN
+-
+-**Purpose:** Deep-dive into individual provider behaviour during an incident.
+-
+-> **Known gap:** `callback_received_total` and `callback_failed_total` currently have no `provider` tag (see `PaymentMetricsService`). Provider-split callback rate panels use the log query as a workaround until the tag is added to the counters.
+-
+-**Panels:**
+-
+-| Panel | Query | Visualization |
+-|-------|-------|---------------|
+-| Orange Circuit State | `resilience4j_circuitbreaker_state{name="orange", state="open"}` | State timeline |
+-| MTN Circuit State | `resilience4j_circuitbreaker_state{name="mtn", state="open"}` | State timeline |
+-| Orange Failure Rate (sliding window) | `resilience4j_circuitbreaker_failure_rate{name="orange"}` | Gauge |
+-| MTN Failure Rate (sliding window) | `resilience4j_circuitbreaker_failure_rate{name="mtn"}` | Gauge |
+-| Orange p50/p95/p99 Latency | `histogram_quantile(0.95, sum by (le) (rate(payment_provider_latency_seconds_bucket{provider="ORANGE"}[5m])))` | Time series |
+-| MTN p50/p95/p99 Latency | Same with `provider="MTN"` | Time series |
+-| Orange Callback Rate (log-derived) | `sum(rate({service="skillars"} \|= "orange-callback" [5m]))` | Time series |
+-| MTN Callback Rate (log-derived) | `sum(rate({service="skillars"} \|= "mtn-callback" [5m]))` | Time series |
+-| Orange Error Logs | `{service="skillars", level="error"} \| json \| provider="ORANGE"` | Logs panel |
+-| MTN Error Logs | `{service="skillars", level="error"} \| json \| provider="MTN"` | Logs panel |
++Traces cover the **request** path. The outbox drain runs on `outboxDrainPool`, off the request
++thread, so a drain is a separate trace — do not expect it inside the booking's span.
+ 
+ ---
+ 
+-### 6.3 Fraud & Risk Dashboard
+-
+-**Purpose:** Monitor fraud engine health, block rates, and velocity rule effectiveness.
++## 5. Correlating logs, traces and metrics
+ 
+-**Panels:**
++Every log line carries `traceId` (Micrometer Tracing / OTEL). Grafana's Loki datasource is
++provisioned with a derived field in `deploy/lgtm/grafana-datasources.yml` that turns it into a link
++to Tempo.
+ 
+-| Panel | Query | Visualization |
+-|-------|-------|---------------|
+-| Fraud Block Rate | `rate(payment_fraud_blocked_total[5m])` | Stat |
+-| Fraud Block % of Total | `rate(payment_fraud_blocked_total[5m]) / (rate(payment_success_total[5m]) + rate(payment_failed_total[5m]) + rate(payment_fraud_blocked_total[5m])) * 100` | Gauge |
+-| Blocks Over Time | `rate(payment_fraud_blocked_total[5m])` | Time series |
+-| Top Fraud Signals Firing | `sum by (fraudSignal) (count_over_time({service="skillars"} \|= "velocity_limit_exceeded" \| json [5m]))` | Bar chart |
+-| Risk Score Distribution | `{service="skillars"} \|= "FRAUD_BLOCKED" \| json \| unwrap riskScore \| histogram_over_time([5m])` | Histogram |
+-| Blocked Transactions Log | `{service="skillars"} \|= "FRAUD_BLOCKED" \| json \| line_format "..."` | Logs panel |
++**Typical path:** alert fires → open the panel's PromQL to see the shape → jump to Loki for the same
++window → find the `traceId` on an ERROR line → follow it to Tempo for the hop that failed.
+ 
+ ---
+ 
+-### 6.4 Transaction Lifecycle & Reconciliation
++## 6. MDC fields available on log lines
+ 
+-**Purpose:** Daily reconciliation health and transaction state distribution.
++Populated by the application (not all fields appear on every line — they are set by the code path
++that owns them):
+ 
+-**Panels:**
++| Field | Set by | Example |
++|---|---|---|
++| `traceId` | Micrometer Tracing (OTEL) | `a1b2c3d4…` |
++| `operation` | business services | `admin_bootstrap` |
++| `eventType` | video / webhook handling | `video.uploaded` |
++| `videoId`, `ownerId`, `viewerId` | video module | UUID / user id |
++| `uploadSessionId`, `storageKey`, `providerAssetId` | upload + storage | — |
++| `webhookEventId` | inbound webhook handling | Stripe event id |
++| `provider`, `localState` | video provider integration | — |
+ 
+-| Panel | Query | Visualization |
+-|-------|-------|---------------|
+-| Reconciliation Job Last Run | `{service="skillars"} \|= "ReconciliationJob" \|= "completed"` | Logs panel |
+-| HIGH Severity Discrepancies | `{service="skillars", level="error"} \| json \| severity="HIGH"` | Table |
+-| Discrepancy Types | LogQL count grouped by `discrepancyType` | Bar chart |
+-| Webhook Delivery Failures | `count_over_time({service="skillars", level="error"} \|= "webhook_delivery" [5m])` | Stat |
+-| Permanently Failed Webhooks | `count_over_time({service="skillars", level="error"} \|= "FAILED_PERMANENT" [24h])` | Stat |
+-| Idempotency Key Collisions | `count_over_time({service="skillars"} \|= "PAYMENT_ALREADY_PROCESSING" [5m])` | Time series |
++`MdcDecorator` propagates the MDC across `@Async` hand-offs, so a task queued on a pool keeps the
++originating request's `traceId`.
+ 
+ ---
+ 
+ ## 7. Alerts
+ 
+-All alerts should route notifications to an on-call Slack channel.
+-
+-> **Alert system routing:**
+-> - Alerts marked **\[Prometheus\]** use only PromQL — load them via `prometheus.yml` as standard alerting rules or import into Grafana Alerting with a Prometheus datasource.
+-> - Alerts marked **\[Loki\]** use LogQL — they must be configured in **Grafana Alerting** with the Loki datasource. They cannot be placed in a Prometheus alerting rules file.
+-
+-### 7.1 Critical Alerts (P1 — Immediate Response)
+-
+-**Payment failure ratio exceeds 5% for 2 minutes** `[Prometheus]`
+-```yaml
+-alert: PaymentFailureRateHigh
+-expr: |
+-  (
+-    rate(payment_failed_total[5m])
+-    /
+-    (rate(payment_success_total[5m]) + rate(payment_failed_total[5m]))
+-  ) > 0.05
+-for: 2m
+-labels:
+-  severity: critical
+-annotations:
+-  summary: "Payment failure rate {{ $value | humanizePercentage }} exceeds 5%"
+-  runbook: "Check OrchestratorError breakdown in Loki. Verify provider health."
+-```
+-
+-**Orange circuit breaker is OPEN** `[Prometheus]`
+-```yaml
+-alert: OrangeCircuitBreakerOpen
+-expr: resilience4j_circuitbreaker_state{name="orange", state="open"} == 1
+-for: 30s
+-labels:
+-  severity: critical
+-annotations:
+-  summary: "Orange Money circuit breaker is OPEN — new payments will fail with 503"
+-  runbook: "Run incident runbook: Provider Down. Check Orange API status page."
+-```
++**Not listed here — deliberately.** See
++[`docs/deployment/monitoring.md`](deployment/monitoring.md) § *Alert Inventory and Response Actions*
++for all nine rules with their meaning and response runbook, and `deploy/lgtm/alerts.yml` /
++`deploy/lgtm/grafana-alerts.yml` for the definitions themselves.
+ 
+-**MTN circuit breaker is OPEN** `[Prometheus]`
+-```yaml
+-alert: MtnCircuitBreakerOpen
+-expr: resilience4j_circuitbreaker_state{name="mtn", state="open"} == 1
+-for: 30s
+-labels:
+-  severity: critical
+-annotations:
+-  summary: "MTN MoMo circuit breaker is OPEN — new payments will fail with 503"
+-```
+-
+-**Provider latency p99 exceeds 10 seconds** `[Prometheus]`
+-```yaml
+-alert: ProviderLatencyP99Critical
+-expr: |
+-  histogram_quantile(0.99,
+-    sum by (le, provider) (
+-      rate(payment_provider_latency_seconds_bucket[5m])
+-    )
+-  ) > 10
+-for: 2m
+-labels:
+-  severity: critical
+-annotations:
+-  summary: "{{ $labels.provider }} p99 latency is {{ $value }}s — SLO breach"
+-```
+-
+-### 7.2 High Alerts (P2 — Respond Within 30 Minutes)
+-
+-**Callback receipt rate drops to zero while payments are still being submitted** `[Prometheus]`
+-```yaml
+-alert: CallbackRateZero
+-expr: |
+-  rate(callback_received_total[5m]) == 0
+-  and
+-  rate(payment_success_total[5m]) > 0.1
+-for: 5m
+-labels:
+-  severity: high
+-annotations:
+-  summary: "No callbacks received in 5 minutes — payments may be stuck in PROCESSING"
+-  runbook: "Check IP whitelist config and provider webhook configuration."
+-```
+-
+-**Provider latency p95 exceeds 5 seconds** `[Prometheus]`
+-```yaml
+-alert: ProviderLatencyP95High
+-expr: |
+-  histogram_quantile(0.95,
+-    sum by (le, provider) (
+-      rate(payment_provider_latency_seconds_bucket[5m])
+-    )
+-  ) > 5
+-for: 3m
+-labels:
+-  severity: high
+-annotations:
+-  summary: "{{ $labels.provider }} p95 latency is {{ $value }}s"
+-```
+-
+-**Database connection pool above 80%** `[Prometheus]`
+-```yaml
+-alert: DbConnectionPoolHigh
+-expr: hikaricp_connections_active / hikaricp_connections_max > 0.80
+-for: 2m
+-labels:
+-  severity: high
+-annotations:
+-  summary: "DB connection pool at {{ $value | humanizePercentage }} — starvation risk"
+-```
+-
+-**Webhook delivery failures (any permanently failed webhooks)** `[Loki]`
+-```yaml
+-# Configure in Grafana Alerting with Loki datasource — not a Prometheus rule
+-alert: WebhookPermanentFailure
+-expr: |
+-  count_over_time(
+-    {service="skillars", level="error"} |= "FAILED_PERMANENT" [5m]
+-  ) > 0
+-for: 1m
+-labels:
+-  severity: high
+-annotations:
+-  summary: "Webhook permanently failed — merchant will not receive status update"
+-```
+-
+-### 7.3 Warning Alerts (P3 — Investigate During Business Hours)
+-
+-**Fraud block rate exceeds 20% of total traffic** `[Prometheus]`
+-```yaml
+-alert: FraudBlockRateHigh
+-expr: |
+-  rate(payment_fraud_blocked_total[5m])
+-    /
+-  (rate(payment_success_total[5m]) + rate(payment_failed_total[5m]) + rate(payment_fraud_blocked_total[5m]))
+-  > 0.20
+-for: 5m
+-labels:
+-  severity: warning
+-annotations:
+-  summary: "{{ $value | humanizePercentage }} of payments are being fraud-blocked — check if rules are too aggressive"
+-```
+-
+-**JVM heap above 85%** `[Prometheus]`
+-```yaml
+-alert: JvmHeapHigh
+-expr: jvm_memory_used_bytes{area="heap"} / jvm_memory_max_bytes{area="heap"} > 0.85
+-for: 5m
+-labels:
+-  severity: warning
+-annotations:
+-  summary: "JVM heap at {{ $value | humanizePercentage }}"
+-```
+-
+-**Reconciliation job discrepancies detected** `[Loki]`
+-```yaml
+-# Configure in Grafana Alerting with Loki datasource — not a Prometheus rule
+-alert: ReconciliationDiscrepancy
+-expr: |
+-  count_over_time(
+-    {service="skillars", level="error"} |= "severity=\"HIGH\"" [1h]
+-  ) > 0
+-for: 1m
+-labels:
+-  severity: warning
+-annotations:
+-  summary: "Reconciliation found HIGH-severity discrepancies — review ReconciliationReport"
+-```
+-
+-**Callback failure ratio above 10%** `[Prometheus]`
+-```yaml
+-alert: CallbackFailureRatioHigh
+-expr: rate(callback_failed_total[5m]) / rate(callback_received_total[5m]) > 0.10
+-for: 5m
+-labels:
+-  severity: warning
+-annotations:
+-  summary: "{{ $value | humanizePercentage }} of callbacks reference unknown transactions"
+-```
+-
+----
+-
+-## 8. Correlation: Loki ↔ Tempo ↔ Prometheus
+-
+-### Enabling Derived Fields in Grafana
+-
+-In the Loki datasource settings, add a derived field to auto-link log lines to Tempo traces:
+-
+-```json
+-{
+-  "name": "TraceID",
+-  "matcherRegex": "\"traceId\":\"([a-f0-9]{32})\"",
+-  "url": "${__value.raw}",
+-  "urlDisplayLabel": "View Trace",
+-  "datasourceUid": "<tempo-datasource-uid>"
+-}
+-```
+-
+-Once configured, any Loki log line containing a `traceId` field renders a **View Trace** button that opens the full waterfall in Tempo.
+-
+-### Correlation Workflow Example
+-
+-1. **Alert fires** → PaymentFailureRateHigh (Prometheus/Grafana)
+-2. **Open Operations Overview dashboard** → identify spike in time range
+-3. **Drill to Loki** → filter `{service="skillars", level="error"}`, narrow time range
+-4. **Identify error code** → e.g., `PROVIDER_ERROR` for ORANGE
+-5. **Click TraceID** in the log line → Tempo opens the waterfall
+-6. **Inspect spans** → `OrangeMoneyClient.pay` span shows HTTP 502 from Orange API, 4.2s latency
+-7. **Return to Prometheus** → confirm circuit breaker failure rate was climbing before the alert
+-8. **Check Orange health endpoint** in Grafana → `OrangePlatformHealthIndicator` shows DOWN
++`AlertDocumentationParityTest` (in the `test` phase, no container) fails the build if a rule exists
++without documentation or a documented alert no longer exists. That check is the reason this section
++is a pointer rather than a copy.
+ 
+ ---
+ 
+-## 9. Key MDC Fields Available in Every Log Line
+-
+-These fields are available in all Loki queries via `| json` extraction:
+-
+-| Field | Description | Example |
+-|-------|-------------|---------|
+-| `traceId` | OpenTelemetry trace ID (links to Tempo) | `a1b2c3d4...` |
+-| `transactionId` | Internal transaction UUID | `uuid-v4` |
+-| `externalReference` | Merchant's payment reference | `ORDER-12345` |
+-| `tenantId` | Merchant tenant identifier | `tenant-acme` |
+-| `provider` | Mobile money provider | `ORANGE` or `MTN` |
+-| `operation` | Business operation name | `initiate_payment` |
+-| `errorCode` | Standardised error code | `PROVIDER_ERROR` |
+-| `durationMs` | Wall-clock operation duration | `1247` |
+-| `httpStatusCode` | HTTP status from provider API | `502` |
+-| `riskScore` | Fraud risk score (0–100) | `78` |
+-| `fraudSignal` | Fraud signal that triggered | `MSISDN_VELOCITY` |
+-| `severity` | Reconciliation discrepancy severity | `HIGH` |
+-| `discrepancyType` | Reconciliation mismatch type | `AMOUNT_MISMATCH` |
+-
+----
+-
+-## 10. Environment Variables and Endpoints Reference
+-
+-| Component | Default | Override |
+-|-----------|---------|----------|
+-| Loki push URL | `http://localhost:3100` | `LOKI_URL` |
+-| Tempo OTLP HTTP | `http://localhost:4318/v1/traces` | `management.otlp.tracing.endpoint` |
+-| Prometheus scrape | `http://host.docker.internal:8367/manage/prometheus` | `prometheus.yml` |
+-| Grafana | `http://localhost:3000` | docker-compose |
+-| Metrics port | `8367` | `management.server.port` |
+-| Tracing sampling | `1.0` (100%) | `management.tracing.sampling.probability` |
++## History — why this file was rewritten (skillars-deferred-92 AC27)
++
++This document was inherited from the `javatemplate` origin project and described **a Mobile Money
++payment orchestrator (Orange Money + MTN MoMo)** — a system Skillars has never been. It survived the
++whole pivot to a Stripe coaching marketplace, and six prior full-file ledger audits closed without
++examining it.
++
++What was wrong, concretely:
++
++- **The alert catalogue was entirely fictional.** It documented `CallbackRateZero`,
++  `WebhookPermanentFailure`, `OrangeCircuitBreakerOpen`, `MtnCircuitBreakerOpen`,
++  `PaymentFailureRateHigh`, `CallbackFailureRatioHigh`, `FraudBlockRateHigh`,
++  `ReconciliationDiscrepancy` and `ProviderLatencyP*`. **None of them exist.** The nine that do
++  (`AppDown`, `NodeExporterDown`, `BookingPaymentSettleFailureRateHigh`, `DbConnectionPoolHigh`,
++  `JvmHeapHigh`, `SubscriptionInvoicePaymentFailureHigh`, `DiskDataVolumeHigh`, `DiskRootHigh`,
++  `MemoryPressureHigh`) appeared nowhere in it. An operator following this file during an incident
++  hunted for alerts that cannot fire and missed every one that can.
++- **~80 of 1143 lines were Orange/MTN/MSISDN/mobile-money narrative**, including seven incident
++  runbooks (provider circuit breaker, callback silence, reconciliation discrepancy, fraud engine,
++  webhook backlog, token refresh loop) for subsystems this codebase does not contain, and two
++  Grafana dashboard specs (*Provider Health — Orange & MTN*, *Fraud & Risk*) for dashboards that do
++  not exist.
++- **The MDC table was fiction too** — it listed `transactionId`, `externalReference`, `tenantId`,
++  `provider: ORANGE|MTN`, `riskScore`, `fraudSignal`, `discrepancyType`. Only `provider` survives,
++  and it means a *video* provider. §6 is now the real set, read from `MDC.put` call sites.
++- **The Quick Start did not work.** It told you to run
++  `docker-compose -f docker-compose-lgtm.yaml up -d`; that file has never existed in this repository.
++  The observability services are in the main `docker-compose.yml`.
++- **The Loki caveat was buried.** `loki.enabled` defaults to `false`, so every LogQL example returned
++  nothing until you set `LOKI_ENABLED=true` — now stated in §0 rather than left to be discovered.
++
++A prior story added a "STALE" warning banner at the top. That was honest but did not help the
++operator holding a pager: the wrong content was still the content. Two `dev-docs` pages link here as
++the authoritative observability reference (`docs/dev-docs/index.html`,
++`docs/dev-docs/monitoring/index.html`), which is what made leaving it in place untenable.
+diff --git a/src/main/java/com/softropic/skillars/platform/config/api/ConfigResource.java b/src/main/java/com/softropic/skillars/platform/config/api/ConfigResource.java
+index 5ca06c2..cb65b84 100644
+--- a/src/main/java/com/softropic/skillars/platform/config/api/ConfigResource.java
++++ b/src/main/java/com/softropic/skillars/platform/config/api/ConfigResource.java
+@@ -33,6 +33,31 @@ public class ConfigResource {
+         return ResponseEntity.ok(configService.findResponse(key));
+     }
+ 
++    /**
++     * Updates one platform config value.
++     *
++     * <p><strong>Two paths change a config value, and they behave differently</strong>
++     * (skillars-deferred-92 AC24; project-owner decision 6 was to document this, not change the TTL):
++     *
++     * <ul>
++     *   <li><strong>Through this endpoint — immediate.</strong> {@code ConfigService.updateConfig}
++     *       invalidates the cache as part of the write, so the new value is live on this node before
++     *       the response returns.</li>
++     *   <li><strong>Directly in the database (psql, a migration, a manual fix) — up to
++     *       {@code app.config.cache-ttl-seconds} (default 300s / 5 minutes).</strong>
++     *       {@code ConfigService} holds an in-memory cache refreshed by
++     *       {@code @Scheduled(fixedDelayString = "${app.config.cache-ttl-seconds:300}")}, and a direct
++     *       DB write cannot invalidate it. The value looks like it did not take effect.</li>
++     * </ul>
++     *
++     * <p>That second case is what made {@code booking.session.defaultDurationMinutes} read as broken
++     * during UAT. It is not a bug and the TTL is deliberately unchanged — a shorter TTL means more
++     * polling for a table that changes a few times a year. <strong>Prefer this endpoint.</strong> If
++     * you must edit the database directly, wait out the TTL or restart the app; on more than one node,
++     * each caches independently, so wait for the slowest.
++     *
++     * <p>Also in {@code docs/deployment/runbook.md} § "Config change appears to have no effect".
++     */
+     @PutMapping("/values/{key}")
+     @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+     public ResponseEntity<ConfigValueResponse> updateValue(
+diff --git a/src/test/java/com/softropic/skillars/db/AlertDocumentationParityTest.java b/src/test/java/com/softropic/skillars/db/AlertDocumentationParityTest.java
+new file mode 100644
+index 0000000..24cfcff
+--- /dev/null
++++ b/src/test/java/com/softropic/skillars/db/AlertDocumentationParityTest.java
+@@ -0,0 +1,129 @@
++package com.softropic.skillars.db;
++
++import org.junit.jupiter.api.DisplayName;
++import org.junit.jupiter.api.Test;
++
++import java.io.IOException;
++import java.nio.charset.StandardCharsets;
++import java.nio.file.Files;
++import java.nio.file.Path;
++import java.util.List;
++import java.util.Set;
++import java.util.TreeSet;
++import java.util.regex.Matcher;
++import java.util.regex.Pattern;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++/**
++ * skillars-deferred-92 AC27.4 — the alert rules that ship and the alerts that are documented must be
++ * the same set.
++ *
++ * <h2>Why this exists</h2>
++ *
++ * {@code docs/lgtm-observability.md} documented nine alerts — {@code CallbackRateZero},
++ * {@code OrangeCircuitBreakerOpen}, {@code MtnCircuitBreakerOpen}, {@code ReconciliationDiscrepancy}
++ * and friends — <strong>none of which exist</strong>. They were inherited from the {@code javatemplate}
++ * origin project, a Mobile Money payment orchestrator. The nine alerts this repository actually
++ * defines appeared nowhere in it. An operator following that document during an incident would hunt
++ * for alerts that cannot fire and miss every one that can.
++ *
++ * <p>That drift survived an entire project pivot and six prior full-file documentation audits. A
++ * grep-level check in the build is what stops it recurring, and it is cheap: two files, no Spring
++ * context, no container.
++ *
++ * <h2>What it checks, and what it deliberately does not</h2>
++ *
++ * Both directions of set equality between the rule files and the response-action documentation:
++ * a rule with no runbook is an alert that will page someone who then has nowhere to look, and a
++ * documented alert with no rule is the exact failure above.
++ *
++ * <p>It does <strong>not</strong> check that the documented <em>response</em> is correct, or that the
++ * PromQL threshold is sensible. Those need judgement. This is a name-level guard and its message
++ * says so, because this project has a recorded habit of guards believed stronger than they are.
++ */
++@DisplayName("Every shipped alert rule must be documented, and vice versa")
++class AlertDocumentationParityTest {
++
++    private static final Path PROM_RULES = Path.of("deploy", "lgtm", "alerts.yml");
++    private static final Path GRAFANA_RULES = Path.of("deploy", "lgtm", "grafana-alerts.yml");
++    private static final Path RUNBOOK = Path.of("docs", "deployment", "monitoring.md");
++
++    /** Prometheus rule: {@code - alert: NameOfAlert}. */
++    private static final Pattern PROM_ALERT = Pattern.compile("(?m)^\\s*-\\s*alert:\\s*(\\S+)\\s*$");
++    /**
++     * Grafana provisioned rule: {@code title: NameOfAlert}. Contact-point templates in the same file
++     * also use {@code title:}, but theirs are quoted Go templates ({@code "{{ len .Alerts... }}"}),
++     * so requiring a bare identifier separates them without needing a YAML parser.
++     */
++    private static final Pattern GRAFANA_ALERT = Pattern.compile("(?m)^\\s*title:\\s*([A-Za-z][A-Za-z0-9_]*)\\s*$");
++    /** Runbook heading: {@code #### NameOfAlert}. */
++    private static final Pattern DOCUMENTED = Pattern.compile("(?m)^#{2,4}\\s+([A-Za-z][A-Za-z0-9_]*)\\s*$");
++
++    private static Set<String> matches(Path file, Pattern pattern) throws IOException {
++        assertThat(file).as("%s must exist — this guard cannot check what it cannot read", file).exists();
++        Set<String> out = new TreeSet<>();
++        Matcher m = pattern.matcher(Files.readString(file, StandardCharsets.UTF_8));
++        while (m.find()) {
++            out.add(m.group(1));
++        }
++        return out;
++    }
++
++    private static Set<String> shippedAlerts() throws IOException {
++        Set<String> all = new TreeSet<>(matches(PROM_RULES, PROM_ALERT));
++        all.addAll(matches(GRAFANA_RULES, GRAFANA_ALERT));
++        return all;
++    }
++
++    @Test
++    @DisplayName("the guard sees a plausible number of rules, so it cannot pass by finding nothing")
++    void theRuleFilesAreActuallyParsed() throws IOException {
++        assertThat(shippedAlerts())
++            .as("""
++                Zero (or implausibly few) alert names parsed out of deploy/lgtm/. Either the rule files \
++                moved, or their format changed and the patterns in this class no longer match — in \
++                which case every assertion below would pass while checking nothing.""")
++            .hasSizeGreaterThanOrEqualTo(9);
++    }
++
++    @Test
++    @DisplayName("every shipped alert has a documented response action")
++    void everyShippedAlertIsDocumented() throws IOException {
++        Set<String> documented = matches(RUNBOOK, DOCUMENTED);
++        List<String> undocumented = shippedAlerts().stream()
++            .filter(a -> !documented.contains(a))
++            .toList();
++
++        assertThat(undocumented)
++            .as("""
++                These alerts can fire but have no entry in docs/deployment/monitoring.md, so whoever \
++                is paged has nowhere to look. Add a '#### <AlertName>' section with its meaning and \
++                response.""")
++            .isEmpty();
++    }
++
++    @Test
++    @DisplayName("every documented alert still exists as a rule")
++    void everyDocumentedAlertStillShips() throws IOException {
++        Set<String> shipped = shippedAlerts();
++        // Section headings that are structure, not alert names.
++        Set<String> headings = Set.of("Critical", "High", "Warning", "Alerts", "Alert", "Overview",
++            "Dashboards", "Contents", "Notes", "Monitoring", "Prerequisites", "Troubleshooting");
++
++        List<String> phantom = matches(RUNBOOK, DOCUMENTED).stream()
++            .filter(a -> !shipped.contains(a))
++            .filter(a -> !headings.contains(a))
++            // Documented names are CamelCase alert identifiers; ordinary prose headings are not.
++            .filter(a -> a.matches("[A-Z][a-z0-9]+([A-Z][A-Za-z0-9]*)+"))
++            .toList();
++
++        assertThat(phantom)
++            .as("""
++                docs/deployment/monitoring.md documents these alerts, but no rule in deploy/lgtm/ \
++                defines them. This is the exact failure that left docs/lgtm-observability.md \
++                documenting nine Orange/MTN mobile-money alerts for a Stripe platform. Delete the \
++                section, or add the rule.""")
++            .isEmpty();
++    }
++}

@@ -22,7 +22,6 @@ export const fetchPlayerConversations = (playerId) =>
   api.get(`/api/messaging/players/${playerId}/conversations`)
 
 export const fetchPlayerConversationMessages = (playerId, conversationId, page = 0, size = 20) =>
-  api
-    .get(`/api/messaging/players/${playerId}/conversations/${conversationId}/messages`, {
-      params: { page, size },
-    })
+  api.get(`/api/messaging/players/${playerId}/conversations/${conversationId}/messages`, {
+    params: { page, size },
+  })

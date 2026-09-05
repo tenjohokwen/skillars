@@ -223,7 +223,8 @@ export const useDevelopmentStore = defineStore('development', () => {
       }
     } catch (err) {
       if (seq === _coachContributionsSeq) {
-        coachContributionsError.value = err?.response?.data?.message ?? 'development.portal.contributionsLoadError'
+        coachContributionsError.value =
+          err?.response?.data?.message ?? 'development.portal.contributionsLoadError'
       }
     } finally {
       if (seq === _coachContributionsSeq) {

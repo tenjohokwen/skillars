@@ -12,17 +12,22 @@
       <div v-if="savedCard?.hasCard && !editing" class="row items-center q-gutter-sm">
         <q-icon name="mdi-credit-card-outline" size="sm" color="primary" />
         <span class="text-body2">
-          {{ savedCard.brand
-            ? t('payment.card.savedLabel', {
-                brand: savedCard.brand,
-                last4: savedCard.last4,
-                expMonth: savedCard.expMonth,
-                expYear: savedCard.expYear,
-              })
-            : t('payment.card.detailsUnavailable') }}
+          {{
+            savedCard.brand
+              ? t('payment.card.savedLabel', {
+                  brand: savedCard.brand,
+                  last4: savedCard.last4,
+                  expMonth: savedCard.expMonth,
+                  expYear: savedCard.expYear,
+                })
+              : t('payment.card.detailsUnavailable')
+          }}
         </span>
         <q-btn
-          flat dense size="sm" color="primary"
+          flat
+          dense
+          size="sm"
+          color="primary"
           :label="t('payment.card.replaceCard')"
           @click="startEditing"
         />
@@ -38,7 +43,8 @@
         </q-banner>
         <div class="row q-gutter-sm">
           <q-btn
-            unelevated color="primary"
+            unelevated
+            color="primary"
             :label="t('payment.card.save')"
             :loading="saving"
             :disable="!elementsReady"
@@ -83,7 +89,9 @@ let cardElement = null
 const savedCard = computed(() => paymentStore.savedPaymentMethod)
 // AC 2: the form (and the Stripe Elements mount point) shows whenever there is no saved card
 // yet, or the parent explicitly asked to replace the saved one.
-const showForm = computed(() => !stripeUnavailable.value && (editing.value || !savedCard.value?.hasCard))
+const showForm = computed(
+  () => !stripeUnavailable.value && (editing.value || !savedCard.value?.hasCard),
+)
 
 async function ensureStripeReady() {
   if (stripe) return true
@@ -179,10 +187,7 @@ async function submit() {
 
 onMounted(async () => {
   try {
-    await Promise.all([
-      paymentStore.fetchStripeConfig(),
-      paymentStore.fetchSavedPaymentMethod(),
-    ])
+    await Promise.all([paymentStore.fetchStripeConfig(), paymentStore.fetchSavedPaymentMethod()])
   } finally {
     loadingInitial.value = false
   }

@@ -101,3 +101,21 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: '1'
           trivyignores: .trivyignore
+
+  # skillars-deferred-92 AC1. The AC names ci.yml, but ci.yml's own comment records that "the
+  # enforcement gates live in pr-build, which is where regressions should be caught" — a gate that
+  # only runs on push-to-master reports the drift after it has already landed.
+  # Steps live in .github/actions/frontend-quality, shared with ci.yml's copy of this job --
+  # skillars-deferred-92 code review, chunk 5 (2026-09-04) found the two hand-duplicated inline
+  # copies already drifting from each other despite a comment (previously here) asking humans to
+  # keep them in sync manually; the composite action is what actually keeps them in sync now.
+  frontend-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: ./.github/actions/frontend-quality

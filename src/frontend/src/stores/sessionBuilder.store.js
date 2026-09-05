@@ -20,16 +20,23 @@ export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
   const templateBannerDismissed = ref(false)
 
   const sessionDna = computed(() => {
-    const allDrills = blocks.value.flatMap((b) => b.drills.map((d) => d.drill?.metadata).filter(Boolean))
-    if (!allDrills.length) return { technical: 0, physical: 0, cognitive: 0, matchRealism: 0, weakFootFocus: 0 }
+    const allDrills = blocks.value.flatMap((b) =>
+      b.drills.map((d) => d.drill?.metadata).filter(Boolean),
+    )
+    if (!allDrills.length)
+      return { technical: 0, physical: 0, cognitive: 0, matchRealism: 0, weakFootFocus: 0 }
 
     const count = allDrills.length
-    let sumTech = 0, sumPhys = 0, sumCog = 0, sumMatch = 0, weakFoot = 0
+    let sumTech = 0,
+      sumPhys = 0,
+      sumCog = 0,
+      sumMatch = 0,
+      weakFoot = 0
     for (const m of allDrills) {
       sumTech += ((m.intensity ?? 1) + (m.pressureLevel ?? 1)) / 2
-      sumPhys += (m.intensity ?? 1)
-      sumCog += (m.cognitiveLoad ?? 1)
-      sumMatch += (m.matchRealism ?? 1)
+      sumPhys += m.intensity ?? 1
+      sumCog += m.cognitiveLoad ?? 1
+      sumMatch += m.matchRealism ?? 1
       if (m.weakFootBias) weakFoot++
     }
 
@@ -55,7 +62,10 @@ export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
     return block.drills.reduce((sum, d) => {
       const meta = d.drill?.metadata
       if (!meta) return sum
-      const skillTotal = Math.max(1, Object.values(meta.skillWeighting ?? {}).reduce((a, v) => a + v, 0))
+      const skillTotal = Math.max(
+        1,
+        Object.values(meta.skillWeighting ?? {}).reduce((a, v) => a + v, 0),
+      )
       return sum + (meta.repDensity ?? 0) * skillTotal
     }, 0)
   }
@@ -66,9 +76,27 @@ export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
     status.value = 'DRAFT'
     blocks.value = [
       { _uid: 1, blockType: 'WARM_UP', blockName: 'Warm-Up', durationMinutes: 10, drills: [] },
-      { _uid: 2, blockType: 'TECHNICAL_FOUNDATION', blockName: 'Technical Foundation', durationMinutes: 15, drills: [] },
-      { _uid: 3, blockType: 'GAME_INTENSITY', blockName: 'Game Intensity', durationMinutes: 25, drills: [] },
-      { _uid: 4, blockType: 'COOL_DOWN_REVIEW', blockName: 'Cool-Down & Review', durationMinutes: 10, drills: [] },
+      {
+        _uid: 2,
+        blockType: 'TECHNICAL_FOUNDATION',
+        blockName: 'Technical Foundation',
+        durationMinutes: 15,
+        drills: [],
+      },
+      {
+        _uid: 3,
+        blockType: 'GAME_INTENSITY',
+        blockName: 'Game Intensity',
+        durationMinutes: 25,
+        drills: [],
+      },
+      {
+        _uid: 4,
+        blockType: 'COOL_DOWN_REVIEW',
+        blockName: 'Cool-Down & Review',
+        durationMinutes: 10,
+        drills: [],
+      },
     ]
     developmentFocus.value = []
     error.value = null
@@ -102,7 +130,10 @@ export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
     } catch (e) {
       if (e?.response?.status === 404) {
         initForBooking(bId)
-      } else if (e?.response?.status === 403 && e?.response?.data?.helpCode === 'security.featureGated') {
+      } else if (
+        e?.response?.status === 403 &&
+        e?.response?.data?.helpCode === 'security.featureGated'
+      ) {
         isGated.value = true
       } else {
         error.value = e

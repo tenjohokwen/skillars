@@ -23,7 +23,7 @@ export const useHomeworkStore = defineStore('homework', () => {
 
   async function markComplete(assignmentId) {
     await homeworkApi.markComplete(assignmentId)
-    const a = assignments.value.find(a => a.assignmentId === assignmentId)
+    const a = assignments.value.find((a) => a.assignmentId === assignmentId)
     if (a) a.completed = true
   }
 

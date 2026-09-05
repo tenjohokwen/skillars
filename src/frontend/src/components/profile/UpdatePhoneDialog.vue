@@ -1,6 +1,6 @@
 <template>
   <q-dialog v-model="dialogVisible" persistent>
-    <q-card style="min-width: 400px;">
+    <q-card style="min-width: 400px">
       <q-card-section>
         <div class="text-h6">{{ t('profile.updatePhone') }}</div>
       </q-card-section>
@@ -18,15 +18,11 @@
             :error="hasFieldError('phone')"
             :error-message="getFieldError('phone')"
             mask="#########"
-            hint="9 digits starting with 6 (e.g., 670123456)"
+            :hint="$t('auth.phoneHintFormat')"
           />
 
           <!-- Error banner -->
-          <q-banner
-            v-if="hasError && !isValidationError"
-            class="bg-negative text-white"
-            rounded
-          >
+          <q-banner v-if="hasError && !isValidationError" class="bg-negative text-white" rounded>
             {{ errorMessage }}
             <template v-if="helpCode">
               <br />
@@ -50,27 +46,27 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue';
-import { useQuasar } from 'quasar';
-import { useI18n } from 'vue-i18n';
-import { profileApi } from 'src/api/profile.api';
-import { useErrorHandler } from 'src/composables/useErrorHandler';
+import { ref, watch } from 'vue'
+import { useQuasar } from 'quasar'
+import { useI18n } from 'vue-i18n'
+import { profileApi } from 'src/api/profile.api'
+import { useErrorHandler } from 'src/composables/useErrorHandler'
 
 const props = defineProps({
   modelValue: {
     type: Boolean,
-    default: false
+    default: false,
   },
   currentPhone: {
     type: String,
-    default: ''
-  }
-});
+    default: '',
+  },
+})
 
-const emit = defineEmits(['update:modelValue', 'updated']);
+const emit = defineEmits(['update:modelValue', 'updated'])
 
-const $q = useQuasar();
-const { t } = useI18n();
+const $q = useQuasar()
+const { t } = useI18n()
 const {
   setError,
   clearError,
@@ -79,68 +75,71 @@ const {
   helpCode,
   isValidationError,
   hasFieldError,
-  getFieldError
-} = useErrorHandler();
+  getFieldError,
+} = useErrorHandler()
 
 // Local dialog visibility for v-model sync
-const dialogVisible = ref(props.modelValue);
+const dialogVisible = ref(props.modelValue)
 
 // Form state
 const form = ref({
-  phone: props.currentPhone || ''
-});
-const originalPhone = ref(props.currentPhone || '');
-const isSubmitting = ref(false);
+  phone: props.currentPhone || '',
+})
+const originalPhone = ref(props.currentPhone || '')
+const isSubmitting = ref(false)
 
 // Cameroon phone validation
 const validCamPhone = (val) => {
-  if (!val) return t('validation.required');
-  const cleaned = val.replace(/\D/g, '');
-  if (cleaned.length !== 9) return t('validation.phone.digitCount');
-  if (cleaned[0] !== '6') return t('validation.phone.firstDigit');
-  return true;
-};
+  if (!val) return t('validation.required')
+  const cleaned = val.replace(/\D/g, '')
+  if (cleaned.length !== 9) return t('validation.phone.digitCount')
+  if (cleaned[0] !== '6') return t('validation.phone.firstDigit')
+  return true
+}
 const notSamePhone = (val) => {
-  const cleanedNew = (val || '').replace(/\D/g, '');
-  const cleanedOld = (originalPhone.value || '').replace(/\D/g, '');
-  return cleanedNew !== cleanedOld || t('validation.samePhone');
-};
+  const cleanedNew = (val || '').replace(/\D/g, '')
+  const cleanedOld = (originalPhone.value || '').replace(/\D/g, '')
+  return cleanedNew !== cleanedOld || t('validation.samePhone')
+}
 
 // Watch for external changes to modelValue
-watch(() => props.modelValue, (newVal) => {
-  dialogVisible.value = newVal;
-  if (newVal) {
-    // Reset form when dialog opens
-    form.value.phone = props.currentPhone || '';
-    originalPhone.value = props.currentPhone || '';
-    clearError();
-  }
-});
+watch(
+  () => props.modelValue,
+  (newVal) => {
+    dialogVisible.value = newVal
+    if (newVal) {
+      // Reset form when dialog opens
+      form.value.phone = props.currentPhone || ''
+      originalPhone.value = props.currentPhone || ''
+      clearError()
+    }
+  },
+)
 
 // Watch for internal changes to sync back to parent
 watch(dialogVisible, (newVal) => {
-  emit('update:modelValue', newVal);
-});
+  emit('update:modelValue', newVal)
+})
 
 function close() {
-  dialogVisible.value = false;
+  dialogVisible.value = false
 }
 
 async function handleSubmit() {
-  clearError();
-  isSubmitting.value = true;
+  clearError()
+  isSubmitting.value = true
   try {
-    await profileApi.updatePhone(form.value.phone);
+    await profileApi.updatePhone(form.value.phone)
     $q.notify({
       type: 'positive',
-      message: t('success.phoneChanged')
-    });
-    emit('updated');
-    close();
+      message: t('success.phoneChanged'),
+    })
+    emit('updated')
+    close()
   } catch (err) {
-    setError(err);
+    setError(err)
   } finally {
-    isSubmitting.value = false;
+    isSubmitting.value = false
   }
 }
 </script>

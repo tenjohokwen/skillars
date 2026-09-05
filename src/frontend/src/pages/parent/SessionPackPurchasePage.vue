@@ -29,10 +29,21 @@
         <q-card-section>
           <div class="row items-center">
             <div class="col">
-              <div class="text-weight-medium">{{ t('booking.packs.sessionsBundle', { count: tier.sessionCount }) }}</div>
-              <div class="text-caption text-grey">{{ formatPrice(tier.totalPrice) }} · {{ t('booking.packs.pricePerSession', { price: formatPrice(tier.pricePerSession) }) }}</div>
+              <div class="text-weight-medium">
+                {{ t('booking.packs.sessionsBundle', { count: tier.sessionCount }) }}
+              </div>
+              <div class="text-caption text-grey">
+                {{ formatPrice(tier.totalPrice) }} ·
+                {{
+                  t('booking.packs.pricePerSession', { price: formatPrice(tier.pricePerSession) })
+                }}
+              </div>
             </div>
-            <q-radio :model-value="selected" :val="tier.packTierId" @update:model-value="selected = tier.packTierId" />
+            <q-radio
+              :model-value="selected"
+              :val="tier.packTierId"
+              @update:model-value="selected = tier.packTierId"
+            />
           </div>
         </q-card-section>
       </q-card>

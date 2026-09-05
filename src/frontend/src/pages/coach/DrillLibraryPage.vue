@@ -108,7 +108,7 @@
         <q-card-section class="q-pt-none">
           <q-select
             v-model="localFilters.skill"
-            label="Skill"
+            :label="t('session.drillLibrary.filterSkill')"
             :options="skillOptions"
             clearable
             outlined
@@ -117,7 +117,7 @@
           />
           <q-select
             v-model="localFilters.difficultyTier"
-            label="Difficulty Tier"
+            :label="$t('session.drillLibrary.filterDifficulty')"
             :options="['U8', 'U10', 'U12', 'U14', 'U16', 'U18', 'Adult']"
             clearable
             outlined
@@ -126,7 +126,7 @@
           />
           <q-select
             v-model="localFilters.equipment"
-            label="Equipment"
+            :label="t('session.drillLibrary.filterEquipment')"
             :options="equipmentOptions"
             clearable
             outlined
@@ -134,11 +134,14 @@
             multiple
             class="q-mb-sm"
           />
-          <q-toggle v-model="localFilters.weakFootBias" label="Weak Foot Bias only" />
+          <q-toggle
+            v-model="localFilters.weakFootBias"
+            :label="$t('session.drillLibrary.filterWeakFootOnly')"
+          />
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat :label="t('session.drillLibrary.clearFilters')" @click="clearFilters" />
-          <q-btn color="primary" label="Apply" @click="applyFilters" />
+          <q-btn color="primary" :label="t('session.drillLibrary.apply')" @click="applyFilters" />
         </q-card-actions>
       </q-card>
     </q-dialog>
@@ -280,7 +283,7 @@ async function handleClone(drillId) {
       ],
     })
   } catch {
-    $q.notify({ message: 'Failed to clone drill', color: 'negative' })
+    $q.notify({ message: t('session.drillLibrary.cloneFailed'), color: 'negative' })
   }
 }
 
@@ -289,7 +292,12 @@ async function handleEditClone(cloneId) {
   selectedLibrary.value = 'PRIVATE'
   localSearchQuery.value = ''
   sessionStore.searchQuery = ''
-  sessionStore.activeFilters = { skill: null, difficultyTier: null, equipment: null, weakFootBias: null }
+  sessionStore.activeFilters = {
+    skill: null,
+    difficultyTier: null,
+    equipment: null,
+    weakFootBias: null,
+  }
   localFilters.value = { skill: null, difficultyTier: null, equipment: null, weakFootBias: null }
   await sessionStore.fetchDrills('PRIVATE')
   const clone = sessionStore.drills.find((d) => d.id === cloneId)

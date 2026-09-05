@@ -1,12 +1,28 @@
 <template>
   <div
-    v-if="pitchTimezone && pitchTimezone !== authStore.browserTimezone && !authStore.timezoneNoticeDismissed"
+    v-if="
+      pitchTimezone &&
+      pitchTimezone !== authStore.browserTimezone &&
+      !authStore.timezoneNoticeDismissed
+    "
     class="timezone-notice"
   >
     <span class="timezone-notice__message">
-      {{ t('booking.timezone.noticeDiffers', { browser: authStore.browserTimezone, pitch: pitchTimezone }) }}
+      {{
+        t('booking.timezone.noticeDiffers', {
+          browser: authStore.browserTimezone,
+          pitch: pitchTimezone,
+        })
+      }}
     </span>
-    <q-btn flat dense round icon="close" class="timezone-notice__close" @click="authStore.dismissTimezoneNotice()" />
+    <q-btn
+      flat
+      dense
+      round
+      icon="close"
+      class="timezone-notice__close"
+      @click="authStore.dismissTimezoneNotice()"
+    />
   </div>
 </template>
 

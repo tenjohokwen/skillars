@@ -15,6 +15,9 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.List;
@@ -41,13 +44,19 @@ class BookingReminderSchedulerTest {
     @Mock ConfigService configService;
     @Mock CoachProfileRepository coachProfileRepository;
     @Mock UserRepository userRepository;
+    // skillars-deferred-92 code review: the scheduler no longer carries a method-level
+    // @Transactional; each booking is processed in its own TransactionTemplate scope. A real
+    // template over a stub manager keeps that structure visible here rather than mocking it away.
+    @Mock PlatformTransactionManager transactionManager;
 
     private BookingReminderScheduler scheduler;
 
     @BeforeEach
     void setUp() {
+        lenient().when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
         scheduler = new BookingReminderScheduler(bookingRepository, bookingService, eventPublisher,
-                configService, coachProfileRepository, userRepository);
+                configService, coachProfileRepository, userRepository,
+                new TransactionTemplate(transactionManager));
         lenient().when(configService.getBoundedLong(eq("platform.reminder_interval_primary_hours"), anyLong(), anyLong(), anyLong())).thenReturn(24L);
         lenient().when(configService.getBoundedLong(eq("platform.reminder_interval_secondary_hours"), anyLong(), anyLong(), anyLong())).thenReturn(2L);
     }
@@ -67,6 +76,8 @@ class BookingReminderSchedulerTest {
         Booking booking = buildBooking();
         when(bookingRepository.findConfirmedForUpcomingTransition(any())).thenReturn(List.of(booking));
         when(bookingRepository.findUpcomingWithin2hWindow(any(), any())).thenReturn(List.of());
+        // Re-read inside the per-booking transaction rather than reusing the selected instance.
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.empty());
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
 
@@ -86,6 +97,7 @@ class BookingReminderSchedulerTest {
         parent.setEmail("parent@example.com");
         when(bookingRepository.findConfirmedForUpcomingTransition(any())).thenReturn(List.of(booking));
         when(bookingRepository.findUpcomingWithin2hWindow(any(), any())).thenReturn(List.of());
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.empty());
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(parent));
 

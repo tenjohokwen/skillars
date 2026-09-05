@@ -34,7 +34,7 @@ public class SessionPackEmailListener {
 
     private final com.softropic.skillars.platform.notification.service.NotificationOutboxSupport notificationOutboxSupport;
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onExpiryWarning(SessionPackExpiryWarningEvent event) {
         try {
             Map<String, Object> data = new HashMap<>();
@@ -55,7 +55,7 @@ public class SessionPackEmailListener {
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onPackExpired(SessionPackExpiredEvent event) {
         try {
             Map<String, Object> data = new HashMap<>();
@@ -74,7 +74,7 @@ public class SessionPackEmailListener {
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onPackPaused(PackPausedEvent event) {
         try {
             Map<String, Object> data = new HashMap<>();

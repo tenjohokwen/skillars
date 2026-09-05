@@ -9,14 +9,16 @@
           v-model="fromDate"
           :label="t('common.startDate')"
           type="date"
-          outlined dense
+          outlined
+          dense
           class="col"
         />
         <q-input
           v-model="toDate"
           :label="t('common.endDate')"
           type="date"
-          outlined dense
+          outlined
+          dense
           class="col"
         />
         <q-btn
@@ -50,7 +52,9 @@
           <q-td :props="props">
             <q-btn
               v-if="props.row.type === 'BOOKING_DEDUCTION' && props.row.referenceId"
-              flat dense size="sm"
+              flat
+              dense
+              size="sm"
               :label="t('creditStatement.receipt')"
               @click="openReceipt(props.row.referenceId)"
             />
@@ -91,9 +95,19 @@ const statementPage = computed(() => paymentStore.creditStatementPage)
 const columns = [
   { name: 'createdAt', label: t('creditStatement.date'), field: 'createdAt', align: 'left' },
   { name: 'type', label: t('creditStatement.type'), field: 'type', align: 'left' },
-  { name: 'description', label: t('creditStatement.description'), field: 'description', align: 'left' },
+  {
+    name: 'description',
+    label: t('creditStatement.description'),
+    field: 'description',
+    align: 'left',
+  },
   { name: 'amount', label: t('creditStatement.amount'), field: 'amount', align: 'right' },
-  { name: 'runningBalance', label: t('creditStatement.balance'), field: 'runningBalance', align: 'right' },
+  {
+    name: 'runningBalance',
+    label: t('creditStatement.balance'),
+    field: 'runningBalance',
+    align: 'right',
+  },
   { name: 'actions', label: '', field: 'actions', align: 'center' },
 ]
 
@@ -123,6 +137,8 @@ function fmtBalance(val) {
 
 function formatDate(iso) {
   if (!iso) return '—'
-  return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso))
+  return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }).format(
+    new Date(iso),
+  )
 }
 </script>

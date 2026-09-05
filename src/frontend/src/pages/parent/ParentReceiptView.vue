@@ -6,7 +6,12 @@
 
     <div v-else-if="receipt" class="receipt-container">
       <div class="no-print q-mb-md row justify-end">
-        <q-btn color="primary" icon="print" :label="t('revenue.receipt.print')" @click="printPage" />
+        <q-btn
+          color="primary"
+          icon="print"
+          :label="t('revenue.receipt.print')"
+          @click="printPage"
+        />
       </div>
 
       <div class="receipt-card glass-card q-pa-xl">
@@ -83,7 +88,9 @@ function fmt(val) {
 
 function formatDate(iso) {
   if (!iso) return '—'
-  return new Intl.DateTimeFormat(locale.value, { dateStyle: 'long', timeStyle: 'short' }).format(new Date(iso))
+  return new Intl.DateTimeFormat(locale.value, { dateStyle: 'long', timeStyle: 'short' }).format(
+    new Date(iso),
+  )
 }
 </script>
 

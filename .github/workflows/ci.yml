@@ -61,8 +61,34 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+  # skillars-deferred-92 AC1: the Prettier mandate in `_bmad-output/project-context.md` had never
+  # been enforced by any workflow, which is why 130 of ~150 frontend source files had drifted out of
+  # conformance over the life of the repo (re-recorded three separate times before anyone gated it).
+  # `mvn verify` builds the frontend via frontend-maven-plugin but runs neither Prettier nor ESLint
+  # (`npm test` is a stub), so this is the only place either check happens.
+  # Kept as its own job, not a step in `test`: it needs no JDK, no containers and no Maven cache, and
+  # a formatting failure should be visible in ~1 minute rather than behind a 15-minute test suite.
+  # Steps live in .github/actions/frontend-quality, shared with pr-build.yml's copy of this job --
+  # skillars-deferred-92 code review, chunk 5 (2026-09-04) found the two hand-duplicated inline
+  # copies already drifting from each other despite a comment asking humans to keep them in sync.
+  frontend-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: ./.github/actions/frontend-quality
+
   build-and-push:
-    needs: test
+    # skillars-deferred-92 code review, chunk 5 (2026-09-04): this job used to depend on `test`
+    # only, so a red `frontend-quality` gate still let an image build and publish from the commit
+    # the gate had just rejected -- only pr-build.yml actually stopped anything. Both jobs gate the
+    # push now.
+    needs: [test, frontend-quality]
     runs-on: ubuntu-latest
     concurrency:
       group: build-and-push-${{ github.ref }}

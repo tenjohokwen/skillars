@@ -1,5 +1,28 @@
 export default {
   auth: {
+    parentPrivacyBody:
+      'We collect personal data to provide our services. Your data is processed in accordance with GDPR and applicable data protection laws. We do not sell your personal data to third parties. You may request deletion of your data at any time. Session recordings and coaching data are retained for the period specified in our privacy policy.',
+    parentConsentBody:
+      "As the legal guardian of the player(s) you register, you consent to Skillars collecting and processing data about your child for coaching purposes. You confirm you are the legal parent or guardian. You are responsible for ensuring your child's participation is appropriate. You may withdraw consent at any time by contacting support.",
+    activateRedirecting: 'Redirecting in {seconds}…',
+    otpCodeExpiry: 'the code expires in 10 minutes.',
+    parentTosBody:
+      'By using Skillars, you agree to our terms and conditions. These terms govern your use of the platform, including booking sessions, payments, and data handling. You must be at least 18 years old to register as a parent. All accounts are subject to our acceptable use policy.',
+    activationTitle: 'Account activation',
+    activationKeyMissing: 'Invalid or missing activation key.',
+    recoveryTitle: 'Account recovery',
+    recoveryBody: 'Enter your email and date of birth to reset your password.',
+    recoveryEmailSent: 'Email sent',
+    loginWelcome: 'Welcome back. Sign in to continue.',
+    twoFactorTitle: 'Two-factor authentication',
+    otpNotReceived: "Didn't receive the code?",
+    registerTitle: 'Create your account',
+    registerBody: 'Fill in your details to get started.',
+    resetTitle: 'Password reset',
+    resetBody: 'Choose a strong new password.',
+    resetKeyMissing: 'Invalid or missing reset key. Please request a new password reset.',
+    verifyTokenMissing: 'No verification token found. Please check your email link.',
+    phoneHintFormat: '9 digits starting with 6 (e.g., 670123456)',
     accountNotVerified:
       'Your account is not yet verified. Please complete phone verification first.',
     accountLocked: 'Too many login attempts. Please try again in a few minutes.',
@@ -46,6 +69,7 @@ export default {
     languageEnglish: 'English',
     languageFrench: 'French',
     coach: {
+      resendOtp: 'Resend Code',
       registerTitle: 'Create Coach Account',
       registerSubtitle: 'Join Skillars and start coaching',
       emailPendingTitle: 'Check your email',
@@ -76,6 +100,13 @@ export default {
       step2Short: 'Specialties',
       step2Specialties: 'Specializations',
       step2AgeGroups: 'Age Groups',
+      // skillars-deferred-92 code review, chunk 3: exposed by the eslint.config.js Quasar-attribute
+      // fix above — these q-checkbox labels were hardcoded even though the identical youth-category
+      // notation applies across locales.
+      ageGroupU10: 'U10',
+      ageGroup10to12: '10–12',
+      ageGroup13to17: '13–17',
+      ageGroupAdult: '18+',
       step3Title: 'Pricing',
       step3Short: 'Pricing',
       step3PerSessionPrice: 'Per Session Price (EUR)',
@@ -112,6 +143,16 @@ export default {
       step4Start: 'Start',
       step4End: 'End',
       step4RemoveWindow: 'Remove window',
+      // skillars-deferred-92 code review, chunk 3: ProfileBuilderStep4's day-of-week options were
+      // hardcoded English ('Monday'…'Sunday'), invisible to AC14's sweep because they live in a
+      // <script> array bound to :options, not a template text node.
+      weekdayMonday: 'Monday',
+      weekdayTuesday: 'Tuesday',
+      weekdayWednesday: 'Wednesday',
+      weekdayThursday: 'Thursday',
+      weekdayFriday: 'Friday',
+      weekdaySaturday: 'Saturday',
+      weekdaySunday: 'Sunday',
       step5Title: 'Profile Photo',
       step5Short: 'Photo',
       step5PhotoLabel: 'Profile Photo',
@@ -153,6 +194,7 @@ export default {
       tileUnavailable: 'Unavailable',
     },
     player: {
+      resendOtp: 'Resend Code',
       registerTitle: 'Create Player Account',
       registerSubtitle: 'Track your own development and book sessions',
       emailPendingTitle: 'Check your email',
@@ -316,9 +358,23 @@ export default {
     continueQuestion: 'Would you like to continue your session?',
     continueSession: 'Continue Session',
     refreshed: 'Session refreshed successfully',
-    refreshFailed: "We couldn't extend your session. Check your connection and select Continue Session to try again.",
+    refreshFailed:
+      "We couldn't extend your session. Check your connection and select Continue Session to try again.",
     expired: 'Your session has expired. Please log in again.',
     drillLibrary: {
+      moreItems: '+{count} more',
+      setupDiagram: 'Setup diagram',
+      tags: 'Tags',
+      videoPreviewAfterUpload: 'Video preview available after upload',
+      metaDifficulty: 'Difficulty',
+      metaGroupSize: 'Group Size',
+      metaEquipment: 'Equipment',
+      filterDifficulty: 'Difficulty Tier',
+      filterSkill: 'Skill',
+      filterEquipment: 'Equipment',
+      filterWeakFootOnly: 'Weak Foot Bias only',
+      apply: 'Apply',
+      cloneFailed: 'Failed to clone drill',
       title: 'Drill Library',
       loadError: 'Failed to load drills. Please try again.',
       videoLoadFailed: 'Video failed to load — refreshing…',
@@ -361,10 +417,12 @@ export default {
         removeConfirm: 'Remove',
         uploadStarted: 'Video upload started — processing may take a few minutes',
         videoRemoved: 'Video removed',
-        quotaExceeded: 'Upload would exceed your video storage quota. Upgrade your plan to upload more.',
+        quotaExceeded:
+          'Upload would exceed your video storage quota. Upgrade your plan to upload more.',
         rateLimited: 'Too many uploads. Wait a moment and try again.',
         constraintViolated: 'Video exceeds the 120-second or 500 MB limit for drill demos.',
-        videoAlreadyLinked: 'A video is already linked to this drill. Remove it before uploading a new one.',
+        videoAlreadyLinked:
+          'A video is already linked to this drill. Remove it before uploading a new one.',
         notOwned: 'You do not have permission to upload video to this drill.',
         uploadFailed: 'Upload failed. Please try again.',
         removeFailed: 'Could not remove video. Please try again.',
@@ -556,6 +614,9 @@ export default {
     errorGeneric: 'Something went wrong. Please try again.',
   },
   profile: {
+    subtitle: 'Manage your account details and preferences.',
+    sectionAccount: 'Account',
+    sectionPersonal: 'Personal Info',
     title: 'My Profile',
     email: 'Email Address',
     password: 'Password',
@@ -579,6 +640,12 @@ export default {
     // Address fields
     addressName: 'Address Label',
     addressNameHint: 'e.g., HOME, WORK',
+    // skillars-deferred-92 code review, chunk 3: UpdateAddressDialog's addressNameOptions labels
+    // were the hardcoded English enum literal ('HOME'/'WORK'/'OTHER') — the enum value is the
+    // option's `value`, so the `label` is free to be a real translated word.
+    addressTypeHome: 'Home',
+    addressTypeWork: 'Work',
+    addressTypeOther: 'Other',
     companyName: 'Company Name',
     addressLine1: 'Address Line 1',
     addressLine2: 'Address Line 2',
@@ -611,6 +678,7 @@ export default {
       decreased: '{skill} exposure decreased {percent}% this month',
     },
     radar: {
+      chartAriaLabel: 'Skills Radar Data',
       addAssessmentLabel: 'Add Radar Assessment',
       assessmentPanelTitle: 'Skills Radar Assessment',
       assessmentTypeLabelObjective: 'Objective Test',
@@ -621,7 +689,7 @@ export default {
       notesLabel: 'Notes (optional)',
       assessmentTypeLabel: 'Assessment Type',
       scoreTierReference:
-        'Score reference: Elite 90–100 | Excellent 80–89 | Good 70–79 | Above Average 60–69 | Average 50–59 | Below Average 40–49 | Very Weak <40',
+        'Score reference: Elite 90–100 • Excellent 80–89 • Good 70–79 • Above Average 60–69 • Average 50–59 • Below Average 40–49 • Very Weak <40',
       submitLabel: 'Submit Assessment',
       historyTitle: 'My Assessment History',
       noEntriesYet: 'No assessments recorded yet',
@@ -651,7 +719,8 @@ export default {
         academyFeatureTeaser: 'Academy feature — upgrade to unlock',
         upgradeButton: 'Upgrade to Academy',
         noInsightsYet: 'No correlation insights yet — log more sessions with different skills.',
-        excludedSkills: '{count} skill | {count} skills not shown — no training data recorded yet.',
+        excludedSkills:
+          '{count} skill not shown — no training data recorded yet. | {count} skills not shown — no training data recorded yet.',
         insight: {
           highSluImprovement: 'High training volume → Score improving',
           highSluNoImprovement:
@@ -765,7 +834,14 @@ export default {
   parent: {
     nav: 'Parent',
   },
-  admin: {},
+  admin: {
+    health: {
+      title: 'System Health',
+      subtitle: 'Real-time infrastructure status',
+      accessDenied: 'Admin access required to view health details.',
+      loadError: 'Failed to load health status',
+    },
+  },
   booking: {
     requests: {
       statusRequested: 'Awaiting coach response',
@@ -820,6 +896,11 @@ export default {
       blockAdded: 'Time block saved successfully.',
       windowAdded: 'Availability window saved successfully.',
       blocked: 'Blocked',
+      // skillars-deferred-92 code review, chunk 3: BookingRequestPage called
+      // t('booking.availability.noSlotsAvailable', 'English default') for a key that existed in no
+      // bundle — the inline default suppressed the missing-key symptom in every locale instead of
+      // surfacing it.
+      noSlotsAvailable: 'No available slots this week',
     },
     schedule: {
       weekOf: 'Week of {date}',
@@ -932,7 +1013,8 @@ export default {
         'This will cancel the session. Depending on how close it is to the scheduled time, it may not be eligible for a refund.',
       confirm: 'Cancel session',
       success: 'Session cancelled',
-      paymentInProgress: 'A payment for this session is already in progress. Please try again shortly.',
+      paymentInProgress:
+        'A payment for this session is already in progress. Please try again shortly.',
       failed: 'Could not cancel this session. Please try again.',
     },
     batch: {
@@ -965,7 +1047,8 @@ export default {
       blockOverlapsBooking:
         'You already have a booking during this time — cancel or reschedule it first if you need to block this time out.',
       sessionCrossesMidnight: 'A session cannot cross midnight.',
-      availabilityChanged: "This coach's availability changed since you loaded this page. Please pick a new time.",
+      availabilityChanged:
+        "This coach's availability changed since you loaded this page. Please pick a new time.",
       weekStartOutOfRange: 'That week is too far in the past or future to view.',
       batchAlreadyProcessed: 'These requests have already been handled.',
       batchNoneAccepted: 'None of the sessions in this request could be accepted.',
@@ -1260,5 +1343,32 @@ export default {
     send: 'Send',
     loadMore: 'Load more',
     unread: '{count} unread',
+  },
+  errorPage: {
+    notFoundTitle: 'Page not found',
+    notFoundBody: "The page you're looking for doesn't exist or has been moved.",
+    goHome: 'Go Home',
+  },
+  dashboard: {
+    title: 'Dashboard',
+    welcomeBack: 'Welcome back, {name}',
+    defaultUser: 'User',
+    loggedIn: 'You are successfully logged in',
+    operational: 'All systems are operational.',
+    metricSessionsToday: 'Sessions Today',
+    metricActiveUsers: 'Active Users',
+    metricUptime: 'Uptime',
+    metricResponseTime: 'Response Time',
+    metricNoData: 'No data yet',
+    metricLast30Days: 'Last 30 days',
+    metricAverageMs: 'Average ms',
+  },
+  nav: {
+    sectionMain: 'Main',
+    menu: 'Menu',
+    tagline: 'Analytics Platform',
+    dashboard: 'Dashboard',
+    admin: 'Admin',
+    healthDashboard: 'Health Dashboard',
   },
 }

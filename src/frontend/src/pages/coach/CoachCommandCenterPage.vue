@@ -33,9 +33,21 @@
     />
 
     <div class="row items-center q-mb-md q-gutter-sm">
-      <q-btn flat dense icon="chevron_left" :label="t('booking.schedule.prevWeek')" @click="prevWeek" />
+      <q-btn
+        flat
+        dense
+        icon="chevron_left"
+        :label="t('booking.schedule.prevWeek')"
+        @click="prevWeek"
+      />
       <div class="text-subtitle1">{{ t('booking.schedule.weekOf', { date: selectedWeek }) }}</div>
-      <q-btn flat dense icon="chevron_right" :label="t('booking.schedule.nextWeek')" @click="nextWeek" />
+      <q-btn
+        flat
+        dense
+        icon="chevron_right"
+        :label="t('booking.schedule.nextWeek')"
+        @click="nextWeek"
+      />
     </div>
 
     <div v-if="bookingStore.coachScheduleLoading" class="flex flex-center q-py-xl">
@@ -46,7 +58,11 @@
       <!-- Sidebar: active clients -->
       <div class="command-center__sidebar">
         <div class="text-subtitle2 q-mb-sm">{{ t('coach.commandCenterSidebar') }}</div>
-        <div v-if="activeClients.length === 0" class="text-body2" style="color: var(--text-secondary)">
+        <div
+          v-if="activeClients.length === 0"
+          class="text-body2"
+          style="color: var(--text-secondary)"
+        >
           {{ t('coach.commandCenterNoClients') }}
         </div>
         <q-list v-else dense>
@@ -59,8 +75,11 @@
       <!-- Schedule pane -->
       <div class="command-center__schedule">
         <div class="text-subtitle2 q-mb-sm">{{ t('coach.commandCenterSchedule') }}</div>
-        <div v-if="!bookingStore.coachSchedule || bookingStore.coachSchedule.bookings.length === 0"
-             class="text-body2 q-py-md" style="color: var(--text-secondary)">
+        <div
+          v-if="!bookingStore.coachSchedule || bookingStore.coachSchedule.bookings.length === 0"
+          class="text-body2 q-py-md"
+          style="color: var(--text-secondary)"
+        >
           {{ t('booking.schedule.noBookings') }}
         </div>
         <div v-else class="week-grid">
@@ -69,14 +88,16 @@
               {{ dayLabel(dayIndex - 1) }}
             </div>
             <div
-              v-for="booking in (bookingsByDay[dayIndex - 1] ?? [])"
+              v-for="booking in bookingsByDay[dayIndex - 1] ?? []"
               :key="booking.bookingId"
               class="week-grid__booking-block"
             >
               <BookingStateChip :status="booking.status" :booking-id="booking.bookingId" />
               <div class="text-caption">{{ booking.playerName }}</div>
               <div class="text-caption">
-                {{ slotLabel(booking.requestedStartTime, bookingStore.coachSchedule.coachTimezone) }}
+                {{
+                  slotLabel(booking.requestedStartTime, bookingStore.coachSchedule.coachTimezone)
+                }}
               </div>
               <q-btn
                 v-if="booking.status === 'UPCOMING'"
@@ -89,7 +110,9 @@
               />
               <q-btn
                 v-if="booking.status === 'UPCOMING'"
-                flat dense size="sm"
+                flat
+                dense
+                size="sm"
                 :label="t('booking.completion.quickComplete')"
                 class="q-mt-xs"
                 :loading="quickCompletingId === booking.bookingId"
@@ -98,7 +121,9 @@
               />
               <q-btn
                 v-if="booking.status === 'COMPLETED'"
-                flat dense size="sm"
+                flat
+                dense
+                size="sm"
                 :label="t('booking.schedule.repeatNextWeek')"
                 :loading="duplicatingId === booking.bookingId"
                 class="q-mt-xs"
@@ -110,20 +135,34 @@
                 </div>
                 <div class="text-caption q-mt-xs">
                   {{ t('booking.reschedule.proposed') }}
-                  {{ slotLabel(booking.pendingReschedule.proposedStartTime, bookingStore.coachSchedule.coachTimezone) }}
+                  {{
+                    slotLabel(
+                      booking.pendingReschedule.proposedStartTime,
+                      bookingStore.coachSchedule.coachTimezone,
+                    )
+                  }}
                 </div>
                 <!-- skillars-deferred-69 AC5: a coach can no longer accept/decline their OWN
                      proposal (the backend rejects it via CANNOT_RESPOND_TO_OWN_PROPOSAL) — gate
                      the buttons so they don't even render for that case. -->
-                <div v-if="booking.pendingReschedule.proposedBy === 'PARENT'" class="row q-gutter-xs q-mt-xs">
+                <div
+                  v-if="booking.pendingReschedule.proposedBy === 'PARENT'"
+                  class="row q-gutter-xs q-mt-xs"
+                >
                   <q-btn
-                    flat dense size="sm" color="positive"
+                    flat
+                    dense
+                    size="sm"
+                    color="positive"
                     :label="t('booking.reschedule.accept')"
                     :loading="rescheduleActionId === booking.bookingId"
                     @click="handleAcceptReschedule(booking)"
                   />
                   <q-btn
-                    flat dense size="sm" color="negative"
+                    flat
+                    dense
+                    size="sm"
+                    color="negative"
                     :label="t('booking.reschedule.decline')"
                     :loading="rescheduleActionId === booking.bookingId"
                     @click="handleDeclineReschedule(booking)"
@@ -132,7 +171,9 @@
               </template>
               <q-btn
                 v-else-if="['CONFIRMED', 'UPCOMING'].includes(booking.status)"
-                flat dense size="sm"
+                flat
+                dense
+                size="sm"
                 :label="t('booking.reschedule.proposeNewTime')"
                 class="q-mt-xs"
                 @click="openCoachRescheduleDialog(booking)"
@@ -141,18 +182,14 @@
 
             <!-- Available windows without bookings -->
             <div
-              v-for="(window, wIdx) in (slotsByDay[dayIndex - 1] ?? [])"
+              v-for="(window, wIdx) in slotsByDay[dayIndex - 1] ?? []"
               :key="wIdx"
               class="week-grid__gap-block"
             >
               <div class="text-caption" style="color: var(--text-secondary)">
                 {{ window.startTime }}
               </div>
-              <q-btn
-                flat dense
-                :label="t('booking.schedule.shareSlot')"
-                @click="shareSlot()"
-              />
+              <q-btn flat dense :label="t('booking.schedule.shareSlot')" @click="shareSlot()" />
             </div>
           </div>
         </div>
@@ -186,21 +223,42 @@
           <div class="text-h6">{{ t('booking.reschedule.dialogTitle') }}</div>
         </q-card-section>
         <q-card-section>
-          <q-input v-model="coachRescheduleProposedStart" type="datetime-local"
-                   :label="t('booking.reschedule.proposedStart')"
-                   class="q-mb-lg"
-                   :hint="t('booking.reschedule.startTimezoneHint', { browser: browserTimezone, session: coachRescheduleTimezone })" />
-          <q-input :model-value="coachRescheduleProposedEnd" type="datetime-local" readonly
-                   :label="t('booking.reschedule.proposedEnd')" class="q-mt-sm q-mb-lg"
-                   :hint="t('booking.reschedule.endDerivedHintWithTimezone', { browser: browserTimezone, session: coachRescheduleTimezone })" />
+          <q-input
+            v-model="coachRescheduleProposedStart"
+            type="datetime-local"
+            :label="t('booking.reschedule.proposedStart')"
+            class="q-mb-lg"
+            :hint="
+              t('booking.reschedule.startTimezoneHint', {
+                browser: browserTimezone,
+                session: coachRescheduleTimezone,
+              })
+            "
+          />
+          <q-input
+            :model-value="coachRescheduleProposedEnd"
+            type="datetime-local"
+            readonly
+            :label="t('booking.reschedule.proposedEnd')"
+            class="q-mt-sm q-mb-lg"
+            :hint="
+              t('booking.reschedule.endDerivedHintWithTimezone', {
+                browser: browserTimezone,
+                session: coachRescheduleTimezone,
+              })
+            "
+          />
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat :label="t('common.cancel')" v-close-popup />
-          <q-btn unelevated color="primary"
-                 :label="t('booking.reschedule.submit')"
-                 :loading="rescheduleActionId === coachRescheduleBookingId"
-                 :disable="rescheduleActionId === coachRescheduleBookingId"
-                 @click="submitCoachReschedule" />
+          <q-btn
+            unelevated
+            color="primary"
+            :label="t('booking.reschedule.submit')"
+            :loading="rescheduleActionId === coachRescheduleBookingId"
+            :disable="rescheduleActionId === coachRescheduleBookingId"
+            @click="submitCoachReschedule"
+          />
         </q-card-actions>
       </q-card>
     </q-dialog>
@@ -256,7 +314,7 @@ const coachRescheduleProposedEnd = computed(() => {
 
 /** datetime-local wants local wall-clock `YYYY-MM-DDTHH:mm`, which toISOString (UTC) is not. */
 function toDatetimeLocal(date) {
-  const pad = n => String(n).padStart(2, '0')
+  const pad = (n) => String(n).padStart(2, '0')
   return (
     `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
     `T${pad(date.getHours())}:${pad(date.getMinutes())}`
@@ -268,7 +326,9 @@ let sessionEventSource = null
 function startSessionSse(bookingId) {
   sessionEventSource?.close()
   const es = new EventSource(`/api/bookings/${bookingId}/events`, { withCredentials: true })
-  es.addEventListener('status', (e) => { activeBookingStatus.value = e.data })
+  es.addEventListener('status', (e) => {
+    activeBookingStatus.value = e.data
+  })
   sessionEventSource = es
 }
 
@@ -537,7 +597,9 @@ function openCoachRescheduleDialog(booking) {
   const start = new Date(booking.requestedStartTime)
   const end = new Date(booking.requestedEndTime)
   const durationMs =
-    Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) ? 0 : end.getTime() - start.getTime()
+    Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())
+      ? 0
+      : end.getTime() - start.getTime()
 
   if (durationMs <= 0) {
     $q.notify({ message: t('booking.reschedule.endDerivedLengthUnavailable'), type: 'negative' })
@@ -630,9 +692,15 @@ async function shareSlot() {
 
 @media (max-width: 768px) {
   .command-center__layout {
-    > .command-center__revenue { order: 1; }
-    > .command-center__schedule { order: 2; }
-    > .command-center__sidebar { order: 3; }
+    > .command-center__revenue {
+      order: 1;
+    }
+    > .command-center__schedule {
+      order: 2;
+    }
+    > .command-center__sidebar {
+      order: 3;
+    }
   }
 }
 

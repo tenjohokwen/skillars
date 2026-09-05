@@ -1,4 +1,4 @@
-import { api } from 'src/boot/axios';
+import { api } from 'src/boot/axios'
 
 export const authApi = {
   /**
@@ -9,7 +9,7 @@ export const authApi = {
    * @returns {Promise} Response with JWT_CREATED or check.otp message
    */
   login(id, password, loginCode = 1) {
-    return api.post('/authenticate', { id, password, loginCode });
+    return api.post('/authenticate', { id, password, loginCode })
   },
 
   /**
@@ -19,7 +19,7 @@ export const authApi = {
    * @returns {Promise} Response with authentication result
    */
   verifyOtp(loginInfoId, otp) {
-    return api.post('/otp', { loginInfoId, otp });
+    return api.post('/otp', { loginInfoId, otp })
   },
 
   /**
@@ -27,7 +27,7 @@ export const authApi = {
    * @returns {Promise} Logout confirmation
    */
   logout() {
-    return api.post('/api/logout');
+    return api.post('/api/logout')
   },
 
   /**
@@ -35,7 +35,7 @@ export const authApi = {
    * @returns {Promise} Authentication status
    */
   checkAuth() {
-    return api.get('/v1/account/authenticate');
+    return api.get('/v1/account/authenticate')
   },
 
   async skillarsLogin(email, password) {
@@ -49,4 +49,4 @@ export const authApi = {
   async skillarsLogout() {
     await api.post('/api/auth/logout')
   },
-};
+}

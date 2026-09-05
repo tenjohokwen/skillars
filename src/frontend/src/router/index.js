@@ -1,4 +1,5 @@
 import { defineRouter } from '#q-app/wrappers'
+import { routeForRole } from './roleRoutes'
 import {
   createRouter,
   createMemoryHistory,
@@ -35,13 +36,6 @@ export default defineRouter(function (/* { store, ssrContext } */) {
     history: createHistory(process.env.VUE_ROUTER_BASE),
   })
 
-  const ROLE_ROUTES = {
-    COACH: '/coach/command-center',
-    PARENT: '/parent/dashboard',
-    PLAYER: '/player/home', // resolves the caller's own playerId, then redirects to /player/locker-room/:playerId
-    ADMIN: '/admin/health-dashboard',
-  }
-
   let hydrated = false
   Router.beforeEach(async (to, from, next) => {
     const authStore = useAuthStore()
@@ -68,27 +62,27 @@ export default defineRouter(function (/* { store, ssrContext } */) {
     }
 
     if (requiresGuest && isAuthenticated) {
-      next(ROLE_ROUTES[authStore.role] || '/dashboard')
+      next(routeForRole(authStore.role))
       return
     }
 
     if (requiresCoach && isAuthenticated && !authStore.isCoach) {
-      next(ROLE_ROUTES[authStore.role] || '/dashboard')
+      next(routeForRole(authStore.role))
       return
     }
 
     if (requiresParent && isAuthenticated && !authStore.isParent) {
-      next(ROLE_ROUTES[authStore.role] || '/dashboard')
+      next(routeForRole(authStore.role))
       return
     }
 
     if (requiresPlayer && isAuthenticated && !authStore.isPlayer) {
-      next(ROLE_ROUTES[authStore.role] || '/dashboard')
+      next(routeForRole(authStore.role))
       return
     }
 
     if (requiresOneOfRoles && isAuthenticated && !rolesMeta.includes(authStore.role)) {
-      next(ROLE_ROUTES[authStore.role] || '/dashboard')
+      next(routeForRole(authStore.role))
       return
     }
 

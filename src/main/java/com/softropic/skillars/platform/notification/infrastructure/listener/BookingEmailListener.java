@@ -57,7 +57,7 @@ public class BookingEmailListener {
         this.appBaseUrl = baseUrl + ":" + serverPort;
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBookingRequested(BookingRequestedEvent event) {
         try {
             if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
@@ -83,7 +83,7 @@ public class BookingEmailListener {
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBookingConfirmed(BookingConfirmedEvent event) {
         try {
             if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
@@ -108,7 +108,7 @@ public class BookingEmailListener {
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBookingDeclined(BookingDeclinedEvent event) {
         try {
             if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
@@ -133,7 +133,7 @@ public class BookingEmailListener {
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBookingExpired(BookingExpiredEvent event) {
         try {
             if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
@@ -158,7 +158,7 @@ public class BookingEmailListener {
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onQuickCompleteConfirmationRequired(QuickCompleteConfirmationRequiredEvent event) {
         try {
             Map<String, Object> data = new HashMap<>();
@@ -180,7 +180,7 @@ public class BookingEmailListener {
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onRescheduleRequested(RescheduleRequestedEvent event) {
         try {
             if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
@@ -206,7 +206,7 @@ public class BookingEmailListener {
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onRescheduleAccepted(RescheduleAcceptedEvent event) {
         try {
             Map<String, Object> data = new HashMap<>();
@@ -228,7 +228,7 @@ public class BookingEmailListener {
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onRescheduleDeclined(RescheduleDeclinedEvent event) {
         try {
             if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
@@ -253,7 +253,7 @@ public class BookingEmailListener {
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onRescheduleRequestedByCoach(RescheduleRequestedByCoachEvent event) {
         try {
             if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
@@ -279,7 +279,7 @@ public class BookingEmailListener {
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onRescheduleDeclinedByParent(RescheduleDeclinedByParentEvent event) {
         try {
             if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
@@ -304,7 +304,7 @@ public class BookingEmailListener {
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBatchBookingRequested(BatchBookingRequestedEvent event) {
         try {
             if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
@@ -333,7 +333,7 @@ public class BookingEmailListener {
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBatchBookingAccepted(BatchBookingAcceptedEvent event) {
         try {
             if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
@@ -358,7 +358,7 @@ public class BookingEmailListener {
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onDuplicateBookingProposed(DuplicateBookingProposedEvent event) {
         try {
             if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
@@ -394,7 +394,7 @@ public class BookingEmailListener {
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBookingCancelledDueToPause(BookingCancelledDueToPauseEvent event) {
         try {
             Map<String, Object> data = new HashMap<>();
@@ -414,7 +414,7 @@ public class BookingEmailListener {
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBookingCancelledByParent(BookingCancelledByParentEvent event) {
         try {
             if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
@@ -438,7 +438,7 @@ public class BookingEmailListener {
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBookingCancelledByCoach(BookingCancelledByCoachEvent event) {
         try {
             if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
@@ -462,7 +462,7 @@ public class BookingEmailListener {
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onCoachNoShow(CoachNoShowEvent event) {
         try {
             if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
@@ -486,7 +486,7 @@ public class BookingEmailListener {
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onPlayerNoShow(PlayerNoShowEvent event) {
         try {
             if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
@@ -515,7 +515,7 @@ public class BookingEmailListener {
      * BOOKING_DECLINED — that template tells the parent their credits were not affected, which the
      * platform cannot assert when the Stripe side is unknown.
      */
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBookingPaymentUnresolved(BookingPaymentUnresolvedEvent event) {
         try {
             if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
@@ -542,6 +542,33 @@ public class BookingEmailListener {
         }
     }
 
+    /**
+     * skillars-deferred-92 AC29 — <strong>this method carried no annotation at all until 2026-09-04,
+     * so no booking reminder had ever been delivered.</strong>
+     *
+     * <p>Spring dispatches {@code publishEvent} only to {@code @EventListener} /
+     * {@code @TransactionalEventListener} methods and to {@code ApplicationListener} beans.
+     * {@code BookingEmailListener} is a bare {@code @Component}, so an unannotated public method
+     * taking an event type is simply never invoked. {@code BookingReminderScheduler} published
+     * {@code BookingReminderEvent} every five minutes into nothing, and
+     * {@code EmailTemplate.BOOKING_REMINDER} is referenced nowhere else in {@code src/main} — there
+     * was no alternative sender.
+     *
+     * <p>Three things kept it silent through a whole story and a 3-layer code review: the scheduler
+     * logged {@code "… and sent primary reminder"}, it stamped {@code primaryReminderSentAt} inside
+     * its own transaction so the database also recorded the send, and
+     * {@code BookingEmailListenerTest} invoked this method <em>directly</em>, so the unit tests
+     * passed while proving only that the body composes the right email. The regression guard is
+     * {@code BookingReminderEmailWiringIT}, which publishes through {@code ApplicationEventPublisher}
+     * and asserts an outbox row, plus
+     * {@code EmailListenerAnnotationCoverageTest}, which fails if any {@code on*(…Event)} method on
+     * either email listener loses its annotation again.
+     *
+     * <p>{@code BEFORE_COMMIT} rather than {@code AFTER_COMMIT} per AC4: the enqueue then commits
+     * atomically with the scheduler's own {@code @Transactional} work, so the
+     * {@code *ReminderSentAt} stamp and the outbox row can never disagree.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBookingReminder(BookingReminderEvent event) {
         // skillars-deferred-91 code review: this was the one publish site with no try/catch, so an
         // enqueue failure here propagated to the caller instead of being logged like every sibling.

@@ -18,12 +18,18 @@
           <template #avatar>
             <q-icon name="mdi-alert" color="warning" />
           </template>
-          {{ t('subscription.coach.cancelPending', { date: formatDate(subscription.currentPeriodEnd) }) }}
+          {{
+            t('subscription.coach.cancelPending', {
+              date: formatDate(subscription.currentPeriodEnd),
+            })
+          }}
         </q-banner>
 
         <!-- Current tier card -->
         <div class="current-tier-card glass-card q-pa-md q-mb-lg">
-          <div class="text-subtitle1 text-weight-bold q-mb-sm">{{ t('subscription.currentPlan') }}</div>
+          <div class="text-subtitle1 text-weight-bold q-mb-sm">
+            {{ t('subscription.currentPlan') }}
+          </div>
           <div class="row items-center q-gutter-md">
             <div>
               <q-badge :color="tierColor(subscription?.tier)" class="text-body1 q-px-md q-py-xs">
@@ -32,7 +38,12 @@
             </div>
             <div>
               <span class="text-caption text-secondary">{{ t('subscription.status') }}:</span>
-              <q-chip dense :color="statusColor(subscription?.status)" text-color="white" class="q-ml-xs">
+              <q-chip
+                dense
+                :color="statusColor(subscription?.status)"
+                text-color="white"
+                class="q-ml-xs"
+              >
                 {{ subscription?.status || 'ACTIVE' }}
               </q-chip>
             </div>
@@ -44,7 +55,9 @@
         </div>
 
         <!-- Tier comparison table -->
-        <div class="text-subtitle1 text-weight-bold q-mb-sm">{{ t('subscription.availablePlans') }}</div>
+        <div class="text-subtitle1 text-weight-bold q-mb-sm">
+          {{ t('subscription.availablePlans') }}
+        </div>
         <div class="row q-gutter-md q-mb-lg">
           <div
             v-for="tier in tiers"
@@ -66,10 +79,7 @@
             </q-list>
             <div class="tier-actions">
               <!-- Upgrade / Subscribe CTA — gated if current is higher tier -->
-              <div
-                v-if="isTierBlocked(tier.tier)"
-                class="tier-gate-overlay relative-position"
-              >
+              <div v-if="isTierBlocked(tier.tier)" class="tier-gate-overlay relative-position">
                 <div class="blurred-preview"></div>
                 <div class="overlay-cta absolute-center text-center">
                   <q-icon name="mdi-lock" size="2rem" />
@@ -86,19 +96,28 @@
               <q-btn
                 v-else-if="tier.tier !== subscription?.tier && tier.tier !== 'SCOUT'"
                 color="primary"
-                :label="isUpgrade(tier.tier) ? t('subscription.upgrade') : t('subscription.downgrade')"
+                :label="
+                  isUpgrade(tier.tier) ? t('subscription.upgrade') : t('subscription.downgrade')
+                "
                 class="full-width"
                 @click="handleChangeTier(tier.tier)"
               />
               <q-btn
-                v-else-if="tier.tier === subscription?.tier && tier.tier !== 'SCOUT' && !subscription?.cancelAtPeriodEnd"
+                v-else-if="
+                  tier.tier === subscription?.tier &&
+                  tier.tier !== 'SCOUT' &&
+                  !subscription?.cancelAtPeriodEnd
+                "
                 color="negative"
                 outline
                 :label="t('subscription.cancel')"
                 class="full-width"
                 @click="handleCancel"
               />
-              <div v-else-if="tier.tier === 'SCOUT'" class="text-center text-caption text-secondary">
+              <div
+                v-else-if="tier.tier === 'SCOUT'"
+                class="text-center text-caption text-secondary"
+              >
                 {{ t('subscription.freePlan') }}
               </div>
             </div>
@@ -116,7 +135,14 @@
         <q-card-section>
           <div v-if="hasCard === false" class="text-body2 text-warning q-mb-sm">
             {{ t('payment.card.addCardPrompt') }}
-            <q-btn flat dense size="sm" color="primary" :label="t('payment.card.addCardCta')" @click="addCardDialog = true" />
+            <q-btn
+              flat
+              dense
+              size="sm"
+              color="primary"
+              :label="t('payment.card.addCardCta')"
+              @click="addCardDialog = true"
+            />
           </div>
         </q-card-section>
         <q-card-actions align="right">
@@ -190,7 +216,10 @@ function tierColor(tier) {
 }
 
 function statusColor(status) {
-  return { ACTIVE: 'positive', PAST_DUE: 'warning', CANCELLED: 'negative', TRIALLING: 'info' }[status] || 'grey'
+  return (
+    { ACTIVE: 'positive', PAST_DUE: 'warning', CANCELLED: 'negative', TRIALLING: 'info' }[status] ||
+    'grey'
+  )
 }
 
 function isUpgrade(tier) {
@@ -219,7 +248,10 @@ async function confirmSubscribe() {
   try {
     await paymentStore.subscribeCoach({ tier: selectedTier.value })
     subscribeDialog.value = false
-    $q.notify({ type: 'positive', message: t('subscription.coach.subscribeSuccess', { tier: selectedTier.value }) })
+    $q.notify({
+      type: 'positive',
+      message: t('subscription.coach.subscribeSuccess', { tier: selectedTier.value }),
+    })
   } catch {
     $q.notify({ type: 'negative', message: t('subscription.coach.subscribeError') })
   } finally {
@@ -231,7 +263,10 @@ async function handleChangeTier(newTier) {
   actionLoading.value = true
   try {
     await paymentStore.changeCoachTier(newTier)
-    $q.notify({ type: 'positive', message: t('subscription.coach.tierChangeSuccess', { tier: newTier }) })
+    $q.notify({
+      type: 'positive',
+      message: t('subscription.coach.tierChangeSuccess', { tier: newTier }),
+    })
   } catch {
     $q.notify({ type: 'negative', message: t('subscription.coach.tierChangeError') })
   } finally {
@@ -243,7 +278,12 @@ async function handleCancel() {
   actionLoading.value = true
   try {
     await paymentStore.cancelCoachSubscription()
-    $q.notify({ type: 'info', message: t('subscription.coach.cancelSuccess', { date: formatDate(subscription.value?.currentPeriodEnd) }) })
+    $q.notify({
+      type: 'info',
+      message: t('subscription.coach.cancelSuccess', {
+        date: formatDate(subscription.value?.currentPeriodEnd),
+      }),
+    })
   } catch {
     $q.notify({ type: 'negative', message: t('subscription.coach.cancelError') })
   } finally {

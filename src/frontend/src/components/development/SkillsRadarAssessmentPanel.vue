@@ -36,7 +36,11 @@
           </div>
         </div>
 
-        <div v-for="skill in skillDefinitions" :key="skill.code" class="row items-center q-mb-sm q-col-gutter-sm">
+        <div
+          v-for="skill in skillDefinitions"
+          :key="skill.code"
+          class="row items-center q-mb-sm q-col-gutter-sm"
+        >
           <div class="col-4 text-caption">{{ skill.displayName }} ({{ skill.code }})</div>
           <div class="col-5">
             <q-input
@@ -124,21 +128,23 @@ const assessmentTypeOptions = computed(() => [
   { label: t('development.radar.assessmentTypeLabelCoachEval'), value: 'COACH_EVALUATION' },
 ])
 
-watch(() => props.modelValue, (val) => {
-  if (val) {
-    assessmentGroupId.value = crypto.randomUUID()
-    assessmentType.value = 'OBJECTIVE'
-    assessmentDate.value = localDateString()
-    scores.value = Object.fromEntries(
-      props.skillDefinitions.map((s) => [s.code, { score: null, notes: '' }])
-    )
-  }
-}, { immediate: true })
+watch(
+  () => props.modelValue,
+  (val) => {
+    if (val) {
+      assessmentGroupId.value = crypto.randomUUID()
+      assessmentType.value = 'OBJECTIVE'
+      assessmentDate.value = localDateString()
+      scores.value = Object.fromEntries(
+        props.skillDefinitions.map((s) => [s.code, { score: null, notes: '' }]),
+      )
+    }
+  },
+  { immediate: true },
+)
 
 const canSubmit = computed(() =>
-  Object.values(scores.value).some(
-    (s) => s.score !== null && s.score >= 1 && s.score <= 100
-  )
+  Object.values(scores.value).some((s) => s.score !== null && s.score >= 1 && s.score <= 100),
 )
 
 async function submit() {

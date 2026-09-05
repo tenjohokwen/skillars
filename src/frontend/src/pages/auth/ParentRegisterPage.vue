@@ -1,14 +1,12 @@
 <template>
   <q-page class="auth-page">
     <div class="auth-card-container--wide fade-in">
-
       <div class="auth-brand q-mb-xl">
         <div class="gradient-text auth-brand-name">Skillars</div>
         <div class="text-meta">{{ t('auth.parent.registerSubtitle') }}</div>
       </div>
 
       <div class="glass-card--static auth-card">
-
         <div class="text-section-title q-mb-xs">{{ t('auth.parent.registerTitle') }}</div>
 
         <q-banner
@@ -19,7 +17,9 @@
           {{ emailInUse ? t('auth.parent.emailInUse') : errorMessage }}
           <template v-if="emailInUse">
             <span>&nbsp;</span>
-            <router-link to="/login" class="auth-link">{{ t('auth.parent.signInInstead') }}</router-link>
+            <router-link to="/login" class="auth-link">{{
+              t('auth.parent.signInInstead')
+            }}</router-link>
           </template>
           <template v-else-if="helpCode">
             <br /><small>{{ t('error.helpCode') }}: {{ helpCode }}</small>
@@ -28,22 +28,18 @@
 
         <q-form @submit.prevent="handleRegister">
           <div class="row q-col-gutter-md">
-
             <div class="col-12 col-md-6">
               <div>
                 <q-input
                   v-model="form.firstName"
                   :label="t('auth.firstName')"
-                  outlined lazy-rules
+                  outlined
+                  lazy-rules
                   :rules="[required, maxLen50]"
                   :error="hasFieldError('firstName')"
                   :error-message="getFieldError('firstName')"
                 />
-                <q-banner
-                  v-if="firstNameHasContact"
-                  class="contact-warning q-mt-xs"
-                  rounded dense
-                >
+                <q-banner v-if="firstNameHasContact" class="contact-warning q-mt-xs" rounded dense>
                   {{ t('auth.parent.contactDetailWarning') }}
                 </q-banner>
               </div>
@@ -54,16 +50,13 @@
                 <q-input
                   v-model="form.lastName"
                   :label="t('auth.lastName')"
-                  outlined lazy-rules
+                  outlined
+                  lazy-rules
                   :rules="[required, maxLen50]"
                   :error="hasFieldError('lastName')"
                   :error-message="getFieldError('lastName')"
                 />
-                <q-banner
-                  v-if="lastNameHasContact"
-                  class="contact-warning q-mt-xs"
-                  rounded dense
-                >
+                <q-banner v-if="lastNameHasContact" class="contact-warning q-mt-xs" rounded dense>
                   {{ t('auth.parent.contactDetailWarning') }}
                 </q-banner>
               </div>
@@ -74,7 +67,8 @@
                 v-model="form.email"
                 type="email"
                 :label="t('auth.email')"
-                outlined lazy-rules
+                outlined
+                lazy-rules
                 :rules="[required, validEmail]"
                 :error="hasFieldError('email')"
                 :error-message="getFieldError('email')"
@@ -86,7 +80,8 @@
                 v-model="form.phone"
                 type="tel"
                 :label="t('auth.phone')"
-                outlined lazy-rules
+                outlined
+                lazy-rules
                 :rules="[required]"
                 :error="hasFieldError('phone')"
                 :error-message="getFieldError('phone')"
@@ -98,7 +93,8 @@
                 v-model="form.password"
                 :type="isPwd ? 'password' : 'text'"
                 :label="t('auth.password')"
-                outlined lazy-rules
+                outlined
+                lazy-rules
                 :rules="[required, minLen8]"
                 :error="hasFieldError('password')"
                 :error-message="getFieldError('password')"
@@ -113,14 +109,14 @@
                 </template>
               </q-input>
             </div>
-
           </div>
 
           <div class="q-mt-lg q-gutter-y-md">
-
             <div>
               <div ref="tosBoxRef" class="policy-scroll-box" @scroll="onScroll('tos', $event)">
-                <p>{{ t('auth.parent.tosLabel') }} — Lorem ipsum dolor sit amet, consectetur adipiscing elit. By using Skillars, you agree to our terms and conditions. These terms govern your use of the platform, including booking sessions, payments, and data handling. You must be at least 18 years old to register as a parent. All accounts are subject to our acceptable use policy.</p>
+                <p>
+                  {{ t('auth.parentTosBody') }}
+                </p>
               </div>
               <q-checkbox
                 v-model="tosAccepted"
@@ -131,8 +127,14 @@
             </div>
 
             <div>
-              <div ref="privacyBoxRef" class="policy-scroll-box" @scroll="onScroll('privacy', $event)">
-                <p>{{ t('auth.parent.privacyLabel') }} — We collect personal data to provide our services. Your data is processed in accordance with GDPR and applicable data protection laws. We do not sell your personal data to third parties. You may request deletion of your data at any time. Session recordings and coaching data are retained for the period specified in our privacy policy.</p>
+              <div
+                ref="privacyBoxRef"
+                class="policy-scroll-box"
+                @scroll="onScroll('privacy', $event)"
+              >
+                <p>
+                  {{ t('auth.parentPrivacyBody') }}
+                </p>
               </div>
               <q-checkbox
                 v-model="privacyAccepted"
@@ -143,8 +145,14 @@
             </div>
 
             <div>
-              <div ref="parentConsentBoxRef" class="policy-scroll-box" @scroll="onScroll('parentConsent', $event)">
-                <p>{{ t('auth.parent.parentConsentLabel') }} — As the legal guardian of the player(s) you register, you consent to Skillars collecting and processing data about your child for coaching purposes. You confirm you are the legal parent or guardian. You are responsible for ensuring your child's participation is appropriate. You may withdraw consent at any time by contacting support.</p>
+              <div
+                ref="parentConsentBoxRef"
+                class="policy-scroll-box"
+                @scroll="onScroll('parentConsent', $event)"
+              >
+                <p>
+                  {{ t('auth.parentConsentBody') }}
+                </p>
               </div>
               <q-checkbox
                 v-model="parentConsentAccepted"
@@ -153,7 +161,6 @@
                 color="primary"
               />
             </div>
-
           </div>
 
           <q-btn
@@ -162,7 +169,8 @@
             :label="t('auth.createAccount')"
             :loading="isSubmitting"
             :disable="!tosAccepted || !privacyAccepted || !parentConsentAccepted || isSubmitting"
-            unelevated size="md"
+            unelevated
+            size="md"
           />
 
           <div class="text-center q-mt-md">
@@ -178,7 +186,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { parentRegistrationApi } from 'src/api/parentRegistration.api'
@@ -188,8 +196,15 @@ import { useContactDetector } from 'src/composables/useContactDetector'
 const router = useRouter()
 const { t, locale } = useI18n()
 const {
-  setError, clearError, hasError, hasFieldErrors, errorMessage,
-  helpCode, hasFieldError, getFieldError, errorKey,
+  setError,
+  clearError,
+  hasError,
+  hasFieldErrors,
+  errorMessage,
+  helpCode,
+  hasFieldError,
+  getFieldError,
+  errorKey,
 } = useErrorHandler()
 
 const form = ref({ firstName: '', lastName: '', email: '', password: '', phone: '' })
@@ -206,7 +221,11 @@ const tosBoxRef = ref(null)
 const privacyBoxRef = ref(null)
 const parentConsentBoxRef = ref(null)
 
-const scrollFlags = { tos: tosScrolled, privacy: privacyScrolled, parentConsent: parentConsentScrolled }
+const scrollFlags = {
+  tos: tosScrolled,
+  privacy: privacyScrolled,
+  parentConsent: parentConsentScrolled,
+}
 const boxRefs = { tos: tosBoxRef, privacy: privacyBoxRef, parentConsent: parentConsentBoxRef }
 
 function isFullyVisible(el) {
@@ -223,13 +242,25 @@ function onScroll(key, event) {
 // Policy text short enough to fit without scrolling would otherwise never fire
 // a scroll event, permanently disabling the checkbox — treat "nothing to scroll"
 // as already read.
-onMounted(() => {
+function markFullyVisibleBoxesAsRead() {
   for (const key of Object.keys(boxRefs)) {
     const el = boxRefs[key].value
     if (el && isFullyVisible(el)) {
       scrollFlags[key].value = true
     }
   }
+}
+
+onMounted(() => {
+  markFullyVisibleBoxesAsRead()
+  // A box that overflows at mount (so the check above leaves it un-read) can stop overflowing
+  // once the user widens the window — with no more scroll events possible, the checkbox stayed
+  // permanently disabled. Re-run the same check on resize (review, skillars-deferred-92 chunk 4).
+  window.addEventListener('resize', markFullyVisibleBoxesAsRead)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', markFullyVisibleBoxesAsRead)
 })
 
 const firstNameRef = computed(() => form.value.firstName)
@@ -239,10 +270,10 @@ const { hasContactDetail: lastNameHasContact } = useContactDetector(lastNameRef)
 
 const emailInUse = computed(() => errorKey.value === 'security.emailInUse')
 
-const required = val => !!val || t('validation.required')
-const validEmail = val => /.+@.+\..+/.test(val) || t('validation.email')
-const minLen8 = val => val.length >= 8 || t('validation.minLength', { min: 8 })
-const maxLen50 = val => !val || val.length <= 50 || t('validation.maxLength', { max: 50 })
+const required = (val) => !!val || t('validation.required')
+const validEmail = (val) => /.+@.+\..+/.test(val) || t('validation.email')
+const minLen8 = (val) => val.length >= 8 || t('validation.minLength', { min: 8 })
+const maxLen50 = (val) => !val || val.length <= 50 || t('validation.maxLength', { max: 50 })
 
 async function handleRegister() {
   clearError()
@@ -268,25 +299,34 @@ async function handleRegister() {
 </script>
 
 <style lang="scss" scoped>
-.auth-brand { text-align: center; }
+.auth-brand {
+  text-align: center;
+}
 .auth-brand-name {
   font-size: 32px;
   font-weight: 800;
   font-family: 'Inter', sans-serif;
   letter-spacing: -1px;
 }
-.auth-card { padding: 32px; }
+.auth-card {
+  padding: 32px;
+}
 .auth-link {
   color: var(--accent-primary);
   text-decoration: none;
   font-size: 14px;
   font-weight: 500;
-  &:hover { opacity: 0.8; }
+  &:hover {
+    opacity: 0.8;
+  }
 }
 .auth-banner {
   border-radius: 12px !important;
   font-size: 14px;
-  &--error { background: rgba(255, 95, 122, 0.12) !important; color: var(--accent-danger) !important; }
+  &--error {
+    background: rgba(255, 95, 122, 0.12) !important;
+    color: var(--accent-danger) !important;
+  }
 }
 .contact-warning {
   background: var(--surface-warning) !important;

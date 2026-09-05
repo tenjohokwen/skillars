@@ -81,7 +81,7 @@
 </template>
 
 <script setup>
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useProfileBuilderStore } from 'src/stores/profileBuilder.store'
 import TimezoneSelect from './TimezoneSelect.vue'
@@ -106,15 +106,18 @@ const emit = defineEmits(['submit'])
 // a per-window zone the coach had deliberately chosen here.
 const canonicalTimezone = ref(store.selectedTimezone ?? null)
 
-const dayOptions = [
-  { label: 'Monday', value: 1 },
-  { label: 'Tuesday', value: 2 },
-  { label: 'Wednesday', value: 3 },
-  { label: 'Thursday', value: 4 },
-  { label: 'Friday', value: 5 },
-  { label: 'Saturday', value: 6 },
-  { label: 'Sunday', value: 7 },
-]
+// skillars-deferred-92 code review, chunk 3: was a hardcoded English array — invisible to AC14's
+// sweep because it lives in <script>, not a template text node, so a French coach saw English
+// weekday names next to the (translated) step4Day label.
+const dayOptions = computed(() => [
+  { label: t('auth.coach.weekdayMonday'), value: 1 },
+  { label: t('auth.coach.weekdayTuesday'), value: 2 },
+  { label: t('auth.coach.weekdayWednesday'), value: 3 },
+  { label: t('auth.coach.weekdayThursday'), value: 4 },
+  { label: t('auth.coach.weekdayFriday'), value: 5 },
+  { label: t('auth.coach.weekdaySaturday'), value: 6 },
+  { label: t('auth.coach.weekdaySunday'), value: 7 },
+])
 
 const form = reactive({ windows: [] })
 

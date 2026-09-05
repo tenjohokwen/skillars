@@ -45,38 +45,66 @@
               : formatDateTime(booking.requestedStartTime, booking.canonicalTimezone)
           }}</q-item-label>
           <q-btn
-            flat dense
+            flat
+            dense
             class="self-start q-pa-none"
-            :label="showInMyTime[booking.id] ? t('booking.timezone.showInSessionTime') : t('booking.timezone.showInMyTime')"
+            :label="
+              showInMyTime[booking.id]
+                ? t('booking.timezone.showInSessionTime')
+                : t('booking.timezone.showInMyTime')
+            "
             @click="toggleTimezone(booking.id)"
           />
           <!-- Pending reschedule indicator -->
-          <div v-if="booking.pendingReschedule" class="text-caption q-mt-xs"
-               style="color: var(--accent-warning)">
+          <div
+            v-if="booking.pendingReschedule"
+            class="text-caption q-mt-xs"
+            style="color: var(--accent-warning)"
+          >
             {{ t('booking.reschedule.pendingLabel') }}
           </div>
           <div v-if="booking.pendingReschedule" class="text-caption q-mt-xs">
-            <span class="text-strike">{{ formatDateTime(booking.requestedStartTime, booking.canonicalTimezone) }}</span>
-            → {{ formatDateTime(booking.pendingReschedule.proposedStartTime, booking.canonicalTimezone) }}
+            <span class="text-strike">{{
+              formatDateTime(booking.requestedStartTime, booking.canonicalTimezone)
+            }}</span>
+            →
+            {{
+              formatDateTime(booking.pendingReschedule.proposedStartTime, booking.canonicalTimezone)
+            }}
           </div>
           <!-- Accept/decline a coach-proposed reschedule (skillars-deferred-69 AC5) — only a coach
                could ever be the one needing to respond before this story, so this indicator used to
                render unconditionally with no actions. -->
           <div v-if="booking.pendingReschedule?.proposedBy === 'COACH'" class="q-gutter-sm q-mt-xs">
-            <q-btn unelevated color="primary" size="sm" :label="t('booking.reschedule.accept')"
-                   :loading="respondingId === booking.id"
-                   @click="handleAcceptRescheduleAsParent(booking.id, booking.pendingReschedule.id)" />
-            <q-btn flat size="sm" :label="t('booking.reschedule.decline')"
-                   :loading="respondingId === booking.id"
-                   @click="handleDeclineRescheduleAsParent(booking.id, booking.pendingReschedule.id)" />
+            <q-btn
+              unelevated
+              color="primary"
+              size="sm"
+              :label="t('booking.reschedule.accept')"
+              :loading="respondingId === booking.id"
+              @click="handleAcceptRescheduleAsParent(booking.id, booking.pendingReschedule.id)"
+            />
+            <q-btn
+              flat
+              size="sm"
+              :label="t('booking.reschedule.decline')"
+              :loading="respondingId === booking.id"
+              @click="handleDeclineRescheduleAsParent(booking.id, booking.pendingReschedule.id)"
+            />
           </div>
 
           <!-- Request Change button — parent-or-self-booking-player (skillars-deferred-69 AC4:
                widened from parent-only; RescheduleService.requestReschedule's ownership check is
                self-booking-compatible). -->
           <q-btn
-            v-if="(authStore.isParent || authStore.isPlayer) && ['CONFIRMED', 'UPCOMING'].includes(booking.status) && !booking.pendingReschedule"
-            flat dense size="sm"
+            v-if="
+              (authStore.isParent || authStore.isPlayer) &&
+              ['CONFIRMED', 'UPCOMING'].includes(booking.status) &&
+              !booking.pendingReschedule
+            "
+            flat
+            dense
+            size="sm"
             :label="t('booking.reschedule.requestChange')"
             :loading="reschedulingId === booking.id"
             @click="openRescheduleDialog(booking)"
@@ -88,8 +116,13 @@
                the same status set as Request-Change rather than a time-based guard that doesn't
                exist server-side. -->
           <q-btn
-            v-if="(authStore.isParent || authStore.isPlayer) && ['CONFIRMED', 'UPCOMING'].includes(booking.status)"
-            flat dense size="sm"
+            v-if="
+              (authStore.isParent || authStore.isPlayer) &&
+              ['CONFIRMED', 'UPCOMING'].includes(booking.status)
+            "
+            flat
+            dense
+            size="sm"
             color="negative"
             :label="t('booking.cancel.cta')"
             :loading="cancelingId === booking.id"
@@ -103,7 +136,10 @@
                widened from parent-only; BookingCompletionService.confirmCompletion's ownership check
                is self-booking-compatible). -->
           <q-btn
-            v-if="(authStore.isParent || authStore.isPlayer) && booking.status === 'COMPLETED_PENDING_CONFIRMATION'"
+            v-if="
+              (authStore.isParent || authStore.isPlayer) &&
+              booking.status === 'COMPLETED_PENDING_CONFIRMATION'
+            "
             unelevated
             color="primary"
             size="sm"
@@ -123,22 +159,43 @@
           <div class="text-h6">{{ t('booking.reschedule.dialogTitle') }}</div>
         </q-card-section>
         <q-card-section>
-          <q-input v-model="rescheduleProposedStart" type="datetime-local"
-                   :label="t('booking.reschedule.proposedStart')"
-                   class="q-mb-lg"
-                   :hint="t('booking.reschedule.startTimezoneHint', { browser: browserTimezone, session: rescheduleBookingTimezone })" />
+          <q-input
+            v-model="rescheduleProposedStart"
+            type="datetime-local"
+            :label="t('booking.reschedule.proposedStart')"
+            class="q-mb-lg"
+            :hint="
+              t('booking.reschedule.startTimezoneHint', {
+                browser: browserTimezone,
+                session: rescheduleBookingTimezone,
+              })
+            "
+          />
           <!-- Read-only and derived: the backend requires a reschedule to keep the session's
                original length (a move, not a resize). Two freely-editable inputs where the second
                must exactly equal the first plus that length is a trap the parent cannot see. -->
-          <q-input :model-value="rescheduleProposedEnd" type="datetime-local" readonly
-                   :label="t('booking.reschedule.proposedEnd')" class="q-mt-sm q-mb-lg"
-                   :hint="t('booking.reschedule.endDerivedHintWithTimezone', { browser: browserTimezone, session: rescheduleBookingTimezone })" />
+          <q-input
+            :model-value="rescheduleProposedEnd"
+            type="datetime-local"
+            readonly
+            :label="t('booking.reschedule.proposedEnd')"
+            class="q-mt-sm q-mb-lg"
+            :hint="
+              t('booking.reschedule.endDerivedHintWithTimezone', {
+                browser: browserTimezone,
+                session: rescheduleBookingTimezone,
+              })
+            "
+          />
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat :label="t('common.cancel')" v-close-popup />
-          <q-btn unelevated color="primary"
-                 :label="t('booking.reschedule.submit')"
-                 @click="submitReschedule" />
+          <q-btn
+            unelevated
+            color="primary"
+            :label="t('booking.reschedule.submit')"
+            @click="submitReschedule"
+          />
         </q-card-actions>
       </q-card>
     </q-dialog>
@@ -154,9 +211,12 @@
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat :label="t('common.cancel')" v-close-popup />
-          <q-btn unelevated color="primary"
-                 :label="t('booking.cancel.confirm')"
-                 @click="submitCancelBooking" />
+          <q-btn
+            unelevated
+            color="primary"
+            :label="t('booking.cancel.confirm')"
+            @click="submitCancelBooking"
+          />
         </q-card-actions>
       </q-card>
     </q-dialog>
@@ -198,7 +258,7 @@ const rescheduleProposedEnd = computed(() => {
 
 /** datetime-local wants local wall-clock `YYYY-MM-DDTHH:mm`, which toISOString (UTC) is not. */
 function toDatetimeLocal(date) {
-  const pad = n => String(n).padStart(2, '0')
+  const pad = (n) => String(n).padStart(2, '0')
   return (
     `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
     `T${pad(date.getHours())}:${pad(date.getMinutes())}`
@@ -283,7 +343,9 @@ function openRescheduleDialog(booking) {
   const start = new Date(booking.requestedStartTime)
   const end = new Date(booking.requestedEndTime)
   const durationMs =
-    Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) ? 0 : end.getTime() - start.getTime()
+    Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())
+      ? 0
+      : end.getTime() - start.getTime()
 
   // Without a derivable length the end field — now read-only — would sit permanently blank and the
   // dialog could never be submitted. Fail visibly at open time instead of presenting a dead end.

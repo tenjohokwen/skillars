@@ -48,9 +48,7 @@ const hasZeroSkills = computed(() => zeroExposureSkills.value.length > 0)
 const chartOption = computed(() => {
   const codes = sortedEntries.value.map(([code]) => code)
   const values = sortedEntries.value.map(([, slu]) => slu)
-  const colors = codes.map((code) =>
-    props.neglectedCodes.includes(code) ? '#f59e0b' : '#3b82f6',
-  )
+  const colors = codes.map((code) => (props.neglectedCodes.includes(code) ? '#f59e0b' : '#3b82f6'))
 
   return {
     tooltip: { trigger: 'axis' },

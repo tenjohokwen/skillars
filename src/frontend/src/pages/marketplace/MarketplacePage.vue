@@ -27,19 +27,54 @@
 
     <!-- Secondary filters — visible only after a city is entered -->
     <div v-if="cityEntered" class="marketplace-page__filters">
-      <q-input v-model="filters.district" dense outlined :label="t('marketplace.filterDistrict')"
-               clearable @update:model-value="onFilterChange" />
-      <q-select v-model="filters.ageGroup" dense outlined :label="t('marketplace.filterAgeGroup')"
-                :options="ageGroupOptions" emit-value map-options clearable
-                @update:model-value="onFilterChange" />
-      <q-select v-model="filters.language" dense outlined :label="t('marketplace.filterLanguage')"
-                :options="languageOptions" emit-value map-options clearable
-                @update:model-value="onFilterChange" />
-      <q-select v-model="filters.sortBy" dense outlined :label="t('marketplace.sortBy')"
-                :options="sortOptions" emit-value map-options
-                @update:model-value="onFilterChange" />
-      <q-btn v-if="hasActiveFilters" flat dense :label="t('marketplace.clearFilters')"
-             icon="close" @click="onClearFilters" />
+      <q-input
+        v-model="filters.district"
+        dense
+        outlined
+        :label="t('marketplace.filterDistrict')"
+        clearable
+        @update:model-value="onFilterChange"
+      />
+      <q-select
+        v-model="filters.ageGroup"
+        dense
+        outlined
+        :label="t('marketplace.filterAgeGroup')"
+        :options="ageGroupOptions"
+        emit-value
+        map-options
+        clearable
+        @update:model-value="onFilterChange"
+      />
+      <q-select
+        v-model="filters.language"
+        dense
+        outlined
+        :label="t('marketplace.filterLanguage')"
+        :options="languageOptions"
+        emit-value
+        map-options
+        clearable
+        @update:model-value="onFilterChange"
+      />
+      <q-select
+        v-model="filters.sortBy"
+        dense
+        outlined
+        :label="t('marketplace.sortBy')"
+        :options="sortOptions"
+        emit-value
+        map-options
+        @update:model-value="onFilterChange"
+      />
+      <q-btn
+        v-if="hasActiveFilters"
+        flat
+        dense
+        :label="t('marketplace.clearFilters')"
+        icon="close"
+        @click="onClearFilters"
+      />
     </div>
 
     <!-- Prompt state — no city entered yet (NOT the UX-DR25 empty state) -->
@@ -62,17 +97,29 @@
     </div>
 
     <!-- Empty state (UX-DR25) — city entered, search done, no results -->
-    <div v-else-if="cityEntered && !loading && coaches.length === 0" class="marketplace-page__empty">
+    <div
+      v-else-if="cityEntered && !loading && coaches.length === 0"
+      class="marketplace-page__empty"
+    >
       <q-icon name="search_off" size="64px" color="grey-5" />
       <div class="text-h6 q-mt-md">{{ t('marketplace.noCoachesFound') }}</div>
       <div class="text-body2 text-secondary q-mt-xs">
         {{ t('marketplace.noCoachesFoundInCity', { city: filters.city }) }}
       </div>
       <div class="q-mt-md row q-gutter-sm justify-center">
-        <q-btn v-if="hasActiveFilters" unelevated color="primary"
-               :label="t('marketplace.clearFilters')" @click="onClearFilters" />
-        <q-btn outline color="primary"
-               :label="t('marketplace.tryAnotherCity')" @click="onCityCleared" />
+        <q-btn
+          v-if="hasActiveFilters"
+          unelevated
+          color="primary"
+          :label="t('marketplace.clearFilters')"
+          @click="onClearFilters"
+        />
+        <q-btn
+          outline
+          color="primary"
+          :label="t('marketplace.tryAnotherCity')"
+          @click="onCityCleared"
+        />
       </div>
     </div>
 
@@ -85,12 +132,7 @@
       </div>
 
       <div class="marketplace-page__grid">
-        <CoachCard
-          v-for="coach in coaches"
-          :key="coach.id"
-          :coach="coach"
-          @click="goToProfile"
-        />
+        <CoachCard v-for="coach in coaches" :key="coach.id" :coach="coach" @click="goToProfile" />
       </div>
 
       <!-- Load-more -->
@@ -117,23 +159,34 @@ import CoachCard from 'src/components/marketplace/CoachCard.vue'
 
 const { t } = useI18n()
 const router = useRouter()
-const route  = useRoute()
-const store  = useMarketplaceStore()
-const { coaches, loading, loadingMore, filters, hasActiveFilters,
-        cityEntered, hasNext, totalElements } = storeToRefs(store)
+const route = useRoute()
+const store = useMarketplaceStore()
+const {
+  coaches,
+  loading,
+  loadingMore,
+  filters,
+  hasActiveFilters,
+  cityEntered,
+  hasNext,
+  totalElements,
+} = storeToRefs(store)
 
 const ageGroupOptions = [
-  { label: t('marketplace.ageGroupU10'),   value: 'U10' },
-  { label: t('marketplace.ageGroup1012'),  value: 'AGE_10_12' },
-  { label: t('marketplace.ageGroup1317'),  value: 'AGE_13_17' },
+  { label: t('marketplace.ageGroupU10'), value: 'U10' },
+  { label: t('marketplace.ageGroup1012'), value: 'AGE_10_12' },
+  { label: t('marketplace.ageGroup1317'), value: 'AGE_13_17' },
   { label: t('marketplace.ageGroupAdult'), value: 'ADULT' },
 ]
 
-const languageOptions = ['German', 'English', 'Turkish', 'Arabic'].map(l => ({ label: l, value: l }))
+const languageOptions = ['German', 'English', 'Turkish', 'Arabic'].map((l) => ({
+  label: l,
+  value: l,
+}))
 
 const sortOptions = [
-  { label: t('marketplace.sortName'),      value: 'displayName' },
-  { label: t('marketplace.sortPrice'),     value: 'price' },
+  { label: t('marketplace.sortName'), value: 'displayName' },
+  { label: t('marketplace.sortPrice'), value: 'price' },
   { label: t('marketplace.sortRatingStub'), value: 'rating', disable: true },
 ]
 
@@ -178,7 +231,9 @@ function goToProfile(coachId) {
 
   &__search-bar {
     margin-bottom: 20px;
-    .city-input { max-width: 640px; }
+    .city-input {
+      max-width: 640px;
+    }
   }
 
   &__filters {
@@ -196,12 +251,17 @@ function goToProfile(coachId) {
   &__grid {
     display: grid;
     gap: 20px;
-    grid-template-columns: repeat(3, 1fr);          // ≥1200px
-    @media (max-width: 1199px) { grid-template-columns: repeat(2, 1fr); }  // 768–1199px
-    @media (max-width: 767px)  { grid-template-columns: 1fr; }             // mobile
+    grid-template-columns: repeat(3, 1fr); // ≥1200px
+    @media (max-width: 1199px) {
+      grid-template-columns: repeat(2, 1fr);
+    } // 768–1199px
+    @media (max-width: 767px) {
+      grid-template-columns: 1fr;
+    } // mobile
   }
 
-  &__prompt, &__empty {
+  &__prompt,
+  &__empty {
     display: flex;
     flex-direction: column;
     align-items: center;

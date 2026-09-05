@@ -1,0 +1,1307 @@
+diff --git a/docker-compose.yml b/docker-compose.yml
+index bb44fd4..3efb39d 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -133,14 +133,16 @@ services:
+         condition: service_started
+       tempo:
+         condition: service_started
+-    # skillars-deferred-92 AC3.2. Raised from 30s: SIGTERM now has real work to wait for, and the
+-    # sum of the shutdown budget does not fit in 30. Worst case is ~40s -- 8s HTTP drain
+-    # (spring.lifecycle.timeout-per-shutdown-phase) + 28s of sequential executor awaits across the
+-    # SIX pools (infrastructure.threadpool.ExecutorShutdown documents the per-pool split and the
+-    # arithmetic) + ~4s of remaining context teardown. Docker SIGKILLs at this deadline regardless,
+-    # so if you add a pool or lengthen an await, redo that sum and move this with it. Only the app
+-    # service needs it; the other eight services here shut down in well under 30s.
+-    stop_grace_period: 45s
++    # skillars-deferred-92 AC3.2, raised again by that story's code review (D2). Raised from 30s:
++    # SIGTERM now has real work to wait for, and the sum of the shutdown budget does not fit in 30.
++    # Worst case is ~48s -- 8s HTTP drain (spring.lifecycle.timeout-per-shutdown-phase) + 36s of
++    # sequential executor awaits across the SEVEN pools (infrastructure.threadpool.ExecutorShutdown
++    # documents the per-pool split and the arithmetic) + ~4s of remaining context teardown. The
++    # seventh pool is reportExecutor, at 8s: report/radar generation was on the shared 2s pool while
++    # doing an S3 upload with no retry behind it. Docker SIGKILLs at this deadline regardless, so if
++    # you add a pool or lengthen an await, redo that sum and move this with it. Only the app service
++    # needs it; the other eight services here shut down in well under 30s.
++    stop_grace_period: 55s
+     restart: unless-stopped
+     logging: *default-logging
+ 
+diff --git a/src/main/java/com/softropic/skillars/infrastructure/config/AsyncConfig.java b/src/main/java/com/softropic/skillars/infrastructure/config/AsyncConfig.java
+index 608d6b6..0f0654b 100644
+--- a/src/main/java/com/softropic/skillars/infrastructure/config/AsyncConfig.java
++++ b/src/main/java/com/softropic/skillars/infrastructure/config/AsyncConfig.java
+@@ -41,8 +41,10 @@ public class AsyncConfig implements AsyncConfigurer {
+ 
+         executor.setTaskDecorator(task -> new MdcDecorator().decorate(task));
+         // skillars-deferred-92 AC3. Short, but not zero: this is the pool every bare @Async in the
+-        // application resolves to (see AC17 / DefaultAsyncExecutorResolutionTest), so whatever lands
+-        // here inherits this shutdown behaviour. See ExecutorShutdown for the budget.
++        // application resolves to (see AC17 / AsyncExecutorQualifierTest), so whatever lands here
++        // inherits this shutdown behaviour. That is a CONSTRAINT, not just a note -- work that can
++        // outlast 2s needs its own pool and its own slice, which is why the code review moved report
++        // and radar generation onto reportExecutor. See ExecutorShutdown for the budget.
+         ExecutorShutdown.configureGracefulShutdown(executor, ExecutorShutdown.SHARED_ASYNC_SECONDS);
+ 
+         executor.initialize();
+diff --git a/src/main/java/com/softropic/skillars/infrastructure/threadpool/ExecutorShutdown.java b/src/main/java/com/softropic/skillars/infrastructure/threadpool/ExecutorShutdown.java
+index fa8eb28..fc7ac55 100644
+--- a/src/main/java/com/softropic/skillars/infrastructure/threadpool/ExecutorShutdown.java
++++ b/src/main/java/com/softropic/skillars/infrastructure/threadpool/ExecutorShutdown.java
+@@ -80,17 +80,18 @@ import java.util.concurrent.atomic.AtomicInteger;
+  *   sendMailPool            {@value #SEND_MAIL_SECONDS} s
+  *   moderationTaskExecutor  {@value #MODERATION_SECONDS} s
+  *   taskExecutor            {@value #SHARED_ASYNC_SECONDS} s
++ *   reportExecutor          {@value #REPORT_SECONDS} s
+  *   remaining context teardown (datasource, Flyway, Redis)             ~4 s
+  *   -------------------------------------------------------------------------
+- *   worst case                                                        ~40 s
+- *   docker-compose stop_grace_period (app service)                     45 s
++ *   worst case                                                        ~48 s
++ *   docker-compose stop_grace_period (app service)                     55 s
+  * </pre>
+  *
+- * {@code stop_grace_period} was raised from 30 s to 45 s for this budget; at 30 s the sum above could
+- * not fit and the pools would have been SIGKILLed mid-drain anyway, which is the state this class
+- * exists to leave behind.
++ * {@code stop_grace_period} was raised from 30 s to 45 s for this budget, then to 55 s when
++ * {@link #REPORT_SECONDS} added a seventh pool; at 30 s the sum above could not fit and the pools
++ * would have been SIGKILLed mid-drain anyway, which is the state this class exists to leave behind.
+  *
+- * <p><strong>There are six pools, not the five the story enumerated.</strong>
++ * <p><strong>There are seven pools, not the five the story enumerated.</strong>
+  * {@code BlobstoreConfig#storageUploadExecutor} is a raw {@link java.util.concurrent.ThreadPoolExecutor}
+  * rather than a {@code ThreadPoolTaskExecutor}, which is why an inventory built by grepping for
+  * {@code ThreadPoolTaskExecutor} missed it. Its {@code @Bean(destroyMethod = "shutdown")} was better
+@@ -100,8 +101,10 @@ import java.util.concurrent.atomic.AtomicInteger;
+  * hooks finish; it does not wait on remaining non-daemon threads.) {@link #gracefulFixedPool} closes
+  * that. It was found by {@code ExecutorShutdownConfigurationTest#everyExecutorBeanIsCovered} on its
+  * very first run — which is precisely the "caught by intent, not by luck" that AC3.4 asked for.
++ * {@code reportExecutor} is the seventh and was added by this story's own code review; see
++ * {@link #REPORT_SECONDS}.
+  *
+- * <p><strong>If you add a seventh pool or lengthen an await, redo this sum and move
++ * <p><strong>If you add an eighth pool or lengthen an await, redo this sum and move
+  * {@code stop_grace_period} with it.</strong> The test fails the build on a pool that is not
+  * configured here, but it cannot know what the container will allow.
+  */
+@@ -127,9 +130,34 @@ public final class ExecutorShutdown {
+     /** Moderation work is re-drivable from the SLA monitor; a short drain is enough. */
+     public static final int MODERATION_SECONDS = 2;
+ 
+-    /** The shared {@code @Async} pool: many short tasks, nothing individually long-running. */
++    /**
++     * The shared {@code @Async} pool: many short tasks, nothing individually long-running.
++     *
++     * <p>That second clause is a <em>constraint on what may be routed here</em>, not an observation.
++     * Anything with a task that can outlast two seconds belongs on its own pool with its own slice —
++     * see {@link #REPORT_SECONDS} for the case that forced the distinction.
++     */
+     public static final int SHARED_ASYNC_SECONDS = 2;
+ 
++    /**
++     * {@code reportExecutor} — the development module's long-running {@code @Async} work
++     * (skillars-deferred-92 code review, decision D2).
++     *
++     * <p>{@code ReportGenerationService.onReportGenerated} does an S3 upload of a built PDF followed
++     * by a status flip, a timeline write and a parent notification, in its own {@code REQUIRES_NEW}
++     * transaction, with <strong>no outbox row and no retry</strong>: a report abandoned mid-upload
++     * stays {@code PENDING_UPLOAD} forever and is invisible in {@code listReports}. It ran on
++     * {@code taskExecutor}, whose {@value #SHARED_ASYNC_SECONDS}s slice is explicitly sized for work
++     * that is never individually long-running — an S3 round trip routinely is.
++     * {@code RadarCompositeCalculationService.onRadarEntrySubmitted} joins it: it takes a pessimistic
++     * player-row lock for a read-then-upsert and is the other development-module listener whose task
++     * has no fixed bound.
++     *
++     * <p>8 s buys one full S3 upload plus the short queue behind it. Longer would push the sequential
++     * sum past {@code stop_grace_period}; shorter would not cover the case the pool exists for.
++     */
++    public static final int REPORT_SECONDS = 8;
++
+     /**
+      * One in-flight S3 multipart upload part, plus a little of the queue behind it. An abandoned
+      * upload is not silently lost data — the caller's transaction has not recorded the object yet —
+@@ -137,6 +165,14 @@ public final class ExecutorShutdown {
+      */
+     public static final int STORAGE_UPLOAD_SECONDS = 5;
+ 
++    /**
++     * The short second wait after {@code shutdownNow()} in {@link #gracefulFixedPool}. Not part of the
++     * budget arithmetic above in any meaningful sense: it is only reached once the pool has already
++     * blown its whole slice, and it exists to log whether the interrupt actually took, not to give the
++     * tasks more time.
++     */
++    static final int FORCED_TERMINATION_SECONDS = 1;
++
+     private ExecutorShutdown() {
+     }
+ 
+@@ -167,8 +203,35 @@ public final class ExecutorShutdown {
+                     if (!awaitTermination(awaitSeconds, TimeUnit.SECONDS)) {
+                         LoggerFactory.getLogger(ExecutorShutdown.class).warn(
+                             "Timed out after {}s waiting for executor '{}' to terminate; {} task(s) "
+-                                + "were still queued or running", awaitSeconds, threadNamePrefix,
+-                            getQueue().size() + getActiveCount());
++                                + "were still queued or running -- interrupting them now",
++                            awaitSeconds, threadNamePrefix, getQueue().size() + getActiveCount());
++                        forceTermination(threadNamePrefix);
++                    }
++                } catch (InterruptedException e) {
++                    Thread.currentThread().interrupt();
++                    forceTermination(threadNamePrefix);
++                }
++            }
++
++            /**
++             * skillars-deferred-92 code review. The bounded wait above used to be the end of it: on
++             * timeout it logged and returned, and on interrupt it returned outright. These are
++             * <em>non-daemon</em> workers, so on any context close that is not a JVM exit -- a failed
++             * {@code @SpringBootTest} context, a {@code /actuator/restart}, an embedded container
++             * shutdown -- they went on running against a torn-down application context, touching a
++             * closed datasource and a closed S3 client. Interrupting is the correct end state: the
++             * await above has already given every in-flight upload its full slice of the budget, and
++             * an upload abandoned here is not lost data (the caller's transaction never recorded the
++             * object) -- it is at worst an orphaned multipart upload for the bucket lifecycle rule.
++             */
++            private void forceTermination(String prefix) {
++                shutdownNow();
++                try {
++                    if (!awaitTermination(FORCED_TERMINATION_SECONDS, TimeUnit.SECONDS)) {
++                        LoggerFactory.getLogger(ExecutorShutdown.class).error(
++                            "Executor '{}' did not terminate even after shutdownNow(); {} task(s) are "
++                                + "ignoring interruption and will outlive the application context",
++                            prefix, getQueue().size() + getActiveCount());
+                     }
+                 } catch (InterruptedException e) {
+                     Thread.currentThread().interrupt();
+diff --git a/src/main/java/com/softropic/skillars/platform/booking/service/BookingReminderScheduler.java b/src/main/java/com/softropic/skillars/platform/booking/service/BookingReminderScheduler.java
+index ad33403..541633e 100644
+--- a/src/main/java/com/softropic/skillars/platform/booking/service/BookingReminderScheduler.java
++++ b/src/main/java/com/softropic/skillars/platform/booking/service/BookingReminderScheduler.java
+@@ -15,7 +15,7 @@ import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+ import org.springframework.context.ApplicationEventPublisher;
+ import org.springframework.scheduling.annotation.Scheduled;
+ import org.springframework.stereotype.Component;
+-import org.springframework.transaction.annotation.Transactional;
++import org.springframework.transaction.support.TransactionTemplate;
+ 
+ import java.time.Duration;
+ import java.time.Instant;
+@@ -23,6 +23,7 @@ import java.util.List;
+ import java.util.Set;
+ import java.util.UUID;
+ import java.util.concurrent.TimeUnit;
++import java.util.function.Supplier;
+ import java.util.stream.Collectors;
+ 
+ /**
+@@ -32,13 +33,30 @@ import java.util.stream.Collectors;
+  *
+  * They are stamped <em>before</em> the event is published, and that ordering is deliberate rather
+  * than incidental. {@code BookingEmailListener.onBookingReminder} is
+- * {@code @TransactionalEventListener(BEFORE_COMMIT)}, so its outbox write happens inside this
+- * method's own {@code @Transactional} boundary: the stamp and the outbox row commit together or
++ * {@code @TransactionalEventListener(BEFORE_COMMIT)}, so its outbox write happens inside the
++ * per-booking transaction that made the stamp: the stamp and the outbox row commit together or
+  * neither does. The columns therefore mean <strong>"a reminder was durably queued for this
+  * booking"</strong>, not "an SMTP server accepted it" — delivery itself is the outbox drain's job
+  * and is tracked by the outbox row's {@code attempts} / {@code last_error} and the
+  * {@code [OUTBOX_STUCK]} alert.
+  *
++ * <h2>One transaction per booking, never one per batch (skillars-deferred-92 code review)</h2>
++ *
++ * {@code processReminderWindows} used to carry a method-level {@code @Transactional}, which made the
++ * per-iteration {@code try/catch} below <em>look</em> like isolation while providing none of it. A
++ * {@code BEFORE_COMMIT} listener does not run at the point its event is published; it runs at the
++ * commit of the enclosing transaction. Under one batch-wide transaction that meant every booking's
++ * enqueue ran at the very end, outside every {@code catch}, and a single failing enqueue rolled back
++ * the whole batch — every transition, every stamp, every other booking's outbox row. Worse, an
++ * outbox INSERT failure marks the transaction rollback-only, so the {@code catch} could not have
++ * saved it even if it had been in scope; and because the same bookings are re-selected five minutes
++ * later, a deterministic failure was a permanent stall in which no reminder was ever sent again.
++ *
++ * <p>Each booking now gets its own {@link TransactionTemplate} scope, so its enqueue commits (or
++ * rolls back) with its own stamp and nothing else — the shape {@code SessionPackForfeitureScheduler}
++ * and {@code SessionPackExpiryNotifier} already use. The absence of {@code @Transactional} on this
++ * method is pinned by {@code SchedulerLockTransactionOrderingIT}.
++ *
+  * <p>Stamping <em>after</em> a confirmed send was considered and rejected: it would need the stamp
+  * to be written from the drain, i.e. from a different transaction than the one that selected the
+  * booking, reintroducing the double-send window the {@code IS NULL} filter on
+@@ -63,51 +81,77 @@ public class BookingReminderScheduler {
+     private final com.softropic.skillars.platform.config.service.ConfigService configService;
+     private final CoachProfileRepository coachProfileRepository;
+     private final UserRepository userRepository;
++    private final TransactionTemplate transactionTemplate;
+ 
+     @Scheduled(fixedDelay = 5, timeUnit = TimeUnit.MINUTES)
+     @SchedulerLock(name = "BookingReminderScheduler_remind",
+                    lockAtMostFor = "PT15M", lockAtLeastFor = "PT2M")
+-    @Transactional
+     public void processReminderWindows() {
+         long primaryHours = configService.getBoundedLong("platform.reminder_interval_primary_hours", 24L, 1L, MAX_WINDOW_HOURS);
+         long secondaryHours = configService.getBoundedLong("platform.reminder_interval_secondary_hours", 2L, 1L, MAX_WINDOW_HOURS);
+         Instant now = Instant.now();
+ 
+         Instant primaryWindowEnd = now.plus(Duration.ofHours(primaryHours));
+-        List<Booking> toTransition = bookingRepository.findConfirmedForUpcomingTransition(primaryWindowEnd);
+-        Set<UUID> primaryProcessed = toTransition.stream().map(Booking::getId).collect(Collectors.toSet());
+-        for (Booking b : toTransition) {
++        List<UUID> toTransition = idsOf(
++            () -> bookingRepository.findConfirmedForUpcomingTransition(primaryWindowEnd));
++        Set<UUID> primaryProcessed = Set.copyOf(toTransition);
++        for (UUID bookingId : toTransition) {
+             try {
+-                bookingService.transition(b.getId(), BookingEvent.SCHEDULE_UPCOMING,
+-                    new TransitionContext(ActorRole.SYSTEM, null));
+-                b.setPrimaryReminderSentAt(now);
+-                eventPublisher.publishEvent(buildReminderEvent(b, "PRIMARY"));
++                transactionTemplate.executeWithoutResult(status -> {
++                    bookingService.transition(bookingId, BookingEvent.SCHEDULE_UPCOMING,
++                        new TransitionContext(ActorRole.SYSTEM, null));
++                    // Re-read inside this transaction rather than reusing the detached instance from
++                    // the selecting query: transition() has just bumped this row's @Version, so
++                    // saving the stale copy would take an OptimisticLockingFailureException and
++                    // would also write the pre-transition status back over UPCOMING.
++                    Booking b = bookingRepository.findById(bookingId).orElseThrow();
++                    b.setPrimaryReminderSentAt(now);
++                    bookingRepository.save(b);
++                    eventPublisher.publishEvent(buildReminderEvent(b, "PRIMARY"));
++                });
+                 // skillars-deferred-92 AC29.4: says "queued", not "sent". The old wording asserted a
+                 // delivery this method has never performed — it publishes an event that
+                 // BookingEmailListener turns into an outbox row; the actual SMTP send happens later,
+                 // in the drain, and can still fail there. A log line that claims more than the code
+-                // did is how AC29's bug survived a full story and a 3-layer review.
+-                log.info("Transitioned booking {} to UPCOMING and queued primary reminder", b.getId());
++                // did is how AC29's bug survived a full story and a 3-layer review. Logged after the
++                // commit, for the same reason: the BEFORE_COMMIT enqueue can still fail the
++                // transaction, and a line claiming "queued" must not precede the commit that queued it.
++                log.info("Transitioned booking {} to UPCOMING and queued primary reminder", bookingId);
+             } catch (Exception e) {
+-                log.error("Failed to process primary reminder for booking {}", b.getId(), e);
++                log.error("Failed to process primary reminder for booking {}", bookingId, e);
+             }
+         }
+ 
+         Instant secondaryWindowEnd = now.plus(Duration.ofHours(secondaryHours));
+-        List<Booking> toRemind = bookingRepository.findUpcomingWithin2hWindow(now, secondaryWindowEnd)
+-            .stream().filter(b -> !primaryProcessed.contains(b.getId())).toList();
+-        for (Booking b : toRemind) {
++        List<UUID> toRemind = idsOf(
++            () -> bookingRepository.findUpcomingWithin2hWindow(now, secondaryWindowEnd))
++            .stream().filter(id -> !primaryProcessed.contains(id)).toList();
++        for (UUID bookingId : toRemind) {
+             try {
+-                b.setSecondaryReminderSentAt(now);
+-                bookingRepository.save(b);
+-                eventPublisher.publishEvent(buildReminderEvent(b, "SECONDARY"));
+-                log.info("Queued secondary reminder for booking {}", b.getId());
++                transactionTemplate.executeWithoutResult(status -> {
++                    Booking b = bookingRepository.findById(bookingId).orElseThrow();
++                    b.setSecondaryReminderSentAt(now);
++                    bookingRepository.save(b);
++                    eventPublisher.publishEvent(buildReminderEvent(b, "SECONDARY"));
++                });
++                log.info("Queued secondary reminder for booking {}", bookingId);
+             } catch (Exception e) {
+-                log.error("Failed to process secondary reminder for booking {}", b.getId(), e);
++                log.error("Failed to process secondary reminder for booking {}", bookingId, e);
+             }
+         }
+     }
+ 
++    /**
++     * Runs a selecting query in its own short transaction and keeps only the ids. Ids rather than
++     * entities on purpose: every entity the per-booking transactions work on is loaded inside that
++     * transaction, so no detached instance from this read can be saved by accident.
++     */
++    private List<UUID> idsOf(Supplier<List<Booking>> query) {
++        List<UUID> ids = transactionTemplate.execute(
++            status -> query.get().stream().map(Booking::getId).collect(Collectors.toList()));
++        return ids == null ? List.of() : ids;
++    }
++
+     private BookingReminderEvent buildReminderEvent(Booking b, String reminderType) {
+         CoachProfile coach = coachProfileRepository.findById(b.getCoachId()).orElse(null);
+         String coachName = coach != null ? coach.getDisplayName() : "Coach";
+diff --git a/src/main/java/com/softropic/skillars/platform/development/config/DevelopmentConfig.java b/src/main/java/com/softropic/skillars/platform/development/config/DevelopmentConfig.java
+index aec6ec5..ab5f6e2 100644
+--- a/src/main/java/com/softropic/skillars/platform/development/config/DevelopmentConfig.java
++++ b/src/main/java/com/softropic/skillars/platform/development/config/DevelopmentConfig.java
+@@ -79,4 +79,40 @@ public class DevelopmentConfig {
+         executor.initialize();
+         return executor;
+     }
++
++    /**
++     * The development module's long-running {@code @Async} listeners (skillars-deferred-92 code
++     * review, decision D2).
++     *
++     * <p>{@code ReportGenerationService.onReportGenerated} (S3 upload of a built PDF, then a status
++     * flip, a timeline write and a parent notification) and
++     * {@code RadarCompositeCalculationService.onRadarEntrySubmitted} (pessimistic player-row lock for
++     * a read-then-upsert) both ran on the shared {@code taskExecutor}, whose shutdown slice is
++     * {@value com.softropic.skillars.infrastructure.threadpool.ExecutorShutdown#SHARED_ASYNC_SECONDS}
++     * seconds precisely because nothing on it is supposed to be individually long-running. An S3
++     * round trip is, and the report path has no outbox row and no retry behind it — a report
++     * abandoned mid-upload stays {@code PENDING_UPLOAD} forever and never appears in
++     * {@code listReports}. Its own pool with its own
++     * {@value com.softropic.skillars.infrastructure.threadpool.ExecutorShutdown#REPORT_SECONDS}-second
++     * slice is what makes the shared pool's documented assumption true again.
++     *
++     * <p>Sizing: {@code core 2 / max 4 / queue 50}. {@code CallerRunsPolicy} rather than a discard
++     * policy — a dropped task here is a permanently broken report, so backpressure onto the
++     * committing thread is the lesser harm — and {@code allowCoreThreadTimeOut(true)} so the pool
++     * idles back to zero between the bursts these two listeners actually arrive in.
++     */
++    @Bean(name = "reportExecutor")
++    public ThreadPoolTaskExecutor reportExecutor() {
++        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
++        executor.setCorePoolSize(2);
++        executor.setMaxPoolSize(4);
++        executor.setQueueCapacity(50);
++        executor.setAllowCoreThreadTimeOut(true);
++        executor.setThreadNamePrefix("report-");
++        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
++        executor.setTaskDecorator(task -> new MdcDecorator().decorate(task));
++        ExecutorShutdown.configureGracefulShutdown(executor, ExecutorShutdown.REPORT_SECONDS);
++        executor.initialize();
++        return executor;
++    }
+ }
+diff --git a/src/main/java/com/softropic/skillars/platform/development/service/RadarCompositeCalculationService.java b/src/main/java/com/softropic/skillars/platform/development/service/RadarCompositeCalculationService.java
+index 85a1777..d9131a8 100644
+--- a/src/main/java/com/softropic/skillars/platform/development/service/RadarCompositeCalculationService.java
++++ b/src/main/java/com/softropic/skillars/platform/development/service/RadarCompositeCalculationService.java
+@@ -52,7 +52,10 @@ public class RadarCompositeCalculationService {
+     private RadarCompositeCalculationService self;
+ 
+     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+-    @Async("taskExecutor")
++    // skillars-deferred-92 code review (D2): shares reportExecutor with report generation. The
++    // recalculation below takes a pessimistic player-row lock for a read-then-upsert, so it has no
++    // fixed upper bound either and does not belong on the shared 2s-budget pool.
++    @Async("reportExecutor")
+     public void onRadarEntrySubmitted(RadarEntrySubmittedEvent event) {
+         Long playerId    = event.playerId();
+         Long parentId    = event.parentId();
+diff --git a/src/main/java/com/softropic/skillars/platform/development/service/ReportGenerationService.java b/src/main/java/com/softropic/skillars/platform/development/service/ReportGenerationService.java
+index 12b91e6..6a5280b 100644
+--- a/src/main/java/com/softropic/skillars/platform/development/service/ReportGenerationService.java
++++ b/src/main/java/com/softropic/skillars/platform/development/service/ReportGenerationService.java
+@@ -195,7 +195,10 @@ public class ReportGenerationService {
+      * from listReports; there is currently no automatic retry (matches this story's scope).
+      */
+     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+-    @Async("taskExecutor")
++    // skillars-deferred-92 code review (D2): its own pool, not the shared @Async one. The upload
++    // below is a full S3 round trip with no outbox row and no retry behind it, and taskExecutor's
++    // 2s shutdown slice is sized for tasks that are never individually long-running.
++    @Async("reportExecutor")
+     @Transactional(propagation = Propagation.REQUIRES_NEW)
+     public void onReportGenerated(ReportGeneratedEvent event) {
+         String storageKey = "reports/" + UUID.randomUUID() + "/report.pdf";
+diff --git a/src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/VideoModerationEmailListener.java b/src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/VideoModerationEmailListener.java
+index d0bddbd..631e9b6 100644
+--- a/src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/VideoModerationEmailListener.java
++++ b/src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/VideoModerationEmailListener.java
+@@ -3,10 +3,15 @@ package com.softropic.skillars.platform.notification.infrastructure.listener;
+ import com.softropic.skillars.infrastructure.feature.AppFeature;
+ import com.softropic.skillars.infrastructure.feature.FeatureToggleService;
+ import com.softropic.skillars.platform.config.service.ConfigService;
++import com.softropic.skillars.platform.notification.contract.EmailDeliveryStatus;
+ import com.softropic.skillars.platform.notification.contract.EmailTemplate;
+ import com.softropic.skillars.platform.notification.contract.Envelope;
+ import com.softropic.skillars.platform.notification.contract.Recipient;
++import com.softropic.skillars.platform.notification.repo.EnvelopeEntity;
++import com.softropic.skillars.platform.notification.repo.EnvelopeEntityRepository;
++import com.softropic.skillars.platform.notification.service.MailManager;
+ import com.softropic.skillars.platform.security.contract.util.ShortCode;
++import com.softropic.skillars.platform.video.contract.ModerationAdminAlertSender;
+ import com.softropic.skillars.platform.video.contract.event.VideoModerationAdminAlertEvent;
+ import com.softropic.skillars.platform.video.contract.event.VideoModerationOwnerNotificationEvent;
+ import lombok.RequiredArgsConstructor;
+@@ -30,11 +35,13 @@ import java.util.UUID;
+ @Slf4j
+ @Component
+ @RequiredArgsConstructor
+-public class VideoModerationEmailListener {
++public class VideoModerationEmailListener implements ModerationAdminAlertSender {
+ 
+     private final ApplicationEventPublisher publisher;
+     private final ConfigService configService;
+     private final FeatureToggleService featureToggleService;
++    private final MailManager mailManager;
++    private final EnvelopeEntityRepository envelopeEntityRepository;
+ 
+     @PostConstruct
+     void checkAdminAlertConfig() {
+@@ -51,10 +58,62 @@ public class VideoModerationEmailListener {
+ 
+     @EventListener
+     public void onAdminAlert(VideoModerationAdminAlertEvent event) {
++        Envelope envelope = adminAlertEnvelope(event);
++        if (envelope == null) {
++            return;
++        }
++        publisher.publishEvent(envelope);
++    }
++
++    /**
++     * skillars-deferred-92 code review, decision D1 — the outbox handler's entry point.
++     *
++     * <p>{@link #onAdminAlert} above publishes the envelope and returns; the actual send then happens
++     * on {@code sendMailPool} after the publishing transaction commits. On the outbox drain that
++     * ordering is a hole: {@code ModerationAdminAlertOutboxHandler} returns normally, the drain
++     * commits, the durable row is deleted — and only then does the send run and possibly fail. The
++     * envelope records the failure, but the row that was supposed to re-drive it is gone.
++     *
++     * <p>So this method sends inline and decides from the recorded outcome, exactly as
++     * {@code NotificationEmailOutboxHandler} does: {@code MailManager.sendEmailSync} catches
++     * {@code Exception} and never rethrows — it stamps {@code EnvelopeEntity.status = FAILED} and
++     * returns normally — so a normal return proves nothing and the envelope has to be read back.
++     */
++    @Override
++    public void sendAdminAlertSync(VideoModerationAdminAlertEvent event) {
++        Envelope envelope = adminAlertEnvelope(event);
++        if (envelope == null) {
++            // Already logged at ERROR by adminAlertEnvelope. Returning normally is deliberate: no
++            // number of re-drives fixes an unset config key, and a retained row would occupy a claim
++            // slot until a human noticed.
++            return;
++        }
++
++        mailManager.sendEmailSync(envelope);
++
++        EnvelopeEntity persisted = envelopeEntityRepository.findBySendId(envelope.sendId());
++        if (persisted != null && persisted.getStatus() == EmailDeliveryStatus.FAILED) {
++            if (persisted.isRetry()) {
++                throw new IllegalStateException(
++                    "video moderation admin alert send FAILED (retryable) for videoId=" + event.videoId()
++                        + " sendId=" + envelope.sendId());
++            }
++            log.error("[VIDEO_MODERATION_ADMIN_ALERT_UNDELIVERABLE] videoId={} subject={} sendId={} — "
++                    + "permanently undeliverable, no re-drive can succeed; outbox row released. This "
++                    + "alert is the only signal a human gets that this video needs manual review.",
++                event.videoId(), event.subject(), envelope.sendId());
++            return;
++        }
++        log.info("[VIDEO_MODERATION_ADMIN_ALERT] delivered alert for videoId={} subject={}",
++            event.videoId(), event.subject());
++    }
++
++    /** @return the envelope to send, or {@code null} when {@code platform.admin_alert_email} is unset. */
++    private Envelope adminAlertEnvelope(VideoModerationAdminAlertEvent event) {
+         String adminEmail = configService.find("platform.admin_alert_email").orElse("");
+         if (adminEmail.isBlank()) {
+             log.error("platform.admin_alert_email config key is blank — admin alert NOT sent: {}", event.subject());
+-            return;
++            return null;
+         }
+ 
+         Map<String, Object> data = new HashMap<>();
+@@ -68,13 +127,13 @@ public class VideoModerationEmailListener {
+         recipient.setEmail(adminEmail);
+         recipient.setLangKey("en");
+ 
+-        publisher.publishEvent(new Envelope(
++        return new Envelope(
+             List.of(recipient),
+             EmailTemplate.VIDEO_MODERATION_ADMIN_ALERT,
+             Instant.now().plus(Duration.ofHours(1)),
+             data,
+             ShortCode.shortenInt(UUID.randomUUID().hashCode())
+-        ));
++        );
+     }
+ 
+     @EventListener
+diff --git a/src/main/java/com/softropic/skillars/platform/video/repo/VideoApprovalRequestRepository.java b/src/main/java/com/softropic/skillars/platform/video/repo/VideoApprovalRequestRepository.java
+index 8874f64..da699a4 100644
+--- a/src/main/java/com/softropic/skillars/platform/video/repo/VideoApprovalRequestRepository.java
++++ b/src/main/java/com/softropic/skillars/platform/video/repo/VideoApprovalRequestRepository.java
+@@ -8,7 +8,6 @@ import org.springframework.data.jpa.repository.Query;
+ import org.springframework.data.repository.query.Param;
+ import org.springframework.transaction.annotation.Transactional;
+ 
+-import java.time.Instant;
+ import java.util.List;
+ import java.util.Optional;
+ import java.util.UUID;
+diff --git a/src/main/java/com/softropic/skillars/platform/video/service/BandwidthResetService.java b/src/main/java/com/softropic/skillars/platform/video/service/BandwidthResetService.java
+index 8f42478..a41235f 100644
+--- a/src/main/java/com/softropic/skillars/platform/video/service/BandwidthResetService.java
++++ b/src/main/java/com/softropic/skillars/platform/video/service/BandwidthResetService.java
+@@ -50,8 +50,7 @@ public class BandwidthResetService {
+     @SchedulerLock(name = "BandwidthResetService_reset",
+                    lockAtMostFor = "PT30M", lockAtLeastFor = "PT1M")
+     public void resetMonthlyBandwidth() {
+-        int chunks = drainReset();
+-        log.info("Monthly bandwidth reset complete in {} chunk(s)", chunks);
++        drainReset();
+     }
+ 
+     /**
+@@ -66,23 +65,34 @@ public class BandwidthResetService {
+     public int drainReset() {
+         int chunks = 0;
+         long total = 0;
++        int lastReset = 0;
+         for (int i = 0; i < MAX_CHUNKS; i++) {
+-            int reset = chunkProcessor.resetChunk();
+-            if (reset == 0) {
++            lastReset = chunkProcessor.resetChunk();
++            if (lastReset == 0) {
+                 break;
+             }
+             chunks++;
+-            total += reset;
+-            if (i == MAX_CHUNKS - 1) {
+-                // Only reachable if the predicate stopped excluding already-reset rows, which would
+-                // mean the loop was never going to terminate. Loud, because the alternative is a job
+-                // that runs forever holding a scheduler lock.
+-                log.error("[BANDWIDTH_RESET_CHUNK_LIMIT] stopped after {} chunks ({} rows) without the "
+-                    + "predicate going empty — the reset is incomplete and the self-excluding WHERE "
+-                    + "clause in BandwidthResetChunkProcessor needs investigating", MAX_CHUNKS, total);
+-            }
++            total += lastReset;
++        }
++
++        // skillars-deferred-92 code review. The budget-exhaustion ERROR and the "reset complete" line
++        // used to be able to fire on the same run: the ERROR sat inside the loop and
++        // resetMonthlyBandwidth logged "Monthly bandwidth reset complete" unconditionally straight
++        // afterwards, so operators saw one run declare itself both incomplete and complete. Exactly
++        // one of the two branches below now runs. The condition is unchanged in meaning — the loop
++        // breaks on the first empty chunk, so `chunks == MAX_CHUNKS && lastReset > 0` describes the
++        // same state the old `i == MAX_CHUNKS - 1` test did.
++        if (chunks == MAX_CHUNKS && lastReset > 0) {
++            // Only reachable if the predicate stopped excluding already-reset rows, which would
++            // mean the loop was never going to terminate. Loud, because the alternative is a job
++            // that runs forever holding a scheduler lock.
++            log.error("[BANDWIDTH_RESET_CHUNK_LIMIT] stopped after {} chunks ({} rows) without the "
++                + "predicate going empty — the reset is incomplete and the self-excluding WHERE "
++                + "clause in BandwidthResetChunkProcessor needs investigating", MAX_CHUNKS, total);
++        } else {
++            log.info("Monthly bandwidth reset complete: {} video quota row(s) across {} chunk(s)",
++                total, chunks);
+         }
+-        log.info("Monthly bandwidth reset applied to {} video quota row(s) across {} chunk(s)", total, chunks);
+         return chunks;
+     }
+ }
+diff --git a/src/main/java/com/softropic/skillars/platform/video/service/ModerationAdminAlertOutboxHandler.java b/src/main/java/com/softropic/skillars/platform/video/service/ModerationAdminAlertOutboxHandler.java
+index 3205890..73ea27c 100644
+--- a/src/main/java/com/softropic/skillars/platform/video/service/ModerationAdminAlertOutboxHandler.java
++++ b/src/main/java/com/softropic/skillars/platform/video/service/ModerationAdminAlertOutboxHandler.java
+@@ -2,11 +2,10 @@ package com.softropic.skillars.platform.video.service;
+ 
+ import com.fasterxml.jackson.databind.ObjectMapper;
+ import com.softropic.skillars.platform.outbox.contract.OutboxMessageHandler;
++import com.softropic.skillars.platform.video.contract.ModerationAdminAlertSender;
+ import com.softropic.skillars.platform.video.contract.event.VideoModerationAdminAlertEvent;
+ 
+ import lombok.RequiredArgsConstructor;
+-import lombok.extern.slf4j.Slf4j;
+-import org.springframework.context.ApplicationEventPublisher;
+ import org.springframework.stereotype.Component;
+ 
+ import java.io.UncheckedIOException;
+@@ -24,15 +23,30 @@ import java.io.UncheckedIOException;
+  * is the only signal a human gets that a video needs manual review, so suppressing a possible
+  * duplicate at the cost of possibly suppressing the only copy would be the wrong trade.
+  *
+- * <p>Delivery is still guarded downstream: {@code VideoModerationEmailListener.onAdminAlert} refuses
+- * to send when {@code platform.admin_alert_email} is blank, and logs loudly when it does.
++ * <p>Delivery is still guarded downstream: {@code VideoModerationEmailListener} refuses to send when
++ * {@code platform.admin_alert_email} is blank, and logs loudly when it does.
++ *
++ * <h2>Why the send is synchronous (skillars-deferred-92 code review, decision D1)</h2>
++ *
++ * This handler used to re-{@code publishEvent} the alert. {@code VideoModerationEmailListener}
++ * ({@code @EventListener}) turned that into an {@code Envelope}, which {@code MailManager
++ * .sendEmailFromTemplate} ({@code @Async} + {@code @TransactionalEventListener(AFTER_COMMIT)})
++ * delivered — <em>after</em> the drain transaction had committed and deleted this row. A send failure
++ * therefore marked the envelope {@code FAILED} against an outbox row that no longer existed: no
++ * {@code attempts++}, no backoff, no {@code [OUTBOX_STUCK]}, and the durability this whole aggregate
++ * type exists for was cosmetic. {@link ModerationAdminAlertSender#sendAdminAlertSync} closes that
++ * loop by making delivery either happen or throw before {@code handle()} returns, mirroring
++ * {@code NotificationEmailOutboxHandler}.
++ *
++ * <p>{@link ModerationRetryOutboxHandler} deliberately keeps its event dispatch: its payload is a
++ * request to re-run the moderation pipeline, not an email, so there is no delivery outcome to read
++ * back and its guarantee really is discharged the moment the event is dispatched.
+  */
+-@Slf4j
+ @Component
+ @RequiredArgsConstructor
+ public class ModerationAdminAlertOutboxHandler implements OutboxMessageHandler {
+ 
+-    private final ApplicationEventPublisher publisher;
++    private final ModerationAdminAlertSender adminAlertSender;
+     private final ObjectMapper objectMapper;
+ 
+     @Override
+@@ -49,9 +63,11 @@ public class ModerationAdminAlertOutboxHandler implements OutboxMessageHandler {
+             throw new UncheckedIOException(e);
+         }
+ 
+-        publisher.publishEvent(new VideoModerationAdminAlertEvent(
++        // Throws on a retryable failure so the row keeps attempts++ / last_error and is re-driven
++        // after its backoff; logs and returns on a permanently undeliverable one. The delivered /
++        // undeliverable log line is emitted by the sender, which is the only place that knows which
++        // of the two happened.
++        adminAlertSender.sendAdminAlertSync(new VideoModerationAdminAlertEvent(
+             p.videoId(), p.ownerId(), p.subject(), p.body(), p.urgent()));
+-        log.info("[VIDEO_MODERATION_ADMIN_ALERT] re-dispatched alert for videoId={} subject={}",
+-            p.videoId(), p.subject());
+     }
+ }
+diff --git a/src/main/resources/application.yaml b/src/main/resources/application.yaml
+index e657938..42c6993 100644
+--- a/src/main/resources/application.yaml
++++ b/src/main/resources/application.yaml
+@@ -2,9 +2,13 @@ baseurl: http://localhost
+ server:
+   port: "${port:9990}"
+   # skillars-deferred-92 AC3.2. Lets in-flight HTTP requests finish instead of being cut mid-response
+-  # on SIGTERM. This is NOT what bounds the executor pools -- ExecutorConfigurationSupport is a
+-  # DisposableBean, not a SmartLifecycle, so its destroy() runs during ordinary bean destruction,
+-  # after this phase and outside its timeout (see infrastructure.threadpool.ExecutorShutdown).
++  # on SIGTERM. This is NOT what bounds the executor pools. ExecutorConfigurationSupport is BOTH a
++  # DisposableBean and a SmartLifecycle (verified against spring-context 6.2.19 sources), but
++  # ExecutorShutdown.configureGracefulShutdown sets waitForTasksToCompleteOnShutdown=true, which puts
++  # every pool on the lateShutdown path: stop() becomes a no-op, so the pools consume none of this
++  # phase's timeout and their blocking await happens later, in destroy(), during ordinary bean
++  # destruction -- outside this timeout entirely. The full derivation and the per-pool budget live in
++  # infrastructure.threadpool.ExecutorShutdown; the only real bound is docker-compose stop_grace_period.
+   shutdown: graceful
+   error:
+     whitelabel:
+@@ -42,7 +46,7 @@ quartz:
+ spring:
+   # skillars-deferred-92 AC3.2. Bounds the SmartLifecycle stop phases, of which the only meaningful
+   # one here is server.shutdown=graceful's in-flight HTTP drain. Pinned rather than left at Spring's
+-  # 30s default because 30s alone would consume two thirds of docker-compose's stop_grace_period
++  # 30s default because 30s alone would consume over half of docker-compose's stop_grace_period
+   # before bean destruction -- where the executor awaits actually live -- had begun.
+   lifecycle:
+     timeout-per-shutdown-phase: 8s
+diff --git a/src/test/java/com/softropic/skillars/infrastructure/threadpool/AsyncExecutorQualifierTest.java b/src/test/java/com/softropic/skillars/infrastructure/threadpool/AsyncExecutorQualifierTest.java
+index a689ac8..18598a8 100644
+--- a/src/test/java/com/softropic/skillars/infrastructure/threadpool/AsyncExecutorQualifierTest.java
++++ b/src/test/java/com/softropic/skillars/infrastructure/threadpool/AsyncExecutorQualifierTest.java
+@@ -39,13 +39,18 @@ import static org.assertj.core.api.Assertions.assertThat;
+  * {@code @Async} in the application, possibly onto {@code SimpleAsyncTaskExecutor}, at which point
+  * the ledger's original claim would finally become true. Nothing anywhere would have said so.
+  *
+- * <p>All 11 bare sites now carry {@code @Async("taskExecutor")} (the story said 10; its own
+- * enumeration totals 11 — {@code VideoSseService} ×2, {@code TimelineEventListener} ×2,
++ * <p>All 11 bare sites now name their pool (the story said 10; its own enumeration totals 11 —
++ * {@code VideoSseService} ×2, {@code TimelineEventListener} ×2,
+  * {@code VideoPhysicalDeletionListener} ×2, plus {@code SluCalculationService},
+  * {@code RadarCompositeCalculationService}, {@code ReportGenerationService},
+  * {@code HomeworkAssignmentService} and {@code SessionPlanService}). All of them, not a subset:
+  * a partial fix would leave the fallback load-bearing while looking as though it were not.
+  *
++ * <p>Nine of those name {@code taskExecutor}; {@code ReportGenerationService} and
++ * {@code RadarCompositeCalculationService} name {@code reportExecutor} instead — this story's code
++ * review (D2) found the shared pool's 2-second shutdown slice incompatible with an S3 upload that
++ * has no retry behind it. See {@code ExecutorShutdown.REPORT_SECONDS}.
++ *
+  * <p>This test then pins two things: no bare {@code @Async} comes back, and no {@code @Async} names
+  * a pool that does not exist. The second matters because a typo'd qualifier is worse than no
+  * qualifier — Spring throws at invocation time, on a background thread, where
+@@ -60,8 +65,13 @@ class AsyncExecutorQualifierTest {
+      * added here, a qualifier pointing at it fails this test and the two lists are forced back
+      * together.
+      */
+-    private static final Set<String> KNOWN_POOLS =
+-        Set.of("taskExecutor", "outboxDrainPool", "sluRetryExecutor", "moderationTaskExecutor", "sendMailPool");
++    private static final Set<String> KNOWN_POOLS = Set.of(
++        "taskExecutor", "outboxDrainPool", "sluRetryExecutor", "moderationTaskExecutor", "sendMailPool",
++        // skillars-deferred-92 code review D2. This test is what forced the addition: re-pointing the
++        // two development-module listeners at a new pool failed everyQualifierNamesAKnownPool until
++        // the pool was declared here as well, which is exactly the coupling the field's javadoc asks
++        // for.
++        "reportExecutor");
+ 
+     private record AsyncSite(String type, String method, String qualifier) {
+         @Override
+diff --git a/src/test/java/com/softropic/skillars/infrastructure/threadpool/ExecutorShutdownConfigurationTest.java b/src/test/java/com/softropic/skillars/infrastructure/threadpool/ExecutorShutdownConfigurationTest.java
+index 12579a0..8ff3f8d 100644
+--- a/src/test/java/com/softropic/skillars/infrastructure/threadpool/ExecutorShutdownConfigurationTest.java
++++ b/src/test/java/com/softropic/skillars/infrastructure/threadpool/ExecutorShutdownConfigurationTest.java
+@@ -74,6 +74,7 @@ class ExecutorShutdownConfigurationTest {
+                 .threadPoolTaskExecutor());
+         pools.put("taskExecutor",
+             new com.softropic.skillars.infrastructure.config.AsyncConfig().taskExecutor());
++        pools.put("reportExecutor", new DevelopmentConfig(null).reportExecutor());
+         return pools;
+     }
+ 
+@@ -82,7 +83,8 @@ class ExecutorShutdownConfigurationTest {
+         "sluRetryExecutor", ExecutorShutdown.SLU_RETRY_SECONDS,
+         "moderationTaskExecutor", ExecutorShutdown.MODERATION_SECONDS,
+         "sendMailPool", ExecutorShutdown.SEND_MAIL_SECONDS,
+-        "taskExecutor", ExecutorShutdown.SHARED_ASYNC_SECONDS);
++        "taskExecutor", ExecutorShutdown.SHARED_ASYNC_SECONDS,
++        "reportExecutor", ExecutorShutdown.REPORT_SECONDS);
+ 
+     private static Object field(Object target, String name) {
+         Field f = ReflectionUtils.findField(target.getClass(), name);
+@@ -92,7 +94,7 @@ class ExecutorShutdownConfigurationTest {
+     }
+ 
+     @Test
+-    @DisplayName("all five pools wait for queued tasks and have a bounded await")
++    @DisplayName("all six ThreadPoolTaskExecutor pools wait for queued tasks and have a bounded await")
+     void everyPoolDrainsOnShutdown() {
+         pools().forEach((name, pool) -> {
+             assertThat(field(pool, "waitForTasksToCompleteOnShutdown"))
+@@ -185,6 +187,10 @@ class ExecutorShutdownConfigurationTest {
+                 // by @ConditionalOnProperty. It has no threads and nothing to drain.
+                 "OutboxConfig#outboxDrainPoolSynchronous",
+                 "DevelopmentConfig#sluRetryExecutor",
++                // skillars-deferred-92 code review D2. Report/radar generation used to sit on the
++                // shared taskExecutor and its 2s slice while doing an S3 upload with no retry behind
++                // it; ExecutorShutdown.REPORT_SECONDS documents why it has its own 8s slice instead.
++                "DevelopmentConfig#reportExecutor",
+                 "AsyncConfig#moderationTaskExecutor",
+                 "AsyncConfig#threadPoolTaskExecutor",
+                 "AsyncConfig#taskExecutor",
+@@ -231,4 +237,40 @@ class ExecutorShutdownConfigurationTest {
+             .isTrue();
+         assertThat(pool.isTerminated()).isTrue();
+     }
++
++    /**
++     * skillars-deferred-92 code review. The bounded wait used to be the whole of {@code shutdown()}:
++     * a task that outlived the budget was logged about and then left running. These are non-daemon
++     * threads, so on any context close that is not a JVM exit they carried on against a torn-down
++     * context. {@code shutdown()} must now interrupt them.
++     *
++     * <p>Load-bearing by construction: the task sleeps far longer than the 1-second budget, so
++     * without the {@code shutdownNow()} this assertion sees a pool that is still not terminated.
++     */
++    @Test
++    @DisplayName("shutdown() interrupts tasks that outlive the pool's budget")
++    void gracefulFixedPool_forcesTerminationAfterItsBudget() throws Exception {
++        ExecutorService pool = ExecutorShutdown.gracefulFixedPool(1, 4, "test-overrun-", 1);
++        CountDownLatch started = new CountDownLatch(1);
++        AtomicBoolean interrupted = new AtomicBoolean(false);
++
++        pool.submit(() -> {
++            started.countDown();
++            try {
++                Thread.sleep(30_000);
++            } catch (InterruptedException e) {
++                Thread.currentThread().interrupt();
++                interrupted.set(true);
++            }
++        });
++        assertThat(started.await(5, TimeUnit.SECONDS)).as("task must have started").isTrue();
++
++        pool.shutdown();
++
++        assertThat(pool.isTerminated())
++            .as("after its bounded wait expires, shutdown() must shutdownNow() rather than leave "
++                + "non-daemon workers running against a torn-down context")
++            .isTrue();
++        assertThat(interrupted).as("the overrunning task must have been interrupted").isTrue();
++    }
+ }
+diff --git a/src/test/java/com/softropic/skillars/platform/booking/service/BookingReminderSchedulerTest.java b/src/test/java/com/softropic/skillars/platform/booking/service/BookingReminderSchedulerTest.java
+index 85a17ab..1e62c66 100644
+--- a/src/test/java/com/softropic/skillars/platform/booking/service/BookingReminderSchedulerTest.java
++++ b/src/test/java/com/softropic/skillars/platform/booking/service/BookingReminderSchedulerTest.java
+@@ -15,6 +15,9 @@ import org.mockito.ArgumentCaptor;
+ import org.mockito.Mock;
+ import org.mockito.junit.jupiter.MockitoExtension;
+ import org.springframework.context.ApplicationEventPublisher;
++import org.springframework.transaction.PlatformTransactionManager;
++import org.springframework.transaction.support.SimpleTransactionStatus;
++import org.springframework.transaction.support.TransactionTemplate;
+ 
+ import java.time.Instant;
+ import java.util.List;
+@@ -41,13 +44,19 @@ class BookingReminderSchedulerTest {
+     @Mock ConfigService configService;
+     @Mock CoachProfileRepository coachProfileRepository;
+     @Mock UserRepository userRepository;
++    // skillars-deferred-92 code review: the scheduler no longer carries a method-level
++    // @Transactional; each booking is processed in its own TransactionTemplate scope. A real
++    // template over a stub manager keeps that structure visible here rather than mocking it away.
++    @Mock PlatformTransactionManager transactionManager;
+ 
+     private BookingReminderScheduler scheduler;
+ 
+     @BeforeEach
+     void setUp() {
++        lenient().when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+         scheduler = new BookingReminderScheduler(bookingRepository, bookingService, eventPublisher,
+-                configService, coachProfileRepository, userRepository);
++                configService, coachProfileRepository, userRepository,
++                new TransactionTemplate(transactionManager));
+         lenient().when(configService.getBoundedLong(eq("platform.reminder_interval_primary_hours"), anyLong(), anyLong(), anyLong())).thenReturn(24L);
+         lenient().when(configService.getBoundedLong(eq("platform.reminder_interval_secondary_hours"), anyLong(), anyLong(), anyLong())).thenReturn(2L);
+     }
+@@ -67,6 +76,8 @@ class BookingReminderSchedulerTest {
+         Booking booking = buildBooking();
+         when(bookingRepository.findConfirmedForUpcomingTransition(any())).thenReturn(List.of(booking));
+         when(bookingRepository.findUpcomingWithin2hWindow(any(), any())).thenReturn(List.of());
++        // Re-read inside the per-booking transaction rather than reusing the selected instance.
++        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.empty());
+         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
+ 
+@@ -86,6 +97,7 @@ class BookingReminderSchedulerTest {
+         parent.setEmail("parent@example.com");
+         when(bookingRepository.findConfirmedForUpcomingTransition(any())).thenReturn(List.of(booking));
+         when(bookingRepository.findUpcomingWithin2hWindow(any(), any())).thenReturn(List.of());
++        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.empty());
+         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(parent));
+ 
+diff --git a/src/test/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingReminderEmailWiringIT.java b/src/test/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingReminderEmailWiringIT.java
+index c844b71..45ce3f0 100644
+--- a/src/test/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingReminderEmailWiringIT.java
++++ b/src/test/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingReminderEmailWiringIT.java
+@@ -2,6 +2,9 @@ package com.softropic.skillars.platform.notification.infrastructure.listener;
+ 
+ import com.softropic.skillars.config.AbstractIntegrationTest;
+ import com.softropic.skillars.platform.booking.contract.BookingReminderEvent;
++import com.softropic.skillars.platform.booking.repo.Booking;
++import com.softropic.skillars.platform.booking.repo.BookingRepository;
++import com.softropic.skillars.platform.booking.service.BookingReminderScheduler;
+ import com.softropic.skillars.platform.notification.contract.EmailTemplate;
+ import com.softropic.skillars.platform.notification.contract.Envelope;
+ import com.softropic.skillars.platform.notification.service.NotificationOutboxSupport;
+@@ -16,6 +19,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
+ import org.springframework.transaction.support.TransactionSynchronizationManager;
+ import org.springframework.transaction.support.TransactionTemplate;
+ 
++import java.sql.Timestamp;
+ import java.time.Instant;
+ import java.util.List;
+ import java.util.UUID;
+@@ -59,6 +63,8 @@ class BookingReminderEmailWiringIT extends AbstractIntegrationTest {
+     @Autowired private TransactionTemplate transactionTemplate;
+     @Autowired private JdbcTemplate jdbcTemplate;
+     @Autowired private TestMailManager testMailManager;
++    @Autowired private BookingReminderScheduler bookingReminderScheduler;
++    @Autowired private BookingRepository bookingRepository;
+ 
+     private final String parentEmail = "ac29.parent." + UUID.randomUUID() + "@skillars-test.com";
+     private final String coachEmail = "ac29.coach." + UUID.randomUUID() + "@skillars-test.com";
+@@ -144,4 +150,86 @@ class BookingReminderEmailWiringIT extends AbstractIntegrationTest {
+             .as("and nothing may have been sent")
+             .noneMatch(e -> e.emailTemplate() == EmailTemplate.BOOKING_REMINDER);
+     }
++
++    /**
++     * skillars-deferred-92 code review. The two tests above publish {@code BookingReminderEvent}
++     * themselves, which proves the listener is wired but says nothing about the only thing that
++     * publishes it in production. This drives {@code BookingReminderScheduler.processReminderWindows}
++     * against a real seeded booking, so the assertion covers the chain the feature actually uses:
++     * query, per-booking transaction, {@code transition}, stamp, publish, BEFORE_COMMIT enqueue,
++     * drain, send.
++     *
++     * <p>It also pins the per-booking transaction boundary the review asked for. The stamp and the
++     * status transition are visible here only because this booking's own transaction committed;
++     * under the batch-wide {@code @Transactional} this method used to carry, they committed with
++     * every other booking's or with none.
++     */
++    @Test
++    @DisplayName("the scheduler transitions a real booking, stamps it, and delivers its reminder")
++    void processReminderWindows_drivesTheWholeChainForARealBooking() {
++        testMailManager.clear();
++        long parentId = 92_000_000L + Math.abs(UUID.randomUUID().getLeastSignificantBits() % 1_000_000L);
++        insertParent(parentId, parentEmail);
++
++        UUID bookingId = insertConfirmedBooking(parentId, Instant.now().plusSeconds(3600));
++        releaseSchedulerLock("BookingReminderScheduler_remind");
++
++        bookingReminderScheduler.processReminderWindows();
++
++        Booking booking = bookingRepository.findById(bookingId).orElseThrow();
++        assertThat(booking.getStatus())
++            .as("the primary pass transitions CONFIRMED bookings inside the reminder window")
++            .isEqualTo("UPCOMING");
++        assertThat(booking.getPrimaryReminderSentAt())
++            .as("the stamp must have COMMITTED with this booking's own transaction; null means "
++                + "either the transition threw or that transaction rolled back, which the "
++                + "batch-wide @Transactional used to make indistinguishable from a batch failure")
++            .isNotNull();
++
++        List<Envelope> reminders = testMailManager.getEnvelopes().values().stream()
++            .filter(e -> e.emailTemplate() == EmailTemplate.BOOKING_REMINDER)
++            .filter(e -> e.recipients().stream().anyMatch(r -> parentEmail.equals(r.getEmail())))
++            .toList();
++        assertThat(reminders)
++            .as("the scheduler is the only production publisher of BookingReminderEvent; empty here "
++                + "while the two tests above pass means the listener is wired but nothing reaches "
++                + "it, which is a subtler shape of the AC29 bug rather than a different one")
++            .hasSize(1);
++        assertThat(reminders.get(0).data()).containsEntry("reminderType", "PRIMARY");
++    }
++
++    /**
++     * bookings.parent_id/player_id/coach_id carry no FK constraints, so this needs no coach or
++     * player fixture. A fresh random coach id keeps the row clear of V87's
++     * {@code excl_bkg_coach_slot_overlap} exclusion constraint.
++     */
++    private UUID insertConfirmedBooking(long parentId, Instant startTime) {
++        Booking booking = new Booking();
++        booking.setParentId(parentId);
++        booking.setPlayerId(parentId);
++        booking.setCoachId(UUID.randomUUID());
++        booking.setRequestedStartTime(startTime);
++        booking.setRequestedEndTime(startTime.plusSeconds(3600));
++        booking.setCanonicalTimezone("Europe/Berlin");
++        booking.setStatus("CONFIRMED");
++        return transactionTemplate.execute(s -> bookingRepository.save(booking)).getId();
++    }
++
++    /**
++     * The reminder's parent recipient. Without a real row {@code resolveEmail} yields "" and the
++     * listener filters that recipient out, so the test would pass for the wrong reason.
++     */
++    private void insertParent(long id, String email) {
++        transactionTemplate.executeWithoutResult(s -> jdbcTemplate.update(
++            "INSERT INTO main.\"user\" "
++                + "(id, created_by, created_date, last_modified_by, last_modified_date, request_id, "
++                + "session_id, status, dob, email, first_name, gender, lang_key, last_name, "
++                + "iso2_country, phone, activated, locked, login, login_id_type, password_hash, "
++                + "otp_enabled, skillars_role, verification_status) "
++                + "VALUES (?, 'system', ?, 'system', ?, 'test-req', NULL, "
++                + "'ACTIVE', '1990-01-01', ?, 'Test', 'OTHER', 'en', 'Parent', 'DE', ?, "
++                + "true, false, ?, 'EMAIL', 'x', false, 'PARENT', 'BASIC_VERIFIED')",
++            id, Timestamp.from(Instant.now()), Timestamp.from(Instant.now()),
++            email, "69" + (id % 100000000L), email));
++    }
+ }
+diff --git a/src/test/java/com/softropic/skillars/platform/outbox/ModerationOutboxIT.java b/src/test/java/com/softropic/skillars/platform/outbox/ModerationOutboxIT.java
+index b66afc3..307cb1b 100644
+--- a/src/test/java/com/softropic/skillars/platform/outbox/ModerationOutboxIT.java
++++ b/src/test/java/com/softropic/skillars/platform/outbox/ModerationOutboxIT.java
+@@ -1,11 +1,14 @@
+ package com.softropic.skillars.platform.outbox;
+ 
+ import com.softropic.skillars.config.AbstractIntegrationTest;
+-import com.softropic.skillars.platform.outbox.service.OutboxService;
+-import com.softropic.skillars.platform.video.contract.event.VideoModerationAdminAlertEvent;
++import com.softropic.skillars.platform.config.service.ConfigService;
++import com.softropic.skillars.platform.notification.contract.EmailTemplate;
++import com.softropic.skillars.platform.notification.contract.Envelope;
+ import com.softropic.skillars.platform.video.contract.event.VideoModerationRetryEvent;
+ import com.softropic.skillars.platform.video.service.ModerationOutboxSupport;
++import com.softropic.skillars.utils.TestMailManager;
+ 
++import org.junit.jupiter.api.AfterEach;
+ import org.junit.jupiter.api.BeforeEach;
+ import org.junit.jupiter.api.DisplayName;
+ import org.junit.jupiter.api.Test;
+@@ -39,13 +42,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
+  */
+ class ModerationOutboxIT extends AbstractIntegrationTest {
+ 
++    private static final String ADMIN_ALERT_EMAIL_KEY = "platform.admin_alert_email";
++
+     @Autowired private ModerationOutboxSupport moderationOutboxSupport;
+-    @Autowired private OutboxService outboxService;
+     @Autowired private TransactionTemplate transactionTemplate;
+     @Autowired private JdbcTemplate jdbcTemplate;
+     @Autowired private ConfigurableApplicationContext applicationContext;
++    @Autowired private ConfigService configService;
++    @Autowired private TestMailManager testMailManager;
+ 
+     private final UUID videoId = UUID.randomUUID();
++    private final String adminEmail = "ac5.admin." + UUID.randomUUID() + "@skillars-test.com";
+     private final List<Object> captured = new CopyOnWriteArrayList<>();
+ 
+     @BeforeEach
+@@ -58,47 +65,87 @@ class ModerationOutboxIT extends AbstractIntegrationTest {
+             ModerationOutboxSupport.ADMIN_ALERT_AGGREGATE_TYPE, videoId.toString()));
+ 
+         captured.clear();
++        testMailManager.clear();
++        // The alert handler now delivers through MailManager rather than re-publishing an event
++        // (code review D1), and VideoModerationEmailListener suppresses a send when this key is
++        // blank — which is its shipped default. Set it for the duration of the test, restored below.
++        configService.updateConfig(ADMIN_ALERT_EMAIL_KEY, adminEmail);
++
+         // Registered on the live context rather than mocked, so this exercises the same dispatch the
+-        // handlers use in production. Filtered by this test's own video id so a concurrently running
+-        // IT's events cannot leak in.
++        // retry handler uses in production. Filtered by this test's own video id so a concurrently
++        // running IT's events cannot leak in.
+         applicationContext.addApplicationListener(
+             (ApplicationListener<PayloadApplicationEvent<Object>>) event -> {
+                 Object payload = event.getPayload();
+                 if (payload instanceof VideoModerationRetryEvent r && videoId.equals(r.videoId())) {
+                     captured.add(r);
+-                } else if (payload instanceof VideoModerationAdminAlertEvent a && videoId.equals(a.videoId())) {
+-                    captured.add(a);
+                 }
+             });
+     }
+ 
++    @AfterEach
++    void restoreAdminAlertEmail() {
++        // Blank is the shipped default (V57). Other ITs share this context and its config cache.
++        configService.updateConfig(ADMIN_ALERT_EMAIL_KEY, "");
++    }
++
+     private long myRows(String aggregateType) {
+         return jdbcTemplate.queryForObject(
+             "SELECT COUNT(*) FROM main.outbox_messages WHERE aggregate_type = ? AND payload->>'videoId' = ?",
+             Long.class, aggregateType, videoId.toString());
+     }
+ 
++    /**
++     * The assertion is on a <em>send</em>, not on a re-published event (code review D1). Dispatching
++     * an event and returning is what let the drain delete the row before anything had been delivered;
++     * the property worth pinning is that {@code handle()} does not return until the alert has actually
++     * gone through {@code MailManager}.
++     */
+     @Test
+-    @DisplayName("an enqueued admin alert survives its transaction and is dispatched by the drain")
++    @DisplayName("an enqueued admin alert survives its transaction and is delivered by the drain")
+     void adminAlert_roundTripsThroughTheOutbox() {
+         transactionTemplate.executeWithoutResult(s -> moderationOutboxSupport.enqueueAdminAlert(
+             videoId, "owner@example.com", "Moderation pipeline permanently failed",
+             "videoId=" + videoId + " retries=5 — manual review required", true));
+ 
+-        assertThat(captured)
+-            .as("the drain must have re-dispatched the alert after the producing transaction committed")
+-            .hasSize(1)
+-            .first()
+-            .isInstanceOfSatisfying(VideoModerationAdminAlertEvent.class, a -> {
+-                assertThat(a.urgent()).isTrue();
+-                assertThat(a.subject()).isEqualTo("Moderation pipeline permanently failed");
+-                assertThat(a.ownerId()).isEqualTo("owner@example.com");
+-            });
++        List<Envelope> alerts = testMailManager.getEnvelopes().values().stream()
++            .filter(e -> e.emailTemplate() == EmailTemplate.VIDEO_MODERATION_ADMIN_ALERT)
++            .filter(e -> e.recipients().stream().anyMatch(r -> adminEmail.equals(r.getEmail())))
++            .toList();
++
++        assertThat(alerts)
++            .as("the drain must have DELIVERED the alert, synchronously, before releasing the row")
++            .hasSize(1);
++        assertThat(alerts.get(0).data())
++            .containsEntry("subject", "Moderation pipeline permanently failed")
++            .containsEntry("ownerId", "owner@example.com")
++            .containsEntry("urgent", true)
++            .containsEntry("videoId", videoId.toString());
+         assertThat(myRows(ModerationOutboxSupport.ADMIN_ALERT_AGGREGATE_TYPE))
+             .as("a successfully handled row is deleted")
+             .isZero();
+     }
+ 
++    /**
++     * The hole D1 closed, pinned: with {@code platform.admin_alert_email} unset the alert cannot be
++     * delivered, and that must still <em>complete</em> the row rather than leave an immortal one — no
++     * number of re-drives fixes a missing config key.
++     */
++    @Test
++    @DisplayName("an alert that cannot be delivered at all still releases its row")
++    void adminAlertWithNoConfiguredRecipient_completesRatherThanSticking() {
++        configService.updateConfig(ADMIN_ALERT_EMAIL_KEY, "");
++
++        transactionTemplate.executeWithoutResult(s -> moderationOutboxSupport.enqueueAdminAlert(
++            videoId, "owner@example.com", "Moderation pipeline permanently failed",
++            "videoId=" + videoId, true));
++
++        assertThat(testMailManager.getEnvelopes().values())
++            .as("nothing may be sent when there is no recipient configured")
++            .noneMatch(e -> e.emailTemplate() == EmailTemplate.VIDEO_MODERATION_ADMIN_ALERT);
++        assertThat(myRows(ModerationOutboxSupport.ADMIN_ALERT_AGGREGATE_TYPE)).isZero();
++    }
++
+     /**
+      * AC5.2's idempotence, end to end rather than against a mock: this test's video id does not exist
+      * in {@code video.videos} at all, which is the "deleted since the SLA cycle" case. The row must
+@@ -144,9 +191,8 @@ class ModerationOutboxIT extends AbstractIntegrationTest {
+         }
+ 
+         assertThat(myRows(ModerationOutboxSupport.RETRY_AGGREGATE_TYPE)).isZero();
+-        assertThat(captured).isEmpty();
+         // Guards against the row having been drained rather than rolled back: a drain would also
+         // leave zero rows, but it would have dispatched an event, which `captured` would show.
+-        assertThat(outboxService).isNotNull();
++        assertThat(captured).isEmpty();
+     }
+ }
+diff --git a/src/test/java/com/softropic/skillars/platform/scheduler/SchedulerLockTransactionOrderingIT.java b/src/test/java/com/softropic/skillars/platform/scheduler/SchedulerLockTransactionOrderingIT.java
+index d805fd5..abab851 100644
+--- a/src/test/java/com/softropic/skillars/platform/scheduler/SchedulerLockTransactionOrderingIT.java
++++ b/src/test/java/com/softropic/skillars/platform/scheduler/SchedulerLockTransactionOrderingIT.java
+@@ -23,15 +23,20 @@ import static org.assertj.core.api.Assertions.assertThat;
+  * skillars-deferred-89 AC4 — a regression guard on an advisor order that is ALREADY pinned in
+  * production; no production code changes with this story.
+  *
+- * <p>{@code BookingExpiryScheduler.expireStaleRequests}, {@code BookingReminderScheduler
+- * .processReminderWindows} and {@code BandwidthResetService.resetMonthlyBandwidth} each stack
+- * {@code @SchedulerLock} and {@code @Transactional} on one method. {@code AsyncConfig}'s
++ * <p>{@code BookingExpiryScheduler.expireStaleRequests} stacks {@code @SchedulerLock} and
++ * {@code @Transactional} on one method. {@code AsyncConfig}'s
+  * {@code @EnableSchedulerLock(order = Ordered.LOWEST_PRECEDENCE - 100)} forces the ShedLock advisor
+  * to higher precedence than the (bare, {@code LOWEST_PRECEDENCE}) transaction advisor from
+  * {@code DataSourceConfig}'s {@code @EnableTransactionManagement} — so ShedLock sits <em>outermost</em>
+  * and {@code proceed()} runs the DB transaction to commit/rollback <em>before</em> the lock is
+  * released. Shipped {@code 7e697d4} (2026-07-02).
+  *
++ * <p>Its two former siblings — {@code BookingReminderScheduler.processReminderWindows} and
++ * {@code BandwidthResetService.resetMonthlyBandwidth} — have since moved to per-item
++ * {@code TransactionTemplate} scopes and must NOT carry a method-level {@code @Transactional} any
++ * more. For those, the property worth pinning is the <em>absence</em> of the annotation; see the two
++ * tests below.
++ *
+  * <p>Three assertions per scheduler bean, so the guard cannot stay green through the regression it
+  * exists to catch (code review P7):
+  * <ol>
+@@ -61,9 +66,30 @@ class SchedulerLockTransactionOrderingIT extends AbstractIntegrationTest {
+         assertShedLockOutermost(bookingExpiryScheduler, "expireStaleRequests");
+     }
+ 
++    /**
++     * skillars-deferred-92's code review changed this bean's shape, so the assertion changed with it.
++     *
++     * <p>{@code processReminderWindows} no longer stacks {@code @Transactional} — it must not.
++     * {@code BookingEmailListener.onBookingReminder} is
++     * {@code @TransactionalEventListener(BEFORE_COMMIT)}, so under one batch-wide transaction every
++     * booking's outbox enqueue ran at the batch's commit, outside every per-iteration
++     * {@code catch}: one failing enqueue rolled back the whole batch — all the transitions, all the
++     * {@code *ReminderSentAt} stamps, every other booking's reminder — and because the next run
++     * re-selects the same bookings, a deterministic failure meant no reminder was ever sent again.
++     * Each booking now commits in its own {@code TransactionTemplate} scope.
++     *
++     * <p>Pinned as an absence for the same reason as {@code BandwidthResetService} below: re-adding
++     * {@code @Transactional} looks like tidying up next to its annotated sibling, and nothing else
++     * would notice.
++     */
+     @Test
+-    void bookingReminderScheduler_shedLockAdvisorIsOutsideTheTransactionAdvisor() {
+-        assertShedLockOutermost(bookingReminderScheduler, "processReminderWindows");
++    void bookingReminderScheduler_isNotTransactional_soOneBadEnqueueCannotRollBackTheBatch() {
++        assertNotTransactional(bookingReminderScheduler, "processReminderWindows", """
++            BookingReminderScheduler.processReminderWindows must NOT be @Transactional \
++            (skillars-deferred-92 code review). Its BEFORE_COMMIT enqueue listener runs at the \
++            enclosing transaction's commit, so a batch-wide transaction turns one failed enqueue \
++            into a full-batch rollback and, if the failure is deterministic, a permanent stall. The \
++            transaction boundary belongs to the per-booking TransactionTemplate scope.""");
+     }
+ 
+     /**
+@@ -75,36 +101,44 @@ class SchedulerLockTransactionOrderingIT extends AbstractIntegrationTest {
+      * {@code UPDATE} it replaced, held for longer, which is strictly worse than doing nothing. The
+      * per-chunk boundary lives in {@code BandwidthResetChunkProcessor}.
+      *
+-     * <p>So the advisor-ordering question no longer applies here (the other two beans still pin it).
+-     * What is worth pinning instead is the <em>absence</em> of {@code @Transactional}, because it is
+-     * exactly the kind of thing a later reader re-adds while tidying up — it looks like an oversight
+-     * next to its two annotated siblings, and nothing else would notice.
++     * <p>So the advisor-ordering question no longer applies here ({@code BookingExpiryScheduler}
++     * still pins it). What is worth pinning instead is the <em>absence</em> of
++     * {@code @Transactional}, because it is exactly the kind of thing a later reader re-adds while
++     * tidying up — it looks like an oversight next to its annotated sibling, and nothing else would
++     * notice.
+      */
+     @Test
+     void bandwidthResetService_isNotTransactional_soChunksCommitIndependently() {
+-        Class<?> target = AopUtils.getTargetClass(bandwidthResetService);
++        assertNotTransactional(bandwidthResetService, "resetMonthlyBandwidth", """
++            BandwidthResetService.resetMonthlyBandwidth must NOT be @Transactional \
++            (skillars-deferred-92 AC9.2). It drives a chunked loop; one enclosing transaction \
++            would hold every row lock until the end and block QuotaService.reserve() for the whole \
++            run — worse than the single UPDATE the chunking replaced. The transaction boundary \
++            belongs to BandwidthResetChunkProcessor.resetChunk(), one per chunk.""");
++    }
++
++    /**
++     * Asserts a scheduled method carries no {@code @Transactional} (method- or type-level) while
++     * keeping its {@code @SchedulerLock} — dropping the lock alongside the transaction would let a
++     * second node run the job concurrently, which none of these beans tolerate.
++     */
++    private static void assertNotTransactional(Object bean, String scheduledMethodName, String why) {
++        Class<?> target = AopUtils.getTargetClass(bean);
+         Method scheduled = Arrays.stream(target.getMethods())
+-            .filter(m -> m.getName().equals("resetMonthlyBandwidth"))
++            .filter(m -> m.getName().equals(scheduledMethodName))
+             .findFirst()
+-            .orElseThrow();
++            .orElseThrow(() -> new AssertionError(
++                "no method %s on %s".formatted(scheduledMethodName, target)));
+ 
+         assertThat(scheduled.getAnnotation(org.springframework.transaction.annotation.Transactional.class))
+-            .as("""
+-                BandwidthResetService.resetMonthlyBandwidth must NOT be @Transactional \
+-                (skillars-deferred-92 AC9.2). It drives a chunked loop; one enclosing transaction \
+-                would hold every row lock until the end and block QuotaService.reserve() for the whole \
+-                run — worse than the single UPDATE the chunking replaced. The transaction boundary \
+-                belongs to BandwidthResetChunkProcessor.resetChunk(), one per chunk.""")
++            .as(why)
+             .isNull();
+         assertThat(target.getAnnotation(org.springframework.transaction.annotation.Transactional.class))
+-            .as("nor may the class carry a type-level @Transactional")
++            .as("nor may %s carry a type-level @Transactional", target.getSimpleName())
+             .isNull();
+-
+-        assertThat(Arrays.stream(target.getMethods())
+-                .anyMatch(m -> m.getName().equals("resetMonthlyBandwidth")
+-                            && m.getAnnotation(net.javacrumbs.shedlock.spring.annotation.SchedulerLock.class) != null))
+-            .as("@SchedulerLock must stay — a second node running a concurrent reset is still wrong")
+-            .isTrue();
++        assertThat(scheduled.getAnnotation(net.javacrumbs.shedlock.spring.annotation.SchedulerLock.class))
++            .as("@SchedulerLock must stay — a second node running this job concurrently is still wrong")
++            .isNotNull();
+     }
+ 
+     private static void assertShedLockOutermost(Object bean, String scheduledMethodName) {
+diff --git a/src/main/java/com/softropic/skillars/platform/video/contract/ModerationAdminAlertSender.java b/src/main/java/com/softropic/skillars/platform/video/contract/ModerationAdminAlertSender.java
+new file mode 100644
+index 0000000..d8f0cff
+--- /dev/null
++++ b/src/main/java/com/softropic/skillars/platform/video/contract/ModerationAdminAlertSender.java
+@@ -0,0 +1,39 @@
++package com.softropic.skillars.platform.video.contract;
++
++import com.softropic.skillars.platform.video.contract.event.VideoModerationAdminAlertEvent;
++
++/**
++ * Synchronous delivery of a moderation admin alert, for callers that must know whether the send
++ * actually succeeded (skillars-deferred-92 code review, decision D1).
++ *
++ * <p>The ordinary path for this alert is fire-and-forget: {@code ModerationOrchestrationService}
++ * publishes a {@link VideoModerationAdminAlertEvent}, {@code VideoModerationEmailListener} turns it
++ * into an {@code Envelope}, and {@code MailManager.sendEmailFromTemplate} sends it
++ * {@code @Async} + {@code AFTER_COMMIT}. That is fine when nothing is waiting on the outcome.
++ *
++ * <p>It is <em>not</em> fine on the outbox drain. {@code ModerationAdminAlertOutboxHandler} holds a
++ * durable row whose whole purpose is "this alert has not been delivered yet", and the outbox deletes
++ * that row the moment {@code handle()} returns normally. Re-publishing the event returns normally
++ * before anything has been sent, so an SMTP failure minutes later marked an envelope {@code FAILED}
++ * against a row that no longer existed: no {@code attempts++}, no backoff, no {@code [OUTBOX_STUCK]}.
++ * The handler needs delivery to have either happened or thrown by the time it returns, which is what
++ * this interface promises.
++ *
++ * <p>Declared in {@code platform.video.contract} and implemented in {@code platform.notification} so
++ * the dependency runs the same direction as every other cross-module link here — video owns the
++ * contract, notification owns the mail.
++ */
++public interface ModerationAdminAlertSender {
++
++    /**
++     * Sends the alert on the calling thread and reports the outcome by throwing or not throwing.
++     *
++     * @throws RuntimeException if the send failed in a way a later attempt could still fix, so the
++     *                          caller's outbox row is retained, backed off and retried. A permanently
++     *                          undeliverable alert (or one suppressed because
++     *                          {@code platform.admin_alert_email} is unset) is logged at ERROR and
++     *                          returns normally — no re-drive can improve on it, and an immortal row
++     *                          would consume a claim slot forever.
++     */
++    void sendAdminAlertSync(VideoModerationAdminAlertEvent event);
++}

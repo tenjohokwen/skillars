@@ -32,7 +32,7 @@ public class TimelineEventListener {
     private TimelineEventListener self;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    @Async
+    @Async("taskExecutor")
     public void onBookingCompleted(BookingCompletedEvent event) {
         try {
             self.writeTimelineEvent(
@@ -48,7 +48,7 @@ public class TimelineEventListener {
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    @Async
+    @Async("taskExecutor")
     public void onRadarEntrySubmitted(RadarEntrySubmittedEvent event) {
         try {
             self.writeTimelineEvent(

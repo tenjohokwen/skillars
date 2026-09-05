@@ -5,13 +5,18 @@
     </div>
 
     <div v-if="perSessionPrice != null" class="pack-row">
-      <span class="pack-label">{{ t('marketplace.perSessionFrom', { price: formatPrice(perSessionPrice) }) }}</span>
+      <span class="pack-label">{{
+        t('marketplace.perSessionFrom', { price: formatPrice(perSessionPrice) })
+      }}</span>
     </div>
 
     <div v-for="pack in sessionPacks" :key="pack.sessionCount" class="pack-row">
       <span class="pack-label">{{ packLabel(pack) }}</span>
       <span class="pack-price">{{ formatPrice(pack.totalPrice) }}</span>
-      <span v-if="perSessionPrice != null && pack.sessionCount > 1 && savings(pack)" class="pack-saving text-caption">
+      <span
+        v-if="perSessionPrice != null && pack.sessionCount > 1 && savings(pack)"
+        class="pack-saving text-caption"
+      >
         {{ savings(pack) }}
       </span>
     </div>
@@ -30,12 +35,13 @@ const props = defineProps({
 
 const { t, locale } = useI18n()
 
-const hasContent = computed(
-  () => props.sessionPacks.length > 0 || props.perSessionPrice != null,
-)
+const hasContent = computed(() => props.sessionPacks.length > 0 || props.perSessionPrice != null)
 
 function formatPrice(value) {
-  return new Intl.NumberFormat(locale.value, { style: 'currency', currency: props.currency }).format(Number(value))
+  return new Intl.NumberFormat(locale.value, {
+    style: 'currency',
+    currency: props.currency,
+  }).format(Number(value))
 }
 
 function packLabel(pack) {

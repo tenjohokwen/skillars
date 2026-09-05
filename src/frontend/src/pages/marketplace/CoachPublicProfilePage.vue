@@ -87,15 +87,15 @@
 
         <!-- Reviews -->
         <div class="glass-card q-pa-md q-mb-md">
-          <div v-if="reviewsTotalElements === 0" class="text-body2" style="color: var(--text-secondary)">
+          <div
+            v-if="reviewsTotalElements === 0"
+            class="text-body2"
+            style="color: var(--text-secondary)"
+          >
             {{ t('marketplace.noReviewsYet') }}
           </div>
           <template v-else>
-            <div
-              v-for="review in reviews"
-              :key="review.reviewId"
-              class="review-item q-mb-md"
-            >
+            <div v-for="review in reviews" :key="review.reviewId" class="review-item q-mb-md">
               <div class="row items-center q-gutter-sm q-mb-xs">
                 <q-rating :model-value="review.rating" readonly size="16px" color="amber" />
                 <span class="text-caption" style="color: var(--text-secondary)">
@@ -106,10 +106,7 @@
               <div v-if="review.body" class="text-body2" style="color: var(--text-primary)">
                 {{ review.body }}
               </div>
-              <div
-                v-if="review.coachResponseBody?.trim()"
-                class="coach-response q-mt-sm q-pa-sm"
-              >
+              <div v-if="review.coachResponseBody?.trim()" class="coach-response q-mt-sm q-pa-sm">
                 <div class="text-caption text-weight-bold" style="color: var(--text-secondary)">
                   {{ t('reviews.coachResponseLabel') }}
                 </div>
@@ -130,10 +127,7 @@
         </div>
 
         <!-- Write / edit review (eligible parent or player only) -->
-        <div
-          v-if="authStore.isParent || authStore.isPlayer"
-          class="glass-card q-pa-md q-mb-md"
-        >
+        <div v-if="authStore.isParent || authStore.isPlayer" class="glass-card q-pa-md q-mb-md">
           <template v-if="myReview">
             <div class="text-subtitle1 q-mb-xs" style="color: var(--text-primary)">
               {{ t('reviews.yourReview') }}
@@ -149,7 +143,10 @@
               {{ myReview.body }}
             </div>
             <div
-              v-if="myReview.moderationStatus === 'PENDING' || myReview.moderationStatus === 'UNDER_REVIEW'"
+              v-if="
+                myReview.moderationStatus === 'PENDING' ||
+                myReview.moderationStatus === 'UNDER_REVIEW'
+              "
               class="text-caption q-mb-sm"
               style="color: var(--text-secondary)"
             >
@@ -367,7 +364,12 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { getCoachProfile } from 'src/api/marketplace.api'
-import { listCoachReviews, getMyReviewForCoach, submitReview, updateReview } from 'src/api/reviews.api'
+import {
+  listCoachReviews,
+  getMyReviewForCoach,
+  submitReview,
+  updateReview,
+} from 'src/api/reviews.api'
 import { parseApiError } from 'src/utils/errorHandler'
 import { useErrorHandler } from 'src/composables/useErrorHandler'
 import { useAuthStore } from 'src/stores/auth.store'
@@ -448,7 +450,12 @@ onMounted(async () => {
     const response = await getCoachProfile(coachId)
     profile.value = response
 
-    await fetchReviews(0)
+    // AC22: seed from the profile payload instead of re-fetching what it already contains.
+    // CoachMarketplaceResource.getCoachProfile always populates `reviews` (via
+    // ReviewQueryService.getFirstPageForCoach, unconditionally, never null) with the same
+    // envelope fetchReviews(0) would produce, so there is no reachable fallback case for this
+    // backend — a prior `else { await fetchReviews(0) }` was dead code (skillars-deferred-92 review).
+    applyReviewPage(response.reviews, 0)
     if (authStore.isParent || authStore.isPlayer) {
       await fetchMyReview()
     }
@@ -530,13 +537,32 @@ function openLightbox(item) {
   lightboxOpen.value = true
 }
 
+/**
+ * Applies one page of reviews to the local state.
+ *
+ * skillars-deferred-92 AC22: page 0 is NOT fetched. `GET /api/marketplace/coaches/{id}` already
+ * embeds it — `CoachMarketplaceResource` builds `CoachProfileDto.reviews` from
+ * `reviewQueryService.getFirstPageForCoach(coachId)`, which is literally
+ * `listApprovedReviews(coachId, 0, "newest")`: the same call, the same `ReviewListResponse`, the
+ * same 10 rows in the same order as `listCoachReviews(coachId, 0)`. Verified against source before
+ * removing either side. `onMounted` fired both, so every profile view cost a wholly redundant
+ * second round trip.
+ *
+ * Of AC22's two options, this keeps the server-side enrichment and drops the client's duplicate
+ * request, rather than the reverse. Reason: the profile response already carries the data, so this
+ * direction removes a round trip from FIRST PAINT — the one that matters — whereas dropping the
+ * enrichment would have preserved it. `listCoachReviews` is still the only path for page 1+.
+ */
+function applyReviewPage(res, page) {
+  reviews.value = page === 0 ? res.reviews : reviews.value.concat(res.reviews)
+  reviewsTotalElements.value = res.totalElements
+  reviewsHasNext.value = res.hasNext
+  reviewsCurrentPage.value = res.page
+}
+
 async function fetchReviews(page = 0) {
   try {
-    const res = await listCoachReviews(coachId, page)
-    reviews.value = page === 0 ? res.reviews : reviews.value.concat(res.reviews)
-    reviewsTotalElements.value = res.totalElements
-    reviewsHasNext.value = res.hasNext
-    reviewsCurrentPage.value = res.page
+    applyReviewPage(await listCoachReviews(coachId, page), page)
   } catch (err) {
     console.error('Failed to load reviews', err)
     $q.notify({ type: 'negative', message: t('common.errorGeneric') })

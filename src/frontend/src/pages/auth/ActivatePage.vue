@@ -1,14 +1,12 @@
 <template>
   <q-page class="auth-page">
     <div class="auth-card-container fade-in">
-
       <div class="auth-brand q-mb-xl">
         <div class="gradient-text auth-brand-name">Skillars</div>
-        <div class="text-meta">Account activation</div>
+        <div class="text-meta">{{ $t('auth.activationTitle') }}</div>
       </div>
 
       <div class="glass-card--static auth-card text-center">
-
         <div class="text-section-title q-mb-xs">{{ t('auth.activateAccount') }}</div>
 
         <!-- Loading -->
@@ -19,14 +17,19 @@
 
         <!-- No key -->
         <div v-else-if="!activationKey" class="auth-banner auth-banner--error q-pa-md q-mt-md">
-          Invalid or missing activation key.
+          {{ $t('auth.activationKeyMissing') }}
         </div>
 
         <!-- Success -->
         <div v-else-if="isSuccess" class="q-py-md">
-          <q-icon name="check_circle" size="48px" style="color: var(--accent-primary)" class="q-mb-md" />
+          <q-icon
+            name="check_circle"
+            size="48px"
+            style="color: var(--accent-primary)"
+            class="q-mb-md"
+          />
           <div class="text-card-title q-mb-sm">{{ t('success.activated') }}</div>
-          <div class="text-meta">Redirecting in {{ countdown }}...</div>
+          <div class="text-meta">{{ $t('auth.activateRedirecting', { seconds: countdown }) }}</div>
         </div>
 
         <!-- Error -->
@@ -43,69 +46,87 @@
             </router-link>
           </div>
         </template>
-
       </div>
     </div>
   </q-page>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue';
-import { useRouter, useRoute } from 'vue-router';
-import { useI18n } from 'vue-i18n';
-import { accountApi } from 'src/api/account.api';
-import { useErrorHandler } from 'src/composables/useErrorHandler';
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
+import { accountApi } from 'src/api/account.api'
+import { useErrorHandler } from 'src/composables/useErrorHandler'
 
-const router = useRouter();
-const route = useRoute();
-const { t } = useI18n();
-const { setError, hasError, errorMessage, helpCode } = useErrorHandler();
+const router = useRouter()
+const route = useRoute()
+const { t } = useI18n()
+const { setError, hasError, errorMessage, helpCode } = useErrorHandler()
 
-const activationKey = computed(() => route.query.key);
-const isLoading = ref(true);
-const isSuccess = ref(false);
-const countdown = ref(3);
-let redirectTimer = null;
+const activationKey = computed(() => route.query.key)
+const isLoading = ref(true)
+const isSuccess = ref(false)
+const countdown = ref(3)
+let redirectTimer = null
 
 async function handleActivation() {
-  if (!activationKey.value) { isLoading.value = false; return; }
+  if (!activationKey.value) {
+    isLoading.value = false
+    return
+  }
   try {
-    await accountApi.activate(activationKey.value);
-    isSuccess.value = true;
-    isLoading.value = false;
+    await accountApi.activate(activationKey.value)
+    isSuccess.value = true
+    isLoading.value = false
     redirectTimer = setInterval(() => {
-      countdown.value--;
-      if (countdown.value <= 0) { clearInterval(redirectTimer); router.push('/login'); }
-    }, 1000);
+      countdown.value--
+      if (countdown.value <= 0) {
+        clearInterval(redirectTimer)
+        router.push('/login')
+      }
+    }, 1000)
   } catch (err) {
-    setError(err);
-    isLoading.value = false;
+    setError(err)
+    isLoading.value = false
   }
 }
 
-onMounted(() => { handleActivation(); });
-onUnmounted(() => { if (redirectTimer) clearInterval(redirectTimer); });
+onMounted(() => {
+  handleActivation()
+})
+onUnmounted(() => {
+  if (redirectTimer) clearInterval(redirectTimer)
+})
 </script>
 
 <style lang="scss" scoped>
-.auth-brand { text-align: center; }
+.auth-brand {
+  text-align: center;
+}
 .auth-brand-name {
   font-size: 32px;
   font-weight: 800;
   font-family: 'Inter', sans-serif;
   letter-spacing: -1px;
 }
-.auth-card { padding: 32px; }
+.auth-card {
+  padding: 32px;
+}
 .auth-link {
   color: var(--accent-primary);
   text-decoration: none;
   font-size: 14px;
   font-weight: 500;
-  &:hover { opacity: 0.8; }
+  &:hover {
+    opacity: 0.8;
+  }
 }
 .auth-banner {
   border-radius: 12px !important;
   font-size: 14px;
-  &--error { background: rgba(255, 95, 122, 0.12); color: var(--accent-danger); }
+  &--error {
+    background: rgba(255, 95, 122, 0.12);
+    color: var(--accent-danger);
+  }
 }
 </style>

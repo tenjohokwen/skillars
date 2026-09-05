@@ -14,7 +14,9 @@
             v-model="position"
             :options="positionOptions"
             :label="t('auth.player.position')"
-            outlined emit-value map-options
+            outlined
+            emit-value
+            map-options
             :rules="[required]"
           />
 
@@ -24,7 +26,8 @@
             :label="t('auth.player.finishSetup')"
             :loading="isSubmitting"
             :disable="!position || isSubmitting"
-            unelevated size="md"
+            unelevated
+            size="md"
           />
         </q-form>
       </div>
@@ -53,7 +56,7 @@ const positionOptions = computed(() => [
   { label: t('auth.player.positionForward'), value: 'FORWARD' },
 ])
 
-const required = val => !!val || t('validation.required')
+const required = (val) => !!val || t('validation.required')
 
 async function handleSubmit() {
   clearError()
@@ -70,10 +73,15 @@ async function handleSubmit() {
 </script>
 
 <style lang="scss" scoped>
-.auth-card { padding: 32px; }
+.auth-card {
+  padding: 32px;
+}
 .auth-banner {
   border-radius: 12px !important;
   font-size: 14px;
-  &--error { background: rgba(255, 95, 122, 0.12) !important; color: var(--accent-danger) !important; }
+  &--error {
+    background: rgba(255, 95, 122, 0.12) !important;
+    color: var(--accent-danger) !important;
+  }
 }
 </style>

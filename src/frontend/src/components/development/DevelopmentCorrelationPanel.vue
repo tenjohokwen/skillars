@@ -9,7 +9,13 @@
               <q-badge color="primary">{{ ['PAC', 'SHO', 'DRI'][n - 1] }}</q-badge>
             </q-item-section>
             <q-item-section>
-              <q-item-label>{{ $t('development.radar.correlation.insight.highSluImprovement') }}</q-item-label>
+              <q-item-label>{{
+                $t('development.radar.correlation.insight.highSluImprovement')
+              }}</q-item-label>
+              <!-- Sample figures inside the blurred upsell teaser: not user data and not prose.
+                   'SLU' is a product acronym and the numbers are illustrative, so translating
+                   them would imply they mean something. -->
+              <!-- eslint-disable-next-line vue/no-bare-strings-in-template -->
               <q-item-label caption>SLU: 120.00 | Score: 75.00</q-item-label>
             </q-item-section>
           </q-item>
@@ -46,7 +52,11 @@
 
     <!-- Insufficient data state -->
     <div v-else-if="correlationData.insufficientData" class="q-pa-md text-center text-secondary">
-      {{ $t('development.radar.correlation.insufficientData', { count: correlationData.minimumSessionCount }) }}
+      {{
+        $t('development.radar.correlation.insufficientData', {
+          count: correlationData.minimumSessionCount,
+        })
+      }}
     </div>
 
     <!-- Insights list -->
@@ -58,7 +68,9 @@
           </q-item-section>
           <q-item-section>
             <q-item-label>
-              {{ $t('development.radar.correlation.insight.' + camelInsightKey(insight.insightType)) }}
+              {{
+                $t('development.radar.correlation.insight.' + camelInsightKey(insight.insightType))
+              }}
             </q-item-label>
           </q-item-section>
           <q-item-section side>
@@ -66,7 +78,8 @@
               SLU: {{ insight.cumulativeSlu?.toFixed(1) }}
             </div>
             <div class="text-caption text-secondary">
-              {{ $t('development.radar.accessibleTable.currentScore') }}: {{ insight.compositeScore?.toFixed(1) }}
+              {{ $t('development.radar.accessibleTable.currentScore') }}:
+              {{ insight.compositeScore?.toFixed(1) }}
             </div>
           </q-item-section>
         </q-item>
@@ -77,7 +90,11 @@
         v-if="correlationData.excludedSkillCount > 0"
         class="q-pa-sm text-caption text-secondary"
       >
-        {{ $t('development.radar.correlation.excludedSkills', { count: correlationData.excludedSkillCount }) }}
+        {{
+          $t('development.radar.correlation.excludedSkills', {
+            count: correlationData.excludedSkillCount,
+          })
+        }}
       </div>
     </div>
 
@@ -88,7 +105,11 @@
         v-if="correlationData && correlationData.excludedSkillCount > 0"
         class="text-caption q-mt-xs"
       >
-        {{ $t('development.radar.correlation.excludedSkills', { count: correlationData.excludedSkillCount }) }}
+        {{
+          $t('development.radar.correlation.excludedSkills', {
+            count: correlationData.excludedSkillCount,
+          })
+        }}
       </div>
     </div>
   </div>
@@ -103,9 +124,7 @@ defineProps({
 
 function camelInsightKey(insightType) {
   // Converts e.g. "HIGH_SLU_IMPROVEMENT" → "highSluImprovement"
-  return insightType
-    .toLowerCase()
-    .replace(/_([a-z])/g, (_, c) => c.toUpperCase())
+  return insightType.toLowerCase().replace(/_([a-z])/g, (_, c) => c.toUpperCase())
 }
 </script>
 

@@ -1,6 +1,6 @@
 <template>
   <q-dialog v-model="dialogVisible" persistent>
-    <q-card style="min-width: 400px;">
+    <q-card style="min-width: 400px">
       <q-card-section>
         <div class="text-h6">{{ t('profile.updateEmail') }}</div>
       </q-card-section>
@@ -17,12 +17,7 @@
       <q-card-section>
         <q-form @submit.prevent="handleSubmit" class="q-gutter-md">
           <!-- Old email (readonly) -->
-          <q-input
-            v-model="form.oldEmail"
-            :label="t('auth.email')"
-            readonly
-            outlined
-          />
+          <q-input v-model="form.oldEmail" :label="t('auth.email')" readonly outlined />
 
           <!-- New email -->
           <q-input
@@ -57,11 +52,7 @@
           </q-input>
 
           <!-- Error banner -->
-          <q-banner
-            v-if="hasError && !isValidationError"
-            class="bg-negative text-white"
-            rounded
-          >
+          <q-banner v-if="hasError && !isValidationError" class="bg-negative text-white" rounded>
             {{ errorMessage }}
             <template v-if="helpCode">
               <br />
@@ -85,29 +76,29 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue';
-import { useQuasar } from 'quasar';
-import { useI18n } from 'vue-i18n';
-import { profileApi } from 'src/api/profile.api';
-import { useErrorHandler } from 'src/composables/useErrorHandler';
-import { useSession } from 'src/composables/useSession';
+import { ref, watch } from 'vue'
+import { useQuasar } from 'quasar'
+import { useI18n } from 'vue-i18n'
+import { profileApi } from 'src/api/profile.api'
+import { useErrorHandler } from 'src/composables/useErrorHandler'
+import { useSession } from 'src/composables/useSession'
 
 const props = defineProps({
   modelValue: {
     type: Boolean,
-    default: false
+    default: false,
   },
   currentEmail: {
     type: String,
-    default: ''
-  }
-});
+    default: '',
+  },
+})
 
-const emit = defineEmits(['update:modelValue', 'updated']);
+const emit = defineEmits(['update:modelValue', 'updated'])
 
-const $q = useQuasar();
-const { t } = useI18n();
-const { handleLogout } = useSession();
+const $q = useQuasar()
+const { t } = useI18n()
+const { handleLogout } = useSession()
 const {
   setError,
   clearError,
@@ -116,64 +107,67 @@ const {
   helpCode,
   isValidationError,
   hasFieldError,
-  getFieldError
-} = useErrorHandler();
+  getFieldError,
+} = useErrorHandler()
 
 // Local dialog visibility for v-model sync
-const dialogVisible = ref(props.modelValue);
+const dialogVisible = ref(props.modelValue)
 
 // Form state
 const form = ref({
   oldEmail: props.currentEmail,
   newEmail: '',
-  password: ''
-});
-const isPwd = ref(true);
-const isSubmitting = ref(false);
+  password: '',
+})
+const isPwd = ref(true)
+const isSubmitting = ref(false)
 
 // Validation rules
-const required = val => !!val || t('validation.required');
-const validEmail = val => /.+@.+\..+/.test(val) || t('validation.email');
-const minLen5 = val => val.length >= 5 || t('validation.minLength', { min: 5 });
-const notSameEmail = val => val !== form.value.oldEmail || t('validation.sameEmail');
+const required = (val) => !!val || t('validation.required')
+const validEmail = (val) => /.+@.+\..+/.test(val) || t('validation.email')
+const minLen5 = (val) => val.length >= 5 || t('validation.minLength', { min: 5 })
+const notSameEmail = (val) => val !== form.value.oldEmail || t('validation.sameEmail')
 
 // Watch for external changes to modelValue
-watch(() => props.modelValue, (newVal) => {
-  dialogVisible.value = newVal;
-  if (newVal) {
-    // Reset form when dialog opens
-    form.value.oldEmail = props.currentEmail;
-    form.value.newEmail = '';
-    form.value.password = '';
-    isPwd.value = true;
-    clearError();
-  }
-});
+watch(
+  () => props.modelValue,
+  (newVal) => {
+    dialogVisible.value = newVal
+    if (newVal) {
+      // Reset form when dialog opens
+      form.value.oldEmail = props.currentEmail
+      form.value.newEmail = ''
+      form.value.password = ''
+      isPwd.value = true
+      clearError()
+    }
+  },
+)
 
 // Watch for internal changes to sync back to parent
 watch(dialogVisible, (newVal) => {
-  emit('update:modelValue', newVal);
-});
+  emit('update:modelValue', newVal)
+})
 
 function close() {
-  dialogVisible.value = false;
+  dialogVisible.value = false
 }
 
 async function handleSubmit() {
-  clearError();
-  isSubmitting.value = true;
+  clearError()
+  isSubmitting.value = true
   try {
-    await profileApi.updateEmail(form.value.oldEmail, form.value.newEmail, form.value.password);
+    await profileApi.updateEmail(form.value.oldEmail, form.value.newEmail, form.value.password)
     $q.notify({
       type: 'positive',
-      message: t('success.emailChangeInitiated')
-    });
-    close();
-    await handleLogout();
+      message: t('success.emailChangeInitiated'),
+    })
+    close()
+    await handleLogout()
   } catch (err) {
-    setError(err);
+    setError(err)
   } finally {
-    isSubmitting.value = false;
+    isSubmitting.value = false
   }
 }
 </script>

@@ -137,7 +137,7 @@ async function connectStripe() {
     } else {
       connectError.value = true
     }
-  } catch  {
+  } catch {
     // P21: surface API failures — store error drives the banner
     connectError.value = true
   } finally {

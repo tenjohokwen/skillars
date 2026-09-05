@@ -33,11 +33,7 @@ import {
   createBatch,
   acceptAllBatch,
 } from 'src/api/booking.api'
-import {
-  purchaseSessionPack,
-  getMySessionPacks,
-  pauseSessionPack,
-} from 'src/api/payment.api'
+import { purchaseSessionPack, getMySessionPacks, pauseSessionPack } from 'src/api/payment.api'
 
 // IMPORTANT: keep in sync with BookingStateMachine.TRANSITIONS on the backend — a status absent as a
 // key there has no outgoing transitions, i.e. is terminal. See
@@ -45,8 +41,13 @@ import {
 // status is added to that enum with no transitions out of it, add it here too, or this composable will
 // keep subscribing to it forever.
 export const TERMINAL_BOOKING_STATUSES = new Set([
-  'DECLINED', 'CANCELLED', 'CANCELLED_PARENT', 'CANCELLED_COACH',
-  'NO_SHOW_PLAYER', 'NO_SHOW_COACH', 'REFUNDED',
+  'DECLINED',
+  'CANCELLED',
+  'CANCELLED_PARENT',
+  'CANCELLED_COACH',
+  'NO_SHOW_PLAYER',
+  'NO_SHOW_COACH',
+  'REFUNDED',
 ])
 
 export function useBookingSse(bookingId) {
@@ -178,8 +179,8 @@ export const useBookingStore = defineStore('booking', () => {
   const batchError = ref(null)
 
   const batchBasketSize = computed(() => batchBasket.value.length)
-  const isSlotInBasket = computed(() => (startDatetime) =>
-    batchBasket.value.some((s) => s.startDatetime === startDatetime),
+  const isSlotInBasket = computed(
+    () => (startDatetime) => batchBasket.value.some((s) => s.startDatetime === startDatetime),
   )
 
   const coachSchedule = ref(null)
@@ -314,7 +315,13 @@ export const useBookingStore = defineStore('booking', () => {
     }
   }
 
-  async function confirmPausePack(playerId, purchaseId, pauseStartDate, pauseDurationDays, confirmedCancellationIds) {
+  async function confirmPausePack(
+    playerId,
+    purchaseId,
+    pauseStartDate,
+    pauseDurationDays,
+    confirmedCancellationIds,
+  ) {
     packPauseLoading.value = true
     packPauseError.value = null
     try {
@@ -408,7 +415,10 @@ export const useBookingStore = defineStore('booking', () => {
       return true
     } catch (e) {
       if (requestId !== coachRequestsSequence) {
-        console.warn('Discarding failure from a superseded loadCoachBookingRequests call:', e?.message || e)
+        console.warn(
+          'Discarding failure from a superseded loadCoachBookingRequests call:',
+          e?.message || e,
+        )
         return true
       }
       coachRequestsError.value = e

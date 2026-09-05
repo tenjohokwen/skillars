@@ -12,18 +12,16 @@
     />
 
     <!-- Drill plan stub -->
-    <div class="active-session__drill-name">{{ t('booking.completion.noDrillPlan', 'No drill plan') }}</div>
+    <div class="active-session__drill-name">
+      {{ t('booking.completion.noDrillPlan', 'No drill plan') }}
+    </div>
 
     <!-- Timer -->
     <div class="active-session__timer">{{ formattedElapsed }}</div>
 
     <!-- Block progress pips -->
     <div class="active-session__pips">
-      <div
-        v-for="n in 4"
-        :key="n"
-        class="active-session__pip"
-      />
+      <div v-for="n in 4" :key="n" class="active-session__pip" />
     </div>
 
     <!-- Next drill stub -->
@@ -64,7 +62,9 @@
       v-if="!isPaused"
       unelevated
       class="active-session__end-btn"
-      :label="endAllowed ? t('booking.completion.endSession') : t('booking.completion.endSessionDisabled')"
+      :label="
+        endAllowed ? t('booking.completion.endSession') : t('booking.completion.endSessionDisabled')
+      "
       :disable="!endAllowed"
       :loading="ending"
       @click="handleEndSession"
@@ -101,7 +101,9 @@ const endAllowed = computed(() => !isPaused.value && elapsed.value >= 300)
 
 function startTimer() {
   if (timer) return
-  timer = setInterval(() => { elapsed.value++ }, 1000)
+  timer = setInterval(() => {
+    elapsed.value++
+  }, 1000)
 }
 
 function stopTimer() {
@@ -160,15 +162,18 @@ async function handleResumeSession() {
 }
 
 // SSE-driven status sync: handles remote pause/resume (other device/tab)
-watch(() => props.bookingStatus, (status) => {
-  if (status === 'PAUSED' && !isPaused.value) {
-    isPaused.value = true
-    stopTimer()
-  } else if (status === 'IN_PROGRESS' && isPaused.value) {
-    isPaused.value = false
-    startTimer()
-  }
-})
+watch(
+  () => props.bookingStatus,
+  (status) => {
+    if (status === 'PAUSED' && !isPaused.value) {
+      isPaused.value = true
+      stopTimer()
+    } else if (status === 'IN_PROGRESS' && isPaused.value) {
+      isPaused.value = false
+      startTimer()
+    }
+  },
+)
 
 onMounted(() => {
   if (props.bookingStatus === 'PAUSED') {
@@ -216,7 +221,11 @@ onUnmounted(() => {
 .active-session__timer {
   font-size: 72px;
   font-weight: 700;
-  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary, var(--accent-primary)));
+  background: linear-gradient(
+    135deg,
+    var(--accent-primary),
+    var(--accent-secondary, var(--accent-primary))
+  );
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -259,8 +268,13 @@ onUnmounted(() => {
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
 }
 
 .active-session__pause-btn {

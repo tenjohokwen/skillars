@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.notification.config;
 
 
 
+import com.softropic.skillars.infrastructure.threadpool.ExecutorShutdown;
 import com.softropic.skillars.infrastructure.threadpool.MdcDecorator;
 
 import net.javacrumbs.shedlock.spring.annotation.EnableSchedulerLock;
@@ -42,6 +43,9 @@ public class AsyncConfig {
         taskExecutor.setThreadNamePrefix("modPool");
         taskExecutor.setTaskDecorator(new MdcDecorator());
         taskExecutor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        // skillars-deferred-92 AC3. Note the ordering here — every setter BEFORE afterPropertiesSet().
+        // This bean was always correct; sendMailPool below was not. See its comment.
+        ExecutorShutdown.configureGracefulShutdown(taskExecutor, ExecutorShutdown.MODERATION_SECONDS);
         taskExecutor.afterPropertiesSet();
         return taskExecutor;
     }
@@ -54,8 +58,18 @@ public class AsyncConfig {
         taskExecutor.setMaxPoolSize(10);
         taskExecutor.setThreadNamePrefix("smPool");
         taskExecutor.setTaskDecorator(new MdcDecorator());
-        taskExecutor.afterPropertiesSet();
+        // skillars-deferred-92 AC3.3 — BUG FIX, not a reshuffle. setRejectedExecutionHandler used to
+        // sit AFTER afterPropertiesSet(). ExecutorConfigurationSupport.afterPropertiesSet() calls
+        // initialize(), which builds the underlying ThreadPoolExecutor from the fields set so far; a
+        // later setter mutates the Spring wrapper's field and never reaches the live executor. So this
+        // pool ran with the JDK default AbortPolicy for the whole life of the bean: a full 10-deep
+        // queue threw RejectedExecutionException at the caller instead of sending the mail inline,
+        // which is the exact opposite of what CallerRunsPolicy was chosen for.
+        // moderationTaskExecutor directly above always ordered these two correctly.
+        // ExecutorShutdownConfigurationTest asserts the live executor's handler, not this field.
         taskExecutor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        ExecutorShutdown.configureGracefulShutdown(taskExecutor, ExecutorShutdown.SEND_MAIL_SECONDS);
+        taskExecutor.afterPropertiesSet();
         //Tags are also referred to as labels or dimensions, depending upon which Application Performance Monitoring (APM) tool is being utilized
         final Tag tag = Tag.of("name", "sendmailPool");
         final Set<Tag> tags = Set.of(tag);

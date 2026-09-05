@@ -2,7 +2,9 @@
   <q-dialog :model-value="modelValue" @update:model-value="$emit('update:modelValue', $event)">
     <q-card style="min-width: 420px; max-width: 560px">
       <q-card-section class="row items-center q-pb-none">
-        <div class="text-h6">{{ $t('development.report.generateTitle', { name: playerName }) }}</div>
+        <div class="text-h6">
+          {{ $t('development.report.generateTitle', { name: playerName }) }}
+        </div>
         <q-space />
         <q-btn icon="close" flat round dense @click="close" />
       </q-card-section>

@@ -1,6 +1,9 @@
 <template>
   <div>
-    <div v-if="!radarEntries || radarEntries.entries.length === 0" class="text-caption text-grey q-pa-md">
+    <div
+      v-if="!radarEntries || radarEntries.entries.length === 0"
+      class="text-caption text-grey q-pa-md"
+    >
       {{ $t('development.radar.noEntriesYet') }}
     </div>
 
@@ -20,14 +23,19 @@
             {{ entry.notes }}
           </q-item-label>
           <q-item-label
-            v-if="otherCoachCount(entry.skillCode) >= 1 && firstIndexBySkillCode[entry.skillCode] === idx"
+            v-if="
+              otherCoachCount(entry.skillCode) >= 1 &&
+              firstIndexBySkillCode[entry.skillCode] === idx
+            "
             caption
             class="text-info"
           >
-            {{ $t('development.radar.otherCoachCount', {
-              count: otherCoachCount(entry.skillCode),
-              skill: entry.skillCode
-            }) }}
+            {{
+              $t('development.radar.otherCoachCount', {
+                count: otherCoachCount(entry.skillCode),
+                skill: entry.skillCode,
+              })
+            }}
           </q-item-label>
         </q-item-section>
       </q-item>

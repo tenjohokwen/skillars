@@ -1,10 +1,9 @@
 <template>
   <q-page>
     <div class="app-page fade-in">
-
       <div class="page-header q-mb-xl">
-        <div class="text-page-title">System Health</div>
-        <div class="text-meta">Real-time infrastructure status</div>
+        <div class="text-page-title">{{ $t('admin.health.title') }}</div>
+        <div class="text-meta">{{ $t('admin.health.subtitle') }}</div>
       </div>
 
       <div v-if="isLoading" class="flex flex-center q-py-xl">
@@ -27,7 +26,7 @@
           <template #avatar>
             <q-icon name="lock" style="color: var(--accent-warning)" />
           </template>
-          Admin access required to view health details.
+          {{ $t('admin.health.accessDenied') }}
         </q-banner>
 
         <div v-if="health.components" class="components-grid">
@@ -46,11 +45,7 @@
               </span>
             </div>
             <div v-if="component.details" class="component-details q-mt-md">
-              <div
-                v-for="(val, key) in component.details"
-                :key="key"
-                class="detail-row"
-              >
+              <div v-for="(val, key) in component.details" :key="key" class="detail-row">
                 <span class="text-label">{{ key }}</span>
                 <span class="text-meta">{{ val }}</span>
               </div>
@@ -58,7 +53,6 @@
           </div>
         </div>
       </template>
-
     </div>
   </q-page>
 </template>
@@ -67,6 +61,9 @@
 import { ref, onMounted } from 'vue'
 import { useQuasar } from 'quasar'
 import { adminApi } from 'src/api/admin.api'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const $q = useQuasar()
 const health = ref(null)
@@ -80,7 +77,7 @@ onMounted(async () => {
     if (error?.response?.data?.status) {
       health.value = error.response.data
     } else {
-      $q.notify({ type: 'negative', message: 'Failed to load health status' })
+      $q.notify({ type: 'negative', message: t('admin.health.loadError') })
     }
   } finally {
     isLoading.value = false
@@ -120,9 +117,9 @@ onMounted(async () => {
 }
 
 .health-banner {
-  background: rgba(255, 184, 77, 0.10) !important;
+  background: rgba(255, 184, 77, 0.1) !important;
   color: var(--accent-warning) !important;
-  border: 1px solid rgba(255, 184, 77, 0.20) !important;
+  border: 1px solid rgba(255, 184, 77, 0.2) !important;
 }
 
 .components-grid {

@@ -1,13 +1,11 @@
 <template>
   <q-page class="auth-page">
     <div class="auth-card-container fade-in">
-
       <div class="auth-brand q-mb-xl">
         <div class="gradient-text auth-brand-name">Skillars</div>
       </div>
 
       <div class="glass-card--static auth-card">
-
         <div class="text-section-title q-mb-xs">{{ t('auth.player.phoneVerifyTitle') }}</div>
         <div class="text-meta q-mb-lg">{{ t('auth.player.phoneVerifySubtitle') }}</div>
 
@@ -15,7 +13,11 @@
           <q-input
             v-for="(_, index) in digits"
             :key="index"
-            :ref="el => { if (el) otpInputs[index] = el }"
+            :ref="
+              (el) => {
+                if (el) otpInputs[index] = el
+              }
+            "
             v-model="digits[index]"
             maxlength="1"
             class="otp-digit"
@@ -32,11 +34,7 @@
           <q-spinner-dots size="32px" style="color: var(--accent-primary)" />
         </div>
 
-        <q-banner
-          v-if="hasError"
-          class="auth-banner auth-banner--error q-mb-md"
-          rounded
-        >
+        <q-banner v-if="hasError" class="auth-banner auth-banner--error q-mb-md" rounded>
           {{ errorMessage }}
           <template v-if="helpCode">
             <br /><small>{{ t('error.helpCode') }}: {{ helpCode }}</small>
@@ -44,18 +42,31 @@
         </q-banner>
 
         <div class="text-center q-mt-md">
+          <q-btn
+            flat
+            no-caps
+            dense
+            class="auth-link q-mr-md"
+            :label="
+              resendCooldown > 0
+                ? t('auth.player.resendCooldown', { seconds: resendCooldown })
+                : t('auth.player.resendOtp')
+            "
+            :disable="resendCooldown > 0 || isResending"
+            :loading="isResending"
+            @click="handleResendOtp"
+          />
           <router-link to="/login" class="auth-link">
             &larr; {{ t('auth.player.signInInstead') }}
           </router-link>
         </div>
-
       </div>
     </div>
   </q-page>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { playerRegistrationApi } from 'src/api/playerRegistration.api'
@@ -69,8 +80,44 @@ const { setError, clearError, hasError, errorMessage, helpCode } = useErrorHandl
 const digits = ref(['', '', '', '', '', ''])
 const otpInputs = ref([])
 const isSubmitting = ref(false)
+const isResending = ref(false)
+const resendCooldown = ref(0)
+let cooldownTimer = null
 
-const userId = computed(() => route.query.userId ? Number(route.query.userId) : null)
+// Mirrors ParentPhoneVerifyPage exactly (skillars-deferred-92 AC28.2) — same 60s cooldown,
+// same disabled state, same silent catch. The parent flow is the reference implementation;
+// a second pattern here would be a second thing to keep in step.
+function startCooldown() {
+  resendCooldown.value = 60
+  cooldownTimer = setInterval(() => {
+    resendCooldown.value--
+    if (resendCooldown.value <= 0) {
+      clearInterval(cooldownTimer)
+      cooldownTimer = null
+    }
+  }, 1000)
+}
+
+onUnmounted(() => {
+  if (cooldownTimer) clearInterval(cooldownTimer)
+})
+
+async function handleResendOtp() {
+  if (!userId.value) return
+  isResending.value = true
+  try {
+    await playerRegistrationApi.resendOtp(userId.value)
+    startCooldown()
+  } catch {
+    // Silent, as in the parent flow: the backend's 409 / 400 responses distinguish
+    // "already sending", "locked" and "bad user", and surfacing that difference to an
+    // unauthenticated caller is account enumeration. The cooldown simply does not start.
+  } finally {
+    isResending.value = false
+  }
+}
+
+const userId = computed(() => (route.query.userId ? Number(route.query.userId) : null))
 
 onMounted(() => {
   if (userId.value === null) {
@@ -82,9 +129,12 @@ onMounted(() => {
 
 function onDigitInput(index) {
   const value = digits.value[index]
-  if (value && !/^\d$/.test(value)) { digits.value[index] = ''; return }
+  if (value && !/^\d$/.test(value)) {
+    digits.value[index] = ''
+    return
+  }
   if (value && index < 5) setTimeout(() => otpInputs.value[index + 1]?.focus(), 10)
-  if (digits.value.every(d => /^\d$/.test(d))) handleSubmit()
+  if (digits.value.every((d) => /^\d$/.test(d))) handleSubmit()
 }
 
 function onKeyDown(index, event) {
@@ -93,8 +143,14 @@ function onKeyDown(index, event) {
     otpInputs.value[index - 1]?.focus()
     digits.value[index - 1] = ''
   }
-  if (event.key === 'ArrowLeft' && index > 0) { event.preventDefault(); otpInputs.value[index - 1]?.focus() }
-  if (event.key === 'ArrowRight' && index < 5) { event.preventDefault(); otpInputs.value[index + 1]?.focus() }
+  if (event.key === 'ArrowLeft' && index > 0) {
+    event.preventDefault()
+    otpInputs.value[index - 1]?.focus()
+  }
+  if (event.key === 'ArrowRight' && index < 5) {
+    event.preventDefault()
+    otpInputs.value[index + 1]?.focus()
+  }
 }
 
 function onPaste(event) {
@@ -126,25 +182,34 @@ async function handleSubmit() {
 </script>
 
 <style lang="scss" scoped>
-.auth-brand { text-align: center; }
+.auth-brand {
+  text-align: center;
+}
 .auth-brand-name {
   font-size: 32px;
   font-weight: 800;
   font-family: 'Inter', sans-serif;
   letter-spacing: -1px;
 }
-.auth-card { padding: 32px; }
+.auth-card {
+  padding: 32px;
+}
 .auth-link {
   color: var(--accent-primary);
   text-decoration: none;
   font-size: 14px;
   font-weight: 500;
-  &:hover { opacity: 0.8; }
+  &:hover {
+    opacity: 0.8;
+  }
 }
 .auth-banner {
   border-radius: 12px !important;
   font-size: 14px;
-  &--error { background: rgba(255, 95, 122, 0.12) !important; color: var(--accent-danger) !important; }
+  &--error {
+    background: rgba(255, 95, 122, 0.12) !important;
+    color: var(--accent-danger) !important;
+  }
 }
 .otp-row {
   display: flex;

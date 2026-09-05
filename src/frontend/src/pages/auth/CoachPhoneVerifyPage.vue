@@ -1,13 +1,11 @@
 <template>
   <q-page class="auth-page">
     <div class="auth-card-container fade-in">
-
       <div class="auth-brand q-mb-xl">
         <div class="gradient-text auth-brand-name">Skillars</div>
       </div>
 
       <div class="glass-card--static auth-card">
-
         <div class="text-section-title q-mb-xs">{{ t('auth.coach.phoneVerifyTitle') }}</div>
         <div class="text-meta q-mb-lg">{{ t('auth.coach.phoneVerifySubtitle') }}</div>
 
@@ -15,7 +13,11 @@
           <q-input
             v-for="(_, index) in digits"
             :key="index"
-            :ref="el => { if (el) otpInputs[index] = el }"
+            :ref="
+              (el) => {
+                if (el) otpInputs[index] = el
+              }
+            "
             v-model="digits[index]"
             maxlength="1"
             class="otp-digit"
@@ -32,11 +34,7 @@
           <q-spinner-dots size="32px" style="color: var(--accent-primary)" />
         </div>
 
-        <q-banner
-          v-if="hasError"
-          class="auth-banner auth-banner--error q-mb-md"
-          rounded
-        >
+        <q-banner v-if="hasError" class="auth-banner auth-banner--error q-mb-md" rounded>
           {{ errorMessage }}
           <template v-if="helpCode">
             <br /><small>{{ t('error.helpCode') }}: {{ helpCode }}</small>
@@ -44,18 +42,31 @@
         </q-banner>
 
         <div class="text-center q-mt-md">
+          <q-btn
+            flat
+            no-caps
+            dense
+            class="auth-link q-mr-md"
+            :label="
+              resendCooldown > 0
+                ? t('auth.coach.resendCooldown', { seconds: resendCooldown })
+                : t('auth.coach.resendOtp')
+            "
+            :disable="resendCooldown > 0 || isResending"
+            :loading="isResending"
+            @click="handleResendOtp"
+          />
           <router-link to="/login" class="auth-link">
             &larr; {{ t('auth.coach.signInInstead') }}
           </router-link>
         </div>
-
       </div>
     </div>
   </q-page>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { coachRegistrationApi } from 'src/api/coachRegistration.api'
@@ -69,8 +80,56 @@ const { setError, clearError, hasError, errorMessage, helpCode } = useErrorHandl
 const digits = ref(['', '', '', '', '', ''])
 const otpInputs = ref([])
 const isSubmitting = ref(false)
+const isResending = ref(false)
+const resendCooldown = ref(0)
+let cooldownTimer = null
+let isUnmounted = false
 
-const userId = computed(() => route.query.userId ? Number(route.query.userId) : null)
+// skillars-deferred-92 review (chunk 4): AC28.4 names three backend responses a resend can
+// get (429 per-IP rate limit, 400 security.otpMismatch per-user limit, 400
+// security.accountLocked) — the per-user limit deliberately returns a vague code rather than
+// a rate-state oracle, so surfacing it is not account enumeration. setError() renders
+// whichever of those `useErrorHandler` resolves; clearError() up front means a successful
+// resend no longer leaves a stale error banner beside the new countdown. The cooldown now
+// arms in `finally` (previously only on success) so a refused resend still throttles the
+// client rather than letting a confused user exhaust the shared per-IP bucket by re-clicking.
+function startCooldown() {
+  resendCooldown.value = 60
+  cooldownTimer = setInterval(() => {
+    resendCooldown.value--
+    if (resendCooldown.value <= 0) {
+      clearInterval(cooldownTimer)
+      cooldownTimer = null
+    }
+  }, 1000)
+}
+
+onUnmounted(() => {
+  isUnmounted = true
+  if (cooldownTimer) clearInterval(cooldownTimer)
+})
+
+async function handleResendOtp() {
+  if (userId.value === null) return
+  clearError()
+  isResending.value = true
+  try {
+    await coachRegistrationApi.resendOtp(userId.value)
+  } catch (err) {
+    setError(err)
+  } finally {
+    isResending.value = false
+    if (!isUnmounted) startCooldown()
+  }
+}
+
+// A malformed userId (non-numeric, duplicated query param, zero/negative) must resolve to the
+// same `null` that onMounted's redirect guard checks for, rather than NaN/0 — otherwise the
+// page renders normally but every control silently no-ops (skillars-deferred-92 review).
+const userId = computed(() => {
+  const parsed = Number(route.query.userId)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+})
 
 onMounted(() => {
   if (userId.value === null) {
@@ -82,9 +141,12 @@ onMounted(() => {
 
 function onDigitInput(index) {
   const value = digits.value[index]
-  if (value && !/^\d$/.test(value)) { digits.value[index] = ''; return }
+  if (value && !/^\d$/.test(value)) {
+    digits.value[index] = ''
+    return
+  }
   if (value && index < 5) setTimeout(() => otpInputs.value[index + 1]?.focus(), 10)
-  if (digits.value.every(d => /^\d$/.test(d))) handleSubmit()
+  if (digits.value.every((d) => /^\d$/.test(d))) handleSubmit()
 }
 
 function onKeyDown(index, event) {
@@ -93,8 +155,14 @@ function onKeyDown(index, event) {
     otpInputs.value[index - 1]?.focus()
     digits.value[index - 1] = ''
   }
-  if (event.key === 'ArrowLeft' && index > 0) { event.preventDefault(); otpInputs.value[index - 1]?.focus() }
-  if (event.key === 'ArrowRight' && index < 5) { event.preventDefault(); otpInputs.value[index + 1]?.focus() }
+  if (event.key === 'ArrowLeft' && index > 0) {
+    event.preventDefault()
+    otpInputs.value[index - 1]?.focus()
+  }
+  if (event.key === 'ArrowRight' && index < 5) {
+    event.preventDefault()
+    otpInputs.value[index + 1]?.focus()
+  }
 }
 
 function onPaste(event) {
@@ -126,25 +194,34 @@ async function handleSubmit() {
 </script>
 
 <style lang="scss" scoped>
-.auth-brand { text-align: center; }
+.auth-brand {
+  text-align: center;
+}
 .auth-brand-name {
   font-size: 32px;
   font-weight: 800;
   font-family: 'Inter', sans-serif;
   letter-spacing: -1px;
 }
-.auth-card { padding: 32px; }
+.auth-card {
+  padding: 32px;
+}
 .auth-link {
   color: var(--accent-primary);
   text-decoration: none;
   font-size: 14px;
   font-weight: 500;
-  &:hover { opacity: 0.8; }
+  &:hover {
+    opacity: 0.8;
+  }
 }
 .auth-banner {
   border-radius: 12px !important;
   font-size: 14px;
-  &--error { background: rgba(255, 95, 122, 0.12) !important; color: var(--accent-danger) !important; }
+  &--error {
+    background: rgba(255, 95, 122, 0.12) !important;
+    color: var(--accent-danger) !important;
+  }
 }
 .otp-row {
   display: flex;

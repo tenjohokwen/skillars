@@ -64,11 +64,16 @@ export const getDrillSuggestions = (bookingId) =>
   api.get(`/api/bookings/session/${bookingId}/drills/suggestions`, { params: { limit: 2 } })
 
 export const requestReschedule = (id, data) => api.post(`/api/bookings/${id}/reschedule`, data)
-export const acceptReschedule = (id, rescheduleId) => api.put(`/api/bookings/${id}/reschedule/${rescheduleId}/accept`)
-export const declineReschedule = (id, rescheduleId) => api.put(`/api/bookings/${id}/reschedule/${rescheduleId}/decline`)
-export const requestRescheduleAsCoach = (id, data) => api.post(`/api/bookings/${id}/reschedule/coach`, data)
-export const acceptRescheduleAsParent = (id, rescheduleId) => api.put(`/api/bookings/${id}/reschedule/${rescheduleId}/accept-parent`)
-export const declineRescheduleAsParent = (id, rescheduleId) => api.put(`/api/bookings/${id}/reschedule/${rescheduleId}/decline-parent`)
+export const acceptReschedule = (id, rescheduleId) =>
+  api.put(`/api/bookings/${id}/reschedule/${rescheduleId}/accept`)
+export const declineReschedule = (id, rescheduleId) =>
+  api.put(`/api/bookings/${id}/reschedule/${rescheduleId}/decline`)
+export const requestRescheduleAsCoach = (id, data) =>
+  api.post(`/api/bookings/${id}/reschedule/coach`, data)
+export const acceptRescheduleAsParent = (id, rescheduleId) =>
+  api.put(`/api/bookings/${id}/reschedule/${rescheduleId}/accept-parent`)
+export const declineRescheduleAsParent = (id, rescheduleId) =>
+  api.put(`/api/bookings/${id}/reschedule/${rescheduleId}/decline-parent`)
 export const duplicateNextWeek = (id) => api.post(`/api/bookings/${id}/duplicate-next-week`)
 export const getBatchConfig = () => api.get('/api/bookings/batches/config')
 export const createBatch = (data) => api.post('/api/bookings/batches', data)
@@ -79,5 +84,6 @@ export const acceptAllBatch = (batchId) =>
 export const cancelBooking = (bookingId) => api.post(`/api/bookings/${bookingId}/cancel`)
 export const coachCancelBooking = (bookingId, cancelReason) =>
   api.post(`/api/bookings/${bookingId}/coach-cancel`, { cancelReason })
-export const recordNoShowPlayer = (bookingId) => api.post(`/api/bookings/${bookingId}/no-show-player`)
+export const recordNoShowPlayer = (bookingId) =>
+  api.post(`/api/bookings/${bookingId}/no-show-player`)
 export const recordNoShowCoach = (bookingId) => api.post(`/api/bookings/${bookingId}/no-show-coach`)

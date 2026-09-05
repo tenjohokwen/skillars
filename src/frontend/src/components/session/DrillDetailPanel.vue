@@ -1,6 +1,11 @@
 <template>
   <!-- Mobile: bottom sheet — max-height applied here so Quasar's chrome is included in the 75vh cap -->
-  <q-bottom-sheet v-if="isMobile" v-model="open" @hide="emit('close')" class="drill-detail-panel__sheet">
+  <q-bottom-sheet
+    v-if="isMobile"
+    v-model="open"
+    @hide="emit('close')"
+    class="drill-detail-panel__sheet"
+  >
     <div class="drill-detail-panel__content">
       <template v-if="drill">
         <div class="drill-detail-panel__video-area q-mb-md">
@@ -13,7 +18,9 @@
           />
           <div v-else class="drill-detail-panel__no-video text-center q-pa-md">
             <q-icon name="videocam_off" size="48px" class="q-mb-sm" />
-            <div class="text-caption text-secondary">Video preview available after upload</div>
+            <div class="text-caption text-secondary">
+              {{ $t('session.drillLibrary.videoPreviewAfterUpload') }}
+            </div>
           </div>
         </div>
 
@@ -24,15 +31,27 @@
             </q-item-section>
           </q-item>
           <q-item>
-            <q-item-section><q-item-label caption>Difficulty</q-item-label></q-item-section>
+            <q-item-section
+              ><q-item-label caption>{{
+                $t('session.drillLibrary.metaDifficulty')
+              }}</q-item-label></q-item-section
+            >
             <q-item-section side>{{ drill.metadata?.difficultyTier }}</q-item-section>
           </q-item>
           <q-item>
-            <q-item-section><q-item-label caption>Group Size</q-item-label></q-item-section>
+            <q-item-section
+              ><q-item-label caption>{{
+                $t('session.drillLibrary.metaGroupSize')
+              }}</q-item-label></q-item-section
+            >
             <q-item-section side>{{ drill.metadata?.recommendedGroupSize }}</q-item-section>
           </q-item>
           <q-item>
-            <q-item-section><q-item-label caption>Equipment</q-item-label></q-item-section>
+            <q-item-section
+              ><q-item-label caption>{{
+                $t('session.drillLibrary.metaEquipment')
+              }}</q-item-label></q-item-section
+            >
             <q-item-section side>{{
               (drill.metadata?.equipmentRequired ?? []).join(', ')
             }}</q-item-section>
@@ -54,7 +73,7 @@
         <div v-if="drill.metadata?.setupDiagram" class="q-mb-md">
           <img
             :src="drill.metadata.setupDiagram"
-            alt="Setup diagram"
+            :alt="$t('session.drillLibrary.setupDiagram')"
             style="width: 100%; border-radius: 8px"
           />
         </div>
@@ -75,7 +94,7 @@
         </div>
 
         <div v-if="drill.tags?.length" class="q-mb-md">
-          <div class="text-subtitle2 q-mb-sm">Tags</div>
+          <div class="text-subtitle2 q-mb-sm">{{ $t('session.drillLibrary.tags') }}</div>
           <div class="row q-gutter-xs">
             <q-chip v-for="tag in drill.tags" :key="tag" size="sm">{{ tag }}</q-chip>
           </div>
@@ -92,8 +111,10 @@
         />
 
         <!-- Upload section (PRIVATE drills only, INSTRUCTOR+ tier) -->
-        <div v-if="props.drill.libraryType === 'PRIVATE' && sessionStore.canUploadVideo === true"
-             class="detail-panel__upload q-mt-md">
+        <div
+          v-if="props.drill.libraryType === 'PRIVATE' && sessionStore.canUploadVideo === true"
+          class="detail-panel__upload q-mt-md"
+        >
           <template v-if="!props.drill.hasVideo">
             <q-file
               v-model="selectedVideoFile"
@@ -159,7 +180,9 @@
               />
               <div v-else class="drill-detail-panel__no-video text-center q-pa-md">
                 <q-icon name="videocam_off" size="48px" class="q-mb-sm" />
-                <div class="text-caption text-secondary">Video preview available after upload</div>
+                <div class="text-caption text-secondary">
+                  {{ $t('session.drillLibrary.videoPreviewAfterUpload') }}
+                </div>
               </div>
             </div>
 
@@ -172,15 +195,27 @@
                 </q-item-section>
               </q-item>
               <q-item>
-                <q-item-section><q-item-label caption>Difficulty</q-item-label></q-item-section>
+                <q-item-section
+                  ><q-item-label caption>{{
+                    $t('session.drillLibrary.metaDifficulty')
+                  }}</q-item-label></q-item-section
+                >
                 <q-item-section side>{{ drill.metadata?.difficultyTier }}</q-item-section>
               </q-item>
               <q-item>
-                <q-item-section><q-item-label caption>Group Size</q-item-label></q-item-section>
+                <q-item-section
+                  ><q-item-label caption>{{
+                    $t('session.drillLibrary.metaGroupSize')
+                  }}</q-item-label></q-item-section
+                >
                 <q-item-section side>{{ drill.metadata?.recommendedGroupSize }}</q-item-section>
               </q-item>
               <q-item>
-                <q-item-section><q-item-label caption>Equipment</q-item-label></q-item-section>
+                <q-item-section
+                  ><q-item-label caption>{{
+                    $t('session.drillLibrary.metaEquipment')
+                  }}</q-item-label></q-item-section
+                >
                 <q-item-section side>{{
                   (drill.metadata?.equipmentRequired ?? []).join(', ')
                 }}</q-item-section>
@@ -202,7 +237,7 @@
             <div v-if="drill.metadata?.setupDiagram" class="q-mb-md">
               <img
                 :src="drill.metadata.setupDiagram"
-                alt="Setup diagram"
+                :alt="$t('session.drillLibrary.setupDiagram')"
                 style="width: 100%; border-radius: 8px"
               />
             </div>
@@ -223,7 +258,7 @@
             </div>
 
             <div v-if="drill.tags?.length" class="q-mb-md">
-              <div class="text-subtitle2 q-mb-sm">Tags</div>
+              <div class="text-subtitle2 q-mb-sm">{{ $t('session.drillLibrary.tags') }}</div>
               <div class="row q-gutter-xs">
                 <q-chip v-for="tag in drill.tags" :key="tag" size="sm">{{ tag }}</q-chip>
               </div>
@@ -240,8 +275,10 @@
             />
 
             <!-- Upload section (PRIVATE drills only, INSTRUCTOR+ tier) -->
-            <div v-if="props.drill.libraryType === 'PRIVATE' && sessionStore.canUploadVideo === true"
-                 class="detail-panel__upload q-mt-md">
+            <div
+              v-if="props.drill.libraryType === 'PRIVATE' && sessionStore.canUploadVideo === true"
+              class="detail-panel__upload q-mt-md"
+            >
               <template v-if="!props.drill.hasVideo">
                 <q-file
                   v-model="selectedVideoFile"
@@ -313,14 +350,24 @@ const isMobile = computed(() => $q.screen.lt.sm)
 
 // Local ref avoids Quasar's sheet snapping back while the parent processes the close event
 const open = ref(props.isOpen)
-watch(() => props.isOpen, (val) => { open.value = val })
+watch(
+  () => props.isOpen,
+  (val) => {
+    open.value = val
+  },
+)
 
 // Story Deferred-75 AC9: this panel stays mounted and is reused for whichever drill is currently
 // selected (props.drill swaps without a remount) — so the once-per-mount emit guard must reset
 // whenever the displayed drill changes, or a video error on one drill would permanently suppress
 // recovery for every drill viewed afterward.
 const videoErrorEmitted = ref(false)
-watch(() => props.drill?.id, () => { videoErrorEmitted.value = false })
+watch(
+  () => props.drill?.id,
+  () => {
+    videoErrorEmitted.value = false
+  },
+)
 function handleVideoError() {
   if (videoErrorEmitted.value) return
   videoErrorEmitted.value = true
@@ -374,8 +421,14 @@ function readVideoDuration(file) {
     const url = URL.createObjectURL(file)
     const video = document.createElement('video')
     video.preload = 'metadata'
-    video.onloadedmetadata = () => { URL.revokeObjectURL(url); resolve(video.duration) }
-    video.onerror = () => { URL.revokeObjectURL(url); reject(new Error('metadata read failed')) }
+    video.onloadedmetadata = () => {
+      URL.revokeObjectURL(url)
+      resolve(video.duration)
+    }
+    video.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('metadata read failed'))
+    }
     video.src = url
   })
 }

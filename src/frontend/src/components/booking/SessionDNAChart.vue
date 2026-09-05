@@ -26,7 +26,11 @@
         :y1="cy"
         :x2="outerPoint(i).x"
         :y2="outerPoint(i).y"
-        :stroke="props.highlightAxes.includes(axis.key) ? 'var(--accent-secondary)' : 'var(--border-subtle, rgba(255,255,255,0.15))'"
+        :stroke="
+          props.highlightAxes.includes(axis.key)
+            ? 'var(--accent-secondary)'
+            : 'var(--border-subtle, rgba(255,255,255,0.15))'
+        "
         :stroke-width="props.highlightAxes.includes(axis.key) ? 2 : 1"
       />
 
@@ -68,7 +72,10 @@
     </svg>
 
     <!-- Compact: small legend row -->
-    <div v-if="props.variant === 'compact'" class="session-dna-chart__legend row q-gutter-sm justify-center">
+    <div
+      v-if="props.variant === 'compact'"
+      class="session-dna-chart__legend row q-gutter-sm justify-center"
+    >
       <div v-for="axis in axes" :key="axis.key" class="col-auto text-center">
         <div class="text-caption text-secondary">{{ t(`session.dna.axis.${axis.key}`) }}</div>
         <div class="text-body2 text-bold">{{ props.sessionDna[axis.key] ?? 0 }}</div>
@@ -76,9 +83,14 @@
     </div>
 
     <!-- Confirmation tick (shown in WrapUp) -->
-    <div v-if="props.showConfirmation" class="session-dna-chart__confirmed row items-center q-mt-sm">
+    <div
+      v-if="props.showConfirmation"
+      class="session-dna-chart__confirmed row items-center q-mt-sm"
+    >
       <q-icon name="check_circle" color="positive" size="24px" />
-      <span class="text-body2 q-ml-xs text-positive">{{ t('booking.completion.summaryTitle') }}</span>
+      <span class="text-body2 q-ml-xs text-positive">{{
+        t('booking.completion.summaryTitle')
+      }}</span>
     </div>
   </div>
 </template>
@@ -111,7 +123,7 @@ const axes = [
 ]
 const rings = [1, 2, 3, 4]
 
-const svgSize = computed(() => props.variant === 'full' ? 240 : 160)
+const svgSize = computed(() => (props.variant === 'full' ? 240 : 160))
 const cx = computed(() => svgSize.value / 2)
 const cy = computed(() => svgSize.value / 2)
 const radius = computed(() => svgSize.value * 0.38)
@@ -123,7 +135,10 @@ function angleFor(i) {
 
 function outerPoint(i) {
   const angle = angleFor(i)
-  return { x: cx.value + radius.value * Math.cos(angle), y: cy.value + radius.value * Math.sin(angle) }
+  return {
+    x: cx.value + radius.value * Math.cos(angle),
+    y: cy.value + radius.value * Math.sin(angle),
+  }
 }
 
 function labelPoint(i) {
@@ -133,11 +148,13 @@ function labelPoint(i) {
 }
 
 function polygonPoints(fraction) {
-  return axes.map((_, i) => {
-    const angle = angleFor(i)
-    const r = radius.value * fraction
-    return `${cx.value + r * Math.cos(angle)},${cy.value + r * Math.sin(angle)}`
-  }).join(' ')
+  return axes
+    .map((_, i) => {
+      const angle = angleFor(i)
+      const r = radius.value * fraction
+      return `${cx.value + r * Math.cos(angle)},${cy.value + r * Math.sin(angle)}`
+    })
+    .join(' ')
 }
 
 const dataDots = computed(() =>
@@ -146,7 +163,7 @@ const dataDots = computed(() =>
     const val = (props.sessionDna[axis.key] ?? 0) / 100
     const r = radius.value * val
     return { x: cx.value + r * Math.cos(angle), y: cy.value + r * Math.sin(angle) }
-  })
+  }),
 )
 
 const dataPoints = computed(() => dataDots.value.map((p) => `${p.x},${p.y}`).join(' '))

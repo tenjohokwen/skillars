@@ -10,6 +10,7 @@ import com.lowagie.text.Phrase;
 import com.lowagie.text.pdf.PdfPCell;
 import com.lowagie.text.pdf.PdfPTable;
 import com.lowagie.text.pdf.PdfWriter;
+import com.softropic.skillars.platform.security.contract.exception.LoginRateLimitedException;
 import com.softropic.skillars.platform.development.contract.CoachBrandingRequest;
 import com.softropic.skillars.platform.development.contract.CoachBrandingResponse;
 import com.softropic.skillars.platform.development.contract.PerformanceReportResponse;
@@ -92,13 +93,47 @@ public class ReportGenerationService {
     private final SecurityUtil securityUtil;
     private final CoachPlayerAuthorizationService coachPlayerAuthorizationService;
     private final PlayerProfileRepository playerProfileRepository;
+    private final com.softropic.skillars.infrastructure.security.RateLimitingService rateLimitingService;
 
     @Value("${baseurl}")
     private String baseUrl;
 
+    /**
+     * Per-coach report-generation budget (skillars-deferred-92 AC18), enforced <em>in addition to</em>
+     * the {@code @RateLimited} annotation below rather than instead of it.
+     *
+     * <p>{@code RateLimitingAspect} keys its bucket on the <strong>client IP</strong>, and collapses
+     * to the single literal bucket {@code "report_generate:unknown"} whenever the IP cannot be
+     * resolved ({@code RateLimitingAspect:80-81}). Two consequences, both live: every coach behind one
+     * office or school NAT shares a single 10/minute budget, and every caller whose IP is
+     * unresolvable shares one global bucket with every other such caller.
+     *
+     * <p>The fix mirrors {@code RegistrationOtpResendSupport.resendPhoneOtp} (skillars-deferred-89
+     * AC7) exactly: an explicit per-user {@code tryConsume} inside the service.
+     * {@code RateLimitingAspect}'s keying strategy is deliberately <strong>not</strong> changed — it
+     * is a shared aspect with a much wider blast radius, which is why the ledger deferred that and
+     * why this AC did not revisit it.
+     *
+     * <p>Both limits apply. The per-coach one is the meaningful bound; the IP one stays as the
+     * anti-abuse floor for unauthenticated flooding.
+     */
+    private static final long PER_COACH_REPORTS = 10;
+    private static final long PER_COACH_WINDOW_MINUTES = 1;
+    /** Bucket name, kept distinct from the aspect's {@code report_generate} so the two cannot merge. */
+    static final String PER_COACH_BUCKET = "report_generate_user";
+
     @Transactional
     @RateLimited(key = "report_generate", capacity = 10, duration = 1, unit = TimeUnit.MINUTES)
     public void generateReport(Long coachUserId, Long playerId, String nextSteps) {
+        // Before any authorization or DB work, as in VideoService.initiateUpload: a rejected request
+        // must cost as little as possible.
+        if (!rateLimitingService.tryConsume(String.valueOf(coachUserId), PER_COACH_BUCKET,
+                PER_COACH_REPORTS, PER_COACH_WINDOW_MINUTES, TimeUnit.MINUTES)) {
+            throw new LoginRateLimitedException(
+                "Report generation limit reached for this coach",
+                java.util.Map.of("coachUserId", coachUserId, "bucket", PER_COACH_BUCKET),
+                TimeUnit.MINUTES.toSeconds(PER_COACH_WINDOW_MINUTES));
+        }
         coachPlayerAuthorizationService.requireCoachPlayerRelationship(coachUserId, playerId);
         UUID coachId = coachProfileService.getCoachIdByUserId(coachUserId);
 
@@ -160,7 +195,10 @@ public class ReportGenerationService {
      * from listReports; there is currently no automatic retry (matches this story's scope).
      */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    @Async
+    // skillars-deferred-92 code review (D2): its own pool, not the shared @Async one. The upload
+    // below is a full S3 round trip with no outbox row and no retry behind it, and taskExecutor's
+    // 2s shutdown slice is sized for tasks that are never individually long-running.
+    @Async("reportExecutor")
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onReportGenerated(ReportGeneratedEvent event) {
         String storageKey = "reports/" + UUID.randomUUID() + "/report.pdf";
