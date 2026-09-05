@@ -451,14 +451,11 @@ onMounted(async () => {
     profile.value = response
 
     // AC22: seed from the profile payload instead of re-fetching what it already contains.
-    // The else-branch is deliberate rather than defensive noise: an older backend
-    // (or a future one that drops the enrichment) simply returns no `reviews` field, and the page
-    // keeps working through the original path instead of rendering an empty review list.
-    if (response?.reviews) {
-      applyReviewPage(response.reviews, 0)
-    } else {
-      await fetchReviews(0)
-    }
+    // CoachMarketplaceResource.getCoachProfile always populates `reviews` (via
+    // ReviewQueryService.getFirstPageForCoach, unconditionally, never null) with the same
+    // envelope fetchReviews(0) would produce, so there is no reachable fallback case for this
+    // backend — a prior `else { await fetchReviews(0) }` was dead code (skillars-deferred-92 review).
+    applyReviewPage(response.reviews, 0)
     if (authStore.isParent || authStore.isPlayer) {
       await fetchMyReview()
     }

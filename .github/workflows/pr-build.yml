@@ -104,9 +104,11 @@ jobs:
 
   # skillars-deferred-92 AC1. The AC names ci.yml, but ci.yml's own comment records that "the
   # enforcement gates live in pr-build, which is where regressions should be caught" — a gate that
-  # only runs on push-to-master reports the drift after it has already landed. The job is duplicated
-  # rather than shared because reusable-workflow indirection for ~20 lines costs more than it saves;
-  # keep the two copies in step.
+  # only runs on push-to-master reports the drift after it has already landed.
+  # Steps live in .github/actions/frontend-quality, shared with ci.yml's copy of this job --
+  # skillars-deferred-92 code review, chunk 5 (2026-09-04) found the two hand-duplicated inline
+  # copies already drifting from each other despite a comment (previously here) asking humans to
+  # keep them in sync manually; the composite action is what actually keeps them in sync now.
   frontend-quality:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -116,24 +118,4 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38  # v6.5.0
-        with:
-          # Pinned to <node.version> in pom.xml — same toolchain the frontend-maven-plugin build uses.
-          node-version: '22.16.0'
-          cache: npm
-          cache-dependency-path: src/frontend/package-lock.json
-
-      - name: Install frontend dependencies
-        working-directory: src/frontend
-        run: npm ci
-
-      - name: Prettier check
-        id: prettier
-        working-directory: src/frontend
-        run: npx prettier --check "src/**/*.{js,vue,scss,json}"
-
-      - name: ESLint
-        if: ${{ !cancelled() && steps.prettier.conclusion != 'skipped' }}
-        working-directory: src/frontend
-        run: npx eslint .
+      - uses: ./.github/actions/frontend-quality

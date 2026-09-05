@@ -426,22 +426,29 @@ old one. Reported during UAT for `booking.session.defaultDurationMinutes`, where
 
 | How the value was changed | When it takes effect |
 |---|---|
-| `PUT /api/config/values/{key}` (admin API) | **Immediately.** `ConfigService.updateConfig` invalidates the cache as part of the write. |
-| Directly in the database — `psql`, a migration, a manual fix | **Up to `app.config.cache-ttl-seconds` (default 300s / 5 minutes).** |
+| `PUT /api/config/values/{key}` (admin API) | **Immediately, on the node that served the request.** `ConfigService.updateConfig` invalidates that node's cache as part of the write. |
+| Directly in the database — `psql`, a migration, a manual fix | **Up to `app.config.cache-ttl-seconds` (default 300s / 5 minutes), on every node.** |
 
 `ConfigService` keeps an in-memory cache refreshed by
-`@Scheduled(fixedDelayString = "${app.config.cache-ttl-seconds:300}")`. A direct database write has
-no way to invalidate it, so the node keeps serving the cached value until the next refresh.
+`@Scheduled(fixedDelayString = "${app.config.cache-ttl-seconds:300}", timeUnit = TimeUnit.SECONDS)`.
+A direct database write has no way to invalidate it, so a node keeps serving the cached value until
+its own next refresh.
 
-**On more than one node, each caches independently**, so a direct DB edit is live everywhere only
-after the slowest node's next refresh. This is the reason to prefer the API even when psql is
-quicker to reach.
+**`invalidate()` has no cross-node effect — it only clears the cache of the node that ran it.** On
+more than one node, the admin API is *not* "immediate everywhere": the node that handled your `PUT`
+is correct at once, but every other node still serves the old value until its own TTL elapses, no
+differently from a direct DB write. **Prefer the API anyway** — not because it is faster across the
+fleet, but because it validates the input, is audited, and guarantees at least one node (the one you
+just queried) reflects the change immediately, which is what "wait out the TTL, or restart the
+application" below is really waiting on for the rest.
 
 **What to do**
 
 1. Prefer the admin API. That is the whole answer in the normal case.
-2. If the value was already changed directly in the database: wait out the TTL, or restart the
-   application, or re-apply the same value through the API (which invalidates the cache immediately).
+2. If the value was already changed directly in the database, or you need every node correct right
+   now rather than after the TTL: wait out the TTL, or restart the application. A load-balanced
+   re-`PUT` through the public API does **not** reliably reach every node — it invalidates only
+   whichever node happens to receive that request, and there is no fleet-wide invalidation broadcast.
 3. Do not lower `app.config.cache-ttl-seconds` to work around this. It would add polling on every
    node, permanently, for a table that changes a handful of times a year. The TTL was reviewed under
    skillars-deferred-92 AC24 and deliberately left at 300s.

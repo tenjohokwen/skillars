@@ -1,0 +1,1221 @@
+diff --git a/src/frontend/src/api/coachRegistration.api.js b/src/frontend/src/api/coachRegistration.api.js
+index e93cec4..0fbb660 100644
+--- a/src/frontend/src/api/coachRegistration.api.js
++++ b/src/frontend/src/api/coachRegistration.api.js
+@@ -13,4 +13,11 @@ export const coachRegistrationApi = {
+   resendVerification(email) {
+     return axios.post('/api/security/coach/resend-verification', { email })
+   },
++  // skillars-deferred-92 AC28: the OTP resend. Distinct from resendVerification above, which
++  // re-sends the EMAIL verification link. skillars-deferred-89 AC7 shipped this endpoint
++  // (permitAll, rate-limited 3/30min per role plus a per-user guard) and nothing ever called
++  // it, so a coach whose OTP email was lost had no self-service recovery while a parent did.
++  resendOtp(userId) {
++    return axios.post('/api/security/coach/resend-otp', { userId })
++  },
+ }
+diff --git a/src/frontend/src/api/playerRegistration.api.js b/src/frontend/src/api/playerRegistration.api.js
+index 411199b..11b86db 100644
+--- a/src/frontend/src/api/playerRegistration.api.js
++++ b/src/frontend/src/api/playerRegistration.api.js
+@@ -13,6 +13,13 @@ export const playerRegistrationApi = {
+   resendVerification(email) {
+     return api.post('/api/security/player/resend-verification', { email })
+   },
++  // skillars-deferred-92 AC28: the OTP resend. Distinct from resendVerification above, which
++  // re-sends the EMAIL verification link. skillars-deferred-89 AC7 shipped this endpoint
++  // (permitAll, rate-limited 3/30min per role plus a per-user guard) and nothing ever called
++  // it, so a player whose OTP email was lost had no self-service recovery while a parent did.
++  resendOtp(userId) {
++    return api.post('/api/security/player/resend-otp', { userId })
++  },
+   createProfile(data) {
+     return api.post('/api/security/players/me', data)
+   },
+diff --git a/src/frontend/src/components/development/DevelopmentCorrelationPanel.vue b/src/frontend/src/components/development/DevelopmentCorrelationPanel.vue
+index d4b8724..6ef4a4d 100644
+--- a/src/frontend/src/components/development/DevelopmentCorrelationPanel.vue
++++ b/src/frontend/src/components/development/DevelopmentCorrelationPanel.vue
+@@ -12,6 +12,10 @@
+               <q-item-label>{{
+                 $t('development.radar.correlation.insight.highSluImprovement')
+               }}</q-item-label>
++              <!-- Sample figures inside the blurred upsell teaser: not user data and not prose.
++                   'SLU' is a product acronym and the numbers are illustrative, so translating
++                   them would imply they mean something. -->
++              <!-- eslint-disable-next-line vue/no-bare-strings-in-template -->
+               <q-item-label caption>SLU: 120.00 | Score: 75.00</q-item-label>
+             </q-item-section>
+           </q-item>
+diff --git a/src/frontend/src/components/development/SkillsRadarChart.vue b/src/frontend/src/components/development/SkillsRadarChart.vue
+index 5d2e7b1..4d593dc 100644
+--- a/src/frontend/src/components/development/SkillsRadarChart.vue
++++ b/src/frontend/src/components/development/SkillsRadarChart.vue
+@@ -169,7 +169,7 @@
+     <!-- NOTE: the confidence dot is driven by distinctCoachCount (distinct coaches who have logged an
+          assessment), not entryCount (total assessment rows) — a single coach logging many assessments
+          no longer misrepresents multi-coach agreement (skillars-deferred-40 AC3). -->
+-    <table class="sr-only" aria-label="Skills Radar Data">
++    <table class="sr-only" :aria-label="$t('development.radar.chartAriaLabel')">
+       <thead>
+         <tr>
+           <th>{{ $t('development.radar.accessibleTable.skill') }}</th>
+diff --git a/src/frontend/src/components/profile/UpdatePhoneDialog.vue b/src/frontend/src/components/profile/UpdatePhoneDialog.vue
+index e3f9ada..83f89b7 100644
+--- a/src/frontend/src/components/profile/UpdatePhoneDialog.vue
++++ b/src/frontend/src/components/profile/UpdatePhoneDialog.vue
+@@ -18,7 +18,7 @@
+             :error="hasFieldError('phone')"
+             :error-message="getFieldError('phone')"
+             mask="#########"
+-            hint="9 digits starting with 6 (e.g., 670123456)"
++            :hint="$t('auth.phoneHintFormat')"
+           />
+ 
+           <!-- Error banner -->
+diff --git a/src/frontend/src/components/session/DrillCard.vue b/src/frontend/src/components/session/DrillCard.vue
+index 6c566af..2b484cf 100644
+--- a/src/frontend/src/components/session/DrillCard.vue
++++ b/src/frontend/src/components/session/DrillCard.vue
+@@ -60,7 +60,7 @@
+           {{ point }}
+         </li>
+         <li v-if="extraPointsCount > 0" class="text-caption text-grey">
+-          +{{ extraPointsCount }} more
++          {{ $t('session.drillLibrary.moreItems', { count: extraPointsCount }) }}
+         </li>
+       </ul>
+ 
+diff --git a/src/frontend/src/components/session/DrillDetailPanel.vue b/src/frontend/src/components/session/DrillDetailPanel.vue
+index eecd24e..c600cd0 100644
+--- a/src/frontend/src/components/session/DrillDetailPanel.vue
++++ b/src/frontend/src/components/session/DrillDetailPanel.vue
+@@ -18,7 +18,9 @@
+           />
+           <div v-else class="drill-detail-panel__no-video text-center q-pa-md">
+             <q-icon name="videocam_off" size="48px" class="q-mb-sm" />
+-            <div class="text-caption text-secondary">Video preview available after upload</div>
++            <div class="text-caption text-secondary">
++              {{ $t('session.drillLibrary.videoPreviewAfterUpload') }}
++            </div>
+           </div>
+         </div>
+ 
+@@ -29,15 +31,27 @@
+             </q-item-section>
+           </q-item>
+           <q-item>
+-            <q-item-section><q-item-label caption>Difficulty</q-item-label></q-item-section>
++            <q-item-section
++              ><q-item-label caption>{{
++                $t('session.drillLibrary.metaDifficulty')
++              }}</q-item-label></q-item-section
++            >
+             <q-item-section side>{{ drill.metadata?.difficultyTier }}</q-item-section>
+           </q-item>
+           <q-item>
+-            <q-item-section><q-item-label caption>Group Size</q-item-label></q-item-section>
++            <q-item-section
++              ><q-item-label caption>{{
++                $t('session.drillLibrary.metaGroupSize')
++              }}</q-item-label></q-item-section
++            >
+             <q-item-section side>{{ drill.metadata?.recommendedGroupSize }}</q-item-section>
+           </q-item>
+           <q-item>
+-            <q-item-section><q-item-label caption>Equipment</q-item-label></q-item-section>
++            <q-item-section
++              ><q-item-label caption>{{
++                $t('session.drillLibrary.metaEquipment')
++              }}</q-item-label></q-item-section
++            >
+             <q-item-section side>{{
+               (drill.metadata?.equipmentRequired ?? []).join(', ')
+             }}</q-item-section>
+@@ -59,7 +73,7 @@
+         <div v-if="drill.metadata?.setupDiagram" class="q-mb-md">
+           <img
+             :src="drill.metadata.setupDiagram"
+-            alt="Setup diagram"
++            :alt="$t('session.drillLibrary.setupDiagram')"
+             style="width: 100%; border-radius: 8px"
+           />
+         </div>
+@@ -80,7 +94,7 @@
+         </div>
+ 
+         <div v-if="drill.tags?.length" class="q-mb-md">
+-          <div class="text-subtitle2 q-mb-sm">Tags</div>
++          <div class="text-subtitle2 q-mb-sm">{{ $t('session.drillLibrary.tags') }}</div>
+           <div class="row q-gutter-xs">
+             <q-chip v-for="tag in drill.tags" :key="tag" size="sm">{{ tag }}</q-chip>
+           </div>
+@@ -166,7 +180,9 @@
+               />
+               <div v-else class="drill-detail-panel__no-video text-center q-pa-md">
+                 <q-icon name="videocam_off" size="48px" class="q-mb-sm" />
+-                <div class="text-caption text-secondary">Video preview available after upload</div>
++                <div class="text-caption text-secondary">
++                  {{ $t('session.drillLibrary.videoPreviewAfterUpload') }}
++                </div>
+               </div>
+             </div>
+ 
+@@ -179,15 +195,27 @@
+                 </q-item-section>
+               </q-item>
+               <q-item>
+-                <q-item-section><q-item-label caption>Difficulty</q-item-label></q-item-section>
++                <q-item-section
++                  ><q-item-label caption>{{
++                    $t('session.drillLibrary.metaDifficulty')
++                  }}</q-item-label></q-item-section
++                >
+                 <q-item-section side>{{ drill.metadata?.difficultyTier }}</q-item-section>
+               </q-item>
+               <q-item>
+-                <q-item-section><q-item-label caption>Group Size</q-item-label></q-item-section>
++                <q-item-section
++                  ><q-item-label caption>{{
++                    $t('session.drillLibrary.metaGroupSize')
++                  }}</q-item-label></q-item-section
++                >
+                 <q-item-section side>{{ drill.metadata?.recommendedGroupSize }}</q-item-section>
+               </q-item>
+               <q-item>
+-                <q-item-section><q-item-label caption>Equipment</q-item-label></q-item-section>
++                <q-item-section
++                  ><q-item-label caption>{{
++                    $t('session.drillLibrary.metaEquipment')
++                  }}</q-item-label></q-item-section
++                >
+                 <q-item-section side>{{
+                   (drill.metadata?.equipmentRequired ?? []).join(', ')
+                 }}</q-item-section>
+@@ -209,7 +237,7 @@
+             <div v-if="drill.metadata?.setupDiagram" class="q-mb-md">
+               <img
+                 :src="drill.metadata.setupDiagram"
+-                alt="Setup diagram"
++                :alt="$t('session.drillLibrary.setupDiagram')"
+                 style="width: 100%; border-radius: 8px"
+               />
+             </div>
+@@ -230,7 +258,7 @@
+             </div>
+ 
+             <div v-if="drill.tags?.length" class="q-mb-md">
+-              <div class="text-subtitle2 q-mb-sm">Tags</div>
++              <div class="text-subtitle2 q-mb-sm">{{ $t('session.drillLibrary.tags') }}</div>
+               <div class="row q-gutter-xs">
+                 <q-chip v-for="tag in drill.tags" :key="tag" size="sm">{{ tag }}</q-chip>
+               </div>
+diff --git a/src/frontend/src/components/video/QuotaUsageBar.vue b/src/frontend/src/components/video/QuotaUsageBar.vue
+index b13310d..ff5f824 100644
+--- a/src/frontend/src/components/video/QuotaUsageBar.vue
++++ b/src/frontend/src/components/video/QuotaUsageBar.vue
+@@ -20,7 +20,7 @@
+           :color="barColor(storagePercent)"
+           rounded
+           size="8px"
+-          aria-label="Storage usage"
++          :aria-label="$t('video.quota.storage')"
+         />
+         <div
+           v-if="storagePercent >= 95 && showUpgradePrompt"
+@@ -46,7 +46,7 @@
+           :color="barColor(bandwidthPercent)"
+           rounded
+           size="8px"
+-          aria-label="Bandwidth usage"
++          :aria-label="$t('video.quota.bandwidth')"
+         />
+       </div>
+     </template>
+diff --git a/src/frontend/src/css/glass.scss b/src/frontend/src/css/glass.scss
+index 43d041a..904f29f 100644
+--- a/src/frontend/src/css/glass.scss
++++ b/src/frontend/src/css/glass.scss
+@@ -12,7 +12,16 @@
+   backdrop-filter: blur(18px);
+   -webkit-backdrop-filter: blur(18px);
+   box-shadow: var(--card-shadow);
+-  transition: all 0.2s ease;
++  // skillars-deferred-92 AC25.1: the four properties the :hover block below actually changes,
++  // not `all`. Story 1.2 narrowed .hover-lift for exactly this reason; these four were missed.
++  // `transition: all` animates EVERY property change, including layout ones the browser cannot
++  // cheaply interpolate, so an unrelated width/padding change from another class arrives as a
++  // 200ms animation nobody asked for.
++  transition:
++    border-color 0.2s ease,
++    background 0.2s ease,
++    transform 0.2s ease,
++    box-shadow 0.2s ease;
+ 
+   &:hover {
+     border-color: var(--border-accent);
+@@ -39,7 +48,8 @@
+ }
+ 
+ .soft-hover {
+-  transition: all 0.2s ease;
++  // AC25.1: transform is the only property this :hover changes.
++  transition: transform 0.2s ease;
+ 
+   &:hover {
+     transform: translateY(-2px);
+@@ -53,7 +63,10 @@
+   border: none !important;
+   border-radius: 14px !important;
+   font-weight: 600;
+-  transition: all 0.2s ease;
++  // AC25.1: transform + box-shadow, matching the :hover block.
++  transition:
++    transform 0.2s ease,
++    box-shadow 0.2s ease;
+ 
+   &:hover {
+     transform: translateY(-1px);
+@@ -67,7 +80,10 @@
+   border: 1px solid var(--btn-border) !important;
+   color: var(--text-primary) !important;
+   border-radius: 14px !important;
+-  transition: all 0.2s ease;
++  // AC25.1: background + transform, matching the :hover block.
++  transition:
++    background 0.2s ease,
++    transform 0.2s ease;
+ 
+   &:hover {
+     background: var(--btn-hover) !important;
+diff --git a/src/frontend/src/css/quasar.variables.scss b/src/frontend/src/css/quasar.variables.scss
+index a6c2bf3..4c68552 100644
+--- a/src/frontend/src/css/quasar.variables.scss
++++ b/src/frontend/src/css/quasar.variables.scss
+@@ -1,5 +1,7 @@
+ // Quasar SCSS variables — aligned with the design system.
+-// Runtime theme switching is handled by CSS custom properties in variables.scss.
++// Runtime theme switching is handled by CSS custom properties in tokens/_colors.scss,
++// imported once by app.scss (skillars-deferred-92 AC25.2 deleted the variables.scss forwarder,
++// which nothing imported and which made tokens/colors reachable by two paths).
+ // These SCSS variables set Quasar's compile-time defaults.
+ 
+ $primary: #00ffb4;
+diff --git a/src/frontend/src/css/variables.scss b/src/frontend/src/css/variables.scss
+deleted file mode 100644
+index 1733580..0000000
+--- a/src/frontend/src/css/variables.scss
++++ /dev/null
+@@ -1,2 +0,0 @@
+-// Tokens moved to tokens/_colors.scss — kept for any legacy imports
+-@import 'tokens/colors';
+diff --git a/src/frontend/src/layouts/MainLayout.vue b/src/frontend/src/layouts/MainLayout.vue
+index b09a942..7f726ff 100644
+--- a/src/frontend/src/layouts/MainLayout.vue
++++ b/src/frontend/src/layouts/MainLayout.vue
+@@ -11,7 +11,7 @@
+           dense
+           icon="menu"
+           class="header-btn"
+-          aria-label="Menu"
++          :aria-label="$t('nav.menu')"
+           @click="toggleLeftDrawer"
+         />
+ 
+@@ -116,19 +116,19 @@
+       <!-- Drawer header -->
+       <div class="drawer-header">
+         <div class="drawer-brand gradient-text">Skillars</div>
+-        <div class="text-meta">Analytics Platform</div>
++        <div class="text-meta">{{ $t('nav.tagline') }}</div>
+       </div>
+ 
+       <q-list padding class="drawer-nav">
+         <!-- Main navigation -->
+-        <div class="text-label q-px-md q-mb-sm">Main</div>
++        <div class="text-label q-px-md q-mb-sm">{{ $t('nav.sectionMain') }}</div>
+ 
+         <q-item clickable to="/dashboard" class="nav-item">
+           <q-item-section avatar>
+             <q-icon name="dashboard" class="nav-icon" />
+           </q-item-section>
+           <q-item-section>
+-            <q-item-label class="nav-label">Dashboard</q-item-label>
++            <q-item-label class="nav-label">{{ $t('nav.dashboard') }}</q-item-label>
+           </q-item-section>
+         </q-item>
+ 
+@@ -230,14 +230,14 @@
+ 
+         <!-- Admin section -->
+         <template v-if="authStore.isAdmin">
+-          <div class="text-label q-px-md q-mt-lg q-mb-sm">Admin</div>
++          <div class="text-label q-px-md q-mt-lg q-mb-sm">{{ $t('nav.admin') }}</div>
+ 
+           <q-item clickable to="/admin/health-dashboard" class="nav-item">
+             <q-item-section avatar>
+               <q-icon name="monitor_heart" class="nav-icon" />
+             </q-item-section>
+             <q-item-section>
+-              <q-item-label class="nav-label">Health Dashboard</q-item-label>
++              <q-item-label class="nav-label">{{ $t('nav.healthDashboard') }}</q-item-label>
+             </q-item-section>
+           </q-item>
+         </template>
+diff --git a/src/frontend/src/pages/DashboardPage.vue b/src/frontend/src/pages/DashboardPage.vue
+index 1f19907..83f73af 100644
+--- a/src/frontend/src/pages/DashboardPage.vue
++++ b/src/frontend/src/pages/DashboardPage.vue
+@@ -7,8 +7,8 @@
+     <div class="app-page fade-in">
+       <!-- Page header -->
+       <div class="page-header q-mb-xl">
+-        <div class="text-page-title">Dashboard</div>
+-        <div class="text-meta">Welcome back, {{ username }}</div>
++        <div class="text-page-title">{{ $t('dashboard.title') }}</div>
++        <div class="text-meta">{{ $t('dashboard.welcomeBack', { name: username }) }}</div>
+       </div>
+ 
+       <!-- Metric cards -->
+@@ -25,8 +25,8 @@
+         <div class="status-inner">
+           <q-icon name="check_circle" size="40px" style="color: var(--accent-primary)" />
+           <div>
+-            <div class="text-card-title">You are successfully logged in</div>
+-            <div class="text-meta">All systems are operational.</div>
++            <div class="text-card-title">{{ $t('dashboard.loggedIn') }}</div>
++            <div class="text-meta">{{ $t('dashboard.operational') }}</div>
+           </div>
+         </div>
+       </div>
+@@ -36,6 +36,7 @@
+ 
+ <script setup>
+ import { computed, onMounted } from 'vue'
++import { useI18n } from 'vue-i18n'
+ import { useBookingStore } from 'src/stores/booking.store'
+ import { useAuthStore } from 'src/stores/auth.store'
+ import { readUserDisplayName } from 'src/utils/sessionCookies'
+@@ -43,8 +44,9 @@ import TimezoneNotice from 'src/components/booking/TimezoneNotice.vue'
+ 
+ // readUserDisplayName() returns null for a blank / sentinel `user` cookie value
+ // (skillars-deferred-90 AC2), so the greeting falls through to the generic default.
+-const username = computed(() => readUserDisplayName() ?? 'User')
++const username = computed(() => readUserDisplayName() ?? t('dashboard.defaultUser'))
+ 
++const { t } = useI18n()
+ const bookingStore = useBookingStore()
+ const authStore = useAuthStore()
+ 
+@@ -58,12 +60,13 @@ const dashboardPitchTimezone = computed(() => {
+   return bookingStore.parentBookings[0]?.canonicalTimezone ?? null
+ })
+ 
+-const metrics = [
+-  { label: 'Sessions Today', value: '—', sub: 'No data yet' },
+-  { label: 'Active Users', value: '—', sub: 'No data yet' },
+-  { label: 'Uptime', value: '99.9%', sub: 'Last 30 days' },
+-  { label: 'Response Time', value: '—', sub: 'Average ms' },
+-]
++// computed, not a plain array: the labels must re-render when the locale changes.
++const metrics = computed(() => [
++  { label: t('dashboard.metricSessionsToday'), value: '—', sub: t('dashboard.metricNoData') },
++  { label: t('dashboard.metricActiveUsers'), value: '—', sub: t('dashboard.metricNoData') },
++  { label: t('dashboard.metricUptime'), value: '99.9%', sub: t('dashboard.metricLast30Days') },
++  { label: t('dashboard.metricResponseTime'), value: '—', sub: t('dashboard.metricAverageMs') },
++])
+ </script>
+ 
+ <style lang="scss" scoped>
+diff --git a/src/frontend/src/pages/ErrorNotFound.vue b/src/frontend/src/pages/ErrorNotFound.vue
+index b3c9c70..598f1eb 100644
+--- a/src/frontend/src/pages/ErrorNotFound.vue
++++ b/src/frontend/src/pages/ErrorNotFound.vue
+@@ -2,11 +2,16 @@
+   <div class="error-page app-bg">
+     <div class="error-content fade-in">
+       <div class="error-number gradient-text">404</div>
+-      <div class="text-page-title q-mb-sm">Page not found</div>
+-      <div class="text-body q-mb-xl">
+-        The page you're looking for doesn't exist or has been moved.
+-      </div>
+-      <q-btn unelevated to="/" class="btn-accent q-px-xl" size="md" label="Go Home" no-caps />
++      <div class="text-page-title q-mb-sm">{{ $t('errorPage.notFoundTitle') }}</div>
++      <div class="text-body q-mb-xl">{{ $t('errorPage.notFoundBody') }}</div>
++      <q-btn
++        unelevated
++        to="/"
++        class="btn-accent q-px-xl"
++        size="md"
++        :label="$t('errorPage.goHome')"
++        no-caps
++      />
+     </div>
+   </div>
+ </template>
+diff --git a/src/frontend/src/pages/IndexPage.vue b/src/frontend/src/pages/IndexPage.vue
+deleted file mode 100644
+index 8f7562d..0000000
+--- a/src/frontend/src/pages/IndexPage.vue
++++ /dev/null
+@@ -1,13 +0,0 @@
+-<template>
+-  <q-page class="flex flex-center">
+-    <img
+-      alt="Quasar logo"
+-      src="~assets/quasar-logo-vertical.svg"
+-      style="width: 200px; height: 200px"
+-    />
+-  </q-page>
+-</template>
+-
+-<script setup>
+-//
+-</script>
+diff --git a/src/frontend/src/pages/ProfilePage.vue b/src/frontend/src/pages/ProfilePage.vue
+index 60b0c8b..3264a49 100644
+--- a/src/frontend/src/pages/ProfilePage.vue
++++ b/src/frontend/src/pages/ProfilePage.vue
+@@ -4,7 +4,7 @@
+       <!-- Page header -->
+       <div class="page-header q-mb-xl">
+         <div class="text-page-title">{{ t('profile.title') }}</div>
+-        <div class="text-meta">Manage your account details and preferences.</div>
++        <div class="text-meta">{{ $t('profile.subtitle') }}</div>
+       </div>
+ 
+       <!-- Loading -->
+@@ -26,7 +26,7 @@
+       <template v-else-if="profile">
+         <div class="profile-grid">
+           <div class="glass-card profile-section">
+-            <div class="text-label q-mb-lg">Account</div>
++            <div class="text-label q-mb-lg">{{ $t('profile.sectionAccount') }}</div>
+ 
+             <div class="profile-row">
+               <div>
+@@ -71,7 +71,7 @@
+           </div>
+ 
+           <div class="glass-card profile-section">
+-            <div class="text-label q-mb-lg">Personal Info</div>
++            <div class="text-label q-mb-lg">{{ $t('profile.sectionPersonal') }}</div>
+ 
+             <div class="profile-row">
+               <div>
+diff --git a/src/frontend/src/pages/admin/HealthDashboardPage.vue b/src/frontend/src/pages/admin/HealthDashboardPage.vue
+index a84a782..a765203 100644
+--- a/src/frontend/src/pages/admin/HealthDashboardPage.vue
++++ b/src/frontend/src/pages/admin/HealthDashboardPage.vue
+@@ -2,8 +2,8 @@
+   <q-page>
+     <div class="app-page fade-in">
+       <div class="page-header q-mb-xl">
+-        <div class="text-page-title">System Health</div>
+-        <div class="text-meta">Real-time infrastructure status</div>
++        <div class="text-page-title">{{ $t('admin.health.title') }}</div>
++        <div class="text-meta">{{ $t('admin.health.subtitle') }}</div>
+       </div>
+ 
+       <div v-if="isLoading" class="flex flex-center q-py-xl">
+@@ -26,7 +26,7 @@
+           <template #avatar>
+             <q-icon name="lock" style="color: var(--accent-warning)" />
+           </template>
+-          Admin access required to view health details.
++          {{ $t('admin.health.accessDenied') }}
+         </q-banner>
+ 
+         <div v-if="health.components" class="components-grid">
+@@ -61,6 +61,9 @@
+ import { ref, onMounted } from 'vue'
+ import { useQuasar } from 'quasar'
+ import { adminApi } from 'src/api/admin.api'
++import { useI18n } from 'vue-i18n'
++
++const { t } = useI18n()
+ 
+ const $q = useQuasar()
+ const health = ref(null)
+@@ -74,7 +77,7 @@ onMounted(async () => {
+     if (error?.response?.data?.status) {
+       health.value = error.response.data
+     } else {
+-      $q.notify({ type: 'negative', message: 'Failed to load health status' })
++      $q.notify({ type: 'negative', message: t('admin.health.loadError') })
+     }
+   } finally {
+     isLoading.value = false
+diff --git a/src/frontend/src/pages/auth/ActivatePage.vue b/src/frontend/src/pages/auth/ActivatePage.vue
+index 6866659..bd7a776 100644
+--- a/src/frontend/src/pages/auth/ActivatePage.vue
++++ b/src/frontend/src/pages/auth/ActivatePage.vue
+@@ -3,7 +3,7 @@
+     <div class="auth-card-container fade-in">
+       <div class="auth-brand q-mb-xl">
+         <div class="gradient-text auth-brand-name">Skillars</div>
+-        <div class="text-meta">Account activation</div>
++        <div class="text-meta">{{ $t('auth.activationTitle') }}</div>
+       </div>
+ 
+       <div class="glass-card--static auth-card text-center">
+@@ -17,7 +17,7 @@
+ 
+         <!-- No key -->
+         <div v-else-if="!activationKey" class="auth-banner auth-banner--error q-pa-md q-mt-md">
+-          Invalid or missing activation key.
++          {{ $t('auth.activationKeyMissing') }}
+         </div>
+ 
+         <!-- Success -->
+@@ -29,7 +29,7 @@
+             class="q-mb-md"
+           />
+           <div class="text-card-title q-mb-sm">{{ t('success.activated') }}</div>
+-          <div class="text-meta">Redirecting in {{ countdown }}...</div>
++          <div class="text-meta">{{ $t('auth.activateRedirecting', { seconds: countdown }) }}</div>
+         </div>
+ 
+         <!-- Error -->
+diff --git a/src/frontend/src/pages/auth/CoachEmailVerifyPage.vue b/src/frontend/src/pages/auth/CoachEmailVerifyPage.vue
+index dec080f..1f79548 100644
+--- a/src/frontend/src/pages/auth/CoachEmailVerifyPage.vue
++++ b/src/frontend/src/pages/auth/CoachEmailVerifyPage.vue
+@@ -66,7 +66,7 @@ onMounted(async () => {
+   if (!token) {
+     isVerifying.value = false
+     setError({
+-      response: { data: { message: 'No verification token found. Please check your email link.' } },
++      response: { data: { message: t('auth.verifyTokenMissing') } },
+     })
+     return
+   }
+diff --git a/src/frontend/src/pages/auth/CoachPhoneVerifyPage.vue b/src/frontend/src/pages/auth/CoachPhoneVerifyPage.vue
+index 196218e..3f6aaea 100644
+--- a/src/frontend/src/pages/auth/CoachPhoneVerifyPage.vue
++++ b/src/frontend/src/pages/auth/CoachPhoneVerifyPage.vue
+@@ -42,6 +42,20 @@
+         </q-banner>
+ 
+         <div class="text-center q-mt-md">
++          <q-btn
++            flat
++            no-caps
++            dense
++            class="auth-link q-mr-md"
++            :label="
++              resendCooldown > 0
++                ? t('auth.coach.resendCooldown', { seconds: resendCooldown })
++                : t('auth.coach.resendOtp')
++            "
++            :disable="resendCooldown > 0 || isResending"
++            :loading="isResending"
++            @click="handleResendOtp"
++          />
+           <router-link to="/login" class="auth-link">
+             &larr; {{ t('auth.coach.signInInstead') }}
+           </router-link>
+@@ -52,7 +66,7 @@
+ </template>
+ 
+ <script setup>
+-import { ref, computed, onMounted } from 'vue'
++import { ref, computed, onMounted, onUnmounted } from 'vue'
+ import { useRouter, useRoute } from 'vue-router'
+ import { useI18n } from 'vue-i18n'
+ import { coachRegistrationApi } from 'src/api/coachRegistration.api'
+@@ -66,6 +80,42 @@ const { setError, clearError, hasError, errorMessage, helpCode } = useErrorHandl
+ const digits = ref(['', '', '', '', '', ''])
+ const otpInputs = ref([])
+ const isSubmitting = ref(false)
++const isResending = ref(false)
++const resendCooldown = ref(0)
++let cooldownTimer = null
++
++// Mirrors ParentPhoneVerifyPage exactly (skillars-deferred-92 AC28.2) — same 60s cooldown,
++// same disabled state, same silent catch. The parent flow is the reference implementation;
++// a second pattern here would be a second thing to keep in step.
++function startCooldown() {
++  resendCooldown.value = 60
++  cooldownTimer = setInterval(() => {
++    resendCooldown.value--
++    if (resendCooldown.value <= 0) {
++      clearInterval(cooldownTimer)
++      cooldownTimer = null
++    }
++  }, 1000)
++}
++
++onUnmounted(() => {
++  if (cooldownTimer) clearInterval(cooldownTimer)
++})
++
++async function handleResendOtp() {
++  if (!userId.value) return
++  isResending.value = true
++  try {
++    await coachRegistrationApi.resendOtp(userId.value)
++    startCooldown()
++  } catch {
++    // Silent, as in the parent flow: the backend's 409 / 400 responses distinguish
++    // "already sending", "locked" and "bad user", and surfacing that difference to an
++    // unauthenticated caller is account enumeration. The cooldown simply does not start.
++  } finally {
++    isResending.value = false
++  }
++}
+ 
+ const userId = computed(() => (route.query.userId ? Number(route.query.userId) : null))
+ 
+diff --git a/src/frontend/src/pages/auth/ForgotPasswordPage.vue b/src/frontend/src/pages/auth/ForgotPasswordPage.vue
+index 3094336..d4774ee 100644
+--- a/src/frontend/src/pages/auth/ForgotPasswordPage.vue
++++ b/src/frontend/src/pages/auth/ForgotPasswordPage.vue
+@@ -3,7 +3,7 @@
+     <div class="auth-card-container fade-in">
+       <div class="auth-brand q-mb-xl">
+         <div class="gradient-text auth-brand-name">Skillars</div>
+-        <div class="text-meta">Account recovery</div>
++        <div class="text-meta">{{ $t('auth.recoveryTitle') }}</div>
+       </div>
+ 
+       <div class="glass-card--static auth-card">
+@@ -11,7 +11,7 @@
+           {{ t('auth.forgotPassword').replace('?', '') }}
+         </div>
+         <div class="text-meta q-mb-lg">
+-          Enter your email and date of birth to reset your password.
++          {{ $t('auth.recoveryBody') }}
+         </div>
+ 
+         <!-- Success state -->
+@@ -23,7 +23,7 @@
+               style="color: var(--accent-primary)"
+               class="q-mb-md"
+             />
+-            <div class="text-card-title q-mb-sm">Email sent</div>
++            <div class="text-card-title q-mb-sm">{{ $t('auth.recoveryEmailSent') }}</div>
+             <div class="text-meta">{{ t('success.emailSent') }}</div>
+           </div>
+           <router-link to="/login" class="auth-link block-link">
+diff --git a/src/frontend/src/pages/auth/LoginPage.vue b/src/frontend/src/pages/auth/LoginPage.vue
+index a4a7d62..8644655 100644
+--- a/src/frontend/src/pages/auth/LoginPage.vue
++++ b/src/frontend/src/pages/auth/LoginPage.vue
+@@ -4,12 +4,12 @@
+       <!-- Brand mark -->
+       <div class="auth-brand q-mb-xl">
+         <div class="gradient-text auth-brand-name">Skillars</div>
+-        <div class="text-meta">Analytics Platform</div>
++        <div class="text-meta">{{ $t('nav.tagline') }}</div>
+       </div>
+ 
+       <div class="glass-card--static auth-card">
+         <div class="text-section-title q-mb-xs">{{ t('auth.login') }}</div>
+-        <div class="text-meta q-mb-lg">Welcome back. Sign in to continue.</div>
++        <div class="text-meta q-mb-lg">{{ $t('auth.loginWelcome') }}</div>
+ 
+         <!-- Session expired banner -->
+         <q-banner
+@@ -90,7 +90,9 @@
+           </router-link>
+         </div>
+ 
+-        <div class="auth-divider"><span>or</span></div>
++        <div class="auth-divider">
++          <span>{{ $t('common.or') }}</span>
++        </div>
+ 
+         <div class="text-center">
+           <div class="text-meta q-mb-xs">{{ t('auth.noAccount') }}</div>
+@@ -119,6 +121,7 @@ import { authApi } from 'src/api/auth.api'
+ import { useErrorHandler } from 'src/composables/useErrorHandler'
+ import { useAuthStore } from 'src/stores/auth.store'
+ import { useSession } from 'src/composables/useSession'
++import { routeForRole } from 'src/router/roleRoutes'
+ 
+ const router = useRouter()
+ const route = useRoute()
+@@ -137,13 +140,6 @@ const {
+   getFieldError,
+ } = useErrorHandler()
+ 
+-const ROLE_ROUTES = {
+-  COACH: '/coach/command-center',
+-  PARENT: '/parent/dashboard',
+-  PLAYER: '/player/home', // resolves the caller's own playerId, then redirects to /player/locker-room/:playerId
+-  ADMIN: '/admin/health-dashboard',
+-}
+-
+ const form = ref({ email: '', password: '' })
+ const isPwd = ref(true)
+ const isSubmitting = ref(false)
+@@ -166,7 +162,7 @@ async function handleLogin() {
+     const safePath =
+       typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')
+         ? redirect
+-        : ROLE_ROUTES[response.role] || '/dashboard'
++        : routeForRole(response.role)
+     router.push(safePath)
+   } catch (err) {
+     const status = err?.response?.status
+diff --git a/src/frontend/src/pages/auth/OtpPage.vue b/src/frontend/src/pages/auth/OtpPage.vue
+index 20945f6..7c3912f 100644
+--- a/src/frontend/src/pages/auth/OtpPage.vue
++++ b/src/frontend/src/pages/auth/OtpPage.vue
+@@ -3,12 +3,12 @@
+     <div class="auth-card-container fade-in">
+       <div class="auth-brand q-mb-xl">
+         <div class="gradient-text auth-brand-name">Skillars</div>
+-        <div class="text-meta">Two-factor authentication</div>
++        <div class="text-meta">{{ $t('auth.twoFactorTitle') }}</div>
+       </div>
+ 
+       <div class="glass-card--static auth-card">
+         <div class="text-section-title q-mb-xs">{{ t('auth.enterOtp') }}</div>
+-        <div class="text-meta q-mb-lg">{{ t('auth.otpSent') }} — code expires in 30 minutes.</div>
++        <div class="text-meta q-mb-lg">{{ t('auth.otpSent') }} — {{ t('auth.otpCodeExpiry') }}</div>
+ 
+         <!-- OTP digit inputs -->
+         <div class="otp-row q-mb-lg">
+@@ -47,7 +47,7 @@
+ 
+         <!-- Resend -->
+         <div class="text-center q-mt-lg">
+-          <div class="text-meta q-mb-sm">Didn't receive the code?</div>
++          <div class="text-meta q-mb-sm">{{ $t('auth.otpNotReceived') }}</div>
+           <q-btn
+             flat
+             no-caps
+diff --git a/src/frontend/src/pages/auth/ParentEmailVerifyPage.vue b/src/frontend/src/pages/auth/ParentEmailVerifyPage.vue
+index 77e68b4..8144493 100644
+--- a/src/frontend/src/pages/auth/ParentEmailVerifyPage.vue
++++ b/src/frontend/src/pages/auth/ParentEmailVerifyPage.vue
+@@ -66,7 +66,7 @@ onMounted(async () => {
+   if (!token) {
+     isVerifying.value = false
+     setError({
+-      response: { data: { message: 'No verification token found. Please check your email link.' } },
++      response: { data: { message: t('auth.verifyTokenMissing') } },
+     })
+     return
+   }
+diff --git a/src/frontend/src/pages/auth/ParentRegisterPage.vue b/src/frontend/src/pages/auth/ParentRegisterPage.vue
+index 5b43eec..65db069 100644
+--- a/src/frontend/src/pages/auth/ParentRegisterPage.vue
++++ b/src/frontend/src/pages/auth/ParentRegisterPage.vue
+@@ -115,11 +115,7 @@
+             <div>
+               <div ref="tosBoxRef" class="policy-scroll-box" @scroll="onScroll('tos', $event)">
+                 <p>
+-                  {{ t('auth.parent.tosLabel') }} — Lorem ipsum dolor sit amet, consectetur
+-                  adipiscing elit. By using Skillars, you agree to our terms and conditions. These
+-                  terms govern your use of the platform, including booking sessions, payments, and
+-                  data handling. You must be at least 18 years old to register as a parent. All
+-                  accounts are subject to our acceptable use policy.
++                  {{ t('auth.parentTosBody') }}
+                 </p>
+               </div>
+               <q-checkbox
+@@ -137,11 +133,7 @@
+                 @scroll="onScroll('privacy', $event)"
+               >
+                 <p>
+-                  {{ t('auth.parent.privacyLabel') }} — We collect personal data to provide our
+-                  services. Your data is processed in accordance with GDPR and applicable data
+-                  protection laws. We do not sell your personal data to third parties. You may
+-                  request deletion of your data at any time. Session recordings and coaching data
+-                  are retained for the period specified in our privacy policy.
++                  {{ t('auth.parentPrivacyBody') }}
+                 </p>
+               </div>
+               <q-checkbox
+@@ -159,11 +151,7 @@
+                 @scroll="onScroll('parentConsent', $event)"
+               >
+                 <p>
+-                  {{ t('auth.parent.parentConsentLabel') }} — As the legal guardian of the player(s)
+-                  you register, you consent to Skillars collecting and processing data about your
+-                  child for coaching purposes. You confirm you are the legal parent or guardian. You
+-                  are responsible for ensuring your child's participation is appropriate. You may
+-                  withdraw consent at any time by contacting support.
++                  {{ t('auth.parentConsentBody') }}
+                 </p>
+               </div>
+               <q-checkbox
+diff --git a/src/frontend/src/pages/auth/PlayerEmailVerifyPage.vue b/src/frontend/src/pages/auth/PlayerEmailVerifyPage.vue
+index ec7472a..25fad8d 100644
+--- a/src/frontend/src/pages/auth/PlayerEmailVerifyPage.vue
++++ b/src/frontend/src/pages/auth/PlayerEmailVerifyPage.vue
+@@ -66,7 +66,7 @@ onMounted(async () => {
+   if (!token) {
+     isVerifying.value = false
+     setError({
+-      response: { data: { message: 'No verification token found. Please check your email link.' } },
++      response: { data: { message: t('auth.verifyTokenMissing') } },
+     })
+     return
+   }
+diff --git a/src/frontend/src/pages/auth/PlayerPhoneVerifyPage.vue b/src/frontend/src/pages/auth/PlayerPhoneVerifyPage.vue
+index 87e8bcb..beffd26 100644
+--- a/src/frontend/src/pages/auth/PlayerPhoneVerifyPage.vue
++++ b/src/frontend/src/pages/auth/PlayerPhoneVerifyPage.vue
+@@ -42,6 +42,20 @@
+         </q-banner>
+ 
+         <div class="text-center q-mt-md">
++          <q-btn
++            flat
++            no-caps
++            dense
++            class="auth-link q-mr-md"
++            :label="
++              resendCooldown > 0
++                ? t('auth.player.resendCooldown', { seconds: resendCooldown })
++                : t('auth.player.resendOtp')
++            "
++            :disable="resendCooldown > 0 || isResending"
++            :loading="isResending"
++            @click="handleResendOtp"
++          />
+           <router-link to="/login" class="auth-link">
+             &larr; {{ t('auth.player.signInInstead') }}
+           </router-link>
+@@ -52,7 +66,7 @@
+ </template>
+ 
+ <script setup>
+-import { ref, computed, onMounted } from 'vue'
++import { ref, computed, onMounted, onUnmounted } from 'vue'
+ import { useRouter, useRoute } from 'vue-router'
+ import { useI18n } from 'vue-i18n'
+ import { playerRegistrationApi } from 'src/api/playerRegistration.api'
+@@ -66,6 +80,42 @@ const { setError, clearError, hasError, errorMessage, helpCode } = useErrorHandl
+ const digits = ref(['', '', '', '', '', ''])
+ const otpInputs = ref([])
+ const isSubmitting = ref(false)
++const isResending = ref(false)
++const resendCooldown = ref(0)
++let cooldownTimer = null
++
++// Mirrors ParentPhoneVerifyPage exactly (skillars-deferred-92 AC28.2) — same 60s cooldown,
++// same disabled state, same silent catch. The parent flow is the reference implementation;
++// a second pattern here would be a second thing to keep in step.
++function startCooldown() {
++  resendCooldown.value = 60
++  cooldownTimer = setInterval(() => {
++    resendCooldown.value--
++    if (resendCooldown.value <= 0) {
++      clearInterval(cooldownTimer)
++      cooldownTimer = null
++    }
++  }, 1000)
++}
++
++onUnmounted(() => {
++  if (cooldownTimer) clearInterval(cooldownTimer)
++})
++
++async function handleResendOtp() {
++  if (!userId.value) return
++  isResending.value = true
++  try {
++    await playerRegistrationApi.resendOtp(userId.value)
++    startCooldown()
++  } catch {
++    // Silent, as in the parent flow: the backend's 409 / 400 responses distinguish
++    // "already sending", "locked" and "bad user", and surfacing that difference to an
++    // unauthenticated caller is account enumeration. The cooldown simply does not start.
++  } finally {
++    isResending.value = false
++  }
++}
+ 
+ const userId = computed(() => (route.query.userId ? Number(route.query.userId) : null))
+ 
+diff --git a/src/frontend/src/pages/auth/RegisterPage.vue b/src/frontend/src/pages/auth/RegisterPage.vue
+index d9231b1..92bf7e8 100644
+--- a/src/frontend/src/pages/auth/RegisterPage.vue
++++ b/src/frontend/src/pages/auth/RegisterPage.vue
+@@ -3,12 +3,12 @@
+     <div class="auth-card-container--wide fade-in">
+       <div class="auth-brand q-mb-xl">
+         <div class="gradient-text auth-brand-name">Skillars</div>
+-        <div class="text-meta">Create your account</div>
++        <div class="text-meta">{{ $t('auth.registerTitle') }}</div>
+       </div>
+ 
+       <div class="glass-card--static auth-card">
+         <div class="text-section-title q-mb-xs">{{ t('auth.register') }}</div>
+-        <div class="text-meta q-mb-lg">Fill in your details to get started.</div>
++        <div class="text-meta q-mb-lg">{{ $t('auth.registerBody') }}</div>
+ 
+         <q-banner
+           v-if="hasError && (!isValidationError || !hasFieldErrors)"
+diff --git a/src/frontend/src/pages/auth/ResetPasswordPage.vue b/src/frontend/src/pages/auth/ResetPasswordPage.vue
+index 96d04f1..d180976 100644
+--- a/src/frontend/src/pages/auth/ResetPasswordPage.vue
++++ b/src/frontend/src/pages/auth/ResetPasswordPage.vue
+@@ -3,16 +3,16 @@
+     <div class="auth-card-container fade-in">
+       <div class="auth-brand q-mb-xl">
+         <div class="gradient-text auth-brand-name">Skillars</div>
+-        <div class="text-meta">Password reset</div>
++        <div class="text-meta">{{ $t('auth.resetTitle') }}</div>
+       </div>
+ 
+       <div class="glass-card--static auth-card">
+         <div class="text-section-title q-mb-xs">{{ t('auth.resetPassword') }}</div>
+-        <div class="text-meta q-mb-lg">Choose a strong new password.</div>
++        <div class="text-meta q-mb-lg">{{ $t('auth.resetBody') }}</div>
+ 
+         <!-- Invalid key -->
+         <div v-if="!resetKey" class="auth-banner auth-banner--error q-pa-md q-mb-md">
+-          Invalid or missing reset key. Please request a new password reset.
++          {{ $t('auth.resetKeyMissing') }}
+         </div>
+ 
+         <q-form v-else @submit.prevent="handleSubmit" class="q-gutter-md">
+diff --git a/src/frontend/src/pages/coach/DrillLibraryPage.vue b/src/frontend/src/pages/coach/DrillLibraryPage.vue
+index ad4e6d8..0fc2120 100644
+--- a/src/frontend/src/pages/coach/DrillLibraryPage.vue
++++ b/src/frontend/src/pages/coach/DrillLibraryPage.vue
+@@ -108,7 +108,7 @@
+         <q-card-section class="q-pt-none">
+           <q-select
+             v-model="localFilters.skill"
+-            label="Skill"
++            :label="$t('development.radar.accessibleTable.skill')"
+             :options="skillOptions"
+             clearable
+             outlined
+@@ -117,7 +117,7 @@
+           />
+           <q-select
+             v-model="localFilters.difficultyTier"
+-            label="Difficulty Tier"
++            :label="$t('session.drillLibrary.filterDifficulty')"
+             :options="['U8', 'U10', 'U12', 'U14', 'U16', 'U18', 'Adult']"
+             clearable
+             outlined
+@@ -126,7 +126,7 @@
+           />
+           <q-select
+             v-model="localFilters.equipment"
+-            label="Equipment"
++            :label="$t('session.builder.equipment')"
+             :options="equipmentOptions"
+             clearable
+             outlined
+@@ -134,11 +134,14 @@
+             multiple
+             class="q-mb-sm"
+           />
+-          <q-toggle v-model="localFilters.weakFootBias" label="Weak Foot Bias only" />
++          <q-toggle
++            v-model="localFilters.weakFootBias"
++            :label="$t('session.drillLibrary.filterWeakFootOnly')"
++          />
+         </q-card-section>
+         <q-card-actions align="right">
+           <q-btn flat :label="t('session.drillLibrary.clearFilters')" @click="clearFilters" />
+-          <q-btn color="primary" label="Apply" @click="applyFilters" />
++          <q-btn color="primary" :label="$t('revenue.apply')" @click="applyFilters" />
+         </q-card-actions>
+       </q-card>
+     </q-dialog>
+@@ -280,7 +283,7 @@ async function handleClone(drillId) {
+       ],
+     })
+   } catch {
+-    $q.notify({ message: 'Failed to clone drill', color: 'negative' })
++    $q.notify({ message: t('session.drillLibrary.cloneFailed'), color: 'negative' })
+   }
+ }
+ 
+diff --git a/src/frontend/src/pages/marketplace/CoachPublicProfilePage.vue b/src/frontend/src/pages/marketplace/CoachPublicProfilePage.vue
+index f3786d7..bc0c6f8 100644
+--- a/src/frontend/src/pages/marketplace/CoachPublicProfilePage.vue
++++ b/src/frontend/src/pages/marketplace/CoachPublicProfilePage.vue
+@@ -450,7 +450,15 @@ onMounted(async () => {
+     const response = await getCoachProfile(coachId)
+     profile.value = response
+ 
+-    await fetchReviews(0)
++    // AC22: seed from the profile payload instead of re-fetching what it already contains.
++    // The else-branch is deliberate rather than defensive noise: an older backend
++    // (or a future one that drops the enrichment) simply returns no `reviews` field, and the page
++    // keeps working through the original path instead of rendering an empty review list.
++    if (response?.reviews) {
++      applyReviewPage(response.reviews, 0)
++    } else {
++      await fetchReviews(0)
++    }
+     if (authStore.isParent || authStore.isPlayer) {
+       await fetchMyReview()
+     }
+@@ -532,13 +540,32 @@ function openLightbox(item) {
+   lightboxOpen.value = true
+ }
+ 
++/**
++ * Applies one page of reviews to the local state.
++ *
++ * skillars-deferred-92 AC22: page 0 is NOT fetched. `GET /api/marketplace/coaches/{id}` already
++ * embeds it — `CoachMarketplaceResource` builds `CoachProfileDto.reviews` from
++ * `reviewQueryService.getFirstPageForCoach(coachId)`, which is literally
++ * `listApprovedReviews(coachId, 0, "newest")`: the same call, the same `ReviewListResponse`, the
++ * same 10 rows in the same order as `listCoachReviews(coachId, 0)`. Verified against source before
++ * removing either side. `onMounted` fired both, so every profile view cost a wholly redundant
++ * second round trip.
++ *
++ * Of AC22's two options, this keeps the server-side enrichment and drops the client's duplicate
++ * request, rather than the reverse. Reason: the profile response already carries the data, so this
++ * direction removes a round trip from FIRST PAINT — the one that matters — whereas dropping the
++ * enrichment would have preserved it. `listCoachReviews` is still the only path for page 1+.
++ */
++function applyReviewPage(res, page) {
++  reviews.value = page === 0 ? res.reviews : reviews.value.concat(res.reviews)
++  reviewsTotalElements.value = res.totalElements
++  reviewsHasNext.value = res.hasNext
++  reviewsCurrentPage.value = res.page
++}
++
+ async function fetchReviews(page = 0) {
+   try {
+-    const res = await listCoachReviews(coachId, page)
+-    reviews.value = page === 0 ? res.reviews : reviews.value.concat(res.reviews)
+-    reviewsTotalElements.value = res.totalElements
+-    reviewsHasNext.value = res.hasNext
+-    reviewsCurrentPage.value = res.page
++    applyReviewPage(await listCoachReviews(coachId, page), page)
+   } catch (err) {
+     console.error('Failed to load reviews', err)
+     $q.notify({ type: 'negative', message: t('common.errorGeneric') })
+diff --git a/src/frontend/src/pages/marketplace/CoachPublicProfilePlaceholderPage.vue b/src/frontend/src/pages/marketplace/CoachPublicProfilePlaceholderPage.vue
+deleted file mode 100644
+index d101aed..0000000
+--- a/src/frontend/src/pages/marketplace/CoachPublicProfilePlaceholderPage.vue
++++ /dev/null
+@@ -1,9 +0,0 @@
+-<template>
+-  <q-page class="flex flex-center">
+-    <q-card class="glass-card" style="min-width: 320px; padding: 40px; text-align: center">
+-      <q-icon name="person" size="64px" color="grey-5" />
+-      <div class="text-h6 q-mt-md">Coach Profile</div>
+-      <div class="text-body2 text-secondary q-mt-xs">Full profile coming in Story 2.3</div>
+-    </q-card>
+-  </q-page>
+-</template>
+diff --git a/src/frontend/src/router/index.js b/src/frontend/src/router/index.js
+index f85f70b..44ffd10 100644
+--- a/src/frontend/src/router/index.js
++++ b/src/frontend/src/router/index.js
+@@ -1,4 +1,5 @@
+ import { defineRouter } from '#q-app/wrappers'
++import { routeForRole } from './roleRoutes'
+ import {
+   createRouter,
+   createMemoryHistory,
+@@ -35,13 +36,6 @@ export default defineRouter(function (/* { store, ssrContext } */) {
+     history: createHistory(process.env.VUE_ROUTER_BASE),
+   })
+ 
+-  const ROLE_ROUTES = {
+-    COACH: '/coach/command-center',
+-    PARENT: '/parent/dashboard',
+-    PLAYER: '/player/home', // resolves the caller's own playerId, then redirects to /player/locker-room/:playerId
+-    ADMIN: '/admin/health-dashboard',
+-  }
+-
+   let hydrated = false
+   Router.beforeEach(async (to, from, next) => {
+     const authStore = useAuthStore()
+@@ -68,27 +62,27 @@ export default defineRouter(function (/* { store, ssrContext } */) {
+     }
+ 
+     if (requiresGuest && isAuthenticated) {
+-      next(ROLE_ROUTES[authStore.role] || '/dashboard')
++      next(routeForRole(authStore.role))
+       return
+     }
+ 
+     if (requiresCoach && isAuthenticated && !authStore.isCoach) {
+-      next(ROLE_ROUTES[authStore.role] || '/dashboard')
++      next(routeForRole(authStore.role))
+       return
+     }
+ 
+     if (requiresParent && isAuthenticated && !authStore.isParent) {
+-      next(ROLE_ROUTES[authStore.role] || '/dashboard')
++      next(routeForRole(authStore.role))
+       return
+     }
+ 
+     if (requiresPlayer && isAuthenticated && !authStore.isPlayer) {
+-      next(ROLE_ROUTES[authStore.role] || '/dashboard')
++      next(routeForRole(authStore.role))
+       return
+     }
+ 
+     if (requiresOneOfRoles && isAuthenticated && !rolesMeta.includes(authStore.role)) {
+-      next(ROLE_ROUTES[authStore.role] || '/dashboard')
++      next(routeForRole(authStore.role))
+       return
+     }
+ 
+diff --git a/src/frontend/src/router/roleRoutes.js b/src/frontend/src/router/roleRoutes.js
+new file mode 100644
+index 0000000..b4f3e4d
+--- /dev/null
++++ b/src/frontend/src/router/roleRoutes.js
+@@ -0,0 +1,26 @@
++/**
++ * The landing route for each role, defined ONCE (skillars-deferred-92 AC16).
++ *
++ * This map used to be declared twice — `router/index.js` and `pages/auth/LoginPage.vue` — and read
++ * from six places across the two. The two copies were byte-identical, verified before merging, but
++ * only by luck: the failure mode if they ever drifted is an **infinite redirect loop**. The router
++ * guard sends a role to route A, the login page pushes it to route B, the guard sends it back, and
++ * the user sees a spinning tab with no error anywhere. Nothing in the build would have caught it.
++ *
++ * `/player/home` is deliberately not a real page: it resolves the caller's own playerId and then
++ * redirects to `/player/locker-room/:playerId`.
++ */
++export const ROLE_ROUTES = Object.freeze({
++  COACH: '/coach/command-center',
++  PARENT: '/parent/dashboard',
++  PLAYER: '/player/home',
++  ADMIN: '/admin/health-dashboard',
++})
++
++/** Fallback for a role with no landing route of its own (or no role at all). */
++export const DEFAULT_ROUTE = '/dashboard'
++
++/** The landing route for `role`, or {@link DEFAULT_ROUTE}. */
++export function routeForRole(role) {
++  return ROLE_ROUTES[role] || DEFAULT_ROUTE
++}
+diff --git a/src/frontend/src/utils/errorHandler.js b/src/frontend/src/utils/errorHandler.js
+index c573ac9..ceb35cd 100644
+--- a/src/frontend/src/utils/errorHandler.js
++++ b/src/frontend/src/utils/errorHandler.js
+@@ -1,3 +1,5 @@
++import { i18n } from 'boot/i18n'
++
+ /**
+  * Error handling utilities for parsing backend ErrorDto responses.
+  *
+@@ -51,7 +53,11 @@ export function parseApiError(error) {
+     return {
+       helpCode: null,
+       errorKey: 'error.network',
+-      message: 'Network error. Please check your connection.',
++      // skillars-deferred-92 AC14: this is the message the UI actually renders
++      // (useErrorHandler exposes error.message), so an English literal here reached a
++      // French or German user verbatim. `error.network` already existed in all three
++      // bundles. i18n.global.t is the documented way to translate outside a component.
++      message: i18n.global.t('error.network'),
+       fieldErrors: {},
+       isValidationError: false,
+       status: 0,

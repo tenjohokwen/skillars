@@ -7,6 +7,11 @@
 -- skillars-deferred-92 AC11.2: each marker now sits directly above the statement it covers. Before
 -- statement scoping, the single allow-blocking-index below covered BOTH statements from anywhere in
 -- the file; it now has to be repeated where it is actually needed, which is the point.
+--
+-- skillars-deferred-92 code review: repeatables are now ALSO linted by MISSING_LOCK_TIMEOUT, since
+-- a rebuilt index is exactly as much a lock-taking-DDL hazard here as in a versioned migration.
+SET lock_timeout = '5s';
+
 -- migration-lint: allow-unconditional-drop the index is recreated immediately below; a guarded drop
 -- would leave a stale definition if the index expression changed.
 DROP INDEX main.idx_widget_owner;

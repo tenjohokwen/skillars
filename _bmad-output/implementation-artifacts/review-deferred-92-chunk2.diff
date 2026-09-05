@@ -1,0 +1,1375 @@
+diff --git a/docs/deployment/migration-conventions.md b/docs/deployment/migration-conventions.md
+index fb32899..7bea914 100644
+--- a/docs/deployment/migration-conventions.md
++++ b/docs/deployment/migration-conventions.md
+@@ -25,6 +25,20 @@ check are still your responsibility in review.
+    `DROP COLUMN`, and `DROP INDEX` carries `IF EXISTS`. A migration that performs any
+    drop carries a header comment block explaining which release removed the last
+    reader/writer.
++   - **Name that release in a machine-readable marker** (skillars-deferred-92 AC7):
++     `-- migration-lint: drop-prepared-in: V123` in the header block.
++     `MigrationLint.Rule.DROP_WITHOUT_PRIOR_RELEASE_PREP` fails the build without it, and
++     — this is the half that makes the marker more than decoration — it also searches
++     `src/main/java` and `src/main/resources` for the dropped identifier and fails if a
++     live reference remains. A marker that claims preparation while the code still reads
++     the column is the failure mode worth catching.
++   - The search is **qualified**, not a bare grep: a hit needs the `snake_case`
++     identifier (or its camelCase JPA form) *and* the owning table's name in the same
++     file, because column names like `id`, `status` and `amount` are far too generic to
++     match on alone. It therefore **cannot** see a reader that never mentions the table —
++     a raw SQL string assembled from fragments, say. For those the marker alone is the
++     guarantee. `-- migration-lint: allow-drop-reference-scan <reason>` suppresses the
++     search when its output is noise; the marker requirement still stands.
+ 
+ 3. **Constraints validate in two steps** on any table that is not trivially small:
+    `ALTER TABLE … ADD CONSTRAINT … FOREIGN KEY|CHECK … NOT VALID` in one migration,
+@@ -68,11 +82,67 @@ check are still your responsibility in review.
+    reject it otherwise. (This is the `AdminAlertType.MODERATION_UNRESOLVED` failure mode.)
+ 
+ 6. **Long `UPDATE` backfills are batched / chunked** (see `V98` and the `Def10`
+-   precedent in `skillars-6-1`), with `SET lock_timeout` / `SET statement_timeout` set
+-   where a full scan is unavoidable, so a slow backfill cannot hold a lock indefinitely
++   precedent in `skillars-6-1`), so a slow backfill cannot hold a lock indefinitely
+    or wedge the deploy.
+-
+-7. **Every DDL migration that takes `ACCESS EXCLUSIVE` on a table with expected
++   - `MigrationLint.Rule.UNBATCHED_DML` (skillars-deferred-92 AC9) fails an `UPDATE` or
++     `DELETE` with **no** `WHERE`, or with a tautological one (`WHERE TRUE`, `WHERE 1=1`).
++     Opt out with `-- migration-lint: allow-full-table-dml <reason>` immediately above the
++     statement.
++   - **What that rule does not do:** decide whether a *present* `WHERE` actually bounds
++     anything. `WHERE status = 'X'` may match three rows or three million, and no
++     text-level check can tell. Review still owns that half.
++   - The same applies to application code, not just migrations.
++     `BandwidthResetService.resetMonthlyBandwidth` was a single unpartitioned `UPDATE` over
++     every `video_quotas` row at the month boundary — it locked all of them and blocked
++     every concurrent `QuotaService.reserve()` for the duration. It is now a bounded loop
++     of chunks, **each committed in its own transaction** by a separate
++     `BandwidthResetChunkProcessor` bean. Two non-obvious requirements come with that
++     shape: the driving method must **not** be `@Transactional` (one enclosing transaction
++     holds every row lock to the end, which is strictly worse than the statement it
++     replaced), and the chunk predicate must be **self-excluding** so the loop terminates
++     and a crashed run resumes rather than double-applying.
++
++7. **`SET lock_timeout` on every lock-taking DDL statement** (skillars-deferred-92 AC8).
++   Verified during that story: only **2** of 121 migrations set one.
++
++   **Why this matters more than it looks.** The danger is not that the `ALTER` itself is
++   slow — it is usually instant. It is that a *blocked* `ALTER` sits in the lock queue, and
++   **every subsequent query on that table queues behind it**. So one long-running `SELECT`
++   holding a conflicting lock is enough to stall the entire table and exhaust the
++   connection pool, for as long as that `SELECT` runs. A bounded wait turns that outage
++   into a failed migration, which is the far better outcome. The doc previously gave the
++   rule without this reason, which is most of why it was ignored.
++
++   Put `SET lock_timeout = '5s';` near the top of the migration (it is a session/transaction
++   setting, so one statement covers the whole script), or opt out with
++   `-- migration-lint: allow-unbounded-lock-wait <reason>`.
++
++   **The lock levels are not all the same, and the rule does not pretend they are:**
++
++   | Statement | Lock | Blocks |
++   |---|---|---|
++   | `ALTER TABLE … ADD/DROP COLUMN`, `ADD/DROP CONSTRAINT`, `DROP TABLE`, `DROP INDEX` | `ACCESS EXCLUSIVE` | reads **and** writes |
++   | `CREATE INDEX` (non-`CONCURRENTLY`) | `SHARE` | writes and other DDL; **reads continue** |
++   | `CREATE INDEX CONCURRENTLY` | `SHARE UPDATE EXCLUSIVE` | other DDL / index builds only |
++
++   All three are covered, because all three can wait indefinitely for a conflicting lock.
++   They are not equally disruptive and the rule's message does not claim they are.
++
++8. **`main.platform_config` seeds omit `id`** (skillars-deferred-92 AC10). `V128` attached
++   `GENERATED BY DEFAULT AS IDENTITY` to the column and seeded the sequence from the live
++   maximum. Before that, every seeding migration hand-picked the next free id, and because
++   the seeds use `ON CONFLICT (key)` — a *different* unique constraint from the primary key
++   — an id collision raised a PK violation the `ON CONFLICT` clause never saw, failing
++   Flyway on every database that had already used that id. `V99`'s header spends six lines
++   on this; the ledger records five separate brushes with it.
++   `MigrationLint.Rule.PLATFORM_CONFIG_EXPLICIT_ID` now fails the build on any
++   `INSERT INTO main.platform_config (id, …)`.
++
++   `BY DEFAULT` rather than `ALWAYS` is deliberate: `ALWAYS` rejects an explicit `id`, which
++   would break every historical seed the moment Flyway replayed it on a fresh database —
++   breaking CI and every new environment while continuing to look fine on migrated ones.
++
++9. **Every DDL migration that takes `ACCESS EXCLUSIVE` on a table with expected
+    production volume carries a header comment** naming the lock it takes and the
+    online-safe alternative that was considered and why it was or wasn't used.
+ 
+@@ -83,6 +153,24 @@ Skillars has **no production system yet**. The migrations that predate this conv
+ **applied and immutable**; they are not rewritten. The convention and its guard bind
+ **new** migrations only (version `> V121`).
+ 
++### Two baselines (skillars-deferred-92)
++
++The rules added by skillars-deferred-92 — `DROP_WITHOUT_PRIOR_RELEASE_PREP`,
++`MISSING_LOCK_TIMEOUT`, `UNBATCHED_DML`, `PLATFORM_CONFIG_EXPLICIT_ID` — bind from
++**`V128`**, not `V122`, and `MigrationLint` carries a second constant
++(`DEFERRED_92_BASELINE = 127`) for exactly that.
++
++The reason is mechanical rather than editorial: **Flyway checksums a migration's whole
++file, comments included.** `V122`–`V127` are already applied, so they cannot be edited —
++not even to add an opt-out marker — without breaking `flyway validate` on every
++environment that has run them. Several of them would trip the new rules. The choice was
++between rewriting applied migrations (which the first sentence of this section forbids)
++and grandfathering once more; grandfathering is the same call this project already made at
++`V121`, applied a second time.
++
++Anyone adding a rule in future should expect to add a third baseline rather than edit
++history.
++
+ ### Per-migration disposition (skillars-deferred-91 AC8)
+ 
+ Each grandfathered migration was re-read for a validating `ACCESS EXCLUSIVE` operation on a
+@@ -153,24 +241,59 @@ The three blind spots this section used to name are now checked by `MigrationLin
+   `DROP TABLE`/`COLUMN`/`INDEX`. `V124`'s own `DROP CONSTRAINT chk_bp_status` was unlinted until
+   then and would have failed hard on any environment where the constraint was already absent.
+ 
++### Added by skillars-deferred-92 (AC7–AC11)
++
++- **expand/contract ORDERING**, not just statement shape — `DROP_WITHOUT_PRIOR_RELEASE_PREP`.
++  A `DROP TABLE`/`DROP COLUMN` must carry `-- migration-lint: drop-prepared-in: V<n>`, **and**
++  no live reference to the dropped identifier may remain in `src/main`. Rule 2 above states
++  exactly what the reference search can and cannot see.
++- **`SET lock_timeout`** on lock-taking DDL — `MISSING_LOCK_TIMEOUT`. See rule 7 for the
++  queue-behind-the-blocked-`ALTER` mechanism and the per-statement lock levels.
++  *Implementation note:* the check strips comments before looking for `SET lock_timeout`.
++  Without that, a migration whose header merely **discusses** `lock_timeout` silences the rule
++  for its own DDL — which is not hypothetical, it is how the first version of the rule passed
++  its own negative fixture.
++- **Unbatched full-table DML** — `UNBATCHED_DML`, for an `UPDATE`/`DELETE` with no `WHERE` or a
++  tautological one. Rule 6 states the half it cannot decide.
++- **Hand-picked `platform_config` ids** — `PLATFORM_CONFIG_EXPLICIT_ID`. See rule 8.
++- **Per-clause `NOT VALID` evaluation** (AC11.1). `ALTER TABLE t ADD CONSTRAINT a CHECK (…) NOT
++  VALID, ADD CONSTRAINT b CHECK (…);` used to pass, because the rule asked only whether
++  `NOT VALID` appeared *somewhere* in the statement. Clauses are now split on **top-level**
++  commas with balanced-paren tracking — necessary because a `CHECK` body carries its own commas
++  (`CHECK (x IN (1,2,3))`), which a naive split would tear in half.
++- **Statement-scoped opt-outs** (AC11.2). A `-- migration-lint: allow-*` marker used to match
++  against the whole file, so one opt-out silenced that rule for every statement in the
++  migration. A marker now covers only the statement that follows it.
++
+ **Still not covered:** rule 5 (enum / `CHECK` widening one release ahead of the first write) has
+ no lint rule. `V124` deviates from it knowingly under the pre-production clause below and carries
+ a `-- migration-lint: allow-enum-widen-same-release` marker for the day the rule is implemented.
+ 
+ ## What the guard still cannot catch
+ 
+-The lint is a **text-level backstop, not a proof**. It does not catch:
+-
+-- a **second validating constraint in the same statement** — the `NOT VALID` rule splits on
+-  `;` and asks only whether `NOT VALID` appears *somewhere* in the statement, so
+-  `ALTER TABLE t ADD CONSTRAINT a CHECK (…) NOT VALID, ADD CONSTRAINT b CHECK (…);`
+-  passes even though `b` validates. Add one constraint per statement and the rule is exact;
+-- a **second blocking index in a file that already carries an opt-out** — the
+-  `-- migration-lint: allow-*` markers are matched against the whole file, so one opt-out
+-  silences that rule for every statement in the migration. Keep opt-outs in single-purpose
+-  migrations.
+-
+-Review still owns these.
++The lint is a **text-level backstop, not a proof**. The two items this section used to name —
++a second validating constraint in the same statement, and an opt-out leaking to every other
++statement in the file — were both closed by skillars-deferred-92 AC11 and now appear above.
++
++What genuinely remains:
++
++- **Whether a present `WHERE` actually bounds anything.** `UNBATCHED_DML` sees a missing or
++  tautological `WHERE`; it cannot know that `WHERE status = 'X'` matches three rows rather than
++  three million.
++- **A reader that never names its table.** `DROP_WITHOUT_PRIOR_RELEASE_PREP`'s reference search
++  requires the identifier and the table name in the same file, so a raw SQL string assembled
++  from fragments, or a column accessed purely by index, is invisible to it. The
++  `drop-prepared-in` marker is the guarantee for those; the search is what stops the marker
++  being a rubber stamp.
++- **Enum / `CHECK` widening one release ahead of the first write** (rule 5) — no rule yet.
++- **A committed backport below the baseline.** `BACKPORT_BELOW_BASELINE` is a pre-commit,
++  working-tree guard; in CI every migration already exists at `HEAD`, so it cannot fire there.
++- **Anything requiring a database**: actual table sizes, actual lock contention, whether an
++  index is really needed. The lint reads text.
++
++Review still owns these. They are listed rather than implied because this project has three
++recorded instances of a guard believed stronger than it was, and an overstated guard is worse
++than a missing one.
+ 
+ ## PR checklist
+ 
+@@ -182,5 +305,14 @@ Before merging a PR that adds or changes a file under
+       `VALIDATE` for FK/CHECK on non-trivial tables, `CONCURRENTLY` for indexes on
+       hot/large tables, enum/CHECK widening one release ahead of the first write,
+       batched backfills).
++- [ ] Any `DROP TABLE` / `DROP COLUMN` carries `-- migration-lint: drop-prepared-in: V<n>`
++      naming the release that removed the last reader — and that release really did ship.
++- [ ] Any lock-taking DDL is preceded by `SET lock_timeout` (see rule 7 for why), or carries
++      `-- migration-lint: allow-unbounded-lock-wait <reason>`.
++- [ ] Any `UPDATE` / `DELETE` bounds its row count, or carries
++      `-- migration-lint: allow-full-table-dml <reason>`.
++- [ ] Any `INSERT INTO main.platform_config` **omits `id`** — the column has an identity as of
++      `V128`.
+ - [ ] `MigrationConventionLintTest` passes (it runs in the `test` phase).
+-- [ ] Any `-- migration-lint: allow-*` opt-out carries a real reason.
++- [ ] Any `-- migration-lint: allow-*` opt-out carries a real reason **and sits immediately above
++      the statement it covers** — markers are statement-scoped, not file-scoped.
+diff --git a/src/main/resources/db/migration/V128__platform_config_identity.sql b/src/main/resources/db/migration/V128__platform_config_identity.sql
+new file mode 100644
+index 0000000..0f160ad
+--- /dev/null
++++ b/src/main/resources/db/migration/V128__platform_config_identity.sql
+@@ -0,0 +1,44 @@
++-- skillars-deferred-92 AC10: give main.platform_config.id an identity, so seed migrations stop
++-- hand-picking the next free primary key.
++--
++-- V20 created the table with `id BIGINT NOT NULL, PRIMARY KEY (id)` and no sequence, so every
++-- migration that seeds a config row has had to guess the next free id by reading the ones before it.
++-- V99's own header spends six lines on why that is dangerous, and the mechanism is worth restating
++-- because it is not the obvious one: the seeds use `ON CONFLICT (key)`, which targets the UNIQUE
++-- constraint on `key` — a DIFFERENT constraint from the primary key. So an id collision raises a
++-- PRIMARY KEY violation that the ON CONFLICT clause never sees, and Flyway fails on every database
++-- that has already run a later migration using that id. The ledger records five separate brushes
++-- with this (V25 112-114, V33 id=39, V46 70-72, V48, V53 117-132).
++--
++-- BY DEFAULT, not ALWAYS. This is the load-bearing choice in the migration.
++--   * GENERATED ALWAYS rejects any INSERT that supplies an explicit id. Every historical seed
++--     (V20, V25, V33, V46, V48, V53, V93, V99 ...) does exactly that, and Flyway replays all of them
++--     from scratch on a fresh database. ALWAYS would therefore break CI and every new environment
++--     while continuing to look fine on already-migrated ones — the worst possible failure shape.
++--   * GENERATED BY DEFAULT leaves the historical inserts working and supplies a value only when one
++--     is omitted, which is what new seeds will do.
++--
++-- The sequence is seeded from the live maximum, computed here rather than hardcoded: hardcoding it
++-- would reintroduce the same "guess the next free number" problem this migration exists to remove.
++-- COALESCE covers the empty-table case (setval requires a value >= 1 with is_called = false).
++--
++-- MigrationLint.Rule.PLATFORM_CONFIG_EXPLICIT_ID now fails the build on any future
++-- `INSERT INTO main.platform_config (id, ...)`, so the old pattern cannot come back.
++
++-- ACCESS EXCLUSIVE on main.platform_config for the duration of the ALTER. The table is a small
++-- configuration table (~130 rows) and the operation is catalog-only, so the statement itself is
++-- instantaneous — but a bounded wait is still required (skillars-deferred-92 AC8): without it, an
++-- ALTER blocked behind a long-running reader makes every subsequent query on the table queue behind
++-- the ALTER, and ConfigService reads this table on a 5-minute refresh from every node.
++SET lock_timeout = '5s';
++
++ALTER TABLE main.platform_config
++    ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY;
++
++-- Start above every id the historical seeds have already claimed. pg_get_serial_sequence resolves
++-- the sequence the identity just created, so the name is never hardcoded either.
++SELECT setval(
++    pg_get_serial_sequence('main.platform_config', 'id'),
++    (SELECT COALESCE(max(id), 1) FROM main.platform_config),
++    true
++);
+diff --git a/src/main/resources/db/migration/V129__reset_never_sent_secondary_reminders.sql b/src/main/resources/db/migration/V129__reset_never_sent_secondary_reminders.sql
+new file mode 100644
+index 0000000..3d65305
+--- /dev/null
++++ b/src/main/resources/db/migration/V129__reset_never_sent_secondary_reminders.sql
+@@ -0,0 +1,35 @@
++-- skillars-deferred-92 AC29.5: un-stamp the 2-hour reminders that were recorded as sent but never were.
++--
++-- Until AC29, BookingEmailListener.onBookingReminder carried no annotation at all — not
++-- @EventListener, not @TransactionalEventListener — so Spring never dispatched
++-- BookingReminderEvent to it and EmailTemplate.BOOKING_REMINDER had no other sender anywhere in
++-- src/main. No booking reminder has ever been delivered. BookingReminderScheduler nonetheless
++-- stamped both *_reminder_sent_at columns inside its own transaction, so the database records
++-- sends that did not happen.
++--
++-- Why only the SECONDARY column is reset:
++--   * BookingRepository.findUpcomingWithin2hWindow filters `secondary_reminder_sent_at IS NULL`, so
++--     a stamped row is permanently excluded. Without this reset, every booking already stamped when
++--     the fix deploys would silently never get its 2-hour reminder either — the bug would outlive
++--     its own fix for exactly the bookings closest to starting.
++--   * primary_reminder_sent_at gates nothing. findConfirmedForUpcomingTransition selects on
++--     status = 'CONFIRMED' and the transition moves the row to 'UPCOMING', so the primary reminder
++--     is already once-only by state, not by stamp. Clearing it would change no behaviour and would
++--     destroy the only record of which bookings were affected.
++--
++-- Bounded and idempotent by construction: only rows still in the future and still UPCOMING are
++-- touched. Past bookings keep their (inaccurate) stamp — re-reminding someone about a session that
++-- has already happened is worse than the missing reminder. Worst case for an affected row is one
++-- reminder arriving slightly late; there is no double-send, because nothing was sent.
++--
++-- Row count is tiny by nature (the secondary window is 2 hours wide) and this project has no
++-- production deployment yet, so a single bounded UPDATE is correct here — no chunking needed. See
++-- docs/deployment/migration-conventions.md § "Full-table DML" for when chunking IS required.
++--
++-- Lock profile: UPDATE takes ROW EXCLUSIVE, which does not block concurrent readers or writers of
++-- other rows, so no SET lock_timeout is required (that convention binds lock-taking DDL).
++UPDATE booking.bookings
++   SET secondary_reminder_sent_at = NULL
++ WHERE secondary_reminder_sent_at IS NOT NULL
++   AND status = 'UPCOMING'
++   AND requested_start_time > NOW();
+diff --git a/src/test/java/com/softropic/skillars/db/MigrationConventionLintTest.java b/src/test/java/com/softropic/skillars/db/MigrationConventionLintTest.java
+index 77202fb..eae3547 100644
+--- a/src/test/java/com/softropic/skillars/db/MigrationConventionLintTest.java
++++ b/src/test/java/com/softropic/skillars/db/MigrationConventionLintTest.java
+@@ -14,7 +14,8 @@ import java.util.stream.Collectors;
+ import static org.assertj.core.api.Assertions.assertThat;
+ 
+ /**
+- * Build-failing guard for {@code docs/deployment/migration-conventions.md} (skillars-deferred-90 AC10).
++ * Build-failing guard for {@code docs/deployment/migration-conventions.md} (skillars-deferred-90 AC10,
++ * widened by skillars-deferred-91 AC7 and skillars-deferred-92 AC7–AC11).
+  *
+  * <p>Named {@code *Test}, not {@code *IT}: it runs in the {@code test} phase, ahead of failsafe,
+  * with no Spring context and no container. It reads {@code .sql} text only.
+@@ -23,12 +24,43 @@ import static org.assertj.core.api.Assertions.assertThat;
+  * NOT under {@code src/(main|test)/resources/db/migration/} (F19): Flyway is {@code enabled: true}
+  * with {@code validateMigrationNaming: true} and {@code locations = classpath:db/migration}, so a
+  * fixture placed there would be executed or fail naming validation.
++ *
++ * <h2>The fixture set has two baselines too</h2>
++ *
++ * The real migration tree grandfathers the skillars-deferred-92 rules below {@code V127}, because
++ * {@code V122}–{@code V127} are already applied and Flyway checksums whole files — they cannot be
++ * edited to carry the markers those rules demand. The fixtures mirror that split at
++ * {@link #FIXTURE_DEFERRED_92_BASELINE}: {@code V800}–{@code V808} predate the new rules exactly as
++ * {@code V122}–{@code V127} do, and {@code V809}+ are bound by them. Mirroring it here means the
++ * two-baseline mechanism is itself exercised rather than only described.
+  */
+ @DisplayName("New DB migrations must follow the rolling-deploy safety conventions")
+ class MigrationConventionLintTest {
+ 
+     private static final Path FIXTURES = Path.of("src", "test", "resources", "migration-lint");
+ 
++    /**
++     * Fixture stand-in for {@code src/main/java} + {@code src/main/resources}. Pointing
++     * {@link MigrationLint.Rule#DROP_WITHOUT_PRIOR_RELEASE_PREP}'s reference scan at a fixture corpus
++     * rather than the real source tree keeps the fixture assertions deterministic — otherwise adding
++     * an unrelated class that happens to mention {@code widget} would flip a fixture's verdict.
++     */
++    private static final List<Path> FIXTURE_SOURCES = List.of(FIXTURES.resolve("fixture-src"));
++
++    /** Fixtures at or below this predate the skillars-deferred-92 rules, as V122–V127 do for real. */
++    private static final int FIXTURE_DEFERRED_92_BASELINE = 808;
++
++    private static List<MigrationLint.Violation> lintFixtures(String dir, int baseline) throws IOException {
++        return lintFixtures(dir, baseline, FIXTURE_DEFERRED_92_BASELINE, MigrationLint.ALL_KNOWN_AT_HEAD);
++    }
++
++    private static List<MigrationLint.Violation> lintFixtures(
++            String dir, int baseline, int deferred92Baseline,
++            java.util.function.Predicate<Path> knownAtHead) throws IOException {
++        return MigrationLint.lint(
++            FIXTURES.resolve(dir), baseline, deferred92Baseline, knownAtHead, FIXTURE_SOURCES);
++    }
++
+     @Test
+     @DisplayName("real migrations above the V121 grandfather baseline have zero violations")
+     void realMigrations_aboveBaseline_areClean() throws IOException {
+@@ -45,7 +77,7 @@ class MigrationConventionLintTest {
+     @Test
+     @DisplayName("the valid/ fixtures produce no violations")
+     void validFixtures_areClean() throws IOException {
+-        List<MigrationLint.Violation> violations = MigrationLint.lint(FIXTURES.resolve("valid"), 0);
++        List<MigrationLint.Violation> violations = lintFixtures("valid", 0);
+ 
+         assertThat(violations).as("valid fixtures should lint clean, got: %s", violations).isEmpty();
+     }
+@@ -56,8 +88,8 @@ class MigrationConventionLintTest {
+         // baseline 100: V50__backported_hazard.sql is at/below it (→ BACKPORT_BELOW_BASELINE fires
+         // because knownAtHead says it is NOT in HEAD), while V900+ stay above it so every content
+         // rule still applies. The R__ and Vx fixtures are version-less and unaffected by the baseline.
+-        List<MigrationLint.Violation> violations = MigrationLint.lint(
+-            FIXTURES.resolve("invalid"), 100,
++        List<MigrationLint.Violation> violations = lintFixtures("invalid", 100,
++            FIXTURE_DEFERRED_92_BASELINE,
+             p -> !p.getFileName().toString().equals("V50__backported_hazard.sql"));
+ 
+         Set<MigrationLint.Rule> triggered = violations.stream()
+@@ -77,7 +109,8 @@ class MigrationConventionLintTest {
+         //  - UNPARSEABLE_VERSION: the version cannot be read, so "above the baseline?" is unanswerable
+         //    (code review, 3-layer run) — grandfathering it would reinstate the silent skip.
+         //  - REPEATABLE_HAZARD: an R__ file has no version at all, so the baseline does not apply.
+-        List<MigrationLint.Violation> violations = MigrationLint.lint(FIXTURES.resolve("invalid"), 100_000);
++        List<MigrationLint.Violation> violations = lintFixtures("invalid", 100_000, 100_000,
++            MigrationLint.ALL_KNOWN_AT_HEAD);
+ 
+         assertThat(violations)
+             .as("only the baseline-independent rules may fire below the baseline, got: %s", violations)
+@@ -93,7 +126,7 @@ class MigrationConventionLintTest {
+     @Test
+     @DisplayName("the widened rules trigger on each specific new fixture")
+     void widenedRules_triggerOnTheirOwnFixtures() throws IOException {
+-        List<MigrationLint.Violation> violations = MigrationLint.lint(FIXTURES.resolve("invalid"), 100);
++        List<MigrationLint.Violation> violations = lintFixtures("invalid", 100);
+ 
+         assertThat(violations)
+             .as("COLUMN is optional in PostgreSQL: 'ADD owner_id BIGINT REFERENCES …' is the same hazard")
+@@ -109,6 +142,99 @@ class MigrationConventionLintTest {
+             .as("DROP CONSTRAINT without IF EXISTS is as unguarded as DROP TABLE/COLUMN/INDEX")
+             .anyMatch(v -> v.file().equals("V909__drop_constraint_no_if_exists.sql")
+                         && v.rule() == MigrationLint.Rule.DROP_WITHOUT_IF_EXISTS);
++
++        // --- skillars-deferred-92 ------------------------------------------------------------
++
++        assertThat(violations)
++            .as("AC7: a DROP COLUMN with no drop-prepared-in marker — skillars-11-3 D2's exact defect")
++            .anyMatch(v -> v.file().equals("V910__drop_column_no_prepared_marker.sql")
++                        && v.rule() == MigrationLint.Rule.DROP_WITHOUT_PRIOR_RELEASE_PREP);
++
++        assertThat(violations)
++            .as("AC7.2: the marker is load-bearing — it must fail when a reader is still live, or it "
++                + "is decoration and the rule overstates what it guarantees")
++            .anyMatch(v -> v.file().equals("V911__drop_column_marker_but_live_reference.sql")
++                        && v.rule() == MigrationLint.Rule.DROP_WITHOUT_PRIOR_RELEASE_PREP
++                        && v.detail().contains("obsolete_reading"));
++
++        assertThat(violations)
++            .as("AC8: lock-taking DDL with no SET lock_timeout")
++            .anyMatch(v -> v.file().equals("V912__missing_lock_timeout.sql")
++                        && v.rule() == MigrationLint.Rule.MISSING_LOCK_TIMEOUT);
++
++        assertThat(violations)
++            .as("AC9: an UPDATE with no bounding WHERE")
++            .anyMatch(v -> v.file().equals("V913__unbatched_dml.sql")
++                        && v.rule() == MigrationLint.Rule.UNBATCHED_DML);
++
++        assertThat(violations)
++            .as("AC10.3: a platform_config seed that still hand-picks the primary key")
++            .anyMatch(v -> v.file().equals("V914__platform_config_explicit_id.sql")
++                        && v.rule() == MigrationLint.Rule.PLATFORM_CONFIG_EXPLICIT_ID);
++
++        assertThat(violations)
++            .as("AC11.1: the SECOND ADD CONSTRAINT validates; the old rule passed because NOT VALID "
++                + "appeared somewhere in the statement")
++            .anyMatch(v -> v.file().equals("V915__second_constraint_validates.sql")
++                        && v.rule() == MigrationLint.Rule.VALIDATING_CONSTRAINT
++                        && v.detail().contains("chk_widget_label"));
++
++        assertThat(violations)
++            .as("AC11.2: an opt-out must not leak to a later statement it says nothing about")
++            .anyMatch(v -> v.file().equals("V916__optout_leaks_to_later_statement.sql")
++                        && v.rule() == MigrationLint.Rule.BLOCKING_INDEX);
++    }
++
++    /**
++     * AC11.1 is only meaningful if the balanced-paren clause split does not also break the
++     * <em>correct</em> spelling. {@code V812} carries two constraints, each with its own
++     * {@code NOT VALID}, and both {@code CHECK} bodies contain commas — the exact shape a naive split
++     * on {@code ,} would tear in half, producing two clause fragments that each look constraint-less.
++     */
++    @Test
++    @DisplayName("AC11.1: per-clause evaluation still passes a correctly written multi-constraint statement")
++    void perClauseNotValid_doesNotFalselyFlagTheCorrectShape() throws IOException {
++        assertThat(lintFixtures("valid", 0))
++            .as("V812 declares both constraints NOT VALID with commas inside the CHECK bodies")
++            .noneMatch(v -> v.file().equals("V812__per_clause_not_valid.sql"));
++    }
++
++    /**
++     * AC11.2 the other way round: two blocking indexes, each carrying its own opt-out, must pass.
++     * Together with the {@code V916} assertion above this pins the rule from both sides — a marker
++     * covers the statement it precedes and only that one.
++     */
++    @Test
++    @DisplayName("AC11.2: a per-statement opt-out covers exactly the statement it precedes")
++    void statementScopedOptOut_coversItsOwnStatement() throws IOException {
++        assertThat(lintFixtures("valid", 0))
++            .as("V813 gives each of its two indexes its own allow-blocking-index marker")
++            .noneMatch(v -> v.file().equals("V813__optout_per_statement.sql"));
++    }
++
++    /**
++     * The AC7 reference scan must be provably load-bearing in both directions. {@code V911} fails
++     * <em>because</em> a reader is live; the same file with the identifier renamed to one that appears
++     * nowhere in the corpus must pass, otherwise the rule is really just "did you write a marker".
++     */
++    @Test
++    @DisplayName("AC7.2: the reference scan is what fails V911, not merely the marker's presence")
++    void dropReferenceScan_isLoadBearing() throws IOException {
++        Path tmp = Files.createTempDirectory("migration-lint-dropscan");
++        try {
++            String withLiveReader = Files.readString(
++                FIXTURES.resolve("invalid").resolve("V911__drop_column_marker_but_live_reference.sql"));
++            Files.writeString(tmp.resolve("V911__drop_column_marker_but_live_reference.sql"),
++                withLiveReader.replace("obsolete_reading", "column_nothing_reads"));
++
++            assertThat(MigrationLint.lint(tmp, 100, FIXTURE_DEFERRED_92_BASELINE,
++                    MigrationLint.ALL_KNOWN_AT_HEAD, FIXTURE_SOURCES))
++                .as("with no live reader the identical file must pass — so V911's failure is the scan "
++                    + "finding a real reference, not the rule firing on every DROP that carries a marker")
++                .isEmpty();
++        } finally {
++            deleteRecursively(tmp);
++        }
+     }
+ 
+     /**
+@@ -119,7 +245,7 @@ class MigrationConventionLintTest {
+     @Test
+     @DisplayName("an R__ repeatable can opt out of the unconditional-DROP rule, and only via the opt-out")
+     void repeatableDropOptOut_isHonoured_andIsLoadBearing() throws IOException {
+-        assertThat(MigrationLint.lint(FIXTURES.resolve("valid"), 0))
++        assertThat(lintFixtures("valid", 0))
+             .as("R__repeatable_drop_optout.sql carries the opt-out and must lint clean")
+             .isEmpty();
+ 
+@@ -136,15 +262,19 @@ class MigrationConventionLintTest {
+                 .anyMatch(v -> v.rule() == MigrationLint.Rule.REPEATABLE_HAZARD
+                             && v.detail().contains("allow-unconditional-drop"));
+         } finally {
+-            try (var paths = Files.walk(tmp)) {
+-                paths.sorted(java.util.Comparator.reverseOrder()).forEach(f -> {
+-                    try {
+-                        Files.deleteIfExists(f);
+-                    } catch (IOException ignored) {
+-                        // best effort temp cleanup
+-                    }
+-                });
+-            }
++            deleteRecursively(tmp);
++        }
++    }
++
++    private static void deleteRecursively(Path dir) throws IOException {
++        try (var paths = Files.walk(dir)) {
++            paths.sorted(java.util.Comparator.reverseOrder()).forEach(f -> {
++                try {
++                    Files.deleteIfExists(f);
++                } catch (IOException ignored) {
++                    // best effort temp cleanup
++                }
++            });
+         }
+     }
+ }
+diff --git a/src/test/java/com/softropic/skillars/db/MigrationLint.java b/src/test/java/com/softropic/skillars/db/MigrationLint.java
+index 84f20b5..0e36cee 100644
+--- a/src/test/java/com/softropic/skillars/db/MigrationLint.java
++++ b/src/test/java/com/softropic/skillars/db/MigrationLint.java
+@@ -6,7 +6,10 @@ import java.nio.charset.StandardCharsets;
+ import java.nio.file.Files;
+ import java.nio.file.Path;
+ import java.util.ArrayList;
++import java.util.LinkedHashSet;
+ import java.util.List;
++import java.util.Locale;
++import java.util.Set;
+ import java.util.concurrent.TimeUnit;
+ import java.util.function.Predicate;
+ import java.util.regex.Matcher;
+@@ -14,15 +17,36 @@ import java.util.regex.Pattern;
+ import java.util.stream.Stream;
+ 
+ /**
+- * Text-level rolling-deploy migration-safety lint (skillars-deferred-90 AC10).
++ * Text-level rolling-deploy migration-safety lint (skillars-deferred-90 AC10, widened by
++ * skillars-deferred-91 AC7 and skillars-deferred-92 AC7–AC11).
+  *
+  * <p>Scans a directory of Flyway {@code V<n>__*.sql} scripts and reports the mechanical subset of
+  * {@code docs/deployment/migration-conventions.md} that can be checked without a database. Only
+  * scripts with a version <strong>strictly greater than</strong> {@code baselineVersion} are checked
+  * — everything at or below the baseline is grandfathered (applied and immutable).
+  *
+- * <p>Intentionally a backstop, not a proof — see the "What the guard cannot catch" section of the
+- * conventions doc (backported lower-version scripts, {@code R__} repeatables, inline FK columns).
++ * <h2>Two baselines, and why</h2>
++ *
++ * Flyway checksums a migration's whole file, comments included, so an applied migration cannot be
++ * edited — not even to add an opt-out marker — without breaking validation on every environment that
++ * already ran it. The rules skillars-deferred-92 adds ({@link Rule#MISSING_LOCK_TIMEOUT},
++ * {@link Rule#UNBATCHED_DML}, {@link Rule#DROP_WITHOUT_PRIOR_RELEASE_PREP},
++ * {@link Rule#PLATFORM_CONFIG_EXPLICIT_ID}) would flag several of {@code V122}–{@code V127}, which
++ * are above {@link #GRANDFATHER_BASELINE} but already applied. They therefore bind from
++ * {@link #DEFERRED_92_BASELINE} instead. This is the same reasoning that produced the first baseline,
++ * applied a second time rather than quietly rewriting shipped migrations.
++ *
++ * <h2>Statement scoping (skillars-deferred-92 AC11.2)</h2>
++ *
++ * {@code -- migration-lint: allow-*} markers used to be matched against the whole file, so one
++ * opt-out silenced that rule for <em>every</em> statement in the migration — a documented blind spot.
++ * A marker now scopes to the statement that follows it (precisely: to the text between the previous
++ * statement terminator and this statement's own), which is where every existing marker in this
++ * repository already sits.
++ *
++ * <p>Intentionally a backstop, not a proof. Each rule's javadoc states what it does <em>not</em>
++ * catch; this project has three recorded instances of a guard believed stronger than it was, and an
++ * overstated rule would be a fourth.
+  *
+  * <p>No Spring context, no database — invoked from {@code MigrationConventionLintTest} in the
+  * {@code test} phase so it fails the build in milliseconds.
+@@ -32,14 +56,25 @@ public final class MigrationLint {
+     /** The Flyway location whose scripts are grandfathered up to {@link #GRANDFATHER_BASELINE}. */
+     public static final Path REAL_MIGRATIONS = Path.of("src", "main", "resources", "db", "migration");
+ 
++    /** Source trees {@link Rule#DROP_WITHOUT_PRIOR_RELEASE_PREP} searches for live references. */
++    public static final List<Path> REAL_SOURCE_ROOTS = List.of(
++        Path.of("src", "main", "java"), Path.of("src", "main", "resources"));
++
+     /**
+      * Highest migration version that predates this convention. V60/V89/V94/V97/V98/V117 + the
+      * AdminAlertType enum widen are all &le; this and are immutable; the guard binds V122+.
+      */
+     public static final int GRANDFATHER_BASELINE = 121;
+ 
++    /**
++     * Highest migration version that predates the skillars-deferred-92 rules. {@code V122}–{@code V127}
++     * are above {@link #GRANDFATHER_BASELINE} but already applied and therefore checksum-frozen, so
++     * they cannot carry the opt-out markers the new rules would demand. Those rules bind {@code V128+}.
++     */
++    public static final int DEFERRED_92_BASELINE = 127;
++
+     public enum Rule {
+-        /** {@code DROP TABLE|COLUMN|INDEX} without {@code IF EXISTS}. */
++        /** {@code DROP TABLE|COLUMN|INDEX|CONSTRAINT} without {@code IF EXISTS}. */
+         DROP_WITHOUT_IF_EXISTS,
+         /** {@code ADD CONSTRAINT … FOREIGN KEY|CHECK} without {@code NOT VALID} and no opt-out. */
+         VALIDATING_CONSTRAINT,
+@@ -68,8 +103,28 @@ public final class MigrationLint {
+          * without {@code NOT VALID}.
+          */
+         INLINE_FK_ADD_COLUMN,
+-        /** A {@code V…\u200b.sql} whose version the lint cannot parse — it would otherwise be skipped silently. */
+-        UNPARSEABLE_VERSION
++        /** A {@code V…​.sql} whose version the lint cannot parse — it would otherwise be skipped silently. */
++        UNPARSEABLE_VERSION,
++        /**
++         * skillars-deferred-92 AC7: expand/contract <em>ordering</em>. A {@code DROP TABLE} or
++         * {@code DROP COLUMN} must name the release that removed the last reader
++         * ({@code -- migration-lint: drop-prepared-in: V123}), and no live reference to the dropped
++         * identifier may remain in {@code src/main}.
++         */
++        DROP_WITHOUT_PRIOR_RELEASE_PREP,
++        /**
++         * skillars-deferred-92 AC8: lock-taking DDL with no {@code SET lock_timeout}, so it waits
++         * indefinitely — and every later query on the table queues behind the blocked statement.
++         */
++        MISSING_LOCK_TIMEOUT,
++        /** skillars-deferred-92 AC9: an {@code UPDATE}/{@code DELETE} that cannot bound its row count. */
++        UNBATCHED_DML,
++        /**
++         * skillars-deferred-92 AC10.3: an {@code INSERT INTO main.platform_config} that supplies an
++         * explicit {@code id}. {@code V128} gave the column an identity; a hand-picked id collides on
++         * the primary key, which the {@code ON CONFLICT (key)} clause never sees.
++         */
++        PLATFORM_CONFIG_EXPLICIT_ID
+     }
+ 
+     public record Violation(String file, Rule rule, String detail) {
+@@ -119,6 +174,32 @@ public final class MigrationLint {
+     private static final Pattern NOT_VALID = Pattern.compile("(?i)\\bNOT\\s+VALID\\b");
+     private static final Pattern DROP_TABLE_OR_COLUMN = Pattern.compile("(?is)\\bDROP\\s+(TABLE|COLUMN)\\b");
+ 
++    // --- skillars-deferred-92 patterns -------------------------------------------------------
++
++    /** {@code -- migration-lint: drop-prepared-in: V123} (AC7). */
++    private static final Pattern DROP_PREPARED_IN =
++        Pattern.compile("(?i)migration-lint:\\s*drop-prepared-in:\\s*(V?\\d+(?:[._]\\d+)*)");
++    /** The identifier a {@code DROP TABLE|COLUMN} names, and (for a column) its owning table. */
++    private static final Pattern DROP_COLUMN_TARGET = Pattern.compile(
++        "(?is)\\bALTER\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?([\\w.\"]+).*?\\bDROP\\s+COLUMN\\s+(?:IF\\s+EXISTS\\s+)?([\\w\"]+)");
++    private static final Pattern DROP_TABLE_TARGET =
++        Pattern.compile("(?is)\\bDROP\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?([\\w.\"]+)");
++    private static final Pattern SET_LOCK_TIMEOUT =
++        Pattern.compile("(?i)\\bSET\\s+(?:LOCAL\\s+)?lock_timeout\\b");
++    /** Any index build, concurrent or not — all of them take a lock worth bounding (AC8.1). */
++    private static final Pattern ANY_CREATE_INDEX =
++        Pattern.compile("(?is)\\bCREATE\\s+(UNIQUE\\s+)?INDEX\\b");
++    /** DDL that takes a lock blocking concurrent DML or DDL. Lock levels differ — see the rule. */
++    private static final Pattern ACCESS_EXCLUSIVE_DDL = Pattern.compile(
++        "(?is)\\bALTER\\s+TABLE\\b(?:(?!;).)*?\\b(ADD|DROP|ALTER)\\s+(COLUMN|CONSTRAINT)\\b"
++            + "|\\bDROP\\s+TABLE\\b|\\bDROP\\s+INDEX\\b|\\bALTER\\s+TABLE\\b(?:(?!;).)*?\\bADD\\s+GENERATED\\b");
++    private static final Pattern DML_WRITE = Pattern.compile("(?is)^\\s*(UPDATE|DELETE)\\s+");
++    private static final Pattern HAS_WHERE = Pattern.compile("(?i)\\bWHERE\\b");
++    private static final Pattern TAUTOLOGICAL_WHERE =
++        Pattern.compile("(?i)\\bWHERE\\s+(TRUE|1\\s*=\\s*1)\\b");
++    private static final Pattern PLATFORM_CONFIG_INSERT = Pattern.compile(
++        "(?is)\\bINSERT\\s+INTO\\s+(?:main\\.)?platform_config\\s*\\(([^)]*)\\)");
++
+     private MigrationLint() {
+     }
+ 
+@@ -129,23 +210,125 @@ public final class MigrationLint {
+         return lint(dir, baselineVersion, ALL_KNOWN_AT_HEAD);
+     }
+ 
++    public static List<Violation> lint(Path dir, int baselineVersion, Predicate<Path> knownAtHead)
++            throws IOException {
++        return lint(dir, baselineVersion, DEFERRED_92_BASELINE, knownAtHead, REAL_SOURCE_ROOTS);
++    }
++
+     /**
++     * @param baselineVersion versions at or below this are grandfathered from every content rule
++     * @param deferred92Baseline versions at or below this are additionally grandfathered from the
++     *     rules skillars-deferred-92 added — see the class javadoc for why there are two
+      * @param knownAtHead returns {@code true} if the file already existed at {@code HEAD}. A
+      *     {@code V<n>} script with {@code n <= baselineVersion} for which this returns {@code false}
+      *     is a backport past the grandfather baseline ({@link Rule#BACKPORT_BELOW_BASELINE}).
++     * @param sourceRoots trees searched for live references to a dropped identifier
++     *     ({@link Rule#DROP_WITHOUT_PRIOR_RELEASE_PREP})
+      */
+-    public static List<Violation> lint(Path dir, int baselineVersion, Predicate<Path> knownAtHead)
++    public static List<Violation> lint(Path dir, int baselineVersion, int deferred92Baseline,
++                                       Predicate<Path> knownAtHead, List<Path> sourceRoots)
+             throws IOException {
+         final List<Violation> violations = new ArrayList<>();
+         try (Stream<Path> files = Files.list(dir)) {
+             files.filter(p -> p.getFileName().toString().endsWith(".sql"))
+                  .sorted()
+-                 .forEach(p -> lintFile(p, baselineVersion, knownAtHead, violations));
++                 .forEach(p -> lintFile(p, baselineVersion, deferred92Baseline, knownAtHead,
++                     sourceRoots, violations));
+         }
+         return violations;
+     }
+ 
+-    private static void lintFile(Path file, int baselineVersion, Predicate<Path> knownAtHead,
++    // --- statement model ----------------------------------------------------------------------
++
++    /**
++     * One SQL statement plus the raw text leading up to it — the comments immediately above a
++     * statement are part of its scope, which is what makes a {@code -- migration-lint: allow-*}
++     * marker bind to the statement it was written for rather than to the whole file (AC11.2).
++     *
++     * @param scope raw text from the end of the previous statement through this statement's
++     *     terminator, comments included
++     * @param sql the same statement with comments stripped
++     */
++    private record Statement(String scope, String sql) {
++    }
++
++    /**
++     * Splits on {@code ;} at the top level, skipping terminators inside line comments, block
++     * comments, single-quoted literals and dollar-quoted bodies.
++     *
++     * <p>Limitation, stated rather than implied: nested dollar-quote tags ({@code $tag$}) are matched
++     * only by the plain {@code $$} form. No migration in this repository uses a tagged dollar quote,
++     * and a mis-split would at worst scope a marker more narrowly than intended — the safe direction.
++     */
++    private static List<Statement> statements(String raw) {
++        final List<Statement> out = new ArrayList<>();
++        int start = 0;
++        int i = 0;
++        while (i < raw.length()) {
++            char c = raw.charAt(i);
++            if (c == '-' && i + 1 < raw.length() && raw.charAt(i + 1) == '-') {
++                int nl = raw.indexOf('\n', i);
++                i = nl < 0 ? raw.length() : nl + 1;
++            } else if (c == '/' && i + 1 < raw.length() && raw.charAt(i + 1) == '*') {
++                int end = raw.indexOf("*/", i + 2);
++                i = end < 0 ? raw.length() : end + 2;
++            } else if (c == '\'') {
++                int end = raw.indexOf('\'', i + 1);
++                i = end < 0 ? raw.length() : end + 1;
++            } else if (c == '$' && i + 1 < raw.length() && raw.charAt(i + 1) == '$') {
++                int end = raw.indexOf("$$", i + 2);
++                i = end < 0 ? raw.length() : end + 2;
++            } else if (c == ';') {
++                String scope = raw.substring(start, i + 1);
++                out.add(new Statement(scope, stripComments(scope)));
++                start = i + 1;
++                i++;
++            } else {
++                i++;
++            }
++        }
++        String tail = raw.substring(start);
++        if (!stripComments(tail).isBlank()) {
++            out.add(new Statement(tail, stripComments(tail)));
++        }
++        return out;
++    }
++
++    /**
++     * Splits an {@code ALTER TABLE} statement's clauses on top-level commas, so each
++     * {@code ADD CONSTRAINT} is evaluated independently (AC11.1).
++     *
++     * <p>Balanced-paren tracking is what makes this correct: a {@code CHECK} body carries its own
++     * commas ({@code CHECK (x IN (1,2,3))}), so a naive split on {@code ,} would tear a constraint in
++     * half and both fragments would look clause-less.
++     */
++    private static List<String> topLevelClauses(String statement) {
++        final List<String> out = new ArrayList<>();
++        int depth = 0;
++        int start = 0;
++        for (int i = 0; i < statement.length(); i++) {
++            char c = statement.charAt(i);
++            if (c == '(') {
++                depth++;
++            } else if (c == ')') {
++                depth--;
++            } else if (c == ',' && depth == 0) {
++                out.add(statement.substring(start, i));
++                start = i + 1;
++            }
++        }
++        out.add(statement.substring(start));
++        return out;
++    }
++
++    private static boolean hasMarker(String scope, String marker) {
++        return scope.toLowerCase(Locale.ROOT).contains("migration-lint: " + marker);
++    }
++
++    // --- file linting -------------------------------------------------------------------------
++
++    private static void lintFile(Path file, int baselineVersion, int deferred92Baseline,
++                                 Predicate<Path> knownAtHead, List<Path> sourceRoots,
+                                  List<Violation> out) {
+         final String name = file.getFileName().toString();
+         final Matcher vm = VERSIONED.matcher(name);
+@@ -180,33 +363,50 @@ public final class MigrationLint {
+         } catch (IOException e) {
+             throw new UncheckedIOException(e);
+         }
+-        final String stripped = stripComments(raw);
+-        final String lowerRaw = raw.toLowerCase();
++        final List<Statement> statements = statements(raw);
++        final boolean deferred92Applies = version > deferred92Baseline;
++
++        for (Statement st : statements) {
++            lintStatement(name, st, out);
++            if (deferred92Applies) {
++                lintStatementDeferred92(name, st, raw, sourceRoots, out);
++            }
++        }
++
++        if (DROP_TABLE_OR_COLUMN.matcher(stripComments(raw)).find() && !hasHeaderComment(raw)) {
++            out.add(new Violation(name, Rule.BARE_DROP_NO_HEADER,
++                "performs a table/column DROP but has no leading header comment block explaining the expand/contract sequencing"));
++        }
++    }
+ 
+-        if (DROP_NO_IF_EXISTS.matcher(stripped).find()) {
++    /** The skillars-deferred-90/-91 rules, now evaluated per statement rather than per file. */
++    private static void lintStatement(String name, Statement st, List<Violation> out) {
++        if (DROP_NO_IF_EXISTS.matcher(st.sql()).find()) {
+             out.add(new Violation(name, Rule.DROP_WITHOUT_IF_EXISTS,
+                 "a DROP TABLE/COLUMN/INDEX is missing IF EXISTS"));
+         }
+ 
+-        if (CREATE_INDEX_BLOCKING.matcher(stripped).find()
+-            && !lowerRaw.contains("migration-lint: allow-blocking-index")) {
++        if (CREATE_INDEX_BLOCKING.matcher(st.sql()).find()
++            && !hasMarker(st.scope(), "allow-blocking-index")) {
+             out.add(new Violation(name, Rule.BLOCKING_INDEX,
+-                "CREATE INDEX without CONCURRENTLY and without a '-- migration-lint: allow-blocking-index <reason>' opt-out"));
++                "CREATE INDEX without CONCURRENTLY and without a '-- migration-lint: allow-blocking-index <reason>' "
++                    + "opt-out immediately above this statement (skillars-deferred-92 AC11.2: an opt-out "
++                    + "elsewhere in the file no longer covers it)"));
+         }
+ 
+-        if (!lowerRaw.contains("migration-lint: allow-validating-constraint")) {
+-            for (String statement : stripped.split(";")) {
+-                if (ADD_FK_OR_CHECK.matcher(statement).find() && !NOT_VALID.matcher(statement).find()) {
++        if (!hasMarker(st.scope(), "allow-validating-constraint")) {
++            // AC11.1: per CLAUSE, not per statement. `ADD CONSTRAINT a CHECK (…) NOT VALID,
++            // ADD CONSTRAINT b CHECK (…)` used to pass because NOT VALID appeared *somewhere*.
++            for (String clause : topLevelClauses(st.sql())) {
++                if (ADD_FK_OR_CHECK.matcher(clause).find() && !NOT_VALID.matcher(clause).find()) {
+                     out.add(new Violation(name, Rule.VALIDATING_CONSTRAINT,
+-                        "ADD CONSTRAINT … FOREIGN KEY|CHECK without NOT VALID (and no allow-validating-constraint opt-out)"));
++                        "ADD CONSTRAINT … FOREIGN KEY|CHECK without NOT VALID on that clause (and no "
++                            + "allow-validating-constraint opt-out): " + oneLine(clause)));
+                     break;
+                 }
+             }
+-        }
+-
+-        if (!lowerRaw.contains("migration-lint: allow-validating-constraint")) {
+-            for (String statement : stripped.split(";")) {
+-                if (INLINE_FK.matcher(statement).find() && !NOT_VALID.matcher(statement).find()) {
++            for (String clause : topLevelClauses(st.sql())) {
++                if (INLINE_FK.matcher(clause).find() && !NOT_VALID.matcher(clause).find()) {
+                     out.add(new Violation(name, Rule.INLINE_FK_ADD_COLUMN,
+                         "ALTER TABLE … ADD COLUMN … REFERENCES x(y) inline FK without NOT VALID — the "
+                             + "'ADD CONSTRAINT' rule does not see it; add the column first, then "
+@@ -215,18 +415,250 @@ public final class MigrationLint {
+                 }
+             }
+         }
++    }
+ 
+-        if (DROP_TABLE_OR_COLUMN.matcher(stripped).find() && !hasHeaderComment(raw)) {
+-            out.add(new Violation(name, Rule.BARE_DROP_NO_HEADER,
+-                "performs a table/column DROP but has no leading header comment block explaining the expand/contract sequencing"));
++    /** The rules skillars-deferred-92 added; bind above {@link #DEFERRED_92_BASELINE} only. */
++    private static void lintStatementDeferred92(String name, Statement st, String raw,
++                                                List<Path> sourceRoots, List<Violation> out) {
++        lintDropOrdering(name, st, raw, sourceRoots, out);
++        lintLockTimeout(name, st, raw, out);
++        lintUnbatchedDml(name, st, out);
++        lintPlatformConfigId(name, st, out);
++    }
++
++    /**
++     * AC7 — expand/contract <strong>ordering</strong>, which the shape rules never checked. During a
++     * rolling deploy the old pods are still reading a column when the new pod's migration drops it;
++     * {@code skillars-11-3} D2 shipped exactly that and passed the lint clean.
++     *
++     * <p>Two halves, and the second is what makes the first more than decoration: the migration must
++     * name the release that removed the last reader, <em>and</em> no live reference to the dropped
++     * identifier may remain in {@code src/main}.
++     *
++     * <p><strong>What the reference search actually guarantees</strong> (AC7.2 requires this be
++     * stated, not implied). Column names like {@code id}, {@code status} or {@code amount} are far
++     * too generic to grep for, so a match requires the {@code snake_case} identifier <em>and</em> the
++     * owning table's bare name to appear in the same file, plus the camelCase JPA field name where
++     * that is distinctive. A dropped column whose reader lives in a file that never mentions the table
++     * name — a raw SQL string assembled from fragments, say — will not be found. For those, the
++     * marker alone is the guarantee. {@code -- migration-lint: allow-drop-reference-scan <reason>}
++     * suppresses the search when its output is noise; the marker requirement still stands.
++     */
++    private static void lintDropOrdering(String name, Statement st, String raw,
++                                         List<Path> sourceRoots, List<Violation> out) {
++        if (!DROP_TABLE_OR_COLUMN.matcher(st.sql()).find()) {
++            return;
++        }
++        Matcher prepared = DROP_PREPARED_IN.matcher(raw);
++        if (!prepared.find()) {
++            out.add(new Violation(name, Rule.DROP_WITHOUT_PRIOR_RELEASE_PREP,
++                "a DROP TABLE/COLUMN must name the release in which the last reader was removed — add "
++                    + "'-- migration-lint: drop-prepared-in: V<n>' to the header block. Dropping in the "
++                    + "same release that stops reading is the rolling-deploy hazard the expand/contract "
++                    + "standard exists to prevent: old pods are still reading the column when the new "
++                    + "pod's migration removes it"));
++            return;
++        }
++        if (hasMarker(raw, "allow-drop-reference-scan")) {
++            return;
++        }
++
++        for (String[] target : droppedIdentifiers(st.sql())) {
++            final String table = target[0];
++            final String identifier = target[1];
++            List<String> offenders = referencesIn(sourceRoots, table, identifier);
++            if (!offenders.isEmpty()) {
++                out.add(new Violation(name, Rule.DROP_WITHOUT_PRIOR_RELEASE_PREP,
++                    "the header claims this DROP was prepared in " + prepared.group(1) + ", but '"
++                        + identifier + "' still appears alongside '" + table + "' in " + offenders
++                        + " — a marker that claims preparation while the code still reads the object is "
++                        + "the failure worth catching. Remove the reads first, or add "
++                        + "'-- migration-lint: allow-drop-reference-scan <reason>' if these are false "
++                        + "positives"));
++            }
++        }
++    }
++
++    /** {@code {table, identifier}} pairs for each {@code DROP TABLE} / {@code DROP COLUMN}. */
++    private static List<String[]> droppedIdentifiers(String sql) {
++        final List<String[]> out = new ArrayList<>();
++        Matcher col = DROP_COLUMN_TARGET.matcher(sql);
++        while (col.find()) {
++            out.add(new String[] {bareName(col.group(1)), bareName(col.group(2))});
++        }
++        Matcher tbl = DROP_TABLE_TARGET.matcher(sql);
++        while (tbl.find()) {
++            String t = bareName(tbl.group(1));
++            out.add(new String[] {t, t});
++        }
++        return out;
++    }
++
++    private static String bareName(String qualified) {
++        String s = qualified.replace("\"", "");
++        int dot = s.lastIndexOf('.');
++        return dot < 0 ? s : s.substring(dot + 1);
++    }
++
++    /** Files mentioning both the owning table and the identifier (snake_case or camelCase). */
++    private static List<String> referencesIn(List<Path> roots, String table, String identifier) {
++        final String camel = toCamelCase(identifier);
++        final Set<String> hits = new LinkedHashSet<>();
++        for (Path root : roots) {
++            if (!Files.isDirectory(root)) {
++                continue;
++            }
++            try (Stream<Path> paths = Files.walk(root)) {
++                paths.filter(Files::isRegularFile)
++                     // The migration tree is not source; a later migration naming the column is not a reader.
++                     .filter(p -> !p.toString().contains("db" + java.io.File.separator + "migration"))
++                     .filter(p -> {
++                         String n = p.getFileName().toString();
++                         return n.endsWith(".java") || n.endsWith(".sql") || n.endsWith(".yaml")
++                             || n.endsWith(".yml") || n.endsWith(".xml");
++                     })
++                     .forEach(p -> {
++                         final String body;
++                         try {
++                             body = Files.readString(p, StandardCharsets.UTF_8);
++                         } catch (IOException | RuntimeException e) {
++                             return; // unreadable or non-UTF-8: not evidence of a reference
++                         }
++                         if (!body.contains(table)) {
++                             return;
++                         }
++                         if (body.contains(identifier) || (!camel.equals(identifier) && body.contains(camel))) {
++                             hits.add(p.getFileName().toString());
++                         }
++                     });
++            } catch (IOException e) {
++                throw new UncheckedIOException(e);
++            }
++        }
++        return new ArrayList<>(hits);
++    }
++
++    private static String toCamelCase(String snake) {
++        StringBuilder sb = new StringBuilder();
++        boolean upper = false;
++        for (char c : snake.toCharArray()) {
++            if (c == '_') {
++                upper = true;
++            } else {
++                sb.append(upper ? Character.toUpperCase(c) : c);
++                upper = false;
++            }
+         }
++        return sb.toString();
++    }
++
++    /**
++     * AC8 — every lock-taking DDL statement needs a bounded wait.
++     *
++     * <p>Verified during skillars-deferred-92: only {@code V55} and {@code V57} of 121 migrations set
++     * {@code lock_timeout}. Without it a blocked {@code ALTER TABLE} queues behind a long-running
++     * reader <em>and every subsequent query on that table queues behind the ALTER</em>, so one slow
++     * {@code SELECT} can stall the whole table and exhaust the connection pool. That mechanism, not
++     * the {@code ALTER}'s own duration, is why this matters — and it is the concrete cause behind the
++     * three separate ledger entries for {@code V60}, {@code V94} and {@code V97}.
++     *
++     * <p><strong>The locks are not all the same, and saying so matters:</strong>
++     * <ul>
++     *   <li>{@code ALTER TABLE … ADD/DROP COLUMN|CONSTRAINT}, {@code DROP TABLE}, {@code DROP INDEX}
++     *       → {@code ACCESS EXCLUSIVE}, which blocks reads too;</li>
++     *   <li>{@code CREATE INDEX} (non-{@code CONCURRENTLY}) → {@code SHARE}: blocks writes and other
++     *       DDL, but <strong>allows reads</strong>;</li>
++     *   <li>{@code CREATE INDEX CONCURRENTLY} → {@code SHARE UPDATE EXCLUSIVE}.</li>
++     * </ul>
++     * All three are covered, because all three can wait indefinitely for a conflicting lock — but the
++     * rule deliberately does not claim they are equally disruptive, and the message it emits does not
++     * either. Overstating what a guard covers is the failure this project has recorded three times.
++     */
++    private static void lintLockTimeout(String name, Statement st, String raw, List<Violation> out) {
++        if (!ACCESS_EXCLUSIVE_DDL.matcher(st.sql()).find()
++            && !ANY_CREATE_INDEX.matcher(st.sql()).find()) {
++            return;
++        }
++        if (hasMarker(st.scope(), "allow-unbounded-lock-wait")) {
++            return;
++        }
++        // A `SET lock_timeout` anywhere earlier in the file covers this statement: it is a session /
++        // transaction setting, not a per-statement one, so scoping it per statement would be wrong.
++        //
++        // Comments MUST be stripped before this search. Without it, a migration whose header merely
++        // *discusses* lock_timeout — "this migration does not set lock_timeout because ..." — silences
++        // the rule for its own DDL. That is not hypothetical: the V912 fixture's explanatory header
++        // contains the phrase, and the rule passed it clean until this line stripped comments first.
++        int here = raw.indexOf(st.scope());
++        String before = here < 0 ? raw : raw.substring(0, here + st.scope().length());
++        if (SET_LOCK_TIMEOUT.matcher(stripComments(before)).find()) {
++            return;
++        }
++        out.add(new Violation(name, Rule.MISSING_LOCK_TIMEOUT,
++            "lock-taking DDL with no 'SET lock_timeout' before it, so it waits indefinitely — and every "
++                + "later query on that table queues behind the blocked statement. Add "
++                + "'SET lock_timeout = '<n>s';' near the top of the migration, or "
++                + "'-- migration-lint: allow-unbounded-lock-wait <reason>': " + oneLine(st.sql())));
++    }
++
++    /**
++     * AC9 — a full-table {@code UPDATE}/{@code DELETE} in a migration locks every row it touches for
++     * the whole statement.
++     *
++     * <p><strong>Scope, stated honestly.</strong> AC9 asks for "no {@code WHERE}, <em>or a
++     * {@code WHERE} that cannot bound the row count</em>". The second half is not decidable from
++     * text — {@code WHERE status = 'X'} may match three rows or three million. This rule therefore
++     * catches a missing {@code WHERE} and the tautological forms ({@code WHERE TRUE},
++     * {@code WHERE 1=1}), and no more. A present-but-unbounded predicate is still review's problem,
++     * which is why that limitation is written here rather than left for a reader to discover.
++     */
++    private static void lintUnbatchedDml(String name, Statement st, List<Violation> out) {
++        String sql = st.sql().strip();
++        if (!DML_WRITE.matcher(sql).find()) {
++            return;
++        }
++        boolean unbounded = !HAS_WHERE.matcher(sql).find() || TAUTOLOGICAL_WHERE.matcher(sql).find();
++        if (!unbounded || hasMarker(st.scope(), "allow-full-table-dml")) {
++            return;
++        }
++        out.add(new Violation(name, Rule.UNBATCHED_DML,
++            "an UPDATE/DELETE with no bounding WHERE clause locks every row in the table for the whole "
++                + "statement. Batch it, or add '-- migration-lint: allow-full-table-dml <reason>' "
++                + "immediately above: " + oneLine(sql)));
++    }
++
++    /**
++     * AC10.3 — {@code V128} gave {@code main.platform_config.id} an identity, so seeds must omit it.
++     * A hand-picked id raises a <em>primary key</em> violation that the {@code ON CONFLICT (key)}
++     * clause never sees, failing Flyway on every database that already ran a later migration reusing
++     * that id — the hazard {@code V99}'s own header spends six lines describing.
++     */
++    private static void lintPlatformConfigId(String name, Statement st, List<Violation> out) {
++        Matcher m = PLATFORM_CONFIG_INSERT.matcher(st.sql());
++        while (m.find()) {
++            boolean namesId = Stream.of(m.group(1).split(","))
++                .map(c -> c.strip().replace("\"", "").toLowerCase(Locale.ROOT))
++                .anyMatch("id"::equals);
++            if (namesId) {
++                out.add(new Violation(name, Rule.PLATFORM_CONFIG_EXPLICIT_ID,
++                    "INSERT INTO main.platform_config supplies an explicit id. Since V128 the column has "
++                        + "an identity — omit id and let the sequence assign it. A hand-picked id raises a "
++                        + "PRIMARY KEY violation that ON CONFLICT (key) does not catch, which fails Flyway "
++                        + "on every database that already used that id"));
++            }
++        }
++    }
++
++    private static String oneLine(String sql) {
++        String s = sql.replaceAll("\\s+", " ").strip();
++        return s.length() <= 120 ? s : s.substring(0, 117) + "...";
+     }
+ 
+     /**
+      * skillars-deferred-91 AC7 blind spot 2: an {@code R__} repeatable migration re-runs on every
+      * checksum change, so a {@code DROP} / validating constraint / blocking {@code CREATE INDEX} in
+      * one is a rolling-deploy hazard no versioned rule ever sees. The {@code allow-*} opt-outs still
+-     * apply.
++     * apply, and since skillars-deferred-92 AC11.2 they are scoped to the statement they precede.
+      */
+     private static void lintRepeatable(Path file, String name, List<Violation> out) {
+         final String raw;
+@@ -235,30 +667,30 @@ public final class MigrationLint {
+         } catch (IOException e) {
+             throw new UncheckedIOException(e);
+         }
+-        final String stripped = stripComments(raw);
+-        final String lowerRaw = raw.toLowerCase();
+-
+-        // skillars-deferred-91 code review: this branch had no opt-out check, though the method
+-        // javadoc promises "the allow-* opt-outs still apply" and both sibling branches honour one.
+-        // A repeatable that legitimately needs an unconditional DROP had no way past the lint.
+-        if (DROP_NO_IF_EXISTS.matcher(stripped).find()
+-            && !lowerRaw.contains("migration-lint: allow-unconditional-drop")) {
+-            out.add(new Violation(name, Rule.REPEATABLE_HAZARD,
+-                "an R__ repeatable contains a DROP without IF EXISTS and without a "
+-                    + "'-- migration-lint: allow-unconditional-drop <reason>' opt-out"));
+-        }
+-        if (CREATE_INDEX_BLOCKING.matcher(stripped).find()
+-            && !lowerRaw.contains("migration-lint: allow-blocking-index")) {
+-            out.add(new Violation(name, Rule.REPEATABLE_HAZARD,
+-                "an R__ repeatable contains a blocking CREATE INDEX (not CONCURRENTLY) with no opt-out"));
+-        }
+-        if (!lowerRaw.contains("migration-lint: allow-validating-constraint")) {
+-            for (String statement : stripped.split(";")) {
+-                if ((ADD_FK_OR_CHECK.matcher(statement).find() || INLINE_FK.matcher(statement).find())
+-                    && !NOT_VALID.matcher(statement).find()) {
+-                    out.add(new Violation(name, Rule.REPEATABLE_HAZARD,
+-                        "an R__ repeatable adds a validating constraint (no NOT VALID) with no opt-out"));
+-                    break;
++
++        for (Statement st : statements(raw)) {
++            // skillars-deferred-91 code review: this branch had no opt-out check, though the method
++            // javadoc promises "the allow-* opt-outs still apply" and both sibling branches honour one.
++            // A repeatable that legitimately needs an unconditional DROP had no way past the lint.
++            if (DROP_NO_IF_EXISTS.matcher(st.sql()).find()
++                && !hasMarker(st.scope(), "allow-unconditional-drop")) {
++                out.add(new Violation(name, Rule.REPEATABLE_HAZARD,
++                    "an R__ repeatable contains a DROP without IF EXISTS and without a "
++                        + "'-- migration-lint: allow-unconditional-drop <reason>' opt-out"));
++            }
++            if (CREATE_INDEX_BLOCKING.matcher(st.sql()).find()
++                && !hasMarker(st.scope(), "allow-blocking-index")) {
++                out.add(new Violation(name, Rule.REPEATABLE_HAZARD,
++                    "an R__ repeatable contains a blocking CREATE INDEX (not CONCURRENTLY) with no opt-out"));
++            }
++            if (!hasMarker(st.scope(), "allow-validating-constraint")) {
++                for (String clause : topLevelClauses(st.sql())) {
++                    if ((ADD_FK_OR_CHECK.matcher(clause).find() || INLINE_FK.matcher(clause).find())
++                        && !NOT_VALID.matcher(clause).find()) {
++                        out.add(new Violation(name, Rule.REPEATABLE_HAZARD,
++                            "an R__ repeatable adds a validating constraint (no NOT VALID) with no opt-out"));
++                        break;
++                    }
+                 }
+             }
+         }
+diff --git a/src/test/resources/migration-lint/fixture-src/WidgetRepository.java b/src/test/resources/migration-lint/fixture-src/WidgetRepository.java
+new file mode 100644
+index 0000000..aa11b18
+--- /dev/null
++++ b/src/test/resources/migration-lint/fixture-src/WidgetRepository.java
+@@ -0,0 +1,23 @@
++// Fixture source for MigrationLint.Rule.DROP_WITHOUT_PRIOR_RELEASE_PREP (skillars-deferred-92 AC7.2).
++//
++// This file is deliberately NOT compiled — it lives under src/test/resources so it is a text corpus
++// for the reference scan, nothing more. It exists to make both outcomes of the scan reachable:
++//
++//   * the column V911 drops appears below, alongside the table name, so
++//     invalid/V911__drop_column_marker_but_live_reference.sql must FAIL even though it carries a
++//     drop-prepared-in marker — a marker that claims preparation while a reader is still live is the
++//     whole failure mode the scan exists to catch;
++//   * the column V809 drops appears nowhere in this corpus, so valid/V809__prepared_drop.sql passes.
++//
++// Do NOT name V809's column anywhere in this file, not even in a comment: the scan is a text search,
++// so a mention here — including in prose explaining that it is absent — makes it present. That is
++// exactly how the first draft of this fixture failed.
++//
++// The generic column names the rule's javadoc warns about (`id`, `status`) are included so the
++// qualified match — identifier AND table name in the same file — is exercised rather than assumed.
++package fixtures;
++
++interface WidgetRepository {
++    @Query("SELECT w.obsolete_reading FROM main.widget w WHERE w.status = 'ACTIVE' AND w.id = :id")
++    Long findObsoleteReading(Long id);
++}
+diff --git a/src/test/resources/migration-lint/invalid/V910__drop_column_no_prepared_marker.sql b/src/test/resources/migration-lint/invalid/V910__drop_column_no_prepared_marker.sql
+new file mode 100644
+index 0000000..3fec18c
+--- /dev/null
++++ b/src/test/resources/migration-lint/invalid/V910__drop_column_no_prepared_marker.sql
+@@ -0,0 +1,6 @@
++-- Fixture (skillars-deferred-92 AC7): a DROP COLUMN with no drop-prepared-in marker.
++-- This is skillars-11-3 D2's exact defect — the code deletion and the destructive migration ship
++-- together, so during a rolling deploy the old pods are still reading the column when the new pod's
++-- migration removes it. Passed the lint clean before AC7.
++SET lock_timeout = '5s';
++ALTER TABLE main.widget DROP COLUMN IF EXISTS legacy_flag;
+diff --git a/src/test/resources/migration-lint/invalid/V911__drop_column_marker_but_live_reference.sql b/src/test/resources/migration-lint/invalid/V911__drop_column_marker_but_live_reference.sql
+new file mode 100644
+index 0000000..6c9b791
+--- /dev/null
++++ b/src/test/resources/migration-lint/invalid/V911__drop_column_marker_but_live_reference.sql
+@@ -0,0 +1,5 @@
++-- Fixture (skillars-deferred-92 AC7.2): the marker claims preparation, but a reader is still live.
++-- A marker nobody checks is decoration; this is the failure mode worth catching.
++-- migration-lint: drop-prepared-in: V905
++SET lock_timeout = '5s';
++ALTER TABLE main.widget DROP COLUMN IF EXISTS obsolete_reading;
+diff --git a/src/test/resources/migration-lint/invalid/V912__missing_lock_timeout.sql b/src/test/resources/migration-lint/invalid/V912__missing_lock_timeout.sql
+new file mode 100644
+index 0000000..b361095
+--- /dev/null
++++ b/src/test/resources/migration-lint/invalid/V912__missing_lock_timeout.sql
+@@ -0,0 +1,6 @@
++-- Fixture (skillars-deferred-92 AC8): ACCESS EXCLUSIVE DDL with no bounded lock wait.
++-- Only 2 of the 121 migrations in this repository set lock_timeout. Without it the ALTER waits
++-- indefinitely behind a long-running reader, and — the part that actually hurts — every subsequent
++-- query on the table then queues behind the blocked ALTER, so one slow SELECT can stall the whole
++-- table and exhaust the connection pool.
++ALTER TABLE main.widget ADD COLUMN nickname VARCHAR(50);
+diff --git a/src/test/resources/migration-lint/invalid/V913__unbatched_dml.sql b/src/test/resources/migration-lint/invalid/V913__unbatched_dml.sql
+new file mode 100644
+index 0000000..9d2305f
+--- /dev/null
++++ b/src/test/resources/migration-lint/invalid/V913__unbatched_dml.sql
+@@ -0,0 +1,3 @@
++-- Fixture (skillars-deferred-92 AC9): a WHERE-less UPDATE locks every row for the whole statement.
++SET lock_timeout = '5s';
++UPDATE main.widget SET label = upper(label);
+diff --git a/src/test/resources/migration-lint/invalid/V914__platform_config_explicit_id.sql b/src/test/resources/migration-lint/invalid/V914__platform_config_explicit_id.sql
+new file mode 100644
+index 0000000..4d97a28
+--- /dev/null
++++ b/src/test/resources/migration-lint/invalid/V914__platform_config_explicit_id.sql
+@@ -0,0 +1,5 @@
++-- Fixture (skillars-deferred-92 AC10.3): a seed that still hand-picks the primary key. Since V128
++-- the column has an identity; an explicit id raises a PK violation ON CONFLICT (key) never sees.
++INSERT INTO main.platform_config (id, key, value, value_type, description) VALUES
++    (999, 'widget.fixture.flag', 'true', 'STRING', 'fixture')
++ON CONFLICT (key) DO NOTHING;
+diff --git a/src/test/resources/migration-lint/invalid/V915__second_constraint_validates.sql b/src/test/resources/migration-lint/invalid/V915__second_constraint_validates.sql
+new file mode 100644
+index 0000000..cd05521
+--- /dev/null
++++ b/src/test/resources/migration-lint/invalid/V915__second_constraint_validates.sql
+@@ -0,0 +1,8 @@
++-- Fixture (skillars-deferred-92 AC11.1): the NOT VALID rule used to ask only whether NOT VALID
++-- appeared SOMEWHERE in the statement, so constraint `b` below validated under ACCESS EXCLUSIVE
++-- while the statement passed clean. The CHECK body's own commas are why a naive split on ',' does
++-- not work and balanced-paren scanning is required.
++SET lock_timeout = '5s';
++ALTER TABLE main.widget
++    ADD CONSTRAINT chk_widget_size CHECK (size IN (1,2,3)) NOT VALID,
++    ADD CONSTRAINT chk_widget_label CHECK (label <> '');
+diff --git a/src/test/resources/migration-lint/invalid/V916__optout_leaks_to_later_statement.sql b/src/test/resources/migration-lint/invalid/V916__optout_leaks_to_later_statement.sql
+new file mode 100644
+index 0000000..134c619
+--- /dev/null
++++ b/src/test/resources/migration-lint/invalid/V916__optout_leaks_to_later_statement.sql
+@@ -0,0 +1,8 @@
++-- Fixture (skillars-deferred-92 AC11.2): the opt-out below belongs to the FIRST index only. Before
++-- AC11.2 markers were matched against the whole file, so this single opt-out silenced the rule for
++-- every statement in the migration — including the second index, on a table it says nothing about.
++SET lock_timeout = '5s';
++-- migration-lint: allow-blocking-index widget_type is a 6-row static lookup table
++CREATE INDEX idx_widget_type_label ON main.widget_type (label);
++
++CREATE INDEX idx_widget_owner ON main.widget (owner_id);
+diff --git a/src/test/resources/migration-lint/valid/R__repeatable_drop_optout.sql b/src/test/resources/migration-lint/valid/R__repeatable_drop_optout.sql
+index 58c645a..044b19b 100644
+--- a/src/test/resources/migration-lint/valid/R__repeatable_drop_optout.sql
++++ b/src/test/resources/migration-lint/valid/R__repeatable_drop_optout.sql
+@@ -3,8 +3,13 @@
+ -- all, despite lintRepeatable's javadoc promising "the allow-* opt-outs still apply", so a file like
+ -- this had no way past the lint. Uses DROP INDEX, which DROP_NO_IF_EXISTS does match, so the
+ -- opt-out is genuinely exercised rather than passing because no rule applied.
++--
++-- skillars-deferred-92 AC11.2: each marker now sits directly above the statement it covers. Before
++-- statement scoping, the single allow-blocking-index below covered BOTH statements from anywhere in
++-- the file; it now has to be repeated where it is actually needed, which is the point.
+ -- migration-lint: allow-unconditional-drop the index is recreated immediately below; a guarded drop
+ -- would leave a stale definition if the index expression changed.
+--- migration-lint: allow-blocking-index recreated in the same repeatable; see above.
+ DROP INDEX main.idx_widget_owner;
++
++-- migration-lint: allow-blocking-index recreated in the same repeatable; see above.
+ CREATE INDEX idx_widget_owner ON main.widget (owner_id);
+diff --git a/src/test/resources/migration-lint/valid/V809__prepared_drop.sql b/src/test/resources/migration-lint/valid/V809__prepared_drop.sql
+new file mode 100644
+index 0000000..7da53d4
+--- /dev/null
++++ b/src/test/resources/migration-lint/valid/V809__prepared_drop.sql
+@@ -0,0 +1,5 @@
++-- Fixture (skillars-deferred-92 AC7): a correctly sequenced DROP. The marker names the release that
++-- removed the last reader, and no live reference to the identifier remains in the scanned sources.
++-- migration-lint: drop-prepared-in: V806
++SET lock_timeout = '5s';
++ALTER TABLE main.widget DROP COLUMN IF EXISTS fully_retired_column;
+diff --git a/src/test/resources/migration-lint/valid/V810__bounded_dml_and_lock_timeout.sql b/src/test/resources/migration-lint/valid/V810__bounded_dml_and_lock_timeout.sql
+new file mode 100644
+index 0000000..68a30a2
+--- /dev/null
++++ b/src/test/resources/migration-lint/valid/V810__bounded_dml_and_lock_timeout.sql
+@@ -0,0 +1,4 @@
++-- Fixture (skillars-deferred-92 AC8/AC9): a bounded lock wait and a bounded UPDATE.
++SET lock_timeout = '5s';
++ALTER TABLE main.widget ADD COLUMN nickname VARCHAR(50);
++UPDATE main.widget SET nickname = label WHERE nickname IS NULL AND id < 1000;
+diff --git a/src/test/resources/migration-lint/valid/V811__full_table_dml_optout.sql b/src/test/resources/migration-lint/valid/V811__full_table_dml_optout.sql
+new file mode 100644
+index 0000000..8ef6a15
+--- /dev/null
++++ b/src/test/resources/migration-lint/valid/V811__full_table_dml_optout.sql
+@@ -0,0 +1,4 @@
++-- Fixture (skillars-deferred-92 AC9): a full-table UPDATE is acceptable with a stated reason.
++SET lock_timeout = '5s';
++-- migration-lint: allow-full-table-dml main.widget_type is a 6-row static lookup table
++UPDATE main.widget_type SET label = trim(label);
+diff --git a/src/test/resources/migration-lint/valid/V812__per_clause_not_valid.sql b/src/test/resources/migration-lint/valid/V812__per_clause_not_valid.sql
+new file mode 100644
+index 0000000..539e396
+--- /dev/null
++++ b/src/test/resources/migration-lint/valid/V812__per_clause_not_valid.sql
+@@ -0,0 +1,6 @@
++-- Fixture (skillars-deferred-92 AC11.1): BOTH constraints carry NOT VALID on their own clause, and
++-- the CHECK bodies contain commas — the case balanced-paren scanning has to get right.
++SET lock_timeout = '5s';
++ALTER TABLE main.widget
++    ADD CONSTRAINT chk_widget_size CHECK (size IN (1,2,3)) NOT VALID,
++    ADD CONSTRAINT chk_widget_label CHECK (label <> '') NOT VALID;
+diff --git a/src/test/resources/migration-lint/valid/V813__optout_per_statement.sql b/src/test/resources/migration-lint/valid/V813__optout_per_statement.sql
+new file mode 100644
+index 0000000..e1f1d73
+--- /dev/null
++++ b/src/test/resources/migration-lint/valid/V813__optout_per_statement.sql
+@@ -0,0 +1,8 @@
++-- Fixture (skillars-deferred-92 AC11.2): two blocking indexes, each with its OWN opt-out. Under the
++-- old whole-file matching a single marker covered both; each must now carry its own.
++SET lock_timeout = '5s';
++-- migration-lint: allow-blocking-index widget_type is a 6-row static lookup table
++CREATE INDEX idx_widget_type_label ON main.widget_type (label);
++
++-- migration-lint: allow-blocking-index widget is empty at deploy in this fixture's scenario
++CREATE INDEX idx_widget_owner ON main.widget (owner_id);

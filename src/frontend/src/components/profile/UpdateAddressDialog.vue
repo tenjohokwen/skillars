@@ -196,11 +196,13 @@ const form = ref({
 
 const isSubmitting = ref(false)
 
-// Address name options
+// Address name options. skillars-deferred-92 code review, chunk 3: the label was the hardcoded
+// English enum literal — the enum value (what the server stores) is `value`, so `label` is free to
+// be a real translated word.
 const addressNameOptions = computed(() => [
-  { label: 'HOME', value: 'HOME' },
-  { label: 'WORK', value: 'WORK' },
-  { label: 'OTHER', value: 'OTHER' },
+  { label: t('profile.addressTypeHome'), value: 'HOME' },
+  { label: t('profile.addressTypeWork'), value: 'WORK' },
+  { label: t('profile.addressTypeOther'), value: 'OTHER' },
 ])
 
 // Pre-fill from currentAddress prop

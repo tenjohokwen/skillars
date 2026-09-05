@@ -13,10 +13,18 @@
     />
     <div class="text-label q-mb-sm">{{ t('auth.coach.step2AgeGroups') }}</div>
     <div class="profile-builder__age-groups q-mb-lg">
-      <q-checkbox v-model="form.ageGroups" val="U10" label="U10" />
-      <q-checkbox v-model="form.ageGroups" val="AGE_10_12" label="10–12" />
-      <q-checkbox v-model="form.ageGroups" val="AGE_13_17" label="13–17" />
-      <q-checkbox v-model="form.ageGroups" val="ADULT" label="18+" />
+      <q-checkbox v-model="form.ageGroups" val="U10" :label="t('auth.coach.ageGroupU10')" />
+      <q-checkbox
+        v-model="form.ageGroups"
+        val="AGE_10_12"
+        :label="t('auth.coach.ageGroup10to12')"
+      />
+      <q-checkbox
+        v-model="form.ageGroups"
+        val="AGE_13_17"
+        :label="t('auth.coach.ageGroup13to17')"
+      />
+      <q-checkbox v-model="form.ageGroups" val="ADULT" :label="t('auth.coach.ageGroupAdult')" />
     </div>
     <q-btn
       :label="t('common.next')"

@@ -74,6 +74,7 @@ class ExecutorShutdownConfigurationTest {
                 .threadPoolTaskExecutor());
         pools.put("taskExecutor",
             new com.softropic.skillars.infrastructure.config.AsyncConfig().taskExecutor());
+        pools.put("reportExecutor", new DevelopmentConfig(null).reportExecutor());
         return pools;
     }
 
@@ -82,7 +83,8 @@ class ExecutorShutdownConfigurationTest {
         "sluRetryExecutor", ExecutorShutdown.SLU_RETRY_SECONDS,
         "moderationTaskExecutor", ExecutorShutdown.MODERATION_SECONDS,
         "sendMailPool", ExecutorShutdown.SEND_MAIL_SECONDS,
-        "taskExecutor", ExecutorShutdown.SHARED_ASYNC_SECONDS);
+        "taskExecutor", ExecutorShutdown.SHARED_ASYNC_SECONDS,
+        "reportExecutor", ExecutorShutdown.REPORT_SECONDS);
 
     private static Object field(Object target, String name) {
         Field f = ReflectionUtils.findField(target.getClass(), name);
@@ -92,7 +94,7 @@ class ExecutorShutdownConfigurationTest {
     }
 
     @Test
-    @DisplayName("all five pools wait for queued tasks and have a bounded await")
+    @DisplayName("all six ThreadPoolTaskExecutor pools wait for queued tasks and have a bounded await")
     void everyPoolDrainsOnShutdown() {
         pools().forEach((name, pool) -> {
             assertThat(field(pool, "waitForTasksToCompleteOnShutdown"))
@@ -185,6 +187,10 @@ class ExecutorShutdownConfigurationTest {
                 // by @ConditionalOnProperty. It has no threads and nothing to drain.
                 "OutboxConfig#outboxDrainPoolSynchronous",
                 "DevelopmentConfig#sluRetryExecutor",
+                // skillars-deferred-92 code review D2. Report/radar generation used to sit on the
+                // shared taskExecutor and its 2s slice while doing an S3 upload with no retry behind
+                // it; ExecutorShutdown.REPORT_SECONDS documents why it has its own 8s slice instead.
+                "DevelopmentConfig#reportExecutor",
                 "AsyncConfig#moderationTaskExecutor",
                 "AsyncConfig#threadPoolTaskExecutor",
                 "AsyncConfig#taskExecutor",
@@ -230,5 +236,41 @@ class ExecutorShutdownConfigurationTest {
             .as("shutdown() must not return while a task is still running — the whole point of AC3")
             .isTrue();
         assertThat(pool.isTerminated()).isTrue();
+    }
+
+    /**
+     * skillars-deferred-92 code review. The bounded wait used to be the whole of {@code shutdown()}:
+     * a task that outlived the budget was logged about and then left running. These are non-daemon
+     * threads, so on any context close that is not a JVM exit they carried on against a torn-down
+     * context. {@code shutdown()} must now interrupt them.
+     *
+     * <p>Load-bearing by construction: the task sleeps far longer than the 1-second budget, so
+     * without the {@code shutdownNow()} this assertion sees a pool that is still not terminated.
+     */
+    @Test
+    @DisplayName("shutdown() interrupts tasks that outlive the pool's budget")
+    void gracefulFixedPool_forcesTerminationAfterItsBudget() throws Exception {
+        ExecutorService pool = ExecutorShutdown.gracefulFixedPool(1, 4, "test-overrun-", 1);
+        CountDownLatch started = new CountDownLatch(1);
+        AtomicBoolean interrupted = new AtomicBoolean(false);
+
+        pool.submit(() -> {
+            started.countDown();
+            try {
+                Thread.sleep(30_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                interrupted.set(true);
+            }
+        });
+        assertThat(started.await(5, TimeUnit.SECONDS)).as("task must have started").isTrue();
+
+        pool.shutdown();
+
+        assertThat(pool.isTerminated())
+            .as("after its bounded wait expires, shutdown() must shutdownNow() rather than leave "
+                + "non-daemon workers running against a torn-down context")
+            .isTrue();
+        assertThat(interrupted).as("the overrunning task must have been interrupted").isTrue();
     }
 }

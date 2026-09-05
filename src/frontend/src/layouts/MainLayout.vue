@@ -303,6 +303,11 @@ const currentLanguageLabel = computed(() => {
 function changeLanguage(lang) {
   locale.value = lang
   localStorage.setItem('locale', lang)
+  // skillars-deferred-92 code review, chunk 3: a prior `?language=` visit can have left a `lang`
+  // cookie (LocaleChangeInterceptor, MvcConfig) that outranks Accept-Language on every backend
+  // request from then on, with no other way for the user to unstick it. Clear it so this switcher
+  // is authoritative again for backend-resolved locale (error messages, emails).
+  document.cookie = 'lang=; Max-Age=0; path=/'
 }
 
 function loadLanguagePreference() {

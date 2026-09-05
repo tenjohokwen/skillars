@@ -20,7 +20,14 @@
 --
 -- The sequence is seeded from the live maximum, computed here rather than hardcoded: hardcoding it
 -- would reintroduce the same "guess the next free number" problem this migration exists to remove.
--- COALESCE covers the empty-table case (setval requires a value >= 1 with is_called = false).
+-- COALESCE covers the empty-table case, and it is is_called — not the value — that has to carry it.
+-- setval(seq, v, true) makes the NEXT nextval() return v + 1; setval(seq, v, false) returns v itself.
+-- So a populated table wants (max(id), true) and an empty one wants (1, false). Lowering the value
+-- to COALESCE(max(id), 0) instead does NOT work and is not merely suboptimal: the identity sequence
+-- has the default MINVALUE 1, so setval(seq, 0, true) raises
+--   ERROR: setval: value 0 is out of bounds for sequence "platform_config_id_seq" (1..92233...)
+-- and the migration aborts. Verified against postgres:17-alpine, which is the image this project
+-- runs (code review of the code review, skillars-deferred-92).
 --
 -- MigrationLint.Rule.PLATFORM_CONFIG_EXPLICIT_ID now fails the build on any future
 -- `INSERT INTO main.platform_config (id, ...)`, so the old pattern cannot come back.
@@ -40,5 +47,5 @@ ALTER TABLE main.platform_config
 SELECT setval(
     pg_get_serial_sequence('main.platform_config', 'id'),
     (SELECT COALESCE(max(id), 1) FROM main.platform_config),
-    true
+    (SELECT count(*) > 0 FROM main.platform_config)
 );

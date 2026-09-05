@@ -52,7 +52,7 @@ export default {
     parentConsentBody:
       'En tant que représentant légal du ou des joueurs que vous inscrivez, vous consentez à ce que Skillars collecte et traite les données de votre enfant à des fins de coaching. Vous confirmez être le parent ou le tuteur légal. Il vous appartient de vous assurer que la participation de votre enfant est appropriée. Vous pouvez retirer votre consentement à tout moment en contactant le support.',
     activateRedirecting: 'Redirection dans {seconds}…',
-    otpCodeExpiry: 'le code expire dans 30 minutes.',
+    otpCodeExpiry: 'le code expire dans 10 minutes.',
     parentTosBody:
       "En utilisant Skillars, vous acceptez nos conditions générales. Elles régissent votre utilisation de la plateforme, y compris la réservation de séances, les paiements et le traitement des données. Vous devez avoir au moins 18 ans pour créer un compte parent. Tous les comptes sont soumis à notre charte d'utilisation.",
     activationTitle: 'Activation du compte',
@@ -212,6 +212,10 @@ export default {
       step2Short: 'Spécialités',
       step2Specialties: 'Spécialisations',
       step2AgeGroups: "Groupes d'âge",
+      ageGroupU10: 'U10',
+      ageGroup10to12: '10–12',
+      ageGroup13to17: '13–17',
+      ageGroupAdult: '18+',
       step3Title: 'Tarification',
       step3Short: 'Tarifs',
       step3PerSessionPrice: 'Prix par séance (EUR)',
@@ -250,6 +254,13 @@ export default {
       step4Start: 'Début',
       step4End: 'Fin',
       step4RemoveWindow: 'Supprimer le créneau',
+      weekdayMonday: 'Lundi',
+      weekdayTuesday: 'Mardi',
+      weekdayWednesday: 'Mercredi',
+      weekdayThursday: 'Jeudi',
+      weekdayFriday: 'Vendredi',
+      weekdaySaturday: 'Samedi',
+      weekdaySunday: 'Dimanche',
       step5Title: 'Photo de profil',
       step5Short: 'Photo',
       step5PhotoLabel: 'Photo de profil',
@@ -365,7 +376,10 @@ export default {
       metaGroupSize: 'Taille du groupe',
       metaEquipment: 'Équipement',
       filterDifficulty: 'Niveau de difficulté',
+      filterSkill: 'Compétence',
+      filterEquipment: 'Équipement',
       filterWeakFootOnly: 'Axé pied faible uniquement',
+      apply: 'Appliquer',
       cloneFailed: "Échec de la copie de l'exercice",
       title: "Bibliothèque d'exercices",
       loadError: 'Échec du chargement des exercices. Veuillez réessayer.',
@@ -640,6 +654,9 @@ export default {
     // Address fields
     addressName: "Libellé de l'adresse",
     addressNameHint: 'ex: DOMICILE, TRAVAIL',
+    addressTypeHome: 'Domicile',
+    addressTypeWork: 'Travail',
+    addressTypeOther: 'Autre',
     companyName: "Nom de l'entreprise",
     addressLine1: "Ligne d'adresse 1",
     addressLine2: "Ligne d'adresse 2",
@@ -684,7 +701,7 @@ export default {
       notesLabel: 'Notes (facultatif)',
       assessmentTypeLabel: "Type d'évaluation",
       scoreTierReference:
-        'Référence de score : Élite 90–100 | Excellent 80–89 | Bon 70–79 | Au-dessus de la moyenne 60–69 | Moyen 50–59 | En dessous de la moyenne 40–49 | Très faible <40',
+        'Référence de score : Élite 90–100 • Excellent 80–89 • Bon 70–79 • Au-dessus de la moyenne 60–69 • Moyen 50–59 • En dessous de la moyenne 40–49 • Très faible <40',
       submitLabel: "Soumettre l'évaluation",
       historyTitle: 'Mon historique des évaluations',
       noEntriesYet: 'Aucune évaluation enregistrée pour le moment',
@@ -717,7 +734,7 @@ export default {
         noInsightsYet:
           'Aucune information de corrélation pour le moment — enregistrez plus de séances avec différentes compétences.',
         excludedSkills:
-          "{count} compétence | {count} compétences non affichées — aucune donnée d'entraînement enregistrée pour le moment.",
+          "{count} compétence non affichée — aucune donnée d'entraînement enregistrée pour le moment. | {count} compétences non affichées — aucune donnée d'entraînement enregistrée pour le moment.",
         insight: {
           highSluImprovement: 'Volume élevé → Score en amélioration',
           highSluNoImprovement:
@@ -1152,6 +1169,7 @@ export default {
       blockAdded: 'Bloc horaire enregistré avec succès.',
       windowAdded: 'Créneau de disponibilité enregistré avec succès.',
       blocked: 'Bloqué',
+      noSlotsAvailable: 'Aucun créneau disponible cette semaine',
     },
     schedule: {
       weekOf: 'Semaine du {date}',

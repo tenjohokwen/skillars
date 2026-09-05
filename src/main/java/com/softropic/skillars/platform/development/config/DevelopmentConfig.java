@@ -79,4 +79,40 @@ public class DevelopmentConfig {
         executor.initialize();
         return executor;
     }
+
+    /**
+     * The development module's long-running {@code @Async} listeners (skillars-deferred-92 code
+     * review, decision D2).
+     *
+     * <p>{@code ReportGenerationService.onReportGenerated} (S3 upload of a built PDF, then a status
+     * flip, a timeline write and a parent notification) and
+     * {@code RadarCompositeCalculationService.onRadarEntrySubmitted} (pessimistic player-row lock for
+     * a read-then-upsert) both ran on the shared {@code taskExecutor}, whose shutdown slice is
+     * {@value com.softropic.skillars.infrastructure.threadpool.ExecutorShutdown#SHARED_ASYNC_SECONDS}
+     * seconds precisely because nothing on it is supposed to be individually long-running. An S3
+     * round trip is, and the report path has no outbox row and no retry behind it — a report
+     * abandoned mid-upload stays {@code PENDING_UPLOAD} forever and never appears in
+     * {@code listReports}. Its own pool with its own
+     * {@value com.softropic.skillars.infrastructure.threadpool.ExecutorShutdown#REPORT_SECONDS}-second
+     * slice is what makes the shared pool's documented assumption true again.
+     *
+     * <p>Sizing: {@code core 2 / max 4 / queue 50}. {@code CallerRunsPolicy} rather than a discard
+     * policy — a dropped task here is a permanently broken report, so backpressure onto the
+     * committing thread is the lesser harm — and {@code allowCoreThreadTimeOut(true)} so the pool
+     * idles back to zero between the bursts these two listeners actually arrive in.
+     */
+    @Bean(name = "reportExecutor")
+    public ThreadPoolTaskExecutor reportExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(50);
+        executor.setAllowCoreThreadTimeOut(true);
+        executor.setThreadNamePrefix("report-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setTaskDecorator(task -> new MdcDecorator().decorate(task));
+        ExecutorShutdown.configureGracefulShutdown(executor, ExecutorShutdown.REPORT_SECONDS);
+        executor.initialize();
+        return executor;
+    }
 }

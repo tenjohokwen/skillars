@@ -26,17 +26,36 @@ file:
 docker compose up -d prometheus loki tempo grafana node_exporter
 ```
 
-| Service | Local URL | Notes |
-|---|---|---|
-| Grafana | <http://localhost:3000> | Datasources and alert rules are provisioned from `deploy/lgtm/` |
-| Prometheus | <http://localhost:9090> | Scrapes the app's `/manage/prometheus` |
-| Loki | <http://localhost:3100> | See the log-shipping caveat below |
-| Tempo | <http://localhost:3200> | OTLP ingest |
+> **`docker-compose.yml` alone publishes no host port for any of these four services** — only
+> `traefik` (80/443) does; `monitoring.md` says so explicitly ("There is no direct port exposure to
+> the host network"). The command above starts the containers, but `localhost:3000/9090/3100/3200`
+> all refuse connections until you also load the local override, which is the only compose file that
+> publishes anything else:
+>
+> ```bash
+> docker compose -f docker-compose.yml -f docker-compose.local.yml up -d prometheus loki tempo grafana node_exporter
+> ```
+>
+> `docker-compose.local.yml` publishes Grafana only (`3000:3000`); it does not add ports for
+> Prometheus, Loki or Tempo. Query those from inside the network instead — `docker compose exec
+> grafana wget -qO- http://prometheus:9090/api/v1/query?query=up`, or add your own `ports:` override
+> for the one you need.
 
-> **Log shipping to Loki is OFF by default.** `application.yaml` sets `loki.enabled` from
-> `LOKI_ENABLED`, defaulting to **`false`**, and `config/logback-spring.xml` only installs the
-> `Loki4jAppender` when it is `true`. With it off, logs go to the console JSON appender only and
-> **every LogQL query in §2 returns nothing**. Set `LOKI_ENABLED=true` and `LOKI_URL` first. See
+| Service | URL once published (see above) | Notes |
+|---|---|---|
+| Grafana | <http://localhost:3000> | Datasources and alert rules are provisioned from `deploy/lgtm/`; published by `docker-compose.local.yml` |
+| Prometheus | not published by any compose file | Scrapes the app's `/manage/prometheus`; query it via `docker compose exec` or an ad-hoc port override |
+| Loki | not published by any compose file | See the log-shipping caveat below |
+| Tempo | not published by any compose file | OTLP ingest |
+
+> **Log shipping to Loki is ON in the compose stack, OFF by the Spring Boot default.**
+> `application.yaml` sets `loki.enabled` from `LOKI_ENABLED`, defaulting to **`false`**, and
+> `config/logback-spring.xml` only installs the `Loki4jAppender` when it is `true` — that default
+> applies to the JAR run standalone (`mvn spring-boot:run`, an IDE run configuration, etc.).
+> `docker-compose.yml` overrides both `LOKI_URL` and `LOKI_ENABLED=true` on the `app` service, so
+> **every LogQL query in §2 does return results when the stack was started with `docker compose up`.**
+> If you are running the app outside compose against a standalone LGTM stack, set `LOKI_ENABLED=true`
+> and `LOKI_URL` yourself first, or every LogQL query in §2 returns nothing. See
 > [dev-docs → Monitoring](dev-docs/monitoring/index.html) for the wider gap.
 
 ---
@@ -173,9 +192,15 @@ sum by (uri) (rate(http_server_requests_seconds_count{status=~"5.."}[5m]))
 hikaricp_connections_active / hikaricp_connections_max
 jvm_memory_used_bytes{area="heap"} / jvm_memory_max_bytes{area="heap"}
 
-# Executor saturation. Six pools exist — see infrastructure/threadpool/ExecutorShutdown for the
-# inventory and the shutdown budget. A queue that never drains is the signal that matters.
-executor_queued_tasks{name=~"outbox-drain-|slu-retry-|smPool|modPool|skillars-async-"}
+# Executor saturation. Six ThreadPoolTaskExecutor pools are Micrometer-instrumented — see
+# infrastructure/threadpool/ExecutorShutdown for the full inventory (seven pools) and the shutdown
+# budget. Micrometer's executor_* metrics tag `name` with the Spring BEAN name, not the thread-name
+# prefix each pool sets for its own worker threads (e.g. moderationTaskExecutor's threads are
+# "modPool-N", but the metric label is "moderationTaskExecutor") — match on the bean names below, not
+# the prefixes. `storageUploadExecutor` (the seventh pool) is a raw ThreadPoolExecutor, not a
+# ThreadPoolTaskExecutor, so it carries no executor_* series at all; it has no queue-depth signal here.
+# A queue that never drains is the signal that matters.
+executor_queued_tasks{name=~"taskExecutor|outboxDrainPool|sluRetryExecutor|moderationTaskExecutor|sendMailPool|reportExecutor"}
 executor_active_threads
 sendmail_queue_size
 ```

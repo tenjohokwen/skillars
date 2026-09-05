@@ -41,8 +41,10 @@ public class AsyncConfig implements AsyncConfigurer {
 
         executor.setTaskDecorator(task -> new MdcDecorator().decorate(task));
         // skillars-deferred-92 AC3. Short, but not zero: this is the pool every bare @Async in the
-        // application resolves to (see AC17 / DefaultAsyncExecutorResolutionTest), so whatever lands
-        // here inherits this shutdown behaviour. See ExecutorShutdown for the budget.
+        // application resolves to (see AC17 / AsyncExecutorQualifierTest), so whatever lands here
+        // inherits this shutdown behaviour. That is a CONSTRAINT, not just a note -- work that can
+        // outlast 2s needs its own pool and its own slice, which is why the code review moved report
+        // and radar generation onto reportExecutor. See ExecutorShutdown for the budget.
         ExecutorShutdown.configureGracefulShutdown(executor, ExecutorShutdown.SHARED_ASYNC_SECONDS);
 
         executor.initialize();

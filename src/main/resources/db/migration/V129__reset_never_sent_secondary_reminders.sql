@@ -27,7 +27,13 @@
 -- docs/deployment/migration-conventions.md § "Full-table DML" for when chunking IS required.
 --
 -- Lock profile: UPDATE takes ROW EXCLUSIVE, which does not block concurrent readers or writers of
--- other rows, so no SET lock_timeout is required (that convention binds lock-taking DDL).
+-- other rows, so this is not the ACCESS-EXCLUSIVE hazard the lock_timeout convention binds (that
+-- convention is about lock-taking DDL, per docs/deployment/migration-conventions.md rule 7). A row
+-- lock held by a concurrent writer on one of these specific rows could still make this UPDATE wait,
+-- so SET lock_timeout is added anyway, defensively, rather than argued out of (code review,
+-- skillars-deferred-92): the row set is tiny and the wait should never be long if it happens at all.
+SET lock_timeout = '5s';
+
 UPDATE booking.bookings
    SET secondary_reminder_sent_at = NULL
  WHERE secondary_reminder_sent_at IS NOT NULL

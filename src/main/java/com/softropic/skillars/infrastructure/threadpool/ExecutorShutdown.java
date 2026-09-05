@@ -80,17 +80,18 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   sendMailPool            {@value #SEND_MAIL_SECONDS} s
  *   moderationTaskExecutor  {@value #MODERATION_SECONDS} s
  *   taskExecutor            {@value #SHARED_ASYNC_SECONDS} s
+ *   reportExecutor          {@value #REPORT_SECONDS} s
  *   remaining context teardown (datasource, Flyway, Redis)             ~4 s
  *   -------------------------------------------------------------------------
- *   worst case                                                        ~40 s
- *   docker-compose stop_grace_period (app service)                     45 s
+ *   worst case                                                        ~48 s
+ *   docker-compose stop_grace_period (app service)                     55 s
  * </pre>
  *
- * {@code stop_grace_period} was raised from 30 s to 45 s for this budget; at 30 s the sum above could
- * not fit and the pools would have been SIGKILLed mid-drain anyway, which is the state this class
- * exists to leave behind.
+ * {@code stop_grace_period} was raised from 30 s to 45 s for this budget, then to 55 s when
+ * {@link #REPORT_SECONDS} added a seventh pool; at 30 s the sum above could not fit and the pools
+ * would have been SIGKILLed mid-drain anyway, which is the state this class exists to leave behind.
  *
- * <p><strong>There are six pools, not the five the story enumerated.</strong>
+ * <p><strong>There are seven pools, not the five the story enumerated.</strong>
  * {@code BlobstoreConfig#storageUploadExecutor} is a raw {@link java.util.concurrent.ThreadPoolExecutor}
  * rather than a {@code ThreadPoolTaskExecutor}, which is why an inventory built by grepping for
  * {@code ThreadPoolTaskExecutor} missed it. Its {@code @Bean(destroyMethod = "shutdown")} was better
@@ -100,8 +101,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * hooks finish; it does not wait on remaining non-daemon threads.) {@link #gracefulFixedPool} closes
  * that. It was found by {@code ExecutorShutdownConfigurationTest#everyExecutorBeanIsCovered} on its
  * very first run — which is precisely the "caught by intent, not by luck" that AC3.4 asked for.
+ * {@code reportExecutor} is the seventh and was added by this story's own code review; see
+ * {@link #REPORT_SECONDS}.
  *
- * <p><strong>If you add a seventh pool or lengthen an await, redo this sum and move
+ * <p><strong>If you add an eighth pool or lengthen an await, redo this sum and move
  * {@code stop_grace_period} with it.</strong> The test fails the build on a pool that is not
  * configured here, but it cannot know what the container will allow.
  */
@@ -127,8 +130,33 @@ public final class ExecutorShutdown {
     /** Moderation work is re-drivable from the SLA monitor; a short drain is enough. */
     public static final int MODERATION_SECONDS = 2;
 
-    /** The shared {@code @Async} pool: many short tasks, nothing individually long-running. */
+    /**
+     * The shared {@code @Async} pool: many short tasks, nothing individually long-running.
+     *
+     * <p>That second clause is a <em>constraint on what may be routed here</em>, not an observation.
+     * Anything with a task that can outlast two seconds belongs on its own pool with its own slice —
+     * see {@link #REPORT_SECONDS} for the case that forced the distinction.
+     */
     public static final int SHARED_ASYNC_SECONDS = 2;
+
+    /**
+     * {@code reportExecutor} — the development module's long-running {@code @Async} work
+     * (skillars-deferred-92 code review, decision D2).
+     *
+     * <p>{@code ReportGenerationService.onReportGenerated} does an S3 upload of a built PDF followed
+     * by a status flip, a timeline write and a parent notification, in its own {@code REQUIRES_NEW}
+     * transaction, with <strong>no outbox row and no retry</strong>: a report abandoned mid-upload
+     * stays {@code PENDING_UPLOAD} forever and is invisible in {@code listReports}. It ran on
+     * {@code taskExecutor}, whose {@value #SHARED_ASYNC_SECONDS}s slice is explicitly sized for work
+     * that is never individually long-running — an S3 round trip routinely is.
+     * {@code RadarCompositeCalculationService.onRadarEntrySubmitted} joins it: it takes a pessimistic
+     * player-row lock for a read-then-upsert and is the other development-module listener whose task
+     * has no fixed bound.
+     *
+     * <p>8 s buys one full S3 upload plus the short queue behind it. Longer would push the sequential
+     * sum past {@code stop_grace_period}; shorter would not cover the case the pool exists for.
+     */
+    public static final int REPORT_SECONDS = 8;
 
     /**
      * One in-flight S3 multipart upload part, plus a little of the queue behind it. An abandoned
@@ -136,6 +164,14 @@ public final class ExecutorShutdown {
      * but it does leave an orphaned multipart upload on the bucket for the lifecycle rule to reap.
      */
     public static final int STORAGE_UPLOAD_SECONDS = 5;
+
+    /**
+     * The short second wait after {@code shutdownNow()} in {@link #gracefulFixedPool}. Not part of the
+     * budget arithmetic above in any meaningful sense: it is only reached once the pool has already
+     * blown its whole slice, and it exists to log whether the interrupt actually took, not to give the
+     * tasks more time.
+     */
+    static final int FORCED_TERMINATION_SECONDS = 1;
 
     private ExecutorShutdown() {
     }
@@ -167,8 +203,35 @@ public final class ExecutorShutdown {
                     if (!awaitTermination(awaitSeconds, TimeUnit.SECONDS)) {
                         LoggerFactory.getLogger(ExecutorShutdown.class).warn(
                             "Timed out after {}s waiting for executor '{}' to terminate; {} task(s) "
-                                + "were still queued or running", awaitSeconds, threadNamePrefix,
-                            getQueue().size() + getActiveCount());
+                                + "were still queued or running -- interrupting them now",
+                            awaitSeconds, threadNamePrefix, getQueue().size() + getActiveCount());
+                        forceTermination(threadNamePrefix);
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    forceTermination(threadNamePrefix);
+                }
+            }
+
+            /**
+             * skillars-deferred-92 code review. The bounded wait above used to be the end of it: on
+             * timeout it logged and returned, and on interrupt it returned outright. These are
+             * <em>non-daemon</em> workers, so on any context close that is not a JVM exit -- a failed
+             * {@code @SpringBootTest} context, a {@code /actuator/restart}, an embedded container
+             * shutdown -- they went on running against a torn-down application context, touching a
+             * closed datasource and a closed S3 client. Interrupting is the correct end state: the
+             * await above has already given every in-flight upload its full slice of the budget, and
+             * an upload abandoned here is not lost data (the caller's transaction never recorded the
+             * object) -- it is at worst an orphaned multipart upload for the bucket lifecycle rule.
+             */
+            private void forceTermination(String prefix) {
+                shutdownNow();
+                try {
+                    if (!awaitTermination(FORCED_TERMINATION_SECONDS, TimeUnit.SECONDS)) {
+                        LoggerFactory.getLogger(ExecutorShutdown.class).error(
+                            "Executor '{}' did not terminate even after shutdownNow(); {} task(s) are "
+                                + "ignoring interruption and will outlive the application context",
+                            prefix, getQueue().size() + getActiveCount());
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();

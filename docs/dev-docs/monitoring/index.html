@@ -95,12 +95,16 @@
 
     <h3>The LGTM stack</h3>
     <p>
-      Beyond this module, Skillars documents a full LGTM (Loki, Grafana, Tempo, Prometheus/Mimir) observability stack
-      for the payment-orchestration surface: structured logs for exact error context, Prometheus/Mimir metrics for
-      rate/volume health signals, Tempo traces for causal request chains, and Grafana for unified dashboards and
-      alerting. See <a href="../../lgtm-observability.md">docs/lgtm-observability.md</a> for the full LogQL/PromQL/TraceQL
-      query reference, incident runbooks, dashboard panel definitions, and alert rules. For how to bring the stack up
-      locally alongside the app, see <a href="../../deployment/local-deployment.md">docs/deployment/local-deployment.md</a>.
+      Beyond this module, Skillars documents a full LGTM (Loki, Grafana, Tempo, Prometheus) observability stack for
+      the whole application (a youth-football coaching marketplace, not a payment orchestrator — see the History
+      section of the doc below for why that distinction matters here): structured logs for exact error context,
+      Prometheus metrics for rate/volume health signals, Tempo traces for causal request chains, and Grafana for
+      unified dashboards and alerting. See <a href="../../lgtm-observability.md">docs/lgtm-observability.md</a> for
+      the LogQL/PromQL/TraceQL query reference; <a href="../../deployment/monitoring.md">docs/deployment/monitoring.md</a>
+      for the alert inventory and its response actions; and <a href="../../deployment/runbook.md">docs/deployment/runbook.md</a>
+      for incident runbooks. Grafana dashboard panels are provisioned from <code>deploy/lgtm/</code>, not narrated in
+      any of the three docs above. For how to bring the stack up locally alongside the app, see
+      <a href="../../deployment/local-deployment.md">docs/deployment/local-deployment.md</a>.
     </p>
 
     <h2>Key Flows</h2>
@@ -129,14 +133,21 @@ flowchart TD
 
     <h2>Conventions &amp; Gotchas</h2>
     <div class="callout warn">
-      <p><strong>Loki log shipping is not actually wired up.</strong> <code>logback-spring.xml</code> defines
-      <code>lokiUrl</code>/<code>lokiEnabled</code> Spring properties (sourced from <code>loki.url</code>/<code>loki.enabled</code>)
-      and the project depends on <code>loki-logback-appender</code>, but no Loki appender is configured in the
-      logback file &mdash; only the console <code>JSON</code> appender is attached to <code>root</code>. In practice
-      this means <code>docker logs</code>/<code>dcl logs</code> against the running container is the only way to see
-      application logs today, and the Loki datasource in Grafana Explore will return nothing no matter how the LogQL
-      query in <a href="../../lgtm-observability.md">docs/lgtm-observability.md</a> is written. Treat every LogQL
-      example there as aspirational/reference until a Loki appender is actually added to <code>logback-spring.xml</code>.</p>
+      <p><strong>Loki log shipping is wired up, but gated behind <code>loki.enabled</code>, which defaults to
+      <code>false</code> outside Docker Compose.</strong> <code>logback-spring.xml</code> declares a
+      <code>Loki4jAppender</code> (using the <code>loki-logback-appender</code> dependency, driven by the
+      <code>lokiUrl</code>/<code>lokiEnabled</code> Spring properties sourced from <code>loki.url</code>/<code>loki.enabled</code>)
+      and attaches it to <code>root</code> <em>unconditionally</em> &mdash; there is no <code>&lt;if&gt;</code> around the
+      <code>&lt;appender-ref ref="LOKI"/&gt;</code> itself, only around which concrete appender class <code>LOKI</code>
+      resolves to (a no-op <code>NOPAppender</code> when disabled, logback's own do-nothing appender &mdash; see the
+      comment block in the file for why the naive <code>&lt;if&gt;</code>-around-<code>&lt;root&gt;</code> placements
+      don't work). <code>docker-compose.yml</code> sets <code>LOKI_ENABLED=true</code>/<code>LOKI_URL</code> on the
+      <code>app</code> service, so logs <strong>do</strong> reach Loki when the app is run via <code>docker compose
+      up</code>. Run the JAR standalone (<code>mvn spring-boot:run</code>, an IDE run configuration) against a
+      standalone LGTM stack instead, and <code>loki.enabled</code> falls back to its Spring Boot default of
+      <code>false</code> &mdash; only the console <code>JSON</code> appender is live, and every LogQL query in
+      <a href="../../lgtm-observability.md">docs/lgtm-observability.md</a> returns nothing until you set
+      <code>LOKI_ENABLED=true</code> yourself.</p>
     </div>
     <div class="callout">
       <p><strong>The dev-profile skip is a deliberate escape hatch, not a bug.</strong> Local/sandbox

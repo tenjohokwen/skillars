@@ -22,5 +22,9 @@ export const DEFAULT_ROUTE = '/dashboard'
 
 /** The landing route for `role`, or {@link DEFAULT_ROUTE}. */
 export function routeForRole(role) {
-  return ROLE_ROUTES[role] || DEFAULT_ROUTE
+  // Object.freeze does not sever the prototype chain, so a plain `ROLE_ROUTES[role]` resolves
+  // `role: 'constructor'` (etc.) to an inherited Object.prototype function instead of falling
+  // through to DEFAULT_ROUTE — reachable because the `skp` cookie AuthService reads `role` from
+  // is deliberately non-HttpOnly (review, skillars-deferred-92 chunk 4).
+  return Object.hasOwn(ROLE_ROUTES, role) ? ROLE_ROUTES[role] : DEFAULT_ROUTE
 }

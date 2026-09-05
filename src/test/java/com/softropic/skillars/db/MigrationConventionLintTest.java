@@ -105,17 +105,21 @@ class MigrationConventionLintTest {
     @DisplayName("a versioned content rule is never flagged at or below the baseline")
     void baselineIsRespected() throws IOException {
         // Same invalid fixtures, baseline above every versioned one → no versioned CONTENT rule
-        // applies. Two rules are baseline-independent by nature and may still fire:
-        //  - UNPARSEABLE_VERSION: the version cannot be read, so "above the baseline?" is unanswerable
-        //    (code review, 3-layer run) — grandfathering it would reinstate the silent skip.
-        //  - REPEATABLE_HAZARD: an R__ file has no version at all, so the baseline does not apply.
+        // applies. An R__ file has no version at all, so baseline never governs it — including for
+        // the skillars-deferred-92 rules (code review: repeatables re-run on every checksum change,
+        // making them at least as much a rolling-deploy hazard as a versioned migration, so those
+        // four rules bind them unconditionally, same as REPEATABLE_HAZARD always has).
+        // UNPARSEABLE_VERSION is baseline-independent for a different reason: the version cannot be
+        // read, so "above the baseline?" is unanswerable (code review, 3-layer run) — grandfathering
+        // it would reinstate the silent skip.
         List<MigrationLint.Violation> violations = lintFixtures("invalid", 100_000, 100_000,
             MigrationLint.ALL_KNOWN_AT_HEAD);
 
         assertThat(violations)
-            .as("only the baseline-independent rules may fire below the baseline, got: %s", violations)
+            .as("only a baseline-independent rule, or one sourced from an R__ file (which has no "
+                + "version for any baseline to govern), may fire below the baseline, got: %s", violations)
             .allMatch(v -> v.rule() == MigrationLint.Rule.UNPARSEABLE_VERSION
-                        || v.rule() == MigrationLint.Rule.REPEATABLE_HAZARD);
+                        || v.file().startsWith("R__"));
     }
 
     /**
@@ -183,6 +187,167 @@ class MigrationConventionLintTest {
             .as("AC11.2: an opt-out must not leak to a later statement it says nothing about")
             .anyMatch(v -> v.file().equals("V916__optout_leaks_to_later_statement.sql")
                         && v.rule() == MigrationLint.Rule.BLOCKING_INDEX);
+
+        // --- skillars-deferred-92 code review (COLUMN-optional / value / marker evasions) ----
+
+        assertThat(violations)
+            .as("code review: COLUMN is optional on a DROP clause — 'DROP col' is 'DROP COLUMN col'")
+            .anyMatch(v -> v.file().equals("V917__drop_column_no_column_keyword.sql")
+                        && v.rule() == MigrationLint.Rule.DROP_WITHOUT_IF_EXISTS);
+
+        assertThat(violations)
+            .as("code review: COLUMN is also optional on an ADD clause, for MISSING_LOCK_TIMEOUT too")
+            .anyMatch(v -> v.file().equals("V918__missing_lock_timeout_no_column_keyword.sql")
+                        && v.rule() == MigrationLint.Rule.MISSING_LOCK_TIMEOUT);
+
+        assertThat(violations)
+            .as("code review: SET lock_timeout = 0 is Postgres's own 'wait forever' and must not satisfy the rule")
+            .anyMatch(v -> v.file().equals("V919__lock_timeout_zero.sql")
+                        && v.rule() == MigrationLint.Rule.MISSING_LOCK_TIMEOUT);
+
+        assertThat(violations)
+            .as("code review: TRUNCATE is an unbatched full-table write UPDATE/DELETE patterns never recognised")
+            .anyMatch(v -> v.file().equals("V920__truncate_unbatched.sql")
+                        && v.rule() == MigrationLint.Rule.UNBATCHED_DML);
+
+        assertThat(violations)
+            .as("code review: no explicit column list still supplies id positionally")
+            .anyMatch(v -> v.file().equals("V921__platform_config_no_column_list.sql")
+                        && v.rule() == MigrationLint.Rule.PLATFORM_CONFIG_EXPLICIT_ID);
+
+        assertThat(violations)
+            .as("code review: a quoted schema/table spelling evaded the original pattern")
+            .anyMatch(v -> v.file().equals("V922__platform_config_quoted_schema.sql")
+                        && v.rule() == MigrationLint.Rule.PLATFORM_CONFIG_EXPLICIT_ID);
+
+        assertThat(violations)
+            .as("code review: a multi-clause DROP used to have only the FIRST clause reference-scanned")
+            .anyMatch(v -> v.file().equals("V923__multi_clause_drop_second_offender.sql")
+                        && v.rule() == MigrationLint.Rule.DROP_WITHOUT_PRIOR_RELEASE_PREP
+                        && v.detail().contains("obsolete_reading"));
+
+        assertThat(violations)
+            .as("code review: a migration in a subdirectory of the Flyway location used to be invisible "
+                + "(Files.list is non-recursive; Flyway's own scan is)")
+            .anyMatch(v -> v.file().equals("V924__nested_migration_unlinted.sql")
+                        && v.rule() == MigrationLint.Rule.DROP_WITHOUT_PRIOR_RELEASE_PREP);
+
+        assertThat(violations)
+            .as("code review: opt-out text inside a STRING LITERAL must not be honoured as a real marker")
+            .anyMatch(v -> v.file().equals("V925__marker_in_string_literal_not_honoured.sql")
+                        && v.rule() == MigrationLint.Rule.UNBATCHED_DML);
+
+        assertThat(violations)
+            .as("code review: a '--' inside a string literal must not swallow the rest of the statement "
+                + "(comment-stripping is now literal-aware) — this firing at all is the proof")
+            .anyMatch(v -> v.file().equals("V926__comment_stripping_string_literal_awareness.sql")
+                        && v.rule() == MigrationLint.Rule.DROP_WITHOUT_PRIOR_RELEASE_PREP);
+
+        assertThat(violations)
+            .as("code review: a subquery's own WHERE must not satisfy the OUTER statement's bounding check")
+            .anyMatch(v -> v.file().equals("V927__subquery_where_not_top_level.sql")
+                        && v.rule() == MigrationLint.Rule.UNBATCHED_DML);
+
+        assertThat(violations)
+            .as("code review: a leading CTE must not hide the DELETE it feeds from UNBATCHED_DML")
+            .anyMatch(v -> v.file().equals("V928__cte_led_delete_unbatched.sql")
+                        && v.rule() == MigrationLint.Rule.UNBATCHED_DML);
+
+        assertThat(violations)
+            .as("code review: repeatables are now bound by the skillars-deferred-92 rules too, "
+                + "unconditionally (no version to gate a baseline on)")
+            .anyMatch(v -> v.file().equals("R__bad_repeatable.sql")
+                        && v.rule() == MigrationLint.Rule.MISSING_LOCK_TIMEOUT);
+    }
+
+    /**
+     * skillars-deferred-92 code review: every fixture test above passes an explicit
+     * {@code deferred92Baseline} ({@link #FIXTURE_DEFERRED_92_BASELINE}), so none of them exercise
+     * the PRODUCTION {@link MigrationLint#DEFERRED_92_BASELINE} constant itself — changing it to any
+     * larger value would silently disable all four skillars-deferred-92 rules for the real migration
+     * tree without a single test failing. This test calls the two-argument {@code lint(dir, baseline)}
+     * overload, which is the one that resolves {@code deferred92Baseline} from the constant rather
+     * than from an argument, against a migration one version above the real constant's value.
+     */
+    @Test
+    @DisplayName("code review: the production DEFERRED_92_BASELINE constant is itself load-bearing")
+    void productionDeferred92Baseline_isLoadBearing() throws IOException {
+        Path tmp = Files.createTempDirectory("migration-lint-real-baseline");
+        try {
+            String justAboveBaseline = "V" + (MigrationLint.DEFERRED_92_BASELINE + 1)
+                + "__real_baseline_probe.sql";
+            Files.writeString(tmp.resolve(justAboveBaseline),
+                "-- header\nALTER TABLE main.widget ADD COLUMN evasion_probe VARCHAR(10);\n");
+
+            List<MigrationLint.Violation> violations = MigrationLint.lint(tmp, 0);
+
+            assertThat(violations)
+                .as("a migration one version above the real DEFERRED_92_BASELINE must trigger "
+                    + "MISSING_LOCK_TIMEOUT when resolved from the constant itself, not from a "
+                    + "test-supplied override: %s", violations)
+                .anyMatch(v -> v.rule() == MigrationLint.Rule.MISSING_LOCK_TIMEOUT);
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    /**
+     * A decimal minor version in the skillars-deferred-92 baseline band (major component equal to
+     * the baseline) must still be bound by the rules — code review: comparing only the major
+     * component let {@code V808.1} compare {@code 808 <= 808} and evade every rule, even though it is
+     * a later migration than {@code V808} and was never applied before the rules existed.
+     */
+    @Test
+    @DisplayName("code review: a decimal minor version in the baseline band still binds the deferred-92 rules")
+    void decimalMinorVersion_stillBindsDeferred92Rules() throws IOException {
+        Path tmp = Files.createTempDirectory("migration-lint-decimal-version");
+        try {
+            Files.writeString(tmp.resolve("V808.1__decimal_version_evasion.sql"),
+                "-- header\nALTER TABLE main.widget ADD COLUMN evasion_probe VARCHAR(10);\n");
+
+            List<MigrationLint.Violation> violations = MigrationLint.lint(
+                tmp, 100, FIXTURE_DEFERRED_92_BASELINE, MigrationLint.ALL_KNOWN_AT_HEAD, FIXTURE_SOURCES);
+
+            assertThat(violations)
+                .as("V808.1 is newer than the V808 baseline and must still trigger MISSING_LOCK_TIMEOUT")
+                .anyMatch(v -> v.rule() == MigrationLint.Rule.MISSING_LOCK_TIMEOUT);
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    /**
+     * The AC7 reference scan must be word-boundary aware, not a bare substring match — code review:
+     * {@code body.contains("id")} matched inside words like {@code Invalid}, making every
+     * {@code id}-class column name unusable and training authors to reach for the blanket opt-out.
+     * The source file mentions {@code widget} as a real standalone token (so the table half of the
+     * qualified match is satisfied) but {@code id} only as a substring of {@code Invalid} — never as
+     * its own token — so a bare-substring scan would (wrongly) still flag it as a live reference.
+     */
+    @Test
+    @DisplayName("code review: the reference scan matches at a word boundary, not as a bare substring")
+    void referenceScan_isWordBoundaryAware_notSubstring() throws IOException {
+        Path tmpSrc = Files.createTempDirectory("migration-lint-word-boundary-src");
+        Path tmpMig = Files.createTempDirectory("migration-lint-word-boundary-mig");
+        try {
+            Files.writeString(tmpSrc.resolve("NoiseOnly.java"),
+                "package fixtures;\ninterface NoiseOnly { boolean isInvalidRequest(String widget); }\n");
+            Files.writeString(tmpMig.resolve("V1__drop_generic_id.sql"),
+                "-- migration-lint: drop-prepared-in: V0\n"
+                    + "SET lock_timeout = '5s';\n"
+                    + "ALTER TABLE main.widget DROP COLUMN IF EXISTS id;\n");
+
+            List<MigrationLint.Violation> violations = MigrationLint.lint(
+                tmpMig, 0, 0, MigrationLint.ALL_KNOWN_AT_HEAD, List.of(tmpSrc));
+
+            assertThat(violations)
+                .as("'id' inside 'Invalid' must not count as a live reference to the dropped id column: %s",
+                    violations)
+                .isEmpty();
+        } finally {
+            deleteRecursively(tmpSrc);
+            deleteRecursively(tmpMig);
+        }
     }
 
     /**

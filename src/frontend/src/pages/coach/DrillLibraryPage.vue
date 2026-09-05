@@ -108,7 +108,7 @@
         <q-card-section class="q-pt-none">
           <q-select
             v-model="localFilters.skill"
-            :label="$t('development.radar.accessibleTable.skill')"
+            :label="t('session.drillLibrary.filterSkill')"
             :options="skillOptions"
             clearable
             outlined
@@ -126,7 +126,7 @@
           />
           <q-select
             v-model="localFilters.equipment"
-            :label="$t('session.builder.equipment')"
+            :label="t('session.drillLibrary.filterEquipment')"
             :options="equipmentOptions"
             clearable
             outlined
@@ -141,7 +141,7 @@
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat :label="t('session.drillLibrary.clearFilters')" @click="clearFilters" />
-          <q-btn color="primary" :label="$t('revenue.apply')" @click="applyFilters" />
+          <q-btn color="primary" :label="t('session.drillLibrary.apply')" @click="applyFilters" />
         </q-card-actions>
       </q-card>
     </q-dialog>

@@ -186,7 +186,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { parentRegistrationApi } from 'src/api/parentRegistration.api'
@@ -242,13 +242,25 @@ function onScroll(key, event) {
 // Policy text short enough to fit without scrolling would otherwise never fire
 // a scroll event, permanently disabling the checkbox — treat "nothing to scroll"
 // as already read.
-onMounted(() => {
+function markFullyVisibleBoxesAsRead() {
   for (const key of Object.keys(boxRefs)) {
     const el = boxRefs[key].value
     if (el && isFullyVisible(el)) {
       scrollFlags[key].value = true
     }
   }
+}
+
+onMounted(() => {
+  markFullyVisibleBoxesAsRead()
+  // A box that overflows at mount (so the check above leaves it un-read) can stop overflowing
+  // once the user widens the window — with no more scroll events possible, the checkbox stayed
+  // permanently disabled. Re-run the same check on resize (review, skillars-deferred-92 chunk 4).
+  window.addEventListener('resize', markFullyVisibleBoxesAsRead)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', markFullyVisibleBoxesAsRead)
 })
 
 const firstNameRef = computed(() => form.value.firstName)

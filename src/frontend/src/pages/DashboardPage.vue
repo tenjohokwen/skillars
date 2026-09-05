@@ -42,11 +42,14 @@ import { useAuthStore } from 'src/stores/auth.store'
 import { readUserDisplayName } from 'src/utils/sessionCookies'
 import TimezoneNotice from 'src/components/booking/TimezoneNotice.vue'
 
+const { t } = useI18n()
+
 // readUserDisplayName() returns null for a blank / sentinel `user` cookie value
-// (skillars-deferred-90 AC2), so the greeting falls through to the generic default.
+// (skillars-deferred-90 AC2), so the greeting falls through to the generic default. `t` must
+// be declared above this: it only survived being referenced before its own declaration
+// because computed getters are lazy (review, skillars-deferred-92 chunk 4).
 const username = computed(() => readUserDisplayName() ?? t('dashboard.defaultUser'))
 
-const { t } = useI18n()
 const bookingStore = useBookingStore()
 const authStore = useAuthStore()
 

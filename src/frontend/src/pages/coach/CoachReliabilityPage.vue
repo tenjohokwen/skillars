@@ -106,7 +106,7 @@ async function handleAcknowledge(strikeId) {
     await paymentStore.acknowledgeStrike(strikeId)
     $q.notify({ type: 'positive', message: t('reliability.acknowledgeSuccess') })
   } catch {
-    $q.notify({ type: 'negative', message: t('common.error') })
+    $q.notify({ type: 'negative', message: t('common.errorGeneric') })
   }
 }
 

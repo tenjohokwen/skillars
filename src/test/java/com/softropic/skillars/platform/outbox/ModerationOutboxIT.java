@@ -1,11 +1,14 @@
 package com.softropic.skillars.platform.outbox;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
-import com.softropic.skillars.platform.outbox.service.OutboxService;
-import com.softropic.skillars.platform.video.contract.event.VideoModerationAdminAlertEvent;
+import com.softropic.skillars.platform.config.service.ConfigService;
+import com.softropic.skillars.platform.notification.contract.EmailTemplate;
+import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.video.contract.event.VideoModerationRetryEvent;
 import com.softropic.skillars.platform.video.service.ModerationOutboxSupport;
+import com.softropic.skillars.utils.TestMailManager;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -39,13 +42,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class ModerationOutboxIT extends AbstractIntegrationTest {
 
+    private static final String ADMIN_ALERT_EMAIL_KEY = "platform.admin_alert_email";
+
     @Autowired private ModerationOutboxSupport moderationOutboxSupport;
-    @Autowired private OutboxService outboxService;
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private ConfigurableApplicationContext applicationContext;
+    @Autowired private ConfigService configService;
+    @Autowired private TestMailManager testMailManager;
 
     private final UUID videoId = UUID.randomUUID();
+    private final String adminEmail = "ac5.admin." + UUID.randomUUID() + "@skillars-test.com";
     private final List<Object> captured = new CopyOnWriteArrayList<>();
 
     @BeforeEach
@@ -58,18 +65,28 @@ class ModerationOutboxIT extends AbstractIntegrationTest {
             ModerationOutboxSupport.ADMIN_ALERT_AGGREGATE_TYPE, videoId.toString()));
 
         captured.clear();
+        testMailManager.clear();
+        // The alert handler now delivers through MailManager rather than re-publishing an event
+        // (code review D1), and VideoModerationEmailListener suppresses a send when this key is
+        // blank — which is its shipped default. Set it for the duration of the test, restored below.
+        configService.updateConfig(ADMIN_ALERT_EMAIL_KEY, adminEmail);
+
         // Registered on the live context rather than mocked, so this exercises the same dispatch the
-        // handlers use in production. Filtered by this test's own video id so a concurrently running
-        // IT's events cannot leak in.
+        // retry handler uses in production. Filtered by this test's own video id so a concurrently
+        // running IT's events cannot leak in.
         applicationContext.addApplicationListener(
             (ApplicationListener<PayloadApplicationEvent<Object>>) event -> {
                 Object payload = event.getPayload();
                 if (payload instanceof VideoModerationRetryEvent r && videoId.equals(r.videoId())) {
                     captured.add(r);
-                } else if (payload instanceof VideoModerationAdminAlertEvent a && videoId.equals(a.videoId())) {
-                    captured.add(a);
                 }
             });
+    }
+
+    @AfterEach
+    void restoreAdminAlertEmail() {
+        // Blank is the shipped default (V57). Other ITs share this context and its config cache.
+        configService.updateConfig(ADMIN_ALERT_EMAIL_KEY, "");
     }
 
     private long myRows(String aggregateType) {
@@ -78,25 +95,55 @@ class ModerationOutboxIT extends AbstractIntegrationTest {
             Long.class, aggregateType, videoId.toString());
     }
 
+    /**
+     * The assertion is on a <em>send</em>, not on a re-published event (code review D1). Dispatching
+     * an event and returning is what let the drain delete the row before anything had been delivered;
+     * the property worth pinning is that {@code handle()} does not return until the alert has actually
+     * gone through {@code MailManager}.
+     */
     @Test
-    @DisplayName("an enqueued admin alert survives its transaction and is dispatched by the drain")
+    @DisplayName("an enqueued admin alert survives its transaction and is delivered by the drain")
     void adminAlert_roundTripsThroughTheOutbox() {
         transactionTemplate.executeWithoutResult(s -> moderationOutboxSupport.enqueueAdminAlert(
             videoId, "owner@example.com", "Moderation pipeline permanently failed",
             "videoId=" + videoId + " retries=5 — manual review required", true));
 
-        assertThat(captured)
-            .as("the drain must have re-dispatched the alert after the producing transaction committed")
-            .hasSize(1)
-            .first()
-            .isInstanceOfSatisfying(VideoModerationAdminAlertEvent.class, a -> {
-                assertThat(a.urgent()).isTrue();
-                assertThat(a.subject()).isEqualTo("Moderation pipeline permanently failed");
-                assertThat(a.ownerId()).isEqualTo("owner@example.com");
-            });
+        List<Envelope> alerts = testMailManager.getEnvelopes().values().stream()
+            .filter(e -> e.emailTemplate() == EmailTemplate.VIDEO_MODERATION_ADMIN_ALERT)
+            .filter(e -> e.recipients().stream().anyMatch(r -> adminEmail.equals(r.getEmail())))
+            .toList();
+
+        assertThat(alerts)
+            .as("the drain must have DELIVERED the alert, synchronously, before releasing the row")
+            .hasSize(1);
+        assertThat(alerts.get(0).data())
+            .containsEntry("subject", "Moderation pipeline permanently failed")
+            .containsEntry("ownerId", "owner@example.com")
+            .containsEntry("urgent", true)
+            .containsEntry("videoId", videoId.toString());
         assertThat(myRows(ModerationOutboxSupport.ADMIN_ALERT_AGGREGATE_TYPE))
             .as("a successfully handled row is deleted")
             .isZero();
+    }
+
+    /**
+     * The hole D1 closed, pinned: with {@code platform.admin_alert_email} unset the alert cannot be
+     * delivered, and that must still <em>complete</em> the row rather than leave an immortal one — no
+     * number of re-drives fixes a missing config key.
+     */
+    @Test
+    @DisplayName("an alert that cannot be delivered at all still releases its row")
+    void adminAlertWithNoConfiguredRecipient_completesRatherThanSticking() {
+        configService.updateConfig(ADMIN_ALERT_EMAIL_KEY, "");
+
+        transactionTemplate.executeWithoutResult(s -> moderationOutboxSupport.enqueueAdminAlert(
+            videoId, "owner@example.com", "Moderation pipeline permanently failed",
+            "videoId=" + videoId, true));
+
+        assertThat(testMailManager.getEnvelopes().values())
+            .as("nothing may be sent when there is no recipient configured")
+            .noneMatch(e -> e.emailTemplate() == EmailTemplate.VIDEO_MODERATION_ADMIN_ALERT);
+        assertThat(myRows(ModerationOutboxSupport.ADMIN_ALERT_AGGREGATE_TYPE)).isZero();
     }
 
     /**
@@ -144,9 +191,8 @@ class ModerationOutboxIT extends AbstractIntegrationTest {
         }
 
         assertThat(myRows(ModerationOutboxSupport.RETRY_AGGREGATE_TYPE)).isZero();
-        assertThat(captured).isEmpty();
         // Guards against the row having been drained rather than rolled back: a drain would also
         // leave zero rows, but it would have dispatched an event, which `captured` would show.
-        assertThat(outboxService).isNotNull();
+        assertThat(captured).isEmpty();
     }
 }

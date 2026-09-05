@@ -1,0 +1,1394 @@
+diff --git a/src/frontend/eslint.config.js b/src/frontend/eslint.config.js
+index 7670d49..426b183 100644
+--- a/src/frontend/eslint.config.js
++++ b/src/frontend/eslint.config.js
+@@ -54,6 +54,48 @@ export default [
+     // add your custom rules here
+     rules: {
+       'prefer-promise-reject-errors': 'off',
++      // skillars-deferred-92 AC14.4: catches user-visible text that never reached the i18n
++      // bundles. The allowlist is only for strings that are genuinely not translatable —
++      // the brand name, symbols, and product acronyms. Anything else belongs in
++      // src/i18n/{en-US,de-DE,fr-FR}/index.js.
++      'vue/no-bare-strings-in-template': [
++        'error',
++        {
++          allowlist: [
++            'Skillars',
++            'SLU',
++            'Stripe',
++            'EUR',
++            '€',
++            '$',
++            '404',
++            '—',
++            '–',
++            '✕',
++            '✓',
++            '←',
++            '→',
++            '&larr;',
++            '·',
++            '|',
++            '/',
++            '(',
++            ')',
++            ':',
++            '-',
++            '+',
++            '*',
++            ',',
++            '.',
++            '&',
++            '#',
++            '%',
++            '@',
++            '…',
++            '...',
++          ],
++        },
++      ],
+ 
+       // allow debugger during development only
+       'no-debugger': process.env.NODE_ENV === 'production' ? 'error' : 'off',
+diff --git a/src/main/java/com/softropic/skillars/platform/security/config/MvcConfig.java b/src/main/java/com/softropic/skillars/platform/security/config/MvcConfig.java
+index cf34aad..dd8349d 100644
+--- a/src/main/java/com/softropic/skillars/platform/security/config/MvcConfig.java
++++ b/src/main/java/com/softropic/skillars/platform/security/config/MvcConfig.java
+@@ -16,6 +16,21 @@ import static com.softropic.skillars.infrastructure.security.SecurityConstants.L
+ @Configuration
+ public class MvcConfig implements WebMvcConfigurer {
+ 
++    /**
++     * <strong>Do not call {@code cookieLocaleResolver.setDefaultLocale(...)} here</strong>
++     * (skillars-deferred-92 AC12.5). It reads like hardening and is the opposite.
++     *
++     * <p>{@code CookieLocaleResolver.determineDefaultLocale(request)} returns {@code this.defaultLocale}
++     * <em>if set</em>, and only falls through to {@code request.getLocale()} — i.e. {@code Accept-Language}
++     * — when it is {@code null}. Setting it therefore <strong>disables Accept-Language negotiation
++     * entirely</strong>: a German browser arriving with no locale cookie gets German today and would get
++     * the pinned default afterwards. That is a user-visible regression.
++     *
++     * <p>Determinism is achieved on the <em>message source</em> instead — see {@link #messageSource()}.
++     * Note that {@code AbstractResourceBasedMessageSource} declares an identically-named
++     * {@code setDefaultLocale}; that one is safe and carries none of this risk. Two different classes,
++     * same method name, opposite consequences.
++     */
+     @Bean(name = "localeResolver")
+     public LocaleResolver localeResolver() {
+         final CookieLocaleResolver cookieLocaleResolver = new CookieLocaleResolver();
+@@ -23,11 +38,29 @@ public class MvcConfig implements WebMvcConfigurer {
+         return cookieLocaleResolver;
+     }
+ 
++    /**
++     * <p><strong>{@code classpath:/i18n/error-messages} is very nearly vestigial</strong>
++     * (skillars-deferred-92 AC12.3, recorded rather than left for a reader to wonder about). Audited
++     * 2026-09-04: {@code src/main/resources/i18n/} contains only {@code error-messages.properties} plus
++     * {@code messages{,_en,_de,_fr}.properties}, and {@code error-messages.properties} holds exactly
++     * <strong>one</strong> key ({@code security.msg.unauthorized}) with <strong>no locale variants at
++     * all</strong> — so any non-English client resolving it gets English regardless. It is kept
++     * registered because removing a basename is a behaviour change for a key that may still be
++     * resolved somewhere, and this story had no mandate to retire it; folding that one key into
++     * {@code messages*.properties} and dropping the basename is the obvious follow-up, filed to
++     * {@code deferred-work.md}.
++     */
+     @Bean
+     public MessageSource messageSource() {
+         final ReloadableResourceBundleMessageSource messageSource = new ReloadableResourceBundleMessageSource();
+         messageSource.setBasenames("classpath:/i18n/error-messages", "classpath:/i18n/messages");
+         messageSource.setDefaultEncoding("UTF-8");
++        // skillars-deferred-92 AC12.4. Default is TRUE, which makes fallback resolution depend on the
++        // CONTAINER's Locale.getDefault() — environment-dependent and pinned nowhere in this repo, so
++        // the same request could resolve differently on two nodes of the same deployment. With it off,
++        // a key missing from messages_de/messages_fr resolves deterministically from
++        // messages.properties (brought to full parity by AC12) on every host.
++        messageSource.setFallbackToSystemLocale(false);
+         //messageSource.setCacheSeconds(propertyResolver.getProperty("cache-seconds", Integer.class, -1));
+         return messageSource;
+     }
+diff --git a/src/main/resources/i18n/messages.properties b/src/main/resources/i18n/messages.properties
+index c003522..7139f17 100644
+--- a/src/main/resources/i18n/messages.properties
++++ b/src/main/resources/i18n/messages.properties
+@@ -9,7 +9,7 @@ email.activation.preheader=Activate your account
+ email.activation.title=Account Activation
+ email.activation.greeting=Dear {0} {1}
+ email.activation.text1=Your Skillars account has been created. Please click on the link below to activate it.
+-email.activation.text2=For security, please check the information below to ensure the account creation request was from you. If you did not create an account, please contact support.
++email.activation.text2=For security, please check the information below to ensure the account creation request was from you. If you did not create an account, please contact support (Help Code: {0}).
+ email.activation.linkText=Activate your account
+ email.activation.copyPaste=Or copy and paste this link into your browser:
+ email.activation.ignore=If you did not register for this account, please ignore this email.
+@@ -18,7 +18,7 @@ email.activation.ignore=If you did not register for this account, please ignore
+ email.creation_dup.title=Duplicate Account Creation Attempt
+ email.creation_dup.preheader=Attempt To Create Duplicate Account
+ email.creation_dup.text1=We got a request for the creation of an account using this address. We hereby inform you that you already have an Skillars account.
+-email.creation_dup.text2=For security, please check the information below to ensure the account creation request was from you. If you did not attempt creating the account, please contact support.
++email.creation_dup.text2=For security, please check the information below to ensure the account creation request was from you. If you did not attempt creating the account, please contact support with the following help Code: {0}.
+ email.creation_dup.loginText=If this was you and you forgot you already have an account, you can log in at:
+ email.creation_dup.loginLink=Login to your account
+ email.creation_dup.forgotText=If you forgot your password, you can reset it here:
+@@ -29,7 +29,7 @@ email.creation_dup.ignore=If this was not you, please ignore this email. Your ac
+ email.pw_reset.title=Password Reset
+ email.pw_reset.callToAction=Reset Password
+ email.pw_reset.text1=You recently requested to reset your password for your Skillars account. Use the button below to reset it. This password reset is only valid for the next 24 hours.
+-email.pw_reset.text2=For security, please check the information below to ensure the request was from you. If you did not request this, please contact support.
++email.pw_reset.text2=For security, please check the information below to ensure the password reset request was from you. If you did not request a password reset, please contact support with the following help Code: {0}.
+ email.pw_reset.linkText=Reset your password
+ email.pw_reset.copyPaste=Or copy and paste this link into your browser:
+ email.pw_reset.ignore=If you did not request a password reset, please ignore this email.
+@@ -44,8 +44,6 @@ email.otp.ignore=If you did not request this code, please ignore this email and
+ email.change.title=Email Address Changed
+ 
+ # Platform config change e-mail
+-email.platform_config_changed.title=Platform MSISDN Changed
+-email.platform_config_changed.preheader=A platform MSISDN has been updated
+ 
+ # Tenant notification e-mails
+ 
+@@ -113,3 +111,68 @@ email.report.shared.title=Performance Report Available
+ payment.refundAlreadyIssued=This booking has already been refunded.
+ video.stateConflict=The video is no longer in a state that allows this action. Please refresh and try again.
+ email.booking.payment_unresolved.title=Session Booking Could Not Be Completed
++
++# ---------------------------------------------------------------------------------
++# skillars-deferred-92 AC12: the 46 keys below existed in messages_en.properties but
++# NOT in this file -- and this file is the bundle Spring falls back to when a key is
++# missing from the resolved locale's bundle.
++#
++# That was a live 500. MvcConfig registers basenames i18n/error-messages and
++# i18n/messages, and CookieLocaleResolver falls through to Accept-Language when no
++# locale cookie is set. A client resolving to any locale other than de, fr or en --
++# Spanish, Italian, anything -- landed here and got a NoSuchMessageException for
++# security.accountLocked (a 500 on the account-lockout response) and for EVERY
++# email.* template key (a template failure on every transactional email).
++# MessageBundleParityTest covered only messages_de and messages_fr against
++# messages_en, so nothing caught it.
++#
++# Values are English on purpose: this is the FALLBACK bundle, not a locale.
++# MessageBundleParityTest#defaultBundle_matchesEnglishKeysAndPlaceholders now fails
++# the build if this drifts again, in either direction.
++# ---------------------------------------------------------------------------------
++email.profile_change.title=Security Alert - Profile Changed
++email.profile_change.password=Your password has been successfully changed. If you did not make this change, please reset your password immediately.
++email.profile_change.email=Your email address has been changed from {0} to {1}. If you did not make this change, please contact support.
++email.profile_change.address=Your address has been updated successfully.
++email.profile_change.phone=Your phone number has been updated successfully.
++email.profile_change.2fa_enabled=Two-factor authentication has been enabled on your account for enhanced security.
++email.profile_change.2fa_disabled=Two-factor authentication has been disabled on your account. We recommend keeping 2FA enabled.
++email.profile_change.generic=A change has been made to your profile.
++email.profile_change.not_you=If you did not make this change, please contact our support team immediately with the help code below.
++security.emailTokenInvalid=This verification link is not valid. Please request a new one.
++security.emailTokenExpired=This verification link has expired. Please request a new one.
++security.emailTokenUsed=This verification link has already been used. Please request a new one.
++security.accountLocked=This account is locked and cannot complete verification. Contact support.
++security.otpResendInProgress=A verification code is already being sent. Please wait a moment and try again.
++email.parent.verify.title=Verify your Skillars parent account
++email.parent.verify.text1=Thank you for registering. Click the link below to verify your email address.
++email.parent.verify.linkText=Verify my email
++email.parent.verify.expiry=This link expires in 24 hours.
++email.parent.verify.ignore=If you did not create a Skillars parent account, please ignore this email.
++email.parent.otp.title=Your Skillars phone verification code
++email.parent.otp.intro=Your phone verification code is:
++email.parent.otp.expiry=This code expires in 10 minutes.
++email.parent.otp.ignore=If you did not request this code, please ignore this email.
++email.player.verify.title=Verify your Skillars account
++email.player.verify.text1=Thank you for registering. Click the link below to verify your email address.
++email.player.verify.linkText=Verify my email
++email.player.verify.expiry=This link expires in 24 hours.
++email.player.verify.ignore=If you did not create a Skillars player account, please ignore this email.
++email.player.otp.title=Your Skillars phone verification code
++email.player.otp.intro=Your phone verification code is:
++email.player.otp.expiry=This code expires in 10 minutes.
++email.player.otp.ignore=If you did not request this code, please ignore this email and ensure your account is secure.
++email.coach.verify.title=Verify your Skillars account
++email.coach.verify.text1=Thank you for registering. Click the link below to verify your email address.
++email.coach.verify.linkText=Verify my email
++email.coach.verify.expiry=This link expires in 24 hours.
++email.coach.verify.ignore=If you did not create a Skillars coach account, please ignore this email.
++email.coach.otp.title=Your Skillars phone verification code
++email.coach.otp.intro=Your phone verification code is:
++email.coach.otp.expiry=This code expires in 10 minutes.
++email.coach.otp.ignore=If you did not request this code, please ignore this email and ensure your account is secure.
++email.booking.requested.title=New Session Request
++email.booking.confirmed.title=Your Session is Confirmed
++email.booking.declined.title=Session Request Declined
++email.booking.expired.title=Session Request Expired
++email.booking.reminder.title=Session Reminder
+diff --git a/src/main/resources/i18n/messages_de.properties b/src/main/resources/i18n/messages_de.properties
+index 01a4967..ebf2458 100644
+--- a/src/main/resources/i18n/messages_de.properties
++++ b/src/main/resources/i18n/messages_de.properties
+@@ -97,9 +97,9 @@ video.playbackDenied=Der Zugriff auf die Wiedergabe dieses Videos wurde verweige
+ video.providerError=Bei einem Videoanbieter ist ein Fehler aufgetreten. Bitte versuchen Sie es erneut oder kontaktieren Sie den Support.
+ video.sessionExpired=Die Upload-Sitzung ist abgelaufen. Bitte starten Sie einen neuen Upload.
+ video.terminalStateViolation=Diese Aktion ist im aktuellen Videostatus nicht zulässig.
+-email.booking.quick_complete_confirm.title=Please confirm your session
+-email.booking.reschedule_requested_by_coach.title=Your coach proposed a new session time
+-email.booking.reschedule_declined_by_parent.title=Reschedule Declined
++email.booking.quick_complete_confirm.title=Bitte best\u00e4tigen Sie Ihre Trainingseinheit
++email.booking.reschedule_requested_by_coach.title=Ihr Coach hat einen neuen Termin vorgeschlagen
++email.booking.reschedule_declined_by_parent.title=Terminverschiebung abgelehnt
+ 
+ email.report.shared.title=Leistungsbericht verfügbar
+ 
+diff --git a/src/main/resources/i18n/messages_en.properties b/src/main/resources/i18n/messages_en.properties
+index 1e12611..f7389c0 100644
+--- a/src/main/resources/i18n/messages_en.properties
++++ b/src/main/resources/i18n/messages_en.properties
+@@ -35,7 +35,7 @@ email.creation_dup.ignore= If this was not you, please ignore this email. Your a
+ # Reset e-mail
+ email.pw_reset.callToAction=Reset Password
+ email.pw_reset.text1=You recently requested to reset your password for your Skillars account. Use the button below to reset it. This password reset is only valid for the next 24 hours.
+-email.pw_reset.text2= For security, please check the information below to ensure the account creation request was from you. If you did not attempt creating the account, please contact support with the following help Code: {0}.
++email.pw_reset.text2=For security, please check the information below to ensure the password reset request was from you. If you did not request a password reset, please contact support with the following help Code: {0}.
+ email.pw_reset.title=Password Reset
+ email.pw_reset.linkText= Reset your password
+ email.pw_reset.copyPaste= Or copy and paste this link into your browser:
+diff --git a/src/main/resources/i18n/messages_fr.properties b/src/main/resources/i18n/messages_fr.properties
+index d143dd8..afa6b94 100644
+--- a/src/main/resources/i18n/messages_fr.properties
++++ b/src/main/resources/i18n/messages_fr.properties
+@@ -5,7 +5,7 @@ email.closing=Merci, l'\u00e9quipe Skillars
+ email.otp.title=Votre code de v\u00e9rification
+ email.otp.intro= Votre code de v\u00e9rification est :
+ email.otp.expiry= Ce code expirera dans 10 minutes.
+-email.otp.ignore= Si vous n'avez pas demand\u00e9 ce code, veuillez ignorer cet email et vous assurer que votre compte est s\u00e9curis\u00e9.
++email.otp.ignore= Si vous n'avez pas demand\u00e9 ce code, veuillez ignorer cet e-mail et vous assurer que votre compte est s\u00e9curis\u00e9.
+ email.change.title=Adresse e-mail modifi\u00e9e
+ email.common.helpCode= Code d'aide :
+ 
+@@ -18,7 +18,7 @@ email.activation.text1= Votre compte Skillars a \u00e9t\u00e9 cr\u00e9\u00e9. Ve
+ email.activation.text2= Pour des raisons de s\u00e9curit\u00e9, veuillez v\u00e9rifier les informations ci-dessous pour confirmer que la demande de cr\u00e9ation de compte provient bien de vous. Si vous n'avez pas cr\u00e9\u00e9 de compte, veuillez contacter le support (Code d'aide : {0}).
+ email.activation.linkText= Activer votre compte
+ email.activation.copyPaste= Ou copiez et collez ce lien dans votre navigateur :
+-email.activation.ignore= Si vous n'avez pas cr\u00e9\u00e9 ce compte, veuillez ignorer cet email.
++email.activation.ignore= Si vous n'avez pas cr\u00e9\u00e9 ce compte, veuillez ignorer cet e-mail.
+ 
+ # E-mail de duplication de cr\u00e9ation
+ email.creation_dup.title= Tentative de cr\u00e9ation de compte en double
+@@ -29,16 +29,16 @@ email.creation_dup.loginText= Si c'\u00e9tait vous et que vous avez oubli\u00e9
+ email.creation_dup.loginLink= Connexion \u00e0 votre compte
+ email.creation_dup.forgotText= Si vous avez oubli\u00e9 votre mot de passe, vous pouvez le r\u00e9initialiser ici :
+ email.creation_dup.resetLink= R\u00e9initialiser votre mot de passe
+-email.creation_dup.ignore= Si ce n'\u00e9tait pas vous, veuillez ignorer cet email. Votre compte est s\u00e9curis\u00e9.
++email.creation_dup.ignore= Si ce n'\u00e9tait pas vous, veuillez ignorer cet e-mail. Votre compte est s\u00e9curis\u00e9.
+ 
+ # E-mail de r\u00e9initialisation de mot de passe
+ email.pw_reset.callToAction= R\u00e9initialiser le mot de passe
+ email.pw_reset.text1= Vous avez r\u00e9cemment demand\u00e9 la r\u00e9initialisation de votre mot de passe pour votre compte Skillars. Utilisez le bouton ci-dessous pour le r\u00e9initialiser. Cette r\u00e9initialisation n'est valable que pendant les 24 prochaines heures.
+-email.pw_reset.text2= Pour des raisons de s\u00e9curit\u00e9, veuillez v\u00e9rifier les informations ci-dessous pour confirmer que la demande de cr\u00e9ation de compte provient bien de vous. Si vous n'avez pas tent\u00e9 de cr\u00e9er ce compte, veuillez contacter le support avec le code d'aide suivant : {0}.
++email.pw_reset.text2=Pour des raisons de s\u00e9curit\u00e9, veuillez v\u00e9rifier les informations ci-dessous pour confirmer que la demande de r\u00e9initialisation du mot de passe provient bien de vous. Si vous n'\u00eates pas \u00e0 l'origine de cette demande, veuillez contacter le support avec le code d'aide suivant : {0}.
+ email.pw_reset.title= R\u00e9initialisation du mot de passe
+ email.pw_reset.linkText= R\u00e9initialiser votre mot de passe
+ email.pw_reset.copyPaste= Ou copiez et collez ce lien dans votre navigateur :
+-email.pw_reset.ignore= Si vous n'avez pas demand\u00e9 de r\u00e9initialisation de mot de passe, veuillez ignorer cet email.
++email.pw_reset.ignore= Si vous n'avez pas demand\u00e9 de r\u00e9initialisation de mot de passe, veuillez ignorer cet e-mail.
+ 
+ # E-mail post-achat
+ 
+@@ -76,7 +76,7 @@ storage.providerError=Une erreur du fournisseur de stockage s'est produite. Veui
+ video.notFound=La vidéo demandée est introuvable.
+ video.validationFailed=La validation de la vidéo a échoué : {0}
+ video.quotaExceeded=L'envoi dépasserait votre quota de stockage vidéo.
+-video.rateLimitExceeded=Trop d'envois. Veuillez attendre un instant puis réessayer.
++video.rateLimitExceeded=Trop de t\u00e9l\u00e9versements. Veuillez attendre un instant puis réessayer.
+ video.playbackDenied=Accès à la lecture refusé pour cette vidéo.
+ video.providerError=Une erreur du fournisseur vidéo s'est produite. Veuillez réessayer ou contacter le support.
+ video.sessionExpired=La session d'envoi a expiré. Veuillez démarrer un nouvel envoi.
+@@ -131,9 +131,9 @@ email.player.otp.title=Votre code de vérification téléphonique Skillars
+ email.player.otp.intro=Votre code de vérification téléphonique est :
+ email.player.otp.expiry=Ce code expire dans 10 minutes.
+ email.player.otp.ignore=Si vous n'avez pas demandé ce code, veuillez ignorer cet e-mail et vous assurer que votre compte est sécurisé.
+-email.booking.quick_complete_confirm.title=Please confirm your session
+-email.booking.reschedule_requested_by_coach.title=Your coach proposed a new session time
+-email.booking.reschedule_declined_by_parent.title=Reschedule Declined
++email.booking.quick_complete_confirm.title=Veuillez confirmer votre s\u00e9ance
++email.booking.reschedule_requested_by_coach.title=Votre coach a propos\u00e9 un nouvel horaire
++email.booking.reschedule_declined_by_parent.title=Report refus\u00e9
+ 
+ email.report.shared.title=Rapport de performance disponible
+ 
+diff --git a/src/main/resources/mails/platformConfigChanged.html b/src/main/resources/mails/platformConfigChanged.html
+deleted file mode 100644
+index 2100abb..0000000
+--- a/src/main/resources/mails/platformConfigChanged.html
++++ /dev/null
+@@ -1,36 +0,0 @@
+-<!DOCTYPE html>
+-<html xmlns:th="http://www.thymeleaf.org">
+-<head>
+-    <meta charset="UTF-8">
+-    <title th:text="#{email.platform_config_changed.title}">Platform Configuration Changed</title>
+-</head>
+-<body>
+-    <p>Hello,</p>
+-
+-    <p>Platform configuration for provider <strong th:text="${map.provider}">PROVIDER</strong>
+-    has been updated.</p>
+-
+-    <table>
+-        <tr th:if="${map.msisdnChanged}">
+-            <td><strong>MSISDN changed:</strong></td>
+-            <td><span th:text="${map.oldMsisdn}">—</span> &#8594; <span th:text="${map.newMsisdn}">—</span></td>
+-        </tr>
+-        <tr th:if="${map.pinChanged}">
+-            <td><strong>PIN changed:</strong></td>
+-            <td>PIN has been updated (value not shown for security)</td>
+-        </tr>
+-        <tr>
+-            <td><strong>Changed by:</strong></td>
+-            <td th:text="${map.changedBy}">—</td>
+-        </tr>
+-        <tr>
+-            <td><strong>Timestamp:</strong></td>
+-            <td th:text="${map.changedAt}">—</td>
+-        </tr>
+-    </table>
+-
+-    <p>If this change was not authorized, please investigate immediately.</p>
+-
+-    <p th:text="#{email.closing}">Thanks, the Skillars team</p>
+-</body>
+-</html>
+diff --git a/src/test/java/com/softropic/skillars/i18n/DefaultMessageBundleFallbackIT.java b/src/test/java/com/softropic/skillars/i18n/DefaultMessageBundleFallbackIT.java
+new file mode 100644
+index 0000000..9f51ebf
+--- /dev/null
++++ b/src/test/java/com/softropic/skillars/i18n/DefaultMessageBundleFallbackIT.java
+@@ -0,0 +1,148 @@
++package com.softropic.skillars.i18n;
++
++import com.softropic.skillars.config.AbstractIntegrationTest;
++
++import org.junit.jupiter.api.DisplayName;
++import org.junit.jupiter.api.Test;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.context.MessageSource;
++import org.springframework.http.HttpEntity;
++import org.springframework.http.HttpHeaders;
++import org.springframework.http.HttpMethod;
++import org.springframework.http.HttpStatus;
++import org.springframework.mock.web.MockHttpServletRequest;
++import org.springframework.web.client.HttpStatusCodeException;
++import org.springframework.web.client.RestTemplate;
++import org.springframework.web.servlet.LocaleResolver;
++
++import java.util.List;
++import java.util.Locale;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.assertj.core.api.Assertions.assertThatCode;
++import static org.assertj.core.api.Assertions.catchThrowableOfType;
++
++/**
++ * skillars-deferred-92 AC12.6 — a client whose resolved locale is neither {@code de}, {@code fr} nor
++ * {@code en} must get clean English, not a 500.
++ *
++ * <h2>The bug this pins</h2>
++ *
++ * {@code messages.properties} — the bundle {@code ReloadableResourceBundleMessageSource} falls back
++ * to — held 86 of {@code messages_en}'s 130 keys. {@code CookieLocaleResolver} falls through to
++ * {@code Accept-Language} when no locale cookie is set, so a Spanish or Italian client resolving
++ * {@code security.accountLocked} hit a {@code NoSuchMessageException}: HTTP 500 on the
++ * account-lockout response, and a template failure on every {@code email.*} key.
++ *
++ * <p>The assertions below are deliberately split. Resolving through the real {@code MessageSource}
++ * bean is what actually proves the hole is closed — a missing key throws, so "does not throw" is the
++ * property, and it can be asserted for every one of the 46 keys rather than for whichever one an
++ * endpoint happens to reach. The HTTP case then confirms the surrounding wiring
++ * ({@code Accept-Language} → {@code LocaleContextHolder} → {@code ApiAdvice}) really does carry a
++ * non-{@code de}/{@code fr}/{@code en} locale through to that message source.
++ */
++class DefaultMessageBundleFallbackIT extends AbstractIntegrationTest {
++
++    /** Locales with no bundle of their own — every one of them lands on messages.properties. */
++    private static final List<Locale> UNSUPPORTED = List.of(
++        Locale.forLanguageTag("es-ES"), Locale.forLanguageTag("it-IT"), Locale.forLanguageTag("pt-BR"));
++
++    /** A representative slice of the 46 keys that were missing, one from each affected family. */
++    private static final List<String> PREVIOUSLY_MISSING = List.of(
++        "security.accountLocked",
++        "security.otpResendInProgress",
++        "security.emailTokenExpired",
++        "security.emailTokenInvalid",
++        "security.emailTokenUsed",
++        "email.coach.otp.title",
++        "email.parent.verify.text1",
++        "email.player.otp.intro",
++        "email.booking.reminder.title",
++        "email.profile_change.password");
++
++    @Autowired private MessageSource messageSource;
++    @Autowired private LocaleResolver localeResolver;
++    @Autowired private RestTemplate testRestTemplate;
++
++    @Test
++    @DisplayName("every previously-missing key resolves for an unsupported locale instead of throwing")
++    void unsupportedLocale_resolvesFromTheDefaultBundle() {
++        for (Locale locale : UNSUPPORTED) {
++            for (String key : PREVIOUSLY_MISSING) {
++                assertThatCode(() -> messageSource.getMessage(key, null, locale))
++                    .as("""
++                        '%s' must resolve for %s. Before skillars-deferred-92 AC12 this threw \
++                        NoSuchMessageException, which is a 500 on the account-lockout response and a \
++                        template failure on every transactional email.""", key, locale)
++                    .doesNotThrowAnyException();
++
++                assertThat(messageSource.getMessage(key, null, locale))
++                    .as("'%s' for %s must be real text, not an empty placeholder", key, locale)
++                    .isNotBlank();
++            }
++        }
++    }
++
++    /**
++     * The AC12.5 regression guard. Pinning determinism was supposed to happen on the <em>message
++     * source</em> ({@code setFallbackToSystemLocale(false)}), never on the <em>resolver</em>: a
++     * {@code CookieLocaleResolver} with a {@code defaultLocale} stops consulting
++     * {@code Accept-Language} altogether, so a German browser with no locale cookie would silently
++     * start getting English. Same method name on two classes, opposite consequences.
++     */
++    @Test
++    @DisplayName("a German client with no locale cookie still negotiates German")
++    void germanAcceptLanguage_withNoCookie_stillResolvesGerman() {
++        MockHttpServletRequest request = new MockHttpServletRequest();
++        request.addPreferredLocale(Locale.GERMANY);   // Accept-Language: de-DE
++        request.setCookies();                          // explicitly no locale cookie
++
++        Locale resolved = localeResolver.resolveLocale(request);
++
++        assertThat(resolved.getLanguage())
++            .as("""
++                CookieLocaleResolver must still fall through to Accept-Language. If this is 'en', \
++                someone called setDefaultLocale on the RESOLVER — that disables Accept-Language \
++                negotiation entirely and is a user-visible regression, not hardening. Pin determinism \
++                on the message source instead (MvcConfig#messageSource).""")
++            .isEqualTo("de");
++
++        assertThat(messageSource.getMessage("security.accountLocked", null, Locale.GERMANY))
++            .as("and the German bundle must still be the one that answers for a German locale")
++            .isNotEqualTo(messageSource.getMessage("security.accountLocked", null, Locale.ENGLISH));
++    }
++
++    /**
++     * End to end: a real request from a Spanish client must come back as a clean localized error, not
++     * a 500. Any authenticated endpoint will do — the point is that the whole
++     * {@code Accept-Language} → {@code LocaleContextHolder} → {@code ApiAdvice} → {@code messageSource}
++     * chain carries an unsupported locale without falling over.
++     */
++    @Test
++    @DisplayName("an es-ES request to a protected endpoint gets a localized 401, never a 500")
++    void spanishAcceptLanguage_protectedEndpoint_returnsCleanUnauthorized() {
++        HttpHeaders headers = new HttpHeaders();
++        headers.setAcceptLanguageAsLocales(List.of(Locale.forLanguageTag("es-ES")));
++
++        // The shared RestTemplate throws on any 4xx, and 401 is the expected outcome here — the
++        // question this test asks is whether the status is 401 rather than 500, so the exception IS
++        // the result. Catching it beats swapping in a no-op error handler, which would change the
++        // bean for every other test sharing this context.
++        HttpStatusCodeException failure = catchThrowableOfType(
++            () -> testRestTemplate.exchange(baseUrl() + "/api/account/me", HttpMethod.GET,
++                new HttpEntity<>(headers), String.class),
++            HttpStatusCodeException.class);
++
++        assertThat(failure)
++            .as("a protected endpoint must reject an anonymous request")
++            .isNotNull();
++        assertThat(failure.getStatusCode())
++            .as("""
++                A Spanish client must get the ordinary auth failure. A 5xx here is the AC12 bug:                 message resolution for a locale with no bundle of its own threw                 NoSuchMessageException inside the error handler itself.""")
++            .isEqualTo(HttpStatus.UNAUTHORIZED);
++        assertThat(failure.getResponseBodyAsString())
++            .as("and the body must be a resolved, localized error rather than an empty or raw one")
++            .contains("errorKey")
++            .contains("message");
++    }
++}
+diff --git a/src/test/java/com/softropic/skillars/i18n/MessageBundleParityTest.java b/src/test/java/com/softropic/skillars/i18n/MessageBundleParityTest.java
+index abbedde..87dfacc 100644
+--- a/src/test/java/com/softropic/skillars/i18n/MessageBundleParityTest.java
++++ b/src/test/java/com/softropic/skillars/i18n/MessageBundleParityTest.java
+@@ -11,6 +11,7 @@ import java.util.ArrayList;
+ import java.util.LinkedHashMap;
+ import java.util.List;
+ import java.util.Map;
++import java.util.Set;
+ import java.util.TreeMap;
+ import java.util.regex.Matcher;
+ import java.util.regex.Pattern;
+@@ -18,7 +19,8 @@ import java.util.regex.Pattern;
+ import static org.assertj.core.api.Assertions.assertThat;
+ 
+ /**
+- * skillars-deferred-90 AC12 (F23): the key-set check alone proves nothing about translation
++ * skillars-deferred-90 AC12 (F23), extended by skillars-deferred-92 AC12 to cover the
++ * <strong>default</strong> bundle: the key-set check alone proves nothing about translation
+  * fidelity. This adds a <strong>placeholder-integrity</strong> gate: for every key,
+  * {@code messages_de.properties} and {@code messages_fr.properties} must carry
+  * <em>exactly</em> the same {@code {name}} / {@code {0}} placeholder token multiset and the same
+@@ -43,6 +45,35 @@ class MessageBundleParityTest {
+         assertParity("messages_fr.properties");
+     }
+ 
++    /**
++     * skillars-deferred-92 AC12 — the case whose absence was a <strong>live 500</strong>, not hygiene.
++     *
++     * <p>{@code messages.properties} carries no locale suffix, so it is the bundle
++     * {@code ReloadableResourceBundleMessageSource} falls back to when a key is missing from the
++     * resolved locale's bundle. It held <strong>86</strong> keys against {@code messages_en}'s 130.
++     * The 46 absentees included {@code security.accountLocked} and <em>every</em> {@code email.*}
++     * template key, so any client resolving to a locale other than {@code de}, {@code fr} or
++     * {@code en} — {@code CookieLocaleResolver} falls through to {@code Accept-Language} when no
++     * locale cookie is set — got a {@code NoSuchMessageException}: a 500 on the account-lockout
++     * response, and a template failure on every transactional email.
++     *
++     * <p>The two tests above covered {@code messages_de} and {@code messages_fr} against
++     * {@code messages_en} and nothing covered this file, which is the whole reason it drifted.
++     *
++     * <p>The drift ran <em>both</em> ways, which the story did not anticipate: this file also held two
++     * keys {@code messages_en} did not ({@code email.platform_config_changed.title} /
++     * {@code .preheader}, reading "Platform MSISDN Changed"). They belonged to
++     * {@code mails/platformConfigChanged.html}, inherited from the {@code javatemplate} origin project
++     * — no {@code EmailTemplate} constant, no sender, nothing in {@code src} referencing it, and no
++     * MSISDN concept anywhere in a Stripe platform. Template and keys were deleted rather than
++     * translated. {@code assertParity}'s existing "foreign keys" assertion is what would have caught
++     * them, and now does.
++     */
++    @Test
++    void defaultBundle_matchesEnglishKeysAndPlaceholders() throws IOException {
++        assertParity("messages.properties");
++    }
++
+     private void assertParity(String translatedFile) throws IOException {
+         Map<String, String> en = load(I18N.resolve("messages_en.properties"));
+         Map<String, String> tr = load(I18N.resolve(translatedFile));
+@@ -77,6 +108,51 @@ class MessageBundleParityTest {
+             .isEmpty();
+     }
+ 
++    /**
++     * skillars-deferred-92 AC13 — a value identical to the English is almost certainly untranslated.
++     *
++     * <p>Key parity and placeholder parity both pass happily on a bundle that simply repeats the
++     * English, which is exactly what had shipped: {@code email.booking.quick_complete_confirm.title},
++     * {@code .reschedule_declined_by_parent.title} and {@code .reschedule_requested_by_coach.title}
++     * were English in <strong>both</strong> {@code messages_de} and {@code messages_fr}, so a French
++     * or German parent received "Please confirm your session" as an email subject line. It survived
++     * skillars-deferred-91 AC9's whole de-DE register pass, which looked for informal forms rather
++     * than for English.
++     *
++     * <p>The allowlist is empty and should stay small. A genuine cognate belongs in it with a reason —
++     * but note that short cognates are excluded by the length floor already, so anything reaching this
++     * assertion is a sentence, and a whole sentence identical across two languages is a translation
++     * that never happened.
++     */
++    private static final Set<String> LEGITIMATELY_IDENTICAL_TO_ENGLISH = Set.of();
++
++    @Test
++    @DisplayName("no translated value is left as untouched English")
++    void translatedBundles_containNoUntranslatedEnglish() throws IOException {
++        for (String bundle : List.of("messages_de.properties", "messages_fr.properties")) {
++            Map<String, String> en = load(I18N.resolve("messages_en.properties"));
++            Map<String, String> tr = load(I18N.resolve(bundle));
++
++            List<String> untranslated = en.entrySet().stream()
++                .filter(e -> !LEGITIMATELY_IDENTICAL_TO_ENGLISH.contains(e.getKey()))
++                // Short values are frequently genuine cognates (Status, Name, Position, Date...);
++                // only a substantial value repeated verbatim is evidence of a missing translation.
++                .filter(e -> e.getValue().strip().length() > 15)
++                .filter(e -> e.getValue().strip().equalsIgnoreCase(
++                    String.valueOf(tr.get(e.getKey())).strip()))
++                .map(e -> e.getKey() + " == \"" + e.getValue().strip() + "\"")
++                .sorted()
++                .toList();
++
++            assertThat(untranslated)
++                .as("""
++                    %s repeats messages_en verbatim for these keys, so a user of that locale reads \
++                    English. Translate them, or add the key to LEGITIMATELY_IDENTICAL_TO_ENGLISH with \
++                    a reason if the two languages really do share the string.""", bundle)
++                .isEmpty();
++        }
++    }
++
+     /** Sorted multiset of {@code {...}} tokens in a value. */
+     private static TreeMap<String, Integer> placeholders(String value) {
+         TreeMap<String, Integer> counts = new TreeMap<>();
+diff --git a/src/frontend/src/i18n/de-DE/index.js b/src/frontend/src/i18n/de-DE/index.js
+index fb54304..c984424 100644
+--- a/src/frontend/src/i18n/de-DE/index.js
++++ b/src/frontend/src/i18n/de-DE/index.js
+@@ -29,11 +29,38 @@ export default {
+     light: 'Hellmodus',
+   },
+   auth: {
++    parentPrivacyBody:
++      'Wir erheben personenbezogene Daten, um unsere Dienste bereitzustellen. Ihre Daten werden gemäß DSGVO und den geltenden Datenschutzgesetzen verarbeitet. Wir verkaufen Ihre personenbezogenen Daten nicht an Dritte. Sie können jederzeit die Löschung Ihrer Daten verlangen. Aufzeichnungen von Trainingseinheiten und Coaching-Daten werden für den in unserer Datenschutzerklärung genannten Zeitraum aufbewahrt.',
++    parentConsentBody:
++      'Als Erziehungsberechtigte(r) der von Ihnen registrierten Spieler stimmen Sie zu, dass Skillars Daten über Ihr Kind zu Coaching-Zwecken erhebt und verarbeitet. Sie bestätigen, dass Sie der gesetzliche Elternteil oder Vormund sind. Sie sind dafür verantwortlich, dass die Teilnahme Ihres Kindes angemessen ist. Sie können Ihre Einwilligung jederzeit widerrufen, indem Sie den Support kontaktieren.',
++    activateRedirecting: 'Weiterleitung in {seconds}…',
++    otpCodeExpiry: 'der Code läuft in 30 Minuten ab.',
++    parentTosBody:
++      'Mit der Nutzung von Skillars stimmen Sie unseren Allgemeinen Geschäftsbedingungen zu. Diese regeln Ihre Nutzung der Plattform, einschließlich der Buchung von Trainingseinheiten, Zahlungen und des Umgangs mit Daten. Für die Registrierung als Elternteil müssen Sie mindestens 18 Jahre alt sein. Für alle Konten gilt unsere Richtlinie zur zulässigen Nutzung.',
++    activationTitle: 'Kontoaktivierung',
++    activationKeyMissing: 'Ungültiger oder fehlender Aktivierungsschlüssel.',
++    recoveryTitle: 'Kontowiederherstellung',
++    recoveryBody:
++      'Geben Sie Ihre E-Mail-Adresse und Ihr Geburtsdatum ein, um Ihr Passwort zurückzusetzen.',
++    recoveryEmailSent: 'E-Mail gesendet',
++    loginWelcome: 'Willkommen zurück. Melden Sie sich an, um fortzufahren.',
++    twoFactorTitle: 'Zwei-Faktor-Authentifizierung',
++    otpNotReceived: 'Code nicht erhalten?',
++    registerTitle: 'Erstellen Sie Ihr Konto',
++    registerBody: 'Geben Sie Ihre Daten ein, um zu starten.',
++    resetTitle: 'Passwort zurücksetzen',
++    resetBody: 'Wählen Sie ein starkes neues Passwort.',
++    resetKeyMissing:
++      'Ungültiger oder fehlender Zurücksetzungsschlüssel. Bitte fordern Sie eine neue Zurücksetzung an.',
++    verifyTokenMissing:
++      'Kein Bestätigungstoken gefunden. Bitte prüfen Sie den Link in Ihrer E-Mail.',
++    phoneHintFormat: '9 Ziffern, beginnend mit 6 (z. B. 670123456)',
+     accountNotVerified:
+       'Ihr Konto ist noch nicht verifiziert. Bitte schließen Sie zunächst die Telefonverifizierung ab.',
+     accountLocked: 'Zu viele Anmeldeversuche. Versuchen Sie es in einigen Minuten erneut.',
+     invalidCredentials: 'Ungültige E-Mail-Adresse oder Passwort.',
+     coach: {
++      resendOtp: 'Code erneut senden',
+       registerTitle: 'Trainer-Konto erstellen',
+       registerSubtitle: 'Bei Skillars registrieren und mit dem Training beginnen',
+       emailPendingTitle: 'E-Mail prüfen',
+@@ -150,6 +177,7 @@ export default {
+       tileUnavailable: 'Nicht verfügbar',
+     },
+     player: {
++      resendOtp: 'Code erneut senden',
+       registerTitle: 'Spielerkonto erstellen',
+       registerSubtitle: 'Verfolgen Sie Ihre eigene Entwicklung und buchen Sie Sitzungen',
+       emailPendingTitle: 'E-Mail prüfen',
+@@ -659,6 +687,16 @@ export default {
+   },
+   session: {
+     drillLibrary: {
++      moreItems: '+{count} weitere',
++      setupDiagram: 'Aufbauskizze',
++      tags: 'Tags',
++      videoPreviewAfterUpload: 'Videovorschau nach dem Hochladen verfügbar',
++      metaDifficulty: 'Schwierigkeit',
++      metaGroupSize: 'Gruppengröße',
++      metaEquipment: 'Ausrüstung',
++      filterDifficulty: 'Schwierigkeitsstufe',
++      filterWeakFootOnly: 'Nur mit Schwachfuß-Fokus',
++      cloneFailed: 'Übung konnte nicht kopiert werden',
+       title: 'Übungsbibliothek',
+       loadError: 'Übungen konnten nicht geladen werden. Bitte versuchen Sie es erneut.',
+       videoLoadFailed: 'Video konnte nicht geladen werden — wird aktualisiert…',
+@@ -912,6 +950,7 @@ export default {
+       decreased: '{skill}-Exposition ist diesen Monat um {percent}% gesunken',
+     },
+     radar: {
++      chartAriaLabel: 'Daten des Fähigkeiten-Radars',
+       addAssessmentLabel: 'Radar-Bewertung hinzufügen',
+       assessmentPanelTitle: 'Skills-Radar-Bewertung',
+       assessmentTypeLabelObjective: 'Objektiver Test',
+@@ -1060,7 +1099,14 @@ export default {
+       unavailable: 'Kartenzahlungen sind derzeit nicht verfügbar',
+     },
+   },
+-  admin: {},
++  admin: {
++    health: {
++      title: 'Systemzustand',
++      subtitle: 'Infrastrukturstatus in Echtzeit',
++      accessDenied: 'Für die Statusdetails sind Administratorrechte erforderlich.',
++      loadError: 'Systemstatus konnte nicht geladen werden',
++    },
++  },
+   featureGate: {
+     requiredTier: 'Erfordert {tier}-Plan',
+     description:
+@@ -1217,6 +1263,9 @@ export default {
+     unread: '{count} ungelesen',
+   },
+   profile: {
++    subtitle: 'Verwalten Sie Ihre Kontodaten und Einstellungen.',
++    sectionAccount: 'Konto',
++    sectionPersonal: 'Persönliche Daten',
+     title: 'Mein Profil',
+     email: 'E-Mail-Adresse',
+     password: 'Passwort',
+@@ -1296,5 +1345,32 @@ export default {
+     samePassword: 'Das neue Passwort muss sich vom aktuellen Passwort unterscheiden',
+     samePhone: 'Die neue Telefonnummer muss sich von der aktuellen unterscheiden',
+   },
++  errorPage: {
++    notFoundTitle: 'Seite nicht gefunden',
++    notFoundBody: 'Die gesuchte Seite existiert nicht oder wurde verschoben.',
++    goHome: 'Zur Startseite',
++  },
++  dashboard: {
++    title: 'Übersicht',
++    welcomeBack: 'Willkommen zurück, {name}',
++    defaultUser: 'Benutzer',
++    loggedIn: 'Sie sind erfolgreich angemeldet',
++    operational: 'Alle Systeme sind betriebsbereit.',
++    metricSessionsToday: 'Einheiten heute',
++    metricActiveUsers: 'Aktive Nutzer',
++    metricUptime: 'Verfügbarkeit',
++    metricResponseTime: 'Antwortzeit',
++    metricNoData: 'Noch keine Daten',
++    metricLast30Days: 'Letzte 30 Tage',
++    metricAverageMs: 'Durchschnitt (ms)',
++  },
++  nav: {
++    sectionMain: 'Allgemein',
++    menu: 'Menü',
++    tagline: 'Analyseplattform',
++    dashboard: 'Übersicht',
++    admin: 'Administration',
++    healthDashboard: 'Systemstatus',
++  },
+ }
+ // TODO: translate
+diff --git a/src/frontend/src/i18n/en-US/index.js b/src/frontend/src/i18n/en-US/index.js
+index 6deeccf..571eb4f 100644
+--- a/src/frontend/src/i18n/en-US/index.js
++++ b/src/frontend/src/i18n/en-US/index.js
+@@ -1,5 +1,28 @@
+ export default {
+   auth: {
++    parentPrivacyBody:
++      'We collect personal data to provide our services. Your data is processed in accordance with GDPR and applicable data protection laws. We do not sell your personal data to third parties. You may request deletion of your data at any time. Session recordings and coaching data are retained for the period specified in our privacy policy.',
++    parentConsentBody:
++      "As the legal guardian of the player(s) you register, you consent to Skillars collecting and processing data about your child for coaching purposes. You confirm you are the legal parent or guardian. You are responsible for ensuring your child's participation is appropriate. You may withdraw consent at any time by contacting support.",
++    activateRedirecting: 'Redirecting in {seconds}…',
++    otpCodeExpiry: 'the code expires in 30 minutes.',
++    parentTosBody:
++      'By using Skillars, you agree to our terms and conditions. These terms govern your use of the platform, including booking sessions, payments, and data handling. You must be at least 18 years old to register as a parent. All accounts are subject to our acceptable use policy.',
++    activationTitle: 'Account activation',
++    activationKeyMissing: 'Invalid or missing activation key.',
++    recoveryTitle: 'Account recovery',
++    recoveryBody: 'Enter your email and date of birth to reset your password.',
++    recoveryEmailSent: 'Email sent',
++    loginWelcome: 'Welcome back. Sign in to continue.',
++    twoFactorTitle: 'Two-factor authentication',
++    otpNotReceived: "Didn't receive the code?",
++    registerTitle: 'Create your account',
++    registerBody: 'Fill in your details to get started.',
++    resetTitle: 'Password reset',
++    resetBody: 'Choose a strong new password.',
++    resetKeyMissing: 'Invalid or missing reset key. Please request a new password reset.',
++    verifyTokenMissing: 'No verification token found. Please check your email link.',
++    phoneHintFormat: '9 digits starting with 6 (e.g., 670123456)',
+     accountNotVerified:
+       'Your account is not yet verified. Please complete phone verification first.',
+     accountLocked: 'Too many login attempts. Please try again in a few minutes.',
+@@ -46,6 +69,7 @@ export default {
+     languageEnglish: 'English',
+     languageFrench: 'French',
+     coach: {
++      resendOtp: 'Resend Code',
+       registerTitle: 'Create Coach Account',
+       registerSubtitle: 'Join Skillars and start coaching',
+       emailPendingTitle: 'Check your email',
+@@ -153,6 +177,7 @@ export default {
+       tileUnavailable: 'Unavailable',
+     },
+     player: {
++      resendOtp: 'Resend Code',
+       registerTitle: 'Create Player Account',
+       registerSubtitle: 'Track your own development and book sessions',
+       emailPendingTitle: 'Check your email',
+@@ -320,6 +345,16 @@ export default {
+       "We couldn't extend your session. Check your connection and select Continue Session to try again.",
+     expired: 'Your session has expired. Please log in again.',
+     drillLibrary: {
++      moreItems: '+{count} more',
++      setupDiagram: 'Setup diagram',
++      tags: 'Tags',
++      videoPreviewAfterUpload: 'Video preview available after upload',
++      metaDifficulty: 'Difficulty',
++      metaGroupSize: 'Group Size',
++      metaEquipment: 'Equipment',
++      filterDifficulty: 'Difficulty Tier',
++      filterWeakFootOnly: 'Weak Foot Bias only',
++      cloneFailed: 'Failed to clone drill',
+       title: 'Drill Library',
+       loadError: 'Failed to load drills. Please try again.',
+       videoLoadFailed: 'Video failed to load — refreshing…',
+@@ -559,6 +594,9 @@ export default {
+     errorGeneric: 'Something went wrong. Please try again.',
+   },
+   profile: {
++    subtitle: 'Manage your account details and preferences.',
++    sectionAccount: 'Account',
++    sectionPersonal: 'Personal Info',
+     title: 'My Profile',
+     email: 'Email Address',
+     password: 'Password',
+@@ -614,6 +652,7 @@ export default {
+       decreased: '{skill} exposure decreased {percent}% this month',
+     },
+     radar: {
++      chartAriaLabel: 'Skills Radar Data',
+       addAssessmentLabel: 'Add Radar Assessment',
+       assessmentPanelTitle: 'Skills Radar Assessment',
+       assessmentTypeLabelObjective: 'Objective Test',
+@@ -768,7 +807,14 @@ export default {
+   parent: {
+     nav: 'Parent',
+   },
+-  admin: {},
++  admin: {
++    health: {
++      title: 'System Health',
++      subtitle: 'Real-time infrastructure status',
++      accessDenied: 'Admin access required to view health details.',
++      loadError: 'Failed to load health status',
++    },
++  },
+   booking: {
+     requests: {
+       statusRequested: 'Awaiting coach response',
+@@ -1266,4 +1312,31 @@ export default {
+     loadMore: 'Load more',
+     unread: '{count} unread',
+   },
++  errorPage: {
++    notFoundTitle: 'Page not found',
++    notFoundBody: "The page you're looking for doesn't exist or has been moved.",
++    goHome: 'Go Home',
++  },
++  dashboard: {
++    title: 'Dashboard',
++    welcomeBack: 'Welcome back, {name}',
++    defaultUser: 'User',
++    loggedIn: 'You are successfully logged in',
++    operational: 'All systems are operational.',
++    metricSessionsToday: 'Sessions Today',
++    metricActiveUsers: 'Active Users',
++    metricUptime: 'Uptime',
++    metricResponseTime: 'Response Time',
++    metricNoData: 'No data yet',
++    metricLast30Days: 'Last 30 days',
++    metricAverageMs: 'Average ms',
++  },
++  nav: {
++    sectionMain: 'Main',
++    menu: 'Menu',
++    tagline: 'Analytics Platform',
++    dashboard: 'Dashboard',
++    admin: 'Admin',
++    healthDashboard: 'Health Dashboard',
++  },
+ }
+diff --git a/src/frontend/src/i18n/fr-FR/index.js b/src/frontend/src/i18n/fr-FR/index.js
+index e2e1af0..8d431ef 100644
+--- a/src/frontend/src/i18n/fr-FR/index.js
++++ b/src/frontend/src/i18n/fr-FR/index.js
+@@ -1,8 +1,8 @@
+ export default {
+   coach: {
+-    commandCenterTitle: 'Centre de commande du coach',
++    commandCenterTitle: 'Espace coach',
+     commandCenterBody:
+-      'Votre tableau de bord de coaching apparaîtra ici une fois les sessions configurées.',
++      'Votre tableau de bord de coaching apparaîtra ici une fois les séances configurées.',
+     nav: 'Coach',
+     commandCenterSidebar: 'Clients actifs',
+     commandCenterNoClients: 'Aucun client actif cette semaine',
+@@ -14,15 +14,15 @@ export default {
+     lockerRoomBody: "Votre contenu d'entraînement et vos devoirs apparaîtront ici.",
+     homeworkEmptyTitle: 'Pas encore de devoirs',
+     homeworkEmptySubtitle:
+-      "Votre entraîneur n'a pas encore assigné de devoirs — revenez après votre prochaine séance",
++      'Votre coach ne vous a pas encore donné de devoirs — revenez après votre prochaine séance',
+     homeworkCompleted: 'Fait !',
+     homeworkMarkDone: "Je l'ai fait",
+-    assignedBy: 'Assigné par {coach}',
++    assignedBy: 'Donné par {coach}',
+     viewLockerRoom: 'Vestiaire',
+     createTitle: 'Ajouter un profil de joueur',
+     nameLabel: 'Nom du joueur',
+     dobLabel: 'Date de naissance',
+-    positionLabel: 'Position',
++    positionLabel: 'Poste',
+     ageTierLabel: "Groupe d'âge",
+     consentTitle: 'Consentement parental',
+     consentBody:
+@@ -47,14 +47,40 @@ export default {
+     },
+   },
+   auth: {
++    parentPrivacyBody:
++      'Nous collectons des données personnelles afin de fournir nos services. Vos données sont traitées conformément au RGPD et aux lois applicables en matière de protection des données. Nous ne vendons pas vos données personnelles à des tiers. Vous pouvez demander leur suppression à tout moment. Les enregistrements de séances et les données de coaching sont conservés pendant la durée indiquée dans notre politique de confidentialité.',
++    parentConsentBody:
++      'En tant que représentant légal du ou des joueurs que vous inscrivez, vous consentez à ce que Skillars collecte et traite les données de votre enfant à des fins de coaching. Vous confirmez être le parent ou le tuteur légal. Il vous appartient de vous assurer que la participation de votre enfant est appropriée. Vous pouvez retirer votre consentement à tout moment en contactant le support.',
++    activateRedirecting: 'Redirection dans {seconds}…',
++    otpCodeExpiry: 'le code expire dans 30 minutes.',
++    parentTosBody:
++      "En utilisant Skillars, vous acceptez nos conditions générales. Elles régissent votre utilisation de la plateforme, y compris la réservation de séances, les paiements et le traitement des données. Vous devez avoir au moins 18 ans pour créer un compte parent. Tous les comptes sont soumis à notre charte d'utilisation.",
++    activationTitle: 'Activation du compte',
++    activationKeyMissing: "Clé d'activation invalide ou manquante.",
++    recoveryTitle: 'Récupération du compte',
++    recoveryBody:
++      'Saisissez votre adresse e-mail et votre date de naissance pour réinitialiser votre mot de passe.',
++    recoveryEmailSent: 'E-mail envoyé',
++    loginWelcome: 'Bon retour. Connectez-vous pour continuer.',
++    twoFactorTitle: 'Authentification à deux facteurs',
++    otpNotReceived: "Vous n'avez pas reçu le code ?",
++    registerTitle: 'Créez votre compte',
++    registerBody: 'Renseignez vos informations pour commencer.',
++    resetTitle: 'Réinitialisation du mot de passe',
++    resetBody: 'Choisissez un nouveau mot de passe robuste.',
++    resetKeyMissing:
++      'Clé de réinitialisation invalide ou manquante. Veuillez demander une nouvelle réinitialisation.',
++    verifyTokenMissing:
++      'Aucun jeton de vérification trouvé. Veuillez vérifier le lien reçu par e-mail.',
++    phoneHintFormat: '9 chiffres commençant par 6 (par ex. 670123456)',
+     accountNotVerified:
+       "Votre compte n'est pas encore vérifié. Veuillez d'abord finaliser la vérification téléphonique.",
+     accountLocked: 'Trop de tentatives de connexion. Veuillez réessayer dans quelques minutes.',
+     invalidCredentials: 'Adresse e-mail ou mot de passe incorrect.',
+     login: 'Connexion',
+-    logout: 'Deconnexion',
++    logout: 'Déconnexion',
+     register: "S'inscrire",
+-    email: 'Email',
++    email: 'E-mail',
+     password: 'Mot de passe',
+     confirmPassword: 'Confirmer le mot de passe',
+     title: 'Titre',
+@@ -72,20 +98,20 @@ export default {
+     male: 'Homme',
+     female: 'Femme',
+     other: 'Autre',
+-    forgotPassword: 'Mot de passe oublie ?',
+-    resetPassword: 'Reinitialiser le mot de passe',
++    forgotPassword: 'Mot de passe oublié ?',
++    resetPassword: 'Réinitialiser le mot de passe',
+     newPassword: 'Nouveau mot de passe',
+     currentPassword: 'Mot de passe actuel',
+     rememberMe: 'Se souvenir de moi',
+     noAccount: "Vous n'avez pas de compte ?",
+     haveAccount: 'Vous avez déjà un compte ?',
+     createAccount: 'Créer un compte',
+-    registerAsCoach: "S'inscrire en tant qu'entraîneur",
++    registerAsCoach: "S'inscrire en tant que coach",
+     registerAsParent: "S'inscrire en tant que parent",
+     registerAsPlayer: "S'inscrire en tant que joueur (18+)",
+     activateAccount: 'Activer le compte',
+     enterOtp: 'Entrer le code de vérification',
+-    otpSent: 'Un code de vérification a été envoyé à votre email',
++    otpSent: 'Un code de vérification a été envoyé à votre e-mail',
+     resendOtp: 'Renvoyer le code',
+     verifyOtp: 'Vérifier',
+     enableTwoFactor: "Activer l'authentification à deux facteurs",
+@@ -95,19 +121,19 @@ export default {
+     parent: {
+       registerTitle: 'Créer un compte parent',
+       registerSubtitle: 'Gérez le parcours de coaching de votre enfant',
+-      emailPendingTitle: 'Vérifiez votre email',
++      emailPendingTitle: 'Vérifiez votre e-mail',
+       emailPendingBody:
+         'Nous avons envoyé un lien de vérification à {email}. Cliquez dessus pour continuer.',
+-      resendEmail: "Renvoyer l'email",
++      resendEmail: "Renvoyer l'e-mail",
+       resendCooldown: 'Renvoi disponible dans {seconds}s',
+       phoneVerifyTitle: 'Vérifiez votre téléphone',
+-      phoneVerifySubtitle: 'Entrez le code à 6 chiffres envoyé à votre email',
++      phoneVerifySubtitle: 'Entrez le code à 6 chiffres envoyé à votre e-mail',
+       tosLabel: "J'accepte les Conditions d'utilisation",
+       privacyLabel: "J'accepte la Politique de confidentialité",
+       parentConsentLabel:
+         "J'accepte la Politique de consentement parental et confirme être le tuteur légal",
+       signInInstead: 'Se connecter à la place',
+-      emailInUse: 'Cet email est déjà enregistré.',
++      emailInUse: 'Cet e-mail est déjà enregistré.',
+       phoneInUse: 'Ce numéro de téléphone est déjà enregistré.',
+       resendOtp: 'Renvoyer le code',
+       contactDetailWarning: "Les coordonnées seront supprimées lors de l'enregistrement",
+@@ -127,50 +153,52 @@ export default {
+       tileUnavailable: 'Indisponible',
+     },
+     player: {
++      resendOtp: 'Renvoyer le code',
+       registerTitle: 'Créer un compte joueur',
+-      registerSubtitle: 'Suivez votre propre progression et reservez des sessions',
+-      emailPendingTitle: 'Vérifiez votre email',
++      registerSubtitle: 'Suivez votre propre progression et réservez des séances',
++      emailPendingTitle: 'Vérifiez votre e-mail',
+       emailPendingBody:
+         'Nous avons envoyé un lien de vérification à {email}. Cliquez dessus pour continuer.',
+-      resendEmail: "Renvoyer l'email",
++      resendEmail: "Renvoyer l'e-mail",
+       resendCooldown: 'Renvoi disponible dans {seconds}s',
+       phoneVerifyTitle: 'Vérifiez votre téléphone',
+-      phoneVerifySubtitle: 'Entrez le code à 6 chiffres envoyé à votre email',
++      phoneVerifySubtitle: 'Entrez le code à 6 chiffres envoyé à votre e-mail',
+       tosLabel: "J'accepte les Conditions d'utilisation",
+       privacyLabel: "J'accepte la Politique de confidentialité",
+-      signInInstead: 'Se connecter a la place',
+-      emailInUse: 'Cet email est déjà enregistré.',
++      signInInstead: 'Se connecter à la place',
++      emailInUse: 'Cet e-mail est déjà enregistré.',
+       contactDetailWarning: "Les coordonnées seront supprimées lors de l'enregistrement",
+       mustBeAdult: 'Vous devez avoir 18 ans ou plus pour vous inscrire directement.',
+-      registerParentInstead: "Demandez a un parent de s'inscrire a votre place",
++      registerParentInstead: "Demandez à un parent de s'inscrire à votre place",
+       profileBuilderTitle: 'Dernière étape',
+-      profileBuilderBody: 'Indiquez votre position pour que les coachs puissent vous trouver.',
+-      position: 'Position',
++      profileBuilderBody: 'Indiquez votre poste pour que les coachs puissent vous trouver.',
++      position: 'Poste',
+       positionGoalkeeper: 'Gardien',
+-      positionDefender: 'Defenseur',
++      positionDefender: 'Défenseur',
+       positionMidfielder: 'Milieu de terrain',
+       positionForward: 'Attaquant',
+       finishSetup: 'Terminer',
+     },
+     coach: {
++      resendOtp: 'Renvoyer le code',
+       registerTitle: 'Créer un compte coach',
+       registerSubtitle: 'Rejoignez Skillars et commencez à coacher',
+-      emailPendingTitle: 'Vérifiez votre email',
++      emailPendingTitle: 'Vérifiez votre e-mail',
+       emailPendingBody:
+         'Nous avons envoyé un lien de vérification à {email}. Cliquez dessus pour continuer.',
+-      resendEmail: "Renvoyer l'email",
++      resendEmail: "Renvoyer l'e-mail",
+       resendCooldown: 'Renvoi disponible dans {seconds}s',
+       phoneVerifyTitle: 'Vérifiez votre téléphone',
+-      phoneVerifySubtitle: 'Entrez le code à 6 chiffres envoyé à votre email',
++      phoneVerifySubtitle: 'Entrez le code à 6 chiffres envoyé à votre e-mail',
+       tosLabel: "J'accepte les Conditions d'utilisation",
+       privacyLabel: "J'accepte la Politique de confidentialité",
+       signInInstead: 'Se connecter à la place',
+-      emailInUse: 'Cet email est déjà enregistré.',
++      emailInUse: 'Cet e-mail est déjà enregistré.',
+       contactDetailWarning: "Les coordonnées seront supprimées lors de l'enregistrement",
+       profileBuilderTitle: 'Complétez votre profil',
+       profileBuilderBody: 'Complétez ces 5 étapes pour apparaître sur la marketplace.',
+       stepOfTotal: 'Étape {current} sur {total}',
+-      step1Title: 'Identité & Localisation',
++      step1Title: 'Identité et localisation',
+       step1Short: 'Profil',
+       step1DisplayName: "Nom d'affichage",
+       step1Bio: 'Biographie',
+@@ -180,7 +208,7 @@ export default {
+       step1SectionBasics: 'Informations de base',
+       step1SectionLocation: 'Localisation',
+       step1SectionLanguages: 'Langues',
+-      step2Title: "Spécialités & Groupes d'âge",
++      step2Title: "Spécialités et groupes d'âge",
+       step2Short: 'Spécialités',
+       step2Specialties: 'Spécialisations',
+       step2AgeGroups: "Groupes d'âge",
+@@ -192,7 +220,7 @@ export default {
+       step3SessionDurationMinutes: '{minutes} minutes',
+       step3SessionDurationHelper:
+         'Chaque créneau réservable de votre calendrier aura cette durée. Laissez la valeur par défaut si vous hésitez.',
+-      step3SessionPacks: 'Packs de séances (optionnel)',
++      step3SessionPacks: 'Packs de séances (facultatif)',
+       step3PackHelper:
+         'Proposez des forfaits multi-séances à prix réduit. Laissez vide si vous ne souhaitez que le tarif à la séance.',
+       step3PackEmpty: 'Aucun pack ajouté pour le moment.',
+@@ -226,7 +254,7 @@ export default {
+       step5Short: 'Photo',
+       step5PhotoLabel: 'Photo de profil',
+       step5Helper: "Une photo claire inspire confiance aux parents. JPG ou PNG, jusqu'à 5 Mo.",
+-      step5Upload: 'Télécharger & Continuer',
++      step5Upload: 'Importer et continuer',
+       step5SkipLabel: "Ignorer pour l'instant",
+       publishSuccess: 'Votre profil est en ligne ! Bienvenue sur Skillars.',
+     },
+@@ -261,7 +289,7 @@ export default {
+     tierBASIC: 'Basique',
+     tierTRUSTED: 'De confiance',
+     tierFEATURED: 'Mis en avant',
+-    tierTooltipBASIC: 'Email et téléphone vérifiés',
++    tierTooltipBASIC: 'E-mail et téléphone vérifiés',
+     tierTooltipTRUSTED: "Coach de confiance vérifié par l'administrateur",
+     tierTooltipFEATURED: "Top coach mis en avant par l'administrateur",
+     ageGroupU10: 'Moins de 10 ans',
+@@ -291,7 +319,7 @@ export default {
+     capabilityBadgeTooltip: {
+       VIDEO_FEEDBACK: 'Ce coach fournit un retour vidéo sur les séances des joueurs',
+       PERFORMANCE_REPORTS: 'Ce coach génère des rapports de performance PDF',
+-      HOMEWORK: "Ce coach assigne des exercices pour l'entraînement à domicile",
++      HOMEWORK: "Ce coach donne des exercices pour l'entraînement à domicile",
+       SKILLS_RADAR: 'Ce coach suit les compétences des joueurs avec un radar',
+       VERIFIED_IDENTITY: "L'identité de ce coach a été vérifiée par Skillars",
+     },
+@@ -329,6 +357,16 @@ export default {
+       'Impossible de prolonger votre session. Vérifiez votre connexion et sélectionnez « Continuer la session » pour réessayer.',
+     expired: 'Votre session a expiré. Veuillez vous reconnecter.',
+     drillLibrary: {
++      moreItems: '+{count} de plus',
++      setupDiagram: 'Schéma de mise en place',
++      tags: 'Tags',
++      videoPreviewAfterUpload: 'Aperçu vidéo disponible après le téléversement',
++      metaDifficulty: 'Difficulté',
++      metaGroupSize: 'Taille du groupe',
++      metaEquipment: 'Équipement',
++      filterDifficulty: 'Niveau de difficulté',
++      filterWeakFootOnly: 'Axé pied faible uniquement',
++      cloneFailed: "Échec de la copie de l'exercice",
+       title: "Bibliothèque d'exercices",
+       loadError: 'Échec du chargement des exercices. Veuillez réessayer.',
+       videoLoadFailed: 'Échec du chargement de la vidéo — actualisation en cours…',
+@@ -347,7 +385,7 @@ export default {
+       addedToLibrary: 'Ajouté à votre bibliothèque',
+       viewInLibrary: 'Voir dans la bibliothèque',
+       addToSession: 'Ajouter à la séance',
+-      assign: 'Assigner',
++      assign: 'Attribuer',
+       weakFootLabel: 'Pied faible',
+       sluEstimate: '~{count} SLU',
+       emptyLibrary: 'Votre bibliothèque est vide',
+@@ -416,7 +454,7 @@ export default {
+         WARM_UP: 'Échauffement',
+         TECHNICAL_FOUNDATION: 'Fondamentaux techniques',
+         GAME_INTENSITY: 'Intensité de jeu',
+-        COOL_DOWN_REVIEW: 'Retour au calme & bilan',
++        COOL_DOWN_REVIEW: 'Retour au calme et bilan',
+       },
+       focus: {
+         technical: 'Technique',
+@@ -481,7 +519,7 @@ export default {
+   },
+   validation: {
+     required: 'Ce champ est requis',
+-    email: 'Veuillez entrer une adresse email valide',
++    email: 'Veuillez entrer une adresse e-mail valide',
+     minLength: 'Doit contenir au moins {min} caractères',
+     maxLength: 'Ne doit pas dépasser {max} caractères',
+     passwordMatch: 'Les mots de passe ne correspondent pas',
+@@ -527,7 +565,7 @@ export default {
+     credExpired: 'Vos identifiants ont expiré.',
+     accNotEnabled: "Votre compte n'est pas activé.",
+     accLocked:
+-      "Il y a un problème avec votre compte. Vérifiez votre email et contactez l'équipe de support. N'oubliez pas de sauvegarder le code d'aide.",
++      "Il y a un problème avec votre compte. Vérifiez votre e-mail et contactez l'équipe de support. N'oubliez pas de sauvegarder le code d'aide.",
+     badCreds: "La combinaison identifiant et mot de passe n'existe pas",
+     opForbidden: "L'accès a été refusé. Vous pouvez contacter le support",
+     sessionExpired: "Votre session n'est plus valide. Vous devez vous reconnecter",
+@@ -536,11 +574,11 @@ export default {
+     userNotFound: 'Le profil joueur demandé est introuvable.',
+   },
+   success: {
+-    registered: 'Inscription réussie ! Veuillez vérifier votre email pour activer votre compte.',
++    registered: 'Inscription réussie ! Veuillez vérifier votre e-mail pour activer votre compte.',
+     activated: 'Votre compte a été activé. Vous pouvez maintenant vous connecter.',
+     passwordReset:
+       'Votre mot de passe a été réinitialisé. Vous pouvez maintenant vous connecter avec votre nouveau mot de passe.',
+-    emailSent: 'Veuillez vérifier votre email pour les instructions.',
++    emailSent: 'Veuillez vérifier votre e-mail pour les instructions.',
+     loggedOut: 'Vous avez été déconnecté avec succès.',
+     emailChangeInitiated:
+       "Modification de l'e-mail initiée. Veuillez vérifier votre nouvelle adresse e-mail.",
+@@ -576,6 +614,9 @@ export default {
+     errorGeneric: "Une erreur s'est produite. Veuillez réessayer.",
+   },
+   profile: {
++    subtitle: 'Gérez les informations et les préférences de votre compte.',
++    sectionAccount: 'Compte',
++    sectionPersonal: 'Informations personnelles',
+     title: 'Mon Profil',
+     email: 'Adresse e-mail',
+     password: 'Mot de passe',
+@@ -586,8 +627,8 @@ export default {
+     noAddress: 'Non fournie',
+     personalInfo: 'Informations personnelles',
+     twoFactorAuth: 'Authentification à deux facteurs',
+-    enabled: 'Active',
+-    disabled: 'Désactivé',
++    enabled: 'Activée',
++    disabled: 'Désactivée',
+     edit: 'Modifier',
+     // Dialog titles
+     updateEmail: "Modifier l'adresse e-mail",
+@@ -632,6 +673,7 @@ export default {
+       decreased: "L'exposition à {skill} a diminué de {percent}% ce mois-ci",
+     },
+     radar: {
++      chartAriaLabel: 'Données du radar de compétences',
+       addAssessmentLabel: 'Ajouter une évaluation radar',
+       assessmentPanelTitle: 'Évaluation du radar de compétences',
+       assessmentTypeLabelObjective: 'Test objectif',
+@@ -639,7 +681,7 @@ export default {
+       assessmentTypeLabelCoachEval: 'Évaluation du coach',
+       assessmentDateLabel: "Date de l'évaluation",
+       scoreLabel: 'Score (1–100)',
+-      notesLabel: 'Notes (optionnel)',
++      notesLabel: 'Notes (facultatif)',
+       assessmentTypeLabel: "Type d'évaluation",
+       scoreTierReference:
+         'Référence de score : Élite 90–100 | Excellent 80–89 | Bon 70–79 | Au-dessus de la moyenne 60–69 | Moyen 50–59 | En dessous de la moyenne 40–49 | Très faible <40',
+@@ -705,7 +747,7 @@ export default {
+         RADAR_ASSESSMENT: 'Évaluation radar',
+         PERFORMANCE_REPORT: 'Rapport de performance',
+         MILESTONE_REACHED: 'Étape atteinte',
+-        HOMEWORK_ASSIGNED: 'Devoir assigné',
++        HOMEWORK_ASSIGNED: 'Devoir donné',
+         VIDEO_UPLOADED: 'Vidéo téléversée',
+         PAYMENT_RECEIVED: 'Paiement reçu',
+         REVIEW_LEFT: 'Avis laissé',
+@@ -731,7 +773,14 @@ export default {
+   parent: {
+     nav: 'Parent',
+   },
+-  admin: {},
++  admin: {
++    health: {
++      title: 'État du système',
++      subtitle: "État de l'infrastructure en temps réel",
++      accessDenied: "Un accès administrateur est requis pour consulter l'état détaillé.",
++      loadError: "Impossible de charger l'état du système",
++    },
++  },
+   video: {
+     status: {
+       UPLOADING: 'Téléversement',
+@@ -802,7 +851,7 @@ export default {
+     },
+     lShapeMastery: {
+       name: 'Maîtrise en forme de L',
+-      desc: 'Le joueur utilise la semelle pour tirer le ballon en arrière, puis le pied intérieur pour le déplacer en forme de L.',
++      desc: "Le joueur utilise la semelle pour tirer le ballon en arrière, puis l'intérieur du pied pour le déplacer en forme de L.",
+     },
+     foundationJugglingSequence: {
+       name: 'Séquence de jonglage de base',
+@@ -810,11 +859,11 @@ export default {
+     },
+     coneSlalomBallMastery: {
+       name: 'Maîtrise du ballon en slalom de plots',
+-      desc: 'Le joueur dribble un slalom de plots en utilisant uniquement des touches intérieures et extérieures.',
++      desc: "Le joueur dribble un slalom de plots en utilisant uniquement des touches de l'intérieur et de l'extérieur du pied.",
+     },
+     staticFinishInsideFoot: {
+-      name: 'Finition statique — pied intérieur',
+-      desc: 'Entraînement de tir statique utilisant le pied intérieur pour le placement et la précision.',
++      name: 'Finition statique — intérieur du pied',
++      desc: "Entraînement de tir statique utilisant l'intérieur du pied pour le placement et la précision.",
+     },
+     turnAndShoot: {
+       name: 'Se retourner et tirer',
+@@ -834,39 +883,39 @@ export default {
+     },
+     cruyffTurn: {
+       name: 'Le crochet de Cruyff',
+-      desc: "Feinte classique : faire semblant de passer ou centrer, ramener le ballon derrière la jambe d'appui avec le pied intérieur.",
++      desc: "Feinte classique : faire semblant de passer ou centrer, ramener le ballon derrière la jambe d'appui avec l'intérieur du pied.",
+     },
+     stepOverToAccelerate: {
+-      name: 'Petit pont pour accélérer',
+-      desc: "Utiliser un ou plusieurs petits ponts pour déséquilibrer un défenseur, puis exploser dans l'espace avec le pied extérieur.",
++      name: 'Passement de jambe pour accélérer',
++      desc: "Utiliser un ou plusieurs passements de jambe pour déséquilibrer un défenseur, puis exploser dans l'espace avec l'extérieur du pied.",
+     },
+     elasticoFlipFlap: {
+       name: 'Elastico / Flip-Flap',
+       desc: "Toucher le ballon vers l'extérieur puis le ramener vers l'intérieur avec le même pied en un mouvement rapide pour battre le défenseur.",
+     },
+     pressureEscapeRondo3v1: {
+-      name: "Rondo d'échappement sous pression (3v1)",
++      name: 'Rondo — sortie de pression (3v1)',
+       desc: 'Trois passeurs gardent le ballon dans un petit carré face à un défenseur ; après 5 passes, un joueur doit dribbler pour sortir.',
+     },
+     bodyFeintAndDrive: {
+       name: 'Feinte de corps et percée',
+-      desc: "Baisser l'épaule pour feindre une direction, puis dépasser le défenseur passif avec le pied extérieur du côté opposé.",
++      desc: "Baisser l'épaule pour feindre une direction, puis dépasser le défenseur passif avec l'extérieur du pied du côté opposé.",
+     },
+     passAndMove2Touch: {
+       name: 'Passe et mouvement (2 touches)',
+       desc: 'Passe et mouvement simple en binômes — recevoir, contrôler, passer, se replacer.',
+     },
+     wallPassOneTwoCombination: {
+-      name: 'Une-deux (combinaison murale)',
++      name: 'Une-deux (passe et va)',
+       desc: "Le joueur joue une passe au joueur mur, reçoit le retour en course et continue vers l'avant.",
+     },
+     switchOfPlayFromCentral: {
+       name: 'Changement de jeu depuis le centre',
+-      desc: 'Le joueur central reçoit, pivote, et change le jeu vers le joueur large opposé sous pression temporelle.',
++      desc: 'Le joueur central reçoit, pivote, et change le jeu vers le joueur excentré opposé sous pression temporelle.',
+     },
+     thirdManRunCombination: {
+       name: 'Combinaison de course du troisième homme',
+-      desc: 'Deux joueurs se combinent pour lancer un troisième coureur arrivant tardivement dans le dernier tiers.',
++      desc: 'Deux joueurs se combinent pour lancer un troisième joueur lancé arrivant tardivement dans le dernier tiers.',
+     },
+     receivingInTheHalfTurn: {
+       name: 'Réception en demi-tour',
+@@ -911,7 +960,7 @@ export default {
+         'Ce pack de séances a expiré le {date}. Contactez votre coach si une prolongation est possible.',
+       exhausted: 'Votre pack de séances est maintenant entièrement utilisé',
+       packCoachMismatch: 'Ce pack de séances est pour un autre coach.',
+-      packExpired: 'Ce forfait de séances a expiré.',
++      packExpired: 'Ce pack de séances a expiré.',
+       packExhausted: "Ce pack de séances n'a plus de séances restantes.",
+       extendSuccess: "Votre pack de séances a été prolongé jusqu'au {date}",
+       tierLabel: '{label} — {count} séances pour {price} €',
+@@ -1071,7 +1120,7 @@ export default {
+       requestTitle: 'Réserver une séance avec {coachName}',
+       selectSlot: 'Sélectionner un créneau',
+       ownBookingCaption: 'Vous avez déjà demandé ce créneau',
+-      notes: 'Notes pour le coach (optionnel)',
++      notes: 'Notes pour le coach (facultatif)',
+       confirmRequest: 'Demander la séance',
+       noCreditsWarning: 'Achetez un pack de séances pour demander une réservation',
+       listTitle: 'Mes réservations',
+@@ -1162,7 +1211,7 @@ export default {
+       pauseConflictsWarning:
+         'Ces séances seront annulées. Le coach sera averti. Confirmez pour continuer.',
+       pauseConfirm: 'Appliquer la pause',
+-      pauseConfirmWithCancellations: 'Annuler les séances & appliquer la pause',
++      pauseConfirmWithCancellations: 'Annuler les séances et appliquer la pause',
+       pauseSuccess: "Pack mis en pause — l'expiration a été prolongée en conséquence",
+       alreadyPausedLabel: 'Le pack a déjà utilisé sa pause',
+       purchaseError: "Échec de l'achat. Veuillez réessayer.",
+@@ -1182,7 +1231,7 @@ export default {
+       wrapUpTitle: 'Bilan de séance',
+       noDrillPlan: "Aucun plan d'exercices",
+       nextDrill: 'Prochain exercice : —',
+-      sessionIntelligencePlaceholder: "L'intelligence de séance apparaîtra ici",
++      sessionIntelligencePlaceholder: 'Les analyses de séance apparaîtront ici',
+     },
+     reschedule: {
+       requestChange: 'Demander un changement',
+@@ -1290,4 +1339,31 @@ export default {
+       step4Done: 'Terminé',
+     },
+   },
++  errorPage: {
++    notFoundTitle: 'Page introuvable',
++    notFoundBody: "La page que vous recherchez n'existe pas ou a été déplacée.",
++    goHome: "Retour à l'accueil",
++  },
++  dashboard: {
++    title: 'Tableau de bord',
++    welcomeBack: 'Bon retour, {name}',
++    defaultUser: 'Utilisateur',
++    loggedIn: 'Vous êtes bien connecté',
++    operational: 'Tous les systèmes sont opérationnels.',
++    metricSessionsToday: "Séances aujourd'hui",
++    metricActiveUsers: 'Utilisateurs actifs',
++    metricUptime: 'Disponibilité',
++    metricResponseTime: 'Temps de réponse',
++    metricNoData: 'Aucune donnée pour le moment',
++    metricLast30Days: '30 derniers jours',
++    metricAverageMs: 'Moyenne en ms',
++  },
++  nav: {
++    sectionMain: 'Général',
++    menu: 'Menu',
++    tagline: "Plateforme d'analyse",
++    dashboard: 'Tableau de bord',
++    admin: 'Administration',
++    healthDashboard: "Tableau de bord de l'état",
++  },
+ }

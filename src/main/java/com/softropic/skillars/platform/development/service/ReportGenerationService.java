@@ -195,7 +195,10 @@ public class ReportGenerationService {
      * from listReports; there is currently no automatic retry (matches this story's scope).
      */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    @Async("taskExecutor")
+    // skillars-deferred-92 code review (D2): its own pool, not the shared @Async one. The upload
+    // below is a full S3 round trip with no outbox row and no retry behind it, and taskExecutor's
+    // 2s shutdown slice is sized for tasks that are never individually long-running.
+    @Async("reportExecutor")
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onReportGenerated(ReportGeneratedEvent event) {
         String storageKey = "reports/" + UUID.randomUUID() + "/report.pdf";

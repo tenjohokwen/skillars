@@ -52,7 +52,10 @@ public class RadarCompositeCalculationService {
     private RadarCompositeCalculationService self;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    @Async("taskExecutor")
+    // skillars-deferred-92 code review (D2): shares reportExecutor with report generation. The
+    // recalculation below takes a pessimistic player-row lock for a read-then-upsert, so it has no
+    // fixed upper bound either and does not belong on the shared 2s-budget pool.
+    @Async("reportExecutor")
     public void onRadarEntrySubmitted(RadarEntrySubmittedEvent event) {
         Long playerId    = event.playerId();
         Long parentId    = event.parentId();

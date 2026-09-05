@@ -50,8 +50,7 @@ public class BandwidthResetService {
     @SchedulerLock(name = "BandwidthResetService_reset",
                    lockAtMostFor = "PT30M", lockAtLeastFor = "PT1M")
     public void resetMonthlyBandwidth() {
-        int chunks = drainReset();
-        log.info("Monthly bandwidth reset complete in {} chunk(s)", chunks);
+        drainReset();
     }
 
     /**
@@ -66,23 +65,34 @@ public class BandwidthResetService {
     public int drainReset() {
         int chunks = 0;
         long total = 0;
+        int lastReset = 0;
         for (int i = 0; i < MAX_CHUNKS; i++) {
-            int reset = chunkProcessor.resetChunk();
-            if (reset == 0) {
+            lastReset = chunkProcessor.resetChunk();
+            if (lastReset == 0) {
                 break;
             }
             chunks++;
-            total += reset;
-            if (i == MAX_CHUNKS - 1) {
-                // Only reachable if the predicate stopped excluding already-reset rows, which would
-                // mean the loop was never going to terminate. Loud, because the alternative is a job
-                // that runs forever holding a scheduler lock.
-                log.error("[BANDWIDTH_RESET_CHUNK_LIMIT] stopped after {} chunks ({} rows) without the "
-                    + "predicate going empty — the reset is incomplete and the self-excluding WHERE "
-                    + "clause in BandwidthResetChunkProcessor needs investigating", MAX_CHUNKS, total);
-            }
+            total += lastReset;
         }
-        log.info("Monthly bandwidth reset applied to {} video quota row(s) across {} chunk(s)", total, chunks);
+
+        // skillars-deferred-92 code review. The budget-exhaustion ERROR and the "reset complete" line
+        // used to be able to fire on the same run: the ERROR sat inside the loop and
+        // resetMonthlyBandwidth logged "Monthly bandwidth reset complete" unconditionally straight
+        // afterwards, so operators saw one run declare itself both incomplete and complete. Exactly
+        // one of the two branches below now runs. The condition is unchanged in meaning — the loop
+        // breaks on the first empty chunk, so `chunks == MAX_CHUNKS && lastReset > 0` describes the
+        // same state the old `i == MAX_CHUNKS - 1` test did.
+        if (chunks == MAX_CHUNKS && lastReset > 0) {
+            // Only reachable if the predicate stopped excluding already-reset rows, which would
+            // mean the loop was never going to terminate. Loud, because the alternative is a job
+            // that runs forever holding a scheduler lock.
+            log.error("[BANDWIDTH_RESET_CHUNK_LIMIT] stopped after {} chunks ({} rows) without the "
+                + "predicate going empty — the reset is incomplete and the self-excluding WHERE "
+                + "clause in BandwidthResetChunkProcessor needs investigating", MAX_CHUNKS, total);
+        } else {
+            log.info("Monthly bandwidth reset complete: {} video quota row(s) across {} chunk(s)",
+                total, chunks);
+        }
         return chunks;
     }
 }

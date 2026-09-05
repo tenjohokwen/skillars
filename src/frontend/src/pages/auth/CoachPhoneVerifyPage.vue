@@ -83,10 +83,16 @@ const isSubmitting = ref(false)
 const isResending = ref(false)
 const resendCooldown = ref(0)
 let cooldownTimer = null
+let isUnmounted = false
 
-// Mirrors ParentPhoneVerifyPage exactly (skillars-deferred-92 AC28.2) — same 60s cooldown,
-// same disabled state, same silent catch. The parent flow is the reference implementation;
-// a second pattern here would be a second thing to keep in step.
+// skillars-deferred-92 review (chunk 4): AC28.4 names three backend responses a resend can
+// get (429 per-IP rate limit, 400 security.otpMismatch per-user limit, 400
+// security.accountLocked) — the per-user limit deliberately returns a vague code rather than
+// a rate-state oracle, so surfacing it is not account enumeration. setError() renders
+// whichever of those `useErrorHandler` resolves; clearError() up front means a successful
+// resend no longer leaves a stale error banner beside the new countdown. The cooldown now
+// arms in `finally` (previously only on success) so a refused resend still throttles the
+// client rather than letting a confused user exhaust the shared per-IP bucket by re-clicking.
 function startCooldown() {
   resendCooldown.value = 60
   cooldownTimer = setInterval(() => {
@@ -99,25 +105,31 @@ function startCooldown() {
 }
 
 onUnmounted(() => {
+  isUnmounted = true
   if (cooldownTimer) clearInterval(cooldownTimer)
 })
 
 async function handleResendOtp() {
-  if (!userId.value) return
+  if (userId.value === null) return
+  clearError()
   isResending.value = true
   try {
     await coachRegistrationApi.resendOtp(userId.value)
-    startCooldown()
-  } catch {
-    // Silent, as in the parent flow: the backend's 409 / 400 responses distinguish
-    // "already sending", "locked" and "bad user", and surfacing that difference to an
-    // unauthenticated caller is account enumeration. The cooldown simply does not start.
+  } catch (err) {
+    setError(err)
   } finally {
     isResending.value = false
+    if (!isUnmounted) startCooldown()
   }
 }
 
-const userId = computed(() => (route.query.userId ? Number(route.query.userId) : null))
+// A malformed userId (non-numeric, duplicated query param, zero/negative) must resolve to the
+// same `null` that onMounted's redirect guard checks for, rather than NaN/0 — otherwise the
+// page renders normally but every control silently no-ops (skillars-deferred-92 review).
+const userId = computed(() => {
+  const parsed = Number(route.query.userId)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+})
 
 onMounted(() => {
   if (userId.value === null) {

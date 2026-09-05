@@ -2,6 +2,9 @@ package com.softropic.skillars.platform.notification.infrastructure.listener;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.platform.booking.contract.BookingReminderEvent;
+import com.softropic.skillars.platform.booking.repo.Booking;
+import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.booking.service.BookingReminderScheduler;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.service.NotificationOutboxSupport;
@@ -16,6 +19,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -59,6 +63,8 @@ class BookingReminderEmailWiringIT extends AbstractIntegrationTest {
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TestMailManager testMailManager;
+    @Autowired private BookingReminderScheduler bookingReminderScheduler;
+    @Autowired private BookingRepository bookingRepository;
 
     private final String parentEmail = "ac29.parent." + UUID.randomUUID() + "@skillars-test.com";
     private final String coachEmail = "ac29.coach." + UUID.randomUUID() + "@skillars-test.com";
@@ -143,5 +149,87 @@ class BookingReminderEmailWiringIT extends AbstractIntegrationTest {
         assertThat(testMailManager.getEnvelopes().values())
             .as("and nothing may have been sent")
             .noneMatch(e -> e.emailTemplate() == EmailTemplate.BOOKING_REMINDER);
+    }
+
+    /**
+     * skillars-deferred-92 code review. The two tests above publish {@code BookingReminderEvent}
+     * themselves, which proves the listener is wired but says nothing about the only thing that
+     * publishes it in production. This drives {@code BookingReminderScheduler.processReminderWindows}
+     * against a real seeded booking, so the assertion covers the chain the feature actually uses:
+     * query, per-booking transaction, {@code transition}, stamp, publish, BEFORE_COMMIT enqueue,
+     * drain, send.
+     *
+     * <p>It also pins the per-booking transaction boundary the review asked for. The stamp and the
+     * status transition are visible here only because this booking's own transaction committed;
+     * under the batch-wide {@code @Transactional} this method used to carry, they committed with
+     * every other booking's or with none.
+     */
+    @Test
+    @DisplayName("the scheduler transitions a real booking, stamps it, and delivers its reminder")
+    void processReminderWindows_drivesTheWholeChainForARealBooking() {
+        testMailManager.clear();
+        long parentId = 92_000_000L + Math.abs(UUID.randomUUID().getLeastSignificantBits() % 1_000_000L);
+        insertParent(parentId, parentEmail);
+
+        UUID bookingId = insertConfirmedBooking(parentId, Instant.now().plusSeconds(3600));
+        releaseSchedulerLock("BookingReminderScheduler_remind");
+
+        bookingReminderScheduler.processReminderWindows();
+
+        Booking booking = bookingRepository.findById(bookingId).orElseThrow();
+        assertThat(booking.getStatus())
+            .as("the primary pass transitions CONFIRMED bookings inside the reminder window")
+            .isEqualTo("UPCOMING");
+        assertThat(booking.getPrimaryReminderSentAt())
+            .as("the stamp must have COMMITTED with this booking's own transaction; null means "
+                + "either the transition threw or that transaction rolled back, which the "
+                + "batch-wide @Transactional used to make indistinguishable from a batch failure")
+            .isNotNull();
+
+        List<Envelope> reminders = testMailManager.getEnvelopes().values().stream()
+            .filter(e -> e.emailTemplate() == EmailTemplate.BOOKING_REMINDER)
+            .filter(e -> e.recipients().stream().anyMatch(r -> parentEmail.equals(r.getEmail())))
+            .toList();
+        assertThat(reminders)
+            .as("the scheduler is the only production publisher of BookingReminderEvent; empty here "
+                + "while the two tests above pass means the listener is wired but nothing reaches "
+                + "it, which is a subtler shape of the AC29 bug rather than a different one")
+            .hasSize(1);
+        assertThat(reminders.get(0).data()).containsEntry("reminderType", "PRIMARY");
+    }
+
+    /**
+     * bookings.parent_id/player_id/coach_id carry no FK constraints, so this needs no coach or
+     * player fixture. A fresh random coach id keeps the row clear of V87's
+     * {@code excl_bkg_coach_slot_overlap} exclusion constraint.
+     */
+    private UUID insertConfirmedBooking(long parentId, Instant startTime) {
+        Booking booking = new Booking();
+        booking.setParentId(parentId);
+        booking.setPlayerId(parentId);
+        booking.setCoachId(UUID.randomUUID());
+        booking.setRequestedStartTime(startTime);
+        booking.setRequestedEndTime(startTime.plusSeconds(3600));
+        booking.setCanonicalTimezone("Europe/Berlin");
+        booking.setStatus("CONFIRMED");
+        return transactionTemplate.execute(s -> bookingRepository.save(booking)).getId();
+    }
+
+    /**
+     * The reminder's parent recipient. Without a real row {@code resolveEmail} yields "" and the
+     * listener filters that recipient out, so the test would pass for the wrong reason.
+     */
+    private void insertParent(long id, String email) {
+        transactionTemplate.executeWithoutResult(s -> jdbcTemplate.update(
+            "INSERT INTO main.\"user\" "
+                + "(id, created_by, created_date, last_modified_by, last_modified_date, request_id, "
+                + "session_id, status, dob, email, first_name, gender, lang_key, last_name, "
+                + "iso2_country, phone, activated, locked, login, login_id_type, password_hash, "
+                + "otp_enabled, skillars_role, verification_status) "
+                + "VALUES (?, 'system', ?, 'system', ?, 'test-req', NULL, "
+                + "'ACTIVE', '1990-01-01', ?, 'Test', 'OTHER', 'en', 'Parent', 'DE', ?, "
+                + "true, false, ?, 'EMAIL', 'x', false, 'PARENT', 'BASIC_VERIFIED')",
+            id, Timestamp.from(Instant.now()), Timestamp.from(Instant.now()),
+            email, "69" + (id % 100000000L), email));
     }
 }

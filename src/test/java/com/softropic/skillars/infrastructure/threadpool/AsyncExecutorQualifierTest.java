@@ -39,12 +39,17 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code @Async} in the application, possibly onto {@code SimpleAsyncTaskExecutor}, at which point
  * the ledger's original claim would finally become true. Nothing anywhere would have said so.
  *
- * <p>All 11 bare sites now carry {@code @Async("taskExecutor")} (the story said 10; its own
- * enumeration totals 11 — {@code VideoSseService} ×2, {@code TimelineEventListener} ×2,
+ * <p>All 11 bare sites now name their pool (the story said 10; its own enumeration totals 11 —
+ * {@code VideoSseService} ×2, {@code TimelineEventListener} ×2,
  * {@code VideoPhysicalDeletionListener} ×2, plus {@code SluCalculationService},
  * {@code RadarCompositeCalculationService}, {@code ReportGenerationService},
  * {@code HomeworkAssignmentService} and {@code SessionPlanService}). All of them, not a subset:
  * a partial fix would leave the fallback load-bearing while looking as though it were not.
+ *
+ * <p>Nine of those name {@code taskExecutor}; {@code ReportGenerationService} and
+ * {@code RadarCompositeCalculationService} name {@code reportExecutor} instead — this story's code
+ * review (D2) found the shared pool's 2-second shutdown slice incompatible with an S3 upload that
+ * has no retry behind it. See {@code ExecutorShutdown.REPORT_SECONDS}.
  *
  * <p>This test then pins two things: no bare {@code @Async} comes back, and no {@code @Async} names
  * a pool that does not exist. The second matters because a typo'd qualifier is worse than no
@@ -60,8 +65,13 @@ class AsyncExecutorQualifierTest {
      * added here, a qualifier pointing at it fails this test and the two lists are forced back
      * together.
      */
-    private static final Set<String> KNOWN_POOLS =
-        Set.of("taskExecutor", "outboxDrainPool", "sluRetryExecutor", "moderationTaskExecutor", "sendMailPool");
+    private static final Set<String> KNOWN_POOLS = Set.of(
+        "taskExecutor", "outboxDrainPool", "sluRetryExecutor", "moderationTaskExecutor", "sendMailPool",
+        // skillars-deferred-92 code review D2. This test is what forced the addition: re-pointing the
+        // two development-module listeners at a new pool failed everyQualifierNamesAKnownPool until
+        // the pool was declared here as well, which is exactly the coupling the field's javadoc asks
+        // for.
+        "reportExecutor");
 
     private record AsyncSite(String type, String method, String qualifier) {
         @Override

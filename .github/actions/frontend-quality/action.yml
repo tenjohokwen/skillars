@@ -1,0 +1,52 @@
+name: 'Frontend Quality'
+description: 'Prettier + ESLint gate for src/frontend, shared by ci.yml (push-to-master) and pr-build.yml (pull_request) so the two copies cannot drift out of step with each other'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38  # v6.5.0
+      with:
+        # Pinned to <node.version> in pom.xml, so CI formats/lints with the same toolchain the
+        # frontend-maven-plugin build uses.
+        node-version: '22.16.0'
+        cache: npm
+        cache-dependency-path: src/frontend/package-lock.json
+
+    - name: Install frontend dependencies
+      working-directory: src/frontend
+      shell: bash
+      run: npm ci
+
+    # skillars-deferred-92 code review, chunk 5 (2026-09-04): the previous glob, run from
+    # src/frontend as "src/**/*.{js,vue,scss,json}", resolved to src/frontend/src only and matched
+    # zero .json files -- project-context.md declares Prettier mandatory for .js/.vue/.scss/.json,
+    # and the gate that exists to enforce that checked no .json file at all. Widened to the whole
+    # package (root config files included: package.json, eslint.config.js, quasar.config.js,
+    # postcss.config.js, jsconfig.json) with --ignore-path pointed at the real repo-root .gitignore
+    # -- src/frontend has no .gitignore of its own, so the bare "--ignore-path .gitignore" this
+    # mirrors from package.json's own "format" script silently ignored nothing and would otherwise
+    # walk into node_modules/dist/.quasar. Deliberately NOT widened to .html/.md: project-context.md
+    # does not mandate Prettier for those, so checking them would fail the build on files nobody
+    # promised to keep formatted.
+    - name: Prettier check
+      id: prettier
+      working-directory: src/frontend
+      shell: bash
+      run: npx prettier --check "**/*.{js,vue,scss,json}" --ignore-path ../../.gitignore
+
+    # Both checks run even if the first fails, so one push surfaces both classes of problem
+    # rather than one per round-trip. The `steps.prettier.conclusion != 'skipped'` guard keeps
+    # ESLint from running when `npm ci` itself failed (Prettier is then skipped by its own
+    # implicit `success()` condition, and an ESLint run with no node_modules only adds a second,
+    # misleading failure).
+    - name: ESLint
+      if: ${{ !cancelled() && steps.prettier.conclusion != 'skipped' }}
+      working-directory: src/frontend
+      shell: bash
+      # skillars-deferred-92 code review, chunk 5 (2026-09-04): eslint.config.js gates
+      # `no-debugger` on `process.env.NODE_ENV === 'production'`, and neither caller of this
+      # action used to set NODE_ENV, so a committed `debugger` statement passed CI silently.
+      env:
+        NODE_ENV: production
+      run: npx eslint .

@@ -89,7 +89,7 @@
         </q-list>
 
         <div v-else class="text-body2 text-secondary q-py-md text-center">
-          {{ t('booking.availability.noSlotsAvailable', 'No available slots this week') }}
+          {{ t('booking.availability.noSlotsAvailable') }}
         </div>
       </q-card-section>
     </q-card>

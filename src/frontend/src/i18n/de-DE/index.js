@@ -34,7 +34,7 @@ export default {
     parentConsentBody:
       'Als Erziehungsberechtigte(r) der von Ihnen registrierten Spieler stimmen Sie zu, dass Skillars Daten über Ihr Kind zu Coaching-Zwecken erhebt und verarbeitet. Sie bestätigen, dass Sie der gesetzliche Elternteil oder Vormund sind. Sie sind dafür verantwortlich, dass die Teilnahme Ihres Kindes angemessen ist. Sie können Ihre Einwilligung jederzeit widerrufen, indem Sie den Support kontaktieren.',
     activateRedirecting: 'Weiterleitung in {seconds}…',
-    otpCodeExpiry: 'der Code läuft in 30 Minuten ab.',
+    otpCodeExpiry: 'der Code läuft in 10 Minuten ab.',
     parentTosBody:
       'Mit der Nutzung von Skillars stimmen Sie unseren Allgemeinen Geschäftsbedingungen zu. Diese regeln Ihre Nutzung der Plattform, einschließlich der Buchung von Trainingseinheiten, Zahlungen und des Umgangs mit Daten. Für die Registrierung als Elternteil müssen Sie mindestens 18 Jahre alt sein. Für alle Konten gilt unsere Richtlinie zur zulässigen Nutzung.',
     activationTitle: 'Kontoaktivierung',
@@ -94,6 +94,10 @@ export default {
       step2Short: 'Spezialisierungen',
       step2Specialties: 'Spezialisierungen',
       step2AgeGroups: 'Altersgruppen',
+      ageGroupU10: 'U10',
+      ageGroup10to12: '10–12',
+      ageGroup13to17: '13–17',
+      ageGroupAdult: '18+',
       step3Title: 'Preise',
       step3Short: 'Preise',
       step3PerSessionPrice: 'Preis pro Einheit (EUR)',
@@ -132,6 +136,13 @@ export default {
       step4Start: 'Start',
       step4End: 'Ende',
       step4RemoveWindow: 'Fenster entfernen',
+      weekdayMonday: 'Montag',
+      weekdayTuesday: 'Dienstag',
+      weekdayWednesday: 'Mittwoch',
+      weekdayThursday: 'Donnerstag',
+      weekdayFriday: 'Freitag',
+      weekdaySaturday: 'Samstag',
+      weekdaySunday: 'Sonntag',
       step5Title: 'Profilfoto',
       step5Short: 'Foto',
       step5PhotoLabel: 'Profilfoto',
@@ -366,6 +377,7 @@ export default {
       blockAdded: 'Zeitblock erfolgreich gespeichert.',
       windowAdded: 'Verfügbarkeitsfenster erfolgreich gespeichert.',
       blocked: 'Blockiert',
+      noSlotsAvailable: 'Diese Woche keine Termine verfügbar',
     },
     schedule: {
       weekOf: 'Woche vom {date}',
@@ -695,7 +707,10 @@ export default {
       metaGroupSize: 'Gruppengröße',
       metaEquipment: 'Ausrüstung',
       filterDifficulty: 'Schwierigkeitsstufe',
+      filterSkill: 'Fähigkeit',
+      filterEquipment: 'Ausrüstung',
       filterWeakFootOnly: 'Nur mit Schwachfuß-Fokus',
+      apply: 'Anwenden',
       cloneFailed: 'Übung konnte nicht kopiert werden',
       title: 'Übungsbibliothek',
       loadError: 'Übungen konnten nicht geladen werden. Bitte versuchen Sie es erneut.',
@@ -961,7 +976,7 @@ export default {
       notesLabel: 'Notizen (optional)',
       assessmentTypeLabel: 'Bewertungstyp',
       scoreTierReference:
-        'Punktereferenz: Elite 90–100 | Ausgezeichnet 80–89 | Gut 70–79 | Überdurchschnittlich 60–69 | Durchschnittlich 50–59 | Unterdurchschnittlich 40–49 | Sehr schwach <40',
+        'Punktereferenz: Elite 90–100 • Ausgezeichnet 80–89 • Gut 70–79 • Überdurchschnittlich 60–69 • Durchschnittlich 50–59 • Unterdurchschnittlich 40–49 • Sehr schwach <40',
       submitLabel: 'Bewertung einreichen',
       historyTitle: 'Mein Bewertungsverlauf',
       noEntriesYet: 'Noch keine Bewertungen erfasst',
@@ -993,7 +1008,7 @@ export default {
         noInsightsYet:
           'Noch keine Korrelationserkenntnisse — protokollieren Sie mehr Einheiten mit verschiedenen Fähigkeiten.',
         excludedSkills:
-          '{count} Fähigkeit | {count} Fähigkeiten nicht angezeigt — noch keine Trainingsdaten erfasst.',
+          '{count} Fähigkeit nicht angezeigt — noch keine Trainingsdaten erfasst. | {count} Fähigkeiten nicht angezeigt — noch keine Trainingsdaten erfasst.',
         insight: {
           highSluImprovement: 'Hohes Trainingsvolumen → Punktzahl verbessert sich',
           highSluNoImprovement:
@@ -1287,6 +1302,9 @@ export default {
     toggle2fa: 'Zwei-Faktor-Authentifizierung',
     addressName: 'Adressbezeichnung',
     addressNameHint: 'z.B. ZUHAUSE, ARBEIT',
+    addressTypeHome: 'Zuhause',
+    addressTypeWork: 'Arbeit',
+    addressTypeOther: 'Sonstiges',
     companyName: 'Firmenname',
     addressLine1: 'Adresszeile 1',
     addressLine2: 'Adresszeile 2',
@@ -1373,4 +1391,3 @@ export default {
     healthDashboard: 'Systemstatus',
   },
 }
-// TODO: translate

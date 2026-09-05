@@ -1,6 +1,7 @@
 package com.softropic.skillars.i18n;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
+import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -29,10 +30,18 @@ import static org.assertj.core.api.Assertions.catchThrowableOfType;
  * <h2>The bug this pins</h2>
  *
  * {@code messages.properties} — the bundle {@code ReloadableResourceBundleMessageSource} falls back
- * to — held 86 of {@code messages_en}'s 130 keys. {@code CookieLocaleResolver} falls through to
- * {@code Accept-Language} when no locale cookie is set, so a Spanish or Italian client resolving
- * {@code security.accountLocked} hit a {@code NoSuchMessageException}: HTTP 500 on the
- * account-lockout response, and a template failure on every {@code email.*} key.
+ * to — held 84 of {@code messages_en}'s 130 keys (84 − 2 foreign {@code platform_config_changed}
+ * keys + 46 added = 130; two javadocs previously said 86, off by the two foreign keys they double
+ * counted — skillars-deferred-92 code review, chunk 3). {@code CookieLocaleResolver} falls through
+ * to {@code Accept-Language} when no locale cookie is set, so a Spanish or Italian client resolving
+ * any of the 46 missing keys hit a {@code NoSuchMessageException} <em>where something still calls
+ * the throwing three-arg {@code getMessage}</em> — in this codebase that is
+ * {@link com.softropic.skillars.platform.notification.service.MailService#sendEmailFromTemplate},
+ * not any HTTP error path (every {@code ApiAdvice} handler uses the four-arg, non-throwing
+ * {@code getMessage(key, args, defaultMessage, locale)} — see the honesty note on
+ * {@link #spanishAcceptLanguage_protectedEndpoint_returnsCleanUnauthorized()} below). So the actual
+ * production incident this bundle held open was a template failure on every transactional email for
+ * a non-{@code de}/{@code fr}/{@code en} recipient, not a 500 on account lockout.
  *
  * <p>The assertions below are deliberately split. Resolving through the real {@code MessageSource}
  * bean is what actually proves the hole is closed — a missing key throws, so "does not throw" is the
@@ -47,18 +56,60 @@ class DefaultMessageBundleFallbackIT extends AbstractIntegrationTest {
     private static final List<Locale> UNSUPPORTED = List.of(
         Locale.forLanguageTag("es-ES"), Locale.forLanguageTag("it-IT"), Locale.forLanguageTag("pt-BR"));
 
-    /** A representative slice of the 46 keys that were missing, one from each affected family. */
+    /**
+     * skillars-deferred-92 code review, chunk 3: the javadoc above claims "it can be asserted for
+     * every one of the 46 keys", but this list previously hand-picked only 10 — the two-argument
+     * key ({@code email.profile_change.email}) and all four {@code email.booking.*.title} keys were
+     * untested. This is the full 46, reproduced from {@code git diff be9a761^..be9a761 --
+     * src/main/resources/i18n/messages.properties}, so the javadoc's claim is now actually true.
+     */
     private static final List<String> PREVIOUSLY_MISSING = List.of(
+        "email.booking.confirmed.title",
+        "email.booking.declined.title",
+        "email.booking.expired.title",
+        "email.booking.reminder.title",
+        "email.booking.requested.title",
+        "email.coach.otp.expiry",
+        "email.coach.otp.ignore",
+        "email.coach.otp.intro",
+        "email.coach.otp.title",
+        "email.coach.verify.expiry",
+        "email.coach.verify.ignore",
+        "email.coach.verify.linkText",
+        "email.coach.verify.text1",
+        "email.coach.verify.title",
+        "email.parent.otp.expiry",
+        "email.parent.otp.ignore",
+        "email.parent.otp.intro",
+        "email.parent.otp.title",
+        "email.parent.verify.expiry",
+        "email.parent.verify.ignore",
+        "email.parent.verify.linkText",
+        "email.parent.verify.text1",
+        "email.parent.verify.title",
+        "email.player.otp.expiry",
+        "email.player.otp.ignore",
+        "email.player.otp.intro",
+        "email.player.otp.title",
+        "email.player.verify.expiry",
+        "email.player.verify.ignore",
+        "email.player.verify.linkText",
+        "email.player.verify.text1",
+        "email.player.verify.title",
+        "email.profile_change.2fa_disabled",
+        "email.profile_change.2fa_enabled",
+        "email.profile_change.address",
+        "email.profile_change.email",
+        "email.profile_change.generic",
+        "email.profile_change.not_you",
+        "email.profile_change.password",
+        "email.profile_change.phone",
+        "email.profile_change.title",
         "security.accountLocked",
-        "security.otpResendInProgress",
         "security.emailTokenExpired",
         "security.emailTokenInvalid",
         "security.emailTokenUsed",
-        "email.coach.otp.title",
-        "email.parent.verify.text1",
-        "email.player.otp.intro",
-        "email.booking.reminder.title",
-        "email.profile_change.password");
+        "security.otpResendInProgress");
 
     @Autowired private MessageSource messageSource;
     @Autowired private LocaleResolver localeResolver;
@@ -113,10 +164,43 @@ class DefaultMessageBundleFallbackIT extends AbstractIntegrationTest {
     }
 
     /**
+     * skillars-deferred-92 code review, chunk 3: the German-only version of this guard would stay
+     * green even if someone pinned {@code cookieLocaleResolver.setDefaultLocale(Locale.GERMANY)} —
+     * German would keep "resolving to German" for the wrong reason while every French and English
+     * browser silently received German. Asserting a second, differently-preferred locale is what
+     * actually pins that {@code determineDefaultLocale} is still consulting the request rather than
+     * a fixed default.
+     */
+    @Test
+    @DisplayName("a French client with no locale cookie still negotiates French, not the German default")
+    void frenchAcceptLanguage_withNoCookie_stillResolvesFrench() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addPreferredLocale(Locale.FRANCE);     // Accept-Language: fr-FR
+        request.setCookies();                          // explicitly no locale cookie
+
+        Locale resolved = localeResolver.resolveLocale(request);
+
+        assertThat(resolved.getLanguage())
+            .as("a French Accept-Language header must resolve to French, not silently to German")
+            .isEqualTo("fr");
+    }
+
+    /**
      * End to end: a real request from a Spanish client must come back as a clean localized error, not
-     * a 500. Any authenticated endpoint will do — the point is that the whole
-     * {@code Accept-Language} → {@code LocaleContextHolder} → {@code ApiAdvice} → {@code messageSource}
-     * chain carries an unsupported locale without falling over.
+     * a 500 — and that much is true, verified below. <strong>What it does not prove, corrected here
+     * per Dev Notes item 2 rather than silently re-asserted (skillars-deferred-92 code review, chunk
+     * 3):</strong> {@code /api/account/me} resolves {@code security.unauthorized}, a key that
+     * predates AC12 and was never one of the 46 missing ones, and every {@code ApiAdvice} handler —
+     * this one included — resolves through the four-argument, non-throwing
+     * {@code getMessage(key, args, defaultMessage, locale)}. Reverting all 46 AC12 keys would not
+     * fail this test: the HTTP error path was never the code path that could throw. The genuine
+     * throwing call site is {@link com.softropic.skillars.platform.notification.service.MailService
+     * #sendEmailFromTemplate}'s three-argument {@code getMessage}, which
+     * {@link #unsupportedLocale_resolvesFromTheDefaultBundle()} above exercises directly against the
+     * real {@code MessageSource} bean. This test earns its place for a narrower, still-real reason:
+     * it is the only coverage that the {@code Accept-Language} → {@code LocaleContextHolder} →
+     * {@code ApiAdvice} wiring itself carries an unsupported locale through cleanly, independent of
+     * bundle completeness.
      */
     @Test
     @DisplayName("an es-ES request to a protected endpoint gets a localized 401, never a 500")
@@ -144,5 +228,34 @@ class DefaultMessageBundleFallbackIT extends AbstractIntegrationTest {
             .as("and the body must be a resolved, localized error rather than an empty or raw one")
             .contains("errorKey")
             .contains("message");
+    }
+
+    /**
+     * skillars-deferred-92 code review, chunk 3 — the finding that motivated this class's honesty
+     * corrections above. {@code MailService#sendEmailFromTemplate} resolves its subject with the
+     * <strong>throwing</strong> three-argument {@code getMessage(subjectKey, null, locale)}, the one
+     * call site in this codebase that can actually raise {@code NoSuchMessageException} in
+     * production. 17 of {@link EmailTemplate}'s 39 {@code subjectKey()} values existed in no bundle
+     * at all before this pass — 9 of them behind a live Thymeleaf template, so those sends were
+     * silently failing (caught by {@code MailManager}, marked the outbox envelope {@code FAILED}) in
+     * every locale, not only an unsupported one. This is the direct regression guard the missing-key
+     * bug actually needed.
+     */
+    @Test
+    @DisplayName("every EmailTemplate subject key resolves, in every supported locale")
+    void everyEmailTemplateSubjectKey_resolvesInEverySupportedLocale() {
+        final List<Locale> supported = List.of(Locale.ENGLISH, Locale.GERMAN, Locale.FRENCH);
+        for (EmailTemplate template : EmailTemplate.values()) {
+            if (EmailTemplate.NONE.equals(template)) {
+                continue; // carries no subject key — MailService special-cases it before any lookup.
+            }
+            for (Locale locale : supported) {
+                assertThatCode(() -> messageSource.getMessage(template.subjectKey(), null, locale))
+                    .as("EmailTemplate.%s's subjectKey '%s' must resolve for %s — MailService uses the "
+                        + "throwing getMessage(key, null, locale) to build every email subject",
+                        template.name(), template.subjectKey(), locale)
+                    .doesNotThrowAnyException();
+            }
+        }
     }
 }

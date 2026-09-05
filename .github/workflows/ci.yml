@@ -68,6 +68,9 @@ jobs:
   # (`npm test` is a stub), so this is the only place either check happens.
   # Kept as its own job, not a step in `test`: it needs no JDK, no containers and no Maven cache, and
   # a formatting failure should be visible in ~1 minute rather than behind a 15-minute test suite.
+  # Steps live in .github/actions/frontend-quality, shared with pr-build.yml's copy of this job --
+  # skillars-deferred-92 code review, chunk 5 (2026-09-04) found the two hand-duplicated inline
+  # copies already drifting from each other despite a comment asking humans to keep them in sync.
   frontend-quality:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -78,35 +81,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38  # v6.5.0
-        with:
-          # Pinned to <node.version> in pom.xml, so CI formats/lints with the same toolchain the
-          # frontend-maven-plugin build uses. Keep the two in step.
-          node-version: '22.16.0'
-          cache: npm
-          cache-dependency-path: src/frontend/package-lock.json
-
-      - name: Install frontend dependencies
-        working-directory: src/frontend
-        run: npm ci
-
-      # Both checks run even if the first fails, so one push surfaces both classes of problem
-      # rather than one per round-trip. The `conclusion != 'skipped'` guard keeps ESLint from
-      # running when `npm ci` itself failed (the Prettier step is skipped in that case, and an
-      # ESLint run with no node_modules only adds a second, misleading failure).
-      - name: Prettier check
-        id: prettier
-        working-directory: src/frontend
-        run: npx prettier --check "src/**/*.{js,vue,scss,json}"
-
-      - name: ESLint
-        if: ${{ !cancelled() && steps.prettier.conclusion != 'skipped' }}
-        working-directory: src/frontend
-        run: npx eslint .
+      - uses: ./.github/actions/frontend-quality
 
   build-and-push:
-    needs: test
+    # skillars-deferred-92 code review, chunk 5 (2026-09-04): this job used to depend on `test`
+    # only, so a red `frontend-quality` gate still let an image build and publish from the commit
+    # the gate had just rejected -- only pr-build.yml actually stopped anything. Both jobs gate the
+    # push now.
+    needs: [test, frontend-quality]
     runs-on: ubuntu-latest
     concurrency:
       group: build-and-push-${{ github.ref }}

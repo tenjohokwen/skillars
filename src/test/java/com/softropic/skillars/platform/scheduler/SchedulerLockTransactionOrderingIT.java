@@ -23,14 +23,19 @@ import static org.assertj.core.api.Assertions.assertThat;
  * skillars-deferred-89 AC4 — a regression guard on an advisor order that is ALREADY pinned in
  * production; no production code changes with this story.
  *
- * <p>{@code BookingExpiryScheduler.expireStaleRequests}, {@code BookingReminderScheduler
- * .processReminderWindows} and {@code BandwidthResetService.resetMonthlyBandwidth} each stack
- * {@code @SchedulerLock} and {@code @Transactional} on one method. {@code AsyncConfig}'s
+ * <p>{@code BookingExpiryScheduler.expireStaleRequests} stacks {@code @SchedulerLock} and
+ * {@code @Transactional} on one method. {@code AsyncConfig}'s
  * {@code @EnableSchedulerLock(order = Ordered.LOWEST_PRECEDENCE - 100)} forces the ShedLock advisor
  * to higher precedence than the (bare, {@code LOWEST_PRECEDENCE}) transaction advisor from
  * {@code DataSourceConfig}'s {@code @EnableTransactionManagement} — so ShedLock sits <em>outermost</em>
  * and {@code proceed()} runs the DB transaction to commit/rollback <em>before</em> the lock is
  * released. Shipped {@code 7e697d4} (2026-07-02).
+ *
+ * <p>Its two former siblings — {@code BookingReminderScheduler.processReminderWindows} and
+ * {@code BandwidthResetService.resetMonthlyBandwidth} — have since moved to per-item
+ * {@code TransactionTemplate} scopes and must NOT carry a method-level {@code @Transactional} any
+ * more. For those, the property worth pinning is the <em>absence</em> of the annotation; see the two
+ * tests below.
  *
  * <p>Three assertions per scheduler bean, so the guard cannot stay green through the regression it
  * exists to catch (code review P7):
@@ -61,9 +66,30 @@ class SchedulerLockTransactionOrderingIT extends AbstractIntegrationTest {
         assertShedLockOutermost(bookingExpiryScheduler, "expireStaleRequests");
     }
 
+    /**
+     * skillars-deferred-92's code review changed this bean's shape, so the assertion changed with it.
+     *
+     * <p>{@code processReminderWindows} no longer stacks {@code @Transactional} — it must not.
+     * {@code BookingEmailListener.onBookingReminder} is
+     * {@code @TransactionalEventListener(BEFORE_COMMIT)}, so under one batch-wide transaction every
+     * booking's outbox enqueue ran at the batch's commit, outside every per-iteration
+     * {@code catch}: one failing enqueue rolled back the whole batch — all the transitions, all the
+     * {@code *ReminderSentAt} stamps, every other booking's reminder — and because the next run
+     * re-selects the same bookings, a deterministic failure meant no reminder was ever sent again.
+     * Each booking now commits in its own {@code TransactionTemplate} scope.
+     *
+     * <p>Pinned as an absence for the same reason as {@code BandwidthResetService} below: re-adding
+     * {@code @Transactional} looks like tidying up next to its annotated sibling, and nothing else
+     * would notice.
+     */
     @Test
-    void bookingReminderScheduler_shedLockAdvisorIsOutsideTheTransactionAdvisor() {
-        assertShedLockOutermost(bookingReminderScheduler, "processReminderWindows");
+    void bookingReminderScheduler_isNotTransactional_soOneBadEnqueueCannotRollBackTheBatch() {
+        assertNotTransactional(bookingReminderScheduler, "processReminderWindows", """
+            BookingReminderScheduler.processReminderWindows must NOT be @Transactional \
+            (skillars-deferred-92 code review). Its BEFORE_COMMIT enqueue listener runs at the \
+            enclosing transaction's commit, so a batch-wide transaction turns one failed enqueue \
+            into a full-batch rollback and, if the failure is deterministic, a permanent stall. The \
+            transaction boundary belongs to the per-booking TransactionTemplate scope.""");
     }
 
     /**
@@ -75,36 +101,44 @@ class SchedulerLockTransactionOrderingIT extends AbstractIntegrationTest {
      * {@code UPDATE} it replaced, held for longer, which is strictly worse than doing nothing. The
      * per-chunk boundary lives in {@code BandwidthResetChunkProcessor}.
      *
-     * <p>So the advisor-ordering question no longer applies here (the other two beans still pin it).
-     * What is worth pinning instead is the <em>absence</em> of {@code @Transactional}, because it is
-     * exactly the kind of thing a later reader re-adds while tidying up — it looks like an oversight
-     * next to its two annotated siblings, and nothing else would notice.
+     * <p>So the advisor-ordering question no longer applies here ({@code BookingExpiryScheduler}
+     * still pins it). What is worth pinning instead is the <em>absence</em> of
+     * {@code @Transactional}, because it is exactly the kind of thing a later reader re-adds while
+     * tidying up — it looks like an oversight next to its annotated sibling, and nothing else would
+     * notice.
      */
     @Test
     void bandwidthResetService_isNotTransactional_soChunksCommitIndependently() {
-        Class<?> target = AopUtils.getTargetClass(bandwidthResetService);
+        assertNotTransactional(bandwidthResetService, "resetMonthlyBandwidth", """
+            BandwidthResetService.resetMonthlyBandwidth must NOT be @Transactional \
+            (skillars-deferred-92 AC9.2). It drives a chunked loop; one enclosing transaction \
+            would hold every row lock until the end and block QuotaService.reserve() for the whole \
+            run — worse than the single UPDATE the chunking replaced. The transaction boundary \
+            belongs to BandwidthResetChunkProcessor.resetChunk(), one per chunk.""");
+    }
+
+    /**
+     * Asserts a scheduled method carries no {@code @Transactional} (method- or type-level) while
+     * keeping its {@code @SchedulerLock} — dropping the lock alongside the transaction would let a
+     * second node run the job concurrently, which none of these beans tolerate.
+     */
+    private static void assertNotTransactional(Object bean, String scheduledMethodName, String why) {
+        Class<?> target = AopUtils.getTargetClass(bean);
         Method scheduled = Arrays.stream(target.getMethods())
-            .filter(m -> m.getName().equals("resetMonthlyBandwidth"))
+            .filter(m -> m.getName().equals(scheduledMethodName))
             .findFirst()
-            .orElseThrow();
+            .orElseThrow(() -> new AssertionError(
+                "no method %s on %s".formatted(scheduledMethodName, target)));
 
         assertThat(scheduled.getAnnotation(org.springframework.transaction.annotation.Transactional.class))
-            .as("""
-                BandwidthResetService.resetMonthlyBandwidth must NOT be @Transactional \
-                (skillars-deferred-92 AC9.2). It drives a chunked loop; one enclosing transaction \
-                would hold every row lock until the end and block QuotaService.reserve() for the whole \
-                run — worse than the single UPDATE the chunking replaced. The transaction boundary \
-                belongs to BandwidthResetChunkProcessor.resetChunk(), one per chunk.""")
+            .as(why)
             .isNull();
         assertThat(target.getAnnotation(org.springframework.transaction.annotation.Transactional.class))
-            .as("nor may the class carry a type-level @Transactional")
+            .as("nor may %s carry a type-level @Transactional", target.getSimpleName())
             .isNull();
-
-        assertThat(Arrays.stream(target.getMethods())
-                .anyMatch(m -> m.getName().equals("resetMonthlyBandwidth")
-                            && m.getAnnotation(net.javacrumbs.shedlock.spring.annotation.SchedulerLock.class) != null))
-            .as("@SchedulerLock must stay — a second node running a concurrent reset is still wrong")
-            .isTrue();
+        assertThat(scheduled.getAnnotation(net.javacrumbs.shedlock.spring.annotation.SchedulerLock.class))
+            .as("@SchedulerLock must stay — a second node running this job concurrently is still wrong")
+            .isNotNull();
     }
 
     private static void assertShedLockOutermost(Object bean, String scheduledMethodName) {
