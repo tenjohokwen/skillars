@@ -75,6 +75,7 @@ public class PlayerRegistrationService {
     private final RateLimitingService rateLimitingService;
     private final RegistrationOtpResendSupport otpResendSupport;
     private final AgePolicyService agePolicyService;
+    private final RegistrationVerificationTokenService verificationTokenService;
 
     @Value("${app.frontend-url}")
     private String frontendUrl;
@@ -176,7 +177,8 @@ public class PlayerRegistrationService {
 
         sendOtpEmail(user, otp);
 
-        return new VerifyEmailResponse("verify-phone", user.getId());
+        return new VerifyEmailResponse(
+            "verify-phone", verificationTokenService.issuePhoneVerificationToken(user.getId()));
     }
 
     public void verifyPhone(Long userId, String otp) {

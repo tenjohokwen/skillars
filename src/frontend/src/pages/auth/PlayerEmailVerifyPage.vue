@@ -72,9 +72,9 @@ onMounted(async () => {
   }
   try {
     const response = await playerRegistrationApi.verifyEmail(token)
-    const { userId } = response
+    const { verificationToken } = response
     isVerifying.value = false
-    router.push({ path: '/player/verify-phone', query: { userId } })
+    router.push({ path: '/player/verify-phone', query: { token: verificationToken } })
   } catch (err) {
     isVerifying.value = false
     canResend.value = err.response?.data?.canResend === true

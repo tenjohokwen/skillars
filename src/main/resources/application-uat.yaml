@@ -61,3 +61,4 @@ app:
 skillars:
   platform:
     pin-encryption-secret: "${PLATFORM_PIN_ENCRYPTION_SECRET:}"
+    registration-verification-secret: "${PLATFORM_REGISTRATION_VERIFICATION_SECRET:}"

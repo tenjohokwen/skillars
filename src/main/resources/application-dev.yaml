@@ -68,3 +68,4 @@ infrastructure:
 skillars:
   platform:
     pin-encryption-secret: "${PLATFORM_PIN_ENCRYPTION_SECRET:S3CR3TW0RD}"
+    registration-verification-secret: "${PLATFORM_REGISTRATION_VERIFICATION_SECRET:dev-registration-verification-secret-32b!}"

@@ -417,4 +417,8 @@ skillars:
     # Declared here, not only on dev/uat, so the prod profile can supply it. Encrypts
     # parent-approval PINs — rotating it invalidates every PIN already stored.
     pin-encryption-secret: ${PLATFORM_PIN_ENCRYPTION_SECRET:}
+    # HMAC key for the phone-verification handle (skillars-deferred-93 AC8). Blank here so prod
+    # must supply it; RegistrationVerificationTokenService aborts startup if unset. Rotating it
+    # only breaks registration handles issued in the last 24h.
+    registration-verification-secret: ${PLATFORM_REGISTRATION_VERIFICATION_SECRET:}
 

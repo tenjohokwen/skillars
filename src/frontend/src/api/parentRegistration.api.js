@@ -13,7 +13,7 @@ export const parentRegistrationApi = {
   resendVerification(email) {
     return axios.post('/api/security/parent/resend-verification', { email })
   },
-  resendOtp(userId) {
-    return axios.post('/api/security/parent/resend-otp', { userId })
+  resendOtp(verificationToken) {
+    return axios.post('/api/security/parent/resend-otp', { verificationToken })
   },
 }

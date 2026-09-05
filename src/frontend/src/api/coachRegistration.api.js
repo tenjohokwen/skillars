@@ -23,7 +23,7 @@ export const coachRegistrationApi = {
   // response with a `.data` envelope) so the resend picks up Accept-Language and the shared
   // interceptors, matching playerRegistration.api.js#resendOtp. No caller reads this call's
   // response body, so the different unwrapping behaviour is safe here.
-  resendOtp(userId) {
-    return api.post('/api/security/coach/resend-otp', { userId })
+  resendOtp(verificationToken) {
+    return api.post('/api/security/coach/resend-otp', { verificationToken })
   },
 }

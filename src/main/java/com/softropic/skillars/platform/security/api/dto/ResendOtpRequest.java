@@ -1,6 +1,10 @@
 package com.softropic.skillars.platform.security.api.dto;
 
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.NotBlank;
 
-public record ResendOtpRequest(@NotNull @Positive Long userId) {}
+/**
+ * skillars-deferred-93 AC8 — carries the opaque phone-verification handle from
+ * {@link VerifyEmailResponse} instead of a client-set {@code userId}, removing the
+ * account-enumeration surface from this {@code permitAll} endpoint.
+ */
+public record ResendOtpRequest(@NotBlank String verificationToken) {}

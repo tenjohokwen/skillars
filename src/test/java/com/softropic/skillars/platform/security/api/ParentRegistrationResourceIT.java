@@ -5,6 +5,7 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.SecurityIT;
+import com.softropic.skillars.platform.security.service.RegistrationVerificationTokenService;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -53,6 +54,9 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
 
     @Autowired
     private HttpTestClient httpTestClient;
+
+    @Autowired
+    private RegistrationVerificationTokenService verificationTokenService;
 
     @LocalServerPort
     private int randomServerPort;
@@ -141,7 +145,7 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void verifyEmail_validToken_setsEmailVerifiedAndReturnsUserId() {
+    void verifyEmail_validToken_setsEmailVerifiedAndReturnsVerificationToken() {
         httpTestClient.makeHttpRequest(
             baseUrl() + REGISTER_ENDPOINT,
             HttpMethod.POST,
@@ -168,7 +172,11 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).containsEntry("nextStep", "verify-phone");
-        assertThat(response.getBody()).containsKey("userId");
+        assertThat(response.getBody()).containsKey("verificationToken");
+        assertThat(verificationTokenService.resolveUserId(
+            (String) response.getBody().get("verificationToken")))
+            .isEqualTo(jdbcTemplate.queryForObject(
+                "SELECT id FROM main.\"user\" WHERE email = ?", Long.class, TEST_EMAIL));
 
         String status = jdbcTemplate.queryForObject(
             "SELECT verification_status FROM main.\"user\" WHERE email = ?",
@@ -285,7 +293,7 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
         ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
             baseUrl() + VERIFY_PHONE_ENDPOINT,
             HttpMethod.POST,
-            Map.of("userId", userId, "otp", knownOtp),
+            Map.of("verificationToken", tokenFor(userId), "otp", knownOtp),
             jsonHeaders(),
             Void.class
         );
@@ -332,7 +340,7 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
             baseUrl() + VERIFY_PHONE_ENDPOINT,
             HttpMethod.POST,
-            Map.of("userId", userId, "otp", "000000"),
+            Map.of("verificationToken", tokenFor(userId), "otp", "000000"),
             jsonHeaders(),
             Map.class
         ))
@@ -444,7 +452,7 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
             baseUrl() + VERIFY_PHONE_ENDPOINT, HttpMethod.POST,
-            Map.of("userId", userId, "otp", knownOtp), jsonHeaders(), Void.class))
+            Map.of("verificationToken", tokenFor(userId), "otp", knownOtp), jsonHeaders(), Void.class))
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> {
                 HttpClientErrorException ex = (HttpClientErrorException) e;
@@ -565,7 +573,7 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
             baseUrl() + "/api/security/parent/resend-otp", HttpMethod.POST,
-            Map.of("userId", userId), jsonHeaders(), Void.class))
+            Map.of("verificationToken", tokenFor(userId)), jsonHeaders(), Void.class))
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> {
                 HttpClientErrorException ex = (HttpClientErrorException) e;
@@ -597,15 +605,61 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
         for (int i = 0; i < 3; i++) {
             ResponseEntity<Void> ok = httpTestClient.makeHttpRequest(
                 baseUrl() + "/api/security/parent/resend-otp", HttpMethod.POST,
-                Map.of("userId", userId), jsonHeaders(), Void.class);
+                Map.of("verificationToken", tokenFor(userId)), jsonHeaders(), Void.class);
             assertThat(ok.getStatusCode()).as("call %s within the per-user cap", i + 1).isEqualTo(HttpStatus.OK);
         }
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
             baseUrl() + "/api/security/parent/resend-otp", HttpMethod.POST,
-            Map.of("userId", userId), jsonHeaders(), Void.class))
+            Map.of("verificationToken", tokenFor(userId)), jsonHeaders(), Void.class))
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    // ── skillars-deferred-93 AC8: opaque phone-verification handle replaces the raw userId ──────
+
+    private String tokenFor(long userId) {
+        return verificationTokenService.issuePhoneVerificationToken(userId);
+    }
+
+    @Test
+    void verifyPhone_malformedHandle_returns400_notServerError() {
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + VERIFY_PHONE_ENDPOINT, HttpMethod.POST,
+            Map.of("verificationToken", "not.a.real.handle", "otp", "123456"), jsonHeaders(), Void.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(ex.getResponseBodyAsString()).contains("security.verificationLinkInvalid");
+            });
+    }
+
+    @Test
+    void resendOtp_tamperedHandleSignature_returns400_notServerError() {
+        String valid = tokenFor(123456789L);
+        String tampered = valid.substring(0, valid.length() - 1)
+            + (valid.endsWith("A") ? "B" : "A");
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/security/parent/resend-otp", HttpMethod.POST,
+            Map.of("verificationToken", tampered), jsonHeaders(), Void.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(ex.getResponseBodyAsString()).contains("security.verificationLinkInvalid");
+            });
+    }
+
+    @Test
+    void resendOtp_blankHandle_returns400() {
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/security/parent/resend-otp", HttpMethod.POST,
+            Map.of("verificationToken", ""), jsonHeaders(), Void.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST));
     }
 
     private String hashOtp(String otp, Long userId) {

@@ -64,6 +64,7 @@ public class ParentRegistrationService {
     private final ContactDetailSanitizer sanitizer;
     private final RateLimitingService rateLimitingService;
     private final RegistrationOtpResendSupport otpResendSupport;
+    private final RegistrationVerificationTokenService verificationTokenService;
 
     @Value("${app.frontend-url}")
     private String frontendUrl;
@@ -165,7 +166,8 @@ public class ParentRegistrationService {
 
         sendOtpEmail(user, otp);
 
-        return new VerifyEmailResponse("verify-phone", user.getId());
+        return new VerifyEmailResponse(
+            "verify-phone", verificationTokenService.issuePhoneVerificationToken(user.getId()));
     }
 
     public void verifyPhone(Long userId, String otp) {

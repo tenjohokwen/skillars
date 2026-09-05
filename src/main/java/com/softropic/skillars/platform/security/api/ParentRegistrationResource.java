@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.security.api.dto.VerifyEmailResponse;
 import com.softropic.skillars.platform.security.api.dto.VerifyPhoneRequest;
 import com.softropic.skillars.platform.security.contract.ParentRegistrationRequest;
 import com.softropic.skillars.platform.security.service.ParentRegistrationService;
+import com.softropic.skillars.platform.security.service.RegistrationVerificationTokenService;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -27,6 +28,7 @@ import java.util.UUID;
 public class ParentRegistrationResource {
 
     private final ParentRegistrationService parentRegistrationService;
+    private final RegistrationVerificationTokenService verificationTokenService;
 
     @PreAuthorize("permitAll()")
     @PostMapping("/register")
@@ -44,7 +46,8 @@ public class ParentRegistrationResource {
     @PreAuthorize("permitAll()")
     @PostMapping("/verify-phone")
     public ResponseEntity<Void> verifyPhone(@RequestBody @Valid VerifyPhoneRequest request) {
-        parentRegistrationService.verifyPhone(request.userId(), request.otp());
+        long userId = verificationTokenService.resolveUserId(request.verificationToken());
+        parentRegistrationService.verifyPhone(userId, request.otp());
         return ResponseEntity.ok().build();
     }
 
@@ -58,7 +61,8 @@ public class ParentRegistrationResource {
     @PreAuthorize("permitAll()")
     @PostMapping("/resend-otp")
     public ResponseEntity<Void> resendOtp(@RequestBody @Valid ResendOtpRequest request) {
-        parentRegistrationService.resendPhoneOtp(request.userId());
+        long userId = verificationTokenService.resolveUserId(request.verificationToken());
+        parentRegistrationService.resendPhoneOtp(userId);
         return ResponseEntity.ok().build();
     }
 }

@@ -17,8 +17,8 @@ export const playerRegistrationApi = {
   // re-sends the EMAIL verification link. skillars-deferred-89 AC7 shipped this endpoint
   // (permitAll, rate-limited 3/30min per role plus a per-user guard) and nothing ever called
   // it, so a player whose OTP email was lost had no self-service recovery while a parent did.
-  resendOtp(userId) {
-    return api.post('/api/security/player/resend-otp', { userId })
+  resendOtp(verificationToken) {
+    return api.post('/api/security/player/resend-otp', { verificationToken })
   },
   createProfile(data) {
     return api.post('/api/security/players/me', data)

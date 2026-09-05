@@ -103,10 +103,10 @@ onUnmounted(() => {
 })
 
 async function handleResendOtp() {
-  if (!userId.value) return
+  if (!verificationToken.value) return
   isResending.value = true
   try {
-    await playerRegistrationApi.resendOtp(userId.value)
+    await playerRegistrationApi.resendOtp(verificationToken.value)
     startCooldown()
   } catch {
     // Silent, as in the parent flow: the backend's 409 / 400 responses distinguish
@@ -117,10 +117,16 @@ async function handleResendOtp() {
   }
 }
 
-const userId = computed(() => (route.query.userId ? Number(route.query.userId) : null))
+// skillars-deferred-93 AC8: the phone-verification handle is an opaque server-signed string in
+// the `token` query param, replacing a raw client-set numeric id. A missing or non-string value
+// resolves to null, which onMounted's guard redirects on, matching the old behaviour.
+const verificationToken = computed(() => {
+  const raw = route.query.token
+  return typeof raw === 'string' && raw.length > 0 ? raw : null
+})
 
 onMounted(() => {
-  if (userId.value === null) {
+  if (verificationToken.value === null) {
     router.push('/player-register')
     return
   }
@@ -169,7 +175,7 @@ async function handleSubmit() {
   clearError()
   isSubmitting.value = true
   try {
-    await playerRegistrationApi.verifyPhone({ userId: userId.value, otp })
+    await playerRegistrationApi.verifyPhone({ verificationToken: verificationToken.value, otp })
     router.push('/player/profile-builder')
   } catch (err) {
     setError(err)
