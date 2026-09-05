@@ -572,7 +572,8 @@ export default {
     upgradeCTA: 'Mettre à niveau',
   },
   security: {
-    verificationLinkInvalid: "Ce lien de vérification n'est plus valide. Veuillez recommencer l'inscription à partir de l'e-mail que nous vous avons envoyé.",
+    verificationLinkInvalid:
+      "Ce lien de vérification n'est plus valide. Veuillez recommencer l'inscription à partir de l'e-mail que nous vous avons envoyé.",
     unauthorized: "Vous n'avez pas les droits requis. Vous pouvez contacter le support",
     authError: "Un problème d'authentification s'est produit.",
     accountExpired: 'Votre compte a expiré.',

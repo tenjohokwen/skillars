@@ -560,7 +560,8 @@ export default {
     upgradeCTA: 'Upgrade plan',
   },
   security: {
-    verificationLinkInvalid: 'This verification link is no longer valid. Please restart sign-up from the email we sent you.',
+    verificationLinkInvalid:
+      'This verification link is no longer valid. Please restart sign-up from the email we sent you.',
     unauthorized: 'You do not have the required rights. You can contact help desk',
     authError: 'Authentication issue has occurred.',
     accountExpired: 'Your account has expired.',
