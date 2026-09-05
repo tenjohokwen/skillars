@@ -9,6 +9,6 @@ import jakarta.validation.constraints.Size;
  * raw {@code userId} is no longer accepted on this {@code permitAll} endpoint.
  */
 public record VerifyPhoneRequest(
-    @NotBlank String verificationToken,
+    @NotBlank @Size(min = 50, max = 200) String verificationToken,
     @NotBlank @Size(min = 6, max = 6) String otp
 ) {}

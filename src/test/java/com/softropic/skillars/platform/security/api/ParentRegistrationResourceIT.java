@@ -658,8 +658,11 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
             baseUrl() + "/api/security/parent/resend-otp", HttpMethod.POST,
             Map.of("verificationToken", ""), jsonHeaders(), Void.class))
             .isInstanceOf(HttpClientErrorException.class)
-            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
-                .isEqualTo(HttpStatus.BAD_REQUEST));
+            .satisfies(e -> {
+                HttpClientErrorException httpException = (HttpClientErrorException) e;
+                assertThat(httpException.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(httpException.getResponseBodyAsString()).contains("security.verificationLinkInvalid");
+            });
     }
 
     private String hashOtp(String otp, Long userId) {

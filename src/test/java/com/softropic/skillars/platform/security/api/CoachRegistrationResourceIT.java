@@ -721,8 +721,11 @@ class CoachRegistrationResourceIT extends AbstractIntegrationTest {
             baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST,
             Map.of("verificationToken", ""), jsonHeaders(), Void.class))
             .isInstanceOf(HttpClientErrorException.class)
-            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
-                .isEqualTo(HttpStatus.BAD_REQUEST));
+            .satisfies(e -> {
+                HttpClientErrorException httpException = (HttpClientErrorException) e;
+                assertThat(httpException.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(httpException.getResponseBodyAsString()).contains("security.verificationLinkInvalid");
+            });
     }
 
     private String hashOtp(String otp, Long userId) {
