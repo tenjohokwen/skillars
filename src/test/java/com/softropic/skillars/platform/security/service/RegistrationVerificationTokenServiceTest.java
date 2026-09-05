@@ -76,8 +76,12 @@ class RegistrationVerificationTokenServiceTest {
 
     @Test
     void tamperedSignature_isRejected() {
+        // Keep the payload, swap in the (validly-encoded) signature of a different handle — a
+        // guaranteed HMAC mismatch, unlike flipping the last base64 char whose low bits are padding.
         String token = service.issuePhoneVerificationToken(42L, ROLE);
-        String tampered = token.substring(0, token.length() - 1) + (token.endsWith("A") ? "B" : "A");
+        String otherToken = service.issuePhoneVerificationToken(43L, ROLE);
+        String otherSig = otherToken.substring(otherToken.indexOf('.') + 1);
+        String tampered = token.substring(0, token.indexOf('.') + 1) + otherSig;
         assertThatThrownBy(() -> service.resolveUserId(tampered, ROLE))
             .isInstanceOf(RegistrationVerificationTokenException.class);
     }
