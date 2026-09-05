@@ -18,7 +18,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 @Slf4j
@@ -36,6 +38,12 @@ public class ModerationSlaMonitorService {
     // the PESSIMISTIC_WRITE row locks; prevents the inner TXs from joining the outer TX and
     // rolling back the entire batch on any single failure.
     private TransactionTemplate requiresNewTemplate;
+
+    // skillars-deferred-93 P13: track consecutive per-video processing failures; if a video
+    // fails repeatedly across cycles, force it to FAILED (with admin alert) so an infinite-loop
+    // exception cannot escape notice.
+    private final Map<Long, Integer> videoConsecutiveFailures = new HashMap<>();
+    private static final int CONSECUTIVE_FAILURE_THRESHOLD = 3;
 
     @PostConstruct
     void initTemplates() {
@@ -76,9 +84,11 @@ public class ModerationSlaMonitorService {
                         });
                     } catch (TerminalStateViolationException e) {
                         log.warn("SLA FAILED transition skipped — videoId={} already in terminal state", video.getId());
+                        videoConsecutiveFailures.remove(video.getId());
                         continue;
                     }
                     exhausted++;
+                    videoConsecutiveFailures.remove(video.getId());
                 } else {
                     // Increment retry count before dispatching to prevent concurrent SLA cycles from
                     // re-queuing the same video when the lock just expired
@@ -101,14 +111,42 @@ public class ModerationSlaMonitorService {
                              video.getId(), video.getScanningStartedAt(),
                              newRetryCount, maxRetries);
                     retried++;
+                    videoConsecutiveFailures.remove(video.getId());
                 }
             } catch (Exception e) {
                 log.error("Failed to process SLA violation for videoId={}", video.getId(), e);
+                // skillars-deferred-93 P13: track consecutive failures and force FAILED if threshold exceeded.
+                // A persistently-throwing REQUIRES_NEW block (a stuck resource lock, a crashing
+                // downstream system, etc.) would otherwise loop forever unnoticed. The threshold is
+                // low (3) because the SLA monitor runs frequently (5min default); three consecutive
+                // failures = 15 minutes of unrecoverable failure.
+                int failureCount = videoConsecutiveFailures.getOrDefault(video.getId(), 0) + 1;
+                videoConsecutiveFailures.put(video.getId(), failureCount);
+
+                if (failureCount >= CONSECUTIVE_FAILURE_THRESHOLD) {
+                    log.error("Moderation SLA processing for videoId={} failed {} times — forcing FAILED",
+                              video.getId(), failureCount);
+                    try {
+                        requiresNewTemplate.execute(status -> {
+                            videoLifecycleService.transitionOperationalState(video.getId(), OperationalState.FAILED);
+                            moderationOutboxSupport.enqueueAdminAlert(
+                                video.getId(), video.getOwnerId(),
+                                "Moderation pipeline permanently failed",
+                                "videoId=" + video.getId() + " — SLA processing failed " + failureCount
+                                    + " consecutive times; manual review required", true);
+                            return null;
+                        });
+                    } catch (TerminalStateViolationException ex) {
+                        log.warn("SLA FAILED transition skipped — videoId={} already in terminal state", video.getId());
+                    }
+                    videoConsecutiveFailures.remove(video.getId());
+                    exhausted++;
+                }
             }
         }
         if (retried > 0)
             log.info("Requeued {} videos stuck in SCANNING beyond {}min SLA", retried, slaMinutes);
         if (exhausted > 0)
-            log.error("Permanently failed {} videos after exhausting {} moderation retries", exhausted, maxRetries);
+            log.error("Permanently failed {} videos after exhausting {} moderation retries or {} consecutive failures", exhausted, maxRetries, CONSECUTIVE_FAILURE_THRESHOLD);
     }
 }

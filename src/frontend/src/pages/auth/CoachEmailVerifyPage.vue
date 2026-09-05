@@ -74,7 +74,10 @@ onMounted(async () => {
     const response = await coachRegistrationApi.verifyEmail(token)
     const { verificationToken } = response.data
     isVerifying.value = false
-    router.push({ path: '/coach/verify-phone', query: { token: verificationToken } })
+    // skillars-deferred-93 P12: move verification handle to sessionStorage instead of URL query
+    // to keep it out of browser history, Referer headers, and access logs.
+    sessionStorage.setItem('coachVerificationToken', verificationToken)
+    router.push({ path: '/coach/verify-phone', replace: true })
   } catch (err) {
     isVerifying.value = false
     canResend.value = err.response?.data?.canResend === true

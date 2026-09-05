@@ -123,11 +123,11 @@ async function handleResendOtp() {
   }
 }
 
-// skillars-deferred-93 AC8: the phone-verification handle is an opaque server-signed string in
-// the `token` query param, replacing a raw client-set numeric id. A missing or non-string value
-// resolves to null, which onMounted's guard redirects on, matching the old behaviour.
+// skillars-deferred-93 AC8: the phone-verification handle is an opaque server-signed string;
+// P12 moves it from URL query to sessionStorage to keep it out of browser history and logs.
+// A missing or non-string value resolves to null, which onMounted's guard redirects on.
 const verificationToken = computed(() => {
-  const raw = route.query.token
+  const raw = sessionStorage.getItem('coachVerificationToken')
   return typeof raw === 'string' && raw.length > 0 ? raw : null
 })
 

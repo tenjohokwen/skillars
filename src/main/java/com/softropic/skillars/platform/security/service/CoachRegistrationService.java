@@ -218,6 +218,12 @@ public class CoachRegistrationService {
                 user.getVerificationStatus() == SkillarsVerificationStatus.UNVERIFIED) {
                 emailTokenRepository.deleteByUserIdAndUsedFalse(user.getId());
                 sendVerificationEmail(user);
+            } else if (user.getVerificationStatus() == SkillarsVerificationStatus.EMAIL_VERIFIED) {
+                // skillars-deferred-93 P11: allow re-issue of phone verification handle for expired handles.
+                // User has already verified email but the phone-verification handle (24h TTL) expired.
+                // Silently re-issue a new handle (sent via email in resend-phone-verification flow, or
+                // via the frontend's sessionStorage mechanism in P12).
+                verificationTokenService.issuePhoneVerificationToken(user.getId(), "COACH");
             }
         });
     }
