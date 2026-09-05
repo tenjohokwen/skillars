@@ -67,13 +67,12 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { parentRegistrationApi } from 'src/api/parentRegistration.api'
 import { useErrorHandler } from 'src/composables/useErrorHandler'
 
 const router = useRouter()
-const route = useRoute()
 const { t } = useI18n()
 const { setError, clearError, hasError, errorMessage, helpCode } = useErrorHandler()
 
@@ -83,7 +82,16 @@ const isSubmitting = ref(false)
 const isResending = ref(false)
 const resendCooldown = ref(0)
 let cooldownTimer = null
+let isUnmounted = false
 
+// skillars-deferred-92 review (chunk 4): AC28.4 names three backend responses a resend can
+// get (429 per-IP rate limit, 400 security.otpMismatch per-user limit, 400
+// security.accountLocked) — the per-user limit deliberately returns a vague code rather than
+// a rate-state oracle, so surfacing it is not account enumeration. setError() renders
+// whichever of those `useErrorHandler` resolves; clearError() up front means a successful
+// resend no longer leaves a stale error banner beside the new countdown. The cooldown now
+// arms in `finally` (previously only on success) so a refused resend still throttles the
+// client rather than letting a confused user exhaust the shared per-IP bucket by re-clicking.
 function startCooldown() {
   resendCooldown.value = 60
   cooldownTimer = setInterval(() => {
@@ -96,26 +104,34 @@ function startCooldown() {
 }
 
 onUnmounted(() => {
+  isUnmounted = true
   if (cooldownTimer) clearInterval(cooldownTimer)
 })
 
 async function handleResendOtp() {
-  if (!userId.value) return
+  if (verificationToken.value === null) return
+  clearError()
   isResending.value = true
   try {
-    await parentRegistrationApi.resendOtp(userId.value)
-    startCooldown()
-  } catch {
-    // silent — no account enumeration
+    await parentRegistrationApi.resendOtp(verificationToken.value)
+  } catch (err) {
+    setError(err)
   } finally {
     isResending.value = false
+    if (!isUnmounted) startCooldown()
   }
 }
 
-const userId = computed(() => (route.query.userId ? Number(route.query.userId) : null))
+// skillars-deferred-93 AC8: the phone-verification handle is an opaque server-signed string;
+// P12 moves it from URL query to sessionStorage to keep it out of browser history and logs.
+// A missing or non-string value resolves to null, which onMounted's guard redirects on.
+const verificationToken = computed(() => {
+  const raw = sessionStorage.getItem('parentVerificationToken')
+  return typeof raw === 'string' && raw.length > 0 ? raw : null
+})
 
 onMounted(() => {
-  if (userId.value === null) {
+  if (verificationToken.value === null) {
     router.push('/parent-register')
     return
   }
@@ -164,7 +180,7 @@ async function handleSubmit() {
   clearError()
   isSubmitting.value = true
   try {
-    await parentRegistrationApi.verifyPhone({ userId: userId.value, otp })
+    await parentRegistrationApi.verifyPhone({ verificationToken: verificationToken.value, otp })
     router.push('/parent/create-player')
   } catch (err) {
     setError(err)

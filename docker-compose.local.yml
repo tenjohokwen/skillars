@@ -43,6 +43,7 @@ services:
       - APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET=dev-webhook-signing-secret
       - APP_VIDEO_PLAYBACK_SIGNING_SECRET=dGVzdC1wbGF5YmFjay1zaWduaW5nLXNlY3JldC0zMi1ieXRlcyEh
       - PLATFORM_PIN_ENCRYPTION_SECRET=S3CR3TW0RD
+      - PLATFORM_REGISTRATION_VERIFICATION_SECRET=dev-registration-verification-secret-32-bytes!
       - GEMINI_API_KEY=${GEMINI_API_KEY:-dev-key}
       # App container talks to MinIO over the compose network by service name.
       # The presigned upload URLs it generates also use this host — see the

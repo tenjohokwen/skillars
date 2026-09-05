@@ -280,7 +280,6 @@ export default {
     sortName: 'Name',
     sortPrice: 'Price',
     sortRating: 'Rating',
-    sortRatingStub: 'Rating (Epic 9)',
     tryAnotherCity: 'Try another city',
     clearFilters: 'Clear filters',
     noCoachesFound: 'No coaches found',
@@ -561,6 +560,8 @@ export default {
     upgradeCTA: 'Upgrade plan',
   },
   security: {
+    verificationLinkInvalid:
+      'This verification link is no longer valid. Please restart sign-up from the email we sent you.',
     unauthorized: 'You do not have the required rights. You can contact help desk',
     authError: 'Authentication issue has occurred.',
     accountExpired: 'Your account has expired.',

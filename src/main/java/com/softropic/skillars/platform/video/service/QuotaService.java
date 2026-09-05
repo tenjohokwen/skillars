@@ -152,6 +152,13 @@ public class QuotaService implements QuotaProvider {
     // metering isn't available from the provider (see PlaybackService.authorizePlayback's call site
     // comment), so this charges an approximation — the video's own file size — to its owner on each
     // playback authorization.
+    //
+    // AC5 (skillars-deferred-93): A benign, self-correcting race window exists if a concurrent
+    // BandwidthResetChunkProcessor reset happens on the same row within the same month. The reset
+    // releases a lock between chunks, and this update has no row lock or period check. Worst outcome:
+    // a once-per-month sub-minute skew in a cosmetic counter (bandwidth_used_bytes gates nothing;
+    // no rate-limit or quota enforcement depends on it). The next monthly run corrects the skew.
+    // This is within acceptable tolerance for a display-only metric.
     @Transactional
     public void incrementBandwidthUsedBytes(String ownerId, long bytes) {
         if (bytes <= 0) return;

@@ -46,4 +46,22 @@ public class SkillarsPlatformProperties {
     public void setPinEncryptionSecret(String pinEncryptionSecret) {
         this.pinEncryptionSecret = pinEncryptionSecret;
     }
+
+    /**
+     * HMAC-SHA256 key for the short-lived phone-verification handle returned by
+     * {@code /verify-email} and required by {@code /verify-phone} and {@code /resend-otp}
+     * (skillars-deferred-93 AC8). Bound from {@code skillars.platform.registration-verification-secret},
+     * set via {@code PLATFORM_REGISTRATION_VERIFICATION_SECRET}. Rotating it only invalidates
+     * in-flight registration handles (24h TTL), nothing persistent.
+     * {@code RegistrationVerificationTokenService} fails fast if this is blank.
+     */
+    private String registrationVerificationSecret;
+
+    public String getRegistrationVerificationSecret() {
+        return registrationVerificationSecret;
+    }
+
+    public void setRegistrationVerificationSecret(String registrationVerificationSecret) {
+        this.registrationVerificationSecret = registrationVerificationSecret;
+    }
 }

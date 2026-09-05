@@ -72,9 +72,12 @@ onMounted(async () => {
   }
   try {
     const response = await parentRegistrationApi.verifyEmail(token)
-    const { userId } = response.data
+    const { verificationToken } = response.data
     isVerifying.value = false
-    router.push({ path: '/parent/verify-phone', query: { userId } })
+    // skillars-deferred-93 P12: move verification handle to sessionStorage instead of URL query
+    // to keep it out of browser history, Referer headers, and access logs.
+    sessionStorage.setItem('parentVerificationToken', verificationToken)
+    router.push({ path: '/parent/verify-phone', replace: true })
   } catch (err) {
     isVerifying.value = false
     canResend.value = err.response?.data?.canResend === true

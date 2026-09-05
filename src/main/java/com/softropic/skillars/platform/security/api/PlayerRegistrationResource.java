@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.security.api.dto.VerifyEmailResponse;
 import com.softropic.skillars.platform.security.api.dto.VerifyPhoneRequest;
 import com.softropic.skillars.platform.security.contract.PlayerRegistrationRequest;
 import com.softropic.skillars.platform.security.service.PlayerRegistrationService;
+import com.softropic.skillars.platform.security.service.RegistrationVerificationTokenService;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -27,6 +28,7 @@ import java.util.UUID;
 public class PlayerRegistrationResource {
 
     private final PlayerRegistrationService playerRegistrationService;
+    private final RegistrationVerificationTokenService verificationTokenService;
 
     @PreAuthorize("permitAll()")
     @PostMapping("/register")
@@ -44,7 +46,8 @@ public class PlayerRegistrationResource {
     @PreAuthorize("permitAll()")
     @PostMapping("/verify-phone")
     public ResponseEntity<Void> verifyPhone(@RequestBody @Valid VerifyPhoneRequest request) {
-        playerRegistrationService.verifyPhone(request.userId(), request.otp());
+        long userId = verificationTokenService.resolveUserId(request.verificationToken(), "PLAYER");
+        playerRegistrationService.verifyPhone(userId, request.otp());
         return ResponseEntity.ok().build();
     }
 
@@ -61,7 +64,8 @@ public class PlayerRegistrationResource {
     @PreAuthorize("permitAll()")
     @PostMapping("/resend-otp")
     public ResponseEntity<Void> resendOtp(@RequestBody @Valid ResendOtpRequest request) {
-        playerRegistrationService.resendPhoneOtp(request.userId());
+        long userId = verificationTokenService.resolveUserId(request.verificationToken(), "PLAYER");
+        playerRegistrationService.resendPhoneOtp(userId);
         return ResponseEntity.ok().build();
     }
 }

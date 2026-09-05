@@ -5,6 +5,7 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.SecurityIT;
+import com.softropic.skillars.platform.security.service.RegistrationVerificationTokenService;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -50,6 +51,9 @@ class PlayerRegistrationResourceIT extends AbstractIntegrationTest {
 
     @Autowired
     private HttpTestClient httpTestClient;
+
+    @Autowired
+    private RegistrationVerificationTokenService verificationTokenService;
 
     @LocalServerPort
     private int randomServerPort;
@@ -168,7 +172,7 @@ class PlayerRegistrationResourceIT extends AbstractIntegrationTest {
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
             baseUrl() + VERIFY_PHONE_ENDPOINT, HttpMethod.POST,
-            Map.of("userId", userId, "otp", knownOtp), jsonHeaders(), Void.class))
+            Map.of("verificationToken", tokenFor(userId), "otp", knownOtp), jsonHeaders(), Void.class))
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> {
                 HttpClientErrorException ex = (HttpClientErrorException) e;
@@ -229,7 +233,7 @@ class PlayerRegistrationResourceIT extends AbstractIntegrationTest {
         });
 
         ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
-            baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST, Map.of("userId", userId), jsonHeaders(), Void.class);
+            baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST, Map.of("verificationToken", tokenFor(userId)), jsonHeaders(), Void.class);
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 
         assertThat(jdbcTemplate.queryForObject(
@@ -244,7 +248,7 @@ class PlayerRegistrationResourceIT extends AbstractIntegrationTest {
     @Test
     void resendOtp_unknownUserId_returns400_otpMismatch() {
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
-            baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST, Map.of("userId", 987654321L), jsonHeaders(), Void.class))
+            baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST, Map.of("verificationToken", tokenFor(987654321L)), jsonHeaders(), Void.class))
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> {
                 HttpClientErrorException ex = (HttpClientErrorException) e;
@@ -266,7 +270,7 @@ class PlayerRegistrationResourceIT extends AbstractIntegrationTest {
         });
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
-            baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST, Map.of("userId", userId), jsonHeaders(), Void.class))
+            baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST, Map.of("verificationToken", tokenFor(userId)), jsonHeaders(), Void.class))
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> {
                 HttpClientErrorException ex = (HttpClientErrorException) e;
@@ -288,7 +292,7 @@ class PlayerRegistrationResourceIT extends AbstractIntegrationTest {
         // user is still UNVERIFIED (verify-email not called)
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
-            baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST, Map.of("userId", userId), jsonHeaders(), Void.class))
+            baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST, Map.of("verificationToken", tokenFor(userId)), jsonHeaders(), Void.class))
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> {
                 HttpClientErrorException ex = (HttpClientErrorException) e;
@@ -318,12 +322,12 @@ class PlayerRegistrationResourceIT extends AbstractIntegrationTest {
 
         for (int i = 0; i < 3; i++) {
             ResponseEntity<Void> ok = httpTestClient.makeHttpRequest(
-                baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST, Map.of("userId", userId), jsonHeaders(), Void.class);
+                baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST, Map.of("verificationToken", tokenFor(userId)), jsonHeaders(), Void.class);
             assertThat(ok.getStatusCode()).as("call %s within the per-user cap", i + 1).isEqualTo(HttpStatus.OK);
         }
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
-            baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST, Map.of("userId", userId), jsonHeaders(), Void.class))
+            baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST, Map.of("verificationToken", tokenFor(userId)), jsonHeaders(), Void.class))
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
     }
@@ -354,6 +358,55 @@ class PlayerRegistrationResourceIT extends AbstractIntegrationTest {
         assertThat(jdbcTemplate.queryForObject(
             "SELECT count(*) FROM main.phone_otp_tokens WHERE user_id = ? AND used = false", Integer.class, userId))
             .isEqualTo(1);
+    }
+
+    // ── skillars-deferred-93 AC8: opaque phone-verification handle replaces the raw userId ──────
+
+    private String tokenFor(long userId) {
+        return verificationTokenService.issuePhoneVerificationToken(userId, "PLAYER");
+    }
+
+    @Test
+    void verifyPhone_malformedHandle_returns400_notServerError() {
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + VERIFY_PHONE_ENDPOINT, HttpMethod.POST,
+            Map.of("verificationToken", "not.a.real.handle", "otp", "123456"), jsonHeaders(), Void.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(ex.getResponseBodyAsString()).contains("security.verificationLinkInvalid");
+            });
+    }
+
+    @Test
+    void resendOtp_tamperedHandleSignature_returns400_notServerError() {
+        String valid = tokenFor(123456789L);
+        String tampered = valid.substring(0, valid.length() - 1)
+            + (valid.endsWith("A") ? "B" : "A");
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST,
+            Map.of("verificationToken", tampered), jsonHeaders(), Void.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(ex.getResponseBodyAsString()).contains("security.verificationLinkInvalid");
+            });
+    }
+
+    @Test
+    void resendOtp_blankHandle_returns400() {
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST,
+            Map.of("verificationToken", ""), jsonHeaders(), Void.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException httpException = (HttpClientErrorException) e;
+                assertThat(httpException.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(httpException.getResponseBodyAsString()).contains("security.verificationLinkInvalid");
+            });
     }
 
     private String hashOtp(String otp, Long userId) {

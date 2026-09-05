@@ -64,6 +64,7 @@ public class ParentRegistrationService {
     private final ContactDetailSanitizer sanitizer;
     private final RateLimitingService rateLimitingService;
     private final RegistrationOtpResendSupport otpResendSupport;
+    private final RegistrationVerificationTokenService verificationTokenService;
 
     @Value("${app.frontend-url}")
     private String frontendUrl;
@@ -134,13 +135,20 @@ public class ParentRegistrationService {
             throw new EmailTokenException("security.accountLocked", false);
         }
 
-        if (user.getVerificationStatus() != SkillarsVerificationStatus.UNVERIFIED) {
+        // skillars-deferred-93 P11: an already-EMAIL_VERIFIED user whose 24h phone-verification handle
+        // expired can re-use a freshly-sent verification email to obtain a new OTP + handle. Re-entry
+        // does not advance status (isLocked() is already checked above); any status past EMAIL_VERIFIED
+        // is a genuinely spent token.
+        if (user.getVerificationStatus() != SkillarsVerificationStatus.UNVERIFIED
+            && user.getVerificationStatus() != SkillarsVerificationStatus.EMAIL_VERIFIED) {
             throw new EmailTokenException("security.emailTokenInvalid", false);
         }
 
-        user.setVerificationStatus(SkillarsVerificationStatus.EMAIL_VERIFIED);
-        user.setActivated(true);
-        userRepository.save(user);
+        if (user.getVerificationStatus() == SkillarsVerificationStatus.UNVERIFIED) {
+            user.setVerificationStatus(SkillarsVerificationStatus.EMAIL_VERIFIED);
+            user.setActivated(true);
+            userRepository.save(user);
+        }
 
         evt.setUsed(true);
         try {
@@ -165,7 +173,8 @@ public class ParentRegistrationService {
 
         sendOtpEmail(user, otp);
 
-        return new VerifyEmailResponse("verify-phone", user.getId());
+        return new VerifyEmailResponse(
+            "verify-phone", verificationTokenService.issuePhoneVerificationToken(user.getId(), "PARENT"));
     }
 
     public void verifyPhone(Long userId, String otp) {
@@ -216,8 +225,13 @@ public class ParentRegistrationService {
             if (user.isLocked()) {
                 return;
             }
+            // skillars-deferred-93 P11: EMAIL_VERIFIED is included so a user whose phone-verification
+            // handle (24h TTL) expired can get a fresh verification email; verifyEmail() then re-issues
+            // a fresh OTP + handle for the already-verified email without advancing status. Without this
+            // an expired handle is a dead-end (the handle is only ever minted by verifyEmail()).
             if (user.getVerificationStatus() == null ||
-                user.getVerificationStatus() == SkillarsVerificationStatus.UNVERIFIED) {
+                user.getVerificationStatus() == SkillarsVerificationStatus.UNVERIFIED ||
+                user.getVerificationStatus() == SkillarsVerificationStatus.EMAIL_VERIFIED) {
                 emailTokenRepository.deleteByUserIdAndUsedFalse(user.getId());
                 sendVerificationEmail(user);
             }

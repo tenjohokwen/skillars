@@ -285,7 +285,6 @@ export default {
     sortName: 'Nom',
     sortPrice: 'Prix',
     sortRating: 'Évaluation',
-    sortRatingStub: 'Évaluation (Epic 9)',
     tryAnotherCity: 'Essayer une autre ville',
     clearFilters: 'Effacer les filtres',
     noCoachesFound: 'Aucun coach trouvé',
@@ -573,6 +572,8 @@ export default {
     upgradeCTA: 'Mettre à niveau',
   },
   security: {
+    verificationLinkInvalid:
+      "Ce lien de vérification n'est plus valide. Veuillez recommencer l'inscription à partir de l'e-mail que nous vous avons envoyé.",
     unauthorized: "Vous n'avez pas les droits requis. Vous pouvez contacter le support",
     authError: "Un problème d'authentification s'est produit.",
     accountExpired: 'Votre compte a expiré.',

@@ -625,7 +625,6 @@ export default {
     sortName: 'Name',
     sortPrice: 'Preis',
     sortRating: 'Bewertung',
-    sortRatingStub: 'Bewertung (Epic 9)',
     tryAnotherCity: 'Andere Stadt versuchen',
     clearFilters: 'Filter zurücksetzen',
     noCoachesFound: 'Keine Trainer gefunden',
@@ -1129,6 +1128,8 @@ export default {
     upgradeCTA: 'Plan upgraden',
   },
   security: {
+    verificationLinkInvalid:
+      'Dieser Bestätigungslink ist nicht mehr gültig. Bitte starten Sie die Registrierung über die E-Mail, die wir Ihnen gesendet haben, erneut.',
     featureGated: 'Diese Funktion erfordert ein höheres Abonnement-Tier.',
     userNotFound: 'Das angeforderte Spielerprofil konnte nicht gefunden werden.',
     unauthorized: 'Sie haben nicht die erforderlichen Rechte. Sie können den Support kontaktieren',

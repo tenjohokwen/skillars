@@ -35,7 +35,9 @@ body,
   color: var(--text-secondary);
   border-radius: 12px;
   margin: 2px 8px;
-  transition: all 0.2s ease;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
 
   &:hover {
     background: var(--surface-glass-hover);
@@ -78,7 +80,9 @@ body,
   border-radius: 14px !important;
   font-family: 'Inter', sans-serif;
   font-weight: 600;
-  transition: all 0.2s ease;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
   min-height: 40px;
 }
 

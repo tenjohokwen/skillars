@@ -67,13 +67,12 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { coachRegistrationApi } from 'src/api/coachRegistration.api'
 import { useErrorHandler } from 'src/composables/useErrorHandler'
 
 const router = useRouter()
-const route = useRoute()
 const { t } = useI18n()
 const { setError, clearError, hasError, errorMessage, helpCode } = useErrorHandler()
 
@@ -110,11 +109,11 @@ onUnmounted(() => {
 })
 
 async function handleResendOtp() {
-  if (userId.value === null) return
+  if (verificationToken.value === null) return
   clearError()
   isResending.value = true
   try {
-    await coachRegistrationApi.resendOtp(userId.value)
+    await coachRegistrationApi.resendOtp(verificationToken.value)
   } catch (err) {
     setError(err)
   } finally {
@@ -123,16 +122,16 @@ async function handleResendOtp() {
   }
 }
 
-// A malformed userId (non-numeric, duplicated query param, zero/negative) must resolve to the
-// same `null` that onMounted's redirect guard checks for, rather than NaN/0 — otherwise the
-// page renders normally but every control silently no-ops (skillars-deferred-92 review).
-const userId = computed(() => {
-  const parsed = Number(route.query.userId)
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+// skillars-deferred-93 AC8: the phone-verification handle is an opaque server-signed string;
+// P12 moves it from URL query to sessionStorage to keep it out of browser history and logs.
+// A missing or non-string value resolves to null, which onMounted's guard redirects on.
+const verificationToken = computed(() => {
+  const raw = sessionStorage.getItem('coachVerificationToken')
+  return typeof raw === 'string' && raw.length > 0 ? raw : null
 })
 
 onMounted(() => {
-  if (userId.value === null) {
+  if (verificationToken.value === null) {
     router.push('/coach-register')
     return
   }
@@ -181,7 +180,7 @@ async function handleSubmit() {
   clearError()
   isSubmitting.value = true
   try {
-    await coachRegistrationApi.verifyPhone({ userId: userId.value, otp })
+    await coachRegistrationApi.verifyPhone({ verificationToken: verificationToken.value, otp })
     router.push('/coach/profile-builder')
   } catch (err) {
     setError(err)
