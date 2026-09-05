@@ -56,22 +56,10 @@ public class MvcConfig implements WebMvcConfigurer {
         return cookieLocaleResolver;
     }
 
-    /**
-     * <p><strong>{@code classpath:/i18n/error-messages} is very nearly vestigial</strong>
-     * (skillars-deferred-92 AC12.3, recorded rather than left for a reader to wonder about). Audited
-     * 2026-09-04: {@code src/main/resources/i18n/} contains only {@code error-messages.properties} plus
-     * {@code messages{,_en,_de,_fr}.properties}, and {@code error-messages.properties} holds exactly
-     * <strong>one</strong> key ({@code security.msg.unauthorized}) with <strong>no locale variants at
-     * all</strong> — so any non-English client resolving it gets English regardless. It is kept
-     * registered because removing a basename is a behaviour change for a key that may still be
-     * resolved somewhere, and this story had no mandate to retire it; folding that one key into
-     * {@code messages*.properties} and dropping the basename is the obvious follow-up, filed to
-     * {@code deferred-work.md}.
-     */
     @Bean
     public MessageSource messageSource() {
         final ReloadableResourceBundleMessageSource messageSource = new ReloadableResourceBundleMessageSource();
-        messageSource.setBasenames("classpath:/i18n/error-messages", "classpath:/i18n/messages");
+        messageSource.setBasenames("classpath:/i18n/messages");
         messageSource.setDefaultEncoding("UTF-8");
         // skillars-deferred-92 AC12.4. Default is TRUE, which makes fallback resolution depend on the
         // CONTAINER's Locale.getDefault() — environment-dependent and pinned nowhere in this repo, so

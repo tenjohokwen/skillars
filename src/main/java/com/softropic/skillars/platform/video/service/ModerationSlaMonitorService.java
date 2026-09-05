@@ -54,52 +54,56 @@ public class ModerationSlaMonitorService {
         List<Video> stuckVideos = videoRepository.findScanningOlderThan(threshold, Instant.now(), 50);
         int retried = 0, exhausted = 0;
         for (Video video : stuckVideos) {
-            if (video.getModerationRetryCount() >= maxRetries) {
-                log.error("Moderation max retries ({}) exceeded for videoId={} — transitioning to FAILED",
-                          maxRetries, video.getId());
-                try {
-                    // skillars-deferred-92 AC5: the alert is enqueued INSIDE the same REQUIRES_NEW
-                    // transaction as the FAILED transition, so the two are atomic. Previously the
-                    // transition committed and the alert was published afterwards from a bare
-                    // ApplicationEventPublisher — a crash in between marked a video permanently failed
-                    // with nothing telling a human it needed manual review, and the next SLA cycle
-                    // would not re-select it because it had left SCANNING.
+            try {
+                if (video.getModerationRetryCount() >= maxRetries) {
+                    log.error("Moderation max retries ({}) exceeded for videoId={} — transitioning to FAILED",
+                              maxRetries, video.getId());
+                    try {
+                        // skillars-deferred-92 AC5: the alert is enqueued INSIDE the same REQUIRES_NEW
+                        // transaction as the FAILED transition, so the two are atomic. Previously the
+                        // transition committed and the alert was published afterwards from a bare
+                        // ApplicationEventPublisher — a crash in between marked a video permanently failed
+                        // with nothing telling a human it needed manual review, and the next SLA cycle
+                        // would not re-select it because it had left SCANNING.
+                        requiresNewTemplate.execute(status -> {
+                            videoLifecycleService.transitionOperationalState(video.getId(), OperationalState.FAILED);
+                            moderationOutboxSupport.enqueueAdminAlert(
+                                video.getId(), video.getOwnerId(),
+                                "Moderation pipeline permanently failed",
+                                "videoId=" + video.getId() + " retries=" + video.getModerationRetryCount()
+                                    + " — manual review required", true);
+                            return null;
+                        });
+                    } catch (TerminalStateViolationException e) {
+                        log.warn("SLA FAILED transition skipped — videoId={} already in terminal state", video.getId());
+                        continue;
+                    }
+                    exhausted++;
+                } else {
+                    // Increment retry count before dispatching to prevent concurrent SLA cycles from
+                    // re-queuing the same video when the lock just expired
+                    final long newRetryCount = video.getModerationRetryCount() + 1;
+                    // skillars-deferred-92 AC5: increment AND enqueue in one transaction. They were
+                    // separate — the counter committed in its own REQUIRES_NEW and the retry was then
+                    // published from a bare ApplicationEventPublisher — so a crash in between burned one
+                    // of the video's finite retry attempts on a retry that was never requested.
+                    // VideoModerationRetryEvent (not VideoUploadedEvent) skips the PROCESSING→SCANNING
+                    // transition; ModerationRetryOutboxHandler re-publishes it after the drain.
                     requiresNewTemplate.execute(status -> {
-                        videoLifecycleService.transitionOperationalState(video.getId(), OperationalState.FAILED);
-                        moderationOutboxSupport.enqueueAdminAlert(
-                            video.getId(), video.getOwnerId(),
-                            "Moderation pipeline permanently failed",
-                            "videoId=" + video.getId() + " retries=" + video.getModerationRetryCount()
-                                + " — manual review required", true);
+                        videoRepository.findById(video.getId()).ifPresent(v -> {
+                            v.setModerationRetryCount(v.getModerationRetryCount() + 1);
+                            videoRepository.save(v);
+                        });
+                        moderationOutboxSupport.enqueueRetry(video.getId(), video.getOwnerId());
                         return null;
                     });
-                } catch (TerminalStateViolationException e) {
-                    log.warn("SLA FAILED transition skipped — videoId={} already in terminal state", video.getId());
-                    continue;
+                    log.warn("Moderation SLA exceeded for videoId={} stuck since={} retry={}/{}",
+                             video.getId(), video.getScanningStartedAt(),
+                             newRetryCount, maxRetries);
+                    retried++;
                 }
-                exhausted++;
-            } else {
-                // Increment retry count before dispatching to prevent concurrent SLA cycles from
-                // re-queuing the same video when the lock just expired
-                final long newRetryCount = video.getModerationRetryCount() + 1;
-                // skillars-deferred-92 AC5: increment AND enqueue in one transaction. They were
-                // separate — the counter committed in its own REQUIRES_NEW and the retry was then
-                // published from a bare ApplicationEventPublisher — so a crash in between burned one
-                // of the video's finite retry attempts on a retry that was never requested.
-                // VideoModerationRetryEvent (not VideoUploadedEvent) skips the PROCESSING→SCANNING
-                // transition; ModerationRetryOutboxHandler re-publishes it after the drain.
-                requiresNewTemplate.execute(status -> {
-                    videoRepository.findById(video.getId()).ifPresent(v -> {
-                        v.setModerationRetryCount(v.getModerationRetryCount() + 1);
-                        videoRepository.save(v);
-                    });
-                    moderationOutboxSupport.enqueueRetry(video.getId(), video.getOwnerId());
-                    return null;
-                });
-                log.warn("Moderation SLA exceeded for videoId={} stuck since={} retry={}/{}",
-                         video.getId(), video.getScanningStartedAt(),
-                         newRetryCount, maxRetries);
-                retried++;
+            } catch (Exception e) {
+                log.error("Failed to process SLA violation for videoId={}", video.getId(), e);
             }
         }
         if (retried > 0)

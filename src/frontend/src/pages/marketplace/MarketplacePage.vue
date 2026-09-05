@@ -187,7 +187,6 @@ const languageOptions = ['German', 'English', 'Turkish', 'Arabic'].map((l) => ({
 const sortOptions = [
   { label: t('marketplace.sortName'), value: 'displayName' },
   { label: t('marketplace.sortPrice'), value: 'price' },
-  { label: t('marketplace.sortRatingStub'), value: 'rating', disable: true },
 ]
 
 onMounted(() => {

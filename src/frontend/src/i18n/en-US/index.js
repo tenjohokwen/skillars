@@ -280,7 +280,6 @@ export default {
     sortName: 'Name',
     sortPrice: 'Price',
     sortRating: 'Rating',
-    sortRatingStub: 'Rating (Epic 9)',
     tryAnotherCity: 'Try another city',
     clearFilters: 'Clear filters',
     noCoachesFound: 'No coaches found',

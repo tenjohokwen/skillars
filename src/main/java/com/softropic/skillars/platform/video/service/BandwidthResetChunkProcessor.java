@@ -19,6 +19,15 @@ import org.springframework.transaction.annotation.Transactional;
  * already forced {@code PendingBlobDeletionService} off exactly that shape; see
  * {@link com.softropic.skillars.platform.filestorage.service.PendingBlobDeletionChunkProcessor},
  * which this mirrors.
+ *
+ * <p><strong>Race window and acceptable risk (skillars-deferred-93 AC5):</strong> The reset
+ * processes rows in 500-row chunks, releasing row locks between chunks. A concurrent
+ * {@code QuotaService.incrementBandwidthUsedBytes()} (called on every video playback) has no row
+ * lock or period check, so within the same monthly period, a race window exists: increment happens
+ * while reset runs, or reset happens while increment is in flight. Result: a benign sub-minute skew
+ * in the {@code bandwidth_used_bytes} counter. This is accepted because: (1) {@code bandwidth_used_bytes}
+ * is display-only (gates no rate-limit or quota enforcement), and (2) the next monthly reset
+ * corrects the skew. Once per month, within acceptable tolerance.
  */
 @Slf4j
 @Component

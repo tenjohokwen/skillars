@@ -126,6 +126,21 @@ class ModerationSlaMonitorServiceTest {
             eq(atLimit.getId()), eq(atLimit.getOwnerId()), any(), any(), eq(true));
     }
 
+    @Test
+    void oneVideoThrowsException_nextVideoStillProcesses() {
+        Video video1 = stuckVideo(3);
+        Video video2 = stuckVideo(4);
+        when(videoRepository.findScanningOlderThan(any(), any(), anyInt())).thenReturn(List.of(video1, video2));
+        when(videoRepository.findById(video1.getId())).thenThrow(new RuntimeException("DB connection failed"));
+        when(videoRepository.findById(video2.getId())).thenReturn(Optional.of(video2));
+        when(videoRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.detectSlaViolations();
+
+        verify(moderationOutboxSupport).enqueueRetry(video2.getId(), video2.getOwnerId());
+        verify(moderationOutboxSupport, never()).enqueueRetry(video1.getId(), video1.getOwnerId());
+    }
+
     private Video stuckVideo(int retryCount) {
         Video v = new Video();
         v.setOwnerId("owner@example.com");

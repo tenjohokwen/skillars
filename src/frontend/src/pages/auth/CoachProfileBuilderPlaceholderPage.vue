@@ -240,7 +240,7 @@ async function publishAndRedirect() {
   background: var(--surface-glass);
   border: 1px solid var(--border-medium);
   color: var(--text-muted);
-  transition: all 0.2s ease;
+  transition: background-color, border-color, color, box-shadow 0.2s ease;
 }
 
 .profile-builder__rail-step--done .profile-builder__rail-dot {

@@ -285,7 +285,6 @@ export default {
     sortName: 'Nom',
     sortPrice: 'Prix',
     sortRating: 'Évaluation',
-    sortRatingStub: 'Évaluation (Epic 9)',
     tryAnotherCity: 'Essayer une autre ville',
     clearFilters: 'Effacer les filtres',
     noCoachesFound: 'Aucun coach trouvé',

@@ -1,403 +1,148 @@
-# Senior-dev audit — story skillars-deferred-92
+# Senior-Dev Audit — skillars-deferred-93 (One-Off Bugs & OTP Security)
 
-Reviewer pass date: 2026-09-04. Method: every finding below was checked against `master` source at
-`c2c47c1`, not against the ledger text. Findings are ordered by severity. A short list of premises
-that **did** hold is at the end, to bound false-positive risk.
+**Reviewed:** 2026-09-05
+**Method:** every factual claim in the story cross-checked against current `master`/branch source. Findings below are only those confirmed by reading the code — no speculative "might be" items.
 
-**Audit pass date: 2026-09-04 (second pass, independent).** Every finding in the original review was
-re-verified against source. Each carries an `**AUDIT:**` verdict. Result: **13 of 15 findings
-CONFIRMED**, **2 partially false-positive** (M2's parenthetical, L5's key-count bullet), **1
-under-called and escalated to a blocker** (H1 → B1 — the finding is real but far more serious than the
-review's framing), and **1 finding the review missed entirely** (N1 — AC17 rests on a false premise).
-The review's own coverage gap is stated in § *What this review did not check*.
-
-Verdict after audit: **the story is sound in direction, but it must not go to a dev agent unamended.**
-One live production bug was surfaced by the review's own investigation and not recognised as one (B1);
-one AC is built on a mechanism that does not behave as the story claims (N1); one AC's headline
-verification does not test the property it names (M4).
+**Verdict:** the story is directionally right about *which* defects exist, but four ACs rest on stale or incorrect premises that will send a developer down the wrong path or produce a broken change if followed literally. AC2, AC5, AC7, and AC8 need rework before dev. AC1/AC3/AC6 need smaller corrections. AC4 is sound.
 
 ---
 
-## Blocker
+## CRITICAL — will mislead the developer or break production if implemented as written
 
-### B1 — Booking reminder emails have never been sent. `EmailTemplate.BOOKING_REMINDER` is unreachable.
+### C1 — AC2: `security.msg.unauthorized` is NOT in `messages*.properties`, and nothing resolves it
 
-*Escalated from the original review's H1, which found the right code and drew too small a conclusion.*
+The AC says *"ensure `security.msg.unauthorized` exists in `messages*.properties` (AC12 of deferred-92 brought `messages.properties` to parity — verify it is there)"* and *"the key is already resolved from `messages*.properties` by every other code path."*
 
-The review correctly observed that `BookingEmailListener.onBookingReminder` (`:545`) carries no
-`@TransactionalEventListener`, and framed the consequence as a scoping question — *"decide whether to
-convert it … or leave it on its current (synchronous, in-scheduler-thread) path."* **It has no path.**
+Both statements are false:
 
-Verified at `c2c47c1`:
+- **The key exists in exactly one place:** `src/main/resources/i18n/error-messages.properties`. It is absent from `messages.properties`, `messages_en.properties`, `messages_de.properties`, and `messages_fr.properties` (verified by grep across all four).
+- **No code path resolves it.** A full-tree grep (`*.java`, `*.xml`, `*.yaml`, `*.yml`, `*.html`, `*.properties`) finds `security.msg.unauthorized` only in `error-messages.properties` itself and in one Javadoc line of `MvcConfig.java`. There is no `getMessage("security.msg.unauthorized", …)` call anywhere.
 
-- `onBookingReminder` has **no annotation at all** — not `@EventListener`, not
-  `@TransactionalEventListener`. `grep -c "@EventListener"` on the file returns 0.
-- `BookingEmailListener` is a bare `@Component` (`:45-47`). It does **not** implement
-  `ApplicationListener`.
-- Spring dispatches `publishEvent` only to `@EventListener`/`@TransactionalEventListener` methods or
-  `ApplicationListener` implementations. An unannotated public method on a `@Component` is never
-  invoked, no matter that its parameter type extends `ApplicationEvent`.
-- `BookingReminderScheduler.processReminderWindows()` (`@Scheduled(fixedDelay = 5, MINUTES)`,
-  `@SchedulerLock`, `@Transactional`) publishes `BookingReminderEvent` at `:59` and `:73`.
-- `EmailTemplate.BOOKING_REMINDER` is referenced in exactly **one** place in `src/main` — the
-  unreachable method (`:562`, `:565`). There is no alternative sender.
-- `onBookingReminder` is the **only** unannotated `public void on*` method across both email
-  listeners. Every sibling is correctly annotated. This is a single omission, not a pattern.
+Consequences the story does not account for:
 
-So the event is published into the void on every 5-minute cycle, and no booking reminder — 24-hour
-primary or 2-hour secondary — has ever been delivered to a parent or a coach.
+1. **Deleting the file + basename without first adding the key elsewhere is only safe because the key is currently dead.** But `MvcConfig.messageSource()` sets `setFallbackToSystemLocale(false)` and does *not* set `useCodeAsDefaultMessage`, so the moment anything *does* resolve this key after the file is gone, it throws `NoSuchMessageException`. The AC must be reworded from *"verify it is there"* to *"decide delete-outright vs. fold-in, then, if folding in, ADD it to all four bundles first."*
+2. **Before choosing, run `git log -S'security.msg.unauthorized'`** to learn why the key was introduced. If it was only ever wired to a Spring Security entry-point `MessageSource` that has since been removed, delete it outright. If it is resolved reflectively/externally, it must be folded in.
+3. **`MessageBundleParityTest` enforces an exact key-set match** between `messages_en` / `messages_de` / `messages_fr` and checks the default bundle. If you fold the key into `messages.properties` only, that test fails. It must go into all four (base + en + de + fr).
+4. **The AC's verification step (*"Grep `error-messages` in the codebase returns zero results"*) is unsatisfiable as written.** `error-messages` is also named in the `MvcConfig.java` Javadoc block (roughly lines 60–71) and in a comment in `messages.properties` (~line 139). Both must be edited/removed, and the AC should list them as required changes.
+5. **Basename order matters and is currently load-bearing.** `setBasenames("classpath:/i18n/error-messages", "classpath:/i18n/messages")` lists `error-messages` *first*, so it wins resolution for any shared key. Removing it shifts resolution of `security.msg.unauthorized` (if re-added) to `messages`. Fine, but call it out.
 
-**Three things make it silent, which is why it survived a full story, a 3-layer code review, and this
-review's own first pass:**
+### C2 — AC5: points at the wrong method, the decision branch is dead, and the proposed SQL fix is broken
 
-1. `BookingReminderScheduler:60` logs `"Transitioned booking {} to UPCOMING and sent primary reminder"`
-   — the log asserts a send that never happened.
-2. `:58` calls `b.setPrimaryReminderSentAt(now)` on a managed entity inside `@Transactional`, so the
-   **database records the reminder as sent**. Any "did we remind them?" query says yes.
-3. `BookingEmailListenerTest` (`:101-125`) invokes `listener.onBookingReminder(event)` **directly**.
-   The unit tests pass and prove the method body composes the right email — they cannot detect that
-   nothing calls it. This is the codebase's own recorded antipattern ("a guard whose test passes
-   without the guard") in its purest form: a *feature* whose test passes without the feature being
-   wired.
+The AC tells the dev to *"Read `QuotaService.reserve()` and verify … Does it self-heal the period"*.
 
-`skillars-deferred-91`'s `OutboxService` javadoc (`:65`) names `onBookingReminder` as a live producer
-that "previously published one marker per recipient" — so a prior review also assumed it was wired.
-The assumption has been propagating.
+- **`QuotaService.reserve()` has nothing to do with bandwidth.** It operates only on *storage* quota: `storage_used_bytes`, the `video_quota_reservations` table, and `findByIdForUpdate`. It never reads or writes `bandwidth_used_bytes` or `bandwidth_period_start`. A developer following the AC verbatim will read `reserve()`, find no bandwidth logic, and stall.
+- **The actual bandwidth writer is `QuotaService.incrementBandwidthUsedBytes(ownerId, bytes)`** — a bare, unlocked `UPDATE main.video_quotas SET bandwidth_used_bytes = bandwidth_used_bytes + ? WHERE user_id = ?`, called once from `PlaybackService.java:143` on each playback authorization. It does **no** period check and **no** rollover. Nothing in the codebase self-heals the bandwidth period except the monthly `BandwidthResetChunkProcessor`.
+- **Therefore the AC's "If `reserve()` self-heals → no code change needed" branch is unreachable.** The decision tree only ever resolves to "no self-heal."
+- **Severity is far lower than the AC implies.** `bandwidth_used_bytes` is *read* in exactly one place: `VideoResource.java:122`, to populate a display field on `VideoQuotaResponse`. It gates nothing — there is no bandwidth cap anywhere in `check()`, `reserve()`, or playback authorization. The worst outcome of the race is a once-a-month, sub-minute skew in a cosmetic counter that the next monthly run zeroes anyway. This almost certainly warrants a one-line explanatory comment, not a locking change.
+- **The proposed remediation (`WHERE bandwidth_period_start = CURRENT_DATE - INTERVAL 1 month` on the chunk) is wrong on four counts:**
+  1. `INTERVAL 1 month` is MySQL syntax. This is PostgreSQL (`DATE_TRUNC`, `main.` schema, `TIMESTAMPTZ`) — it needs `INTERVAL '1 month'`.
+  2. `CURRENT_DATE - INTERVAL '1 month'` is a single calendar day, not a month. An equality predicate against it matches almost no rows.
+  3. It breaks the self-excluding / crash-resumable predicate that `BandwidthResetChunkProcessor`'s Javadoc goes to great length to guarantee. Rows more than one month stale (an inactive user), or rows left behind by a skipped run, would never be reset.
+  4. It does not achieve "non-overlapping row sets." `incrementBandwidthUsedBytes` still targets those same prior-month rows; adding a WHERE clause to the *chunk* does nothing to change which rows the *increment* touches.
+- **If a real fix is genuinely wanted,** it belongs in `incrementBandwidthUsedBytes` — make it period-aware under a row lock (conditional UPDATE / upsert that resets the period when `DATE_TRUNC('month', bandwidth_period_start) < DATE_TRUNC('month', NOW())` before adding). Not in the chunk WHERE clause.
+- **Minor:** the "~1s window once a month" figure is invented. `BandwidthResetService.drainReset()` is a tight `for` loop with no inter-chunk sleep. The exposure window for any given not-yet-processed row is "from 00:00 UTC on the 1st until the chunk loop reaches that row."
 
-**Fix:** this is no longer an AC4 sub-question. It needs its own AC: add
-`@TransactionalEventListener(phase = BEFORE_COMMIT)` (consistent with AC4's target state, and
-`BookingReminderScheduler` already publishes inside `@Transactional`, so the ambient transaction AC4
-requires is present), plus an integration test that publishes the event through
-`ApplicationEventPublisher` and asserts an outbox row appears — **not** another direct-invocation unit
-test, which would reproduce the blind spot. Also correct the premature `log.info` and consider whether
-`primaryReminderSentAt` should be stamped before or after the enqueue.
+**Recommended rewrite of AC5:** "Inspect `incrementBandwidthUsedBytes` (not `reserve()`). Confirm the counter is display-only (`VideoResource:122`, no enforcement). Add a comment on both `incrementBandwidthUsedBytes` and `BandwidthResetChunkProcessor` documenting that a benign, self-correcting sub-minute skew is possible once a month and is accepted. No functional change."
 
-**AUDIT: CONFIRMED and escalated.** The review's underlying observation is correct and was the single
-most valuable thing it found; only its severity assessment was wrong.
+### C3 — AC8: the "verification link" being hardened may not exist in that form; parent role and the `userId` origin are missing
 
----
+1. **There is no emailed phone-verification link carrying `userId`.** `userId` reaches the SPA as the **response body of email verification**: `CoachRegistrationService.verifyEmail(...)` returns `new VerifyEmailResponse("verify-phone", user.getId())` (line ~164), and `CoachEmailVerifyPage.vue:77` then does `router.push({ path: '/coach/verify-phone', query: { userId } })`. So `userId` is a client-set SPA route query param, exposed in the URL bar/history — not a server-generated link. Option A ("sign `userId` into the link") therefore actually requires changing the **email-verify endpoint's response DTO** for all three roles to return an opaque/signed handle instead of a raw id, plus the phone-verify page carrying that handle, plus `verify-phone` and `resend-otp` accepting it. That is a much larger surface than "sign userId into the link," and the story's framing hides it.
 
-## High severity
+2. **The parent role is entirely absent from AC8.** The AC names only `/coach/verify-phone` and `/player/verify-phone`. But `ParentPhoneVerifyPage.vue`, `parentRegistrationApi.resendOtp`, `POST /api/security/parent/resend-otp`, and `ParentRegistrationService.resendPhoneOtp` all exist and route through the same shared `RegistrationOtpResendSupport`. Implemented per the AC's file list, parent stays enumerable and the three flows diverge.
 
-### H1 — AC4: the "23 listener methods" count is wrong
+3. **"Files affected" is materially incomplete.** A correct Option A touches: `Coach/Parent/PlayerEmailVerifyPage.vue`, `Coach/Parent/PlayerPhoneVerifyPage.vue`, `Coach/Parent/PlayerRegistrationResource.java` + `…Service.java` (email-verify + verify-phone + resend paths), and the `VerifyEmailResponse` / `VerifyPhoneRequest` / `ResendOtpRequest` DTOs. `ConfigResource.java` (listed as a guess) is unrelated to this flow.
 
-AC4 instructs: *"Move each of the 23 listener methods from `@TransactionalEventListener(AFTER_COMMIT)`
-to `BEFORE_COMMIT`."* Source says:
+4. **Each of the three suggested implementations carries an unflagged risk:**
+   - **Signed JWT:** `jjwt` is on the classpath, so feasible — but token TTL must cover the *entire* email-verify → phone-verify window, which a distracted user can stretch to hours. A short-lived token breaks legitimate resends. The AC says "short-lived" without addressing this.
+   - **Random handle in Redis:** feasible (`spring-boot-starter-data-redis` + `bucket4j-redis` are on the classpath) but adds a datastore dependency to a currently-stateless pre-auth flow, and contradicts the story's own "zero new Spring beans" guarantee (see X1).
+   - **Bind to session:** the app is stateless JWT auth (`JWTAuthorizationFilter`); the pre-auth registration flow has no `HttpSession`. This option is close to a non-starter and should not be presented as equivalent.
 
-| File | `@TransactionalEventListener` annotations | `enqueueEmail` sites |
-|---|---|---|
-| `BookingEmailListener` | **19** | 20 — the 20th is `onBookingReminder` (`:545`), unannotated (see B1) |
-| `SessionPackEmailListener` | **3** | 3 |
+5. **Malformed-token handling is a corner case with a track record in this codebase.** deferred-92 repeatedly fixed "unauthenticated garbage param → raw 500 via `ApiAdvice`'s `@ExceptionHandler(Throwable.class)`" (see the cookie/locale comments in `MvcConfig`). A bad signature / expired / tampered token on the `permitAll` `resend-otp` endpoint must be mapped to a clean 400. AC8's verification step 3 should explicitly assert **not 500**.
 
-So there are **22** flippable transactional listeners, not 23 — exactly the number
-`NotificationOutboxSupport`'s own javadoc already uses ("moving the enqueue into each of the 22
-producing transactions"). The story's headline "23", its "20 … under 20 `@TransactionalEventListener`
-methods", and its "3 under 4" are all off.
+6. **`verify-phone` also accepts a raw `userId` in its POST body** (`VerifyPhoneRequest`, `permitAll`). Leaving it is defensible — it requires a correct OTP, returns a uniform `security.otpMismatch` for both unknown-user and wrong-OTP, and is rate-limited per `userId` (`coach_otp_verify`, 5/10 min). But the story silently scopes it out; it should state that decision.
 
-**AUDIT: CONFIRMED.** Root cause identified: the story's counts came from `grep -c
-"@TransactionalEventListener"`, which counts the `import` line too (20 = 1 import + 19 annotations;
-4 = 1 import + 3). The corrected figures are 19 + 3 = **22 listeners**, **23 enqueue sites**, the 23rd
-being B1's unreachable one. Both numbers appear in the story and both must be stated separately —
-"22 listeners, 23 enqueue sites" — because conflating them is what produced the error.
-
-**Fix:** correct to 22 listeners / 23 enqueue sites; add `BookingReminderScheduler` to AC4's
-producer-audit list; handle `onBookingReminder` under B1's new AC, not AC4.
-
-### H2 — AC3 item 4: the five-pool assertion is unrunnable under the test profile
-
-AC3.4 asks for a `@SpringBootTest` asserting all five pools report
-`isWaitForTasksToCompleteOnShutdown() == true`. But `OutboxConfig` registers `outboxDrainPool` as a
-`SyncTaskExecutor` whenever `app.outbox.drain-async=false`, and the test profile sets exactly that.
-Under the default test profile the bean is a `SyncTaskExecutor` — no
-`isWaitForTasksToCompleteOnShutdown()` method, cast fails.
-
-**AUDIT: CONFIRMED, verbatim.** `OutboxConfig:68-71` declares a second `@Bean(name =
-"outboxDrainPool")` guarded by `@ConditionalOnProperty(havingValue = "false")` returning
-`new SyncTaskExecutor()`; `src/test/resources/application-test.yaml:124-125` sets
-`app.outbox.drain-async: false`. The two beans are mutually exclusive by condition, so overriding the
-property to `true` in the test does yield exactly one bean and no duplicate-definition error — the
-review's suggested fix is sound as written.
+7. **Pre-existing frontend inconsistency worth sweeping while here:** `ParentPhoneVerifyPage.vue:115` and `PlayerPhoneVerifyPage.vue:120` still parse the id with the weak `route.query.userId ? Number(route.query.userId) : null` (lets `12.5` through, sloppy NaN handling). deferred-92 hardened only `CoachPhoneVerifyPage.vue` (`Number.isInteger(parsed) && parsed > 0 ? parsed : null`). If the query param is being reworked anyway, align all three.
 
 ---
 
-## Medium severity
+## MODERATE — AC intent is fine, but a stated fact is wrong and will misdirect effort
 
-### M1 — AC3: the real shutdown deadline is docker-compose `stop_grace_period: 30s`, not the lifecycle-phase timeout
+### M1 — AC7: "17 of 39 email subject keys missing from one or more bundles" is not true on current source
 
-`ThreadPoolTaskExecutor.destroy()` runs during `ApplicationContext.close()` bean destruction, which is
-**not** governed by `spring.lifecycle.timeout-per-shutdown-phase` (that bounds `SmartLifecycle`
-`stop()` phases). AC3.2's framing is anchored to the wrong mechanism. The operative constraint is: sum
-of all five pools' `awaitTerminationSeconds` **plus** context teardown must fit inside the 30 s
-`stop_grace_period`, or the drain is SIGKILLed regardless.
+Verified key-by-key: **all 39 `EmailTemplate.subjectKey()` values are present in all four bundles** (`messages.properties`, `messages_en`, `messages_de`, `messages_fr`). The "current risk" the AC describes — a missing subject key throwing `NoSuchMessageException` in `MailService.sendEmailFromTemplate` — does not currently exist.
 
-**AUDIT: CONFIRMED.** Verified: **9** services in `docker-compose.yml` carry `stop_grace_period: 30s`;
-`server.shutdown` and `spring.lifecycle.timeout-per-shutdown-phase` appear nowhere in
-`src/main/resources/application*.yaml`. `ExecutorConfigurationSupport` is a `DisposableBean`, not a
-`SmartLifecycle`, on Spring Framework 6.2.12 (Boot 3.5.16) — so the review's mechanism claim is
-correct for this exact version, not merely in general. The review's added point about SIGTERM
-forwarding is worth keeping: if the container entrypoint does not `exec`, the JVM never receives
-SIGTERM and no amount of pool configuration matters.
+Further, `MessageBundleParityTest` **already** enforces an exact key-set match across `_en`/`_de`/`_fr` plus the default bundle, so bundle-to-bundle drift for these keys is already covered.
 
-### M2 — AC12 vs Task 4: direct contradiction on `setDefaultLocale`
+- **Reframe the AC.** The proposed `EmailTemplateSubjectKeyParityTest` will pass on first run; there are no keys to add. Its net-new value is narrow but real: it ties the **enum** to the bundles, catching a mistyped enum constant or a key renamed in every bundle but not the enum — something the existing bundle-vs-bundle test cannot see. Say that, so the dev doesn't waste time hunting a 17-key bug that isn't there.
+- **Spec bug:** "for each `EmailTemplate` enum value" includes `NONE("")`. `getMessage("", …)` throws `NoSuchMessageException`. `NONE` is special-cased in `MailService` and must be filtered out (`t != EmailTemplate.NONE` or `!subjectKey.isBlank()`).
+- **"9 behind a live Thymeleaf template … `MailService:74` turns them into runtime exceptions"** conflates two key sets. Subject keys are resolved in Java (`messageSource.getMessage(emailTemplate.subjectKey(), null, locale)`), never in Thymeleaf `th:text`. In-template `#{...}` keys are a different set that may have separate gaps — but this AC's test does not cover them.
 
-AC12 item 5 is emphatic and correct: **do not** call `CookieLocaleResolver.setDefaultLocale(...)`. But
-Task 4's checklist line (story `:411`) says *"`setFallbackToSystemLocale(false)` + explicit
-`setDefaultLocale`"*. These cannot both stand.
+### M2 — AC1: the "finish the cleanup" scope stops short of the actual remaining declarations
 
-**AUDIT: CONFIRMED — but the review's parenthetical is a FALSE POSITIVE.**
+`transition: all` declarations confirmed at:
+- `src/frontend/src/css/components.scss:38` (`.q-drawer .q-item`) and `:81` (`.q-btn`) — in the AC's scope.
+- `src/frontend/src/layouts/MainLayout.vue:418` and `:456` — **not** in scope.
+- `src/frontend/src/pages/auth/CoachProfileBuilderPlaceholderPage.vue:243` — **not** in scope.
 
-The contradiction is real and must be fixed: story `:411` still carries the instruction that AC12.5
-(story `:207`) explicitly forbids. It is an editing residue — AC12 was revised during story creation
-and Task 4 was not.
+The AC scopes the task and its verification grep to `src/frontend/src/css/` only, so it goes green while three declarations remain in scoped `<style>` blocks — contradicting the AC's own rationale ("finish it") and deferred-92's intent. Either widen to all frontend styles (`.scss` + `.vue` `<style>`), or explicitly record the three `.vue` occurrences as deliberately out of scope.
 
-The review then adds: *"Also: `ReloadableResourceBundleMessageSource` has no `setDefaultLocale` method,
-so 'explicit `setDefaultLocale`' has no valid reading here."* **This is wrong.** Verified by inspecting
-`spring-context-6.2.12.jar`: `AbstractResourceBasedMessageSource` — which
-`ReloadableResourceBundleMessageSource` extends — declares `setDefaultLocale`, `getDefaultLocale`,
-`setFallbackToSystemLocale` and `isFallbackToSystemLocale`.
-
-This matters beyond pedantry: it obscures a legitimate option. `messageSource.setDefaultLocale(
-Locale.ENGLISH)` alongside `setFallbackToSystemLocale(false)` pins *which* bundle the fallback resolves
-to (`messages_en.properties`) rather than relying on the basename bundle, and carries **none** of the
-`Accept-Language` regression that the *resolver*'s `setDefaultLocale` does. The two methods share a
-name and are otherwise unrelated. AC12.5 is right to forbid the resolver one; nothing forbids the
-message-source one.
-
-**Fix:** strike "explicit `setDefaultLocale`" from Task 4 and replace with
-"`messageSource.setFallbackToSystemLocale(false)`; resolver `defaultLocale` left unset per AC12.5".
-Optionally note `messageSource.setDefaultLocale(Locale.ENGLISH)` as a safe additional pin — and say
-explicitly that it is a different method from the forbidden one, or the next reader re-derives this.
-
-### M3 — AC4: the existing `catch (JsonProcessingException)` in `enqueueEmail` defeats AC4's intended semantic
-
-`NotificationOutboxSupport.enqueueEmail` swallows a serialisation failure — logs
-`[NOTIFICATION_EMAIL_ENQUEUE_FAILED]` and returns normally. Under AC4's design (`BEFORE_COMMIT` +
-`MANDATORY`/`REQUIRED`), the intended, deliberately-accepted semantic is "a malformed payload rolls the
-business transaction back". The existing catch means the opposite: the booking commits and the email is
-silently lost — the exact failure mode AC4 exists to close.
-
-**AUDIT: CONFIRMED, verbatim.** `NotificationOutboxSupport:77-84` catches `JsonProcessingException`,
-logs at ERROR, and does not rethrow. The comment above it ("Loud log, not a silent drop — this is a
-notification a committed transaction promised") is reasoning that was correct under `AFTER_COMMIT` and
-becomes wrong the moment AC4 lands: after the flip the transaction has *not* committed yet, so the
-choice is available and must be made deliberately. Strong finding — AC4 as written would ship a
-contradiction between its stated semantic and its actual behaviour.
-
-### M4 — AC4 item 5(b): the "rollback → 0 rows" test, as described, does not prove atomicity
-
-A `BEFORE_COMMIT` listener only fires when the transaction is about to commit. If the business code
-throws *before* commit, the listener never runs, so "rolled-back business transaction leaves zero outbox
-rows" is trivially true. The assertion that actually proves the change is: **enqueue row written during
-`beforeCommit`, then the COMMIT itself fails ⇒ 0 rows** — which needs a forced commit-time failure
-(deferred constraint, serialization conflict, or an injected `TransactionSynchronization` that throws in
-`beforeCommit` after the listener).
-
-**AUDIT: CONFIRMED, and stronger than the review states.** The described test passes **identically
-before and after the change** — today's `AFTER_COMMIT` listener also does not fire on a rollback, so
-zero rows is the current behaviour too. It is therefore not merely weak evidence; it is a test that
-cannot fail in either direction, i.e. precisely the antipattern the story's own Dev Notes §1 lists
-three prior instances of (`deferred-13`, `deferred-15`, `uat-3` D11) and instructs the dev not to add a
-fourth. AC4.5(b) as written would add the fourth.
-
-### M5 — AC8: "non-`CONCURRENTLY` `CREATE INDEX`" does not take `ACCESS EXCLUSIVE`
-
-It takes a `SHARE` lock — blocks writes and other DDL, allows reads. Requiring `lock_timeout` for it is
-still right, but the rule's javadoc and the `migration-conventions.md` text must not call it
-`ACCESS EXCLUSIVE`.
-
-**AUDIT: CONFIRMED.** PostgreSQL lock levels for the DDL AC8 enumerates: `ALTER TABLE … ADD/DROP
-COLUMN`, `ADD/DROP CONSTRAINT` and `DROP TABLE` take `ACCESS EXCLUSIVE`; `CREATE INDEX` takes `SHARE`;
-`CREATE INDEX CONCURRENTLY` takes `SHARE UPDATE EXCLUSIVE`. AC8.1 lumps all of them under "DDL that
-takes `ACCESS EXCLUSIVE`", which is wrong for one of three cases. The review's point that this is the
-story's own overstatement warning in miniature is fair and worth keeping in the fix.
+- **Minor:** `glass.scss:17` is a *comment* containing the literal string "transition: all". A verification worded "grep confirms zero `transition: all`" will report a hit there. Word it "zero `transition: all` **declarations**."
 
 ---
 
-## Low severity
+## MINOR — corrections and missing nuance
 
-### L1 — AC4: `requestDrainAfterCommit()` invoked from a `BEFORE_COMMIT` context is an untested path
+### m1 — AC3: the "rating" sort *is* implemented on the backend
 
-**AUDIT: CONFIRMED.** `NotificationOutboxSupport:76` calls `outboxService.requestDrainAfterCommit()`
-immediately after `enqueue`, and `OutboxService.requestDrainAfterCommit` (`:69-70`) guards on
-`TransactionSynchronizationManager.isSynchronizationActive()` and registers an `AFTER_COMMIT`
-synchronization. Registering a synchronization from within `beforeCommit` is permitted by Spring, and
-the guard will be satisfied — but it is a new path here, and `OutboxService:60-67`'s javadoc documents a
-transaction-scoped dedup resource whose unbinding interacts with completion ordering. The AC4 IT should
-assert the drain still fires, not just that the row is written.
+`CoachSearchService.java:118` has `case "rating" -> statusSort.and(Sort.by(Sort.Order.desc("averageRating").nullsLast()))`, and `CoachSearchParams` documents `sortBy` as `"price" | "rating" | "displayName"`. The AC's dichotomy ("remove if not implemented, else move to real i18n") misses the real state: backend supports it; the frontend option is deliberately `disable: true` with "Rating (Epic 9)" stub text because the ratings/reviews feature is not live (and `average_rating` is presumably unpopulated until then). Removing the frontend option is likely correct, but frame it as deliberate feature-gating, not "unimplemented."
 
-### L2 — AC11 item 1: per-clause `NOT VALID` evaluation needs paren-aware parsing
+- **Edge case:** if `filters.sortBy` ever defaults to or persists `'rating'` (initial value, URL query, or localStorage), removing the option leaves the `q-select` bound to a value with no matching option. Check the default and any persistence before deleting the line.
 
-`ALTER TABLE t ADD CONSTRAINT a CHECK (x IN (1,2,3)) NOT VALID, ADD CONSTRAINT b CHECK (...);` cannot
-be split on `,` naively — the `CHECK` body carries commas. The story calls out the analogous parsing
-hazard for AC7's identifier grep but not here.
+### m2 — AC6: test-infra gap understated; two branch descriptions are factually wrong
 
-**AUDIT: CONFIRMED.** Consistent with AC7.2's own "document the limitation rather than overstate the
-guarantee" allowance, which AC11 should be granted explicitly too.
+- **`TestMailManager` cannot produce a `FAILED` envelope.** Its `sendEmailSync()` override only puts the envelope in a map — it writes no `EnvelopeEntity` row. So in `VideoModerationEmailListener.sendAdminAlertSync`, `envelopeEntityRepository.findBySendId(...)` returns `null`, and the `status == FAILED` branch is **unreachable**; every existing `ModerationOutboxIT` case exercises only the happy path. Reaching the FAILED branch requires a **real** `MailManager` whose `MailService`/`JavaMailSender` throws (GreenMail set to reject, or a `@MockBean` sender) so the real `sendEmailSync` runs its catch and persists `status=FAILED`, `retry=isRetryable(e)`. `TestMailManager`'s `super(null,null,null,null)` constructor means it cannot be extended to persist without new plumbing. The AC's "`TestMailManager` or a mock that can stamp a FAILED envelope" hides this fork.
+- **Wrong discriminant.** The branch in `sendAdminAlertSync` is chosen by `persisted.isRetry()`, and `retry` is set to `isRetryable(exception)` in `MailManager.toEnvelopeEntity` — i.e. a transient SMTP error vs. a `NON_REPAIRABLE_ERRORS` type. There is **no `attempts >= MAX_ATTEMPTS` check** in this path (that mechanism lives in `EmailRetryScheduler`). So the AC's two cases ("isRetry() case: attempts < MAX_ATTEMPTS" / "permanent-failure: attempts >= MAX_ATTEMPTS") are inaccurate. Correct framing:
+  - **Case 1 (retryable):** exception classified retryable → `isRetry()==true` → `sendAdminAlertSync` throws `IllegalStateException` → `handle()` rethrows → outbox row retained, `attempts++`, backoff.
+  - **Case 2 (permanent):** exception in `NON_REPAIRABLE_ERRORS` → `isRetry()==false` → `[VIDEO_MODERATION_ADMIN_ALERT_UNDELIVERABLE]` logged at ERROR → returns normally.
+- **"row marked terminal" is wrong for case 2.** `sendAdminAlertSync` returns normally, `handle()` returns normally, and the generic outbox **deletes** the row. There is no terminal status for this aggregate. The only observable for case 2 is the log line — assert it with a Logback `ListAppender` / `OutputCaptureExtension`, since there is no post-state to check.
 
-### L3 — AC12 item 3: the `error-messages` bundle is effectively vestigial
+### m3 — AC4: sound; three notes for the implementer
 
-**AUDIT: CONFIRMED.** `src/main/resources/i18n/` contains exactly `error-messages.properties`,
-`messages.properties`, `messages_{en,de,fr}.properties`. `error-messages.properties` is **1 line, 1
-key**, with no locale variants. AC12.3 is near-moot as written; the dev should record that explicitly
-(Dev Notes §6) and it is worth asking whether that basename should stay registered in
-`MvcConfig.messageSource()` at all.
+Confirmed the defect: in `ModerationSlaMonitorService.detectSlaViolations()`, the `else` (retry) branch of the `for` loop has **no** try/catch. A `DataAccessException` from `videoRepository.findById`/`save`, or an `IllegalStateException` from `moderationOutboxSupport.enqueueRetry`, propagates out and ends the scheduled run, starving every video after the offender (and, since it stays `SCANNING`, it is re-selected and re-poisons the next cycle). The max-retries branch has a try/catch, but only for `TerminalStateViolationException`.
 
-### L4 — Numbering and Task-header drift
-
-**AUDIT: CONFIRMED.** Story AC order on disk is literally `1 … 26, 28, 29, 27` — AC28/AC29 were
-inserted ahead of AC27 during the deploy-audit pass. Task 5's header reads `(AC: 15–26)` (story `:414`)
-while its body now carries AC28 and AC29 checklist lines. Renumber, or make the header read
-`15–26, 28, 29` and move AC27 last.
-
-### L5 — Several "verified live" counts do not survive a re-count
-
-**AUDIT: PARTIALLY CONFIRMED — one bullet is a FALSE POSITIVE.**
-
-- Listener count **22, not 23** — **CONFIRMED** (see H1). `SessionPackEmailListener` is 3 listeners /
-  3 enqueues, not "3 under 4" — **CONFIRMED**.
-- Migration denominator — **CONFIRMED**. `ls src/main/resources/db/migration/*.sql | wc -l` = **121**
-  files; the highest version is `V127` (the sequence has gaps). The story's "2 of 127" should read
-  "2 of 121". The **2** (`V55`, `V57`) is correct.
-- `messages.properties` gap **"~44 … vs the story's 46"** — **FALSE POSITIVE. The story's 46 is
-  correct.** Re-derived with a properties-aware parser (skips blank lines, `#` and `!` comments,
-  accepts both `=` and `:` as separators, trims keys): `messages_en` = 130 keys, `messages` = 86 keys,
-  **46** present in the former and absent from the latter. The review's `~44` is a counting artefact,
-  and its hedge — "regex-dependent; the dev will re-derive" — is the right instinct applied to the
-  wrong side. AC12 may keep 46.
-
-The review's closing advice on this finding ("re-count at implementation time, don't treat as fixed")
-remains sound and survives the correction.
-
-### L6 — AC9: the resumability predicate leans on the column Def8 flags as quirky
-
-AC9.2 wants each chunk's `WHERE` scoped on `bandwidth_period_start` for idempotent resume; AC9.3 puts
-Def8's `bandwidth_period_start = NOW()`-on-run-date drift explicitly out of scope. Compatible, but the
-dev must confirm the predicate actually separates "already reset this cycle" from "not yet reset" given
-that behaviour before relying on it.
-
-**AUDIT: CONFIRMED as a legitimate caution.** Not a defect in the story; a dependency the story asserts
-past without naming.
+- The line is ~90, not `:60` as the AC states.
+- Preserve the existing `catch (TerminalStateViolationException) { … continue; }` semantics — it intentionally skips `exhausted++` for already-terminal videos. A naïve broad wrap must not start counting those.
+- `detectSlaViolations()` is itself `@Transactional`, and `findScanningOlderThan` takes `PESSIMISTIC_WRITE` locks held to method end. Catching per-item and continuing is safe (the per-item work is `REQUIRES_NEW` and commits/rolls back independently) — just don't restructure the outer transaction.
+- The existing `ModerationSlaMonitorServiceTest` is a Mockito unit test with `transactionTemplate.execute(any())` stubbed to invoke the callback. Making `videoLifecycleService`/`moderationOutboxSupport` throw for video 1 and asserting video 2 still processes is a straightforward addition.
 
 ---
 
-## Findings the review missed
+## CROSS-CUTTING
 
-### N1 — AC17 rests on a false premise: bare `@Async` does **not** resolve to `SimpleAsyncTaskExecutor` here
+### X1 — "Zero new Spring beans / no new contexts" is likely violated by a real AC8
 
-AC17 states that `VideoPhysicalDeletionListener`'s two bare `@Async` annotations mean *"Spring resolves
-that to the application's default `AsyncTaskExecutor`; where no single candidate resolves, it falls back
-to `SimpleAsyncTaskExecutor`, which creates an **unbounded** new thread per task"*, and calls it "an
-unbounded thread-creation vector". Verified at `c2c47c1`, that is not what happens:
+Any Option-A implementation (signed-token service, or a Redis-backed handle store) almost certainly introduces at least one new bean or a new dependency on `RedisTemplate`. The "No Migrations, No New Spring Contexts" guarantee in *Technical Requirements* should be softened to acknowledge AC8 may add a token/handle collaborator.
 
-- A bean **named exactly `taskExecutor`** exists — `infrastructure/config/AsyncConfig.java:32`, a
-  bounded `ThreadPoolTaskExecutor`.
-- `AsyncExecutionAspectSupport.getDefaultExecutor` resolves in this order: unique `TaskExecutor` bean →
-  on `NoUniqueBeanDefinitionException`, the bean literally named `taskExecutor` → only if that is
-  absent does it fall back to `SimpleAsyncTaskExecutor`. With five executor beans present the second
-  step matches, so bare `@Async` runs on the bounded `taskExecutor`.
-- Spring Boot's auto-configured `applicationTaskExecutor` is `@ConditionalOnMissingBean(Executor.class)`
-  and backs off entirely here, so it does not muddy the resolution.
+### X2 — Commit strategy assumes AC5 produces a fix
 
-So the stated failure mode does not exist. Two further facts the AC omits:
+Commit 5 is templated as "analyze + fix bandwidth-reset race condition." Per C2, the correct outcome of AC5 is very likely "analyzed, documented, no functional change." That is a valid result; the checklist/commit message should allow for it rather than presuming a code fix.
 
-- `@EnableAsync` sits on `notification/config/AsyncConfig.java:23`;
-  `infrastructure/config/AsyncConfig.java:21` carries a javadoc explicitly recording that it omits
-  `@EnableAsync` deliberately. The wiring is intentional and documented, not accidental.
-- There are **10** bare `@Async` sites in `src/main` (`VideoSseService` ×2, `TimelineEventListener` ×2,
-  `RadarCompositeCalculationService`, `SluCalculationService`, `ReportGenerationService`,
-  `HomeworkAssignmentService`, `SessionPlanService`, `VideoPhysicalDeletionListener` ×2 — the last
-  being AC17's target). AC17 singles out one file for a codebase-wide convention, on a premise that
-  does not hold, without saying why that file and not the other eight.
+### X3 — AC9 ledger: follow the ledger's own pruning convention
 
-**This is the exact trap the story's own Dev Notes §2 warns about** — implementing against a premise
-copied from the ledger (`skillars-4-3` W6, written 2026-06-17) without re-verifying it against current
-wiring. The ledger entry may well have been true when the codebase had fewer executor beans.
-
-**Fix:** rewrite AC17. The remediation (an explicit qualifier) is still defensible as hygiene — it
-removes reliance on a two-step fallback that a future bean rename would silently break — but it must be
-justified on those grounds, not on unbounded threads. And it should either cover all 10 sites or state
-plainly why only these two. Note that AC3's graceful-shutdown work makes the correct answer more
-valuable, since a bare `@Async` inherits whatever `taskExecutor` is configured to do on shutdown.
+The AC says "delete them once the story is merged." deferred-92 AC6 established that the ledger is pruned per its own documented convention (tag `[PICKED UP by …]`, then prune) rather than bulk-deleted. Match that.
 
 ---
 
-## What this review did not check
+## Summary table
 
-Stated so the coverage gap is explicit rather than implied (the story's own Dev Notes §6 asks for this;
-a review owes the same discipline).
-
-- **Checked in some depth:** AC1, AC3, AC4, AC8, AC10, AC12, AC15, AC16, AC21, AC22, plus AC9 and AC11
-  at the level of their stated approach.
-- **Not checked at all:** AC2, AC5, AC6, AC7, AC13, AC14, AC17 (until this audit's N1), AC18, AC19,
-  AC20, AC23, AC24, AC25, AC26, AC27, AC28, AC29.
-- N1 was found by auditing one of the unchecked ACs. The remaining 15 unchecked ACs have had **no**
-  premise verification by either pass. Given that the two ACs examined outside the review's original
-  scope yielded one blocker (B1, via H1) and one false premise (N1), the unchecked set should not be
-  assumed clean.
-
----
-
-## Premises that checked out (false-positive control)
-
-Verified against source and **correct** as the story states them:
-
-- **AC3** — `grep` for `setWaitForTasksToCompleteOnShutdown` / `setAwaitTerminationSeconds` returns
-  zero hits; all five executor beans exist and none is profile-gated out of production. The
-  `sendMailPool` bean (`AsyncConfig.threadPoolTaskExecutor`) genuinely calls
-  `setRejectedExecutionHandler(new CallerRunsPolicy())` **after** `afterPropertiesSet()`, and
-  `moderationTaskExecutor` directly above it orders the two calls correctly. **Bug confirmed** — and
-  re-confirmed by this audit at the mechanism level: `ExecutorConfigurationSupport.afterPropertiesSet()`
-  → `initialize()` builds the `ThreadPoolExecutor` from the fields set so far, and the inherited
-  default is `AbortPolicy`; a later setter mutates only the wrapper's field. `sendMailPool` runs with
-  `AbortPolicy`.
-- **AC4 core mechanism** — `@TransactionalEventListener(BEFORE_COMMIT)` runs inside the producing
-  transaction's synchronisation with the transaction still open, so switching `enqueueEmail` to
-  `MANDATORY`/`REQUIRED` and relying on the write flushing atomically with the business work is sound.
-  The listeners carry **no** `@Async`, so there is no detached-thread hazard. `RefundOutboxSupport` is
-  a valid reference shape.
-- **AC10** — `V20__platform_config.sql` declares `id BIGINT NOT NULL, PRIMARY KEY (id)` with no
-  sequence / no `DEFAULT` / no `GENERATED`, and hand-seeds ids. Next free migration is `V128`.
-  `BY DEFAULT AS IDENTITY` (not `ALWAYS`) is the right call and `pg_get_serial_sequence` works for
-  identity columns.
-- **AC12** — `messages.properties` = 86 keys vs `messages_en` = 130 (gap **46**, see L5);
-  `MvcConfig.messageSource()` registers `error-messages` + `messages` with no
-  `setFallbackToSystemLocale` / no `setUseCodeAsDefaultMessage`; `localeResolver()` is a bare
-  `CookieLocaleResolver` with no `setDefaultLocale`. `MessageBundleParityTest` covers only
-  `messages_de` / `messages_fr`. The AC12.5 warning about the **resolver**'s `setDefaultLocale`
-  disabling `Accept-Language` is correct. (Severity caveat retained: the 500 manifests when the
-  container JVM default locale is non-`en` and non-`de`/`fr`; "genuine live bug" is defensible but
-  conditional, and the story says so.)
-- **AC8** — only `V55` and `V57` set `lock_timeout`; `migration-conventions.md` mentions it once as
-  precedent. Confirmed. (Denominator corrected to 121 — see L5.)
-- **AC15** — `SecurityConfiguration` passes `PUBLIC_ENDPOINTS.toArray(new String[0])` to
-  `requestMatchers(String...)`. The matcher-fidelity concern is real.
-- **AC16** — `ROLE_ROUTES` is defined twice (`LoginPage.vue:145`, `router/index.js:38`) and read at six
-  sites (1 + 5). `routes.js:232` is only a comment reference. Confirmed.
-- **AC21** — `docs/dev-docs/index.html:152` does say "deep dive on the JWT refresh-token rotation
-  flow", and `:150` links `lgtm-observability.md`, so the AC21 / AC28 coordination note is valid.
-- **AC22** — `CoachPublicProfilePage.vue` `onMounted` at `:446`, page fetch at `:535`,
-  `listCoachReviews` imported at `:370`. Structure matches; AC22.3's "shapes match" hedge is
-  appropriately cautious.
-- **AC1** — `ci.yml` contains no `prettier` / `eslint` / `lint` step. Confirmed.
-
----
-
-## Required story amendments, consolidated
-
-| # | Change | Source |
-|---|---|---|
-| 1 | New AC for the unreachable `onBookingReminder` — annotate, event-published IT (not direct-invocation), fix the premature `log.info` | B1 |
-| 2 | AC4: "22 listeners / 23 enqueue sites"; add `BookingReminderScheduler` to the producer audit | H1 |
-| 3 | AC3.4: require `app.outbox.drain-async=true` override for the five-pool test | H2 |
-| 4 | AC3.2: re-anchor to `stop_grace_period: 30s`; add the SIGTERM-forwarding check | M1 |
-| 5 | Task 4: strike "explicit `setDefaultLocale`"; note the message-source method is a *different*, safe one | M2 |
-| 6 | AC4: decide the fate of `enqueueEmail`'s `catch (JsonProcessingException)` — rethrow or documented residual | M3 |
-| 7 | AC4.5(b): prescribe a commit-time failure mechanism, or the test cannot fail | M4 |
-| 8 | AC8: correct the lock levels — `CREATE INDEX` is `SHARE`, not `ACCESS EXCLUSIVE` | M5 |
-| 9 | AC4 IT: assert the drain fires after a `BEFORE_COMMIT` enqueue | L1 |
-| 10 | AC11: grant the same "document the limitation" allowance AC7.2 has | L2 |
-| 11 | AC12.3: record that `error-messages` is 1 key with no variants | L3 |
-| 12 | Renumber AC27–AC29; fix Task 5's header | L4 |
-| 13 | AC8: denominator 121, not 127 | L5 |
-| 14 | AC9.2: name the dependency on Def8's `bandwidth_period_start` behaviour | L6 |
-| 15 | **AC17: rewrite — the `SimpleAsyncTaskExecutor` premise is false; rejustify or drop, and address all 10 bare `@Async` sites or say why not** | N1 |
+| AC  | Status | Core issue |
+|-----|--------|-----------|
+| AC1 | Fix scope | Verification scoped to `css/`; 3 live `transition: all` declarations remain in `.vue` files. Comment match in `glass.scss:17` will confuse the grep check. |
+| AC2 | **Rework** | Key is NOT in `messages*.properties` and is referenced by zero code paths. "Verify it is there" is wrong — must add to all 4 bundles (or delete outright after `git log -S`). Javadoc/comment references block the verification step. |
+| AC3 | Nuance | Backend `case "rating"` sort IS implemented; frontend option is deliberately Epic-9-gated. Check for a persisted `sortBy='rating'` before removing. |
+| AC4 | OK | Sound. Line is ~90 not `:60`; preserve `TerminalStateViolationException`→`continue`; outer `@Transactional` + pessimistic locks are fine with per-item catch. |
+| AC5 | **Rework** | Names `reserve()` — wrong method (storage only). Bandwidth writer is `incrementBandwidthUsedBytes` (unlocked, no self-heal). Counter is display-only (`VideoResource:122`), not enforced. Proposed WHERE-clause SQL is MySQL syntax, wrong semantics, breaks the resumable predicate, and doesn't separate row sets. Likely outcome: a comment, no code change. |
+| AC6 | Fix framing | `TestMailManager` writes no `EnvelopeEntity` → FAILED branch unreachable with it; needs a real failing `MailManager`. Branch discriminant is `isRetry()` (= exception retryability), NOT `attempts vs MAX_ATTEMPTS`. Permanent-failure path deletes the row (not "terminal") — only observable is a log line. |
+| AC7 | Fix premise | All 39 subject keys are present in all 4 bundles today; no live bug. `MessageBundleParityTest` already covers bundle parity. New test's real value = enum↔bundle drift; will pass on first run. Must exclude `EmailTemplate.NONE`. "Thymeleaf template" claim conflates subject keys (Java-resolved) with in-template keys. |
+| AC8 | **Rework** | `userId` comes from the email-verify *response DTO* + a client `router.push`, not an emailed link. Parent role omitted entirely (3 roles share `RegistrationOtpResendSupport`). File list incomplete. App is stateless (session option ≈ dead). JWT TTL vs. UX window unaddressed. Malformed token must not 500. |
+| AC9 | Minor | Follow the ledger's documented prune convention, not bulk delete. |
