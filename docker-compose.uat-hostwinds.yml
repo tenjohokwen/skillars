@@ -66,6 +66,7 @@ services:
       - APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET=${APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET}
       - APP_VIDEO_PLAYBACK_SIGNING_SECRET=${APP_VIDEO_PLAYBACK_SIGNING_SECRET}
       - PLATFORM_PIN_ENCRYPTION_SECRET=${PLATFORM_PIN_ENCRYPTION_SECRET}
+      - PLATFORM_REGISTRATION_VERIFICATION_SECRET=${PLATFORM_REGISTRATION_VERIFICATION_SECRET}
       # Same single-endpoint constraint as docker-compose.uat.yml (S3Presigner bakes
       # app.storage.endpoint-url into every presigned URL it hands back) — but there's no
       # STORAGE_DOMAIN/Traefik here, just the one real hostname this box already has, on

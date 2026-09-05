@@ -40,6 +40,8 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
       const n = Number(v)
       return v && !isNaN(n) ? n : null
     }
+    const validSortValues = ['displayName', 'price']
+    const sortValue = validSortValues.includes(query.sortBy) ? query.sortBy : 'displayName'
     filters.value = {
       city: query.city || '',
       district: query.district || '',
@@ -48,7 +50,7 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
       maxPrice: parseNumber(query.maxPrice),
       ageGroup: query.ageGroup || '',
       skill: query.skill || '',
-      sortBy: query.sortBy || 'displayName',
+      sortBy: sortValue,
     }
   }
 

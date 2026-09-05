@@ -46,7 +46,7 @@ public class CoachRegistrationResource {
     @PreAuthorize("permitAll()")
     @PostMapping("/verify-phone")
     public ResponseEntity<Void> verifyPhone(@RequestBody @Valid VerifyPhoneRequest request) {
-        long userId = verificationTokenService.resolveUserId(request.verificationToken());
+        long userId = verificationTokenService.resolveUserId(request.verificationToken(), "COACH");
         coachRegistrationService.verifyPhone(userId, request.otp());
         return ResponseEntity.ok().build();
     }
@@ -64,7 +64,7 @@ public class CoachRegistrationResource {
     @PreAuthorize("permitAll()")
     @PostMapping("/resend-otp")
     public ResponseEntity<Void> resendOtp(@RequestBody @Valid ResendOtpRequest request) {
-        long userId = verificationTokenService.resolveUserId(request.verificationToken());
+        long userId = verificationTokenService.resolveUserId(request.verificationToken(), "COACH");
         coachRegistrationService.resendPhoneOtp(userId);
         return ResponseEntity.ok().build();
     }

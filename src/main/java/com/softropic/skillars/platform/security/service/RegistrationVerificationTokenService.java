@@ -23,15 +23,15 @@ import java.util.Base64;
  * <p>The old flow returned the raw {@code userId} in the {@code /verify-email} response body; the SPA
  * then carried it in the {@code /verify-phone} route and POSTed it to {@code /resend-otp}. Anyone
  * could walk {@code userId} 1..N against {@code /resend-otp} and probe which accounts were
- * mid-registration. This handle is an HMAC-SHA256 MAC over {@code {userId, expiry}} keyed by a
- * server-only secret, so it cannot be forged for an arbitrary id.
+ * mid-registration. This handle is an HMAC-SHA256 MAC over {@code {role, userId, expiry}} keyed by a
+ * server-only secret, so it cannot be forged for an arbitrary id, and is bound to a single role.
  *
  * <p>Format: {@code base64url(payload) + "." + base64url(hmacSha256(base64url(payload)))} where
- * {@code payload = "1:" + userId + ":" + expiryEpochSeconds} — the same encode-then-sign shape as a
- * JWS, without pulling in a JWT dependency for a two-field body.
+ * {@code payload = "1:" + role + ":" + userId + ":" + expiryEpochSeconds} — the same encode-then-sign shape as a
+ * JWS, without pulling in a JWT dependency for a three-field body.
  *
- * <p>Every verification failure — malformed, bad signature, expired, wrong version — raises the same
- * {@link RegistrationVerificationTokenException} (a {@code 400}, uniform message), so it is never an
+ * <p>Every verification failure — malformed, bad signature, expired, wrong version, or role mismatch —
+ * raises the same {@link RegistrationVerificationTokenException} (a {@code 400}, uniform message), so it is never an
  * oracle and never a raw {@code 500}.
  */
 @Service
@@ -59,13 +59,16 @@ public class RegistrationVerificationTokenService {
         Assert.hasText(secret,
             "skillars.platform.registration-verification-secret must be set "
                 + "(env PLATFORM_REGISTRATION_VERIFICATION_SECRET) — phone-verification handles cannot be signed without it");
+        Assert.isTrue(secret.length() >= 32,
+            "skillars.platform.registration-verification-secret must be at least 32 characters "
+                + "(generate with: openssl rand -base64 32)");
         this.secretKey = secret.getBytes(StandardCharsets.UTF_8);
     }
 
     /** @return an opaque handle the SPA carries through the phone-verification flow for {@code userId}. */
-    public String issuePhoneVerificationToken(long userId) {
+    public String issuePhoneVerificationToken(long userId, String role) {
         long expiry = Instant.now().plus(TOKEN_TTL).getEpochSecond();
-        String payload = VERSION + ":" + userId + ":" + expiry;
+        String payload = VERSION + ":" + role + ":" + userId + ":" + expiry;
         String encodedPayload = B64.encodeToString(payload.getBytes(StandardCharsets.UTF_8));
         return encodedPayload + "." + B64.encodeToString(hmac(encodedPayload));
     }
@@ -73,9 +76,9 @@ public class RegistrationVerificationTokenService {
     /**
      * @return the {@code userId} the handle was issued for
      * @throws RegistrationVerificationTokenException if the handle is malformed, unsigned by this
-     *     server, expired, or of an unknown version
+     *     server, expired, of an unknown version, or the role does not match the expected role
      */
-    public long resolveUserId(String token) {
+    public long resolveUserId(String token, String expectedRole) {
         if (token == null || token.isBlank()) {
             throw new RegistrationVerificationTokenException();
         }
@@ -98,14 +101,18 @@ public class RegistrationVerificationTokenService {
         }
 
         String[] parts = new String(payloadBytes, StandardCharsets.UTF_8).split(":");
-        if (parts.length != 3 || !VERSION.equals(parts[0])) {
+        if (parts.length != 4 || !VERSION.equals(parts[0])) {
+            throw new RegistrationVerificationTokenException();
+        }
+        String tokenRole = parts[1];
+        if (!tokenRole.equals(expectedRole)) {
             throw new RegistrationVerificationTokenException();
         }
         long userId;
         long expiry;
         try {
-            userId = Long.parseLong(parts[1]);
-            expiry = Long.parseLong(parts[2]);
+            userId = Long.parseLong(parts[2]);
+            expiry = Long.parseLong(parts[3]);
         } catch (NumberFormatException e) {
             throw new RegistrationVerificationTokenException();
         }

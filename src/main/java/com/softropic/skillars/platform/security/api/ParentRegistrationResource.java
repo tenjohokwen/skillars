@@ -46,7 +46,7 @@ public class ParentRegistrationResource {
     @PreAuthorize("permitAll()")
     @PostMapping("/verify-phone")
     public ResponseEntity<Void> verifyPhone(@RequestBody @Valid VerifyPhoneRequest request) {
-        long userId = verificationTokenService.resolveUserId(request.verificationToken());
+        long userId = verificationTokenService.resolveUserId(request.verificationToken(), "PARENT");
         parentRegistrationService.verifyPhone(userId, request.otp());
         return ResponseEntity.ok().build();
     }
@@ -61,7 +61,7 @@ public class ParentRegistrationResource {
     @PreAuthorize("permitAll()")
     @PostMapping("/resend-otp")
     public ResponseEntity<Void> resendOtp(@RequestBody @Valid ResendOtpRequest request) {
-        long userId = verificationTokenService.resolveUserId(request.verificationToken());
+        long userId = verificationTokenService.resolveUserId(request.verificationToken(), "PARENT");
         parentRegistrationService.resendPhoneOtp(userId);
         return ResponseEntity.ok().build();
     }

@@ -34,6 +34,7 @@ services:
       # docker-compose.yml doesn't pass it through for prod either — separate, pre-existing
       # gap not fixed here).
       - PLATFORM_PIN_ENCRYPTION_SECRET=${PLATFORM_PIN_ENCRYPTION_SECRET}
+      - PLATFORM_REGISTRATION_VERIFICATION_SECRET=${PLATFORM_REGISTRATION_VERIFICATION_SECRET}
       # MinIO stands in for the real S3 API — see the `minio` service below. Both the app
       # container and real browsers (for presigned upload/download URLs) need to resolve
       # the *same* host, since S3Presigner bakes app.storage.endpoint-url straight into

@@ -425,3 +425,35 @@ convention the lines are not deleted until the PR merges to master.
 | :--- | :--- | :--- |
 | v0.1 | 2026-09-05 | AC1–AC5, AC7 (commit d5ba043, prior session) |
 | v0.2 | 2026-09-05 | AC6 (`VideoModerationEmailListenerTest`), AC8 (HMAC verification-token flow across 3 roles + frontend), AC9 (ledger tags); AC7 test rewritten to a context-free bundle check; story marked review |
+
+---
+
+## Review Findings
+
+_bmad-code-review, 2026-09-05. Three layers: Blind Hunter, Edge Case Hunter, Acceptance Auditor. All three completed._
+
+### Decision needed
+
+_All 3 resolved by Mbah, 2026-09-06 — see the Patch list below (P11–P13)._
+
+### Patch
+
+- [ ] [Review][Patch] All 5 `transition: all` replacements are malformed shorthand — every property but the last gets `0s` [src/frontend/src/css/components.scss:38, :81; src/frontend/src/layouts/MainLayout.vue:418, :456; src/frontend/src/pages/auth/CoachProfileBuilderPlaceholderPage.vue:243]
+- [ ] [Review][Patch] `PLATFORM_REGISTRATION_VERIFICATION_SECRET` is wired into no deployment file — prod/uat context aborts at startup [.env.example, docker-compose.yml, docker-compose.uat.yml, docker-compose.uat-hostwinds.yml, docker-compose.local.yml]
+- [ ] [Review][Patch] Signed payload carries no role/purpose binding — one handle is accepted by all three role endpoints [src/main/java/com/softropic/skillars/platform/security/service/RegistrationVerificationTokenService.java:68]
+- [ ] [Review][Patch] Three phone-verify pages diverge on error display, cooldown-on-failure, `clearError()`, and unmount guard [src/frontend/src/pages/auth/ParentPhoneVerifyPage.vue:102, PlayerPhoneVerifyPage.vue:105 vs CoachPhoneVerifyPage.vue:112]
+- [ ] [Review][Patch] `resolveUserId` runs before the `@RateLimited` service method, so malformed-token POSTs are unmetered; token has `@NotBlank` but no `@Size` [src/main/java/com/softropic/skillars/platform/security/api/dto/ResendOtpRequest.java:10, VerifyPhoneRequest.java, CoachRegistrationResource.java:49, :67]
+- [ ] [Review][Patch] `security.verificationLinkInvalid` is present in no backend bundle — the 400 body returns the raw dotted key in every locale [src/main/java/com/softropic/skillars/platform/security/contract/exception/RegistrationVerificationTokenException.java:17]
+- [ ] [Review][Patch] HMAC secret has no minimum-strength check — `Assert.hasText` accepts a 1-char production key [src/main/java/com/softropic/skillars/platform/security/service/RegistrationVerificationTokenService.java:59]
+- [ ] [Review][Patch] `resendOtp_blankHandle_returns400` asserts only the status code, so it cannot detect that `@NotBlank` bypasses the uniform `verificationLinkInvalid` body [src/test/java/.../CoachRegistrationResourceIT.java:718, ParentRegistrationResourceIT.java:655, PlayerRegistrationResourceIT.java:401]
+- [ ] [Review][Patch] AC3 removed the `rating` sort option but not its persisted value — a restored `?sortBy=rating` URL renders a blank select while the backend still sorts by rating [src/frontend/src/pages/marketplace/MarketplacePage.vue:186; src/frontend/src/stores/marketplace.store.js:51]
+- [ ] [Review][Patch] AC8's "Out-of-scope" bullet and Verification #1 now describe behaviour that no longer exists (`verify-phone` body was migrated too) — spec text is stale [_bmad-output/implementation-artifacts/skillars-deferred-93-genuine-one-off-bugs-and-otp-security-fixes.md:128]
+
+- [ ] [Review][Patch] (P11, from D1a) Allow verification-handle re-issue at `EMAIL_VERIFIED` so an expired 24h handle is not a dead-end — widen the `resendVerificationEmail` status guard to include `EMAIL_VERIFIED` and re-issue a handle rather than a fresh email token where appropriate; keep the always-200 no-enumeration contract and the `isLocked()` short-circuit [src/main/java/com/softropic/skillars/platform/security/service/CoachRegistrationService.java:217, ParentRegistrationService.java:221, PlayerRegistrationService.java:232]
+- [ ] [Review][Patch] (P12, from D2a) Move the verification handle off the URL query string — hand it to the phone-verify page via `sessionStorage`/history-replace instead of `router.push({ query: { token } })`, so it stops landing in browser history, `Referer` headers, and access logs [src/frontend/src/pages/auth/CoachEmailVerifyPage.vue:77, ParentEmailVerifyPage.vue:77, PlayerEmailVerifyPage.vue:77 and the 3 PhoneVerify pages that read it]
+- [ ] [Review][Patch] (P13, from D3a) Add a consecutive-failure escape hatch to the SLA monitor — track repeated per-video failures and force the video to `FAILED` (with the admin alert) past a threshold, so a persistently-throwing `REQUIRES_NEW` block cannot loop forever unnoticed [src/main/java/com/softropic/skillars/platform/video/service/ModerationSlaMonitorService.java:105]
+
+### Deferred
+
+- [x] [Review][Defer] `VideoModerationEmailListenerTest` cements two fail-open paths — a blank `platform.admin_alert_email` drops every permanent-failure alert with no send, no ERROR, and no retained outbox row; a null `findBySendId` logs an undelivered alert as delivered at INFO [src/test/java/.../VideoModerationEmailListenerTest.java:150] — deferred, pre-existing listener behaviour, not introduced by this story
+- [x] [Review][Defer] AC6 delivered a mocked listener unit test rather than the specified `ModerationOutboxIT` case — both FAILED branches are genuinely exercised and mutation-sensitive, but no test observes outbox row retention/deletion or the real `MailManager` exception→envelope mapping [src/test/java/.../VideoModerationEmailListenerTest.java] — deferred, deviation documented in Dev Agent Record; AC6's own infra premise was wrong (`NotificationEmailOutboxAtomicityIT` uses `TestMailManager`)

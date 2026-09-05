@@ -415,7 +415,7 @@ onUnmounted(() => {
   font-family: 'Inter', sans-serif;
   font-size: 14px;
   color: var(--text-secondary);
-  transition: background-color, color 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease;
 
   &:hover {
     background: var(--surface-glass-hover) !important;
@@ -453,7 +453,7 @@ onUnmounted(() => {
   min-height: 44px;
   color: var(--text-secondary);
   font-family: 'Inter', sans-serif;
-  transition: background-color, color 0.2s ease;
+  transition: background-color 0.2s ease, color 0.2s ease;
 
   &:hover {
     background: var(--surface-glass-hover) !important;

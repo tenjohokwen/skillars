@@ -163,7 +163,7 @@ public class CoachRegistrationService {
         sendOtpEmail(user, otp);
 
         return new VerifyEmailResponse(
-            "verify-phone", verificationTokenService.issuePhoneVerificationToken(user.getId()));
+            "verify-phone", verificationTokenService.issuePhoneVerificationToken(user.getId(), "COACH"));
     }
 
     public void verifyPhone(Long userId, String otp) {

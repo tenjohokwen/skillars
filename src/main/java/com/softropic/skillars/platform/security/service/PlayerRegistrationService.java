@@ -178,7 +178,7 @@ public class PlayerRegistrationService {
         sendOtpEmail(user, otp);
 
         return new VerifyEmailResponse(
-            "verify-phone", verificationTokenService.issuePhoneVerificationToken(user.getId()));
+            "verify-phone", verificationTokenService.issuePhoneVerificationToken(user.getId(), "PLAYER"));
     }
 
     public void verifyPhone(Long userId, String otp) {
