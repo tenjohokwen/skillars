@@ -146,13 +146,20 @@ public class PlayerRegistrationService {
             throw new EmailTokenException("security.accountLocked", false);
         }
 
-        if (user.getVerificationStatus() != SkillarsVerificationStatus.UNVERIFIED) {
+        // skillars-deferred-93 P11: an already-EMAIL_VERIFIED user whose 24h phone-verification handle
+        // expired can re-use a freshly-sent verification email to obtain a new OTP + handle. Re-entry
+        // does not advance status (isLocked() is already checked above); any status past EMAIL_VERIFIED
+        // is a genuinely spent token.
+        if (user.getVerificationStatus() != SkillarsVerificationStatus.UNVERIFIED
+            && user.getVerificationStatus() != SkillarsVerificationStatus.EMAIL_VERIFIED) {
             throw new EmailTokenException("security.emailTokenInvalid", false);
         }
 
-        user.setVerificationStatus(SkillarsVerificationStatus.EMAIL_VERIFIED);
-        user.setActivated(true);
-        userRepository.save(user);
+        if (user.getVerificationStatus() == SkillarsVerificationStatus.UNVERIFIED) {
+            user.setVerificationStatus(SkillarsVerificationStatus.EMAIL_VERIFIED);
+            user.setActivated(true);
+            userRepository.save(user);
+        }
 
         evt.setUsed(true);
         try {
@@ -229,8 +236,13 @@ public class PlayerRegistrationService {
             if (user.isLocked()) {
                 return;
             }
+            // skillars-deferred-93 P11: EMAIL_VERIFIED is included so a user whose phone-verification
+            // handle (24h TTL) expired can get a fresh verification email; verifyEmail() then re-issues
+            // a fresh OTP + handle for the already-verified email without advancing status. Without this
+            // an expired handle is a dead-end (the handle is only ever minted by verifyEmail()).
             if (user.getVerificationStatus() == null ||
-                user.getVerificationStatus() == SkillarsVerificationStatus.UNVERIFIED) {
+                user.getVerificationStatus() == SkillarsVerificationStatus.UNVERIFIED ||
+                user.getVerificationStatus() == SkillarsVerificationStatus.EMAIL_VERIFIED) {
                 emailTokenRepository.deleteByUserIdAndUsedFalse(user.getId());
                 log.atInfo()
                    .addKeyValue("First name", user.getFirstName())
@@ -238,14 +250,6 @@ public class PlayerRegistrationService {
                    .addKeyValue("Current verification status", user.getVerificationStatus())
                    .setMessage("About to resend verification email").log();
                 sendVerificationEmail(user);
-                return;
-            }
-            if (user.getVerificationStatus() == SkillarsVerificationStatus.EMAIL_VERIFIED) {
-                // skillars-deferred-93 P11: allow re-issue of phone verification handle for expired handles.
-                // User has already verified email but the phone-verification handle (24h TTL) expired.
-                // Silently re-issue a new handle (sent via email in resend-phone-verification flow, or
-                // via the frontend's sessionStorage mechanism in P12).
-                verificationTokenService.issuePhoneVerificationToken(user.getId(), "PLAYER");
                 return;
             }
             log.atInfo()

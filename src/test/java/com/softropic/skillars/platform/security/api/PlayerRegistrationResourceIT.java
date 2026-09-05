@@ -363,7 +363,7 @@ class PlayerRegistrationResourceIT extends AbstractIntegrationTest {
     // ── skillars-deferred-93 AC8: opaque phone-verification handle replaces the raw userId ──────
 
     private String tokenFor(long userId) {
-        return verificationTokenService.issuePhoneVerificationToken(userId);
+        return verificationTokenService.issuePhoneVerificationToken(userId, "PLAYER");
     }
 
     @Test

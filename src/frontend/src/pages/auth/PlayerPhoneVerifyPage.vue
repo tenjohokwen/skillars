@@ -67,13 +67,12 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { playerRegistrationApi } from 'src/api/playerRegistration.api'
 import { useErrorHandler } from 'src/composables/useErrorHandler'
 
 const router = useRouter()
-const route = useRoute()
 const { t } = useI18n()
 const { setError, clearError, hasError, errorMessage, helpCode } = useErrorHandler()
 

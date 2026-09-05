@@ -21,6 +21,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 @Service
 @Slf4j
@@ -42,7 +43,7 @@ public class ModerationSlaMonitorService {
     // skillars-deferred-93 P13: track consecutive per-video processing failures; if a video
     // fails repeatedly across cycles, force it to FAILED (with admin alert) so an infinite-loop
     // exception cannot escape notice.
-    private final Map<Long, Integer> videoConsecutiveFailures = new HashMap<>();
+    private final Map<UUID, Integer> videoConsecutiveFailures = new HashMap<>();
     private static final int CONSECUTIVE_FAILURE_THRESHOLD = 3;
 
     @PostConstruct

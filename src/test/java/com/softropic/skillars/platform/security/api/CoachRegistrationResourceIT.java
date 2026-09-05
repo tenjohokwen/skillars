@@ -173,7 +173,7 @@ class CoachRegistrationResourceIT extends AbstractIntegrationTest {
         assertThat(response.getBody()).containsEntry("nextStep", "verify-phone");
         assertThat(response.getBody()).containsKey("verificationToken");
         assertThat(verificationTokenService.resolveUserId(
-            (String) response.getBody().get("verificationToken")))
+            (String) response.getBody().get("verificationToken"), "COACH"))
             .as("the returned handle resolves back to the verified user")
             .isEqualTo(jdbcTemplate.queryForObject(
                 "SELECT id FROM main.\"user\" WHERE email = ?", Long.class, TEST_EMAIL));
@@ -682,7 +682,7 @@ class CoachRegistrationResourceIT extends AbstractIntegrationTest {
     // ── skillars-deferred-93 AC8: opaque phone-verification handle replaces the raw userId ──────
 
     private String tokenFor(long userId) {
-        return verificationTokenService.issuePhoneVerificationToken(userId);
+        return verificationTokenService.issuePhoneVerificationToken(userId, "COACH");
     }
 
     @Test

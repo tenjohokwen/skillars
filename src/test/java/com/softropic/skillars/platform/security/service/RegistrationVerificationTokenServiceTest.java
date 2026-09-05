@@ -16,13 +16,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * skillars-deferred-93 AC8 — {@link RegistrationVerificationTokenService}: an issued handle round
- * trips to its {@code userId}; every corruption (bad signature, wrong key, tampered payload,
- * expiry, malformed shape) is rejected with {@link RegistrationVerificationTokenException} and
- * never silently accepted.
+ * trips to its {@code userId} for the role it was minted for; every corruption (bad signature, wrong
+ * key, tampered payload, expiry, malformed shape, role mismatch) is rejected with
+ * {@link RegistrationVerificationTokenException} and never silently accepted.
  */
 class RegistrationVerificationTokenServiceTest {
 
     private static final String SECRET = "unit-test-registration-verification-secret-key";
+    private static final String ROLE = "COACH";
 
     private RegistrationVerificationTokenService service;
 
@@ -40,7 +41,15 @@ class RegistrationVerificationTokenServiceTest {
     @Test
     void issuedHandle_resolvesBackToTheSameUserId() {
         long userId = 918273645L;
-        assertThat(service.resolveUserId(service.issuePhoneVerificationToken(userId))).isEqualTo(userId);
+        assertThat(service.resolveUserId(service.issuePhoneVerificationToken(userId, ROLE), ROLE))
+            .isEqualTo(userId);
+    }
+
+    @Test
+    void handleIssuedForAnotherRole_isRejected() {
+        String coachHandle = service.issuePhoneVerificationToken(42L, "COACH");
+        assertThatThrownBy(() -> service.resolveUserId(coachHandle, "PARENT"))
+            .isInstanceOf(RegistrationVerificationTokenException.class);
     }
 
     @Test
@@ -51,30 +60,38 @@ class RegistrationVerificationTokenServiceTest {
     }
 
     @Test
+    void shortConfiguredSecret_failsFastAtConstruction() {
+        assertThatThrownBy(() -> serviceWithSecret("too-short-secret"))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("registration-verification-secret");
+    }
+
+    @Test
     void handleSignedByADifferentSecret_isRejected() {
-        String foreign = serviceWithSecret("a-totally-different-secret").issuePhoneVerificationToken(1L);
-        assertThatThrownBy(() -> service.resolveUserId(foreign))
+        String foreign = serviceWithSecret("a-totally-different-secret-of-ample-length")
+            .issuePhoneVerificationToken(1L, ROLE);
+        assertThatThrownBy(() -> service.resolveUserId(foreign, ROLE))
             .isInstanceOf(RegistrationVerificationTokenException.class);
     }
 
     @Test
     void tamperedSignature_isRejected() {
-        String token = service.issuePhoneVerificationToken(42L);
+        String token = service.issuePhoneVerificationToken(42L, ROLE);
         String tampered = token.substring(0, token.length() - 1) + (token.endsWith("A") ? "B" : "A");
-        assertThatThrownBy(() -> service.resolveUserId(tampered))
+        assertThatThrownBy(() -> service.resolveUserId(tampered, ROLE))
             .isInstanceOf(RegistrationVerificationTokenException.class);
     }
 
     @Test
     void tamperedPayload_isRejected() {
         // Re-encode the payload for a different userId but keep the original signature.
-        String token = service.issuePhoneVerificationToken(42L);
+        String token = service.issuePhoneVerificationToken(42L, ROLE);
         String originalSig = token.substring(token.indexOf('.') + 1);
         long forgedExpiry = Instant.now().plusSeconds(3600).getEpochSecond();
         String forgedPayload = Base64.getUrlEncoder().withoutPadding()
-            .encodeToString(("1:999999:" + forgedExpiry).getBytes(StandardCharsets.UTF_8));
+            .encodeToString(("1:" + ROLE + ":999999:" + forgedExpiry).getBytes(StandardCharsets.UTF_8));
 
-        assertThatThrownBy(() -> service.resolveUserId(forgedPayload + "." + originalSig))
+        assertThatThrownBy(() -> service.resolveUserId(forgedPayload + "." + originalSig, ROLE))
             .isInstanceOf(RegistrationVerificationTokenException.class);
     }
 
@@ -82,12 +99,12 @@ class RegistrationVerificationTokenServiceTest {
     void expiredHandle_isRejected() {
         // Hand-craft a correctly-signed payload whose expiry is in the past.
         long pastExpiry = Instant.now().minusSeconds(60).getEpochSecond();
-        String payload = "1:77:" + pastExpiry;
+        String payload = "1:" + ROLE + ":77:" + pastExpiry;
         String encodedPayload = Base64.getUrlEncoder().withoutPadding()
             .encodeToString(payload.getBytes(StandardCharsets.UTF_8));
         String sig = hmacB64(encodedPayload);
 
-        assertThatThrownBy(() -> service.resolveUserId(encodedPayload + "." + sig))
+        assertThatThrownBy(() -> service.resolveUserId(encodedPayload + "." + sig, ROLE))
             .isInstanceOf(RegistrationVerificationTokenException.class);
     }
 
@@ -95,8 +112,8 @@ class RegistrationVerificationTokenServiceTest {
     void unknownPayloadVersion_isRejected() {
         long expiry = Instant.now().plusSeconds(3600).getEpochSecond();
         String encodedPayload = Base64.getUrlEncoder().withoutPadding()
-            .encodeToString(("9:77:" + expiry).getBytes(StandardCharsets.UTF_8));
-        assertThatThrownBy(() -> service.resolveUserId(encodedPayload + "." + hmacB64(encodedPayload)))
+            .encodeToString(("9:" + ROLE + ":77:" + expiry).getBytes(StandardCharsets.UTF_8));
+        assertThatThrownBy(() -> service.resolveUserId(encodedPayload + "." + hmacB64(encodedPayload), ROLE))
             .isInstanceOf(RegistrationVerificationTokenException.class);
     }
 
@@ -106,7 +123,7 @@ class RegistrationVerificationTokenServiceTest {
             null, "", "   ", "nodot", "too.many.dots", ".onlysig", "onlypayload.",
             "!!!not-base64!!!.also!!!not"
         }) {
-            assertThatThrownBy(() -> service.resolveUserId(bad))
+            assertThatThrownBy(() -> service.resolveUserId(bad, ROLE))
                 .as("input %s", bad)
                 .isInstanceOf(RegistrationVerificationTokenException.class);
         }
@@ -114,7 +131,7 @@ class RegistrationVerificationTokenServiceTest {
 
     @Test
     void resolveUserId_doesNotThrowForAFreshHandle() {
-        assertThatCode(() -> service.resolveUserId(service.issuePhoneVerificationToken(5L)))
+        assertThatCode(() -> service.resolveUserId(service.issuePhoneVerificationToken(5L, ROLE), ROLE))
             .doesNotThrowAnyException();
     }
 
