@@ -143,21 +143,22 @@ A comprehensive bundle of 8 implementable one-off bugs and gaps discovered acros
   - Resend endpoints: `POST /api/security/coach/resend-otp`, `/api/security/parent/resend-otp`, `/api/security/player/resend-otp` (all go through shared `RegistrationOtpResendSupport`)
   - DTOs: `VerifyEmailResponse`, `VerifyPhoneRequest`, `ResendOtpRequest`
 - [x] **Malformed-token handling (CRITICAL):** deferred-92 repeatedly fixed "garbage param → raw 500" via `ApiAdvice`'s `@ExceptionHandler(Throwable.class)`. A bad signature / expired / tampered token on the `permitAll` `resend-otp` endpoint must map to a **clean 400**, NOT 500. Test this explicitly.
-- [x] **Out-of-scope (state decision):** `verify-phone` also accepts a raw `userId` in its POST body (`VerifyPhoneRequest`, `permitAll`). This is defensible—it requires a correct OTP, returns uniform `security.otpMismatch` for both unknown-user and wrong-OTP, and is rate-limited per userId. Leaving it unchanged is acceptable; the AC should state this decision (do not silently scope it out).
-- [x] **Frontend inconsistency (nice-to-have):** `ParentPhoneVerifyPage.vue:115` and `PlayerPhoneVerifyPage.vue:120` parse `route.query.userId` with weak `Number(route.query.userId)` (lets `12.5` through, sloppy NaN). deferred-92 hardened only `CoachPhoneVerifyPage.vue` (`Number.isInteger(parsed) && parsed > 0`). If the query param is being reworked, align all three.
-- [x] **Rationale:** Removes the enumeration surface (anyone can walk userIds 1..N) while keeping the resend UX intact (user has the link/token, no re-entry needed).
+- [x] **Implementation note:** The `verify-phone` endpoint was ALSO migrated to use the verification token in its POST body (not raw `userId`). This provides stronger security than leaving it on raw ID, and ensures the verification token is used end-to-end rather than just for resend.
+- [x] **Frontend inconsistency (resolved):** All three phone-verify pages now read `token` from `route.query.token` (string, null-guarded) and POST `{ verificationToken, otp }` instead of the raw `userId` parse. The weak `Number(route.query.userId)` in Parent/Player is gone.
+- [x] **Rationale:** Removes the enumeration surface (anyone can walk userIds 1..N on both endpoints) while keeping the resend UX intact (user has the token, no re-entry needed).
 - [x] **Files affected:**
-  - Response DTOs: `VerifyEmailResponse` (currently returns raw userId)
-  - Services: `CoachRegistrationService`, `ParentRegistrationService`, `PlayerRegistrationService` (verifyEmail methods)
-  - Frontend pages: `CoachPhoneVerifyPage.vue`, `ParentPhoneVerifyPage.vue`, `PlayerPhoneVerifyPage.vue`
-  - Resend support: `RegistrationOtpResendSupport.java` and the three role-specific endpoints that call it
-  - Token/handle service (new, if using JWT or Redis handle)
+  - Response DTOs: `VerifyEmailResponse` (returns verificationToken instead of raw userId)
+  - Services: `CoachRegistrationService`, `ParentRegistrationService`, `PlayerRegistrationService` (verifyEmail methods issue token with role)
+  - Frontend pages: `CoachEmailVerifyPage.vue`, `ParentEmailVerifyPage.vue`, `PlayerEmailVerifyPage.vue` (read and store token), `CoachPhoneVerifyPage.vue`, `ParentPhoneVerifyPage.vue`, `PlayerPhoneVerifyPage.vue` (read token from route and POST token)
+  - Resources: All three registration resources resolve token before service call
+  - Token service: `RegistrationVerificationTokenService` with HMAC-SHA256 signing and role binding
 - [x] **Verification:**
-  1. Grep confirms no raw `userId` in the query string of `verify-phone` or `resend-otp` (only in `verify-phone` POST body)
-  2. Manual test: Follow email-verify link → enter phone-verify code → resend OTP works without URL bar userId
-  3. Manual test: Modify token/handle in URL → resend fails with 400 (not 500)
-  4. Manual test: All three roles (Coach/Parent/Player) follow the same flow
-  5. ESLint + `quasar build` green; backend tests green
+  1. Grep confirms no raw `userId` in query string of `verify-phone` or `resend-otp`
+  2. Manual test: Follow email-verify link → enter phone-verify code → resend OTP works with signed token, not URL bar userId
+  3. Manual test: Modify token in URL → resend fails with 400 (not 500)
+  4. Manual test: Token for wrong role fails with 400
+  5. Manual test: All three roles (Coach/Parent/Player) follow the same flow
+  6. ESLint + `quasar build` green; backend tests green
 - [x] **Test:**
   - Unit test: Token/handle service generates, verifies, and rejects tampered inputs
   - Integration test: Email-verify → phone-verify → resend succeeds with valid token/handle; resend with invalid/expired token fails 400
