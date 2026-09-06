@@ -637,9 +637,13 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
 
     @Test
     void resendOtp_tamperedHandleSignature_returns400_notServerError() {
+        // Swap in a different handle's signature — a guaranteed HMAC mismatch. Flipping the last
+        // base64url char can be a no-op: HMAC-SHA256 is 32 bytes, so the last unpadded char
+        // carries only 4 significant bits.
         String valid = tokenFor(123456789L);
-        String tampered = valid.substring(0, valid.length() - 1)
-            + (valid.endsWith("A") ? "B" : "A");
+        String otherSig = tokenFor(987654321L);
+        otherSig = otherSig.substring(otherSig.indexOf('.') + 1);
+        String tampered = valid.substring(0, valid.indexOf('.') + 1) + otherSig;
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
             baseUrl() + "/api/security/parent/resend-otp", HttpMethod.POST,
