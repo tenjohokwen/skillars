@@ -216,6 +216,11 @@ export function startSessionMonitoring() {
   // Evaluate immediately rather than only priming the state: a tab resumed from sleep, or an
   // app loaded already inside the warning band, must be handled now instead of up to
   // SESSION_CHECK_INTERVAL later. tick() returning true means it already cleaned up.
+  // skillars-deferred-90: Project-owner decision — if the session is already expired at
+  // startup, exit silently without re-arming the interval. The cost of an "arm anyway" approach
+  // (which was considered) would be ~30 seconds of unnecessary ticking before cleanup disarms
+  // the timer, whereas the silent path keeps the request/response cycle clean. The trade-off
+  // favors silence. This decision is documented here to close line 1268 in deferred-work.md.
   if (tick()) return
 
   checkIntervalId = setInterval(tick, SESSION_CHECK_INTERVAL)

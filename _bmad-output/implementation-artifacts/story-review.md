@@ -1,155 +1,286 @@
-# Senior Review — skillars-deferred-96 (Deployment Visibility: Smoke-Test Error Handling & Channel Health)
+# Senior-dev audit — skillars-deferred-98 (SLU Perf Signal & Frontend UX Precision)
 
-**Reviewer role:** senior dev audit for missed corner cases, false assumptions, missed flows.
-**Story file:** `_bmad-output/implementation-artifacts/skillars-deferred-96-deployment-visibility-smoke-test-error-handling-and-channel-health.md`
-**Verified against:** `.github/workflows/deploy.yml`, `src/main/resources/application.yaml`, `src/main/java/.../platform/notification/**`, `pom.xml` @ HEAD (`d01f436`).
-
-## Verdict
-
-The story is chasing two real problems, but **both ACs are under-specified in ways that will produce a wrong or actively harmful implementation if handed to a dev as-is**:
-
-- **AC1**: The root-cause analysis is partly wrong, and the "Option B" fix as written makes auto-revert *never* run. The realistic trigger for the bug is also mis-stated, and the proposed manual repro does not reproduce it.
-- **AC2**: The single biggest issue in the whole story is unstated — a custom `HealthIndicator` that can report `DOWN` rolls into the aggregate `/manage/health`, **which the deploy smoke test greps for `"status":"UP"`**. A briefly-unreachable mail/Slack endpoint would then fail every subsequent deploy and auto-revert healthy releases. AC2 as specified regresses AC1. Additionally, the app has **zero Slack integration or config**, the cited property names don't exist, and a Slack incoming webhook cannot be health-checked without posting a message.
-
-Recommend the story go back for revision before dev.
+**Reviewer:** senior dev (adversarial read against `HEAD` = `f820f9f`)
+**Date:** 2026-09-07
 
 ---
 
-## AC1 — Smoke-test error visibility
+## Follow-up 2026-09-07 — all findings resolved in the revised story
 
-### F1. "Option B" as written disables auto-revert entirely (high)
+The story was revised ("revised after senior code review"). All 13 findings (B1–B4, M1–M4, m1–m5)
+are addressed: AC2/AC3/AC5 struck as already-shipped; AC1 re-scoped to ledger line 1292 only with
+line 1241 explicitly out of scope; fictional files replaced with real classes; the additive-accumulator
+data model documented; AC4 reduced to a reference task; the overstated Option-B cost corrected.
 
-Story lines 53–57 propose, for the error case:
+Two minor residuals raised in the follow-up were then also fixed:
 
-> Auto-revert: `if: steps.smoke.outcome == 'failure'`
-> Pre-smoke notify: `if: steps.smoke.outcome == 'skipped' || steps.smoke.outcome == 'failure'`
+- **m4 (local `mvn test` expectation).** Completion Criteria now reads "GitHub CI (the sole
+  full-verification gate — no local `mvn verify`) green before requesting code review"; the standalone
+  `mvn test` checkbox is removed.
+- **AC1 design/implementation bundling.** AC1 is split into **AC1a** (design-approval gate, no
+  production code) and **AC1b** (implementation, hard-gated on AC1a sign-off). If approval is not
+  obtained within the story cycle, AC1b carves out to a follow-up story and ledger line 1292 stays
+  open. Completion Criteria, Files, and Testing Strategy updated to match.
 
-In GitHub Actions, a step `if:` expression that contains **no status-check function** (`always()`, `failure()`, `success()`, `cancelled()`) is implicitly evaluated as `success() && (<expr>)`. If the smoke step has failed, `success()` is `false`, so `if: steps.smoke.outcome == 'failure'` is **always false** — the auto-revert step would never run in exactly the scenario the story is trying to fix. Same defect in the pre-smoke-notify rewrite. Only the marker rewrite (`if: always() && steps.smoke.outcome != 'success'`) is correct because it carries `always()`.
-
-This is why the *current* workflow works today: when the smoke step completes with `result=fail` it still exits `0`, so `success()` holds and `if: steps.smoke.outputs.result == 'fail'` (deploy.yml:109, :141, :170) runs. The moment the smoke step itself errors, `success()` drops and all of those skip.
-
-**Correction:** any conditional that must survive a failed smoke step needs an explicit status function — `if: failure() && steps.smoke.outcome == 'failure'` for revert/notify, `if: always() && …` for the marker.
-
-### F2. Root cause is incompletely / inaccurately stated (medium)
-
-Story line 42: *"Conditionals assume the smoke step completes (writing an output)…"* — that is only half of it. Even if the smoke step wrote `result=fail` before dying, the auto-revert and the four `result == 'pass|fail'` notification steps (deploy.yml:129, :141, :153, :170) would **still** skip on a smoke *error*, because none of them carry `always()`/`failure()` and are therefore `success()`-gated (see F1). Guaranteeing the output (Option A) is not sufficient on its own; the `if:` chains must also change.
-
-Also line 33 / line 40: *"the run is [not] visibly marked as failed"* / *"Red run, no notification, no auto-revert"*. If the smoke step errors without `continue-on-error`, **the job is already red** — the marker step exists to catch the *opposite* case (smoke `result=fail` but auto-revert succeeds, which would otherwise be green). The genuine losses in the error case are (a) no auto-revert and (b) no failure notification — not "not marked failed". The AC should be reworded around those two losses.
-
-### F3. Option A's "OR" is misleading and its con is wrong (medium)
-
-Story line 46–50:
-
-> - Add `continue-on-error: true` to smoke test step OR
-> - Wrap smoke command in shell script that captures exit code and explicitly writes `result=…`
-> - **Con:** Must ensure subsequent steps still fail the job on error (use separate `if: failure()` check)
-
-Two problems:
-
-1. `continue-on-error: true` **alone does not make `steps.smoke.outputs.result` get written**. If the step aborts mid-run (signal, `$GITHUB_OUTPUT` write failure), the output is still absent. Only the wrapper actually delivers the "outputs always available" property the story wants. The "OR" should be "AND (wrapper is mandatory; `continue-on-error` optional)".
-2. With `continue-on-error: true`, the step's failure **does not make `failure()` true** and does not fail the job — so the story's suggested `if: failure()` recovery check will not fire. To still fail the job you need `if: always() && steps.smoke.outcome == 'failure'` (`outcome`, not `conclusion`).
-
-### F4. Trigger list in the Overview overstates exposure (medium)
-
-Story lines 12 & 64 cite *"ssh dies, timeout, permission denied"* as causes of the invisible failure. Inspecting the smoke loop (deploy.yml:93–104): every `ssh` invocation is inside `STATUS=$(ssh … 2>/dev/null || echo 0)`. An ssh that dies / is refused / hits "permission denied" exits non-zero, the `|| echo 0` absorbs it, `STATUS=0`, the loop runs to completion, and `result=fail` is written on line 105 — which today drives the full failure→revert→notify chain **correctly**. So two of the three enumerated triggers do **not** actually produce the bug.
-
-The realistic triggers are narrower: the step/runner process being killed, the `echo … >> $GITHUB_OUTPUT` write failing (disk), or the step **hanging** until the job is cancelled (see F5). The story should say so, otherwise a dev "fixing" the ssh-failure path will conclude there is nothing to fix.
-
-### F5. Hang → job-cancellation path is unhandled and un-mentioned (medium)
-
-None of the `ssh` calls set `ConnectTimeout`/`BatchMode`, and neither the smoke step nor the job sets `timeout-minutes`. If the node becomes a network black hole, an ssh TCP connect can stall for the kernel default (~2h+); worst case the job hits the **default 360-minute** limit and is **cancelled**. On cancellation `failure()` is false and `steps.smoke.outputs.result` is unset, so the marker (deploy.yml:189), the auto-revert, and *every* notification skip — a broken deploy stays live with zero alerts, and the run shows as grey/cancelled rather than red. AC1 names "timeout" as in-scope but proposes nothing that addresses it. Fix belongs here: `ConnectTimeout=10 -o BatchMode=yes` on ssh + `timeout-minutes` on the step, plus an `if: always()` marker that also covers `cancelled()`.
-
-### F6. The manual repro in AC1 does not reproduce the bug (low)
-
-Story line 64: *"Kill ssh mid-execution (e.g. `ssh … & sleep 1; pkill ssh`)"*. Per F4, a killed ssh inside `$(… || echo 0)` just yields `STATUS=0`; the loop finishes and writes `result=fail`, exercising the path that already works. To actually make the smoke step *error* you must kill the step's shell or fault the `$GITHUB_OUTPUT` write. The verification steps as written give false confidence.
-
-### F7. Notification "dead-zone" for `outcome == 'failure'` is only half-captured (low)
-
-The story notes (line 55) that pre-smoke notifications gate on `steps.smoke.outcome == 'skipped'` and should also handle `== 'failure'`. Correct — on a smoke *error*, `outcome` is `'failure'`, not `'skipped'`, so deploy.yml:197 and :208 don't fire either. But the story's replacement expression drops the `failure()` guard, reintroducing F1. The intended expression is `if: failure() && (steps.smoke.outcome == 'skipped' || steps.smoke.outcome == 'failure')` — and the message text must then branch, because "failed before smoke test" (deploy.yml:200) is no longer accurate for the `failure` sub-case.
+**Current verdict: ready for dev.** The original audit below is retained for the record.
 
 ---
 
-## AC2 — Notification-channel HealthIndicator
+## Original audit (pre-revision)
 
-### F8. Custom HealthIndicator ➜ aggregate `/manage/health` ➜ breaks the deploy smoke test (HIGH — headline finding)
+**Verdict:** **Not ready for dev.** Four of the six ACs describe work that has **already shipped**;
+AC1 is mis-scoped and built on a wrong mental model of the SLU snapshot; AC4 re-litigates a decision
+the project owner already recorded, using a cost analysis that does not hold. Every finding below was
+checked against the current source, not against the ledger text the story was written from.
 
-The deploy smoke test polls `http://localhost:8367/manage/health` and passes only if the body matches `"status":"UP"` (deploy.yml:96–97). `application.yaml` configures **no health groups** (`management.endpoint.health.group.*` is absent) and no probe groups, so **every `HealthIndicator` bean contributes to the root health group**, and the root `status` is the worst contributor. A `SlackHealthIndicator`/`SmtpHealthIndicator` that returns `Health.down()` when an *external* endpoint is briefly unreachable will:
-
-1. flip `/manage/health` to `DOWN`,
-2. fail the smoke test of the **next** deploy,
-3. trigger **auto-revert of a perfectly healthy release**, and
-4. fire a false "deploy FAILED" notification.
-
-AC2 as written therefore *regresses* AC1. Any version of AC2 must isolate these indicators from the liveness/readiness rollup the smoke test observes — e.g. put the smoke test on a dedicated `management.endpoint.health.group.<name>` that excludes them, or register them as non-system-health details. This constraint is not mentioned anywhere in the story and is the first thing a dev will trip over.
-
-Related: `management.endpoint.health.show-details: when-authorized` (roles `ROLE_ADMIN`) means an unauthenticated caller only ever sees the top-level `status`. That's fine for the smoke grep, but it also means the "add to ops dashboard so channel health is visible" goal (AC2, line 109) requires an authenticated scrape — worth stating.
-
-### F9. The application has no Slack integration or configuration at all (HIGH)
-
-`grep -rn -i slack src/main` returns only a blacklist data file. There is **no Slack client, no webhook property, no Slack code path** in the app. Slack notifications are sent **exclusively by GitHub Actions** (`secrets.SLACK_WEBHOOK_URL`, deploy.yml:135/147/202) from **GitHub-hosted runners**. Consequences:
-
-- A `SlackHealthIndicator` in the Spring app has **no URL to read** — the property it needs does not exist (see F11).
-- Even if given the URL, it would test **prod-node → Slack** egress, which is *not* the path that delivers deploy alerts (**GitHub runner → Slack**). A firewall/proxy issue on the runner side — the thing that actually breaks deploy notifications — would be invisible to this check, and vice-versa.
-- So AC2's Slack half does not measure the risk described in the story's own problem statement ("Slack webhooks that are down remain invisible in CI/CD").
-
-If the intent is genuinely to catch a dead deploy-notification webhook, that belongs in the **workflow** (a lightweight post-to-Slack assertion / `#deploys` heartbeat job), not an app `HealthIndicator`.
-
-### F10. A Slack incoming webhook cannot be health-checked without posting a message (medium)
-
-Story line 81 / line 124: *"webhook validation ping if supported by Slack API"*. Slack **incoming webhooks have no validation or ping endpoint**. Options are: (a) POST a real message (channel noise on every `/manage/health` poll — unacceptable), or (b) POST a deliberately malformed body and infer liveness from a `400 invalid_payload` — fragile, still counts against Slack rate limits, and does not cleanly distinguish a live webhook from a disabled/revoked one (`404 no_service` vs `403`/`410`). The story's stated mechanism does not exist; this needs to be called out so the design doesn't assume it.
-
-### F11. Cited property names are fabricated (medium)
-
-Story lines 82 & 89 reference `app.notification.slack-webhook-url` and `app.email.smtp-host` and claim *"App properties already exist for SMTP and Slack configuration."* Actual config:
-
-- Email: `email.providerConfigs[].{name,host,port,username,password}` (two providers: gmx + gmail, round-robin via `MailSenderProvider`) — `EmailProperties`, `application.yaml:144–158`.
-- Spring mail: `spring.mail.{host,port,username,password}` (`mail.gmx.net`) — a **separate** config, `application.yaml:118–128`.
-- Slack: **none**.
-- There is no `app.*` property namespace.
-
-A dev following the story will look for properties that aren't there. The "Re-Verification Against HEAD" section (story lines 139–147) claims all citations were verified, but the AC2 property names and the endpoint path (F13) were not.
-
-### F12. EHLO-only SMTP check misses the failure mode that actually matters (medium)
-
-The app sends mail via STARTTLS + AUTH on port 587 (`MailSenderProvider`: `mail.smtp.auth=true`, `starttls.enable=true`). An unauthenticated EHLO handshake (story lines 80, 124) proves TCP + SMTP banner reachability only. The way these channels **silently break in practice** is credential/app-password expiry or revocation (GMX/Gmail app passwords), which an EHLO probe will report as `UP`. The story's framing ("a down channel surfaces") over-promises: the most common "down" is exactly what this check can't see. If auth is included in the probe, that's a login attempt to an external provider on every health poll — see F14.
-
-### F13. Endpoint path is wrong throughout AC2 (low)
-
-The story repeatedly says `/actuator/health` (lines 78, 108, 111, 122, 165, 180). The app's management base-path is `/manage` on port 8367 (`application.yaml:360–367`); the real endpoint is `http://<host>:8367/manage/health`. Cosmetic, but it's in the acceptance checklist and "manually verified" steps.
-
-### F14. External-provider side effects / latency on `/manage/health` (medium)
-
-`/manage/health` is polled by uptime monitors, load-balancer probes, and (per story) an ops dashboard. Opening an outbound TCP+STARTTLS(+AUTH) connection to `mail.gmx.net` and `smtp.gmail.com` — and an HTTPS POST to Slack — on **every poll** risks connection-rate throttling or transient IP blocklisting by the mail providers, and adds their RTT to every health scrape. The story's own Technical Requirements say `/actuator/health` must not become a bottleneck (line 122) but propose no mitigation. The design needs a scheduled background probe writing a cached result (or `management.endpoint.health.group` + TTL), not a synchronous check per request.
-
-### F15. "The SMTP config" is actually three configs, two providers (low/medium)
-
-AC2 treats SMTP as one host. There are two `email.providerConfigs` entries (gmx, gmail) plus a separate `spring.mail` host. A `SmtpHealthIndicator` must decide: check all providers? Rollup semantics (all-down = `DOWN`, any-down = degraded/`OUT_OF_SERVICE`)? Which config is authoritative? None of this is specified.
-
-### F16. `UNKNOWN`-when-unconfigured still appears in the aggregate (low)
-
-Story line 84: report `UNKNOWN` if endpoints aren't configured. Spring's default `SimpleStatusAggregator` ranks `UNKNOWN` *above* `UP`, so it won't force the aggregate `DOWN` (good, mitigates F8 for that sub-case) — but the indicator still shows in `/manage/health` details and in any "all green?" dashboard logic. Cleaner to not register the bean when the relevant config is absent (`@ConditionalOnProperty`).
-
-### F17. Test-naming / layering unspecified vs. project convention (low)
-
-Story lists `SlackHealthIndicatorIT` / `SmtpHealthIndicatorIT` (Testcontainers-style `*IT`) *and* separately asks for "unit tests" (lines 96–97, 106–107). The repo uses `*IT.java` for Spring/integration and `*Test.java` for pure unit (`src/test/...`). A real Slack webhook call + real SMTP EHLO in an `IT` (story line 107) will be flaky/blocked in CI. Decide: mocked `RestClient`/`JavaMailSender` unit tests for UP/DOWN logic, and keep any real-endpoint check out of CI.
+The root cause is uniform: the story was assembled from `deferred-work.md` bullets dated **2026-09-02**
+(lines 1253, 1254, 1265) and **deferred-91-era** bullets (lines 1291, 1292) **without re-verifying them
+against the tree**. `skillars-deferred-90`, `skillars-deferred-91` and `skillars-deferred-92` (all merged
+*after* those bullets) closed most of them. Those ledger bullets are themselves stale and untagged — the
+story inherited their staleness.
 
 ---
 
-## What the story gets right
+## BLOCKER findings — AC targets work already implemented
 
-- The **core AC1 gap is real**: if the smoke step errors (rather than completing with `result=fail`), the auto-revert and all failure notifications silently skip. (Mechanism is mis-diagnosed — see F1/F2 — but the gap exists.)
-- **deploy.yml line citations are accurate**: auto-revert `if` at :109, marker at :188–194, pre-smoke notifications at :196/:207, and the `steps.smoke.outcome == 'skipped'` gating.
-- The observation that **deferred-94's `continue-on-error: true` removed the CI failure signal** for down notification channels is correct (deploy.yml:130/142/154/171).
-- `spring-boot-starter-actuator` is present (`pom.xml:167`) and the app has real email infrastructure (`platform.notification`), so an app-side **SMTP** health check is at least feasible in principle.
-- Correctly scopes out DB schema / new external APIs.
+### B1 — AC2 is already done, and the AC text describes a superseded state
+
+`CoachProfileService.getPublicProfile` (`src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java:332-349`)
+**already carries the exact architectural-decision Javadoc AC2 asks for**, and it is *more* accurate than
+the AC:
+
+- The method was **collapsed from 8 round-trips to 4** by the `skillars-deferred-91` code review (D9).
+  AC2 says "8 JDBC queries, constant regardless of collection size" and "**No code change to the method
+  itself**" — both describe the pre-collapse state. Current `EXPECTED_QUERY_COUNT = 4`.
+- The Javadoc already explains why the last two collection reads are *not* folded in and why a
+  `JOIN FETCH` is declined: "would risk `MultipleBagFetchException` / a cartesian explosion — the
+  hazards the original 'left as-is' analysis correctly identified."
+- The IT `CoachPublicProfileQueryCountIT` **already exists** with (a) the fixed-count assertion,
+  (b) `getPublicProfile_queryCountDoesNotGrowWithProfileSize` (the "doubles every collection" test),
+  and (c) `getPublicProfile_collapseDoesNotChangeTheResponse` (a response-parity guard).
+
+Following AC2 as written, a developer would add a comment asserting "8 queries" and "no code change" —
+both factually wrong — and re-document a decision that is already documented correctly.
+Ledger line 1291 (which the story copied verbatim) was never updated after D9.
+
+**Wrong path:** AC2 cites `.../platform/marketplace/CoachPublicProfileQueryCountIT.java`; the file is at
+`.../platform/marketplace/api/CoachPublicProfileQueryCountIT.java`.
+
+**Action:** delete AC2, or reduce it to "confirm the D9 collapse Javadoc + IT are still present" (they are).
+
+### B2 — AC3's documentation fix already shipped
+
+`docs/session-refresh-mechanism.md` already documents the ±30 s variance in **three** places:
+
+| Location | Content |
+|---|---|
+| Key timeouts table, line 82 | `SESSION_CHECK_INTERVAL │ 30 s │ plugins/sessionManager.js │ How often the monitor recomputes timeUntilExpiry from rint` |
+| State diagram, line 498 | `±30 s check-tick granularity` |
+| **Known limitations #1, lines 571-573** | "**±30 s granularity.** `SESSION_CHECK_INTERVAL` = 30 s, so the warning and the client-side expiry event can fire up to 30 s late. **Any test asserting an exact figure is flaky by construction.**" |
+
+That last entry is, almost verbatim, what AC3 asks to add. The doc **nowhere** presents the 5-minute
+warning as exact — line 78 describes `WARNING_THRESHOLD` as "Fixed client-side constant; warning shows
+when `timeUntilExpiry` drops below it." AC3's premise ("Documentation presents as precise") is false
+for the current doc.
+
+AC3's cited line `docs/session-refresh-mechanism.md:67` is a stale pointer copied from the 2026-09-02
+ledger bullet (line 1254); the doc was rewritten by Story 1.7a/1.7b and line 67 is now mid-section.
+
+**Action:** delete AC3's doc sub-task. Nothing genuine remains (the `sessionManager.js:218` comment
+already reads "instead of up to `SESSION_CHECK_INTERVAL` later").
+
+### B3 — AC3's `SecurityConstants.java` instruction is not implementable as written
+
+`SESSION_CHECK_INTERVAL` is a **frontend-only** constant (`src/frontend/src/plugins/sessionManager.js:5`).
+It does not exist in `SecurityConstants.java` and is not a backend concept — a repo-wide grep confirms
+it appears only in `sessionManager.js`, docs, and story/ledger artifacts. Adding a "JavaDoc note on
+±30 s variance on `SESSION_CHECK_INTERVAL`" to a Java file that has no such symbol is a no-op at best.
+
+The `SESSION_REFRESH_COUNTDOWN` (`rint`) Javadoc that *does* exist there
+(`src/main/java/com/softropic/skillars/infrastructure/security/SecurityConstants.java`) makes **no**
+precise-timing claim; it names `WARNING_THRESHOLD, 5 min` only as the threshold constant.
+
+**Wrong path:** AC3 lists `.../platform/security/config/SecurityConstants.java`; the file is at
+`.../infrastructure/security/SecurityConstants.java`.
+
+**Action:** drop the `SecurityConstants.java` item entirely.
+
+### B4 — AC5 is already resolved; its "regression" premise is false
+
+```
+$ cd src/frontend && npx prettier --check src/App.vue src/boot/axios.js
+Checking formatting...
+All matched files use Prettier code style!
+```
+
+Commit `cb20f11` — *"skillars-deferred-92 AC1: mechanical `prettier --write` over src/frontend/src +
+CI gate"* (2026-09-04) — reformatted both files (it is the last commit to touch either) **and** added a
+CI gate at `.github/actions/frontend-quality/action.yml:36`
+(`npx prettier --check "**/*.{js,vue,scss,json}"`).
+
+AC5's premise — "Two frontend files … fail Prettier rules", "regression from deferred-89/deferred-90
+work" — was true at the 2026-09-02 ledger bullet (line 1253) and false since `deferred-92`
+(2026-09-04). There is nothing to reformat and no exemption to document. The "land in a separate
+commit so the real diff is visible" dev-note is moot.
+
+**Action:** delete AC5.
 
 ---
 
-## Recommended changes before dev
+## MAJOR findings
 
-1. **AC1 — rewrite the fix:** mandate the wrapper-script approach (smoke step always writes `result=pass|fail|error` via `set +e`/`trap`), *and* change every downstream `if:` to carry an explicit status function (`failure() && …` for revert/notify, `always() && …` for the marker). Drop "Option B" or fix its three expressions. Add `ConnectTimeout`/`BatchMode` to ssh and `timeout-minutes` to the step; make the marker cover `cancelled()`. Replace the `pkill ssh` repro with one that actually kills the step shell.
-2. **AC1 — restate the bug** as "no auto-revert + no failure notification on smoke *error/cancel*", not "run not marked failed".
-3. **AC2 — resolve the aggregate-health coupling first (F8):** define a dedicated health group for the deploy smoke test that excludes these indicators, or drop the `HealthIndicator` approach.
-4. **AC2 — drop the Slack `HealthIndicator`** (F9/F10/F11): the app has no Slack config and can't probe an incoming webhook cleanly. If deploy-webhook liveness matters, add a workflow-side check instead.
-5. **AC2 — SMTP check:** fix property names to `email.providerConfigs[*]` / `spring.mail.*`, specify multi-provider rollup, decide auth-vs-EHLO (and accept EHLO won't catch credential expiry), and design it as a cached background probe, not per-request. `@ConditionalOnProperty` so it's absent when unconfigured.
-6. Fix `/actuator/health` → `/manage/health` (port 8367) everywhere, and note that channel identity is only visible to authenticated `ROLE_ADMIN`.
+### M1 — AC1 conflates two unrelated deferred items; provenance claim is unsupported
+
+There are **two distinct open ledger bullets**, and the story merges them:
+
+| Ledger | What it is | Module | Addressed by deferred-98? |
+|---|---|---|---|
+| **Line 1241** (the *actual* deferred-89 residual, filed by deferred-89 AC10) | A non-gating **latency** perf-tracking job for `authorizePlayback` — record p50/p95/p99 over time; today they only land in Failsafe output nothing scrapes. `[PlaybackServiceIT.java]` | video | **No — untouched** |
+| **Line 1292** (a deferred-91 residual) | A non-gating **SLU skill-trend** signal — "is this player's trend improving/declining", independent of any gate | development | Yes — this is what AC1 builds |
+
+The story's title ("SLU Perf Signal"), Executive Summary, and AC1 ("carried from skillars-deferred-89")
+treat these as one item. They are not. deferred-89's SLU-related residual was the snapshot
+**under-report direction**, which `deferred-91` AC4 already closed (outbox + V119 marker). The
+"carried from skillars-deferred-89" attribution for a *skill-trend* feature has no basis — line 1292's
+own "(carried from skillars-deferred-89, line ~1290)" is a garbled self-reference.
+
+Consequence: the Completion Criteria says *"all six items tagged `[CLOSED by skillars-deferred-98
+AC1-AC6]` and deleted."* Acting on that would wrongly close **line 1241** (the real deferred-89
+perf-tracking job), which this story does not implement.
+
+**Action:** scope AC1 explicitly to ledger line 1292 only. Either add a separate AC for line 1241
+(`authorizePlayback` latency tracking) or state in the story that it is out of scope and stays open.
+Drop the "carried from skillars-deferred-89" language.
+
+### M2 — AC1's file references are fictional and its data model is wrong
+
+**Non-existent files named by AC1:**
+- `.../platform/development/service/SluService.java` — does not exist.
+- `.../platform/development/repo/PlayerSkillStatsRepository.java` — does not exist.
+
+The real SLU code is decomposed: `SluCalculationService`, `SluDashboardService`, `SluNarrativeService`,
+`SnapshotBatchWriter`, `SluWeeklySnapshotRepository`, `PlayerSluWeeklySnapshot` (entity), plus the
+outbox chain (`SluSnapshotOutboxHandler`, `SluSnapshotOutboxSupport`, `SluPersistenceDispatcher`,
+`SnapshotPersistenceRetrier`). For a *coaching-insight* signal the natural home is
+`SluDashboardService` / `SluNarrativeService`, not the write path.
+
+**Wrong mental model of the snapshot:**
+
+1. `player_slu_weekly_snapshot` is an **additive accumulator** keyed
+   `(player_id, skill_code, iso_year, iso_week)`:
+   `SluWeeklySnapshotRepository.upsertAddIdempotent` does
+   `total_slu = player_slu_weekly_snapshot.total_slu + EXCLUDED.total_slu`, applied **one session-delta
+   at a time** as the outbox drains (`SnapshotBatchWriter.writeAllDeltas`). There is **no single
+   "snapshot write" event that ever holds the finished weekly value.** AC1's instructions "Trend signal
+   should be appended to snapshot event, not replace it" and "Verify snapshot-write performance is not
+   degraded by new field" assume a batch job that computes one weekly number — that is not how this
+   works. A directional trend (week N vs weeks N-1, N-2…) is inherently a **read-time or post-week
+   scheduled** computation over historical rows.
+
+2. The snapshot is **per `skill_code`**, not one scalar per player per week. AC1's Implementation Notes
+   examples ("Player's SLU went from 65→72→80 over three weeks") assume a single scalar and never
+   define per-skill vs aggregate. That is an unresolved design decision, not a detail — it drives the
+   query shape, the storage, and what "improving" even means.
+
+3. A historical range query **already exists**:
+   `SluWeeklySnapshotRepository.findByPlayerIdFromWeek(playerId, fromYear, fromWeek, toYear, toWeek)`,
+   ordered `isoYear ASC, isoWeek ASC`. AC1's "new query for historical trends" is largely redundant.
+
+**Action:** rewrite AC1's Files/Dev-Notes against the real classes; decide per-skill vs aggregate up
+front (product input); state explicitly that the trend is computed on read or by a scheduled job over
+`findByPlayerIdFromWeek`, not "appended to the snapshot event."
+
+### M3 — AC4 re-opens a decision the project owner already made
+
+Ledger line 1268 (`skillars-deferred-90`): *"`sessionManager.js` `startSessionMonitoring()`'s
+early-return-with-no-timer path — **left as documented (project-owner decision)**."* Line 1265 records
+the full rationale from the round-2 1.7b review.
+
+AC4 presents Options A/B/C as an open choice and then recommends **Option A = "document current design
+(silent approach)"** — i.e. re-affirming the decision already on record. As written, AC4 is near-zero
+net work dressed as a design task, and risks a developer "implementing" a TODO comment that just
+restates an existing decision.
+
+**Action:** reduce AC4 to "reference the deferred-90 project-owner decision in a code comment if one is
+not already present," or drop it. If the project owner genuinely wants to revisit, say so explicitly
+and cite the prior decision being reversed.
+
+### M4 — AC4's cost analysis for Option B does not hold
+
+AC4 (and ledger line 1265) claim that arming the interval anyway would re-dispatch `session:expired`
+"**every 30s until navigation completes**", triggering "**repeated backend logout calls**".
+
+Trace the actual code:
+- `App.vue:27 handleSessionExpired()` calls `cleanup()` → `stopSessionMonitoring()` →
+  `clearInterval(checkIntervalId); checkIntervalId = null`.
+- So an interval armed *after* the first expired `tick()` fires **once more** at +30 s, `tick()`
+  dispatches `session:expired` once, `handleSessionExpired` runs `cleanup()` again, and the interval
+  **tears itself down**. `startSessionMonitoring()` is not called again (only from mount /
+  `initSession()`).
+
+Net cost of Option B is **one** extra `session:expired` + **one** extra background `authStore.logout()`
+— not a loop. And `authStore.logout()` is already fire-and-forget ("best-effort backend call fires in
+background", `App.vue:32`), so even that is cheap. The comparison AC4 uses to prefer Option A over B
+rests on an overstated cost.
+
+This does not change the recommendation (Option A is still reasonable), but the story should not
+justify it with an inaccurate mechanism.
+
+---
+
+## MINOR findings
+
+### m1 — Pattern of stale / wrong file paths
+
+Beyond B1/B3/M2: the story repeatedly cites paths and line numbers copied from 2026-09-02 ledger
+bullets without re-checking. This is the same failure mode `deferred-work.md`'s own preamble warns
+about ("File paths and line numbers age fast"). Every path in the story should be re-derived.
+
+### m2 — AC6 restates a gap already dismissed ~15 times
+
+The "no frontend test framework" gap is **real and current** — no `vitest` / `@vue/test-utils` in
+`src/frontend/package.json`, no `*.spec.js` / `*.test.js` anywhere. But:
+- Ledger line 722 marks the canonical instance `[DISMISSED 2026-08-30 … not a distinct action item]`.
+- Ledger line 1293 calls it "its own initiative … out of scope."
+- The story's affected-stories list omits `skillars-5-4 W9`, which is the origin the ledger anchors to.
+
+An AC that re-lists this without producing a decision is ledger churn. If AC6 stays, its only real
+deliverable is the explicit **"stand up Vitest in this story vs. defer to its own initiative"**
+decision — make *that* the AC, not the enumeration.
+
+### m3 — AC2 rationale coins a non-existent type name
+
+AC2 writes "risk of `CartesianRowExplosion`" as though it is a class. The real hazards are
+`MultipleBagFetchException` and cartesian row multiplication — already named correctly in the shipped
+`getPublicProfile` Javadoc.
+
+### m4 — Completion Criteria: `mvn -o verify` locally
+
+*"Backend `mvn -o verify` green"* — per project convention (and this repo's memory notes) full
+verification is the GitHub CI gate, not a local pre-push step. Cosmetic; align the wording with the
+other recent stories.
+
+### m5 — Story file is untracked while already `ready-for-dev`
+
+`skillars-deferred-98-…md` is `??` and `sprint-status.yaml` is already modified — the same
+tracking-vs-status mismatch flagged for the 1.7b artifacts (ledger line 1256). Commit the story with
+its status change.
+
+---
+
+## What is actually left to do (if the story is kept at all)
+
+After removing the shipped work, the residue is small:
+
+1. **SLU skill-trend signal** (ledger line 1292) — a genuine open item, but it is a **new feature**
+   that was never a reviewed deferral with an agreed shape. Needs: per-skill vs aggregate decision,
+   where it surfaces (dashboard? narrative? coach analytics API?), read-time vs scheduled computation,
+   and whether it needs its own table/column at all given `findByPlayerIdFromWeek` already exists.
+   Treat as a scoped feature story, not a "close deferred work" bundle item.
+2. **`authorizePlayback` latency perf-tracking job** (ledger line 1241) — the real deferred-89
+   residual, currently unaddressed. Decide in or out; do not let it be tagged `[CLOSED]` by this story.
+3. **AC4** — at most a one-line comment pointing at the deferred-90 decision, if missing.
+4. **AC6** — a yes/no decision on standing up Vitest, nothing else.
+
+AC2, AC3 (both halves), and AC5 should be struck: the code, the IT, the doc, and the Prettier CI gate
+already reflect exactly what they ask for.
