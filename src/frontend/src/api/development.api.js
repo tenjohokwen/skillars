@@ -45,3 +45,8 @@ export const saveCoachBranding = (logoKey, brandColour) =>
 
 export const getCoachContributions = (playerId, days = 30) =>
   api.get(`/api/development/players/${playerId}/slu/coach-contributions`, { params: { days } })
+
+// skillars-deferred-98 AC1b: per-skill weekly SLU trend (improving / flat / declining), independent
+// of the neglected-skill gating signal. Backend: SkillExposureResource#getSkillTrends.
+export const getSkillTrends = (playerId, weeks = 8) =>
+  api.get(`/api/development/players/${playerId}/slu/skill-trends`, { params: { weeks } })

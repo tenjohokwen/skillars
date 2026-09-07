@@ -3,6 +3,8 @@ package com.softropic.skillars.platform.development.service;
 import com.softropic.skillars.infrastructure.util.TestClockProvider;
 import com.softropic.skillars.platform.development.contract.NarrativeKeyDto;
 import com.softropic.skillars.platform.development.contract.SkillExposureResponse;
+import com.softropic.skillars.platform.development.contract.SkillTrendDirection;
+import com.softropic.skillars.platform.development.contract.SkillTrendResponse;
 import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagRepository;
 import com.softropic.skillars.platform.development.repo.PlayerSluWeeklySnapshot;
 import com.softropic.skillars.platform.development.repo.SluWeeklySnapshotRepository;
@@ -25,6 +27,7 @@ import java.time.temporal.IsoFields;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
@@ -146,6 +149,63 @@ class SluDashboardServiceTest {
 
         assertThat(response.currentWeek()).isEmpty();
         assertThat(response.trend()).isEmpty();
+    }
+
+    @Test
+    void getSkillTrends_classifiesEachSkillIndependently() {
+        // Same clock pin / window as the exposure tests above: weeksBack 8 -> from = 2026-W47.
+        TestClockProvider.setClock(Clock.fixed(Instant.parse("2027-01-06T10:00:00Z"), ZoneOffset.UTC));
+        short curYear = (short) 2027;
+        short curWeek = (short) 1;
+        short fromYear = (short) 2026;
+        short fromWeek = (short) 47;
+
+        // Rows must arrive oldest-first (the repository ORDER BY guarantees this in production).
+        List<PlayerSluWeeklySnapshot> snapshots = List.of(
+            makeSnapshot((short) 2026, (short) 49, "PAC", new BigDecimal("2.00")),
+            makeSnapshot((short) 2026, (short) 49, "SHO", new BigDecimal("6.00")),
+            makeSnapshot((short) 2026, (short) 51, "PAC", new BigDecimal("4.00")),
+            makeSnapshot((short) 2026, (short) 51, "SHO", new BigDecimal("4.00")),
+            makeSnapshot((short) 2027, (short) 1, "PAC", new BigDecimal("6.00")),
+            makeSnapshot((short) 2027, (short) 1, "SHO", new BigDecimal("2.00"))
+        );
+        when(snapshotRepository.findByPlayerIdFromWeek(eq(PLAYER_ID), eq(fromYear), eq(fromWeek), eq(curYear), eq(curWeek)))
+            .thenReturn(snapshots);
+
+        SkillTrendResponse response = service.getSkillTrends(PLAYER_ID, 8);
+
+        assertThat(response.trends())
+            .extracting("skillCode", "direction", "weeksObserved")
+            .containsExactly(
+                tuple("PAC", SkillTrendDirection.IMPROVING, 3),
+                tuple("SHO", SkillTrendDirection.DECLINING, 3));
+    }
+
+    @Test
+    void getSkillTrends_withOneWeekOfData_reportsInsufficientData() {
+        TestClockProvider.setClock(Clock.fixed(Instant.parse("2027-01-06T10:00:00Z"), ZoneOffset.UTC));
+        when(snapshotRepository.findByPlayerIdFromWeek(eq(PLAYER_ID), eq((short) 2026), eq((short) 47), eq((short) 2027), eq((short) 1)))
+            .thenReturn(List.of(makeSnapshot((short) 2027, (short) 1, "PAC", new BigDecimal("9.00"))));
+
+        SkillTrendResponse response = service.getSkillTrends(PLAYER_ID, 8);
+
+        assertThat(response.trends()).singleElement()
+            .satisfies(t -> {
+                assertThat(t.skillCode()).isEqualTo("PAC");
+                assertThat(t.direction()).isEqualTo(SkillTrendDirection.INSUFFICIENT_DATA);
+                assertThat(t.weeksObserved()).isEqualTo(1);
+            });
+    }
+
+    @Test
+    void getSkillTrends_withNoData_returnsEmptyList() {
+        TestClockProvider.setClock(Clock.fixed(Instant.parse("2027-01-06T10:00:00Z"), ZoneOffset.UTC));
+        when(snapshotRepository.findByPlayerIdFromWeek(eq(PLAYER_ID), eq((short) 2026), eq((short) 47), eq((short) 2027), eq((short) 1)))
+            .thenReturn(List.of());
+
+        SkillTrendResponse response = service.getSkillTrends(PLAYER_ID, 8);
+
+        assertThat(response.trends()).isEmpty();
     }
 
     @Test
