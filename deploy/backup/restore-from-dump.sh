@@ -131,16 +131,16 @@ if [ -z "$CID" ]; then
 fi
 
 log "Dropping and recreating database ${POSTGRES_DB:-skillars}..."
-docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" "$CID" \
+PGPASSWORD="${POSTGRES_PASSWORD}" docker exec -e PGPASSWORD "$CID" \
   psql -U "${POSTGRES_USER:-postgres}" -d postgres \
   -c "DROP DATABASE IF EXISTS \"${POSTGRES_DB:-skillars}\";"
-docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" "$CID" \
+PGPASSWORD="${POSTGRES_PASSWORD}" docker exec -e PGPASSWORD "$CID" \
   psql -U "${POSTGRES_USER:-postgres}" -d postgres \
   -c "CREATE DATABASE \"${POSTGRES_DB:-skillars}\" OWNER \"${POSTGRES_USER:-postgres}\";"
 
 log "Restoring dump (this may take several minutes)..."
 gunzip -c "${LOCAL_DUMP}" | \
-  docker exec -i -e PGPASSWORD="${POSTGRES_PASSWORD}" "$CID" \
+  PGPASSWORD="${POSTGRES_PASSWORD}" docker exec -i -e PGPASSWORD "$CID" \
   psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-skillars}" \
   --set ON_ERROR_STOP=1
 
@@ -149,7 +149,7 @@ gunzip -c "${LOCAL_DUMP}" | \
 # print (and before the EXIT trap's app-restart could run cleanly). `assert_numeric` then rejects
 # an empty OR non-numeric capture with the intended "integrity check failed" message + exit 1.
 run_psql() {
-  docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" "$CID" \
+  PGPASSWORD="${POSTGRES_PASSWORD}" docker exec -e PGPASSWORD "$CID" \
     psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-skillars}" \
     -t -c "$1" 2>/dev/null | tr -d ' \n'
 }
@@ -195,6 +195,8 @@ log "Starting app service..."
 docker compose -f /opt/skillars/docker-compose.yml start app
 
 APP_CID=$(docker compose -f /opt/skillars/docker-compose.yml ps -q app 2>/dev/null | head -1)
+# Single unretried `docker compose ps -q app` can race container registration; slow registration aborts restore.
+# Retry outside script if observed.
 if [ -z "${APP_CID}" ]; then
   err "app container not found after 'docker compose start app' — cannot wait for health, failing fast instead of burning the 90s timeout."
   exit 1

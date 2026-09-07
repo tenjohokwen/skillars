@@ -377,6 +377,16 @@ All services should reach the `healthy` state within **~60 seconds**. The `app` 
 
 ## Step 7: Verify the Environment
 
+**Before production deployment, verify the Hetzner Volume is mounted at `/opt/skillars/data`:**
+
+```bash
+ssh root@<NODE_IP> "mountpoint -q /opt/skillars/data && echo 'mounted' || echo 'NOT mounted'"
+# Expected output: mounted
+# If "NOT mounted", the volume is NOT mounted — deployment will lose all persistent data on rebuild.
+```
+
+Then verify application health:
+
 ```bash
 curl -s https://<DOMAIN>/actuator/health
 # Expected response: {"status":"UP"}  with HTTP 200
