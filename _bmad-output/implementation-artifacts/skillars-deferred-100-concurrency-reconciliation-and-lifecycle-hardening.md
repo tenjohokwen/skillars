@@ -93,8 +93,16 @@ and there is one transactional-outbox implementation rather than two.
   - Do the `countByCoachIdAndCreatedAtAfter` read **after** acquiring the lock so the count and the
     status decision are consistent for the winner; the loser blocks on the lock, then re-reads
     `status = PENDING_REVIEW`/`REDUCED` and its guard suppresses the duplicate event.
-  - Keep the strike `INSERT` itself before the lock (it always happens; only the threshold
-    escalation must be serialized) — or move it inside, dev's call, but document which.
+  - The count read, the threshold comparison, and the status write **must all sit under the lock**
+    (that is the serialization point). Only the strike `INSERT` is flexible: keep it before the lock
+    (it always happens regardless of outcome) or move it inside — dev's call, document which.
+  - `lockRetryer.withBoundedRetry` can still exhaust (`PessimisticLockRetryException`) under
+    sustained contention; `issue()` then propagates and its transaction rolls back. Acceptable here,
+    do **not** add a bespoke retry: the refund-listener callers
+    (`CancellationRefundService.onCoachCancellationUnexcused` / `onCoachNoShow`) have no retry, and a
+    dropped strike-escalation is far less harmful than the refund those listeners exist to protect;
+    the admin path (`AdminCoachEnforcementService`) surfaces the error for the operator to retry.
+    Record this reasoning in the Dev Agent Record.
 - **Files:** `ReliabilityStrikeService.java`; inject `PessimisticLockRetryer` (+ `EntityManager`
   only if the dev chooses to refactor the strike insert under the lock); `ReliabilityStrikeServiceTest`
   / a new IT.
@@ -138,6 +146,13 @@ and there is one transactional-outbox implementation rather than two.
     `reconcile()`'s existing HTTP-outside-tx discipline), and records a
     `ReconciliationIncident(ORPHANED_ASSET, ...)`. Transient `VideoProviderException` → skip, retry
     next cycle (same as `reconcile()`).
+  - **`deleteAsset` must be idempotent:** a provider "asset not found" / HTTP 404 is *success* (the
+    orphan is already gone) — clear the pending record, still write the `ORPHANED_ASSET` incident;
+    only a genuine transient `VideoProviderException` is skipped for retry. Confirm Bunny's
+    delete-of-missing-asset behaviour and record it in the Dev Agent Record.
+  - **Metrics:** emit `VideoMetrics` counters for sweeper activity — `video.orphan_asset.found`,
+    `video.orphan_asset.purged`, `video.orphan_asset.purge_failed` — same pattern as `reconcile()`'s
+    existing `videoMetrics.recordReconciliationCycleDuration(...)`.
   - **Alternative — provider-side enumeration.** If `VideoProviderAdapter` can list assets by
     account/library, diff that against `videoRepository` and purge unknowns older than a TTL. Only
     if the Bunny adapter supports cheap listing; otherwise use the pre-create record.
@@ -189,10 +204,17 @@ and there is one transactional-outbox implementation rather than two.
     managed + optimistically saved by any concurrent path (scheduler-only claim rows, outbox
     tables), or the column has its own pessimistic-lock guard. One-line Javadoc per query naming the
     reason.
+  - **Bulk `UPDATE`s** (a multi-row `WHERE`, not `WHERE id = :id`) get extra scrutiny — they carry
+    no per-row optimistic check, so either `SET …, version = version + 1` for every matched row, or
+    prove no concurrent managed instance of *any* matched row is optimistically `save()`d. Flag
+    every bulk write explicitly in the audit list.
+  - **Pure `DELETE`s** (with or without `version` in the `WHERE`) are exempt from the
+    `version = version + 1` rule — the guard test's allow-list must not demand a bump on a delete.
   - **Guard test:** a source/reflection scan (same shape as `MigrationLint` /
     `AsyncExecutorQualifierTest` / `AppEndpointsConventionTest`) that finds every native `@Modifying`
-    method on a repo whose entity type has a `@Version` field and asserts each is either in an
-    allow-list (with reason) or contains `version = version + 1`. A new unlisted one fails the build.
+    method on a repo whose entity type has a `@Version` field and asserts each is either a `DELETE`,
+    in an allow-list (with a reason), or contains `version = version + 1`. A new unlisted one fails
+    the build.
 - **Files:** the repositories in the audited intersection; a new
   `NativeModifyingVersionAuditTest` (test tree); Javadoc on each audited query.
 - **Test:** the guard test above (this AC *is* largely its own test); plus, for any query that
@@ -226,7 +248,9 @@ and there is one transactional-outbox implementation rather than two.
   moved).
 - **Test:** IT — publish a `BookingStatusChangedEvent` for a batched booking and assert the batch
   status recomputes with no `TransactionRequiredException`-class failure and no reliance on
-  open-session-in-view; a `Booking` with `batchId == null` is a no-op.
+  open-session-in-view; a `Booking` with `batchId == null` is a no-op (the listener already carries
+  the `booking.getBatchId() != null` guard — do not remove it, and do not call
+  `updateBatchStatusFromBooking(null)`).
 - **Ledger:** `## Deferred from: code review of skillars-3-9-bulk-session-request-from-calendar
   (2026-06-16)` — W2 ("`bookingRepository.findById` in `BookingBatchStatusListener` runs outside
   explicit transaction"). **Also delete W1 from that section** as stale (closed by
@@ -256,8 +280,12 @@ and there is one transactional-outbox implementation rather than two.
   - Add a dedicated `reconcileToReady(UUID videoId, String reason)` (or a `boolean reconciliation`
     param on a small private helper) that performs the `PROCESSING→READY` write for the reconciliation
     / admin paths **without** the `video.moderation.bypass` counter or the "moderation pipeline was
-    not run" WARN — instead an INFO tied to the incident/reason. Point `ReconciliationWorkerScheduler`
-    and `AdminVideoService` at it.
+    not run" WARN — instead an INFO tied to the incident/reason. Point **both**
+    `ReconciliationWorkerScheduler.processReconciliation` and `AdminVideoService` (`:161`) at it — the
+    admin correction is in scope, not just the scheduler. The
+    `ReconciliationIncident(STATE_CORRECTED, …)` row `ReconciliationWorkerScheduler` already writes is
+    the durable record of a legitimate correction; a distinct meter
+    (`video.reconciliation.state_corrected`) is optional, not required.
   - Keep a **belt-and-suspenders** branch in the plain `transitionOperationalState`: if it is ever
     asked for `PROCESSING→READY` (now not in `VALID_TRANSITIONS`), log **ERROR** and still increment
     `video.moderation.bypass` before throwing `TerminalStateViolationException` — so a regression is
@@ -305,20 +333,37 @@ and there is one transactional-outbox implementation rather than two.
   - Rely on the generic outbox's existing AFTER_COMMIT drain + scheduled sweep + `REQUIRES_NEW`
     chunking + attempts/backoff. If the generic outbox lacks the bounded-drain safety stop or the
     attempts-ordering the bespoke one has, port that behaviour into the generic processor (record it).
-  - New Flyway migration to `DROP TABLE IF EXISTS` the old `pending_blob_deletion` table — additive
-    concerns only, `IF EXISTS`, `SET lock_timeout`, follow `docs/deployment/migration-conventions.md`
-    "Go-forward checklist"; next free `V###`.
-  - Delete `PendingBlobDeletionService`, `PendingBlobDeletionChunkProcessor`, `PendingBlobDeletion`,
-    `PendingBlobDeletionRepository`, `BlobDeletionsEnqueuedEvent` once nothing references them.
+  - **Do NOT drop `pending_blob_deletion` in this story.** Dropping a table the just-previous
+    release still reads/writes is exactly the `DROP_WITHOUT_PRIOR_RELEASE_PREP` hazard
+    `docs/deployment/migration-conventions.md` and `MigrationLint` exist to prevent — and `IF EXISTS`
+    does not help a concurrent old-release `processChunk()` mid-transaction. Expand/contract instead:
+    1. Swap every `PendingBlobDeletionService.enqueue(...)` call site to `OutboxService.enqueue(...)`
+       (single PR — the handler and the call-site swap ship together, so there is no dual-write
+       window within this release).
+    2. Drain any **residual** `pending_blob_deletion` rows so nothing is lost: either a one-shot
+       `ApplicationRunner` that re-enqueues them through `OutboxService`, **or** keep
+       `PendingBlobDeletionChunkProcessor`'s scheduled drain running for this one release. Verify the
+       table is empty in every environment first — if it always is, the one-shot is optional. Record
+       which path was taken.
+    3. Delete `PendingBlobDeletionService`, `BlobDeletionsEnqueuedEvent`, and (if path 2a was taken)
+       `PendingBlobDeletionChunkProcessor`. **Keep `PendingBlobDeletion` (entity) +
+       `PendingBlobDeletionRepository`** so the one-shot / residual drain can still read the table.
+    4. The `DROP TABLE IF EXISTS pending_blob_deletion` + the `PendingBlobDeletion`/repo deletion are
+       a **follow-up for a later release** (AC7 adds the ledger line), once this release is confirmed
+       deployed and the table is provably empty.
 - **Files:** new handler in `platform/notification`- or `platform/filestorage`-adjacent to the
   outbox pattern; call sites of `PendingBlobDeletionService.enqueue`; `platform/outbox/*` (only if
-  porting the safety-stop/backoff); a new Flyway migration; deletions listed above;
-  `application.yaml` (retire `app.storage.pending-deletion-sweep-ms` or map it to the outbox sweep);
-  the existing `PendingBlobDeletion*IT` retargeted.
+  porting the safety-stop/backoff); a one-shot residual re-enqueue (`ApplicationRunner`) *or* the
+  retained scheduled drain; the partial class deletions above (**no** `pending_blob_deletion` table
+  drop this release); `application.yaml` (retire `app.storage.pending-deletion-sweep-ms` or map it
+  to the outbox sweep, unless the drain is retained for one release); the existing
+  `PendingBlobDeletion*IT` retargeted.
 - **Test:** IT — a business operation that enqueues a blob deletion commits → the key is deleted
   after the AFTER_COMMIT drain; a `StorageService` delete failure retries on the next sweep via the
-  outbox `attempts` counter and is not lost; a rollback of the business tx enqueues nothing. Keep
-  the assertions the current `PendingBlobDeletion*IT` makes, re-pointed at the generic outbox.
+  outbox `attempts` counter and is not lost; a rollback of the business tx enqueues nothing; a
+  residual `pending_blob_deletion` row present at startup is re-enqueued (or drained) and processed,
+  **not lost**. Keep the assertions the current `PendingBlobDeletion*IT` makes, re-pointed at the
+  generic outbox.
 - **Ledger:** `## Deferred from: skillars-deferred-90 story creation and implementation (2026-09-02)`
   — R1 ("No bulk-delete capability in the storage stack … Left open deliberately") and
   `## Deferred from: skillars-deferred-91 story creation and implementation (2026-09-03)` — the
@@ -351,6 +396,11 @@ and there is one transactional-outbox implementation rather than two.
 - **Annotate (updated by AC6):** the `skillars-deferred-90` R1 bullet and the
   `skillars-deferred-91` "`PendingBlobDeletionService` … nice-to-have" bullet — mark the
   consolidation done; keep the pure `DeleteObjects` bulk-API gap open only if AC6 didn't wire it.
+- **Add (follow-up owed by AC6):** a new dated bullet — `pending_blob_deletion` table +
+  `PendingBlobDeletion` entity/repo are unreferenced after deferred-100 and must be dropped in a
+  **later** release (`DROP_WITHOUT_PRIOR_RELEASE_PREP` — cannot drop in the same release that stops
+  using it). Record whether residual rows were re-enqueued into the generic outbox (nothing left to
+  migrate) or the bespoke drain was kept for one release (retire it in the same follow-up).
 - **Note for the next story-creation audit (add under a short dated sub-heading, do not turn into an
   AC):** the `deferred-94` "Actuator health endpoint should surface notification-channel
   reachability" bullet — the **SMTP half shipped** in `skillars-deferred-99` AC5
@@ -408,8 +458,10 @@ and there is one transactional-outbox implementation rather than two.
 - [ ] **AC6** — blob-deletion outbox consolidation
   - [ ] `OutboxMessageHandler` for blob-key delete; swap `enqueue` call sites to `OutboxService.enqueue`
   - [ ] port bounded-drain safety stop / attempts-ordering into the generic processor if missing
-  - [ ] Flyway `DROP TABLE IF EXISTS pending_blob_deletion` (lock_timeout, IF EXISTS, conventions)
-  - [ ] delete bespoke classes; retarget `PendingBlobDeletion*IT`
+  - [ ] drain residual `pending_blob_deletion` rows (one-shot re-enqueue, or keep the bespoke drain one release) — verify empty first
+  - [ ] delete `PendingBlobDeletionService` + `BlobDeletionsEnqueuedEvent` (+ `ChunkProcessor` if one-shot); **keep** `PendingBlobDeletion` entity + repo for the drain
+  - [ ] **no** `DROP TABLE` this release — AC7 adds the follow-up ledger line
+  - [ ] retarget `PendingBlobDeletion*IT`; add a residual-row IT
 - [ ] **AC7** — ledger hygiene
   - [ ] delete the closed + stale bullets; annotate the AC6 ones; add the dated `deferred-94`-health note
 
@@ -455,9 +507,9 @@ and there is one transactional-outbox implementation rather than two.
 | `platform/booking/service/BookingBatchStatusListener.java` | AC4 | `@Transactional(REQUIRES_NEW, readOnly)` |
 | `platform/video/service/VideoLifecycleService.java` | AC5 | drop `PROCESSING→READY`; belt-and-suspenders |
 | `platform/video/service/AdminVideoService.java` | AC5 | use `reconcileToReady` |
-| `platform/filestorage/service/PendingBlobDeletion*` + `repo/PendingBlobDeletion*` | AC6 | delete |
-| `platform/outbox/*` | AC6 | new blob-delete handler; maybe port safety-stop |
-| `src/main/resources/db/migration/V###__*.sql` | AC2?, AC6 | new table(s) / drop old table |
+| `platform/filestorage/service/PendingBlobDeletionService` + `BlobDeletionsEnqueuedEvent` (+ `ChunkProcessor` if one-shot) | AC6 | delete; **keep** `PendingBlobDeletion` entity + repo for the residual drain |
+| `platform/outbox/*` | AC6 | new blob-delete handler; maybe port safety-stop; maybe a one-shot `ApplicationRunner` |
+| `src/main/resources/db/migration/V###__*.sql` | AC2 (if table route) | new orphan-tracking table only; **no** `pending_blob_deletion` drop this release |
 | `docs`/ n/a; `_bmad-output/implementation-artifacts/deferred-work.md` | AC7 | prune |
 
 ### Project Structure Notes
