@@ -25,10 +25,20 @@ A comprehensive hardening pass across deployment scripts, infrastructure securit
 ## Acceptance Criteria
 
 ### **AC1: PGPASSWORD Exposure — All 4 Occurrences Closed**
-- [ ] `deploy/backup/pg-backup.sh` — line 32: Replace `docker exec -e PGPASSWORD="$DB_PASS"` with heredoc or environment file pattern that keeps credentials out of process args
-- [ ] `deploy/backup/restore-from-dump.sh` — lines 135, 138, 142: Same pattern applied to `DROP DATABASE`, `CREATE DATABASE`, and dump replay
+- [ ] `deploy/backup/pg-backup.sh` — line 32: Replace `docker exec -e PGPASSWORD="$DB_PASS"` with heredoc pattern
+- [ ] `deploy/backup/restore-from-dump.sh` — lines 135, 138, 142: Same heredoc pattern applied to `DROP DATABASE`, `CREATE DATABASE`, and dump replay
 - [ ] **Verification:** `grep -r "docker exec -e PGPASSWORD" deploy/` returns zero matches
-- [ ] **Spec:** Use the `<(printf ...)` heredoc pattern or temporary env-file approach; credentials must not appear in `ps aux` output for the duration of the call
+- [ ] **Spec:** Use heredoc with process substitution: `docker exec -e PGPASSWORD="$(cat <<'PGPW'..."PGPW')" app psql ...`
+  - Credentials never touch filesystem (no temp file)
+  - Credentials never appear in `ps aux` (process argument, not env var visible to ps)
+  - Most concise and secure pattern
+- [ ] **Example pattern:**
+  ```bash
+  docker exec -e PGPASSWORD="$(cat <<'PGPW'
+  $DB_PASS
+  PGPW
+  )" app psql -U postgres -h localhost -c "DROP DATABASE ..."
+  ```
 
 ### **AC2: Hardcoded Container UIDs — Bind to Image Versions**
 - [ ] Document the container UID assumptions (65534=nobody, 10001=postgres, 472=grafana) in `deploy/provision.sh` and `deploy/backup/restore-from-volume-backup.sh`
@@ -85,11 +95,19 @@ A comprehensive hardening pass across deployment scripts, infrastructure securit
 - [ ] **Status:** Pre-existing pattern, out of this story's scope per specification
 - [ ] **Action:** Defer to a separate platform-wide hardening story; do not attempt closure here
 
-### **AC11: awscli v1 from Ubuntu apt — Version Pin**
+### **AC11: awscli v1 from Ubuntu apt — Pin to v2**
 - [ ] Current state: `provision.sh:131` installs awscli v1 which has edge cases with Hetzner Object Storage
-- [ ] **Decision Point:** Should we pin awscli to v2, or accept v1 as-is with docs about workarounds?
-- [ ] Add comment: "awscli v1 approved per spec; revisit if upload failures occur in production. Upgrade to v2 is a separate hardening decision."
-- [ ] **No code change** — document the accepted tradeoff
+- [ ] **Change:** Pin to awscli v2 in `provision.sh` near line 131
+  ```bash
+  # Before:
+  apt-get install -y awscli
+  
+  # After:
+  apt-get install -y awscli=2.* python3-pip
+  ```
+- [ ] **Rationale:** v2 is actively maintained, fewer Hetzner edge cases, recommended upstream
+- [ ] **Verification:** `aws --version` in provisioned environment shows `aws-cli/2.x.x`
+- [ ] **No docs change** — v2 is the stable choice going forward
 
 ### **AC12: Fail Workflow Citation Update**
 - [ ] Current state: `.github/workflows/deploy.yml:184-188` has become the "Fail workflow" step (previously `:139-143`)
@@ -98,11 +116,19 @@ A comprehensive hardening pass across deployment scripts, infrastructure securit
 - [ ] Add a comment in `deploy.yml` at the Fail step: "This step is unreachable if any notification step throws. Notification failures are logged at WARN but may hide the true deploy failure."
 - [ ] **No code change** — document the architectural limitation
 
-### **AC13: Prometheus depends_on App**
+### **AC13: Prometheus depends_on App — Add Dependency**
 - [ ] Current state: `docker-compose.yml:217-235` (Prometheus) has no `depends_on: app`; Grafana at `:328` does
-- [ ] **Decision Point:** Is cold-start scrape failure acceptable per the standing spec, or should we add the dependency?
-- [ ] **Current acceptance:** Scrapes recover once app is healthy; no action this story unless spec directs otherwise
-- [ ] **Action:** Add comment in compose: "Prometheus has no depends_on: app. Acceptable; scrapes recover once app is healthy."
+- [ ] **Change:** Add `depends_on: - app` to the Prometheus service definition in docker-compose.yml
+  ```yaml
+  prometheus:
+    image: prom/prometheus:latest
+    depends_on:
+      - app    # Ensure app is healthy before Prometheus starts scraping
+    ports: [...]
+  ```
+- [ ] **Rationale:** Eliminates cold-start scrape failures; ensures Prometheus only scrapes once app is ready
+- [ ] **Verification:** On fresh `docker compose up`, verify Prometheus enters `healthy` state after app reaches `healthy`
+- [ ] **No regression risk:** Only makes startup order explicit; no behavioral change for running deployments
 
 ### **AC14: LGTM mkdir-p Gating**
 - [ ] Current state: `provision.sh:594-603` has `mkdir -p` calls inside `[ -b "${VOLUME_DEVICE}" ]` check
@@ -111,13 +137,27 @@ A comprehensive hardening pass across deployment scripts, infrastructure securit
 - [ ] **Status:** Accepted design; monitor for permission failures on new deployments
 - [ ] Add comment: "mkdir-p calls are gated inside volume-device check. If volume is absent, Docker creates dirs as root; watch for permission errors on first provision."
 
-### **AC15: VideoModerationEmailListener Fail-Open Path**
+### **AC15: VideoModerationEmailListener Fail-Open Path — Throw on Misconfigured Address**
 - [ ] Current state: When `platform.admin_alert_email` is blank, `VideoModerationEmailListener.sendAdminAlertSync()` returns normally without sending
 - [ ] **Issue:** No ERROR log; outbox row is released silently; operator has no signal that admin alerts are disabled
-- [ ] **Fix:** Change blank-recipient case to log ERROR + retain outbox row (or throw so listener does not release the row)
-- [ ] Acceptance: `VideoModerationEmailListener.java` now treats blank recipient as configuration error
-- [ ] **Verification:** `VideoModerationEmailListenerTest` asserts ERROR-level logging when admin alert address is unset
-- [ ] **Spec:** Distinguish "envelope not yet visible" (INFO/retry) from "misconfigured address" (ERROR/retain)
+- [ ] **Fix:** Change blank-recipient case to throw `ConfigurationException` so listener framework retains the outbox row
+  ```java
+  // In VideoModerationEmailListener.sendAdminAlertSync():
+  String adminAlertEmail = config.getString("platform.admin_alert_email", "");
+  if (adminAlertEmail.isBlank()) {
+    throw new ConfigurationException(
+      "platform.admin_alert_email is not set; video moderation admin alerts cannot be sent. " +
+      "Set this config key and restart to enable admin alert emails."
+    );
+  }
+  // ... continue with send
+  ```
+- [ ] **Acceptance:** `VideoModerationEmailListener.java` throws on blank recipient; Spring listener logs exception at ERROR
+- [ ] **Verification:** 
+  - `VideoModerationEmailListenerTest` asserts `ConfigurationException` is thrown when admin alert is unset
+  - Outbox row is retained (Spring listener framework does not delete on exception)
+  - Operator sees ERROR in logs with clear diagnostic message
+- [ ] **Spec:** Throw early with clear message; let Spring listener framework handle retry + retention
 
 ### **AC16: AC6 Outbox Retain/Delete Semantics — End-to-End Test**
 - [ ] Current state: `VideoModerationEmailListenerTest:150-173` uses mocked `JavaMailSender`; never exercises real `MailManager`
@@ -154,27 +194,47 @@ This story **combines both**: all 14 deploy-* security/operational gaps **plus**
 - **Docs:** `docs/deployment/backup-restore.md`, `docs/deployment/runbook.md`, `docs/deployment/prerequisites.md`
 
 ### Implementation Notes
-- **AC1 (PGPASSWORD):** Three paths to choose from:
-  1. Use `<(printf ...)` heredoc: `docker exec -e PGPASSWORD="$(<file_descriptor)" ...`
-  2. Write to temp file with mode 600, source it, then delete
-  3. Use `docker exec` with stdin: `echo "$DB_PASS" | docker exec -i app psql ...` (least secure)
-  - **Recommend:** Option 1 or 2; Option 2 is most readable for ops
+- **AC1 (PGPASSWORD — Heredoc pattern):** All four occurrences (pg-backup.sh:32, restore-from-dump.sh:135/138/142) use the same pattern:
+  ```bash
+  DB_PASS="..."  # from .env or config
+  docker exec -e PGPASSWORD="$(cat <<'PGPW'
+  $DB_PASS
+  PGPW
+  )" app psql -U postgres -h localhost ...
+  ```
+  - Process substitution keeps credentials in-memory only
+  - Credentials never appear in `ps aux` or temp files
+  - Verify post-fix: `grep -r "docker exec -e PGPASSWORD" deploy/` returns zero
 
-- **AC15–AC16:** Requires understanding current email path:
-  - `VideoModerationEmailListener` → `MailManager.send()` → actual mail transmission
-  - Retention/delete is controlled by presence of `EnvelopeEntity` in outbox with `isRetry` flag
-  - Real failure mode (permanent) should delete; retryable should retain
+- **AC11 (awscli v2 pin):** Update `provision.sh:131` from `apt-get install -y awscli` to `apt-get install -y awscli=2.*`
+  - Ensures consistency across all provisioning
+  - Verify: `aws --version` shows `aws-cli/2.x.x`
+
+- **AC13 (Prometheus depends_on):** In `docker-compose.yml:217`, add:
+  ```yaml
+  depends_on:
+    - app
+  ```
+  - Ensures app is healthy before Prometheus starts scraping
+  - No behavior change; only startup order
+
+- **AC15–AC16 (VideoModerationEmailListener):** 
+  - `VideoModerationEmailListener.sendAdminAlertSync()` checks if `platform.admin_alert_email` is blank
+  - If blank, throw `ConfigurationException` with clear message (do NOT return silently)
+  - Spring `@TransactionalEventListener` catches exception, logs ERROR, and retains outbox row
+  - `VideoModerationEmailListenerTest` asserts exception is thrown (no mock swallow)
+  - Real failure modes: `MailManager` returns retryable vs permanent → `EnvelopeEntity(FAILED, isRetry)` flag controls retention
 
 ### Testing Strategy
 - **AC1:** Grep verification only; no functional test (credential exposure is "not happening" behavior)
-- **AC15:** Add or update `VideoModerationEmailListenerTest` to log-assert on blank recipient
+- **AC15:** Add or update `VideoModerationEmailListenerTest` to assert `ConfigurationException` is thrown on blank recipient
 - **AC16:** Real integration test with `MailManager` mock that simulates retryable and permanent failures
 
-### Decision Points for User
-1. **AC1:** Which pattern for PGPASSWORD? (Heredoc / temp file / other?)
-2. **AC11:** Pin awscli to v2 now, or accept v1 + document?
-3. **AC13:** Add Prometheus `depends_on: app`, or leave as-is?
-4. **AC15–AC16:** Should blank admin alert be ERROR + retain, or throw?
+### Decisions Made (By User, 2026-09-05)
+1. **AC1 — PGPASSWORD pattern:** Heredoc with process substitution (`$(cat <<'PW'...'PW')` pattern) — most secure, no temp files
+2. **AC11 — awscli version:** Pin to v2 now (`apt-get install -y awscli=2.*`) — modern, fewer edge cases
+3. **AC13 — Prometheus depends_on:** Add `depends_on: - app` — eliminates cold-start scrape failures
+4. **AC15 — admin alert misconfiguration:** Throw `ConfigurationException` on blank address — clear ERROR in logs, outbox retained by framework
 
 ---
 
