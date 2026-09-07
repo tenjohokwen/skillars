@@ -11,8 +11,9 @@ fi
 
 DEPLOY_ROOT="/opt/skillars"
 
-# Clone repo BEFORE volume mount. This is benign because repo has no /data/ content.
-# If future changes add repo files under /data/, move this clone to AFTER volume mount.
+# Note: repo is cloned manually in docs/deployment/first-time-setup.md before provision.sh runs.
+# This is benign because repo has no /data/ content today. If future changes add repo files
+# under /data/, that manual clone step would need to move to AFTER provision.sh mounts the Volume.
 # Repo cloned as root into /opt/skillars. Runtime data is mounted at /opt/skillars/data.
 # Separate deploy user or sparse-checkout is deferred as outside this story's scope.
 
@@ -599,6 +600,8 @@ if [ -b "${VOLUME_DEVICE}" ]; then
   # Recreate sub-directories on mounted volume
   # Container UIDs are tied to specific image versions (prometheus, loki, tempo, grafana, redis, traefik).
   # Update these chown calls if the corresponding docker-compose.yml image versions change.
+  # mkdir-p calls are gated inside the volume-device check. If volume is absent, Docker creates dirs as root;
+  # watch for permission errors on first provision.
   mkdir -p "${MOUNT_POINT}/postgres"
   mkdir -p "${MOUNT_POINT}/prometheus"
   chown_if_needed 65534:65534 "${MOUNT_POINT}/prometheus"
@@ -624,9 +627,6 @@ fi
 # Deliberately AFTER the `fi` above, so it covers BOTH branches: on a host with no Volume attached
 # section 7 only warns and falls through, and these two must still exist rather than be created by
 # Docker as root-owned on first `up`. Relocated here from section 6.5 — see the note there.
-#
-# mkdir-p calls are gated inside volume-device check. If volume is absent, Docker creates dirs as root;
-# watch for permission errors on first provision.
 #
 # Redis, unlike the LGTM directories in section 7, is here rather than there because it fails HARD
 # on a wrong owner: the image drops to uid 999 and cannot write an AOF into a root-owned directory,

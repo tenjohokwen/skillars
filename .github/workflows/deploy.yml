@@ -186,8 +186,9 @@ jobs:
             Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: Fail workflow on smoke test failure
-        if: steps.smoke.outputs.result == 'fail'
-        # Ensure all notification steps have `continue-on-error: true` so this marker always runs.
+        if: always() && steps.smoke.outputs.result == 'fail'
+        # The real invariant: no step between `smoke` and this marker may fail the job without `continue-on-error: true`.
+        # All notification steps (.github/workflows/deploy.yml :130/:142/:154/:171) must have it so this always runs.
         run: |
           echo "Smoke test failed — deploy reverted. Marking workflow as failed."
           exit 1

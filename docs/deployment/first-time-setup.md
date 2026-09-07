@@ -380,9 +380,9 @@ All services should reach the `healthy` state within **~60 seconds**. The `app` 
 **Before production deployment, verify the Hetzner Volume is mounted at `/opt/skillars/data`:**
 
 ```bash
-ssh root@<NODE_IP> "mount | grep /opt/skillars/data"
-# Expected output: /dev/... on /opt/skillars/data type ext4 (...)
-# If no output, the volume is NOT mounted — deployment will lose all persistent data on rebuild.
+ssh root@<NODE_IP> "mountpoint -q /opt/skillars/data && echo 'mounted' || echo 'NOT mounted'"
+# Expected output: mounted
+# If "NOT mounted", the volume is NOT mounted — deployment will lose all persistent data on rebuild.
 ```
 
 Then verify application health:

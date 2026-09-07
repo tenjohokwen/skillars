@@ -60,7 +60,8 @@ groups:
           runbook: "Check Docker service: docker compose logs app --tail=50"
 
       # DiskDataVolumeHigh requires the Hetzner volume to be mounted at /opt/skillars/data.
-      # If unmounted, writes land on /, triggering DiskHigh instead.
+      # If unmounted, the mountpoint="/opt/skillars/data" metric is absent and this alert silent.
+      # Root-filesystem usage still fires DiskRootHigh (lines 83–98) if writes land on /.
       # See docs/deployment/first-time-setup.md for volume mount verification.
       - alert: DiskDataVolumeHigh
         expr: |

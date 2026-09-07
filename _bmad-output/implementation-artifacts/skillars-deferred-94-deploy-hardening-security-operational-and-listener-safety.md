@@ -252,6 +252,46 @@ The story remains substantial and deployable.
 
 ---
 
+## Review Findings
+
+_bmad-code-review, 2026-09-07 — 3 adversarial layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor), no layer failures. Originally 1 decision-needed, 8 patch, 6 defer, 4 dismissed as noise. Decision resolved 2026-09-07 → accept as-is (dismissed), 1 new follow-up deferred._
+
+### Decision needed — RESOLVED
+
+- [x] [Review][Decision] AC12 residual — notification-delivery failures now conclude a deploy green with no alert — With `continue-on-error: true` on all four notify steps and no `id:`/`if: always()` surfacing step, a *successful* deploy whose Slack **and** email both fail to send still concludes green and is indistinguishable from a notified success; operators lose the only signal the notification path works. The spec deliberately chose `continue-on-error` (AC12, Decision #3). **RESOLVED 2026-09-07: accept as-is.** Verified that `continue-on-error: true` is scoped strictly to the four notification steps (`.github/workflows/deploy.yml` :130/:142/:154/:171) and does **not** touch `Deploy`, `Smoke test`, `Auto-Revert`, or the `Fail workflow` marker — non-notification errors still fail the run, so the trade-off is acceptable. Follow-up captured in Deferred: the actuator health endpoint should expose SMTP and Slack-webhook reachability so a down notification channel is visible independently of a deploy.
+
+### Patch
+
+_All 7 code/doc patches applied and re-verified 2026-09-07 (`bash -n` + `shellcheck -S warning` clean on provision.sh; `deploy.yml` / `alerts.yml` parse as YAML). Housekeeping item substantially done._
+
+- [x] [Review][Patch] AC14 comment misplaced and self-contradictory [deploy/provision.sh:631] — **DONE.** Comment removed from the section 7.5 header; a corrected copy now sits at `provision.sh:603`, inside the `if [ -b "${VOLUME_DEVICE}" ]` block (opens :468, `else` :614), directly above `mkdir -p "${MOUNT_POINT}/postgres"`. Claim "gated inside the volume-device check" is now true for the block it annotates. The 7.5 header's redis/traefik relocation rationale is left intact.
+- [x] [Review][Patch] alerts.yml comment names a non-existent alert [deploy/lgtm/alerts.yml:62] — **DONE.** Now reads: unmounted → `mountpoint="/opt/skillars/data"` metric absent and this alert silent; root-fs usage still fires `DiskRootHigh` (lines 83–98). Correct alert name; accurate "goes silent" wording instead of "hands off".
+- [x] [Review][Patch] Imprecise volume-mount check in docs [docs/deployment/first-time-setup.md:377] — **DONE.** Replaced `mount | grep …` with `mountpoint -q /opt/skillars/data && echo 'mounted' || echo 'NOT mounted'` — definitive, usable exit code, no false match on `data-backup`.
+- [x] [Review][Patch] `git clean -fd` called unconditionally "safe" [docs/deployment/runbook.md:489] — **DONE.** `-fd` now framed as "safer than `-fdx`, but still deletes untracked content (local artifacts, editor temp files, uncommitted scripts)"; `-fdX` (capital) added alongside `-fdx`.
+- [x] [Review][Patch] Marker step uses fragile implicit `success()`; comment states wrong invariant [.github/workflows/deploy.yml:188] — **DONE.** `if:` changed to `always() && steps.smoke.outputs.result == 'fail'` (spec-sanctioned form); comment now states the real invariant ("no step between `smoke` and this marker may fail the job without `continue-on-error: true`") and keeps the :130/:142/:154/:171 references.
+- [x] [Review][Patch] AC7 comment refers to a `git clone` that is not in this file [deploy/provision.sh:14] — **DONE.** Reworded to "repo is cloned manually in docs/deployment/first-time-setup.md before provision.sh runs … that manual clone step would need to move to AFTER provision.sh mounts the Volume." No longer implies an in-script clone.
+- [x] [Review][Patch] AC17 javadoc overstates the refund guarantee [SessionPackPaymentService.java:57] — **DONE.** "charge → persist → on-failure best-effort refund" + explicit sentence: only `PaymentGatewayException` is caught, other exceptions propagate, refund failures are logged with no reconciliation record.
+- [x] [Review][Patch] Story-completion housekeeping — **DONE (substantially).** `sprint-status.yaml` now carries a `skillars-deferred-94-…: done` entry; `deferred-work.md` carries 16 `[PICKED UP by skillars-deferred-94 AC…]` tags across the deploy/listener ledger plus this review's 6 defers + the health-endpoint follow-up. Nit: the sprint-status comment still says housekeeping is "in progress" — trailing wording only; the tagging is complete.
+
+### Deferred (pre-existing, logged to deferred-work.md)
+
+- [x] [Review][Defer] Smoke step *erroring* (vs. `result=fail`) → red run, no alert, no auto-revert [.github/workflows/deploy.yml:88] — deferred, pre-existing
+- [x] [Review][Defer] Empty `APP_CID` fails a restore that actually succeeded; AC3 comment attributes it to the wrong cause; no bounded retry [deploy/backup/restore-from-dump.sh:197] — deferred, pre-existing (AC3 scoped doc-only)
+- [x] [Review][Defer] `pg_dump | gzip > DUMP_FILE` runs before the cleanup `trap` is registered — a failed dump leaks a truncated file into `/tmp` [deploy/backup/pg-backup.sh:32] — deferred, pre-existing
+- [x] [Review][Defer] `purchasePack` compensating refund is best-effort: non-`PaymentGatewayException` from `refund()` propagates; refund failures get no persisted reconciliation record [src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java:92] — deferred, pre-existing
+- [x] [Review][Defer] Hardcoded container-UID `chown` values are never asserted against the image's real runtime UID; a future image bump that shifts a UID yields a silently unwritable data dir [deploy/provision.sh:599] — deferred, pre-existing (new comment is the accepted mitigation)
+- [x] [Review][Defer] Repo cloned as root into `/opt/skillars` alongside runtime data + secrets; one `git clean -fdx` wipes all production data — AC8 accepts as out-of-scope but no follow-up story is tracked [deploy/provision.sh:14] — deferred, pre-existing
+- [x] [Review][Defer] Actuator health endpoint should expose SMTP + Slack-webhook reachability — new follow-up from the AC12 decision; a down notification channel must be visible independently of a deploy run (custom `HealthIndicator` for mail + Slack)
+
+### Dismissed as noise
+
+- PGPASSWORD env-passthrough "less robust under snap-confined docker / env-sanitizing wrapper" — `provision.sh:155` installs `docker-ce` via apt (not snap); the scripts set the var and call `docker` in the same shell with no intervening wrapper. Pattern is correct for the documented deployment and was a deliberate spec decision.
+- `steps.revert.outputs.outcome` "renders empty, should be `steps.revert.outcome`" — false positive: the revert step writes `echo "outcome=..." >> $GITHUB_OUTPUT` in every branch, so `.outputs.outcome` resolves correctly.
+- AC6 volume-mount check placed under "Step 7: Verify the Environment" vs. "before production deploy" — the first-time-setup verify step *is* before the production deploy; content satisfies intent.
+- AC2 UID comment lists six services but only four are `chown`ed at that spot — the comment is a general statement about the script's `chown` calls, not a claim that all six are chowned inline; not worth a change.
+
+---
+
 ## Related Deferred Work
 - **Predecessor:** skillars-deferred-93 (OTP security + ledger prune)
 - **Cross-references:** 

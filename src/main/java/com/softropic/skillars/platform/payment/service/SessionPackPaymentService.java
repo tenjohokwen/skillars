@@ -54,7 +54,8 @@ public class SessionPackPaymentService {
 
     /**
      * Purchase a session pack for a player.
-     * Uses compensating-action pattern (charge → persist → on-failure refund).
+     * Uses compensating-action pattern: charge → persist → on-failure best-effort refund.
+     * Refund is best-effort only: only PaymentGatewayException is caught; other exceptions propagate, and refund failures are logged with no reconciliation record.
      * Not annotated @Transactional to avoid holding DB connection open across external Stripe call.
      */
     public SessionPackPurchaseResponse purchasePack(Long parentId, UUID packTierId, Long playerId, String paymentMethodId) {
