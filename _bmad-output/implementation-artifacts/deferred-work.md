@@ -1168,7 +1168,6 @@ above rather than duplicated here. This section holds only what the story-creati
 
 ## Deferred from: code review of skillars-deferred-62-postgres-lock-timeout-bounded-wait-fix (2026-08-24)
 
-- **`PessimisticLockRetryer`'s retry loop sleeps while still holding the transaction's pooled JDBC connection.** `[PICKED UP by skillars-deferred-99 AC10: budget already `app.locking.retry.*`; added the `persistence.lock_retry` timer (tag `outcome`) + `.retries`/`.exhausted` counters; expanded the class javadoc cost model and added an architecture.md note. The connection-releasing redesign stays out of scope.]` Up to ~3.2s (the documented default retry budget) of connection-pool time is spent purely sleeping under contention per call. A consciously-chosen tradeoff of the savepoint-based retry-in-place design — the Dev Agent Record documents that Spring's declarative `Propagation.NESTED` was investigated and found unavailable (`DefaultJpaDialect` has no savepoint support), which is why retry happens in-place rather than via a connection-releasing mechanism. Worth tracking if connection-pool pressure becomes visible under real load. [`src/main/java/com/softropic/skillars/infrastructure/persistence/PessimisticLockRetryer.java`]
 - **`PessimisticLockRetryer.withBoundedRetry`'s `Supplier<T>` idempotency/side-effect-free contract is documented only in a javadoc comment, not enforced by the method signature.** Nothing stops a future caller from passing a supplier with real side effects (an external call, an event publish, a write) that would then be silently re-executed on every retry attempt. All 16 current call sites are read-only (a `findByIdForUpdate` plus optional `refresh`), confirmed by this story's own code review — speculative future-risk, not a current violation. [`src/main/java/com/softropic/skillars/infrastructure/persistence/PessimisticLockRetryer.java`]
 - **A JDBC `setSavepoint`/rollback-to-savepoint call itself failing (e.g. genuine connection loss) propagates unretried as an opaque 500**, since `PessimisticLockRetryer` only catches `PessimisticLockingFailureException`. Arguably acceptable — this represents genuine infrastructure failure rather than lock contention — noted for awareness rather than as a defect. [`src/main/java/com/softropic/skillars/infrastructure/persistence/PessimisticLockRetryer.java:63-64,72`]
 
@@ -1353,11 +1352,7 @@ and the booking-reminder blocker (AC29). What genuinely remains:
   applied and cannot be edited to carry the markers `MISSING_LOCK_TIMEOUT` / `UNBATCHED_DML` /
   `DROP_WITHOUT_PRIOR_RELEASE_PREP` / `PLATFORM_CONFIG_EXPLICIT_ID` demand. `MigrationLint` carries a
   second constant (`DEFERRED_92_BASELINE`) for this. The pre-production trigger for `V60`/`V94`/`V117`
-  in `docs/deployment/migration-conventions.md` is unaffected. `[PICKED UP by skillars-deferred-99 AC8:
-  the doc obligation is closed — a scannable "Go-forward checklist" + a "Pre-production migration debt"
-  pointer were added near the top of migration-conventions.md (the full V60/V94/V117 redo trigger + the
-  per-migration table were already there from deferred-91 D7). The eventual migration re-issue stays a
-  pre-prod task.]`
+  in `docs/deployment/migration-conventions.md` is unaffected.
 
 ---
 
