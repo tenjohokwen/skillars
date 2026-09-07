@@ -3,8 +3,9 @@
 ## Story Identifier
 - **Story Key:** skillars-deferred-94
 - **Epic:** Deferred Work Backlog
-- **Status:** ready-for-dev
+- **Status:** done
 - **Priority:** High (security + operational safety + listener reliability)
+- **Completed:** 2026-09-07
 
 ---
 

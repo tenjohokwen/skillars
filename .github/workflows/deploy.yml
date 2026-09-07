@@ -127,6 +127,7 @@ jobs:
 
       - name: Notify Slack — success
         if: steps.smoke.outputs.result == 'pass'
+        continue-on-error: true
         uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d  # v4.0.0
         env:
           SLACK_MESSAGE_TEXT: "✅ *Production deploy succeeded*\nImage: `ghcr.io/${{ github.repository }}:${{ inputs.image_tag }}`\nTriggered by: ${{ github.actor }}"
@@ -138,6 +139,7 @@ jobs:
 
       - name: Notify Slack — failure & revert
         if: steps.smoke.outputs.result == 'fail'
+        continue-on-error: true
         uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d  # v4.0.0
         env:
           SLACK_MESSAGE_TEXT: "❌ *Production deploy FAILED*\nFailed image: `ghcr.io/${{ github.repository }}:${{ inputs.image_tag }}`\nAuto-Revert: ${{ steps.revert.outputs.outcome }}\nPrevious image: `${{ steps.pre_deploy.outputs.image }}`\nTriggered by: ${{ github.actor }}"
@@ -149,6 +151,7 @@ jobs:
 
       - name: Email — success
         if: steps.smoke.outputs.result == 'pass'
+        continue-on-error: true
         uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
         with:
           server_address: ${{ secrets.SMTP_HOST }}
@@ -165,6 +168,7 @@ jobs:
 
       - name: Email — failure & revert
         if: steps.smoke.outputs.result == 'fail'
+        continue-on-error: true
         uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
         with:
           server_address: ${{ secrets.SMTP_HOST }}
@@ -183,6 +187,7 @@ jobs:
 
       - name: Fail workflow on smoke test failure
         if: steps.smoke.outputs.result == 'fail'
+        # Ensure all notification steps have `continue-on-error: true` so this marker always runs.
         run: |
           echo "Smoke test failed — deploy reverted. Marking workflow as failed."
           exit 1

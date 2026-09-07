@@ -224,6 +224,9 @@ services:
     restart: unless-stopped
     logging: *default-logging
 
+  # DECISION: Alertmanager integration will use Grafana alerts exclusively; remove or disable
+  # corresponding Prometheus alert rules when Alertmanager is added. Currently, both Prometheus
+  # and Grafana define infra alerts; ensure only one fires the same alert when Alertmanager is deployed.
   prometheus:
     image: prom/prometheus:v3.4.1
     volumes:
@@ -374,6 +377,9 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     logging: *default-logging
+    # node_exporter is isolated on `skillars-observability`; `app`/`grafana` can reach it as they
+    # join both networks. A compromised `app` container can read host metrics. This is the accepted
+    # design boundary.
     networks:
       - skillars-observability
 

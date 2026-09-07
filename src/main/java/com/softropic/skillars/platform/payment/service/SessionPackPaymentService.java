@@ -52,6 +52,11 @@ public class SessionPackPaymentService {
     private final StripeClient stripeClient;
     private final PessimisticLockRetryer lockRetryer;
 
+    /**
+     * Purchase a session pack for a player.
+     * Uses compensating-action pattern (charge → persist → on-failure refund).
+     * Not annotated @Transactional to avoid holding DB connection open across external Stripe call.
+     */
     public SessionPackPurchaseResponse purchasePack(Long parentId, UUID packTierId, Long playerId, String paymentMethodId) {
         // Deferred-81 AC4: a self-registered (no-parent) player has parentId == null by
         // definition, so the old findByIdAndParentId(playerId, parentId) lookup always returned

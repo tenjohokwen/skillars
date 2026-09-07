@@ -29,7 +29,7 @@ if [ -z "$CID" ]; then
 fi
 
 echo "[pg-backup] Running pg_dump..."
-docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" "$CID" \
+PGPASSWORD="${POSTGRES_PASSWORD}" docker exec -e PGPASSWORD "$CID" \
   pg_dump -U "${POSTGRES_USER:-postgres}" "${POSTGRES_DB:-skillars}" \
   | gzip > "${DUMP_FILE}"
 

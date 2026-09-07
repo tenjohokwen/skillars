@@ -59,6 +59,9 @@ groups:
           summary: "Spring Boot app is DOWN — health endpoint not reachable by Prometheus"
           runbook: "Check Docker service: docker compose logs app --tail=50"
 
+      # DiskDataVolumeHigh requires the Hetzner volume to be mounted at /opt/skillars/data.
+      # If unmounted, writes land on /, triggering DiskHigh instead.
+      # See docs/deployment/first-time-setup.md for volume mount verification.
       - alert: DiskDataVolumeHigh
         expr: |
           (

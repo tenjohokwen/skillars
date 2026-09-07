@@ -480,3 +480,16 @@ exists, either move those to a non-transactional Flyway callback or accept and s
 **Verification:** `MigrationConventionLintTest` passes with the corresponding
 `-- migration-lint: allow-*` opt-outs **removed** from the affected files. If a migration still
 needs its opt-out, the item is not closed.
+
+---
+
+## Repository cleanup safety
+
+**⚠️ WARNING:** `git clean -fdx` deletes the entire production data tree (PostgreSQL, Redis, LGTM stack, Traefik certificates). Only use `git clean -fd` (without the `-x` flag) for day-to-day cleanup.
+
+The repository is cloned directly into `/opt/skillars`, and runtime data is mounted at `/opt/skillars/data` on the Node. `.gitignore` entries protect `/data/` from being tracked by git and from being removed by `git clean -fd`. However:
+
+- `git clean -fd` respects `.gitignore` and is **safe** — it cleans only untracked files outside `/data/`
+- `git clean -fdx` ignores `.gitignore` rules — it will delete `/data/` **and all production data on the Node**, including every PostgreSQL database, Redis AOF, LGTM metrics/logs, and Traefik TLS certificates
+
+**Always use `git clean -fd` on the Node. Never use `-x` without manual confirmation of what will be deleted.**

@@ -86,6 +86,8 @@ rm -f "${ARCHIVE_FILE}"
 # Only directories that actually extracted from this archive are fixed up — an archive taken
 # before a service was added to VOLUME_SUBDIRS, or a service that was never provisioned, is a
 # legitimate absence, not a failure.
+# Container UIDs are tied to specific image versions (prometheus, loki, tempo, grafana, redis, traefik).
+# Update these chown calls if the corresponding docker-compose.yml image versions change.
 for d in $VOLUME_SUBDIRS; do
   if [ ! -d "${DATA_DIR}/${d}" ]; then
     log "skipping ownership fix for ${d} — not present in this archive"
