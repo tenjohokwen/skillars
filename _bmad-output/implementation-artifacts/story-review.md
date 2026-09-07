@@ -1,311 +1,155 @@
-# Senior Dev Review — skillars-deferred-94 (Deploy Hardening, Security, Operational & Listener Safety)
+# Senior Review — skillars-deferred-96 (Deployment Visibility: Smoke-Test Error Handling & Channel Health)
 
-**Reviewed:** 2026-09-07
-**Story file:** `_bmad-output/implementation-artifacts/skillars-deferred-94-deploy-hardening-security-operational-and-listener-safety.md`
-**Verdict:** **Do not implement as written.** Two ACs (AC1, AC11) prescribe changes that are broken or impossible and will break production paths. Three ACs (AC2, AC13, AC15) rest on factual errors about the current code. AC16 asks the dev to re-fight a convention that already blocks it. The doc-only ACs (AC3–10, AC12, AC14, AC17) are mostly harmless but several cite wrong files/line numbers or a file that does not exist.
+**Reviewer role:** senior dev audit for missed corner cases, false assumptions, missed flows.
+**Story file:** `_bmad-output/implementation-artifacts/skillars-deferred-96-deployment-visibility-smoke-test-error-handling-and-channel-health.md`
+**Verified against:** `.github/workflows/deploy.yml`, `src/main/resources/application.yaml`, `src/main/java/.../platform/notification/**`, `pom.xml` @ HEAD (`d01f436`).
 
-Findings are ranked. Every claim below was checked against the actual tree; false-positive filtering notes are at the end.
+## Verdict
 
----
+The story is chasing two real problems, but **both ACs are under-specified in ways that will produce a wrong or actively harmful implementation if handed to a dev as-is**:
 
-## CRITICAL
+- **AC1**: The root-cause analysis is partly wrong, and the "Option B" fix as written makes auto-revert *never* run. The realistic trigger for the bug is also mis-stated, and the proposed manual repro does not reproduce it.
+- **AC2**: The single biggest issue in the whole story is unstated — a custom `HealthIndicator` that can report `DOWN` rolls into the aggregate `/manage/health`, **which the deploy smoke test greps for `"status":"UP"`**. A briefly-unreachable mail/Slack endpoint would then fail every subsequent deploy and auto-revert healthy releases. AC2 as specified regresses AC1. Additionally, the app has **zero Slack integration or config**, the cited property names don't exist, and a Slack incoming webhook cannot be health-checked without posting a message.
 
-### C1 — AC1: the heredoc / command-substitution pattern does **not** keep the password out of `ps`, and as written it breaks DB auth entirely
-
-**Story claims (AC1):**
-> Use heredoc with process substitution … Credentials never appear in `ps aux` (process argument, not env var visible to ps) … Most concise and secure pattern.
-> ```bash
-> docker exec -e PGPASSWORD="$(cat <<'PGPW'
-> $DB_PASS
-> PGPW
-> )" app psql ...
-> ```
-
-**Two independent defects:**
-
-1. **It provides zero `ps` protection.** After shell expansion the kernel still receives
-   `execve("docker", ["docker","exec","-e","PGPASSWORD=<thevalue>", ...])`. `ps aux` / `ps -ef`
-   read `/proc/<pid>/cmdline`, which is exactly that argv. Command substitution and here-docs
-   only change *how the shell assembles the string*, never the final argv. The proposed pattern
-   is byte-for-byte equivalent, from `ps`'s point of view, to the current
-   `docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}"` (`deploy/backup/pg-backup.sh:32`,
-   `deploy/backup/restore-from-dump.sh:134,137,143,152`). The AC's central security rationale
-   is false.
-
-2. **The quoted here-doc delimiter disables expansion — the "password" becomes a literal string.**
-   `<<'PGPW'` (quoted) means the body is emitted verbatim, so `PGPASSWORD` is set to the literal
-   6-char string `$DB_PASS` (or `${POSTGRES_PASSWORD}`), not the secret. The spec writes the
-   quoted form in **three** places (AC1 bullet "Spec", AC1 "Example pattern", Dev Notes AC1).
-   Following it verbatim makes `psql` auth fail on every backup and every restore. In
-   `restore-from-dump.sh` the first failure is the `DROP DATABASE` at line 134 → `set -e` abort
-   → EXIT trap restarts the app; the restore path is completely dead. If a dev "fixes" it to an
-   unquoted `<<PGPW`, then a password containing `$`, `` ` ``, or `\` is mangled — strictly worse
-   than today's direct `"${POSTGRES_PASSWORD}"` expansion.
-
-**Also wrong in AC1:**
-
-- **Occurrence count is 5, not 4.** `grep -n 'docker exec.*PGPASSWORD' deploy/` →
-  `pg-backup.sh:32`, `restore-from-dump.sh:134,137,143,152`. AC1 enumerates only
-  32 / 135 / 138 / 142 and misses `restore-from-dump.sh:152` — the `run_psql()` helper, which is
-  invoked five times for the post-restore integrity checks. Line numbers are also off by 1–10.
-- **The verification grep has a hole.** `grep -r "docker exec -e PGPASSWORD" deploy/` does **not**
-  match `restore-from-dump.sh:143`, which is `docker exec -i -e PGPASSWORD=` (the `-i` sits
-  between). A dev could "pass" AC1's verification with line 143 untouched.
-
-**Recommendation:** Replace the whole approach. The only patterns that actually keep the secret
-out of argv without a temp file:
-- `PGPASSWORD="${POSTGRES_PASSWORD}" docker exec -e PGPASSWORD "$CID" psql …` — the bare
-  `-e PGPASSWORD` (no `=value`) tells Docker to copy the value from its own environment; the
-  `VAR=val cmd` prefix goes into the environment, not argv. One-line change per call site,
-  covers all 5, works with arbitrary password characters.
-- or feed SQL over stdin with a mounted `~/.pgpass`.
-
-Then fix the verification to `grep -rE 'docker exec .*-e +PGPASSWORD=' deploy/` (note `=`).
+Recommend the story go back for revision before dev.
 
 ---
 
-### C2 — AC11: `apt-get install -y awscli=2.*` does not exist; it will abort provisioning
+## AC1 — Smoke-test error visibility
 
-**Story claims (AC11):**
-> ```bash
-> # Before:
-> apt-get install -y awscli
-> # After:
-> apt-get install -y awscli=2.* python3-pip
-> ```
+### F1. "Option B" as written disables auto-revert entirely (high)
 
-**Reality:**
+Story lines 53–57 propose, for the error case:
 
-- `provision.sh:131` is **one combined line**:
-  `apt-get install -y curl git unzip jq rsync fail2ban ufw ca-certificates gnupg lsb-release awscli`.
-  The "Before" in the AC does not exist as its own statement.
-- **Debian/Ubuntu do not package AWS CLI v2 at all.** The `awscli` apt package is 1.x on every
-  current Ubuntu (including 24.04). `apt-get install -y "awscli=2.*"` → *"Version '2.\*' for
-  'awscli' was not found"* → non-zero exit → `set -euo pipefail` → **provisioning aborts**. AWS
-  CLI v2 is distributed only as the bundled zip installer from `awscli.amazonaws.com`; it is also
-  **not on PyPI**, so `python3-pip` does nothing for it.
-- **Regression risk even if it installed.** `pg-backup.sh` contains a large block of comments
-  written specifically around **awscli v1** semantics (`multipart_threshold = 8 MB`, single-part
-  vs `-N` ETag, "awscli v1"). v2 also enables a **client-side pager by default**; the
-  `aws s3api head-object … --output text` calls in `pg-backup.sh` and `restore-from-dump.sh` run
-  inside `$(…)` in a non-TTY cron context and can hang/misbehave unless `AWS_PAGER=""` is
-  exported. AC11 mentions none of this.
+> Auto-revert: `if: steps.smoke.outcome == 'failure'`
+> Pre-smoke notify: `if: steps.smoke.outcome == 'skipped' || steps.smoke.outcome == 'failure'`
 
-**Recommendation:** If v2 is really wanted, use the official installer
-(`curl … awscli-exe-linux-$(uname -m).zip` → `./aws/install`), pin its version, set
-`AWS_PAGER=""` in the backup scripts, and re-audit the v1-specific comments/logic in
-`pg-backup.sh`. Otherwise drop AC11 — v1 is functioning and the "Hetzner edge cases" claim is
-unquantified.
+In GitHub Actions, a step `if:` expression that contains **no status-check function** (`always()`, `failure()`, `success()`, `cancelled()`) is implicitly evaluated as `success() && (<expr>)`. If the smoke step has failed, `success()` is `false`, so `if: steps.smoke.outcome == 'failure'` is **always false** — the auto-revert step would never run in exactly the scenario the story is trying to fix. Same defect in the pre-smoke-notify rewrite. Only the marker rewrite (`if: always() && steps.smoke.outcome != 'success'`) is correct because it carries `always()`.
 
----
+This is why the *current* workflow works today: when the smoke step completes with `result=fail` it still exits `0`, so `success()` holds and `if: steps.smoke.outputs.result == 'fail'` (deploy.yml:109, :141, :170) runs. The moment the smoke step itself errors, `success()` drops and all of those skip.
 
-## HIGH
+**Correction:** any conditional that must survive a failed smoke step needs an explicit status function — `if: failure() && steps.smoke.outcome == 'failure'` for revert/notify, `if: always() && …` for the marker.
 
-### H1 — AC15: premise is factually wrong, and the fix contradicts an explicit in-code design decision
+### F2. Root cause is incompletely / inaccurately stated (medium)
 
-**Story claims (AC15):**
-> When `platform.admin_alert_email` is blank, `sendAdminAlertSync()` returns normally without
-> sending. **Issue:** No ERROR log; outbox row is released silently; operator has no signal…
-> **Fix:** throw `ConfigurationException` so the listener framework retains the outbox row.
-> … Spring `@TransactionalEventListener` catches exception, logs ERROR, and retains outbox row.
+Story line 42: *"Conditionals assume the smoke step completes (writing an output)…"* — that is only half of it. Even if the smoke step wrote `result=fail` before dying, the auto-revert and the four `result == 'pass|fail'` notification steps (deploy.yml:129, :141, :153, :170) would **still** skip on a smoke *error*, because none of them carry `always()`/`failure()` and are therefore `success()`-gated (see F1). Guaranteeing the output (Option A) is not sufficient on its own; the `if:` chains must also change.
 
-**What the code actually does** (`VideoModerationEmailListener.java`):
+Also line 33 / line 40: *"the run is [not] visibly marked as failed"* / *"Red run, no notification, no auto-revert"*. If the smoke step errors without `continue-on-error`, **the job is already red** — the marker step exists to catch the *opposite* case (smoke `result=fail` but auto-revert succeeds, which would otherwise be green). The genuine losses in the error case are (a) no auto-revert and (b) no failure notification — not "not marked failed". The AC should be reworded around those two losses.
 
-- **There IS an ERROR log.** `adminAlertEnvelope()` line 115:
-  `log.error("platform.admin_alert_email config key is blank — admin alert NOT sent: {}", …)`.
-- **There is also a startup signal.** `@PostConstruct checkAdminAlertConfig()` (lines 46–57)
-  logs ERROR at boot when the key is blank, and **hard-aborts startup**
-  (`throw new IllegalStateException`) when `ARACHNID_ENABLED` is on. So for the case that
-  actually matters (CSAM detection enabled) the app already refuses to boot.
-- **Returning normally is a deliberate, documented decision.** Lines 86–89:
-  *"Returning normally is deliberate: no number of re-drives fixes an unset config key, and a
-  retained row would occupy a claim slot until a human noticed."* AC15 proposes the exact
-  opposite with no acknowledgement of the trade-off it reverses. Implementing it means every
-  moderation alert raised while the key is blank permanently pins an outbox claim slot on every
-  retry.
-- **Wrong framework mechanism.** The class comment (lines 31–34) states, with rationale, that it
-  uses `@EventListener`, **not** `@TransactionalEventListener`. And `sendAdminAlertSync()` is not
-  an event-listener method at all — it is the `ModerationAdminAlertSender` contract impl called
-  directly by the outbox handler. Whether a throw retains the row depends on that handler's
-  claim/transaction semantics, not on "Spring listener framework."
-- **`ConfigurationException` does not exist in the repo** (`find … -name ConfigurationException.java`
-  → nothing). The established pattern here is `IllegalStateException` (lines 51, 97). AC15's
-  snippet will not compile as written.
-- **The blank check is in a shared helper.** `adminAlertEnvelope()` (line 112, check at line 114)
-  is called by **both** `sendAdminAlertSync()` (line 84) **and** the `@EventListener`
-  `onAdminAlert()` (line 61). Making it throw also changes `onAdminAlert()` — an exception out of
-  an `@EventListener` propagates into whichever moderation-processing code published the event,
-  which can break/rollback video moderation itself. AC15 treats this as a localized one-liner.
-- **An existing test pins the current behavior.** `VideoModerationEmailListenerTest`
-  `blankRecipient_returnsWithoutSending()` asserts no throw. AC15 silently inverts it; the story
-  does not call out that this test (and any `ModerationOutboxIT` path) must be rewritten.
+### F3. Option A's "OR" is misleading and its con is wrong (medium)
 
-**Recommendation:** If a stronger signal is wanted without slot exhaustion: keep the normal
-return, add a rate-limited WARN + a metric/counter, or gate the whole alert path on a
-"moderation configured" feature check mirroring the existing `ARACHNID_ENABLED` guard. If a
-throw really is wanted, scope it to `sendAdminAlertSync()` only (not the shared helper), reuse
-`IllegalStateException`, and confirm the outbox handler actually retains-and-backs-off rather
-than hot-looping.
+Story line 46–50:
+
+> - Add `continue-on-error: true` to smoke test step OR
+> - Wrap smoke command in shell script that captures exit code and explicitly writes `result=…`
+> - **Con:** Must ensure subsequent steps still fail the job on error (use separate `if: failure()` check)
+
+Two problems:
+
+1. `continue-on-error: true` **alone does not make `steps.smoke.outputs.result` get written**. If the step aborts mid-run (signal, `$GITHUB_OUTPUT` write failure), the output is still absent. Only the wrapper actually delivers the "outputs always available" property the story wants. The "OR" should be "AND (wrapper is mandatory; `continue-on-error` optional)".
+2. With `continue-on-error: true`, the step's failure **does not make `failure()` true** and does not fail the job — so the story's suggested `if: failure()` recovery check will not fire. To still fail the job you need `if: always() && steps.smoke.outcome == 'failure'` (`outcome`, not `conclusion`).
+
+### F4. Trigger list in the Overview overstates exposure (medium)
+
+Story lines 12 & 64 cite *"ssh dies, timeout, permission denied"* as causes of the invisible failure. Inspecting the smoke loop (deploy.yml:93–104): every `ssh` invocation is inside `STATUS=$(ssh … 2>/dev/null || echo 0)`. An ssh that dies / is refused / hits "permission denied" exits non-zero, the `|| echo 0` absorbs it, `STATUS=0`, the loop runs to completion, and `result=fail` is written on line 105 — which today drives the full failure→revert→notify chain **correctly**. So two of the three enumerated triggers do **not** actually produce the bug.
+
+The realistic triggers are narrower: the step/runner process being killed, the `echo … >> $GITHUB_OUTPUT` write failing (disk), or the step **hanging** until the job is cancelled (see F5). The story should say so, otherwise a dev "fixing" the ssh-failure path will conclude there is nothing to fix.
+
+### F5. Hang → job-cancellation path is unhandled and un-mentioned (medium)
+
+None of the `ssh` calls set `ConnectTimeout`/`BatchMode`, and neither the smoke step nor the job sets `timeout-minutes`. If the node becomes a network black hole, an ssh TCP connect can stall for the kernel default (~2h+); worst case the job hits the **default 360-minute** limit and is **cancelled**. On cancellation `failure()` is false and `steps.smoke.outputs.result` is unset, so the marker (deploy.yml:189), the auto-revert, and *every* notification skip — a broken deploy stays live with zero alerts, and the run shows as grey/cancelled rather than red. AC1 names "timeout" as in-scope but proposes nothing that addresses it. Fix belongs here: `ConnectTimeout=10 -o BatchMode=yes` on ssh + `timeout-minutes` on the step, plus an `if: always()` marker that also covers `cancelled()`.
+
+### F6. The manual repro in AC1 does not reproduce the bug (low)
+
+Story line 64: *"Kill ssh mid-execution (e.g. `ssh … & sleep 1; pkill ssh`)"*. Per F4, a killed ssh inside `$(… || echo 0)` just yields `STATUS=0`; the loop finishes and writes `result=fail`, exercising the path that already works. To actually make the smoke step *error* you must kill the step's shell or fault the `$GITHUB_OUTPUT` write. The verification steps as written give false confidence.
+
+### F7. Notification "dead-zone" for `outcome == 'failure'` is only half-captured (low)
+
+The story notes (line 55) that pre-smoke notifications gate on `steps.smoke.outcome == 'skipped'` and should also handle `== 'failure'`. Correct — on a smoke *error*, `outcome` is `'failure'`, not `'skipped'`, so deploy.yml:197 and :208 don't fire either. But the story's replacement expression drops the `failure()` guard, reintroducing F1. The intended expression is `if: failure() && (steps.smoke.outcome == 'skipped' || steps.smoke.outcome == 'failure')` — and the message text must then branch, because "failed before smoke test" (deploy.yml:200) is no longer accurate for the `failure` sub-case.
 
 ---
 
-### H2 — AC13: `depends_on: [app]` couples the entire monitoring stack to app health; spec and rationale contradict each other
+## AC2 — Notification-channel HealthIndicator
 
-**Story claims (AC13):**
-> Add `depends_on: - app` to Prometheus … *Ensure app is healthy before Prometheus starts
-> scraping* … Verification: Prometheus enters `healthy` after app reaches `healthy` … No
-> regression risk.
+### F8. Custom HealthIndicator ➜ aggregate `/manage/health` ➜ breaks the deploy smoke test (HIGH — headline finding)
 
-**Problems:**
+The deploy smoke test polls `http://localhost:8367/manage/health` and passes only if the body matches `"status":"UP"` (deploy.yml:96–97). `application.yaml` configures **no health groups** (`management.endpoint.health.group.*` is absent) and no probe groups, so **every `HealthIndicator` bean contributes to the root health group**, and the root `status` is the worst contributor. A `SlackHealthIndicator`/`SmtpHealthIndicator` that returns `Health.down()` when an *external* endpoint is briefly unreachable will:
 
-- **Short form ≠ health gate.** `depends_on: [app]` is `condition: service_started`. It waits
-  only for the app *container* to start, not for the healthcheck (`app` has
-  `start_period: 60s`, 3 retries). So it does **not** deliver "app healthy before scraping" and
-  the stated verification step is unachievable with the stated spec. Every other service in this
-  file uses the long form with explicit `condition:` — the story should too, and should say
-  which condition.
-- **If it is "corrected" to `condition: service_healthy`, that is a real operational
-  regression.** `grafana.depends_on.prometheus` (line 338). Chain becomes
-  postgres/redis healthy → app healthy → prometheus → grafana. A crash-looping or slow app then
-  means **Prometheus and Grafana never come up** — you lose metrics, alerting, and dashboards in
-  precisely the incident where you need them. Today prometheus/loki/tempo/grafana start
-  independently of `app`, which is correct for a monitoring stack.
-- **Even the short form** blocks Prometheus (and transitively Grafana) from starting on a fresh
-  `docker compose up` if the app image/config is bad enough that the container never reaches
-  "started".
-- **The problem being solved is benign.** A target being briefly `up == 0` at cold start is
-  normal Prometheus behaviour; the next `scrape_interval` recovers it. There is no failure to
-  eliminate. The AC's "eliminates cold-start scrape failures" overstates a non-issue.
-- AC13's YAML sample shows `image: prom/prometheus:latest`; the file pins
-  `prom/prometheus:v3.4.1`.
+1. flip `/manage/health` to `DOWN`,
+2. fail the smoke test of the **next** deploy,
+3. trigger **auto-revert of a perfectly healthy release**, and
+4. fire a false "deploy FAILED" notification.
 
-**Recommendation:** Drop AC13, or (weakest acceptable form) add
-`depends_on: { app: { condition: service_started } }` **with an explicit comment that it must
-never be tightened to `service_healthy`**, because monitoring must survive an unhealthy app.
+AC2 as written therefore *regresses* AC1. Any version of AC2 must isolate these indicators from the liveness/readiness rollup the smoke test observes — e.g. put the smoke test on a dedicated `management.endpoint.health.group.<name>` that excludes them, or register them as non-system-health details. This constraint is not mentioned anywhere in the story and is the first thing a dev will trip over.
 
----
+Related: `management.endpoint.health.show-details: when-authorized` (roles `ROLE_ADMIN`) means an unauthenticated caller only ever sees the top-level `status`. That's fine for the smoke grep, but it also means the "add to ops dashboard so channel health is visible" goal (AC2, line 109) requires an authenticated scrape — worth stating.
 
-## MEDIUM
+### F9. The application has no Slack integration or configuration at all (HIGH)
 
-### M1 — AC2: the container-UID table is wrong (`10001` is Loki/Tempo, not postgres) and the sites list is incomplete
+`grep -rn -i slack src/main` returns only a blacklist data file. There is **no Slack client, no webhook property, no Slack code path** in the app. Slack notifications are sent **exclusively by GitHub Actions** (`secrets.SLACK_WEBHOOK_URL`, deploy.yml:135/147/202) from **GitHub-hosted runners**. Consequences:
 
-- `provision.sh:597–603` and `restore-from-volume-backup.sh:93–99` both show the real mapping:
-  `prometheus 65534:65534`, `loki 10001:10001`, `tempo 10001:10001`, `grafana 472:472`.
-  `redis` is `999:1000` (`provision.sh:627`, `restore-from-volume-backup.sh:95`), and there is a
-  `traefik` case too. AC2 says *"10001 = postgres"* — that is simply incorrect and would be
-  copied into the docs it asks the dev to write. `postgres` (`postgres:17-alpine`) gets **no
-  chown** in `provision.sh` (line 595 is `mkdir -p` only); it relies on the image entrypoint.
-- AC2 names only 2 files; the UID assumptions live in **3** places (add
-  `restore-from-volume-backup.sh` — the story lists it but the checkboxes/line refs only cover
-  provision.sh + the volume-restore snippet inconsistently) and omit redis and traefik entirely.
-- **Premise is softer than stated:** every image in `docker-compose.yml` is already version-
-  pinned (`postgres:17-alpine`, `prom/prometheus:v3.4.1`, `grafana/grafana:11.4.0`,
-  `grafana/loki:3.4.2`, `grafana/tempo:2.9.0`, `prom/node-exporter:v1.9.0`). UIDs only move on
-  deliberate image bumps, which already go through review. "Snapshot base images in
-  `.env.example`" duplicates the pins that are already authoritative in the compose file.
+- A `SlackHealthIndicator` in the Spring app has **no URL to read** — the property it needs does not exist (see F11).
+- Even if given the URL, it would test **prod-node → Slack** egress, which is *not* the path that delivers deploy alerts (**GitHub runner → Slack**). A firewall/proxy issue on the runner side — the thing that actually breaks deploy notifications — would be invisible to this check, and vice-versa.
+- So AC2's Slack half does not measure the risk described in the story's own problem statement ("Slack webhooks that are down remain invisible in CI/CD").
 
-### M2 — AC2 & AC6 reference `docs/deployment/prerequisites.md`, which does not exist
+If the intent is genuinely to catch a dead deploy-notification webhook, that belongs in the **workflow** (a lightweight post-to-Slack assertion / `#deploys` heartbeat job), not an app `HealthIndicator`.
 
-`ls docs/deployment/` → `backup-restore.md, deploy-guide.md, first-time-setup.md,
-local-deployment.md, migration-conventions.md, monitoring.md, rollback.md, runbook.md,
-secrets-reference.md, traefik-tls.md, uat-*.md` — no `prerequisites.md`. The story's
-"Code Locations → Docs" list presents it as existing. The dev needs to be told to create it or
-to fold these notes into `first-time-setup.md` / `deploy-guide.md`.
+### F10. A Slack incoming webhook cannot be health-checked without posting a message (medium)
 
-### M3 — AC16: the "gap" is already a conscious trade-off with compensating coverage, and the prescribed IT is blocked by a convention test
+Story line 81 / line 124: *"webhook validation ping if supported by Slack API"*. Slack **incoming webhooks have no validation or ping endpoint**. Options are: (a) POST a real message (channel noise on every `/manage/health` poll — unacceptable), or (b) POST a deliberately malformed body and infer liveness from a `400 invalid_payload` — fragile, still counts against Slack rate limits, and does not cleanly distinguish a live webhook from a disabled/revoked one (`404 no_service` vs `403`/`410`). The story's stated mechanism does not exist; this needs to be called out so the design doesn't assume it.
 
-`VideoModerationEmailListenerTest`'s own class Javadoc spells it out:
-- A real-`MailManager` FAILED-row IT needs a throwing `MailService` or `@MockitoBean`, and
-  *"both fork the Spring context and trip `IntegrationTestConventionTest`"* — both referenced
-  files exist (`src/test/java/com/softropic/skillars/config/IntegrationTestConventionTest.java`,
-  `.../notification/infrastructure/MailManagerResilienceTest.java`).
-- `MailManager`'s exception→`EnvelopeEntity(FAILED, isRetry)` mapping is **already pinned by
-  `MailManagerResilienceTest`**; the listener's branch-from-outcome logic is pinned by the unit
-  tests in `VideoModerationEmailListenerTest` (`retryableFailure…`, `permanentFailure…`,
-  `sentEnvelope…`, `noPersistedEnvelope…`).
+### F11. Cited property names are fabricated (medium)
 
-AC16 says "`VideoModerationEmailListenerTest:150-173` uses mocked `JavaMailSender`" — it mocks
-**`MailManager`**, not `JavaMailSender`, and the branch mapping it says is "never tested" is
-tested in two places. Also AC16's "permanent failure → row deleted" describes the outbox
-handler, not the listener (the listener logs `[..._UNDELIVERABLE]` and returns). Net: this AC
-asks the dev to build an IT that the codebase deliberately disallows, to cover logic that is
-already covered. If there is a genuine residual gap it needs to be stated precisely (which
-exact transition, and why the existing two tests don't cover it).
+Story lines 82 & 89 reference `app.notification.slack-webhook-url` and `app.email.smtp-host` and claim *"App properties already exist for SMTP and Slack configuration."* Actual config:
 
-### M4 — AC12: the framing is imprecise; the real hole is a suppressed failure email, and there is a cheap actual fix
+- Email: `email.providerConfigs[].{name,host,port,username,password}` (two providers: gmx + gmail, round-robin via `MailSenderProvider`) — `EmailProperties`, `application.yaml:144–158`.
+- Spring mail: `spring.mail.{host,port,username,password}` (`mail.gmx.net`) — a **separate** config, `application.yaml:118–128`.
+- Slack: **none**.
+- There is no `app.*` property namespace.
 
-`.github/workflows/deploy.yml`: the four notification steps (128, 139, 151, 167) have **no
-`continue-on-error`**, and "Fail workflow" (184) uses a plain
-`if: steps.smoke.outputs.result == 'fail'` (implicit `success()`). Consequences when, e.g.,
-"Notify Slack — failure & revert" (139) errors on a real deploy failure:
-- the job **still goes red** (a failed non-`continue-on-error` step fails the job) — so the
-  failure is *not* hidden, contrary to AC12's "may hide the true deploy failure";
-- but "Email — failure & revert" (151) and "Fail workflow" (184) are **skipped** → the failure
-  **email never sends** and the explicit marker never runs. *That* is the defect worth noting.
+A dev following the story will look for properties that aren't there. The "Re-Verification Against HEAD" section (story lines 139–147) claims all citations were verified, but the AC2 property names and the endpoint path (F13) were not.
 
-A comment is fine, but the one-line real fix is `continue-on-error: true` on the four
-notification steps (or `if: always() && …`). AC12 should at least mention it rather than
-enshrining the limitation.
+### F12. EHLO-only SMTP check misses the failure mode that actually matters (medium)
 
-### M5 — AC6: the "silently never fires" risk has a partial backstop the AC ignores
+The app sends mail via STARTTLS + AUTH on port 587 (`MailSenderProvider`: `mail.smtp.auth=true`, `starttls.enable=true`). An unauthenticated EHLO handshake (story lines 80, 124) proves TCP + SMTP banner reachability only. The way these channels **silently break in practice** is credential/app-password expiry or revocation (GMX/Gmail app passwords), which an EHLO probe will report as `UP`. The story's framing ("a down channel surfaces") over-promises: the most common "down" is exactly what this check can't see. If auth is included in the probe, that's a login attempt to an external provider on every health poll — see F14.
 
-`alerts.yml` also defines a root-filesystem alert on `mountpoint="/"` (lines ~82–90). If the
-Hetzner volume is **not** mounted, writes to `/opt/skillars/data` land on `/`, so the root-fs
-alert still catches disk exhaustion (just without the per-volume threshold/attribution).
-Worth stating so the doc doesn't overclaim total blindness.
+### F13. Endpoint path is wrong throughout AC2 (low)
+
+The story repeatedly says `/actuator/health` (lines 78, 108, 111, 122, 165, 180). The app's management base-path is `/manage` on port 8367 (`application.yaml:360–367`); the real endpoint is `http://<host>:8367/manage/health`. Cosmetic, but it's in the acceptance checklist and "manually verified" steps.
+
+### F14. External-provider side effects / latency on `/manage/health` (medium)
+
+`/manage/health` is polled by uptime monitors, load-balancer probes, and (per story) an ops dashboard. Opening an outbound TCP+STARTTLS(+AUTH) connection to `mail.gmx.net` and `smtp.gmail.com` — and an HTTPS POST to Slack — on **every poll** risks connection-rate throttling or transient IP blocklisting by the mail providers, and adds their RTT to every health scrape. The story's own Technical Requirements say `/actuator/health` must not become a bottleneck (line 122) but propose no mitigation. The design needs a scheduled background probe writing a cached result (or `management.endpoint.health.group` + TTL), not a synchronous check per request.
+
+### F15. "The SMTP config" is actually three configs, two providers (low/medium)
+
+AC2 treats SMTP as one host. There are two `email.providerConfigs` entries (gmx, gmail) plus a separate `spring.mail` host. A `SmtpHealthIndicator` must decide: check all providers? Rollup semantics (all-down = `DOWN`, any-down = degraded/`OUT_OF_SERVICE`)? Which config is authoritative? None of this is specified.
+
+### F16. `UNKNOWN`-when-unconfigured still appears in the aggregate (low)
+
+Story line 84: report `UNKNOWN` if endpoints aren't configured. Spring's default `SimpleStatusAggregator` ranks `UNKNOWN` *above* `UP`, so it won't force the aggregate `DOWN` (good, mitigates F8 for that sub-case) — but the indicator still shows in `/manage/health` details and in any "all green?" dashboard logic. Cleaner to not register the bean when the relevant config is absent (`@ConditionalOnProperty`).
+
+### F17. Test-naming / layering unspecified vs. project convention (low)
+
+Story lists `SlackHealthIndicatorIT` / `SmtpHealthIndicatorIT` (Testcontainers-style `*IT`) *and* separately asks for "unit tests" (lines 96–97, 106–107). The repo uses `*IT.java` for Spring/integration and `*Test.java` for pure unit (`src/test/...`). A real Slack webhook call + real SMTP EHLO in an `IT` (story line 107) will be flaky/blocked in CI. Decide: mocked `RestClient`/`JavaMailSender` unit tests for UP/DOWN logic, and keep any real-endpoint check out of CI.
 
 ---
 
-## LOW / NITS
+## What the story gets right
 
-- **AC1 Dev Notes** call the value `DB_PASS`; the scripts use `POSTGRES_PASSWORD` (loaded by
-  `env-guard.sh`). Minor, but the snippet is copy-paste bait.
-- **AC3** line ref `restore-from-dump.sh:197-199`; actual fail-fast block is `191-195`. Content
-  claim (already fails fast on empty `APP_CID`) is correct.
-- **AC9** is effectively already done: `.gitignore:89` has `/data/` with an explanatory comment
-  at 86–87. The AC reads as new work; it is verification-only. Fine, just label it so.
-- **AC5** attributes node_exporter isolation to "deferred-88 AC8"; the compose comment ties AC8
-  to the observability **egress firewall** generally. Cosmetic.
-- **AC4** creates checkbox obligations for a hypothetical future Alertmanager that isn't
-  deployed. Better as a note in `docs/deployment/monitoring.md` than as story ACs that can
-  never be "done".
-- **AC17** is reasonable (doc-only, pattern pre-decided in deferred-82/83). One addition: the
-  javadoc should also note `createPurchase()`'s own transactionality, since the compensating
-  path assumes that call is all-or-nothing. The AC title says "@Transactional Audit" but only
-  `purchasePack` is examined — `extendPack`/`createTier`/`deactivateTier` are already
-  `@Transactional`, so state that the audit was done and came back clean.
-- **AC14** — accurate; `provision.sh:594-603` matches. Doc-only, low risk.
+- The **core AC1 gap is real**: if the smoke step errors (rather than completing with `result=fail`), the auto-revert and all failure notifications silently skip. (Mechanism is mis-diagnosed — see F1/F2 — but the gap exists.)
+- **deploy.yml line citations are accurate**: auto-revert `if` at :109, marker at :188–194, pre-smoke notifications at :196/:207, and the `steps.smoke.outcome == 'skipped'` gating.
+- The observation that **deferred-94's `continue-on-error: true` removed the CI failure signal** for down notification channels is correct (deploy.yml:130/142/154/171).
+- `spring-boot-starter-actuator` is present (`pom.xml:167`) and the app has real email infrastructure (`platform.notification`), so an app-side **SMTP** health check is at least feasible in principle.
+- Correctly scopes out DB schema / new external APIs.
 
 ---
 
-## What is solid
+## Recommended changes before dev
 
-- AC3, AC5, AC7, AC8, AC10, AC14 — accurate "accepted limitation / document only" items; the
-  underlying code matches the descriptions.
-- AC17 — correct call to leave `purchasePack` non-`@Transactional`; the compensating-refund
-  block (`SessionPackPaymentService.java:85-95`) is real and matches the description.
-- The overall instinct to close `docker exec -e PGPASSWORD=<value>` (C1) is right — the current
-  code *does* expose the password in `ps` on the deploy host. Only the prescribed mechanism is
-  wrong.
-
----
-
-## False-positive filtering (checks performed, not flagged)
-
-- Confirmed `docker exec -e VAR=val` argv exposure via `/proc/<pid>/cmdline` semantics — the
-  heredoc rewrite genuinely changes nothing; not a nitpick.
-- Confirmed quoted-heredoc (`<<'PGPW'`) suppresses `$` expansion per POSIX — the AC's example is
-  genuinely broken, verified against the exact text in three locations in the story.
-- Confirmed 5th `PGPASSWORD` call site via `grep` (`restore-from-dump.sh:152`), not an
-  over-count.
-- Confirmed `ConfigurationException` absent and `IllegalStateException` is the local idiom
-  (`find` + reading the listener).
-- Confirmed `MailManagerResilienceTest` and `IntegrationTestConventionTest` both exist before
-  asserting AC16 is redundant/blocked.
-- Confirmed `docs/deployment/prerequisites.md` absent via `ls`.
-- Confirmed UID `10001` maps to loki+tempo in **both** `provision.sh` and
-  `restore-from-volume-backup.sh` before calling AC2's table wrong.
-- Confirmed `grafana.depends_on.prometheus` before asserting the AC13 monitoring-coupling
-  regression.
-- AWS CLI v2 packaging: not in Debian/Ubuntu apt, not on PyPI — high confidence; flagged the
-  pager behaviour as "verify on the target image" rather than asserting a specific failure.
+1. **AC1 — rewrite the fix:** mandate the wrapper-script approach (smoke step always writes `result=pass|fail|error` via `set +e`/`trap`), *and* change every downstream `if:` to carry an explicit status function (`failure() && …` for revert/notify, `always() && …` for the marker). Drop "Option B" or fix its three expressions. Add `ConnectTimeout`/`BatchMode` to ssh and `timeout-minutes` to the step; make the marker cover `cancelled()`. Replace the `pkill ssh` repro with one that actually kills the step shell.
+2. **AC1 — restate the bug** as "no auto-revert + no failure notification on smoke *error/cancel*", not "run not marked failed".
+3. **AC2 — resolve the aggregate-health coupling first (F8):** define a dedicated health group for the deploy smoke test that excludes these indicators, or drop the `HealthIndicator` approach.
+4. **AC2 — drop the Slack `HealthIndicator`** (F9/F10/F11): the app has no Slack config and can't probe an incoming webhook cleanly. If deploy-webhook liveness matters, add a workflow-side check instead.
+5. **AC2 — SMTP check:** fix property names to `email.providerConfigs[*]` / `spring.mail.*`, specify multi-provider rollup, decide auth-vs-EHLO (and accept EHLO won't catch credential expiry), and design it as a cached background probe, not per-request. `@ConditionalOnProperty` so it's absent when unconfigured.
+6. Fix `/actuator/health` → `/manage/health` (port 8367) everywhere, and note that channel identity is only visible to authenticated `ROLE_ADMIN`.
