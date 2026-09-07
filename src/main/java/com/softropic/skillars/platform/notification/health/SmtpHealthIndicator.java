@@ -5,6 +5,7 @@ import com.softropic.skillars.platform.notification.contract.ProviderConfig;
 import com.softropic.skillars.platform.notification.contract.SmtpHealthProperties;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.actuate.health.AbstractHealthIndicator;
 import org.springframework.boot.actuate.health.Health;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -67,11 +68,7 @@ public class SmtpHealthIndicator extends AbstractHealthIndicator {
 	private final ExecutorService probePool;
 	private final AtomicReference<Cached> cache = new AtomicReference<>();
 
-	/** Retains the pre-AC5 single-arg shape for the hermetic unit tests, with default tuning. */
-	SmtpHealthIndicator(EmailProperties emailProperties) {
-		this(emailProperties, new SmtpHealthProperties());
-	}
-
+	@Autowired
 	public SmtpHealthIndicator(EmailProperties emailProperties, SmtpHealthProperties healthProperties) {
 		this.emailProperties = emailProperties;
 		this.healthProperties = healthProperties;
@@ -82,6 +79,11 @@ public class SmtpHealthIndicator extends AbstractHealthIndicator {
 			t.setDaemon(true);
 			return t;
 		});
+	}
+
+	/** Retains the pre-AC5 single-arg shape for the hermetic unit tests, with default tuning. */
+	SmtpHealthIndicator(EmailProperties emailProperties) {
+		this(emailProperties, new SmtpHealthProperties());
 	}
 
 	@PreDestroy
