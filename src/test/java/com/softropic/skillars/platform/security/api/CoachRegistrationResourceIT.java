@@ -25,11 +25,19 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.HexFormat;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
+import org.awaitility.Awaitility;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -659,6 +667,79 @@ class CoachRegistrationResourceIT extends AbstractIntegrationTest {
             baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST, Map.of("verificationToken", tokenFor(userId)), jsonHeaders(), Void.class))
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    /**
+     * skillars-deferred-99 AC4 — the {@code uq_pot_one_active_per_user} 409 proven <em>through the
+     * endpoint</em>, not just as a raw {@code DataIntegrityViolationException} on a direct insert.
+     *
+     * <p>Deterministic, spy-free: a holder transaction inserts a conflicting {@code used = false}
+     * row and stays open. The {@code /resend-otp} call's own {@code deleteByUserIdAndUsedFalse} does
+     * not see the uncommitted row, so its {@code saveAndFlush} INSERT blocks on the partial unique
+     * index. Once {@code pg_stat_activity} confirms that INSERT is waiting on a lock, the holder
+     * commits — the request's INSERT then fails {@code 23505}, which {@code ApiAdvice} maps to
+     * {@code 409 security.otpResendInProgress}.
+     */
+    @Test
+    void resendOtp_concurrentActiveOtpInsert_returns409_otpResendInProgress() throws Exception {
+        httpTestClient.makeHttpRequest(baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST,
+            registrationBody(TEST_EMAIL), jsonHeaders(), Void.class);
+        Long userId = jdbcTemplate.queryForObject(
+            "SELECT id FROM main.\"user\" WHERE email = ?", Long.class, TEST_EMAIL);
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update("UPDATE main.\"user\" SET verification_status = 'EMAIL_VERIFIED', "
+                + "activated = true WHERE id = ?", userId);
+            return null;
+        });
+
+        CountDownLatch inserted = new CountDownLatch(1);
+        CountDownLatch commitNow = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> holder = pool.submit(() -> transactionTemplate.execute(s -> {
+                jdbcTemplate.update(
+                    "INSERT INTO main.phone_otp_tokens (id, version, user_id, otp_hash, expires_at, used) "
+                        + "VALUES (999999999999884, 0, ?, 'concurrent-holder', ?, false)",
+                    userId, Timestamp.from(Instant.now().plus(10, ChronoUnit.MINUTES)));
+                inserted.countDown();
+                try {
+                    commitNow.await(15, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return null;
+            }));
+
+            assertThat(inserted.await(10, TimeUnit.SECONDS)).as("holder must have inserted").isTrue();
+
+            Future<HttpClientErrorException> endpoint = pool.submit(() -> {
+                try {
+                    httpTestClient.makeHttpRequest(baseUrl() + RESEND_OTP_ENDPOINT, HttpMethod.POST,
+                        Map.of("verificationToken", tokenFor(userId)), jsonHeaders(), Void.class);
+                    return null;
+                } catch (HttpClientErrorException e) {
+                    return e;
+                }
+            });
+
+            Awaitility.await("the resend INSERT is waiting on the unique-index lock")
+                .atMost(Duration.ofSeconds(15))
+                .pollInterval(Duration.ofMillis(100))
+                .until(() -> jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' "
+                        + "AND query ILIKE '%phone_otp_tokens%'", Integer.class) > 0);
+
+            commitNow.countDown();
+            holder.get(15, TimeUnit.SECONDS);
+
+            HttpClientErrorException ex = endpoint.get(20, TimeUnit.SECONDS);
+            assertThat(ex).as("the losing resend-otp must surface as an HTTP error, not succeed").isNotNull();
+            assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+            assertThat(ex.getResponseBodyAsString()).contains("security.otpResendInProgress");
+        } finally {
+            commitNow.countDown();
+            pool.shutdownNow();
+        }
     }
 
     private HttpHeaders jsonHeaders() {

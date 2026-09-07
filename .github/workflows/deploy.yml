@@ -117,6 +117,14 @@ jobs:
           if ! grep -q "^result=" $GITHUB_OUTPUT 2>/dev/null; then
             echo "result=error" >> $GITHUB_OUTPUT
           fi
+          # skillars-deferred-99 AC6: if result still cannot be persisted (unwritable $GITHUB_OUTPUT,
+          # disk full), a *passing* smoke (EXIT_CODE=0) would otherwise leave outcome=success with an
+          # empty result — no success notification, no failure notification, no fail marker: a silent
+          # green deploy. Force a failure so the outcome-guarded revert/notify/marker steps engage.
+          if ! grep -q "^result=" $GITHUB_OUTPUT 2>/dev/null; then
+            echo "::error::Smoke step could not persist its result to \$GITHUB_OUTPUT — treating as failure" >&2
+            exit 1
+          fi
           exit $EXIT_CODE
 
       - name: Auto-Revert on smoke test failure
@@ -206,7 +214,10 @@ jobs:
             Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: Fail workflow on smoke test failure
-        if: always() && (steps.smoke.outputs.result == 'fail' || steps.smoke.outcome == 'failure' || steps.smoke.outcome == 'cancelled')
+        # skillars-deferred-99 AC6: the last clause catches a smoke step that exited 0 but never
+        # produced result=pass (e.g. an unwritable $GITHUB_OUTPUT) — an inconclusive run must not
+        # pass as green.
+        if: always() && (steps.smoke.outputs.result == 'fail' || steps.smoke.outcome == 'failure' || steps.smoke.outcome == 'cancelled' || (steps.smoke.outcome == 'success' && steps.smoke.outputs.result != 'pass'))
         # The real invariant: no step between `smoke` and this marker may fail the job without `continue-on-error: true`.
         # All four result-notify steps (Notify Slack/Email — success and failure & revert, at
         # .github/workflows/deploy.yml :144/:156/:172/:189) carry it so this marker always runs.

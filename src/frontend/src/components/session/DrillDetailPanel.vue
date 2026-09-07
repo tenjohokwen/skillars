@@ -10,12 +10,19 @@
       <template v-if="drill">
         <div class="drill-detail-panel__video-area q-mb-md">
           <video
-            v-if="drill.videoUrl"
+            v-if="drill.videoUrl && !videoFailed"
             controls
+            :key="drill.videoUrl"
             :src="drill.videoUrl"
             class="drill-detail-panel__video"
             @error="handleVideoError"
           />
+          <div v-else-if="videoFailed" class="drill-detail-panel__no-video text-center q-pa-md">
+            <q-icon name="videocam_off" size="48px" class="q-mb-sm" />
+            <div class="text-caption text-secondary">
+              {{ $t('session.drillLibrary.videoUnavailable') }}
+            </div>
+          </div>
           <div v-else class="drill-detail-panel__no-video text-center q-pa-md">
             <q-icon name="videocam_off" size="48px" class="q-mb-sm" />
             <div class="text-caption text-secondary">
@@ -172,12 +179,19 @@
           <template v-if="drill">
             <div class="drill-detail-panel__video-area q-mb-md">
               <video
-                v-if="drill.videoUrl"
+                v-if="drill.videoUrl && !videoFailed"
                 controls
+                :key="drill.videoUrl"
                 :src="drill.videoUrl"
                 class="drill-detail-panel__video"
                 @error="handleVideoError"
               />
+              <div v-else-if="videoFailed" class="drill-detail-panel__no-video text-center q-pa-md">
+                <q-icon name="videocam_off" size="48px" class="q-mb-sm" />
+                <div class="text-caption text-secondary">
+                  {{ $t('session.drillLibrary.videoUnavailable') }}
+                </div>
+              </div>
               <div v-else class="drill-detail-panel__no-video text-center q-pa-md">
                 <q-icon name="videocam_off" size="48px" class="q-mb-sm" />
                 <div class="text-caption text-secondary">
@@ -331,6 +345,7 @@ import { useQuasar } from 'quasar'
 import { useI18n } from 'vue-i18n'
 import { Upload } from 'tus-js-client'
 import { useSessionStore } from 'src/stores/session.store'
+import { useDrillVideoPlayback } from 'src/composables/useDrillVideoPlayback'
 
 defineOptions({ name: 'DrillDetailPanel' })
 
@@ -340,7 +355,7 @@ const props = defineProps({
   context: { type: String, default: null },
 })
 
-const emit = defineEmits(['close', 'add-to-session', 'video-error'])
+const emit = defineEmits(['close', 'add-to-session', 'video-error', 'video-load-failed'])
 
 const $q = useQuasar()
 const { t } = useI18n()
@@ -357,22 +372,11 @@ watch(
   },
 )
 
-// Story Deferred-75 AC9: this panel stays mounted and is reused for whichever drill is currently
-// selected (props.drill swaps without a remount) — so the once-per-mount emit guard must reset
-// whenever the displayed drill changes, or a video error on one drill would permanently suppress
-// recovery for every drill viewed afterward.
-const videoErrorEmitted = ref(false)
-watch(
-  () => props.drill?.id,
-  () => {
-    videoErrorEmitted.value = false
-  },
-)
-function handleVideoError() {
-  if (videoErrorEmitted.value) return
-  videoErrorEmitted.value = true
-  emit('video-error')
-}
+// skillars-deferred-99 AC14: first load failure retries once with a fresh signed URL (silent),
+// second failure shows a dismissible toast + an inline "unavailable" panel and stops. The
+// composable resets its per-drill state as props.drill swaps (this panel is reused without a
+// remount) and is navigation-away safe.
+const { videoFailed, handleVideoError } = useDrillVideoPlayback(() => props.drill?.id, emit)
 
 const sluBreakdown = computed(() => {
   if (!props.drill?.metadata) return []

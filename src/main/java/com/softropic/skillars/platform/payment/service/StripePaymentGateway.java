@@ -124,7 +124,10 @@ public class StripePaymentGateway implements PaymentGateway {
             .setAmount(toCents(netAmount))
             .build();
         try {
-            stripeClient.createRefund(params);
+            // skillars-deferred-99 AC1: deterministic key per PaymentIntent so a re-attempted
+            // compensating refund (caller retry / operator replay of a recorded failure) replays the
+            // original refund at Stripe instead of double-crediting the parent.
+            stripeClient.createRefund(params, "refund-" + stripePaymentIntentId);
             log.info("Stripe refund issued: intentId={} amount={}", stripePaymentIntentId, netAmount);
         } catch (StripeException e) {
             log.error("Stripe refund failed: intentId={} error={}", stripePaymentIntentId, e.getMessage());

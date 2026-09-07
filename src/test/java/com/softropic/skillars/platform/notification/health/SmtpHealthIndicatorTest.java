@@ -254,4 +254,98 @@ class SmtpHealthIndicatorTest {
 
 		assertThat(SmtpHealthIndicator.readSmtpLine(in)).isNull();
 	}
+
+	// ------------------------------------------------------------------ skillars-deferred-99 AC5
+
+	@Test
+	@DisplayName("AC5: providers are probed in parallel — N slow probes cost ≈ one, not N")
+	void probesRunInParallel() {
+		emailProperties.setProviderConfigs(List.of(
+			provider("a", "a.example.com", "587"),
+			provider("b", "b.example.com", "587"),
+			provider("c", "c.example.com", "587")));
+		SmtpHealthIndicator indicator = new SmtpHealthIndicator(emailProperties, new com.softropic.skillars.platform.notification.contract.SmtpHealthProperties()) {
+			@Override
+			boolean probeSmtpConnection(String host, int port) {
+				try {
+					Thread.sleep(400);
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
+				return true;
+			}
+		};
+
+		long start = System.nanoTime();
+		Health health = indicator.health();
+		long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+
+		assertThat(health.getStatus()).isEqualTo(Status.UP);
+		assertThat(elapsedMs)
+			.as("3 × 400ms probes running in parallel must finish well under the 1200ms serial cost")
+			.isLessThan(1000);
+	}
+
+	@Test
+	@DisplayName("AC5: a second call inside the TTL is served from cache — no re-probe")
+	void ttlCacheDedupesProbes() {
+		emailProperties.setProviderConfigs(List.of(provider("gmx", "mail.gmx.net", "587")));
+		java.util.concurrent.atomic.AtomicInteger probeCount = new java.util.concurrent.atomic.AtomicInteger();
+		var props = new com.softropic.skillars.platform.notification.contract.SmtpHealthProperties();
+		props.setTtl(java.time.Duration.ofSeconds(60));
+		SmtpHealthIndicator indicator = new SmtpHealthIndicator(emailProperties, props) {
+			@Override
+			boolean probeSmtpConnection(String host, int port) {
+				probeCount.incrementAndGet();
+				return true;
+			}
+		};
+
+		Health first = indicator.health();
+		Health second = indicator.health();
+
+		assertThat(first.getStatus()).isEqualTo(Status.UP);
+		assertThat(second.getStatus()).isEqualTo(Status.UP);
+		assertThat(probeCount.get()).as("the second scrape inside the TTL must not re-probe").isEqualTo(1);
+	}
+
+	@Test
+	@DisplayName("AC5: a port-465 provider is probed with a TLS handshake, not the plaintext banner")
+	void implicitTlsProviderUsesHandshakeProbe() {
+		emailProperties.setProviderConfigs(List.of(provider("smtps", "smtps.example.com", "465")));
+		SmtpHealthIndicator up = new SmtpHealthIndicator(emailProperties, new com.softropic.skillars.platform.notification.contract.SmtpHealthProperties()) {
+			@Override
+			boolean probeSmtpConnection(String host, int port) {
+				throw new AssertionError("a 465 provider must not take the plaintext EHLO path");
+			}
+			@Override
+			boolean probeImplicitTlsConnection(String host, int port) {
+				return true;
+			}
+		};
+
+		Health health = up.health();
+
+		assertThat(health.getStatus()).isEqualTo(Status.UP);
+		assertThat(providers(health)).singleElement()
+			.satisfies(s -> assertThat(s.detail).isEqualTo("TLS handshake successful"));
+	}
+
+	@Test
+	@DisplayName("AC5: a failed TLS handshake on port 465 -> DOWN")
+	void implicitTlsHandshakeFailureIsDown() {
+		emailProperties.setProviderConfigs(List.of(provider("smtps", "smtps.example.com", "465")));
+		SmtpHealthIndicator down = new SmtpHealthIndicator(emailProperties, new com.softropic.skillars.platform.notification.contract.SmtpHealthProperties()) {
+			@Override
+			boolean probeImplicitTlsConnection(String host, int port) {
+				return false;
+			}
+		};
+
+		Health health = down.health();
+
+		assertThat(health.getStatus()).isEqualTo(Status.DOWN);
+		assertThat(providers(health)).singleElement()
+			.satisfies(s -> assertThat(s.detail).isEqualTo("TLS handshake failed"));
+	}
 }

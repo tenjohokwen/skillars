@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.notification.config;
 
 import com.softropic.skillars.platform.notification.contract.EmailProperties;
+import com.softropic.skillars.platform.notification.contract.SmtpHealthProperties;
 import com.softropic.skillars.platform.notification.service.MailManager;
 import com.softropic.skillars.platform.notification.service.MailService;
 import com.softropic.skillars.platform.notification.repo.EnvelopeEntityRepository;
@@ -20,7 +21,7 @@ import org.springframework.retry.support.RetryTemplate;
 import java.time.Duration;
 
 @Configuration
-@EnableConfigurationProperties(EmailProperties.class)
+@EnableConfigurationProperties({EmailProperties.class, SmtpHealthProperties.class})
 public class ComponentConfig {
 
     @Bean

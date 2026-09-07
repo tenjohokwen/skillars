@@ -97,11 +97,10 @@ watch(
   { immediate: true },
 )
 
-// Story Deferred-75 AC9: on a video playback error (e.g. an expired signed URL), refetch this
-// player's homework drills to get a fresh URL. Unlike the coach-facing pages, this page's drills
-// come from homeworkStore (keyed by playerId), not sessionStore.
+// skillars-deferred-99 AC14: first video load failure → silent one-shot refetch of this player's
+// homework drills for a fresh signed URL (homeworkStore, keyed by playerId — not sessionStore).
+// The DrillCard owns the toast + inline "unavailable" tile if the retry also fails.
 function handleVideoError() {
-  $q.notify({ type: 'warning', message: t('session.drillLibrary.videoLoadFailed') })
   if (playerId.value) homeworkStore.fetchDrills(playerId.value)
 }
 </script>

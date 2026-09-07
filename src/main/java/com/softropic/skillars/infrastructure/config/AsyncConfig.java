@@ -1,6 +1,7 @@
 package com.softropic.skillars.infrastructure.config;
 
 import com.softropic.skillars.infrastructure.threadpool.ExecutorShutdown;
+import com.softropic.skillars.infrastructure.threadpool.GracefulShutdownTaskExecutor;
 import com.softropic.skillars.infrastructure.threadpool.MdcDecorator;
 
 import org.slf4j.LoggerFactory;
@@ -32,7 +33,7 @@ public class AsyncConfig implements AsyncConfigurer {
 
     @Bean(name = "taskExecutor")
     public ThreadPoolTaskExecutor taskExecutor() {
-        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        ThreadPoolTaskExecutor executor = new GracefulShutdownTaskExecutor();
         executor.setCorePoolSize(4);
         executor.setMaxPoolSize(16);
         executor.setQueueCapacity(100);

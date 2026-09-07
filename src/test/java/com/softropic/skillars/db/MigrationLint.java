@@ -6,10 +6,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 import java.util.regex.Matcher;
@@ -797,18 +800,21 @@ public final class MigrationLint {
     }
 
     /**
-     * Files mentioning both the owning table and the identifier (snake_case or camelCase), each
-     * matched at a word boundary — code review: a bare substring match made every generic,
-     * {@code id}-class column name unusable (matching, for example, the substring {@code id} inside
-     * {@code Invalid}), which is the opposite of what the doc promises and trains authors to reach
-     * for the blanket opt-out reflexively.
+     * skillars-deferred-99 AC7: the source corpus (absolute-path string → file body) for one set of
+     * roots, walked and read <strong>once</strong> and memoised for the test JVM. Before this,
+     * {@link #referencesIn} did its own {@code Files.walk} + {@code readString} over every
+     * {@code .java/.sql/.yaml/.yml/.xml/.properties/.html/.json} file <em>once per dropped
+     * identifier</em>, so a migration dropping N identifiers re-walked and re-read the whole source
+     * tree N times. The corpus is immutable during a run — nothing edits {@code src/main} mid-test.
      */
-    private static List<String> referencesIn(List<Path> roots, String table, String identifier) {
-        final String camel = toCamelCase(identifier);
-        final Pattern tablePattern = wordBoundary(table);
-        final Pattern identifierPattern = wordBoundary(identifier);
-        final Pattern camelPattern = camel.equals(identifier) ? null : wordBoundary(camel);
-        final Set<String> hits = new LinkedHashSet<>();
+    private static final Map<List<Path>, Map<String, String>> SOURCE_CORPUS_CACHE = new ConcurrentHashMap<>();
+
+    private static Map<String, String> sourceCorpus(List<Path> roots) {
+        return SOURCE_CORPUS_CACHE.computeIfAbsent(roots, MigrationLint::readSourceCorpus);
+    }
+
+    private static Map<String, String> readSourceCorpus(List<Path> roots) {
+        final Map<String, String> corpus = new LinkedHashMap<>();
         for (Path root : roots) {
             if (!Files.isDirectory(root)) {
                 continue;
@@ -819,29 +825,50 @@ public final class MigrationLint {
                      .filter(p -> !p.toString().contains("db" + java.io.File.separator + "migration"))
                      .filter(p -> {
                          String n = p.getFileName().toString().toLowerCase(Locale.ROOT);
-                         // .html added by the code review: src/main/resources/mails/*.html is a live,
-                         // previously-unscanned location for a template that reads a dropped column.
+                         // .html: src/main/resources/mails/*.html is a live location for a template
+                         // that reads a dropped column (code review).
                          return n.endsWith(".java") || n.endsWith(".sql") || n.endsWith(".yaml")
                              || n.endsWith(".yml") || n.endsWith(".xml") || n.endsWith(".properties")
                              || n.endsWith(".html") || n.endsWith(".json");
                      })
                      .forEach(p -> {
-                         final String body;
                          try {
-                             body = Files.readString(p, StandardCharsets.UTF_8);
+                             corpus.put(p.toString(), Files.readString(p, StandardCharsets.UTF_8));
                          } catch (IOException | RuntimeException e) {
-                             return; // unreadable or non-UTF-8: not evidence of a reference
-                         }
-                         if (!tablePattern.matcher(body).find()) {
-                             return;
-                         }
-                         if (identifierPattern.matcher(body).find()
-                             || (camelPattern != null && camelPattern.matcher(body).find())) {
-                             hits.add(p.getFileName().toString());
+                             // unreadable or non-UTF-8: not evidence of a reference
                          }
                      });
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
+            }
+        }
+        return corpus;
+    }
+
+    /**
+     * Files mentioning both the owning table and the identifier (snake_case or camelCase), each
+     * matched at a word boundary — code review: a bare substring match made every generic,
+     * {@code id}-class column name unusable (matching, for example, the substring {@code id} inside
+     * {@code Invalid}), which is the opposite of what the doc promises and trains authors to reach
+     * for the blanket opt-out reflexively.
+     *
+     * <p>Resolves against the memoised {@link #sourceCorpus} rather than walking the tree itself
+     * (skillars-deferred-99 AC7). Hits are still reported by bare file name, exactly as before.
+     */
+    private static List<String> referencesIn(List<Path> roots, String table, String identifier) {
+        final String camel = toCamelCase(identifier);
+        final Pattern tablePattern = wordBoundary(table);
+        final Pattern identifierPattern = wordBoundary(identifier);
+        final Pattern camelPattern = camel.equals(identifier) ? null : wordBoundary(camel);
+        final Set<String> hits = new LinkedHashSet<>();
+        for (Map.Entry<String, String> entry : sourceCorpus(roots).entrySet()) {
+            final String body = entry.getValue();
+            if (!tablePattern.matcher(body).find()) {
+                continue;
+            }
+            if (identifierPattern.matcher(body).find()
+                || (camelPattern != null && camelPattern.matcher(body).find())) {
+                hits.add(Path.of(entry.getKey()).getFileName().toString());
             }
         }
         return new ArrayList<>(hits);

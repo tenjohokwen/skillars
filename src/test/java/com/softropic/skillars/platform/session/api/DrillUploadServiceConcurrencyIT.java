@@ -33,6 +33,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -394,11 +395,16 @@ class DrillUploadServiceConcurrencyIT extends BaseSessionIT {
      * codebase: Spring Data JPA repository methods are interface methods with no bytecode body, so
      * Mockito's {@code callRealMethod()} — needed to preserve genuine locking behavior while still
      * observing the exception — throws {@code MockitoException: Cannot call abstract real method on
-     * java object!} for every invocation path tried, including retrieving the spy's own recorded
-     * spied instance via {@code Mockito.mockingDetails(...).getMockCreationSettings()
-     * .getSpiedInstance()} (which {@code @MockitoSpyBean} leaves {@code null} for this repository).
-     * The externally-held-lock design below reuses this file's own accepted elapsed-time-threshold
-     * convention instead (same {@code holdMillis - 200} tolerance as the brief-contention test above).
+     * java object!} for every invocation path tried.
+     *
+     * <p>skillars-deferred-99 AC13: the assertion is now an <strong>ordering</strong> one, not a
+     * duration one. The holder keeps the row lock until this thread releases a latch — not for a
+     * hardcoded {@code ~1200ms}. While the lock is held, {@code deleteVideo} must be observably
+     * <em>not done</em> (it is looping in {@link PessimisticLockRetryer}); it must then complete
+     * <em>after</em> the latch is released. No wall-clock tolerance to tune, so no
+     * {@code elapsedMillis >= holdMillis - 200} flake. The latch is released promptly (well inside
+     * the retryer's ~3.2s budget), so exhaustion is not a race either. Postgres-specific:
+     * {@code SELECT ... FOR UPDATE} row-lock semantics (Postgres 14+, the container image).
      */
     @Test
     @Timeout(30)
@@ -422,8 +428,8 @@ class DrillUploadServiceConcurrencyIT extends BaseSessionIT {
             return null;
         });
 
-        long holdMillis = 1200;
         CountDownLatch lockHeld = new CountDownLatch(1);
+        CountDownLatch releaseLock = new CountDownLatch(1);
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
             Future<?> holder = pool.submit(() -> transactionTemplate.execute(status -> {
@@ -431,7 +437,10 @@ class DrillUploadServiceConcurrencyIT extends BaseSessionIT {
                     rs -> { }, videoId);
                 lockHeld.countDown();
                 try {
-                    Thread.sleep(holdMillis);
+                    // Held until this test thread lets go — not a fixed sleep.
+                    if (!releaseLock.await(20, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("test never released the lock");
+                    }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
@@ -441,27 +450,29 @@ class DrillUploadServiceConcurrencyIT extends BaseSessionIT {
             assertThat(lockHeld.await(5, TimeUnit.SECONDS))
                 .as("holder must acquire the video-row lock first").isTrue();
 
-            Instant start = Instant.now();
             Future<?> contender = pool.submit(() -> {
                 drillUploadService.deleteVideo(cloneDrillId, COACH_USER_ID);
                 return null;
             });
-            contender.get(20, TimeUnit.SECONDS);
-            long elapsedMillis = Duration.between(start, Instant.now()).toMillis();
-            holder.get(15, TimeUnit.SECONDS);
 
-            assertThat(elapsedMillis)
-                .as("deleteVideo must have genuinely waited out the externally-held video-row lock "
-                    + "via PessimisticLockRetryer's retry loop, not completed instantly — an instant "
-                    + "completion would mean the videoId findByIdForUpdate lock did not actually "
-                    + "serialize against the holder")
-                .isGreaterThanOrEqualTo(holdMillis - 200);
+            // Ordering assertion, no tolerance: while the lock is held the delete cannot have
+            // finished — it is retrying in PessimisticLockRetryer. A short bounded settle is enough
+            // to prove "not instant"; the correctness claim does not depend on its exact length.
+            assertThatThrownBy(() -> contender.get(750, TimeUnit.MILLISECONDS))
+                .as("deleteVideo must still be blocked on the externally-held video-row lock")
+                .isInstanceOf(TimeoutException.class);
+
+            releaseLock.countDown();
+
+            contender.get(20, TimeUnit.SECONDS); // completes only after the lock is released
+            holder.get(15, TimeUnit.SECONDS);
 
             assertThat(jdbcTemplate.queryForObject(
                 "SELECT video_id FROM session.drill_video_refs WHERE drill_id = ?", UUID.class, cloneDrillId))
                 .as("the delete must still complete correctly once the lock is released")
                 .isNull();
         } finally {
+            releaseLock.countDown();
             pool.shutdownNow();
         }
     }

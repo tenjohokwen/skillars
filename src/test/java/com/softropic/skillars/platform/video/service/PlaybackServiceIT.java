@@ -17,21 +17,18 @@ import com.softropic.skillars.platform.video.repo.VideoRepository;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import javax.crypto.SecretKey;
 import java.time.Instant;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -41,13 +38,14 @@ import static org.mockito.Mockito.when;
 
 class PlaybackServiceIT extends BaseVideoIT {
 
-    private static final Logger log = LoggerFactory.getLogger(PlaybackServiceIT.class);
-
     @MockitoBean
     VideoProviderAdapter videoProviderAdapter;
 
     @Autowired
     PlaybackService playbackService;
+
+    @Autowired
+    MeterRegistry meterRegistry;
 
     @Autowired
     VideoRepository videoRepository;
@@ -107,52 +105,30 @@ class PlaybackServiceIT extends BaseVideoIT {
     }
 
     /**
-     * Measurement only — NOT a gate; see skillars-deferred-89 AC5. A hard millisecond wall-clock p99
-     * bound inside a merge-gating IT is structurally flaky (JIT / GC / Testcontainers / CI-host
-     * noise) even after skillars-deferred-23 AC1 fixed the percentile-index and warmup bugs. This
-     * runs the 100 iterations and logs the p50/p95/p99 so the numbers still appear in CI output, but
-     * only keeps a very loose pathology ceiling (a multi-second p99 means something is genuinely
-     * broken, not jitter). The correctness of {@code authorizePlayback} is covered by the other
-     * cases in this class. ({@code @Tag}-exclusion is not an option — {@code pom.xml} has no
-     * {@code excludedGroups}/{@code <groups>} mechanism.)
+     * skillars-deferred-99 AC15 — the non-gating latency signal is the production
+     * {@code @Observed(name = "video.playback.authorize")} on {@code PlaybackService.authorizePlayback},
+     * which lands in the existing Prometheus/OTLP pipeline. This replaces the old
+     * measurement-only 100-iteration loop that logged p50/p95/p99 to Failsafe output nothing scrapes
+     * (removed in this story). No merge gate, no scheduled job — the metrics backend does the
+     * distribution over time.
+     *
+     * <p>This asserts the observation is wired: a successful {@code authorizePlayback} call records a
+     * timer sample under {@code video.playback.authorize}.
      */
     @Test
-    void authorizePlayback_performance_measuresLatencyDistribution() {
+    void authorizePlayback_recordsNonGatingLatencyObservation() {
         Video video = seedVideo(OperationalState.READY, AccessState.ACTIVE);
-        int warmupIterations = 20;
-        int iterations = 100;
-        long[] latencies = new long[iterations];
 
-        for (int i = 0; i < warmupIterations; i++) {
-            playbackService.authorizePlayback(video.getId(), "warmup-viewer-" + i);
-        }
+        // The 4-arg overload is what VideoPlayResource calls, and is the one carrying @Observed —
+        // calling it through the proxy (not a self-call from a convenience overload) is what fires it.
+        playbackService.authorizePlayback(video.getId(), "metrics-viewer-1", null, false);
 
-        for (int i = 0; i < iterations; i++) {
-            long start = System.nanoTime();
-            playbackService.authorizePlayback(video.getId(), "perf-viewer-" + i);
-            latencies[i] = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
-        }
-
-        Arrays.sort(latencies);
-        long p50 = latencies[nearestRankIndex(iterations, 50)];
-        long p95 = latencies[nearestRankIndex(iterations, 95)];
-        long p99 = latencies[nearestRankIndex(iterations, 99)];
-        log.info("authorizePlayback latency over {} iterations (measurement only, not a gate): "
-            + "p50={}ms p95={}ms p99={}ms", iterations, p50, p95, p99);
-
-        // skillars-deferred-90 AC9: gate p99 against the run's OWN p50 rather than a fixed 5s
-        // wall-clock. A uniform slowdown (accidental N+1, a dropped index, a sync provider call)
-        // multiplies every percentile, so p99 >> 20*p50 catches it; the max(200ms, …) floor keeps
-        // a sub-millisecond p50 from making the ceiling flaky-tight on a fast CI box.
-        long p99Ceiling = Math.max(200L, p50 * 20);
-        assertThat(p99).as("p99 %dms >> 20*p50 (%dms) indicates a genuine pathology, not jitter", p99, p50)
-            .isLessThan(p99Ceiling);
-    }
-
-    // Nearest-rank percentile via integer ceiling division (avoids floating-point rounding pitfalls
-    // in count * p/100): rank = ceil(count * p / 100), 0-based index = rank - 1.
-    private static int nearestRankIndex(int count, int percentile) {
-        return (count * percentile + 99) / 100 - 1;
+        assertThat(meterRegistry.find("video.playback.authorize").timer())
+            .as("@Observed on authorizePlayback must register a video.playback.authorize timer")
+            .isNotNull();
+        assertThat(meterRegistry.get("video.playback.authorize").timer().count())
+            .as("the successful call must have recorded a sample")
+            .isPositive();
     }
 
     private Video seedVideo(OperationalState opState, AccessState accessState) {

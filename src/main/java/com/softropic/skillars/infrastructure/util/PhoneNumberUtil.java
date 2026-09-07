@@ -16,8 +16,17 @@ public final class PhoneNumberUtil {
     }
 
     /**
-     * Converts a raw phone string into a {@link PhoneNumber} entity,
-     * enriching it with provider, country code, and phone type via {@link CamMobileValidator}.
+     * Converts a raw phone string into a {@link PhoneNumber} entity, enriching it with
+     * Cameroon operator / country / type via {@link CamMobileValidator} <em>when the number is a
+     * valid CM number</em>.
+     *
+     * <p>skillars-deferred-99 AC16: this is now <strong>best-effort enrichment, not a gate</strong>.
+     * A non-CM number (already accepted by the config-driven {@code @CamPhone} constraint) no longer
+     * throws here — it is stored as-is with {@code provider = null} and {@code phoneType = MOBILE}.
+     * The {@code @CamPhone} constraint on the DTO is the validation gate; this method only decorates.
+     * Operator-level identification stays CM-specific because {@link com.softropic.skillars.infrastructure.validation.Provider}
+     * enumerates CM operators only — a second market that needs operator detection requires a
+     * provider abstraction, which is out of this story's scope.
      *
      * @param phone the raw phone string
      * @return a populated {@link PhoneNumber}, or {@code null} if the input is blank
@@ -26,13 +35,20 @@ public final class PhoneNumberUtil {
         if (phone == null || phone.isBlank()) {
             return null;
         }
-        PhoneNumberDto phoneNoDto = CamMobileValidator.validate(phone);
         PhoneNumber phoneNumber = new PhoneNumber();
-        phoneNumber.setPhone(phoneNoDto.getPhone());
-        phoneNumber.setIso2Country(phoneNoDto.getIso2Country());
-        phoneNumber.setPhoneType(Objects.equals(phoneNoDto.getPhoneType(), PhoneNumberDto.PhoneType.MOBILE)
-                ? PhoneNumber.PhoneType.MOBILE : PhoneNumber.PhoneType.FIXED);
-        phoneNumber.setProvider(phoneNoDto.getProvider());
+        try {
+            PhoneNumberDto phoneNoDto = CamMobileValidator.validate(phone);
+            phoneNumber.setPhone(phoneNoDto.getPhone());
+            phoneNumber.setIso2Country(phoneNoDto.getIso2Country());
+            phoneNumber.setPhoneType(Objects.equals(phoneNoDto.getPhoneType(), PhoneNumberDto.PhoneType.MOBILE)
+                    ? PhoneNumber.PhoneType.MOBILE : PhoneNumber.PhoneType.FIXED);
+            phoneNumber.setProvider(phoneNoDto.getProvider());
+        } catch (CamMobileValidator.InvalidMobileNumberException notCameroon) {
+            // Not a CM number — keep the raw value, no operator/country enrichment.
+            phoneNumber.setPhone(phone.replaceAll("\\s+", ""));
+            phoneNumber.setPhoneType(PhoneNumber.PhoneType.MOBILE);
+            phoneNumber.setProvider(null);
+        }
         return phoneNumber;
     }
 

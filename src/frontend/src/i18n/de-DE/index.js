@@ -54,7 +54,7 @@ export default {
       'Ungültiger oder fehlender Zurücksetzungsschlüssel. Bitte fordern Sie eine neue Zurücksetzung an.',
     verifyTokenMissing:
       'Kein Bestätigungstoken gefunden. Bitte prüfen Sie den Link in Ihrer E-Mail.',
-    phoneHintFormat: '9 Ziffern, beginnend mit 6 (z. B. 670123456)',
+    phoneHintFormat: 'Mit Ländervorwahl angeben, z. B. +1 555 0100',
     accountNotVerified:
       'Ihr Konto ist noch nicht verifiziert. Bitte schließen Sie zunächst die Telefonverifizierung ab.',
     accountLocked: 'Zu viele Anmeldeversuche. Versuchen Sie es in einigen Minuten erneut.',
@@ -230,7 +230,7 @@ export default {
     firstName: 'Vorname',
     lastName: 'Nachname',
     phone: 'Telefonnummer',
-    nationalId: 'Ausweisnummer',
+    nationalId: 'Ausweis- oder Passnummer',
     dateOfBirth: 'Geburtsdatum',
     gender: 'Geschlecht',
     male: 'Männlich',
@@ -714,6 +714,7 @@ export default {
       title: 'Übungsbibliothek',
       loadError: 'Übungen konnten nicht geladen werden. Bitte versuchen Sie es erneut.',
       videoLoadFailed: 'Video konnte nicht geladen werden — wird aktualisiert…',
+      videoUnavailable: 'Video nicht verfügbar',
       platformTab: 'Plattform-Bibliothek',
       myLibraryTab: 'Meine Bibliothek',
       searchPlaceholder: 'Übungen suchen...',

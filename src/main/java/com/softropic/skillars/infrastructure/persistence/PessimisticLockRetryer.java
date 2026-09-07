@@ -1,5 +1,7 @@
 package com.softropic.skillars.infrastructure.persistence;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import jakarta.annotation.PostConstruct;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -32,6 +34,26 @@ import java.util.function.Supplier;
  * failure — Hibernate would never learn the flush was undone and would not re-flush it at commit.
  * Flushing first keeps the savepoint boundary aligned with what it actually protects: this
  * attempt's own locked read, not unrelated prior writes.
+ *
+ * <h2>Cost model — a documented, sized tradeoff (skillars-deferred-99 AC10)</h2>
+ *
+ * <p><strong>The retry loop sleeps while still holding the caller's transaction's pooled JDBC
+ * connection.</strong> The savepoint mechanism above is what lets the caller retry <em>in place</em>
+ * rather than in a transaction of its own, and the price of "in place" is that the connection is
+ * not released between attempts — under contention a request can occupy a HikariCP connection for
+ * up to the worst-case jittered backoff budget (~3.2s with the defaults: 8 attempts,
+ * 100ms→800ms×1.6). This is accepted, not overlooked: {@code DefaultJpaDialect} exposes no
+ * savepoint support so declarative {@code Propagation.NESTED} is unavailable, and all current call
+ * sites are short read-then-maybe-refresh operations ({@code findByIdForUpdate} + optional
+ * {@code refresh}). If a future call site is long-running, or the pool is small relative to the
+ * contended row's traffic, revisit this — a connection-releasing mechanism would be a larger change
+ * (its own transaction per attempt) and is deliberately out of scope here.
+ *
+ * <p>The wait is observable: a {@code persistence.lock_retry} {@link Timer} (tag {@code outcome} =
+ * {@code success} / {@code exhausted} / {@code error}) records the wall-clock time spent in
+ * {@link #withBoundedRetry}, and {@code persistence.lock_retry.retries} /
+ * {@code persistence.lock_retry.exhausted} counters track how hard the loop is working. Watch the
+ * timer's p99 against the HikariCP pool size.
  */
 @Slf4j
 @Component
@@ -39,6 +61,12 @@ public class PessimisticLockRetryer {
 
     @PersistenceContext
     private EntityManager entityManager;
+
+    private final MeterRegistry meterRegistry;
+
+    public PessimisticLockRetryer(MeterRegistry meterRegistry) {
+        this.meterRegistry = meterRegistry;
+    }
 
     @Value("${app.locking.retry.max-attempts:8}")
     private int maxAttempts;
@@ -97,25 +125,58 @@ public class PessimisticLockRetryer {
     public <T> T withBoundedRetry(Supplier<T> lockedOperation) {
         Session session = entityManager.unwrap(Session.class);
         long backoffMillis = initialBackoffMs;
-        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-            entityManager.flush();
-            Savepoint[] savepointHolder = new Savepoint[1];
-            session.doWork(connection -> savepointHolder[0] = connection.setSavepoint());
-            try {
-                T result = lockedOperation.get();
-                session.doWork(connection -> connection.releaseSavepoint(savepointHolder[0]));
-                return result;
-            } catch (PessimisticLockingFailureException e) {
-                if (attempt == maxAttempts) {
-                    log.warn("Giving up on a pessimistic lock after {} attempts; surfacing contention", attempt);
-                    throw e;
+        Timer.Sample sample = Timer.start(meterRegistry);
+        int retries = 0;
+        try {
+            for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+                entityManager.flush();
+                Savepoint[] savepointHolder = new Savepoint[1];
+                session.doWork(connection -> savepointHolder[0] = connection.setSavepoint());
+                try {
+                    T result = lockedOperation.get();
+                    session.doWork(connection -> connection.releaseSavepoint(savepointHolder[0]));
+                    recordRetries(retries);
+                    sample.stop(timer("success"));
+                    return result;
+                } catch (PessimisticLockingFailureException e) {
+                    if (attempt == maxAttempts) {
+                        log.warn("Giving up on a pessimistic lock after {} attempts; surfacing contention", attempt);
+                        recordRetries(retries);
+                        meterRegistry.counter("persistence.lock_retry.exhausted").increment();
+                        sample.stop(timer("exhausted"));
+                        throw e;
+                    }
+                    retries++;
+                    session.doWork(connection -> connection.rollback(savepointHolder[0]));
+                    sleep(jitter(backoffMillis));
+                    backoffMillis = Math.min((long) (backoffMillis * backoffMultiplier), maxBackoffMs);
                 }
-                session.doWork(connection -> connection.rollback(savepointHolder[0]));
-                sleep(jitter(backoffMillis));
-                backoffMillis = Math.min((long) (backoffMillis * backoffMultiplier), maxBackoffMs);
             }
+            throw new IllegalStateException("unreachable: loop above always returns or throws");
+        } catch (RuntimeException e) {
+            // A non-lock failure (the operation's own orElseThrow not-found, or a sleep interrupt)
+            // still exits here; record it so the timer's count matches the call count. The
+            // exhausted-lock path already stopped the sample above, so skip it to avoid a double stop.
+            if (!(e instanceof PessimisticLockingFailureException)) {
+                recordRetries(retries);
+                sample.stop(timer("error"));
+            }
+            throw e;
         }
-        throw new IllegalStateException("unreachable: loop above always returns or throws");
+    }
+
+    private void recordRetries(int retries) {
+        if (retries > 0) {
+            meterRegistry.counter("persistence.lock_retry.retries").increment(retries);
+        }
+    }
+
+    private Timer timer(String outcome) {
+        return Timer.builder("persistence.lock_retry")
+            .description("Wall-clock time a caller spent in PessimisticLockRetryer.withBoundedRetry, "
+                + "holding its pooled JDBC connection while sleeping between attempts")
+            .tag("outcome", outcome)
+            .register(meterRegistry);
     }
 
     /**

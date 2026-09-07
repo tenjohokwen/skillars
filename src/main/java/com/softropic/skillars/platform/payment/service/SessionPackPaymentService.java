@@ -51,12 +51,20 @@ public class SessionPackPaymentService {
     private final PaymentGateway paymentGateway;
     private final StripeClient stripeClient;
     private final PessimisticLockRetryer lockRetryer;
+    private final RefundReconciliationService refundReconciliationService;
 
     /**
      * Purchase a session pack for a player.
-     * Uses compensating-action pattern: charge → persist → on-failure best-effort refund.
-     * Refund is best-effort only: only PaymentGatewayException is caught; other exceptions propagate, and refund failures are logged with no reconciliation record.
+     * Uses compensating-action pattern: charge → persist → on-failure compensating refund.
      * Not annotated @Transactional to avoid holding DB connection open across external Stripe call.
+     *
+     * <p>skillars-deferred-99 AC1: if persisting the purchase throws, the compensating
+     * {@code paymentGateway.refund(...)} is attempted under a deterministic Stripe idempotency key
+     * (so a caller retry replays the original refund rather than double-crediting). Any throwable
+     * from that refund — not just {@link PaymentGatewayException} — is caught and a durable
+     * {@code stripe_refund_failures} row is written via {@link RefundReconciliationService} so an
+     * operator can recover the money. The outer {@code payment.lifecycleFailure} is thrown on every
+     * path.
      */
     public SessionPackPurchaseResponse purchasePack(Long parentId, UUID packTierId, Long playerId, String paymentMethodId) {
         // Deferred-81 AC4: a self-registered (no-parent) player has parentId == null by
@@ -91,11 +99,25 @@ public class SessionPackPaymentService {
         try {
             purchase = createPurchase(parentId, playerId, tier, paymentIntentId);
         } catch (Exception e) {
-            log.error("Purchase record creation failed after Stripe charge: packTierId={} parentId={}", packTierId, parentId);
+            log.error("Purchase record creation failed after Stripe charge: packTierId={} parentId={}", packTierId, parentId, e);
             try {
                 paymentGateway.refund(paymentIntentId, tier.getTotalPrice());
-            } catch (PaymentGatewayException refundEx) {
-                log.error("Compensating refund also failed: intentId={}", paymentIntentId);
+            } catch (Exception refundEx) {
+                // Widened from PaymentGatewayException (skillars-deferred-99 AC1): an unchecked
+                // throw or an unwrapped StripeException used to propagate here and skip both the
+                // reconciliation record and the lifecycleFailure wrap. Excludes Error only.
+                log.error("Compensating refund also failed: intentId={}", paymentIntentId, refundEx);
+                try {
+                    refundReconciliationService.recordRefundFailure(
+                        paymentIntentId, tier.getTotalPrice(), parentId, packTierId, refundEx.toString());
+                } catch (Exception reconEx) {
+                    // The reconciliation write is the last line of defence; if it also fails the
+                    // money is unrecoverable from the DB. Log at ERROR with the full context so it
+                    // is recoverable from the logs, then still throw a clean lifecycleFailure.
+                    log.error("Refund reconciliation record could not be persisted — MANUAL RECOVERY "
+                        + "REQUIRED: intentId={} amount={} parentId={} packTierId={}",
+                        paymentIntentId, tier.getTotalPrice(), parentId, packTierId, reconEx);
+                }
             }
             throw new PaymentGatewayException("payment.lifecycleFailure");
         }

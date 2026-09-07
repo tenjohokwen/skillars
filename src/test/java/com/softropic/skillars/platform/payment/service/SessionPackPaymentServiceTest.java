@@ -49,6 +49,7 @@ class SessionPackPaymentServiceTest {
     @Mock PaymentGateway paymentGateway;
     @Mock StripeClient stripeClient;
     @Mock PessimisticLockRetryer lockRetryer;
+    @Mock RefundReconciliationService refundReconciliationService;
 
     @InjectMocks SessionPackPaymentService sessionPackPaymentService;
 
@@ -134,6 +135,72 @@ class SessionPackPaymentServiceTest {
         assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, null))
             .isInstanceOf(OperationNotAllowedException.class)
             .hasMessageContaining("does not own this profile");
+    }
+
+    // ── skillars-deferred-99 AC1: compensating-refund safety ─────────────────────────────────────
+
+    private void stubHappyPathUntilPersist(SessionPackTier tier) {
+        PlayerProfile player = new PlayerProfile();
+        player.setId(PLAYER_ID);
+        player.setUserId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(tier));
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
+        when(paymentGateway.createStripeCustomer(PARENT_ID)).thenReturn("cus_test");
+        when(stripeCustomerRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(paymentGateway.chargeAndCapture(TIER_ID, PARENT_ID, COACH_ID, tier.getTotalPrice()))
+            .thenReturn("pi_test");
+    }
+
+    @Test
+    void purchasePack_persistFails_thenRefundThrowsUnchecked_stillWrapsAndRecordsReconciliation() {
+        SessionPackTier tier = makeActiveTier();
+        stubHappyPathUntilPersist(tier);
+        when(sessionPackPurchaseRepository.save(any())).thenThrow(new RuntimeException("db write failed"));
+        // An unchecked throw out of refund used to propagate and skip the wrap + reconciliation.
+        org.mockito.Mockito.doThrow(new IllegalStateException("stripe SDK blew up"))
+            .when(paymentGateway).refund("pi_test", tier.getTotalPrice());
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test"))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException.class)
+            .hasMessageContaining("payment.lifecycleFailure");
+
+        verify(refundReconciliationService).recordRefundFailure(
+            org.mockito.ArgumentMatchers.eq("pi_test"),
+            org.mockito.ArgumentMatchers.eq(tier.getTotalPrice()),
+            org.mockito.ArgumentMatchers.eq(PARENT_ID),
+            org.mockito.ArgumentMatchers.eq(TIER_ID),
+            any());
+    }
+
+    @Test
+    void purchasePack_persistFails_thenRefundThrowsPaymentGatewayException_stillWrapsAndRecords() {
+        SessionPackTier tier = makeActiveTier();
+        stubHappyPathUntilPersist(tier);
+        when(sessionPackPurchaseRepository.save(any())).thenThrow(new RuntimeException("db write failed"));
+        org.mockito.Mockito.doThrow(new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException("payment.refundFailed"))
+            .when(paymentGateway).refund("pi_test", tier.getTotalPrice());
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test"))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException.class)
+            .hasMessageContaining("payment.lifecycleFailure");
+
+        verify(refundReconciliationService).recordRefundFailure(
+            org.mockito.ArgumentMatchers.eq("pi_test"), any(), any(), any(), any());
+    }
+
+    @Test
+    void purchasePack_persistFails_butRefundSucceeds_noReconciliationRecord() {
+        SessionPackTier tier = makeActiveTier();
+        stubHappyPathUntilPersist(tier);
+        when(sessionPackPurchaseRepository.save(any())).thenThrow(new RuntimeException("db write failed"));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test"))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException.class)
+            .hasMessageContaining("payment.lifecycleFailure");
+
+        verify(paymentGateway).refund("pi_test", tier.getTotalPrice());
+        verify(refundReconciliationService, never()).recordRefundFailure(any(), any(), any(), any(), any());
     }
 
     private SessionPackTier makeActiveTier() {

@@ -1,7 +1,9 @@
 package com.softropic.skillars.platform.video.service;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
+import com.softropic.skillars.infrastructure.util.TestClockProvider;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -9,6 +11,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.sql.Timestamp;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -56,6 +62,39 @@ class BandwidthResetChunkingIT extends AbstractIntegrationTest {
                     + "bandwidth_period_start) VALUES (?, 0, 4096, NOW() - INTERVAL '2 months')",
                 batch);
         });
+    }
+
+    @AfterEach
+    void clearClock() {
+        TestClockProvider.unsetClock();
+    }
+
+    /**
+     * skillars-deferred-99 AC12 — a late job run must still anchor {@code bandwidth_period_start} to
+     * the calendar 1st at 00:00 UTC, not to whenever the job actually fired. Pin the clock to the
+     * 4th of a month, run the reset, assert every reset row is stamped the 1st (not the 4th), and a
+     * re-run is still a no-op.
+     */
+    @Test
+    @DisplayName("AC12: bandwidth_period_start is anchored to the 1st of the month, not the run date")
+    void periodStart_anchoredToCalendarFirstOfMonth_notRunDate() {
+        Instant lateRun = Instant.parse("2035-03-04T08:30:00Z");
+        TestClockProvider.setClock(Clock.fixed(lateRun, ZoneOffset.UTC));
+        Timestamp expectedPeriodStart = Timestamp.from(Instant.parse("2035-03-01T00:00:00Z"));
+
+        bandwidthResetService.drainReset();
+
+        List<Timestamp> starts = jdbcTemplate.queryForList(
+            "SELECT bandwidth_period_start FROM main.video_quotas WHERE user_id LIKE ?",
+            Timestamp.class, USER_PREFIX + "%");
+        assertThat(starts)
+            .as("every reset row's period start is the 1st 00:00 UTC, regardless of the run date")
+            .isNotEmpty()
+            .allSatisfy(ts -> assertThat(ts.toInstant()).isEqualTo(expectedPeriodStart.toInstant()));
+
+        assertThat(bandwidthResetService.drainReset())
+            .as("a second run in the same month is a no-op")
+            .isZero();
     }
 
     private long myRowsStillNeedingReset() {

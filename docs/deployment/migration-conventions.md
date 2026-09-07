@@ -16,6 +16,40 @@ check are still your responsibility in review.
 
 ## The expand / contract standard
 
+### Go-forward checklist (skillars-deferred-99 AC8)
+
+A compressed form of the rules below — run it against every migration `> V121`. The prose
+after it is the authority; this is the quick pass.
+
+- [ ] **New column / table / enum value / index ships a release before any code reads or
+      writes it.** New columns nullable or defaulted; `NOT NULL` comes later, after the backfill.
+- [ ] **FK or `CHECK` on a table that can grow → `ADD CONSTRAINT … NOT VALID` now, `VALIDATE
+      CONSTRAINT` in a later migration.** Never a validating `ADD` in one shot.
+- [ ] **Index on a hot / large table → `CREATE INDEX CONCURRENTLY`** (and therefore its own
+      migration — `CONCURRENTLY` cannot run in Flyway's transaction with other statements).
+- [ ] **Enum / `CHECK` widening lands one release ahead of the first write of the new value.**
+- [ ] **Backfill `UPDATE` is chunked** (`WHERE` on a key range or `ctid` batch + loop), never one
+      unbounded full-table write.
+- [ ] **Every `DROP` is last and guarded**: `IF EXISTS`, a header explaining which release removed
+      the last reader, and `-- migration-lint: drop-prepared-in: V<n>` immediately above the
+      statement (one per `DROP`).
+- [ ] **Every lock-taking DDL has `SET lock_timeout` in effect** at that point in the file
+      (`0` = unbounded, does not count), or `-- migration-lint: allow-unbounded-lock-wait <reason>`.
+- [ ] **`INSERT INTO main.platform_config` omits `id`** (identity since `V128`).
+- [ ] **`MigrationConventionLintTest` passes.** It enforces the mechanical subset; the rest is review's.
+
+### Pre-production migration debt
+
+`V60`, `V94`, `V117` (validating `ACCESS EXCLUSIVE` on a growth table), `V97` (`DROP COLUMN` —
+catalog-only, safe as written) and `V98` (unbatched backfill) predate this standard and are
+**applied and immutable**. The hard trigger to redo `V60` / `V94` / `V117` online-safe (and split
+`V124`'s same-release CHECK widen) **before the first production deploy** is stated in full under
+[Grandfathering → Per-migration disposition](#per-migration-disposition-skillars-deferred-91-ac8)
+and repeated in `docs/deployment/runbook.md`. This checklist section is the pointer so the debt is
+findable from the top of the document.
+
+---
+
 1. **Additive first.** A new column, table, enum value, or index is deployed **before**
    any code path reads or writes it. New columns are nullable or carry a default;
    `NOT NULL` is added in a later migration after the backfill.
