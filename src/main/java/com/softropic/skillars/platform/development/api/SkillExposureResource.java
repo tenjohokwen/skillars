@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.development.api;
 import com.softropic.skillars.platform.development.contract.CoachContributionDto;
 import com.softropic.skillars.platform.development.contract.NarrativeKeyDto;
 import com.softropic.skillars.platform.development.contract.SkillExposureResponse;
+import com.softropic.skillars.platform.development.contract.SkillTrendResponse;
 import com.softropic.skillars.platform.development.service.SluContributionService;
 import com.softropic.skillars.platform.development.service.SluDashboardService;
 import io.micrometer.observation.annotation.Observed;
@@ -33,6 +34,16 @@ public class SkillExposureResource {
             @RequestParam(defaultValue = "8") int weeks) {
         int weeksBack = Math.min(Math.max(weeks, 1), 52);
         return ResponseEntity.ok(sluDashboardService.getWeeklyExposure(playerId, weeksBack));
+    }
+
+    @GetMapping("/api/development/players/{playerId}/slu/skill-trends")
+    @PreAuthorize("hasRole('ROLE_COACH') or @playerOwnershipGuard.check(authentication, #playerId)")
+    @Observed(name = "development.slu.skilltrends")
+    public ResponseEntity<SkillTrendResponse> getSkillTrends(
+            @PathVariable Long playerId,
+            @RequestParam(defaultValue = "8") int weeks) {
+        int weeksBack = Math.min(Math.max(weeks, 1), 52);
+        return ResponseEntity.ok(sluDashboardService.getSkillTrends(playerId, weeksBack));
     }
 
     @GetMapping("/api/development/players/{playerId}/narrative")

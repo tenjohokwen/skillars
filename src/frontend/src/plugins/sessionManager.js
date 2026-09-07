@@ -215,12 +215,16 @@ export function startSessionMonitoring() {
   recordActivity()
   // Evaluate immediately rather than only priming the state: a tab resumed from sleep, or an
   // app loaded already inside the warning band, must be handled now instead of up to
-  // SESSION_CHECK_INTERVAL later. tick() returning true means it already cleaned up.
-  // skillars-deferred-90: Project-owner decision — if the session is already expired at
-  // startup, exit silently without re-arming the interval. The cost of an "arm anyway" approach
-  // (which was considered) would be ~30 seconds of unnecessary ticking before cleanup disarms
-  // the timer, whereas the silent path keeps the request/response cycle clean. The trade-off
-  // favors silence. This decision is documented here to close line 1268 in deferred-work.md.
+  // SESSION_CHECK_INTERVAL later.
+  //
+  // skillars-deferred-90 (project-owner decision): if that first tick() reports the session
+  // already gone — a genuinely idle-expired session, or the shared cookies cleared by another
+  // tab's logout before this app finished booting — tick() has already dispatched
+  // 'session:expired' and run cleanup(), so we return without arming the 30s interval. The
+  // rejected "arm anyway" alternative costs one dead interval cycle (~30s) plus a duplicate
+  // 'session:expired' dispatch — and therefore a duplicate backend logout — before cleanup()
+  // disarms it on the following tick. Rationale recorded in deferred-work.md, deferred-90
+  // section (ledger line ~1268).
   if (tick()) return
 
   checkIntervalId = setInterval(tick, SESSION_CHECK_INTERVAL)
