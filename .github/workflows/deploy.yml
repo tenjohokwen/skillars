@@ -49,8 +49,9 @@ jobs:
 
       - name: Capture pre-deploy image
         id: pre_deploy
+        timeout-minutes: 3
         run: |
-          PREV=$(ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+          PREV=$(ssh -o ConnectTimeout=10 -o BatchMode=yes "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
             "cd /opt/skillars && \
              CID=\$(docker compose ps -q --status running app 2>/dev/null | head -1) && \
              [ -n \"\$CID\" ] && docker inspect --format='{{.Config.Image}}' \"\$CID\" || echo 'none'")
@@ -60,15 +61,17 @@ jobs:
       - name: Authenticate to GHCR on Node
         env:
           GHCR_PAT: ${{ secrets.GHCR_PAT }}
+        timeout-minutes: 3
         run: |
-          printf '%s' "$GHCR_PAT" | ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+          printf '%s' "$GHCR_PAT" | ssh -o ConnectTimeout=10 -o BatchMode=yes "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
             "docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
 
       - name: Pre-check image availability locally before pull
         env:
           IMAGE_TAG: ${{ inputs.image_tag }}
+        timeout-minutes: 3
         run: |
-          ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+          ssh -o ConnectTimeout=10 -o BatchMode=yes "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
             "docker image inspect 'ghcr.io/${{ github.repository }}:${IMAGE_TAG}' >/dev/null 2>&1 && \
              echo 'Image already cached locally, pull not needed' || \
              echo 'Image not in local cache, will pull during deploy'"
@@ -76,9 +79,10 @@ jobs:
       - name: Deploy
         env:
           IMAGE_TAG: ${{ inputs.image_tag }}
+        timeout-minutes: 10
         run: |
           IMAGE="ghcr.io/${{ github.repository }}:${IMAGE_TAG}"
-          ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+          ssh -o ConnectTimeout=10 -o BatchMode=yes "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
             "cd /opt/skillars && \
              docker compose pull app && \
              sed -i \"s|^APP_IMAGE=.*|APP_IMAGE=${IMAGE}|\" .env && \
@@ -86,27 +90,39 @@ jobs:
 
       - name: Smoke test
         id: smoke
+        timeout-minutes: 15
         run: |
-          echo "Waiting 60s for JVM startup (matches docker-compose start_period)..."
-          sleep 60
-          RESULT="fail"
-          for i in $(seq 1 12); do
-            STATUS=$(ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "
-              CID=\$(cd /opt/skillars && docker compose ps -q --status running app 2>/dev/null | head -1)
-              [ -n \"\$CID\" ] && docker exec \"\$CID\" wget -qO- http://localhost:8367/manage/health 2>/dev/null \
-                | grep -q '\"status\":\"UP\"' && echo 1 || echo 0
-            " 2>/dev/null || echo 0)
-            if [ "$STATUS" = "1" ]; then
-              RESULT="pass"
-              break
-            fi
-            sleep 5
-          done
-          echo "result=$RESULT" >> $GITHUB_OUTPUT
+          set +e
+          (
+            echo "Waiting 60s for JVM startup (matches docker-compose start_period)..."
+            sleep 60
+            RESULT="fail"
+            for i in $(seq 1 12); do
+              STATUS=$(ssh -o ConnectTimeout=10 -o BatchMode=yes "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "
+                CID=\$(cd /opt/skillars && docker compose ps -q --status running app 2>/dev/null | head -1)
+                [ -n \"\$CID\" ] && docker exec \"\$CID\" wget -qO- http://localhost:8367/manage/health/smoke 2>/dev/null \
+                  | grep -q '\"status\":\"UP\"' && echo 1 || echo 0
+              " 2>/dev/null || echo 0)
+              if [ "$STATUS" = "1" ]; then
+                RESULT="pass"
+                break
+              fi
+              sleep 5
+            done
+            echo "result=$RESULT" >> $GITHUB_OUTPUT
+            exit $([ "$RESULT" = "pass" ] && echo 0 || echo 1)
+          )
+          EXIT_CODE=$?
+          # Ensure output is written even if step errors or is interrupted
+          if ! grep -q "^result=" $GITHUB_OUTPUT 2>/dev/null; then
+            echo "result=error" >> $GITHUB_OUTPUT
+          fi
+          exit $EXIT_CODE
 
       - name: Auto-Revert on smoke test failure
         id: revert
-        if: steps.smoke.outputs.result == 'fail'
+        if: failure() && (steps.smoke.outputs.result == 'fail' || steps.smoke.outcome == 'failure')
+        timeout-minutes: 10
         run: |
           PREV="${{ steps.pre_deploy.outputs.image }}"
           if [ "$PREV" = "none" ] || [ -z "$PREV" ]; then
@@ -115,7 +131,7 @@ jobs:
           elif ! printf '%s' "$PREV" | grep -qE '^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$'; then
             echo "ERROR: previous image reference contains unsafe characters; aborting revert." >&2
             echo "outcome=failed" >> $GITHUB_OUTPUT
-          elif ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+          elif ssh -o ConnectTimeout=10 -o BatchMode=yes "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
                  "cd /opt/skillars && \
                   (docker image inspect '${PREV}' >/dev/null 2>&1 || docker compose pull app) && \
                   sed -i \"s|^APP_IMAGE=.*|APP_IMAGE=${PREV}|\" .env && \
@@ -126,7 +142,7 @@ jobs:
           fi
 
       - name: Notify Slack — success
-        if: steps.smoke.outputs.result == 'pass'
+        if: success() && steps.smoke.outputs.result == 'pass'
         continue-on-error: true
         uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d  # v4.0.0
         env:
@@ -138,11 +154,15 @@ jobs:
             {"text": "${{ env.SLACK_MESSAGE_TEXT }}"}
 
       - name: Notify Slack — failure & revert
-        if: steps.smoke.outputs.result == 'fail'
+        # Owns every mode where the smoke step actually started: explicit fail, `result=error`
+        # fallback, step error/timeout (outcome=failure), and job cancellation. `always()` so it
+        # still fires when the job is being cancelled; the condition keeps it off the success and
+        # pre-smoke paths.
+        if: always() && (steps.smoke.outputs.result == 'fail' || steps.smoke.outputs.result == 'error' || steps.smoke.outcome == 'failure' || steps.smoke.outcome == 'cancelled')
         continue-on-error: true
         uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d  # v4.0.0
         env:
-          SLACK_MESSAGE_TEXT: "❌ *Production deploy FAILED*\nFailed image: `ghcr.io/${{ github.repository }}:${{ inputs.image_tag }}`\nAuto-Revert: ${{ steps.revert.outputs.outcome }}\nPrevious image: `${{ steps.pre_deploy.outputs.image }}`\nTriggered by: ${{ github.actor }}"
+          SLACK_MESSAGE_TEXT: "❌ *Production deploy FAILED*\nFailed image: `ghcr.io/${{ github.repository }}:${{ inputs.image_tag }}`\nAuto-Revert: ${{ steps.revert.outputs.outcome || 'not attempted' }}\nPrevious image: `${{ steps.pre_deploy.outputs.image }}`\nTriggered by: ${{ github.actor }}"
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
           webhook-type: incoming-webhook
@@ -150,7 +170,7 @@ jobs:
             {"text": "${{ env.SLACK_MESSAGE_TEXT }}"}
 
       - name: Email — success
-        if: steps.smoke.outputs.result == 'pass'
+        if: success() && steps.smoke.outputs.result == 'pass'
         continue-on-error: true
         uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
         with:
@@ -167,7 +187,7 @@ jobs:
             Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: Email — failure & revert
-        if: steps.smoke.outputs.result == 'fail'
+        if: always() && (steps.smoke.outputs.result == 'fail' || steps.smoke.outputs.result == 'error' || steps.smoke.outcome == 'failure' || steps.smoke.outcome == 'cancelled')
         continue-on-error: true
         uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
         with:
@@ -177,27 +197,31 @@ jobs:
           password: ${{ secrets.SMTP_PASSWORD }}
           to: ${{ secrets.NOTIFY_EMAIL }}
           from: ${{ secrets.SMTP_USERNAME }}
-          subject: "❌ Deploy FAILED (revert: ${{ steps.revert.outputs.outcome }}): ${{ inputs.image_tag }}"
+          subject: "❌ Deploy FAILED (revert: ${{ steps.revert.outputs.outcome || 'not attempted' }}): ${{ inputs.image_tag }}"
           body: |
             Production deploy of ghcr.io/${{ github.repository }}:${{ inputs.image_tag }} FAILED.
-            Auto-Revert outcome: ${{ steps.revert.outputs.outcome }}
+            Auto-Revert outcome: ${{ steps.revert.outputs.outcome || 'not attempted' }}
             Previous image: ${{ steps.pre_deploy.outputs.image }}
             Triggered by: ${{ github.actor }}
             Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: Fail workflow on smoke test failure
-        if: always() && steps.smoke.outputs.result == 'fail'
+        if: always() && (steps.smoke.outputs.result == 'fail' || steps.smoke.outcome == 'failure' || steps.smoke.outcome == 'cancelled')
         # The real invariant: no step between `smoke` and this marker may fail the job without `continue-on-error: true`.
-        # All notification steps (.github/workflows/deploy.yml :130/:142/:154/:171) must have it so this always runs.
+        # All four result-notify steps (Notify Slack/Email — success and failure & revert, at
+        # .github/workflows/deploy.yml :144/:156/:172/:189) carry it so this marker always runs.
         run: |
           echo "Smoke test failed — deploy reverted. Marking workflow as failed."
           exit 1
 
       - name: Notify Slack — early failure (pre-smoke)
-        if: failure() && steps.smoke.outcome == 'skipped'
+        # Only when the smoke step never ran (a prior step failed, or the job was cancelled
+        # before smoke). A smoke step that ran and failed/errored is owned by the steps above,
+        # so `outcome == 'failure'` must NOT be matched here or every failure double-notifies.
+        if: (failure() || cancelled()) && steps.smoke.outcome == 'skipped'
         uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d  # v4.0.0
         env:
-          SLACK_MESSAGE_TEXT: "❌ *Production deploy FAILED before smoke test* (no auto-revert attempted)\nImage tag: `${{ inputs.image_tag }}`\nTriggered by: ${{ github.actor }}\nSee: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          SLACK_MESSAGE_TEXT: "❌ *Production deploy FAILED* (failed before smoke test — no auto-revert attempted)\nImage tag: `${{ inputs.image_tag }}`\nTriggered by: ${{ github.actor }}\nSee: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
           webhook-type: incoming-webhook
@@ -205,7 +229,7 @@ jobs:
             {"text": "${{ env.SLACK_MESSAGE_TEXT }}"}
 
       - name: Email — early failure (pre-smoke)
-        if: failure() && steps.smoke.outcome == 'skipped'
+        if: (failure() || cancelled()) && steps.smoke.outcome == 'skipped'
         uses: dawidd6/action-send-mail@94de994a9f6fffee200243214e17002e2920bb59  # v18
         with:
           server_address: ${{ secrets.SMTP_HOST }}
@@ -214,9 +238,9 @@ jobs:
           password: ${{ secrets.SMTP_PASSWORD }}
           to: ${{ secrets.NOTIFY_EMAIL }}
           from: ${{ secrets.SMTP_USERNAME }}
-          subject: "❌ Deploy FAILED before smoke test: ${{ inputs.image_tag }}"
+          subject: "❌ Deploy FAILED: ${{ inputs.image_tag }}"
           body: |
-            Production deploy of ghcr.io/${{ github.repository }}:${{ inputs.image_tag }} FAILED before the
-            smoke test ever ran (no auto-revert was attempted).
+            Production deploy of ghcr.io/${{ github.repository }}:${{ inputs.image_tag }} FAILED
+            (failed before the smoke test ever ran — no auto-revert was attempted).
             Triggered by: ${{ github.actor }}
             Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

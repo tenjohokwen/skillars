@@ -379,6 +379,11 @@ management:
     health:
       show-details: when-authorized
       roles: ROLE_ADMIN
+      group:
+        smoke:
+          include: db,diskSpace,ping
+        notification:
+          include: smtp
     info:
       show-details: when-authorized
       roles: ROLE_ADMIN
