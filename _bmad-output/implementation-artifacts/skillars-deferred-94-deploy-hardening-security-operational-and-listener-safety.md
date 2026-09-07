@@ -10,7 +10,7 @@
 
 ## Story Summary
 
-A comprehensive hardening pass across deployment scripts, infrastructure security, transactional safety, and listener reliability. This story addresses 15+ deploy-* infrastructure gaps (PGPASSWORD exposure, hardcoded UIDs, network isolation, graceful handling of missing volumes) plus genuine one-off bugs in video moderation emails and payment semantics verification.
+A hardening pass across deployment scripts, infrastructure security, and operational clarity. This story addresses deploy-* infrastructure gaps (PGPASSWORD exposure via correct pattern, hardcoded UID documentation, alert volume-mount dependency, disk space alert backstops) and clarifies existing design decisions (video moderation email handling, payment transaction semantics). Drops AC11 (awscli v2 not in apt) and AC13 (monitoring regression risk) based on code review findings.
 
 ---
 
@@ -24,27 +24,35 @@ A comprehensive hardening pass across deployment scripts, infrastructure securit
 
 ## Acceptance Criteria
 
-### **AC1: PGPASSWORD Exposure — All 4 Occurrences Closed**
-- [ ] `deploy/backup/pg-backup.sh` — line 32: Replace `docker exec -e PGPASSWORD="$DB_PASS"` with heredoc pattern
-- [ ] `deploy/backup/restore-from-dump.sh` — lines 135, 138, 142: Same heredoc pattern applied to `DROP DATABASE`, `CREATE DATABASE`, and dump replay
-- [ ] **Verification:** `grep -r "docker exec -e PGPASSWORD" deploy/` returns zero matches
-- [ ] **Spec:** Use heredoc with process substitution: `docker exec -e PGPASSWORD="$(cat <<'PGPW'..."PGPW')" app psql ...`
-  - Credentials never touch filesystem (no temp file)
-  - Credentials never appear in `ps aux` (process argument, not env var visible to ps)
-  - Most concise and secure pattern
+### **AC1: PGPASSWORD Exposure — All 5 Occurrences Closed**
+- [ ] **Locations:** `deploy/backup/pg-backup.sh:32`, `deploy/backup/restore-from-dump.sh:134`, `restore-from-dump.sh:137`, `restore-from-dump.sh:143`, `restore-from-dump.sh:152` (run_psql helper)
+- [ ] **Spec:** Use environment-variable inheritance: `PGPASSWORD="${POSTGRES_PASSWORD}" docker exec -e PGPASSWORD "$CID" psql ...`
+  - The bare `-e PGPASSWORD` (no `=value`) tells Docker to copy the value from its own environment
+  - The `VAR=val cmd` prefix goes into the environment, not into argv — not visible in `ps aux`
+  - Works with arbitrary password characters (`$`, backticks, backslashes)
 - [ ] **Example pattern:**
   ```bash
-  docker exec -e PGPASSWORD="$(cat <<'PGPW'
-  $DB_PASS
-  PGPW
-  )" app psql -U postgres -h localhost -c "DROP DATABASE ..."
+  PGPASSWORD="${POSTGRES_PASSWORD}" docker exec -e PGPASSWORD "$APP_CID" psql -U postgres -h localhost -c "DROP DATABASE ..."
   ```
+- [ ] **Verification:** `grep -rE 'docker exec .*-e +PGPASSWORD=' deploy/` returns zero matches (no `=value` suffix)
+- [ ] **Why not heredoc:** Quoted heredoc (`<<'PGPW'`) suppresses `$` expansion — the password becomes literal `$POSTGRES_PASSWORD` string, breaking auth. Unquoted heredoc mangles passwords containing `$`, backticks, or backslashes.
 
-### **AC2: Hardcoded Container UIDs — Bind to Image Versions**
-- [ ] Document the container UID assumptions (65534=nobody, 10001=postgres, 472=grafana) in `deploy/provision.sh` and `deploy/backup/restore-from-volume-backup.sh`
-- [ ] Add a guard comment in both scripts: "Verify against upstream image changelogs before deploy to new host"
-- [ ] Snapshot current base images in `.env.example` or `docs/deployment/prerequisites.md` with their known UIDs
-- [ ] **Verification:** Comments added to lines ~597-603 (provision.sh) and ~96-99 (restore-from-volume-backup.sh) naming the specific images and their UIDs
+### **AC2: Hardcoded Container UIDs — Document Correctly**
+- [ ] **Correct UID table:** `provision.sh:597–603` and `restore-from-volume-backup.sh:93–99` show:
+  - `prometheus 65534:65534` (nobody)
+  - `loki 10001:10001` (loki)
+  - `tempo 10001:10001` (tempo)
+  - `grafana 472:472` (grafana)
+  - `redis 999:1000` (redis)
+  - `traefik 65534:65534` (nobody, shares with node_exporter)
+  - `postgres` uses **no chown** — relies on image entrypoint
+- [ ] Add a guard comment in both `provision.sh` and `restore-from-volume-backup.sh` (around the chown lines):
+  ```bash
+  # Container UIDs are tied to specific image versions (prometheus, loki, tempo, grafana, redis, traefik).
+  # Update these chown calls if the corresponding docker-compose.yml image versions change.
+  ```
+- [ ] **Note:** All images in `docker-compose.yml` are already version-pinned (e.g., `postgres:17-alpine`, `grafana/grafana:11.4.0`). UIDs only change on deliberate image bumps, which go through review. No need to snapshot in `.env.example`.
+- [ ] **Verification:** Comments added to lines ~597–603 (provision.sh) and ~93–99 (restore-from-volume-backup.sh) with accurate UID list
 
 ### **AC3: APP_CID Capture Race — Fail Fast with Diagnostic**
 - [ ] Current state: `restore-from-dump.sh:197-199` already fails fast with diagnostic when APP_CID is empty
@@ -64,11 +72,16 @@ A comprehensive hardening pass across deployment scripts, infrastructure securit
 - [ ] **No network change** — this AC documents the decision made by deferred-88
 
 ### **AC6: DiskDataVolumeHigh Alert — Volume Mount Dependency**
-- [ ] Current state: alert requires `mountpoint="/opt/skillars/data"` (`alerts.yml:62-68`)
-- [ ] Add verification step to `docs/deployment/prerequisites.md` or `deploy/provision.sh` comment:
-  - "Verify Hetzner Volume is mounted at `/opt/skillars/data` before deployment or alert will never fire"
-  - "If volume is unmounted, `DiskDataVolumeHigh` will silently never trigger"
-- [ ] **No code change** — document the operational prerequisite
+- [ ] **Current state:** Alert requires `mountpoint="/opt/skillars/data"` (`alerts.yml` lines ~62–68). Prometheus rule fires only if that mount is present.
+- [ ] **Partial backstop:** `alerts.yml` also defines a root-filesystem `DiskHigh` alert on `mountpoint="/"` (lines ~82–90). If the Hetzner volume is **not** mounted, writes to `/opt/skillars/data` land on root (`/`), so the root-fs alert still catches disk exhaustion—without per-volume attribution.
+- [ ] Add comment to `alerts.yml` near the volume alert (around line 62):
+  ```yaml
+  # DiskDataVolumeHigh requires the Hetzner volume to be mounted at /opt/skillars/data.
+  # If unmounted, writes land on /, triggering DiskHigh instead.
+  # See docs/deployment/first-time-setup.md for volume mount verification.
+  ```
+- [ ] Update `docs/deployment/first-time-setup.md` to include: "Verify Hetzner Volume is mounted at `/opt/skillars/data` before production deploy" (do not create a new prerequisites.md file)
+- [ ] **No code change** — documentation only
 
 ### **AC7: Repo Clone Order — Document Fragility**
 - [ ] Current state: repo is cloned to `/opt/skillars` before Hetzner Volume is mounted at `/opt/skillars/data` (benign today, fragile if repo structure changes)
@@ -95,40 +108,35 @@ A comprehensive hardening pass across deployment scripts, infrastructure securit
 - [ ] **Status:** Pre-existing pattern, out of this story's scope per specification
 - [ ] **Action:** Defer to a separate platform-wide hardening story; do not attempt closure here
 
-### **AC11: awscli v1 from Ubuntu apt — Pin to v2**
-- [ ] Current state: `provision.sh:131` installs awscli v1 which has edge cases with Hetzner Object Storage
-- [ ] **Change:** Pin to awscli v2 in `provision.sh` near line 131
-  ```bash
-  # Before:
-  apt-get install -y awscli
-  
-  # After:
-  apt-get install -y awscli=2.* python3-pip
-  ```
-- [ ] **Rationale:** v2 is actively maintained, fewer Hetzner edge cases, recommended upstream
-- [ ] **Verification:** `aws --version` in provisioned environment shows `aws-cli/2.x.x`
-- [ ] **No docs change** — v2 is the stable choice going forward
+### **AC11: awscli v1 from Ubuntu apt — Deferred to Separate Story**
+- [ ] **Current state:** `provision.sh:131` installs awscli v1 via Debian apt package
+- [ ] **Issue:** Debian/Ubuntu do not package AWS CLI v2 in apt. The package `awscli` available via apt is v1.x only. AWS CLI v2 is distributed only via the official installer from `awscli.amazonaws.com`, not via PyPI or apt.
+- [ ] **Attempt to install v2 via apt will fail:** `apt-get install -y "awscli=2.*"` returns *"Version '2.*' for 'awscli' was not found"* → `set -euo pipefail` abort → provisioning fails entirely.
+- [ ] **Regression risk:** `pg-backup.sh` and `restore-from-dump.sh` contain logic written for awscli v1 semantics (multipart ETag handling, `multipart_threshold`). AWS CLI v2 enables a client-side pager by default that can cause hangs in non-TTY cron contexts without `AWS_PAGER=""` env var.
+- [ ] **Action:** **Drop this AC from this story.** If v2 adoption is desired, create a separate story to:
+  - Use the official AWS CLI v2 installer (curl → ./aws/install)
+  - Pin the v2 version explicitly
+  - Audit and update backup/restore scripts for v2 semantics
+  - Set `AWS_PAGER=""` in all backup scripts
+  - Test end-to-end on the provisioned environment
+- [ ] **Current v1 is stable** — no action needed now
 
-### **AC12: Fail Workflow Citation Update**
-- [ ] Current state: `.github/workflows/deploy.yml:184-188` has become the "Fail workflow" step (previously `:139-143`)
-- [ ] Four notification steps (Slack/Email success+failure) precede it, so any notification failure pre-empts the explicit failure marker
-- [ ] Update the deferred-work.md entry (already done by the 2026-09-04 audit) to reflect current line numbers
-- [ ] Add a comment in `deploy.yml` at the Fail step: "This step is unreachable if any notification step throws. Notification failures are logged at WARN but may hide the true deploy failure."
-- [ ] **No code change** — document the architectural limitation
+### **AC12: Deploy Workflow Notification Failures — Document and Fix**
+- [ ] **Current state:** `.github/workflows/deploy.yml` has four notification steps (Slack & Email for success and failure) with **no `continue-on-error`**, and "Fail workflow" (line ~184) uses `if: steps.smoke.outputs.result == 'fail'` (implicit `success()`).
+- [ ] **Actual issue:** When a real deploy failure occurs and then a notification step (e.g., "Notify Slack — failure & revert") errors:
+  - The job **does go red** — the failure is visible
+  - But subsequent steps (email notification, explicit failure marker) are **skipped** → failure email never sends and explicit marker never runs
+- [ ] **Fix:** Add `continue-on-error: true` to the four notification steps (lines ~128, ~139, ~151, ~167), or use `if: always() && ...` to ensure notifications run even if smoke tests fail
+- [ ] **Rationale:** Notification failures should not cascade. A delivery failure should not suppress the explicit failure marker.
+- [ ] **Documentation:** Add comment at the Fail step: "Ensure all notification steps have `continue-on-error: true` so this marker always runs."
+- [ ] **Verification:** Manually trigger a deploy that fails at smoke stage and verify: (1) notification steps execute, (2) job goes red, (3) explicit failure marker runs
 
-### **AC13: Prometheus depends_on App — Add Dependency**
-- [ ] Current state: `docker-compose.yml:217-235` (Prometheus) has no `depends_on: app`; Grafana at `:328` does
-- [ ] **Change:** Add `depends_on: - app` to the Prometheus service definition in docker-compose.yml
-  ```yaml
-  prometheus:
-    image: prom/prometheus:latest
-    depends_on:
-      - app    # Ensure app is healthy before Prometheus starts scraping
-    ports: [...]
-  ```
-- [ ] **Rationale:** Eliminates cold-start scrape failures; ensures Prometheus only scrapes once app is ready
-- [ ] **Verification:** On fresh `docker compose up`, verify Prometheus enters `healthy` state after app reaches `healthy`
-- [ ] **No regression risk:** Only makes startup order explicit; no behavioral change for running deployments
+### **AC13: Prometheus depends_on App — Deferred**
+- [ ] **Current state:** `docker-compose.yml` Prometheus service (line ~220) has no `depends_on: app`; Grafana does.
+- [ ] **Clarification:** `depends_on: [app]` (short form) means `condition: service_started` — it waits only for the app *container* to start, **not** for the healthcheck to pass. The app has `start_period: 60s` and healthcheck retries, so Prometheus starts before app is actually healthy, defeating the stated goal.
+- [ ] **If "corrected" to `condition: service_healthy`:** This creates an operational **regression**. Grafana's `depends_on.prometheus` means the chain becomes: postgres/redis healthy → app healthy → prometheus → grafana. A crashing or misconfigured app then prevents Prometheus and Grafana from starting, losing metrics and alerting precisely when needed.
+- [ ] **Risk assessment:** A target being briefly `up == 0` at cold start is normal Prometheus behavior; the next `scrape_interval` recovers it. There is no failure to eliminate.
+- [ ] **Action:** **Drop this AC** — do not add `depends_on: app` to Prometheus. Monitoring must be independent of app health. If startup sequencing is desired, use the documented `condition: service_started` form with an explicit comment that it must **never** be tightened to `service_healthy`.
 
 ### **AC14: LGTM mkdir-p Gating**
 - [ ] Current state: `provision.sh:594-603` has `mkdir -p` calls inside `[ -b "${VOLUME_DEVICE}" ]` check
@@ -137,35 +145,24 @@ A comprehensive hardening pass across deployment scripts, infrastructure securit
 - [ ] **Status:** Accepted design; monitor for permission failures on new deployments
 - [ ] Add comment: "mkdir-p calls are gated inside volume-device check. If volume is absent, Docker creates dirs as root; watch for permission errors on first provision."
 
-### **AC15: VideoModerationEmailListener Fail-Open Path — Throw on Misconfigured Address**
-- [ ] Current state: When `platform.admin_alert_email` is blank, `VideoModerationEmailListener.sendAdminAlertSync()` returns normally without sending
-- [ ] **Issue:** No ERROR log; outbox row is released silently; operator has no signal that admin alerts are disabled
-- [ ] **Fix:** Change blank-recipient case to throw `ConfigurationException` so listener framework retains the outbox row
-  ```java
-  // In VideoModerationEmailListener.sendAdminAlertSync():
-  String adminAlertEmail = config.getString("platform.admin_alert_email", "");
-  if (adminAlertEmail.isBlank()) {
-    throw new ConfigurationException(
-      "platform.admin_alert_email is not set; video moderation admin alerts cannot be sent. " +
-      "Set this config key and restart to enable admin alert emails."
-    );
-  }
-  // ... continue with send
-  ```
-- [ ] **Acceptance:** `VideoModerationEmailListener.java` throws on blank recipient; Spring listener logs exception at ERROR
-- [ ] **Verification:** 
-  - `VideoModerationEmailListenerTest` asserts `ConfigurationException` is thrown when admin alert is unset
-  - Outbox row is retained (Spring listener framework does not delete on exception)
-  - Operator sees ERROR in logs with clear diagnostic message
-- [ ] **Spec:** Throw early with clear message; let Spring listener framework handle retry + retention
+### **AC15: VideoModerationEmailListener Blank Address — Analyze Tradeoff**
+- [ ] **Current behavior:** `VideoModerationEmailListener.java` lines 46–57 check `platform.admin_alert_email` at `@PostConstruct`. If blank **and** `ARACHNID_ENABLED` is on, throws `IllegalStateException` and **aborts startup entirely**. If `ARACHNID_ENABLED` is off, continues silently.
+- [ ] **At runtime:** `adminAlertEnvelope()` line 114 checks if blank again and logs ERROR: *"platform.admin_alert_email config key is blank — admin alert NOT sent"*. Then `sendAdminAlertSync()` returns normally.
+- [ ] **Premise issue:** Story claims "no ERROR log" — but there IS one at line 115. Startup signal exists for the case that matters (CSAM detection enabled).
+- [ ] **Design decision already made:** Lines 86–89 state: *"Returning normally is deliberate: no number of re-drives fixes an unset config key, and a retained row would occupy a claim slot until a human noticed."* Throwing would directly violate this.
+- [ ] **Complication:** `adminAlertEnvelope()` helper (line 112) is called by both `sendAdminAlertSync()` (line 84) **and** `@EventListener onAdminAlert()` (line 61). Making it throw changes exception semantics for both paths — an exception out of `onAdminAlert()` propagates to whoever published the moderation event.
+- [ ] **Test impact:** `VideoModerationEmailListenerTest.blankRecipient_returnsWithoutSending()` asserts no throw; story does not call out that this test would need to be inverted.
+- [ ] **Action:** **Keep current design.** If a stronger signal is wanted, add a rate-limited WARN + a metric/counter in `adminAlertEnvelope()`, or gate the whole alert path on a "moderation configured" feature flag mirroring the existing `ARACHNID_ENABLED` guard. Do not throw.
 
-### **AC16: AC6 Outbox Retain/Delete Semantics — End-to-End Test**
-- [ ] Current state: `VideoModerationEmailListenerTest:150-173` uses mocked `JavaMailSender`; never exercises real `MailManager`
-- [ ] **Gap:** Branch logic is covered (retryable vs permanent failure) but E2E mapping from exception → `EnvelopeEntity(FAILED, isRetry)` is never tested
-- [ ] **Fix:** Add or update `ModerationOutboxIT` (or equivalent real-mail IT) to drive both paths:
-  - Retryable failure (e.g., `SmtpException`) → row retained with `isRetry=true`
-  - Permanent failure (e.g., invalid address) → row deleted
-- [ ] **Verification:** End-to-end test passes for both failure modes; mutations on the retention logic fail the test
+### **AC16: Outbox Listener Branch Coverage — Verify, Do Not Extend**
+- [ ] **Current state:** `VideoModerationEmailListenerTest` contains unit tests with mocked `MailManager` covering the branch logic:
+  - `retryableFailure*` tests: `MailManager` throws retryable exception → listener logs as retryable → row retained
+  - `permanentFailure*` tests: `MailManager` throws permanent exception → listener deletes row
+  - `sentEnvelope*` test: success path
+- [ ] **Real `MailManager` exception→flag mapping is already tested:** `MailManagerResilienceTest` pins the exact behavior (which exceptions map to `isRetry=true` vs false).
+- [ ] **Potential gap:** The listener's claim/deletion semantics (framework actually retaining/deleting rows on exception) are **framework-dependent**, not listener logic. Both unit tests and `MailManagerResilienceTest` cover the listener's responsibility; the framework's claim behavior is assumed per the outbox pattern.
+- [ ] **Integration test constraint:** Adding a real-mail IT that throws `MailException` requires mocking the mail service or using `@MockitoBean`, both of which fork the Spring context and trip `IntegrationTestConventionTest`. This is a documented blocking constraint.
+- [ ] **Action:** Verify the existing unit test coverage is sufficient. If a residual gap is identified (which exact transition, and why existing tests don't cover it), file a separate story. Do not extend this AC into an impossible IT.
 
 ### **AC17: Payment Transactional Safety — @Transactional Audit**
 - [ ] Current state: `SessionPackPaymentService.purchasePack()` is not annotated `@Transactional`
@@ -177,9 +174,14 @@ A comprehensive hardening pass across deployment scripts, infrastructure securit
 
 ---
 
-## Priority: Deploy-* Items Only vs. With Genuine Bugs
+## Scope After Code Review
 
-This story **combines both**: all 14 deploy-* security/operational gaps **plus** 3 genuine one-off bugs (AC15–AC17 above). This makes it substantial and shippable without requiring a separate story.
+This story contains 17 acceptance criteria across:
+- **Code changes:** AC1 (PGPASSWORD pattern fix), AC12 (add `continue-on-error` to deploy workflow)
+- **Documentation:** AC2–AC10, AC14, AC17 (UID comments, alert dependencies, design decisions)
+- **Deferred/No change:** AC11 (awscli v2 → separate story), AC13 (monitoring regression → drop), AC15–AC16 (current design is sound → keep as-is)
+
+The story remains substantial and deployable.
 
 ---
 
@@ -191,50 +193,40 @@ This story **combines both**: all 14 deploy-* security/operational gaps **plus**
 - **Provision:** `deploy/provision.sh`
 - **Listener:** `src/main/java/com/softropic/skillars/platform/video/service/VideoModerationEmailListener.java`
 - **Tests:** `src/test/java/.../VideoModerationEmailListenerTest.java`, `ModerationOutboxIT.java`
-- **Docs:** `docs/deployment/backup-restore.md`, `docs/deployment/runbook.md`, `docs/deployment/prerequisites.md`
+- **Docs:** `docs/deployment/backup-restore.md`, `docs/deployment/runbook.md`, `docs/deployment/first-time-setup.md`, `alerts.yml`
 
 ### Implementation Notes
-- **AC1 (PGPASSWORD — Heredoc pattern):** All four occurrences (pg-backup.sh:32, restore-from-dump.sh:135/138/142) use the same pattern:
+- **AC1 (PGPASSWORD — Environment Inheritance Pattern):** All 5 occurrences (pg-backup.sh:32, restore-from-dump.sh:134/137/143/152):
   ```bash
-  DB_PASS="..."  # from .env or config
-  docker exec -e PGPASSWORD="$(cat <<'PGPW'
-  $DB_PASS
-  PGPW
-  )" app psql -U postgres -h localhost ...
+  PGPASSWORD="${POSTGRES_PASSWORD}" docker exec -e PGPASSWORD "$APP_CID" psql -U postgres -h localhost ...
   ```
-  - Process substitution keeps credentials in-memory only
-  - Credentials never appear in `ps aux` or temp files
-  - Verify post-fix: `grep -r "docker exec -e PGPASSWORD" deploy/` returns zero
+  - The bare `-e PGPASSWORD` (no `=value` suffix) tells Docker to copy the value from its own environment
+  - The `PGPASSWORD=... cmd` prefix sets the env var, not argv — not visible in `ps aux`
+  - Works with arbitrary password characters (unlike heredoc)
+  - Verify post-fix: `grep -rE 'docker exec .*-e +PGPASSWORD=' deploy/` returns zero (grep for `=` suffix)
 
-- **AC11 (awscli v2 pin):** Update `provision.sh:131` from `apt-get install -y awscli` to `apt-get install -y awscli=2.*`
-  - Ensures consistency across all provisioning
-  - Verify: `aws --version` shows `aws-cli/2.x.x`
+- **AC11 (awscli version):** **DROPPED** — AWS CLI v2 not available in Debian/Ubuntu apt; would require official installer. Defer to separate story. Current v1 is stable.
 
-- **AC13 (Prometheus depends_on):** In `docker-compose.yml:217`, add:
-  ```yaml
-  depends_on:
-    - app
-  ```
-  - Ensures app is healthy before Prometheus starts scraping
-  - No behavior change; only startup order
+- **AC12 (Deploy Workflow Notifications):** Add `continue-on-error: true` to notification steps (lines ~128, ~139, ~151, ~167) in `.github/workflows/deploy.yml`
+  - Ensures email and explicit failure marker run even if a notification step errors
+  - Prevents cascading failures from hiding the deploy status
 
-- **AC15–AC16 (VideoModerationEmailListener):** 
-  - `VideoModerationEmailListener.sendAdminAlertSync()` checks if `platform.admin_alert_email` is blank
-  - If blank, throw `ConfigurationException` with clear message (do NOT return silently)
-  - Spring `@TransactionalEventListener` catches exception, logs ERROR, and retains outbox row
-  - `VideoModerationEmailListenerTest` asserts exception is thrown (no mock swallow)
-  - Real failure modes: `MailManager` returns retryable vs permanent → `EnvelopeEntity(FAILED, isRetry)` flag controls retention
+- **AC13 (Prometheus depends_on):** **DROPPED** — `depends_on: [app]` only waits for container start, not health. Changing to `service_healthy` creates regression (app crash → Prometheus never starts → lose monitoring). Current independent startup is correct.
+
+- **AC15 (VideoModerationEmailListener):** **KEEP CURRENT DESIGN.** Blank `platform.admin_alert_email` already logs ERROR at line 115 and aborts startup if `ARACHNID_ENABLED` is on (lines 46–57). Do not throw — would occupy outbox slot and violate existing design decision.
 
 ### Testing Strategy
-- **AC1:** Grep verification only; no functional test (credential exposure is "not happening" behavior)
-- **AC15:** Add or update `VideoModerationEmailListenerTest` to assert `ConfigurationException` is thrown on blank recipient
-- **AC16:** Real integration test with `MailManager` mock that simulates retryable and permanent failures
+- **AC1:** Grep verification only; no functional test (credential exposure is "not happening" behavior). Verify with `grep -rE 'docker exec .*-e +PGPASSWORD=' deploy/` (checks for `=` suffix)
+- **AC12:** Manual verification — trigger deploy failure and confirm: (1) notification steps execute, (2) job goes red, (3) explicit failure marker runs
+- **AC15:** Verify no changes needed — existing unit tests and `@PostConstruct` check already provide coverage. Keep current behavior.
+- **AC16:** Existing unit test coverage in `VideoModerationEmailListenerTest` and `MailManagerResilienceTest` is sufficient. Do not add new IT (blocked by convention test).
 
-### Decisions Made (By User, 2026-09-05)
-1. **AC1 — PGPASSWORD pattern:** Heredoc with process substitution (`$(cat <<'PW'...'PW')` pattern) — most secure, no temp files
-2. **AC11 — awscli version:** Pin to v2 now (`apt-get install -y awscli=2.*`) — modern, fewer edge cases
-3. **AC13 — Prometheus depends_on:** Add `depends_on: - app` — eliminates cold-start scrape failures
-4. **AC15 — admin alert misconfiguration:** Throw `ConfigurationException` on blank address — clear ERROR in logs, outbox retained by framework
+### Decisions Made (Corrected by Code Review, 2026-09-07)
+1. **AC1 — PGPASSWORD pattern:** Environment variable inheritance (`PGPASSWORD="${POSTGRES_PASSWORD}" docker exec -e PGPASSWORD "$CID" psql ...`) — works with arbitrary characters, visible only in env not argv, no temp files
+2. **AC11 — awscli version:** **DROPPED** — v2 not in Debian/Ubuntu apt. Current v1 stable. If v2 needed, requires separate story with official installer + v1-comment audit
+3. **AC12 — Deploy notification failures:** Add `continue-on-error: true` to notification steps to prevent cascading failures
+4. **AC13 — Prometheus depends_on:** **DROPPED** — `service_healthy` would cause operational regression (app crash → monitoring unavailable). Monitoring must be independent.
+5. **AC15 — admin alert misconfiguration:** **KEEP CURRENT DESIGN** — already has ERROR log and startup abort for CSAM case. Do not throw; would exhaust outbox slots and violate existing decision documented in code
 
 ---
 
