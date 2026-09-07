@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.outbox.config;
 
 import com.softropic.skillars.infrastructure.threadpool.ExecutorShutdown;
+import com.softropic.skillars.infrastructure.threadpool.GracefulShutdownTaskExecutor;
 import com.softropic.skillars.infrastructure.threadpool.MdcDecorator;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -38,7 +39,7 @@ public class OutboxConfig {
     @Bean(name = "outboxDrainPool")
     @ConditionalOnProperty(name = "app.outbox.drain-async", havingValue = "true", matchIfMissing = true)
     public Executor outboxDrainPool() {
-        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        ThreadPoolTaskExecutor executor = new GracefulShutdownTaskExecutor();
         executor.setCorePoolSize(1);
         executor.setMaxPoolSize(2);
         executor.setQueueCapacity(50);

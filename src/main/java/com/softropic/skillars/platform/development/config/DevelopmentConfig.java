@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.development.config;
 
 import com.softropic.skillars.infrastructure.exception.AppSetupException;
 import com.softropic.skillars.infrastructure.threadpool.ExecutorShutdown;
+import com.softropic.skillars.infrastructure.threadpool.GracefulShutdownTaskExecutor;
 import com.softropic.skillars.infrastructure.threadpool.MdcDecorator;
 import jakarta.annotation.PostConstruct;
 import jakarta.persistence.EntityManager;
@@ -64,7 +65,7 @@ public class DevelopmentConfig {
     // without a Spring context, exactly as it does for the other four. Matches its four siblings.
     @Bean(name = "sluRetryExecutor")
     public ThreadPoolTaskExecutor sluRetryExecutor() {
-        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        ThreadPoolTaskExecutor executor = new GracefulShutdownTaskExecutor();
         executor.setCorePoolSize(2);
         executor.setMaxPoolSize(4);
         executor.setQueueCapacity(10);
@@ -103,7 +104,7 @@ public class DevelopmentConfig {
      */
     @Bean(name = "reportExecutor")
     public ThreadPoolTaskExecutor reportExecutor() {
-        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        ThreadPoolTaskExecutor executor = new GracefulShutdownTaskExecutor();
         executor.setCorePoolSize(2);
         executor.setMaxPoolSize(4);
         executor.setQueueCapacity(50);

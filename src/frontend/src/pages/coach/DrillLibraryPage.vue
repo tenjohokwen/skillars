@@ -258,12 +258,11 @@ function openDetail(drill) {
   sessionStore.selectedDrill = drill
 }
 
-// Story Deferred-75 AC9: on a video playback error (e.g. an expired signed URL), refetch the
-// current tab's drill list to get a fresh URL. Calls fetchDrills directly rather than onTabChange,
-// which also resets search/filters — a background recovery refetch should not silently clear
-// whatever the coach was searching for.
+// skillars-deferred-99 AC14: the first video load failure is a silent one-shot retry — refetch
+// the current tab's drill list for a fresh signed URL (fetchDrills directly, not onTabChange,
+// so the coach's search/filters are not cleared). The DrillCard/DrillDetailPanel shows the toast
+// and the inline "unavailable" tile itself if the retry's fresh URL also fails.
 function handleVideoError() {
-  $q.notify({ type: 'warning', message: t('session.drillLibrary.videoLoadFailed') })
   sessionStore.fetchDrills(selectedLibrary.value)
 }
 

@@ -317,10 +317,10 @@ async function fetchDrills() {
   await sessionStore.searchDrills(selectedLibrary.value)
 }
 
-// Deferred-81 AC2: the drill/session video player previously refetched silently on a load
-// failure, leaving the video visibly broken with no explanation while the refetch ran.
+// skillars-deferred-99 AC14: first video load failure → silent one-shot refetch for a fresh
+// signed URL. The DrillCard/DrillDetailPanel owns the toast + inline "unavailable" state if the
+// retry also fails.
 function handleVideoError() {
-  $q.notify({ type: 'warning', message: t('session.drillLibrary.videoLoadFailed') })
   fetchDrills()
 }
 

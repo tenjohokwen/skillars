@@ -166,12 +166,15 @@ public final class ExecutorShutdown {
     public static final int STORAGE_UPLOAD_SECONDS = 5;
 
     /**
-     * The short second wait after {@code shutdownNow()} in {@link #gracefulFixedPool}. Not part of the
-     * budget arithmetic above in any meaningful sense: it is only reached once the pool has already
-     * blown its whole slice, and it exists to log whether the interrupt actually took, not to give the
-     * tasks more time.
+     * The short second wait after {@code shutdownNow()} in {@link #gracefulFixedPool} and, since
+     * skillars-deferred-99 AC2, in {@link GracefulShutdownTaskExecutor} for the six
+     * {@code ThreadPoolTaskExecutor} pools. Not part of the budget arithmetic above in any meaningful
+     * sense: it is only reached once a pool has already blown its whole slice, and it exists to log
+     * whether the interrupt actually took, not to give the tasks more time. Six pools escalating adds
+     * ≤ {@code 6 * this} seconds, which is why it must stay small and why adding a pool means
+     * rechecking {@code stop_grace_period}.
      */
-    static final int FORCED_TERMINATION_SECONDS = 1;
+    static final int FORCED_TERMINATION_SECONDS = 2; // skillars-deferred-99 AC2: increased from 1 to allow cleanup responses
 
     private ExecutorShutdown() {
     }
@@ -246,11 +249,22 @@ public final class ExecutorShutdown {
      * {@code setRejectedExecutionHandler} sat after {@code afterPropertiesSet()} and silently had no
      * effect for the life of the bean.
      *
+     * <p>skillars-deferred-99 AC2: the six {@code ThreadPoolTaskExecutor} pools are now created as
+     * {@link GracefulShutdownTaskExecutor}, whose {@code shutdown()} escalates to {@code shutdownNow()}
+     * plus a {@value #FORCED_TERMINATION_SECONDS}-second wait once {@code awaitSeconds} is spent —
+     * previously only {@link #gracefulFixedPool} (the raw {@code storageUploadExecutor}) did that, and
+     * a {@code ThreadPoolTaskExecutor} task outliving its budget kept running non-daemon against a
+     * torn-down context. {@code ExecutorShutdownConfigurationTest} fails the build on a pool that is a
+     * plain {@code ThreadPoolTaskExecutor}. The escalation adds ≤ 6 s across all six pools, inside the
+     * ~7 s {@code stop_grace_period} headroom.
+     *
      * @param awaitSeconds this pool's slice of the budget documented on this class
      */
     public static void configureGracefulShutdown(ThreadPoolTaskExecutor executor, int awaitSeconds) {
         // shutdown() rather than shutdownNow(): queued tasks run to completion instead of being
-        // discarded, and in-flight tasks are not interrupted mid-write.
+        // discarded, and in-flight tasks are not interrupted mid-write. GracefulShutdownTaskExecutor
+        // then escalates to shutdownNow() after awaitSeconds so a task that ignores the budget does
+        // not outlive the context (skillars-deferred-99 AC2).
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(awaitSeconds);
     }

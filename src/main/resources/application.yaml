@@ -172,6 +172,30 @@ loki:
 app:
   environment: ${ENVIRONMENT:prod}
   version: ${APP_VERSION:unknown}
+  # skillars-deferred-99 AC5 — SmtpHealthIndicator tuning. Defaults live in SmtpHealthProperties;
+  # listed here for discoverability. `ttl` caps how often the aggregate SMTP Health is recomputed;
+  # `overall-timeout` (unset ⇒ max(connect+read)+1s) bounds one round of parallel per-provider probes.
+  notification:
+    smtp-health:
+      ttl: 60s
+      # overall-timeout: 11s
+      probe-pool-size: 4
+  # skillars-deferred-99 AC9 — retention prune for development.player_slu_weekly_snapshot_applied.
+  # Markers only need to outlive the write-retry window (minutes); the 90-day floor is generous.
+  slu:
+    snapshot-applied:
+      retention-days: 90
+      prune-cron: "0 30 3 * * *"
+  # skillars-deferred-99 AC16 — per-market phone validation. Default is permissive international
+  # (optional +, 7–15 digits). Add markets.<CODE>.{pattern,hint-key} to tighten a specific market.
+  validation:
+    phone:
+      default-pattern: "^\\+?\\d{7,15}$"
+      default-hint-key: validation.phone.hintDefault
+      # markets:
+      #   CM:
+      #     pattern: "^(\\+237|00237)?6\\d{8}$"
+      #     hint-key: validation.phone.hintDefault
   # Tomcat access log, emitted via SLF4J by Slf4jAccessLogValve (see AccessLogConfig) rather than
   # written to a file, so entries reach the console JSON appender and Loki like any other log
   # event. `pattern` is standard Tomcat access-log syntax, carried over verbatim from the old

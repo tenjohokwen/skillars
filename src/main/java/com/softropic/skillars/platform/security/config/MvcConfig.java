@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.security.config;
 
+import com.softropic.skillars.infrastructure.i18n.WarnOnMissingMessageSource;
 import org.springframework.context.MessageSource;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -58,7 +59,7 @@ public class MvcConfig implements WebMvcConfigurer {
 
     @Bean
     public MessageSource messageSource() {
-        final ReloadableResourceBundleMessageSource messageSource = new ReloadableResourceBundleMessageSource();
+        final ReloadableResourceBundleMessageSource messageSource = new WarnOnMissingMessageSource();
         messageSource.setBasenames("classpath:/i18n/messages");
         messageSource.setDefaultEncoding("UTF-8");
         // skillars-deferred-92 AC12.4. Default is TRUE, which makes fallback resolution depend on the
@@ -67,6 +68,12 @@ public class MvcConfig implements WebMvcConfigurer {
         // a key missing from messages_de/messages_fr resolves deterministically from
         // messages.properties (brought to full parity by AC12) on every host.
         messageSource.setFallbackToSystemLocale(false);
+        // skillars-deferred-99 AC3. Parity of the four static bundles is enforced by
+        // MessageBundleParityTest, so a runtime NoSuchMessageException can now only come from a
+        // dynamically-constructed code (getMessage(prefix + var, ...)) that no build-time literal
+        // scan can see. useCodeAsDefaultMessage turns that from a 500 into "the code shown to the
+        // user"; WarnOnMissingMessageSource logs one (bounded) WARN so it is still visible to ops.
+        messageSource.setUseCodeAsDefaultMessage(true);
         //messageSource.setCacheSeconds(propertyResolver.getProperty("cache-seconds", Integer.class, -1));
         return messageSource;
     }

@@ -42,7 +42,24 @@ public class QuotaService implements QuotaProvider {
         VideoQuota quota = videoQuotaRepository.findById(ownerId)
             .orElseThrow(() -> new IllegalStateException("video_quotas row missing after init for: " + ownerId));
         long activeReservedBytes = reservationRepository.sumActiveReservedBytes(ownerId);
-        return quota.getStorageUsedBytes() + activeReservedBytes + requestedBytes <= storageQuota;
+        return !exceedsQuota(quota.getStorageUsedBytes(), activeReservedBytes, requestedBytes, storageQuota);
+    }
+
+    /**
+     * True if {@code used + reserved + requested} exceeds {@code limit}. skillars-deferred-99 AC11:
+     * uses {@link Math#addExact} so a {@code long} overflow — theoretical at ~9.2 EB, not a normal
+     * over-quota request — surfaces as an ERROR plus a {@code QUOTA_EXCEEDED}-class rejection instead
+     * of wrapping negative and silently <em>passing</em> the check.
+     */
+    private boolean exceedsQuota(long used, long reserved, long requested, long limit) {
+        try {
+            return Math.addExact(Math.addExact(used, reserved), requested) > limit;
+        } catch (ArithmeticException overflow) {
+            log.error("Quota arithmetic overflow (used={} reserved={} requested={} limit={}) — treating "
+                + "as over-quota; this is a quota-tracking or config bug, not a normal request",
+                used, reserved, requested, limit);
+            return true;
+        }
     }
 
     @Override
@@ -72,7 +89,7 @@ public class QuotaService implements QuotaProvider {
         // 4. Check against tier quota including in-flight ACTIVE reservations (serialised by the FOR UPDATE above)
         long storageQuota = quotaConfigService.getStorageQuotaBytes(ownerId);
         long activeReservedBytes = reservationRepository.sumActiveReservedBytes(ownerId);
-        if (storageQuota == 0 || quota.getStorageUsedBytes() + activeReservedBytes + bytes > storageQuota) {
+        if (storageQuota == 0 || exceedsQuota(quota.getStorageUsedBytes(), activeReservedBytes, bytes, storageQuota)) {
             throw new QuotaExceededException(ownerId, storageQuota, bytes);
         }
         // 5. Insert reservation with videoType populated (null = no type constraint)

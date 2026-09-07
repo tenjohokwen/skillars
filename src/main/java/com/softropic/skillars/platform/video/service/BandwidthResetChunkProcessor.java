@@ -1,11 +1,17 @@
 package com.softropic.skillars.platform.video.service;
 
+import com.softropic.skillars.infrastructure.util.ClockProvider;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.YearMonth;
+import java.time.ZoneOffset;
 
 /**
  * Resets one bounded chunk of {@code main.video_quotas} in its own short transaction
@@ -50,13 +56,13 @@ public class BandwidthResetChunkProcessor {
      * and makes it safely resumable after a crash mid-run — the next run simply finishes the rows the
      * previous one did not reach, with no double-reset.
      *
-     * <p>AC9.2 asks that this be <em>verified</em> rather than assumed, because it leans on the same
-     * column {@code Def8} records as drifting: {@code bandwidth_period_start} is stamped with the
-     * actual run date rather than the period boundary. The two are compatible — a row stamped
-     * mid-January still has {@code DATE_TRUNC('month', ...)} of January, so in February it is still
-     * selected, and once reset in February it is not. Def8's drift changes <em>when in the month</em>
-     * the period nominally starts; it does not change which month the predicate sees. Def8 is
-     * explicitly out of scope and is not touched here.
+     * <p>skillars-deferred-99 AC12 (was {@code Def8}): {@code bandwidth_period_start} is now stamped
+     * with the <strong>calendar first-of-month at 00:00 UTC</strong>
+     * ({@code YearMonth.now(clock).atDay(1)...}), not {@code NOW()} on the actual run date, so a
+     * job that fires late does not permanently shift the monthly boundary forward. Both the SET
+     * value and the predicate's "current month" comparison are bound parameters derived from one
+     * captured {@link ClockProvider} instant, which also makes the self-exclusion deterministic
+     * under a pinned test clock (with {@code NOW()} the predicate compared against real wall time).
      *
      * <p>{@code ORDER BY user_id} makes the chunking deterministic rather than dependent on scan
      * order, so a crash and re-run cannot interleave oddly.
@@ -64,11 +70,11 @@ public class BandwidthResetChunkProcessor {
     private static final String CHUNK_SQL = """
         UPDATE main.video_quotas
            SET bandwidth_used_bytes = 0,
-               bandwidth_period_start = NOW()
+               bandwidth_period_start = ?
          WHERE user_id IN (
                SELECT user_id
                  FROM main.video_quotas
-                WHERE DATE_TRUNC('month', bandwidth_period_start) < DATE_TRUNC('month', NOW())
+                WHERE DATE_TRUNC('month', bandwidth_period_start) < DATE_TRUNC('month', CAST(? AS timestamptz))
                 ORDER BY user_id
                 LIMIT %d
          )
@@ -81,6 +87,9 @@ public class BandwidthResetChunkProcessor {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public int resetChunk() {
-        return jdbcTemplate.update(CHUNK_SQL);
+        Instant now = Instant.now(ClockProvider.getClock());
+        Instant periodStart = YearMonth.from(now.atZone(ZoneOffset.UTC))
+            .atDay(1).atStartOfDay(ZoneOffset.UTC).toInstant();
+        return jdbcTemplate.update(CHUNK_SQL, Timestamp.from(periodStart), Timestamp.from(now));
     }
 }

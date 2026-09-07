@@ -29,6 +29,7 @@
         @add-to-session="emit('add-drill', drill)"
         @open-detail="emit('open-detail', drill)"
         @video-error="emit('video-error')"
+        @video-load-failed="emit('video-load-failed', $event)"
       />
     </div>
   </div>
@@ -44,6 +45,6 @@ defineProps({
   isPersonalized: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['close', 'add-drill', 'open-detail', 'video-error'])
+const emit = defineEmits(['close', 'add-drill', 'open-detail', 'video-error', 'video-load-failed'])
 const { t } = useI18n()
 </script>

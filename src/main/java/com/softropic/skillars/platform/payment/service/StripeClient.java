@@ -45,6 +45,20 @@ public class StripeClient {
         return Refund.create(params);
     }
 
+    /**
+     * Creates a Stripe Refund under a caller-supplied idempotency key. skillars-deferred-99 AC1:
+     * the pack-purchase compensating refund can be re-attempted (a caller retry, or an operator
+     * re-driving a recorded failure), and re-issuing a refund double-credits the parent. A stable
+     * key per {@code paymentIntentId} lets Stripe replay the original refund instead of creating a
+     * second one.
+     */
+    public Refund createRefund(RefundCreateParams params, String idempotencyKey) throws StripeException {
+        RequestOptions options = RequestOptions.builder()
+            .setIdempotencyKey(idempotencyKey)
+            .build();
+        return Refund.create(params, options);
+    }
+
     public SetupIntent createSetupIntent(SetupIntentCreateParams params) throws StripeException {
         return SetupIntent.create(params);
     }

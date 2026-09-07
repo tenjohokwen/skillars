@@ -4,74 +4,55 @@ import jakarta.validation.ConstraintValidator;
 import jakarta.validation.ConstraintValidatorContext;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.regex.Pattern;
+
 import static net.logstash.logback.argument.StructuredArguments.kv;
 
 /**
- * Bean Validation constraint validator for Cameroon mobile numbers.
- * Validates a phone number String using CamMobileValidator logic.
+ * Bean Validation constraint validator for phone numbers.
  *
- * This validator is used with the @CamPhone annotation and integrates
- * with Spring's validation framework to produce field-level errors
- * that are properly returned in the API response.
+ * <p><strong>skillars-deferred-99 AC16:</strong> no longer Cameroon-specific. The rule is
+ * config-driven per market — {@code app.validation.phone} ({@link PhoneValidationProperties}),
+ * resolved through {@link PhoneRuleRegistry}/{@link MarketResolver} — defaulting to a permissive
+ * international pattern (optional leading {@code +}, 7–15 digits). The annotation keeps its
+ * {@code @CamPhone} name to avoid churning every DTO that references it; the name is now a misnomer.
+ *
+ * <p>Emits the project's pipe-template violation message ({@code key|fallback}) so {@code ApiAdvice}
+ * can localise it, per the {@code deferred-18} lesson about bare {@code {...}} templates.
  */
 @Slf4j
 public class CamPhoneValidator implements ConstraintValidator<CamPhone, String> {
 
     @Override
-    public void initialize(CamPhone constraintAnnotation) {
-        // No initialization needed
-    }
-
-    @Override
     public boolean isValid(String phone, ConstraintValidatorContext context) {
-        // Null or empty values are valid (use @NotNull/@NotBlank for required fields)
+        // Null / empty is valid here — use @NotNull / @NotBlank for required fields.
         if (phone == null || phone.isBlank()) {
             return true;
         }
 
-        try {
-            // Use the existing CamMobileValidator to validate the number
-            CamMobileValidator.validate(phone);
+        String normalized = phone.replaceAll("\\s+", "");
+        Pattern pattern = resolvePattern();
+        if (pattern.matcher(normalized).matches()) {
             return true;
-        } catch (CamMobileValidator.InvalidMobileNumberException e) {
-            // Map the error code to a user-friendly message key and fallback
-            String[] msgParts = mapErrorCodeToMessage(e.getErrorCode());
-            addConstraintViolation(context, msgParts[0], msgParts[1]);
-            return false;
-        }
-    }
-
-    /**
-     * Maps CamMobileValidator error codes to i18n message keys and fallback messages.
-     * Returns array: [messageKey, fallbackMessage]
-     */
-    private String[] mapErrorCodeToMessage(com.softropic.skillars.infrastructure.exception.ErrorCode errorCode) {
-        if (errorCode == null) {
-            return new String[]{"validation.phone.invalid", "Invalid phone number format"};
         }
 
-        return switch (errorCode.getErrorCode()) {
-            case "CAMO_BLANK_NO" -> new String[]{"validation.phone.blank", "Phone number cannot be blank"};
-            case "CAMO_INVALID_DIGIT_COUNT" -> new String[]{"validation.phone.digitCount", "Phone number must have exactly 9 digits"};
-            case "CAMO_INVALID_FIRST_DIGIT" -> new String[]{"validation.phone.firstDigit", "Phone number must start with digit 6"};
-            case "CAMO_INVALID_NO" -> new String[]{"validation.phone.invalid", "Invalid phone number format"};
-            case "CAMO_INVALID_OPERATOR" -> new String[]{"validation.phone.operator", "Phone number does not match any valid operator (MTN, Orange, NextTel)"};
-            default -> new String[]{"validation.phone.invalid", "Invalid phone number format"};
-        };
-    }
-
-    /**
-     * Adds a custom constraint violation with the specified message key.
-     * Format: "messageKey|fallbackMessage" to preserve both for ApiAdvice processing.
-     */
-    private void addConstraintViolation(ConstraintValidatorContext context, String messageKey, String fallbackMessage) {
         context.disableDefaultConstraintViolation();
-        // Use pipe separator to pass both key and fallback to ApiAdvice
-        context.buildConstraintViolationWithTemplate(messageKey + "|" + fallbackMessage)
-               .addConstraintViolation();
+        context.buildConstraintViolationWithTemplate(
+                "validation.phone.invalid|Invalid phone number format")
+            .addConstraintViolation();
         log.warn("Phone validation failed",
-                kv("operation", "phone_validation"),
-                kv("reason", messageKey),
-                kv("status", "INVALID"));
+            kv("operation", "phone_validation"),
+            kv("reason", "validation.phone.invalid"),
+            kv("status", "INVALID"));
+        return false;
+    }
+
+    private Pattern resolvePattern() {
+        PhoneRuleRegistry registry = PhoneRuleRegistry.current();
+        if (registry == null) {
+            // No Spring context (a hand-instantiated validator in a unit test) — permissive default.
+            return PhoneRuleRegistry.DEFAULT_FALLBACK_PATTERN;
+        }
+        return registry.ruleFor(null).pattern();
     }
 }

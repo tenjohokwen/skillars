@@ -108,6 +108,63 @@ class ExecutorShutdownConfigurationTest {
     }
 
     /**
+     * skillars-deferred-99 AC2. {@code configureGracefulShutdown} only sets await fields; Spring's
+     * {@code awaitTerminationIfNecessary()} then waits {@code n} seconds, logs at WARN, and
+     * <em>returns</em> — a task outliving the budget kept running non-daemon against a torn-down
+     * context. Every {@code ThreadPoolTaskExecutor} pool must be a {@link GracefulShutdownTaskExecutor}
+     * so {@code shutdown()} escalates to {@code shutdownNow()}. A new pool declared as a plain
+     * {@code ThreadPoolTaskExecutor} fails here.
+     */
+    @Test
+    @DisplayName("every ThreadPoolTaskExecutor pool escalates to shutdownNow() after its budget")
+    void everyPoolIsAGracefulShutdownTaskExecutor() {
+        pools().forEach((name, pool) ->
+            assertThat(pool)
+                .as("%s must be a GracefulShutdownTaskExecutor — a plain ThreadPoolTaskExecutor only "
+                    + "logs when its await budget expires and leaves the task running", name)
+                .isInstanceOf(GracefulShutdownTaskExecutor.class));
+    }
+
+    /**
+     * The escalation itself, asserted directly and fast: a task that sleeps far past the pool's
+     * 1-second await budget must be interrupted by {@code shutdownNow()}, not merely logged about.
+     * Load-bearing by construction — without the escalation the pool is still not terminated when
+     * the assertion runs.
+     */
+    @Test
+    @DisplayName("GracefulShutdownTaskExecutor interrupts a task that outlives its await budget")
+    void gracefulShutdownTaskExecutor_forcesTerminationAfterItsBudget() throws Exception {
+        GracefulShutdownTaskExecutor pool = new GracefulShutdownTaskExecutor();
+        pool.setCorePoolSize(1);
+        pool.setMaxPoolSize(1);
+        pool.setQueueCapacity(4);
+        pool.setThreadNamePrefix("test-tpte-overrun-");
+        ExecutorShutdown.configureGracefulShutdown(pool, 1);
+        pool.initialize();
+
+        CountDownLatch started = new CountDownLatch(1);
+        AtomicBoolean interrupted = new AtomicBoolean(false);
+        pool.submit(() -> {
+            started.countDown();
+            try {
+                Thread.sleep(30_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                interrupted.set(true);
+            }
+        });
+        assertThat(started.await(5, TimeUnit.SECONDS)).as("task must have started").isTrue();
+
+        pool.shutdown();
+
+        assertThat(pool.getThreadPoolExecutor().isTerminated())
+            .as("after its 1s await budget, shutdown() must shutdownNow() rather than leave a "
+                + "non-daemon worker running against a torn-down context")
+            .isTrue();
+        assertThat(interrupted).as("the overrunning task must have been interrupted").isTrue();
+    }
+
+    /**
      * AC3.3. {@code sendMailPool} called {@code setRejectedExecutionHandler} <em>after</em>
      * {@code afterPropertiesSet()}. {@code afterPropertiesSet()} → {@code initialize()} builds the
      * underlying {@code ThreadPoolExecutor} from the fields set so far, so the later setter mutated

@@ -4,6 +4,7 @@ package com.softropic.skillars.platform.notification.config;
 
 
 import com.softropic.skillars.infrastructure.threadpool.ExecutorShutdown;
+import com.softropic.skillars.infrastructure.threadpool.GracefulShutdownTaskExecutor;
 import com.softropic.skillars.infrastructure.threadpool.MdcDecorator;
 
 import net.javacrumbs.shedlock.spring.annotation.EnableSchedulerLock;
@@ -36,7 +37,7 @@ import io.micrometer.core.instrument.Tag;
 public class AsyncConfig {
     @Bean(name = "moderationTaskExecutor")
     public Executor moderationTaskExecutor() {
-        ThreadPoolTaskExecutor taskExecutor = new ThreadPoolTaskExecutor();
+        ThreadPoolTaskExecutor taskExecutor = new GracefulShutdownTaskExecutor();
         taskExecutor.setCorePoolSize(2);
         taskExecutor.setQueueCapacity(200);
         taskExecutor.setMaxPoolSize(5);
@@ -52,7 +53,7 @@ public class AsyncConfig {
 
     @Bean(name = "sendMailPool")
     public Executor threadPoolTaskExecutor() {
-        ThreadPoolTaskExecutor taskExecutor = new ThreadPoolTaskExecutor();
+        ThreadPoolTaskExecutor taskExecutor = new GracefulShutdownTaskExecutor();
         taskExecutor.setCorePoolSize(3);
         taskExecutor.setQueueCapacity(10);
         taskExecutor.setMaxPoolSize(10);

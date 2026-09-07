@@ -72,7 +72,7 @@ export default {
       'Clé de réinitialisation invalide ou manquante. Veuillez demander une nouvelle réinitialisation.',
     verifyTokenMissing:
       'Aucun jeton de vérification trouvé. Veuillez vérifier le lien reçu par e-mail.',
-    phoneHintFormat: '9 chiffres commençant par 6 (par ex. 670123456)',
+    phoneHintFormat: "Indiquez l'indicatif du pays, par ex. +1 555 0100",
     accountNotVerified:
       "Votre compte n'est pas encore vérifié. Veuillez d'abord finaliser la vérification téléphonique.",
     accountLocked: 'Trop de tentatives de connexion. Veuillez réessayer dans quelques minutes.',
@@ -92,7 +92,7 @@ export default {
     firstName: 'Prénom',
     lastName: 'Nom',
     phone: 'Numéro de téléphone',
-    nationalId: 'Numéro CNI',
+    nationalId: "Numéro de pièce d'identité ou de passeport",
     dateOfBirth: 'Date de naissance',
     gender: 'Genre',
     male: 'Homme',
@@ -383,6 +383,7 @@ export default {
       title: "Bibliothèque d'exercices",
       loadError: 'Échec du chargement des exercices. Veuillez réessayer.',
       videoLoadFailed: 'Échec du chargement de la vidéo — actualisation en cours…',
+      videoUnavailable: 'Vidéo indisponible',
       platformTab: 'Bibliothèque de la plateforme',
       myLibraryTab: 'Ma bibliothèque',
       searchPlaceholder: 'Rechercher des exercices...',

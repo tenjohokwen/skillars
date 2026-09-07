@@ -48,7 +48,7 @@ class PessimisticLockRetryerTest {
 
     @BeforeEach
     void setUp() {
-        retryer = new PessimisticLockRetryer();
+        retryer = new PessimisticLockRetryer(new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
         ReflectionTestUtils.setField(retryer, "entityManager", entityManager);
         ReflectionTestUtils.setField(retryer, "maxAttempts", 3);
         ReflectionTestUtils.setField(retryer, "initialBackoffMs", 5L);
@@ -121,6 +121,52 @@ class PessimisticLockRetryerTest {
         verify(connection, times(3)).setSavepoint();
         verify(connection, times(2)).rollback(savepoint);
         verify(connection, never()).releaseSavepoint(any(Savepoint.class));
+    }
+
+    @Test
+    void instrumentsContention_timerAndRetryCounterRecorded() throws Exception {
+        stubSessionAndConnectionPlumbing();
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+            new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        retryer = new PessimisticLockRetryer(registry);
+        ReflectionTestUtils.setField(retryer, "entityManager", entityManager);
+        ReflectionTestUtils.setField(retryer, "maxAttempts", 3);
+        ReflectionTestUtils.setField(retryer, "initialBackoffMs", 1L);
+        ReflectionTestUtils.setField(retryer, "maxBackoffMs", 2L);
+        ReflectionTestUtils.setField(retryer, "backoffMultiplier", 1.5);
+        AtomicInteger calls = new AtomicInteger();
+
+        retryer.withBoundedRetry(() -> {
+            if (calls.incrementAndGet() == 1) {
+                throw new PessimisticLockingFailureException("row locked");
+            }
+            return "ok";
+        });
+
+        assertThat(registry.get("persistence.lock_retry").tag("outcome", "success").timer().count())
+            .isEqualTo(1);
+        assertThat(registry.get("persistence.lock_retry.retries").counter().count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void instrumentsExhaustion_timerTaggedExhausted() throws Exception {
+        stubSessionAndConnectionPlumbing();
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+            new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        retryer = new PessimisticLockRetryer(registry);
+        ReflectionTestUtils.setField(retryer, "entityManager", entityManager);
+        ReflectionTestUtils.setField(retryer, "maxAttempts", 2);
+        ReflectionTestUtils.setField(retryer, "initialBackoffMs", 1L);
+        ReflectionTestUtils.setField(retryer, "maxBackoffMs", 2L);
+        ReflectionTestUtils.setField(retryer, "backoffMultiplier", 1.5);
+
+        assertThatThrownBy(() -> retryer.withBoundedRetry(() -> {
+            throw new PessimisticLockingFailureException("row locked");
+        })).isInstanceOf(PessimisticLockingFailureException.class);
+
+        assertThat(registry.get("persistence.lock_retry").tag("outcome", "exhausted").timer().count())
+            .isEqualTo(1);
+        assertThat(registry.get("persistence.lock_retry.exhausted").counter().count()).isEqualTo(1.0);
     }
 
     @Test

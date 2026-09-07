@@ -3,15 +3,20 @@
     <!-- Video / Thumbnail area -->
     <div class="drill-card__media" @click="emit('open-detail')">
       <video
-        v-if="drill.hasVideo && drill.videoUrl && !prefersReducedMotion"
+        v-if="drill.hasVideo && drill.videoUrl && !prefersReducedMotion && !videoFailed"
         autoplay
         muted
         loop
         playsinline
         class="drill-card__video"
+        :key="drill.videoUrl"
         :src="drill.videoUrl"
         @error="handleVideoError"
       />
+      <div v-else-if="drill.hasVideo && videoFailed" class="drill-card__no-video">
+        <q-icon name="videocam_off" size="48px" />
+        <div class="text-caption q-mt-xs">{{ t('session.drillLibrary.videoUnavailable') }}</div>
+      </div>
       <div v-else-if="drill.hasVideo" class="drill-card__thumbnail">
         <q-icon name="play_circle" size="48px" class="drill-card__play-icon" />
       </div>
@@ -173,6 +178,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { useSessionStore } from 'src/stores/session.store'
+import { useDrillVideoPlayback } from 'src/composables/useDrillVideoPlayback'
 
 const props = defineProps({
   drill: { type: Object, required: true },
@@ -186,22 +192,18 @@ const emit = defineEmits([
   'add-to-session',
   'assign',
   'video-error',
+  'video-load-failed',
 ])
 
 const { t } = useI18n()
 const $q = useQuasar()
 const sessionStore = useSessionStore()
 
-// Story Deferred-75 AC9: signed drill-video URLs expire after 2h server-side. On a native <video>
-// error (e.g. an expired URL), emit once so the parent — which owns the correct refresh action for
-// its own data source (sessionStore, builderStore, or homeworkStore, depending on context) — can
-// refetch. Guarded to fire at most once per mount to avoid a retry loop if the refetch doesn't help.
-const videoErrorEmitted = ref(false)
-function handleVideoError() {
-  if (videoErrorEmitted.value) return
-  videoErrorEmitted.value = true
-  emit('video-error')
-}
+// skillars-deferred-99 AC14: signed drill-video URLs expire after 2h server-side. On a native
+// <video> error, retry once with a fresh URL (emit `video-error` → parent refetches), and if the
+// retry also fails, show a dismissible toast + an inline "unavailable" tile and stop. Never loops;
+// navigation-away safe (see the composable).
+const { videoFailed, handleVideoError } = useDrillVideoPlayback(() => props.drill?.id, emit)
 
 // Reduced motion — reactive, updated when OS preference changes
 const prefersReducedMotion = ref(false)

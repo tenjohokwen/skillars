@@ -351,6 +351,49 @@ class MigrationConventionLintTest {
     }
 
     /**
+     * skillars-deferred-99 AC7 — the {@code \b} anchoring must hold for <em>underscore-adjacent</em>
+     * names: a dropped {@code player_session_id} must not be seen as "referenced" by a file that only
+     * mentions {@code player_session_id_new} (a different column), because {@code _} is a word
+     * character so there is no boundary between {@code id} and {@code _new}. The control below shows
+     * the same file with the bare token does fire, so this proves the anchoring, not just absence.
+     */
+    @Test
+    @DisplayName("AC7: an underscore-adjacent longer name is not a match for the dropped identifier")
+    void referenceScan_underscoreAdjacentName_isNotAMatch() throws IOException {
+        // Two distinct source dirs — MigrationLint memoises the corpus per root list, so re-reading a
+        // mutated dir would return the stale first read (skillars-deferred-99 AC7 corpus cache).
+        Path tmpSrcLonger = Files.createTempDirectory("migration-lint-underscore-src-a");
+        Path tmpSrcBare = Files.createTempDirectory("migration-lint-underscore-src-b");
+        Path tmpMig = Files.createTempDirectory("migration-lint-underscore-mig");
+        try {
+            Files.writeString(tmpMig.resolve("V1__drop_player_session_id.sql"),
+                "-- migration-lint: drop-prepared-in: V0\n"
+                    + "SET lock_timeout = '5s';\n"
+                    + "ALTER TABLE main.player_session DROP COLUMN IF EXISTS player_session_id;\n");
+
+            // Only the longer, distinct column name — never the dropped token on its own.
+            Files.writeString(tmpSrcLonger.resolve("Reader.java"),
+                "package fixtures;\n"
+                    + "class Reader { String q = \"SELECT player_session_id_new FROM main.player_session\"; }\n");
+            assertThat(MigrationLint.lint(tmpMig, 0, 0, MigrationLint.ALL_KNOWN_AT_HEAD, List.of(tmpSrcLonger)))
+                .as("player_session_id_new must not count as a live reference to player_session_id")
+                .isEmpty();
+
+            // Control: the bare token in the same context must be caught.
+            Files.writeString(tmpSrcBare.resolve("Reader.java"),
+                "package fixtures;\n"
+                    + "class Reader { String q = \"SELECT player_session_id FROM main.player_session\"; }\n");
+            assertThat(MigrationLint.lint(tmpMig, 0, 0, MigrationLint.ALL_KNOWN_AT_HEAD, List.of(tmpSrcBare)))
+                .as("the bare dropped token in a live reader must still fire")
+                .anyMatch(v -> v.rule() == MigrationLint.Rule.DROP_WITHOUT_PRIOR_RELEASE_PREP);
+        } finally {
+            deleteRecursively(tmpSrcLonger);
+            deleteRecursively(tmpSrcBare);
+            deleteRecursively(tmpMig);
+        }
+    }
+
+    /**
      * AC11.1 is only meaningful if the balanced-paren clause split does not also break the
      * <em>correct</em> spelling. {@code V812} carries two constraints, each with its own
      * {@code NOT VALID}, and both {@code CHECK} bodies contain commas — the exact shape a naive split

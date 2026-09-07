@@ -1312,6 +1312,14 @@ applied consistently across all three moderation layers (Arachnid, VideoIntel, G
 locking. SSE + polling fallback is specified once in `useSseConnection.js` composable and
 reused across booking, video, and messaging status displays.
 
+`PessimisticLockRetryer` retries a `NO_WAIT` locked read in place via a JDBC savepoint
+(declarative `Propagation.NESTED` is unavailable — `DefaultJpaDialect` reports no savepoint
+support). **Sized tradeoff:** the retry loop sleeps while still holding the caller's pooled
+JDBC connection, up to a worst-case ~3.2s under contention (`app.locking.retry.*`); accepted
+because every call site is a short read-then-maybe-refresh. Observable via the
+`persistence.lock_retry` timer (tag `outcome`) — watch its p99 against the HikariCP pool size
+if a new, longer call site is added (skillars-deferred-99 AC10).
+
 **Structure Alignment:**
 The project structure directly mirrors the module map. Every platform module has a
 matching `pages/` group in the frontend. Integration points (events, webhook handlers,
