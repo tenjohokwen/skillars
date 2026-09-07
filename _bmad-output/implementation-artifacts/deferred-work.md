@@ -374,12 +374,11 @@ one booking-module item corrected below. Gaps stay explicit:
     (`MessagingPage.vue:30`). `deferred-16` AC6b keeps the fix as plain correctness and drops the framing.
 - **Scope correction found while drafting AC4, recorded because neither owned item mentions it:**
   `skillars-8-2` D1/D2 and `skillars-8-1` D1/D6 all name `MessagingService`, but
-  `MessagingReportService.verifyIsParty:127-141` is an acknowledged hand-copy of
-  `MessagingService.verifyIsParty` — its own comment says "Duplicates `MessagingService.verifyIsParty()` —
-  injecting `MessagingService` would create a circular dep" — carrying the identical silent
-  `default -> Objects.equals(conv.getPlayerId(), callerUserId)` arm, and it gates the abuse-report
-  endpoints. `deferred-16` AC4 fixes both copies and keeps the duplication (the circular dependency is
-  real; untangling it is a separate job).
+  `MessagingReportService.verifyIsParty:134-155` was an acknowledged hand-copy of
+  `MessagingService.verifyIsParty` — its comment (`:129-133`) said "Duplicates `MessagingService.verifyIsParty()` —
+  injecting `MessagingService` would create a circular dep" — and carried the identical silent
+  `default -> Objects.equals(conv.getPlayerId(), callerUserId)` arm, gating the abuse-report
+  endpoints. **[CLOSED by skillars-deferred-16 AC4 — both copies fixed; method is now role-aware with proper PlayerProfileRepository injection and identical logic to MessagingService. Commit `c7301e0` (shipped 2026-08-05). The circular dependency duplication remains by design — untangling it is a separate concern.]**
 - **Added by this audit:** one new item under `## Deferred from: skillars-deferred-16 story creation
   (2026-08-05)` — `messaging.conversations.parent_id` is `NOT NULL` while a self-registered adult
   player's profile has `parent_id IS NULL`, so conversation creation for such a player would fail at the
@@ -875,7 +874,7 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - awscli v1 from Ubuntu apt may have `--endpoint-url` edge cases with Hetzner Object Storage — spec-approved as sufficient; revisit if upload failures occur in production
 
 ## Deferred from: code review of deploy-2-2-manual-production-deploy-workflow-with-smoke-test-auto-revert (2026-06-04)
-- `Fail workflow` step is unreachable if a notification step throws — the job still fails, but the failure is attributed to the notification step, hiding "smoke test failed, deploy reverted" as the real cause. **[AUDIT 2026-09-04: still open, citation stale.** Now `.github/workflows/deploy.yml:184-188`, not `:139-143`. Four notification steps (Slack success/failure at `:128`/`:139`, Email success/failure at `:150`/`:166`) all precede it, so any one of them throwing — an unset `SMTP_HOST`, a Slack webhook 5xx — pre-empts the explicit failure marker.]** [`.github/workflows/deploy.yml:184-188`]
+- `Fail workflow` step is unreachable if a notification step throws — the job still fails, but the failure is attributed to the notification step, hiding "smoke test failed, deploy reverted" as the real cause. **[CLOSED by skillars-deferred-94 AC12 — all four notification steps now carry `continue-on-error: true`; `Fail workflow` step carries `if: always() && steps.smoke.outputs.result == 'fail'` to run regardless. Commits `c4e9366`, `71b08b7` (merged in PR #151, `28354e7`).]** [`.github/workflows/deploy.yml:188-194`]
 
 ## Deferred from: code review of deploy-1-5-first-time-setup-documentation (2026-06-04)
 - Repo cloned to `/opt/skillars` before Hetzner Volume mounted — volume mount overlays `/opt/skillars/data`; benign today since repo has no `data/` content, but fragile if repo structure changes.
