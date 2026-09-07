@@ -259,6 +259,6 @@ development_status:
   skillars-deferred-94-deploy-hardening-security-operational-and-listener-safety: done
   skillars-deferred-96-deployment-visibility-smoke-error-channel-health: review
   skillars-deferred-97-backup-and-deployment-smoke-resilience-hardening: backlog
-  skillars-deferred-98-slu-perf-signal-and-frontend-ux-precision: in-progress
+  skillars-deferred-98-slu-perf-signal-and-frontend-ux-precision: review
   ? skillars-deferred-92-outbox-enqueue-atomicity-executor-shutdown-migration-ordering-and-lock-timeout-default-bundle-parity-fr-fr-idiom-prettier-conformance-and-genuine-bug-fixes
   : review
