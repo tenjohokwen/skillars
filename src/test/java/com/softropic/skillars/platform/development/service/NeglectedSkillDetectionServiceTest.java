@@ -210,19 +210,23 @@ class NeglectedSkillDetectionServiceTest {
     // Valid range: (0, 1) — strictly greater than 0, strictly less than 1
     @ParameterizedTest
     @CsvSource({
-        "0",           // Boundary: exactly 0 (invalid)
-        "0.0001",      // Just inside lower bound
-        "0.5",         // Middle of range (valid)
-        "0.9999",      // Just inside upper bound
-        "1.0"          // Boundary: exactly 1 (invalid)
+        "0,      false",      // Boundary: exactly 0 (invalid) — must NOT invoke repo
+        "0.0001, true",       // Just inside lower bound (valid) — must invoke repo
+        "0.5,    true",       // Middle of range (valid) — must invoke repo
+        "0.9999, true",       // Just inside upper bound (valid) — must invoke repo
+        "1.0,    false"       // Boundary: exactly 1 (invalid) — must NOT invoke repo
     })
-    void isInValidRange_boundaryValues(String value) {
+    void isInValidRange_boundaryValues(String value, boolean shouldInvoke) {
         when(configService.getString("slu.neglected.threshold")).thenReturn(value);
+        lenient().when(sluTargetRepository.findMaxTargetPerSkill(anyLong())).thenReturn(List.of());
 
-        // Test that detectNeglectedSkills doesn't throw on boundary values
-        // (invalid values log and return gracefully, valid values proceed).
-        // This exercises isInValidRange() indirectly through the public API.
         detectionService.detectNeglectedSkills();
+
+        if (shouldInvoke) {
+            verify(sluTargetRepository).findMaxTargetPerSkill(anyLong());
+        } else {
+            verify(sluTargetRepository, never()).findMaxTargetPerSkill(anyLong());
+        }
     }
 
     private PlayerSluWeeklySnapshot makeSnapshot(short year, short week, String skill, BigDecimal slu) {

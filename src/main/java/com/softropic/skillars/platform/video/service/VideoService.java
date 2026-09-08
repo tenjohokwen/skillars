@@ -196,8 +196,9 @@ public class VideoService {
                 uploadSessionRepository.save(s);
 
                 // skillars-deferred-101 AC3: if the prior asset differs, track it for the sweeper
-                // so it is deleted and not leaked (bills + stores PII). Must happen in this tx
-                // with the Video write so the pointer-swap and tracking row commit atomically.
+                // so it is deleted and not leaked (bills + stores PII). tracker.record() is REQUIRES_NEW
+                // so commits in its own tx; if the pointer-swap rolls back here, the stale tracking row
+                // is harmless — the sweeper's findByProviderAssetId guard will drop it.
                 if (priorAssetId != null && !priorAssetId.equals(credentials.providerUploadId())) {
                     pendingProviderAssetTracker.record(priorAssetId, properties.getProvider());
                 }

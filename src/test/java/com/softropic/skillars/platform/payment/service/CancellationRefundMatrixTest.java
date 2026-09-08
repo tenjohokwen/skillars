@@ -42,8 +42,7 @@ class CancellationRefundMatrixTest {
 
         service.onBookingCancelledByParent(event);
 
-        verify(refundOutboxSupport).enqueueBookingRefund(
-            eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
+        // Refund enqueue is now a BEFORE_COMMIT listener (RefundEnqueueListener); this test verifies pack/history
         verify(packSessionService, never()).restoreSession(any());
     }
 
@@ -89,8 +88,7 @@ class CancellationRefundMatrixTest {
 
         service.onBookingCancelledByCoach(event);
 
-        verify(refundOutboxSupport).enqueueBookingRefund(
-            eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
+        // Refund enqueue is now a BEFORE_COMMIT listener (RefundEnqueueListener); this test verifies history/strike
         verify(cancellationHistoryRepository).save(any());
         verify(reliabilityStrikeService, never()).issue(any(), any(), anyString());
     }
@@ -102,8 +100,7 @@ class CancellationRefundMatrixTest {
 
         service.onBookingCancelledByCoach(event);
 
-        verify(refundOutboxSupport).enqueueBookingRefund(
-            eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
+        // Refund enqueue is now a BEFORE_COMMIT listener (RefundEnqueueListener); this test verifies history/strike
         verify(cancellationHistoryRepository).save(any());
         verify(reliabilityStrikeService).issue(COACH_ID, BOOKING_ID, "COACH_CANCELLATION_UNEXCUSED");
     }
@@ -138,8 +135,7 @@ class CancellationRefundMatrixTest {
 
         service.onBookingCancelledByCoach(event);
 
-        verify(refundOutboxSupport).enqueueBookingRefund(
-            eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
+        // Refund enqueue is now a BEFORE_COMMIT listener (RefundEnqueueListener); this test verifies pack/restore
         verify(packSessionService, never()).restoreSession(any());
     }
 
@@ -150,8 +146,7 @@ class CancellationRefundMatrixTest {
 
         service.onCoachNoShow(event);
 
-        verify(refundOutboxSupport).enqueueBookingRefund(
-            eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
+        // Refund enqueue is now a BEFORE_COMMIT listener (RefundEnqueueListener); this test verifies strike
         verify(reliabilityStrikeService).issue(COACH_ID, BOOKING_ID, "COACH_NO_SHOW");
     }
 
@@ -176,8 +171,7 @@ class CancellationRefundMatrixTest {
 
         service.onCoachNoShow(event);
 
-        verify(refundOutboxSupport).enqueueBookingRefund(
-            eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
+        // Refund enqueue is now a BEFORE_COMMIT listener (RefundEnqueueListener); this test verifies strike
         verify(reliabilityStrikeService).issue(COACH_ID, BOOKING_ID, "COACH_NO_SHOW");
     }
 

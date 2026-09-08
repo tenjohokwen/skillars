@@ -7,6 +7,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.math.BigDecimal;
 import java.sql.Timestamp;
@@ -19,6 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class PackCancellationRefundIT extends BasePaymentIT {
 
     @Autowired CancellationRefundService cancellationRefundService;
+    @Autowired ApplicationEventPublisher eventPublisher;
 
     private static final long PARENT_ID    = 80001L;
     private static final long COACH_USER_ID = 80002L;
@@ -97,7 +99,7 @@ class PackCancellationRefundIT extends BasePaymentIT {
         UUID bookingId = UUID.randomUUID();
         BookingCancelledByCoachEvent event = coachEvent(packId, "MUTUAL_AGREEMENT", true);
 
-        cancellationRefundService.onBookingCancelledByCoach(event);
+        eventPublisher.publishEvent(event);
 
         long ledgerCount = countLedgerEntries(event.getBookingId());
         assertThat(ledgerCount).isEqualTo(1);
@@ -114,7 +116,7 @@ class PackCancellationRefundIT extends BasePaymentIT {
         int remainingBefore = getRemainingSessions();
         BookingCancelledByParentEvent event = parentEvent(packId, 25);
 
-        cancellationRefundService.onBookingCancelledByParent(event);
+        eventPublisher.publishEvent(event);
 
         int remainingAfter = getRemainingSessions();
         assertThat(remainingAfter).isEqualTo(remainingBefore + 1);
@@ -128,7 +130,7 @@ class PackCancellationRefundIT extends BasePaymentIT {
         int remainingBefore = getRemainingSessions();
         BookingCancelledByParentEvent event = parentEvent(packId, 6);
 
-        cancellationRefundService.onBookingCancelledByParent(event);
+        eventPublisher.publishEvent(event);
 
         int remainingAfter = getRemainingSessions();
         assertThat(remainingAfter).isEqualTo(remainingBefore);

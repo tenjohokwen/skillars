@@ -30,7 +30,6 @@ public class CancellationRefundService {
     private final PackSessionService packSessionService;
     private final CoachCancellationHistoryRepository cancellationHistoryRepository;
     private final ReliabilityStrikeService reliabilityStrikeService;
-    private final RefundOutboxSupport refundOutboxSupport;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
