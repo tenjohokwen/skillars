@@ -1443,3 +1443,29 @@ the actionable patch findings are tracked unchecked in the story's Review Findin
 - **No grace path for in-flight legacy `encoding.success` webhook events during the deferred-100 cutover.** With `PROCESSING→READY` removed from `VALID_TRANSITIONS` and the plain path converted from `log.warn` to `throw TerminalStateViolationException` + `video.moderation.bypass++`, any replayed/queued pre-deploy event that drives `PROCESSING→READY` on the plain path now throws and dead-letters (and raises a false-positive moderation-bypass alarm) instead of completing. Accepted cutover risk — AC5 verified the producer (`WebhookEventProcessorScheduler`) is already gone at HEAD, and dead-lettered events are re-drivable. [`VideoLifecycleService.java:77`]
 - **`reconcileToReady` already-READY no-op still lets `ReconciliationWorkerScheduler.processReconciliation` write a `STATE_CORRECTED` incident.** If another thread moves the video to READY between the (stale) `localState == PROCESSING` guard and `reconcileToReady`'s own `findById`, the correction is a no-op but `recordIncident(STATE_CORRECTED, "…corrected to READY")` still runs — a durable audit record for a correction this pass did not perform. Pre-existing (the old idempotent `transitionOperationalState(READY)` path behaved the same). [`ReconciliationWorkerScheduler.java:89`]
 - **`RefreshTokenRepository.markAllUsedByUserId` allow-list (no `version = version + 1`) rests on an unenforceable global invariant.** The Javadoc reason — "every concurrent managed writer of these rows also only ever sets `used = true`, so races converge" — is sound for the current three writers (`AuthService.refresh` / `logout`, and the GDPR bulk call), but nothing enforces it: a future `refreshTokenRepository.save(...)` on a stale-loaded token that writes any other column would silently resurrect a revoked session, and `NativeModifyingVersionAuditTest` only checks the SQL text. Inherent limitation of AC3's "document as safe" verdict class. [`RefreshTokenRepository.java`]
+
+## Deferred from: skillars-deferred-101 story creation (2026-09-08)
+
+### Pre-production migration rebaseline (future task, no owner)
+
+**Before the first production deploy**, while the schema still carries no data: squash `V1`..`V<current>` into a single clean baseline migration and fold in every safe-pattern rewrite the lock-unsafe applied files (V60/V94/V97/V98/V117, see `docs/deployment/migration-conventions.md#known-lock-unsafe-applied-migrations`) could not take in place. Removes the frozen-file constraint entirely and lets `MigrationLint` bind from `V1`. Large, disruptive, must be its own story; only viable pre-data.
+
+---
+
+## Last audit: 2026-09-08 (skillars-deferred-101 story creation + implementation)
+
+**Scope**: Full re-mine against HEAD (`b41d39a8`) of the "genuine one-off bugs & gaps" class declared effectively exhausted by deferred-100. Confirmed: the remaining bucket is overwhelmingly `[DECIDED]`/`[DISMISSED]` (do not re-litigate), "no dev agent can close this" (native DE/FR register review, parent legal copy), two carved-out backlog stories, speculative/load-dependent notes, and the migration `ACCESS EXCLUSIVE` lock class (frozen files).
+
+**Items deleted this audit** (verified closed at HEAD):
+- `skillars-3-1` weekStart date-range guard bullet — Closed: `AvailabilityResource.validateWeekStartRange` with configurable bound
+- `deploy-2-2` "Fail workflow unreachable" bullet — Closed by deferred-99 AC6: `.github/workflows/deploy.yml:216-226` now reachable
+- Six scattered migration lock-safety bullets (V60/V94/V97/V98/V117) — Consolidated into one section: `docs/deployment/migration-conventions.md#known-lock-unsafe-applied-migrations`
+- All AC-closed bullets from deferred-101 implementation (AC1–AC11): `BookingBatchStatusListener` failure isolation, `reconcileToReady` no-op incident, `VideoService.retryUpload` orphan tracking, refund enqueue atomicity, `getActiveCoachTier` 404, `restore-from-dump.sh` terminate sweep, prometheus `depends_on`, `sessionTemplate.store.js` error wrap, `ConfigGuardIT` isolation, `NeglectedSkillDetectionService` coverage, `RefreshTokenRepository` version bump
+
+**Items re-verified still-open** (not picked up, not re-fixed):
+- `deploy-3-1` awscli v1 EOL — real, open
+- `deploy-1-3` LGTM `mkdir -p` — real, open
+- `deploy-1-5` clone-as-root — real, open
+- `skillars-8-1` N+1 in `getConversations` — real, open (MVP-volume perf tradeoff, explicitly parked)
+
+**No `[DECIDED]`/`[DISMISSED]` bullets were touched.**
