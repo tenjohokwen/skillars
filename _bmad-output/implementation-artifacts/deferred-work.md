@@ -894,9 +894,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - RW1: SSE subscribe → onStatusChanged race — state transition committed between `videoService.findById()` and `emitter.send(currentStatus)` is missed. Polling fallback mitigates. Architectural limitation of SSE without event sourcing. [`VideoSseService.java:39`, `VideoEventResource.java:39`]
 - RW2: scanned_at misleading on upsert retry path — `@Column(updatable=false)` retains original failed-attempt timestamp even when SLA retry overwrites outcome to PASSED. Fix requires append-only per-attempt rows (architectural scope beyond this story). [`VideoModerationScan.java:39`]
 
-## Deferred from: code review of skillars-6-6-player-video-management-portal (2026-06-24)
-- W5: `@GeneratedValue(AUTO)` on `VideoApprovalRequest` entity vs `UUID DEFAULT gen_random_uuid()` in SQL — Hibernate 6 AUTO may allocate a sequence-based Long for AUTO strategy on non-Long PK; pre-existing entity pattern; verify Hibernate dialect resolves UUID correctly. [`VideoApprovalRequest.java`]
-
 ## Deferred from: code review of skillars-7-2-session-payment-lifecycle-credit-wallet (2026-06-24)
 - D4: Raw `String` fields for `type` (ParentCreditLedger) and `status` (BookingPayment) instead of Java enums — DB constraint guards correctness; higher migration cost to add enum mapping
 
@@ -909,9 +906,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 <!-- skillars-deferred-100 AC7: verified closed by AC1 at WORKTREE:src/main/java/com/softropic/skillars/platform/payment/service/ReliabilityStrikeService.java:85 (findByIdForUpdate under lockRetryer before the count/threshold/status decision; ReliabilityStrikeConcurrencyIT) -->
 <!-- skillars-deferred-100 AC7 (2026-09-08): D4 (concurrent strike issuance race — two simultaneous issue() calls both read count=N and both fire StrikeThresholdReachedEvent) closed by AC1. ReliabilityStrikeService.issue() now takes a PESSIMISTIC_WRITE lock on the coach row via lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(coachId)) before the count/threshold/status decision; the count read moved under the lock so the loser blocks, re-reads status = PENDING_REVIEW/REDUCED, and its existing guard suppresses the duplicate event. ReliabilityStrikeConcurrencyIT covers it. -->
 - D5: `CoachCancellationHistory.createdAt` with `@Column(updatable=false)` + `@PrePersist` — in-memory entity is null until DB round-trip if ever used with batch `saveAll`; low risk given single-save usage [`CoachCancellationHistory.java`]
-
-## Deferred from: code review of skillars-7-5-revenue-dashboard-financial-reporting (2026-06-26)
-- D1: Running balance incorrect when two ParentCreditLedger entries share an identical createdAt instant and straddle a page boundary — the strict-less-than predicate in sumByParentIdAndCreatedAtBefore excludes the prior-page twin from the opening balance, understating the running balance for the current page by that twin's amount; extremely rare in practice; inherent in the chosen pagination anchor design [RevenueReportingService.java:211]
 
 ## Deferred from: code review of skillars-11-3-remove-legacy-session-pack-system (2026-08-04)
 - D1: `V89__drop_legacy_session_packs.sql`'s `DROP TABLE` has no `IF EXISTS` guard — not blocking (Flyway won't re-run an applied migration, table confirmed empty at this dev/UAT stage), but there's no prior DROP TABLE in this codebase to establish a convention either way; adopt `IF EXISTS` for future destructive migrations. [`src/main/resources/db/migration/V89__drop_legacy_session_packs.sql`]
@@ -1491,3 +1485,29 @@ data-subdirectory bullet — all five are the items AC1/AC2/AC4/AC5/AC6 actually
 speculative claims by a still-pending story. No other `[PICKED UP]` bullet touched. One known
 residual inconsistency: two `<!-- skillars-deferred-100 AC7 … -->` HTML comments in the `skillars-7-1`
 section still say "D3 and D4 remain" — left as historical audit-trail comments rather than edited.
+
+---
+
+## Last audit: 2026-09-08 (post-skillars-deferred-102-merge prune)
+
+Two bullets that `skillars-deferred-102` closed in code but its AC19 ledger-hygiene pass missed —
+deleted here per this file's delete-outright convention (no `[CLOSED by …]` tag left behind):
+
+- `skillars-7-5` code review **D1** ("Running balance incorrect when two `ParentCreditLedger`
+  entries share an identical `createdAt` … straddle a page boundary") — **closed by
+  `skillars-deferred-102` AC11**. The cited method `sumByParentIdAndCreatedAtBefore` no longer
+  exists; it was replaced by `sumByParentIdBeforeAnchor(parentId, createdAt, txId)` with the
+  compound `(l.createdAt < :createdAt OR (l.createdAt = :createdAt AND l.txId < :txId))` predicate
+  the bullet asked for, plus a `, l.txId DESC` tiebreaker on the page query, guarded by
+  `CreditStatementRunningBalanceAnchorIT` + `RevenueReportingServiceTest`. Header emptied and
+  removed.
+- `skillars-6-6` code review **W5** ("`@GeneratedValue(AUTO)` on `VideoApprovalRequest` … Hibernate 6
+  AUTO may allocate a sequence-based Long for a non-Long PK") — **stale**. At HEAD the entity carries
+  `@GeneratedValue(strategy = GenerationType.UUID)` (not `AUTO`), so the concern is moot;
+  `skillars-deferred-102` AC15 verified this and recorded it as a no-op in the story rather than
+  editing the ledger. Header emptied and removed.
+
+**Reconstruction check:** every surviving non-blank line matches the pre-edit file (master @
+`768a513a`), in order, with nothing reworded or reordered — the only differences are the two bullets
+above, the two now-empty `## Deferred from:` headers removed with them, and this block.
+`[DECIDED …]` / `[DISMISSED …]` bullets: none touched. `[PICKED UP by …]` bullets: none touched.
