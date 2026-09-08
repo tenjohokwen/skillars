@@ -5,8 +5,8 @@
 **Branch:** `story/deferred-102-deploy-resilience-bug-sweep`
 **Created:** 2026-09-08
 **Supersedes:** `skillars-deferred-97` (backlog stub, no story file) — its four backup/deploy-smoke
-items are absorbed here as AC1, AC2, AC4, AC5. Mark `skillars-deferred-97` `withdrawn` in
-`sprint-status.yaml` when this story is created.
+items are absorbed here as AC1, AC2, AC4, AC5. `skillars-deferred-97` was set to `withdrawn` in
+`sprint-status.yaml` at story creation (2026-09-08).
 
 ---
 
@@ -46,8 +46,9 @@ Platform/Admin → Frontend/UX → Payment/Stripe → Infrastructure/Deployment 
    `SessionPlanService`, fragile to any status rename.
 7. **Drills** — the private-drill repository queries lack an explicit `library_type = 'COACH'`
    filter (defense-in-depth behind the `chk_drill_owner` constraint).
-8. **Messaging performance** — `MessagingService.getConversations` was flagged N+1; re-measure at
-   HEAD and either batch the residual per-row lookups or pin the measured cost with a query-count IT.
+8. **Messaging performance** — `MessagingService.getConversations` was flagged N+1 (`skillars-8-1`
+   D2); traced at HEAD and found **already O(1) queries** (batched by `deferred-90` AC13 /
+   `deferred-91` AC19). AC14 pins that with a query-count regression IT and closes the ledger line.
 9. **Video entity** — verify `@GeneratedValue(AUTO)` on `VideoApprovalRequest`'s `UUID` PK resolves
    to the SQL `gen_random_uuid()` default under Hibernate 6.
 10. **Frontend/UX** — a rapid double-click on the theme toggle can desync the DOM attribute from the
@@ -116,11 +117,12 @@ production deploy, and `deferred-work.md` reflects only work that genuinely stil
   `pipefail`, a `pg_dump` failure at `:33` aborts the script before `:39`, leaving a partial
   `${DUMP_FILE}` that is never cleaned; a cron loop of failures accumulates GB files until the disk
   fills.
-- **Fix approach:** Compute `DUMP_FILE` (already `:21`), `trap 'rm -f "${DUMP_FILE}"' EXIT`
-  immediately after, *then* run the pipeline. The existing `:41` `[ ! -s "${DUMP_FILE}" ]` empty-file
-  guard stays. Keep the comment, updated to say the trap now precedes the pipeline. Confirm the
-  `aws s3 cp` success path still ends with the file removed by the trap (it does — the trap fires on
-  normal exit too).
+- **Fix approach:** Compute `DUMP_FILE` (already `:21`), `trap 'rm -f "${DUMP_FILE}" || true' EXIT`
+  immediately after, *then* run the pipeline. (`|| true` so a cleanup failure — e.g. read-only fs —
+  cannot itself become the script's exit status under `set -e`; `rm -f` already swallows
+  "not found".) The existing `:41` `[ ! -s "${DUMP_FILE}" ]` empty-file guard stays. Keep the
+  comment, updated to say the trap now precedes the pipeline. Confirm the `aws s3 cp` success path
+  still ends with the file removed by the trap (it does — the trap fires on normal exit too).
 - **Ledger:** `## Deferred from: code review of skillars-deferred-94 (2026-09-07)` — "`pg-backup.sh`
   leaks a truncated dump on `pg_dump` failure … `[PICKED UP by skillars-deferred-97 AC1]`". Delete
   the bullet.
@@ -140,12 +142,20 @@ production deploy, and `deferred-work.md` reflects only work that genuinely stil
   non-numeric capture is currently handled by failing with an "integrity check failed" message +
   `exit 1` — but `RESTORE_OK` (`:119`) is still `0` at that point, so the EXIT trap (`:121`) restarts
   the app and `rm -f "${LOCAL_DUMP}"` is skipped (dump leaks), for a restore that in fact succeeded.
-- **Fix approach:** Retry loop around the `ps -q app` capture; on success proceed; only after the
-  loop exhausts do the existing `err …; exit 1`. Do **not** set `RESTORE_OK=1` on the retry-exhausted
-  path — a genuinely missing container is still a real failure — but emit a distinct diagnostic
-  ("app container did not register within Ns after start; the restore data is intact, re-run the
-  health wait manually") so the operator knows the DB restore itself completed. Keep the `:201`
-  comment, reworded.
+- **Fix approach:** Retry loop around the `ps -q app` capture (5 attempts × 2 s). On success
+  proceed. Only after the loop exhausts do the existing `err …; exit 1`.
+  - **Exit contract (explicit):** keep `RESTORE_OK=0` on the retry-exhausted path — a genuinely
+    missing container *is* a real failure and the operator must see a non-zero exit. The EXIT trap
+    (`:121`) therefore still runs `docker compose … start app`; that is **acceptable and
+    intentional** — starting a container that is merely slow to register is a harmless no-op / a
+    redundant start, not a corruption risk, and starting one that genuinely failed is the right
+    recovery. Do **not** invent a third `RESTORE_OK` value.
+  - Emit a distinct diagnostic before the `exit 1`: `"app container did not register within Ns of
+    'docker compose start'; the DB restore itself completed and is intact — the EXIT trap will
+    attempt to (re)start the app; if it does not come up, run the health wait manually"`. The point
+    is that the operator can tell "restore failed" from "restore OK, container registration was
+    slow", not that the script behaves differently.
+  - Keep the `:201` comment, reworded to describe the retry.
 - **Ledger:** `## Deferred from: code review of skillars-deferred-94 (2026-09-07)` — "`restore-from-dump.sh`
   empty `APP_CID` fails a restore that already succeeded … `[PICKED UP by skillars-deferred-97 AC2]`",
   and the older `## Deferred from: code review of deploy-3-4-operational-documentation-suite` "APP_CID
@@ -165,8 +175,13 @@ production deploy, and `deferred-work.md` reflects only work that genuinely stil
   `rsync -aHAXni --numeric-ids "${STAGING}/" "${MOUNT_POINT}/"` — an itemized dry-run over the
   **whole** staged tree (`postgres/` included), failing (`:412-414`) if anything is still pending;
   then `:417-427` does `stat -c '%a %u:%g'` ownership/mode checks on `traefik/acme.json` and each
-  armed dir. The one real residual: `rsync -ni` without `--checksum` compares size + mtime, so a
-  torn write that lands at the expected size (SIGKILL / Volume `ENOSPC` mid-file) passes the dry-run.
+  **armed dir** — the armed set at HEAD is `redis/`, `grafana/`, `loki/`, `tempo/`, `prometheus/`
+  (the `for d in redis grafana loki tempo prometheus` loop at `:422`), plus the standalone
+  `traefik/acme.json` file. `postgres/` is **not** in the `stat` loop (it is covered by the `-ni`
+  whole-tree dry-run only). The one real residual: `rsync -ni` without `--checksum` compares
+  size + mtime, so a torn write that lands at the expected size (SIGKILL / Volume `ENOSPC`
+  mid-file) passes the dry-run. Re-confirm the armed list against `:422` at implementation time —
+  it is the literal loop body, not a guess.
 - **Fix approach:** Change `:408` to `rsync -aHAXcni …` (`-c` = `--checksum`). This is a one-time
   provisioning step over a small tree — the extra hashing cost is irrelevant. The per-dir `stat`
   loop (`:423-427`) becomes belt-and-suspenders; keep it. Update the `:406-407` comment to state the
@@ -190,10 +205,13 @@ production deploy, and `deferred-work.md` reflects only work that genuinely stil
   `for i in $(seq 1 12)` (`:100`) with `sleep 5` (`:110`) **unconditional** — iteration 12 checks,
   then sleeps 5 s pointlessly before the loop ends. Effective health window ≈ 60 s + 11×5 s + check
   latency ≈ ~120 s; a JVM needing longer is auto-reverted.
-- **Fix approach:** Guard the sleep: `[ "$i" -lt 12 ] && sleep 5`. Bump the iteration count (e.g.
-  `seq 1 24` at 5 s = ~180 s post-startup) — pick the number from `docker-compose.yml`'s `app`
-  `start_period` + observed cold-start, and leave a comment with the arithmetic. Keep the
-  `result=$RESULT` / `exit` contract (`:112-113`) and every downstream `if:` guard
+- **Fix approach:** Guard the sleep so the final pass doesn't sleep — use a fixed `N` and
+  `[ "$i" -lt "$N" ] && sleep 5`. **Set `N = 24`** (24 × 5 s ≈ 120 s of polling on top of the
+  `sleep 60`, so ~180 s total before revert) unless `docker-compose.yml`'s `app` healthcheck
+  `start_period` is > 60 s, in which case set `N` so that `60 + N*5 ≥ start_period + 120`. Read
+  `start_period` at implementation time and put the arithmetic in a comment above the loop
+  (`# 60s pre-wait + 24*5s poll = ~180s; app start_period is <Xs, cold-start observed ~<Y>s`).
+  Keep the `result=$RESULT` / `exit` contract (`:112-113`) and every downstream `if:` guard
   (`:132`, `:169`, `:220`) unchanged.
 - **Ledger:** `## Deferred from: code review of skillars-deferred-96 (2026-09-07)` — "Deploy smoke
   poll window is effectively ~55s after the initial 60s wait … `[PICKED UP by skillars-deferred-97
@@ -213,19 +231,36 @@ production deploy, and `deferred-work.md` reflects only work that genuinely stil
   Any transport error yields `STATUS=0`, identical to "app down". After 12 such iterations
   `RESULT=fail` → the `Auto-Revert on smoke test failure` step (`:130-132`) rolls back a deploy that
   may be perfectly healthy.
-- **Fix approach:** Capture the `ssh` exit status separately from the remote script's stdout. On
-  `ssh` exit 255 (its transport-failure code) increment a transport-failure counter and `continue`
-  without counting it toward the health verdict; if every iteration is a transport failure, exit the
-  smoke step with `result=error` (the workflow already handles `result == 'error'` distinctly at
-  `:169` / `:198` / `:220` — route it so it fails the job **without** auto-reverting, i.e. the
-  `Auto-Revert` step's `if:` at `:132` must not fire on `result == 'error'`; verify it currently
-  keys only on `'fail'`). Add a short comment block explaining the three outcomes (pass / app-down /
-  unreachable).
+- **Fix approach:**
+  - **Capture mechanics (explicit).** Drop the `|| echo 0` fallback on the `ssh` invocation. Run:
+    `OUT=$(ssh -o ConnectTimeout=10 -o BatchMode=yes "$USER@$HOST" "<remote script>" 2>/dev/null)`
+    then immediately `SSH_RC=$?`. `ssh` returns **255** for any transport-level failure
+    (connect refused, auth failure, DNS, timeout) and otherwise returns the remote command's own
+    exit status. The remote script is written to always `echo 1` / `echo 0` and exit 0, so
+    `SSH_RC == 0` ⇒ trust `OUT` (`1` = healthy, `0` = app not UP); `SSH_RC == 255` ⇒ transport
+    failure, `OUT` is meaningless.
+  - **Per-iteration handling.** On `SSH_RC == 255`: `transport_fail=$((transport_fail+1))`,
+    `continue` — do **not** count it toward the health verdict, do **not** `break`. On
+    `SSH_RC == 0` && `OUT == 1`: `RESULT=pass; break`. Otherwise (`OUT == 0`) the app is reachable
+    but not UP — a real health miss; leave `RESULT=fail` and keep polling.
+  - **Verdict rule (explicit threshold).** After the loop: if `RESULT == pass` → `result=pass`.
+    Else if `transport_fail` equals the **total iteration count** (every single attempt was a
+    255) → `result=error` (host was never reachable — this is an infrastructure problem, not a bad
+    deploy). Else → `result=fail` (the host was reachable at least once and the app was never UP).
+    A mix of transient 255s and genuine `0`s is therefore treated as `fail`, deliberately
+    conservative — a flaky link plus a down app should still block/revert.
+  - **Routing.** The workflow already branches on `result == 'error'` at `:169` / `:198` / `:220`.
+    Verify the `Auto-Revert` step's `if:` (`:132`) keys **only** on `result == 'fail'` (not
+    `'error'`) so an `error` fails the job without reverting; adjust if it also catches `'error'`.
+  - Add a comment block above the loop naming the three outcomes (pass / app-down=fail /
+    unreachable=error) and the threshold rule.
 - **Ledger:** `## Deferred from: code review of skillars-deferred-96 (2026-09-07)` — "Deploy smoke
   SSH failures are swallowed to `echo 0` … `[PICKED UP by skillars-deferred-97 AC4]`". Delete the
   bullet.
-- **Test:** `bash -n`. Re-read the revert step's `if:` and confirm `result == 'error'` does not
-  reach it. Live check on the next real deploy.
+- **Test:** `bash -n` on the extracted step body. Dry-run with a stub `ssh` that exits 255 on every
+  call → assert `result=error` and (by reading the revert step's `if:`) that `Auto-Revert` does not
+  fire. Second dry-run: `ssh` exits 255 twice then returns `0` for the rest → assert `result=fail`.
+  Live check on the next real deploy.
 
 ---
 
@@ -241,21 +276,32 @@ production deploy, and `deferred-work.md` reflects only work that genuinely stil
   so `git clean -fd` is safe, but `git clean -fdx` (`-x` ignores `.gitignore`) still deletes the
   entire runtime tree. `deferred-94` AC8 added prose warnings only; `deferred-101` flagged this
   "needs a tracked deploy-hardening follow-up".
-- **Fix approach (design — confirm details with the owner during implementation if any step is
-  ambiguous):**
-  - Create a system user `deploy` (no login shell needed for the deploy path, or a restricted one)
-    in `provision.sh`; add it to the `docker` group.
-  - Relocate the application checkout to a path the `deploy` user owns — either
-    `/opt/skillars/app` (checkout) with `/opt/skillars/data` as a sibling the checkout can't `clean`,
-    **or** `/srv/skillars` for the checkout with `/opt/skillars/data` unchanged. Prefer the option
-    that moves the **least** — keeping `MOUNT_POINT` = `/opt/skillars/data` avoids touching every
-    backup/restore script's path assumptions; moving only the checkout to `/opt/skillars/app` is the
-    smaller blast radius. Update `docker-compose*.yml` working-dir / relative bind paths accordingly.
-  - `chown -R deploy:deploy` the checkout; leave `data/**` owned by the service UIDs as today.
-  - The deploy workflow's SSH user (`secrets.SSH_USER`) switches to `deploy`; `runbook.md` /
-    `first-time-setup` updated; every `cd /opt/skillars` in `deploy/**` and the workflows updated to
-    the new checkout path.
-  - Document in `runbook.md` that `data/**` is deliberately not under the checkout and why.
+- **Fix approach.** Path layout: move **only the checkout** to `/opt/skillars/app`, keep
+  `MOUNT_POINT` = `/opt/skillars/data` unchanged (smallest blast radius — every backup/restore
+  script's `/opt/skillars/data` assumption stays valid; only `cd`-into-checkout paths move). `app/`
+  and `data/` are then siblings under `/opt/skillars`, and `git -C /opt/skillars/app clean -fdx`
+  cannot reach `../data`.
+  - **Permission contract (explicit — this is the crux the review flagged).**
+    | Actor | Runs as | Touches `data/**`? | How |
+    |---|---|---|---|
+    | `provision.sh` (one-time bootstrap: creates dirs, mounts Volume, `chown`s data dirs to service UIDs, creates the `deploy` user) | **root** — unchanged | yes, once | direct `mkdir`/`chown` at bootstrap only |
+    | `deploy.yml` deploy step (`git pull` in `app/`, `docker compose up -d`) | **`deploy`** (in the `docker` group) | **no — never** | the containers write `data/**` as their own service UIDs via bind mounts; `deploy` only runs `git` + `docker` |
+    | cron backup/restore (`pg-backup.sh`, `volume-backup.sh`, `restore-*.sh`, `prune-backups.sh`) | **root** — unchanged (they `docker exec` into containers, read `data/**`, write `/tmp`, call `aws`; keeping them root-run is the no-change option and is fine) | read only | unchanged |
+    So `deploy` needs: membership of the `docker` group, ownership of `/opt/skillars/app`, read of its own SSH `authorized_keys`, and **nothing else — no sudo, no write to `data/**`, no group membership for the service UIDs.**
+  - `useradd --system --shell /usr/sbin/nologin --home /opt/skillars/app deploy` (or `/bin/bash`
+    with a locked password if manual `ssh deploy@host` for debugging is wanted — owner's call, note
+    it), `usermod -aG docker deploy`, `chown -R deploy:deploy /opt/skillars/app`. Leave `data/**`
+    owned by the service UIDs exactly as today.
+  - **Secrets:** the only deploy secret on the box is the SSH key that `deploy.yml` authenticates
+    with — it lands in `/opt/skillars/app`-adjacent `~deploy/.ssh/authorized_keys` (i.e. under the
+    `deploy` home). AWS creds for the cron backup scripts stay in `/opt/skillars/.env` (root-read,
+    mode 600) — unchanged, since those scripts stay root-run. No new secret store.
+  - Wiring: `secrets.SSH_USER` → `deploy`; every `cd /opt/skillars` that means the **checkout**
+    (not the data root) in `.github/workflows/*.yml` and `deploy/**` → `cd /opt/skillars/app`;
+    `docker-compose*.yml` `working_dir` / relative bind-mount bases updated so
+    `./data/...` still resolves to `/opt/skillars/data` (bind sources may need to become absolute
+    `/opt/skillars/data/...` if compose now runs from `app/`). `runbook.md` / `first-time-setup*.md`
+    updated, including a note that `data/**` is deliberately a sibling of the checkout, not a child.
 - **Ledger:** `## Deferred from: code review of deploy-1-5-first-time-setup-documentation (2026-06-03)`
   — "Repo cloned as root into `/opt/skillars` — `.git` directory sits alongside runtime data" and
   its sibling "git clone root … contains the volume data subdirectory" bullet; plus
@@ -263,9 +309,13 @@ production deploy, and `deferred-work.md` reflects only work that genuinely stil
   directly into `/opt/skillars` … Needs a tracked deploy-hardening follow-up." Delete all three
   (this story is that follow-up).
 - **Test:** `bash -n` + `shellcheck` all changed scripts. Dry-run the provisioning path on a scratch
-  tree (fake `${DEPLOY_ROOT}`), assert: checkout owned by `deploy`, `data/**` not a child of the
-  checkout, `git -C <checkout> clean -fdx` cannot touch `data/**`. Grep `deploy/**` + `.github/**`
-  for stale `/opt/skillars` path assumptions after the move.
+  tree (fake `${DEPLOY_ROOT}`), assert: `deploy` user created, in `docker` group, **not** in any
+  service group, no sudoers entry; checkout owned by `deploy` at `/opt/skillars/app`; `data/**` is a
+  sibling not a child; `git -C /opt/skillars/app clean -fdx` cannot touch `/opt/skillars/data`.
+  Grep `deploy/**` + `.github/**` for every remaining literal `/opt/skillars` and classify each as
+  checkout-path (→ `/opt/skillars/app`) or data-root (unchanged) — none may be left ambiguous.
+  `docker compose config` on the updated compose files resolves every bind source to an existing
+  absolute path.
 
 ---
 
@@ -279,11 +329,15 @@ production deploy, and `deferred-work.md` reflects only work that genuinely stil
   `acme.json` block already documents this exact class of bug ("Creating it from this position would
   write it to the ROOT DISK and section 7's mount would then hide it"). The repo checkout has the
   same exposure if it lands under `${DEPLOY_ROOT}` before the mount.
-- **Fix approach:** After AC6 moves the checkout to its own path, confirm that path is **not** under
-  `${MOUNT_POINT}`; if the chosen layout keeps anything writable under `${MOUNT_POINT}` pre-mount,
-  move that write after the mount. Add an assertion in `provision.sh` right after the mount:
-  `mountpoint -q "${MOUNT_POINT}"` (pattern already used at `:437`) before any step that depends on
-  Volume-backed storage. Update the section-6/section-7 comments.
+- **Fix approach:** AC6 puts the checkout at `/opt/skillars/app` — a **sibling** of
+  `${MOUNT_POINT}` = `/opt/skillars/data`, not under it — so the checkout itself is already safe
+  from the mount overlay. This AC's residual work: (1) confirm no *other* pre-mount write in
+  sections 1–6 targets a path under `${MOUNT_POINT}` (grep the script for `${MOUNT_POINT}` /
+  `${DEPLOY_ROOT}/data` writes before the section-7 mount — the `acme.json` block was already moved
+  for exactly this reason, `:275-279`); (2) add a `mountpoint -q "${MOUNT_POINT}" || { err …; exit 1; }`
+  assertion immediately after the section-7 mount (the `mountpoint -q` pattern is already used at
+  `:437`), before any step that writes Volume-backed storage; (3) update the section-6/section-7
+  comments to state the checkout is deliberately outside `${MOUNT_POINT}`.
 - **Ledger:** `## Deferred from: code review of deploy-1-5-first-time-setup-documentation (2026-06-04)`
   — "Repo cloned to `/opt/skillars` before Hetzner Volume mounted". Delete the bullet.
 - **Test:** Dry-run the reordered script against a scratch tree with a loopback block device as the
@@ -345,12 +399,14 @@ production deploy, and `deferred-work.md` reflects only work that genuinely stil
   Confirm the JPA entity's field length annotation matches after the change
   (`grep -rn "class StripeWebhookEvent" src/main/java`).
 - **Fix approach:** `ALTER TABLE payment.stripe_webhook_events ALTER COLUMN event_id TYPE VARCHAR(255);`
-  in a new `V13x__…` migration. Follow `docs/deployment/migration-conventions.md` — an `ALTER COLUMN
-  … TYPE` that only **adds** a length bound and shrinks nothing is a metadata-only change in
-  PostgreSQL when the new limit is ≥ every existing value **and** ≥ the old (unbounded) declared
-  type only re-scans if narrowing; a `USING` clause is not needed. At current row counts this is not
-  a lock concern, but add the `MISSING_LOCK_TIMEOUT` / rebaseline note per the conventions doc if the
-  lint requires it (`V128+` binding). Set `@Column(length = 255)` on the entity field.
+  in a new `V13x__…` migration (no `USING` — `varchar` → `varchar(255)` is binary-coercible, same
+  on-disk representation, so **no table rewrite**). PostgreSQL still takes an `ACCESS EXCLUSIVE` lock
+  and scans the table once to verify every existing value fits in 255 — negligible at current row
+  counts (the table holds one row per Stripe webhook and Stripe ids are ~28 chars), but per
+  `docs/deployment/migration-conventions.md` set an explicit `lock_timeout` at the top of the
+  migration and add the file to the doc's lock-unsafe list if `MigrationLint` (`V128+` binding)
+  flags it. Set `@Column(length = 255)` on the `StripeWebhookEvent` entity's `event_id` /
+  `eventId` field.
 - **Ledger:** `## Deferred from: code review of skillars-7-1-stripe-connect-onboarding-commission-engine
   (2026-06-24)` — "D3: Unbounded `VARCHAR` on `stripe_webhook_events.event_id`". Delete the D3
   bullet (D4 stays — see **Items examined and NOT folded in**).
@@ -364,25 +420,49 @@ production deploy, and `deferred-work.md` reflects only work that genuinely stil
 - **Task:** Fix `RevenueReportingService`'s running-balance pagination anchor so two
   `ParentCreditLedger` rows with an identical `createdAt` instant straddling a page boundary do not
   understate the current page's running balance by the excluded twin's amount.
-- **Verified at HEAD:** `src/main/java/com/softropic/skillars/platform/payment/service/RevenueReportingService.java:233`
-  — `BigDecimal openingBalance = parentCreditLedgerRepository.sumByParentIdAndCreatedAtBefore(parentId, oldest.getCreatedAt());`
-  then `:238` `BigDecimal balance = openingBalance;` and the per-row accumulation follows. The
-  strict-`<` predicate in `sumByParentIdAndCreatedAtBefore` excludes any row whose `createdAt`
-  equals `oldest.getCreatedAt()` — including a twin that sorts onto the previous page. Rare, but
-  exact when it happens.
-- **Fix approach:** The page is ordered by `(createdAt, <tiebreaker>)`. The opening balance must sum
-  every row that sorts **before the first row of this page**, which means "`createdAt <
-  oldest.createdAt`" **plus** "`createdAt = oldest.createdAt` **and** tiebreaker `< oldest.<tiebreaker>`".
-  Identify the actual sort tiebreaker used by the page query (likely `id` or a sequence column);
-  add a repository method `sumByParentIdBeforeAnchor(parentId, createdAt, tiebreaker)` with the
-  compound predicate, and call it from `:233`. If the page query has **no** deterministic tiebreaker,
-  that is the real bug — add one (`ORDER BY created_at, id`) and make the opening-balance sum match.
+- **Verified at HEAD:**
+  - `RevenueReportingService.java:225` — the page is fetched by
+    `parentCreditLedgerRepository.findByParentAndPeriod(parentId, effectiveFrom, effectiveTo, pageable)`.
+  - `ParentCreditLedgerRepository.java:23` — that query is
+    `@Query("SELECT l FROM ParentCreditLedger l WHERE l.parentId = :parentId AND l.createdAt BETWEEN :from AND :to ORDER BY l.createdAt DESC")` —
+    **there is NO deterministic tiebreaker at HEAD.** Ordering within a `createdAt` tie is whatever
+    the caller's `Pageable` adds (and `getCreditStatement` takes the `Pageable` from its caller, so
+    an unsorted page request leaves tie order = arbitrary DB heap order).
+  - `:233` `openingBalance = parentCreditLedgerRepository.sumByParentIdAndCreatedAtBefore(parentId, oldest.getCreatedAt())`;
+    `:232` `oldest = entries.get(entries.size() - 1)`; `:238-241` accumulate ascending from
+    `openingBalance`. `ParentCreditLedgerRepository.java:29` —
+    `sumByParentIdAndCreatedAtBefore` is `… WHERE l.parentId = :parentId AND l.createdAt < :before`
+    (strict `<`), so any row whose `createdAt` equals `oldest.getCreatedAt()` is dropped from the
+    opening balance — including a twin that (non-deterministically) sorted onto the previous page.
+- **Fix approach (two coupled changes — this is slightly larger than "add a predicate"):**
+  1. **Add a deterministic tiebreaker to the page query.** Change `:23`'s `@Query` to
+     `… ORDER BY l.createdAt DESC, l.txId DESC` (`txId` is the entity's `UUID` id — see
+     `e.getTxId()` used as the balance-map key at `:240`). This makes pagination stable; it is a
+     benign behaviour change (deterministic order replacing arbitrary order — no row is added or
+     removed from any page, only tie order is fixed).
+  2. **Make the opening-balance sum match that order.** `oldest` = `entries.get(size-1)` = the row
+     that sorts **last** on this page in the `createdAt DESC, txId DESC` order (oldest instant, and
+     smallest `txId` among any tie on this page). The opening balance must sum every row that sorts
+     **strictly after `oldest`** in that total order — i.e. every row on a later (older) page. Add
+     `sumByParentIdBeforeAnchor(@Param parentId, @Param createdAt, @Param txId)` with
+     `WHERE l.parentId = :parentId AND (l.createdAt < :createdAt OR (l.createdAt = :createdAt AND l.txId < :txId))`
+     — `<` on `txId` because the order is `DESC`, so a row that sorts *after* `oldest` at the same
+     instant has a *smaller* `txId`. Call it from `:233` with `oldest.getCreatedAt()` and
+     `oldest.getTxId()`. Grep for other callers of `sumByParentIdAndCreatedAtBefore` — keep it if
+     any remain, otherwise remove it.
+  - **Sanity-check the direction with the test below** (seed a known tie, assert the exact expected
+     opening balance) rather than trusting the `<`/`>` reasoning alone — get the sign wrong and the
+     bug flips from "understates" to "double-counts".
 - **Ledger:** `## Deferred from: code review of skillars-7-5-revenue-dashboard-financial-reporting
   (2026-06-26)` — "D1: Running balance incorrect when two ParentCreditLedger entries share an
   identical createdAt instant and straddle a page boundary". Delete the bullet.
-- **Test:** Service-layer / `@Testcontainers` IT: seed two ledger rows with identical `createdAt`,
-  page size 1 so they straddle; assert page 2's opening balance includes page 1's twin. Mutation:
-  revert to the strict-`<` call → assertion fails.
+- **Test:** `@Testcontainers` IT: seed ≥3 ledger rows for one parent where the page-2 boundary row
+  has a twin at the same `createdAt` on page 3 (page size chosen so the tie straddles the 2/3
+  boundary); assert page 2's first running-balance value equals the exact hand-computed sum
+  *including* the page-3 twin. Mutation A: revert `:233` to `sumByParentIdAndCreatedAtBefore` →
+  assertion fails (understated). Mutation B: flip the `txId` comparison to `>` → assertion fails
+  (double-counted). Also assert the page query now returns a **stable** order across repeated calls
+  (the tiebreaker change).
 
 ---
 
@@ -390,27 +470,36 @@ production deploy, and `deferred-work.md` reflects only work that genuinely stil
 
 - **Task:** Introduce a single source of truth for session status values and use it everywhere
   `SessionPlanService` currently compares/sets a bare `"COMPLETED"` / `"CANCELLED"` string.
-- **Verified at HEAD:** `src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java`
-  — `:128` `if ("COMPLETED".equals(session.getStatus()) || "CANCELLED".equals(session.getStatus()))`,
-  `:170` `if (!"COMPLETED".equals(session.getStatus()))`, `:171` `session.setStatus("COMPLETED")`,
-  `:197` `if ("COMPLETED".equals(event.newStatus()) …`. `Session.status` is a `String` column
-  (raw-string status is the codebase convention — see `deferred-work.md` `skillars-7-2` D4 for the
-  same pattern in payment, left as-is by cost). This AC does **not** migrate the column to an enum —
-  it removes the *magic strings* in this one service.
-- **Fix approach:** Add `public final class SessionStatus { public static final String COMPLETED =
-  "COMPLETED"; public static final String CANCELLED = "CANCELLED"; … private SessionStatus(){} }` in
-  the `session` module's `contract` (or wherever `Session` lives), covering the full set the column
-  can hold (grep `setStatus(` / `.getStatus()` across `session/**` for the complete list). Replace
-  the four literals. Do **not** chase every other module in this story — scope is `SessionPlanService`
-  (the ledger bullet's cited file class), but if `SessionCompletionDataRepository` still carries a
-  JPQL `'COMPLETED'` literal (the original W1 citation), swap it to a bound parameter fed from the
-  constant in the same pass.
+- **Verified at HEAD:**
+  - `SessionPlanService.java` — `:128` `if ("COMPLETED".equals(session.getStatus()) || "CANCELLED".equals(session.getStatus()))`,
+    `:170` `if (!"COMPLETED".equals(session.getStatus()))`, `:171` `session.setStatus("COMPLETED")`,
+    `:197` `if ("COMPLETED".equals(event.newStatus()) …`. `Session.status` is a raw `String` column
+    (raw-string status is the codebase convention — see `deferred-work.md` `skillars-7-2` D4, left
+    as-is by cost). This AC does **not** migrate the column to an enum — it removes the *magic
+    strings*.
+  - **The original W1 citation has drifted.** `SessionCompletionDataRepository.java:23` no longer
+    contains a bare `'COMPLETED'` — the JPQL now reads `AND b.status = 'COMPLETED_PENDING_CONFIRMATION'`
+    (a `booking` status literal). The W1 *concern* (a hardcoded status string in JPQL, fragile to a
+    status rename) is still live, just with a different value.
+- **Fix approach:**
+  - Add `public final class SessionStatus { public static final String COMPLETED = "COMPLETED";
+    public static final String CANCELLED = "CANCELLED"; … private SessionStatus() {} }` beside
+    `Session` in the `session` module (grep `session.setStatus(` / `session.getStatus()` across
+    `session/**` for the full value set to include). Replace the four `SessionPlanService` literals.
+  - For `SessionCompletionDataRepository:23`'s `'COMPLETED_PENDING_CONFIRMATION'`: grep for an
+    existing `BookingStatus` constant/enum holding that value (`grep -rn "COMPLETED_PENDING_CONFIRMATION"
+    src/main/java`). If one exists, bind it as a `@Param` fed from that constant; if the codebase has
+    no booking-status constants at all (raw strings only, like `Session`), add a `BookingStatus`
+    constants class in the `booking` module mirroring `SessionStatus` and use it. Either way the
+    JPQL stops carrying the literal.
 - **Ledger:** `## Deferred from: code review of skillars-3-6-session-completion-live-mode-quick-complete
   (2026-06-16)` — "W1: JPQL string literal `'COMPLETED'` in `findPendingQuickCompletes` is fragile
-  against `BookingStatus` enum rename". Delete the W1 bullet.
-- **Test:** `mvn -o test-compile` + targeted `mvn -o test -Dtest=SessionPlanServiceTest,SessionPlanServiceIT`
-  (whichever exist) — behaviour unchanged, so all existing session-plan tests stay green. No new
-  behaviour to assert; the value is compile-time safety.
+  against `BookingStatus` enum rename". Delete the W1 bullet (its concern is fully addressed even
+  though the literal value it named has since changed).
+- **Test:** `mvn -o test-compile` + `mvn -o test -Dtest=SessionPlanServiceTest,SessionPlanServiceIT,SessionCompletionDataRepositoryIT`
+  (whichever exist) — behaviour unchanged, all existing tests stay green. No new behaviour to
+  assert; the value is compile-time safety. If `findPendingQuickCompletes` has an IT, confirm it
+  still returns the same rows after the literal → param swap.
 
 ---
 
@@ -437,30 +526,43 @@ production deploy, and `deferred-work.md` reflects only work that genuinely stil
 
 ---
 
-### AC14: `MessagingService.getConversations` — re-measure the N+1 and either batch it or pin the cost
+### AC14: `MessagingService.getConversations` — pin the (already-constant) query cost with a regression IT
 
-- **Task:** Determine the actual per-request query count of `getConversations` at HEAD; if there is a
-  residual per-row lookup in `toSummary` / `buildSummaryContext`, batch it; if the cost is already
-  constant, add a query-count IT as the regression guard and close the ledger item as measured.
-- **Verified at HEAD:** `src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java`
-  — `getConversations` (`:105`) already batches: the age-policy lookup is a single
-  `agePolicyService.findMessagingPoliciesByPlayerIds(…)` (`:116`, from `deferred-90` AC13), and
-  `buildSummaryContext` (`:~424-449`) does `coachProfileRepository.findAllById(coachIds)`,
-  `findLatestApprovedPerConversation(conversationIds)`, `countUnreadPerConversation(conversationIds, …)`.
-  The remaining question is whether `toSummary` (`:~164`) does anything per-row (player name? last
-  message body?) that escapes the context. `deferred-101`'s audit still lists `skillars-8-1` D2 as
-  "real, open (MVP-volume perf tradeoff, explicitly parked)".
-- **Fix approach:** Read `toSummary` and `buildSummaryContext` in full. If a per-row repository call
-  remains, add it to `SummaryContext` as a batched map (mirror the existing `findAllById` pattern).
-  Whatever the outcome, add `MessagingConversationsQueryCountIT` in the style of
-  `CoachPublicProfileQueryCountIT` (`deferred-91` AC11) — seed N conversations, assert the JDBC
-  round-trip count is **constant** as N doubles. If a genuine batch was added, the IT fails without
-  it (mutation-sensitive by construction).
-- **Ledger:** the `skillars-8-1` D2 line — currently only referenced in audit-block prose (the
-  standalone bullet was pruned long ago). If a standalone `skillars-8-1` bullet still exists, delete
-  it; otherwise add one line to the `deferred-101` audit block's "Items re-verified still open" list
-  noting D2 is now closed/measured by `deferred-102` AC14.
-- **Test:** `MessagingConversationsQueryCountIT` (new). `mvn -o test -Dtest=MessagingConversationsQueryCountIT,AgeTierTransitionTest`.
+- **Task:** Add a query-count IT that locks `getConversations` at a **constant** number of JDBC
+  round-trips regardless of conversation count, and close the `skillars-8-1` D2 ledger line as
+  measured. Batching work is **not expected** — see below.
+- **Verified at HEAD (fully traced during story creation):**
+  `src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java` —
+  - `getConversations` (`:105`) selects the conversation list once per role, does one batched
+    `agePolicyService.findMessagingPoliciesByPlayerIds(playerIds)` (`:116`, `deferred-90` AC13),
+    builds **one** `SummaryContext` via `buildSummaryContext(conversations, …)` (`:~163`), then maps
+    every row through the **4-arg** `toSummary(conv, callerUserId, role, ctx)` (`:~164`).
+  - `buildSummaryContext` (`:417-455`) batches **everything**: `findMessagingPoliciesByPlayerIds`,
+    `playerProfileService.getPlayerNamesByPlayerIds(playerIds)`, `coachProfileRepository.findAllById(coachIds)`,
+    `messageRepository.findLatestApprovedPerConversation(conversationIds)`,
+    `messageRepository.countUnreadPerConversation(conversationIds, …)` — all set-keyed, no loop.
+  - The **4-arg** `toSummary` (`:~460+`) reads **only** from `ctx` (`ctx.lastApprovedByConversationId().get(...)`,
+    `ctx.unreadByConversationId().getOrDefault(...)`, `resolveOtherPartyName(conv, role, ctx)`) — **zero
+    per-row repository calls**. The 2-arg `toSummary(conv, callerUserId, role)` (`:~457`) that rebuilds
+    context per row is **not on this path** (it is a convenience overload used elsewhere).
+  - **Conclusion:** the N+1 `skillars-8-1` D2 describes was already closed incrementally by
+    `deferred-90` AC13 + `deferred-91` AC19 (null-tolerant batched name lookups). `deferred-101`'s
+    audit line ("real, open") is stale. This AC is **path B only** — no batching to add.
+- **Fix approach:** Add `MessagingConversationsQueryCountIT` in the style of
+  `CoachPublicProfileQueryCountIT` (`deferred-91` AC11) — seed a parent with K conversations, call
+  `getConversations`, capture the Hibernate statement count (the project's existing query-count
+  harness / `SQLStatementCountValidator` or the `CoachPublicProfileQueryCountIT` mechanism), then
+  double K and assert the count is **unchanged**. If tracing turns up a per-row call that this
+  story-creation read missed, batch it into `SummaryContext` (mirror `findAllById`) — but treat that
+  as an unexpected finding, not the plan.
+- **Ledger:** no standalone `skillars-8-1` bullet remains (pruned long ago — grep to be sure). Add
+  one line to the `## Last audit: 2026-09-08 (skillars-deferred-101 …)` block's "Items re-verified
+  still open" list: `skillars-8-1 D2 — closed/measured by skillars-deferred-102 AC14
+  (MessagingConversationsQueryCountIT); getConversations is O(1) queries since deferred-90 AC13 /
+  deferred-91 AC19`.
+- **Test:** `MessagingConversationsQueryCountIT` (new), `mvn -o test -Dtest=MessagingConversationsQueryCountIT`.
+  Mutation (to prove the IT bites): temporarily change the 4-arg `toSummary` to call the 2-arg
+  overload → per-row context rebuild → count scales with K → IT fails.
 
 ---
 
@@ -550,13 +652,19 @@ production deploy, and `deferred-work.md` reflects only work that genuinely stil
   Java package was retired; some 3.x lines kept a `com.github.librepdf` groupId — confirm the exact
   coordinates from the #141 diff and the openpdf 3.0.5 release notes during implementation).
 - **Fix approach:**
-  - Take the `pom.xml` change from Dependabot #141 (groupId/artifactId/version as #141 sets them).
-  - Rewrite the 12 imports to the 3.x package names. openpdf 3.x is API-compatible with iText 2.x /
-    openpdf 1.x at the class level — `Document`, `PdfWriter.getInstance`, `PdfPTable`, `PdfPCell`,
-    `FontFactory`, `Image.getInstance`, `PageSize` all keep their signatures; only the package
-    changed. Compile-check for any method that *was* removed in 3.x and adjust.
-  - openpdf 3.x requires Java 17+ — the project is on JDK 17 (`_bmad/bmm/config.yaml` context / the
-    CI `Set up JDK 17` step), so no toolchain change.
+  - **First** open the openpdf **3.0.0 and 3.0.5 release notes / CHANGELOG**
+    (github.com/LibrePDF/OpenPDF releases) and list any **removed or renamed** public API — the 3.0
+    line dropped some long-deprecated members alongside the package move. Diff that list against the
+    ~12 symbols this file uses (`Document`, `PdfWriter.getInstance`, `PdfPTable(int)`,
+    `PdfPCell(Phrase)`, `FontFactory.getFont`, `Image.getInstance`, `PageSize.A4`, `Paragraph`,
+    `Phrase`, `Font`). Expectation: all survive with identical signatures (only the package moved),
+    but confirm before editing so the compile isn't the first place you learn otherwise.
+  - Take the `pom.xml` change from Dependabot #141 verbatim (groupId/artifactId/version exactly as
+    #141 sets them — the 3.x coordinates may be `org.openpdf:openpdf` *or* keep
+    `com.github.librepdf:openpdf`; #141's diff is authoritative).
+  - Rewrite the 12 imports (`com.lowagie.text.*` → the 3.x package, likely `org.openpdf.text.*`);
+    apply any adjustments the CHANGELOG review flagged.
+  - openpdf 3.x requires Java 17+ — the project is on JDK 17, so no toolchain change.
   - After the branch is green, merge Dependabot #141 (or push the equivalent change and close #141
     with a note pointing at this story).
 - **Ledger:** no `deferred-work.md` bullet (the openpdf bump is a Dependabot item, not a ledger
@@ -580,15 +688,26 @@ production deploy, and `deferred-work.md` reflects only work that genuinely stil
     `deferred-91` AC5 Part B bullet is untouched.
   - **Decision D3** — `deploy-1-5` clone-as-root closed via a dedicated non-root deploy user (AC6),
     not "accept + document".
-  - **`skillars-deferred-97`** is superseded by this story — set its `sprint-status.yaml` entry to
-    `withdrawn` with a comment pointing here.
+  - **`skillars-8-1` D2** — closed/measured by AC14 (add the line to the existing `deferred-101`
+    audit block, per AC14's Ledger note).
+  - **Stale-citation corrections** made during implementation: AC3's `postgres/`-unverified half
+    (already covered by the `-ni` dry-run), AC12's `'COMPLETED'` → `'COMPLETED_PENDING_CONFIRMATION'`
+    literal drift, AC11's "no tiebreaker at HEAD" finding. Note each in the audit block so a future
+    reader knows the bullet text and the fix diverged.
+- **`skillars-deferred-97`** — **already** set to `withdrawn` in `sprint-status.yaml` at story
+  creation (2026-09-08), with a comment pointing here. AC19 only **verifies** it is still
+  `withdrawn`; no change needed unless it drifted.
 - **Verified at HEAD:** the bullets named by AC1–AC18 all exist in `deferred-work.md` @ `31982170`
-  (re-confirm each citation immediately before deleting — line numbers will have drifted).
+  (re-confirm each citation immediately before deleting — line numbers will have drifted). Two AC
+  citations were found already-narrowed at creation and their bullets are still deleted (the concern
+  is closed): AC3 (`skillars-deferred-87` pre-Volume verify) and AC12 (`skillars-3-6` W1).
 - **Do NOT touch:** any `[DECIDED]` / `[DISMISSED]` / `[PICKED UP]` bullet, and every item in
-  **Items examined and NOT folded in** below.
+  **Items examined and NOT folded in** below. In particular `skillars-7-1` **D4** stays (only D3 is
+  deleted by AC10).
 - **Ledger:** n/a (this AC *is* the ledger work).
 - **Test:** `git diff deferred-work.md` reviewed against this AC's list; the Reconstruction check
-  statement is literally true (every surviving non-blank line matches the pre-edit file, in order).
+  statement is literally true (every surviving non-blank line matches the pre-edit file, in order);
+  `grep -c 'DECIDED\|DISMISSED' deferred-work.md` unchanged from the pre-edit count.
 
 ---
 
@@ -725,8 +844,28 @@ _(to be filled by the dev agent)_
 
 ---
 
+## Story Review
+
+_Reviewed 2026-09-08 (`story-review.md`), pre-implementation. 5 "critical" + 3 minor findings; all
+were genuine specificity gaps rather than scope problems. Resolutions folded into the ACs above:_
+
+| Finding | Resolution |
+|---|---|
+| AC2 — retry-exhausted exit contract undefined | AC2 now states it explicitly: keep `RESTORE_OK=0`, the trap's `docker compose start app` is an accepted harmless no-op for a slow-to-register container; distinct diagnostic before `exit 1`. No third `RESTORE_OK` value. |
+| AC5 — SSH exit-status capture "how?" + "every iteration?" unclear | AC5 now spells out the `OUT=$(ssh …); SSH_RC=$?` mechanics, per-iteration handling (255 → `continue`, don't count), and an **explicit threshold**: `result=error` only when `transport_fail == total iterations`; any mix of 255s + real `0`s is `fail`. Two dry-run tests added. |
+| AC6 — `deploy` user permission model unspecified | AC6 now carries a full actor/permission table. Key point the review missed: **`deploy` never writes `data/**`** — containers do, as their own UIDs; `provision.sh` stays root; cron backup scripts stay root. `deploy` needs only `docker` group + ownership of `/opt/skillars/app`. No sudo, no service-group membership. Path fixed to `/opt/skillars/app` (sibling of `data/`). |
+| AC7 — depends on AC6 path choice | AC6 now commits to `/opt/skillars/app`; AC7 rewritten as the concrete residual (grep other pre-mount writes under `${MOUNT_POINT}`, add a `mountpoint -q` assertion). |
+| AC11 — pagination tiebreaker "identify" but existence unverified | Verified at HEAD: **no tiebreaker exists** (`findByParentAndPeriod` is `ORDER BY l.createdAt DESC` only). AC11 rewritten as two coupled changes (add `, l.txId DESC` to the page query + compound opening-balance predicate with the correct `DESC`-aware sign) and a mutation test in **both** directions. |
+| AC14 — "entirely conditional / exploratory" | Fully traced during this review: `getConversations` is **already O(1) queries** (4-arg `toSummary` reads only from the batched `SummaryContext`; the 2-arg overload is off-path). AC14 rewritten as **path B only** — add `MessagingConversationsQueryCountIT`, close `skillars-8-1` D2 as measured. Batching is now "unexpected finding", not the plan. |
+| AC3 — "armed dirs" jargon | AC3 now enumerates them (`redis grafana loki tempo prometheus` — the literal `:422` loop) + `traefik/acme.json`. |
+| AC4 — "pick the number" subjective | AC4 now fixes `N = 24` with an explicit formula for when `start_period > 60s`. |
+| AC18 — openpdf removed-API list absent | AC18 now makes "read the 3.0.x CHANGELOG for removed API and diff against this file's ~12 symbols" the **first** step, before any edit. |
+| AC1 — trap `rm` could fail (false-assumption note) | AC1 now uses `trap 'rm -f "${DUMP_FILE}" || true' EXIT`. |
+| Review's "sprint-status not in Files-in-play table" | **False positive** — it is (Ledger row). Review's "no false positives detected" self-assessment was slightly off; also #4 in its own "False Assumptions" list (questioning owner decision D3) is out of scope. |
+
 ## Change Log
 
 | Date | Change |
 |------|--------|
 | 2026-09-08 | Story created from `deferred-work.md` @ `31982170`. 19 ACs across backup/restore resilience, deploy-smoke, provisioning hardening, one schema change, and cross-module correctness (payment reporting, session-status constants, drills, messaging perf, video entity, two frontend, openpdf 3.x). Absorbs `skillars-deferred-97`. Project-owner decisions D1–D4 captured. Status: ready-for-dev. |
+| 2026-09-08 | Applied `story-review.md` pre-implementation review: tightened AC2 (exit contract), AC5 (SSH capture mechanics + threshold), AC6 (explicit permission table), AC7 (concrete residual), AC11 (verified no tiebreaker — now a 2-part change), AC12 (W1 literal-drift correction), AC14 (verified already O(1) — path B only), AC3/AC4/AC18/AC1 (specificity). No scope change. |

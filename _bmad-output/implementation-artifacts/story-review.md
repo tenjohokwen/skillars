@@ -1,248 +1,251 @@
-# skillars-deferred-101: Story Audit Review
+# Story Review: skillars-deferred-102
 
-**Audit Date:** 2026-09-08  
-**Reviewer:** Senior Dev Audit  
-**Status:** Ready for Implementation
+**Status:** Review complete | **Date:** 2026-09-08
 
 ---
 
-## Summary
+## Executive Summary
 
-The story is **well-structured and mostly correct**. No false positives detected. The "Verified at HEAD" discipline is solid, and the scope is properly bounded. However, **three critical assumptions** require explicit verification before implementation, and **two behavior changes** need caller-impact awareness.
+The story is well-structured and comprehensive, with each AC grounded in verified HEAD state. However, there are **5 implementation-time gaps** that will require design decisions or clarifications during dev:
 
----
+1. **AC2** — restore exit contract undefined when container registration exhausts
+2. **AC5** — SSH exit-status separation lacks implementation detail; transport-failure threshold unclear
+3. **AC6** — permission model for `deploy` user touching service-owned `data/**` is unspecified
+4. **AC11** — pagination tiebreaker must exist; implementation is conditional on verification
+5. **AC14** — entirely exploratory (measure → act on findings); AC19 ledger closure depends on outcome
 
-## Critical Assumptions Requiring Verification
+Additionally, **3 minor specificity gaps** (AC3 "armed dirs", AC4 iteration count, AC18 openpdf release notes) should be resolved before implementation to avoid churn. These are flagged in the detail below.
 
-### 🔴 AC4: `onBookingCancelledByAdmin` may break strike-then-refund ordering
-
-**Issue:** Moving from `AFTER_COMMIT` to `BEFORE_COMMIT` changes *when* the refund enqueue happens relative to the strike suspension write. The AC acknowledges this ("Watch the strike-then-refund ordering") and references javadoc `:107-121`, but **the verification is conditional on the dev**, not pre-verified.
-
-**Risk:** If the strike suspension's visibility in the transaction is a genuine precondition (not just "should be ordered before for clarity"), moving the refund enqueue earlier could cause:
-- Refund enqueued *before* the suspension is visible in the same transaction
-- Downstream refund-processor assumes strike is already applied
-- Silent data inconsistency (suspension is written *after* refund enqueue commits if they're in the same transaction)
-
-**Mitigation:** The AC's fallback is correct — "If any of the four genuinely depends on AFTER_COMMIT semantics... it does NOT move." But the story must **verify this explicitly in Dev Agent Record**:
-- Read `onBookingCancelledByAdmin` javadoc and the `ReliabilityStrikeService` interaction
-- If the refund *must* see a committed strike, do not move this listener; record why in the Dev Agent Record
-- If moving is safe, add a comment citing the verified ordering (e.g., "Both the strike and refund enqueue in the same tx; order doesn't matter since both commit atomically")
-
-**Test:** The AC's mutation test (force business rollback) covers this, but only if the dev explicitly runs it for `onBookingCancelledByAdmin` (not just one of the four).
+**Recommendation:** The story is ready for dev after the dev agent resolves the 5 design gaps via CLAUDE.md clarifications or inline comments during implementation. No scope change needed.
 
 ---
 
-### 🔴 AC8: `createTemplate()` throwing is a breaking behavior change
+## Detailed Findings
 
-**Issue:** The store function currently **swallows errors silently**. Making it throw is a behavior change. The AC assumes callers will handle because "other mutating actions throw," but this assumes:
-1. All existing callers already expect exceptions, OR
-2. All callers are in the codebase and visible to grep
+### 🔴 Critical Gaps (must resolve before / during dev)
 
-**Risk:** If `createTemplate()` is called from a place that never had error handling (e.g., auto-save logic, background sync), throwing will cause unhandled promise rejections or crashes.
+#### AC2: `restore-from-dump.sh` — APP_CID retry exit contract
 
-**Mitigation:**
-- Grep for all callers of `createTemplate` (not just `SessionTemplateVault.vue` / `SessionBuilderPage.vue`) — use `sessionStore.createTemplate` to find them
-- For each caller, verify it has a `.catch()` handler or wraps in `try/catch`
-- If any caller lacks error handling, either:
-  - Add the error handling to the caller before this AC ships, OR
-  - Note in Dev Agent Record that callers were verified to already handle
+**Issue:** The AC specifies a retry loop around `docker compose ps -q app` to handle slow container registration, but leaves the exit/signal contract undefined when retries exhaust.
 
-**Test:** The AC says "code-read confirming the five actions now match" — extend this to: "code-read confirming every caller of createTemplate already handles exceptions."
+**Current situation (verified):**
+- `:119` `RESTORE_OK=0` initially
+- `:121` EXIT trap: `if [ "$RESTORE_OK" -eq 0 ]; then docker-compose start app; fi`
+- `:141-142` After health wait succeeds, `RESTORE_OK=1`
+- If the retry-exhausted path keeps `RESTORE_OK=0`, the trap **restarts the app**
 
----
+**The gap:** AC2 says "emit a distinct diagnostic so the operator knows the DB restore itself completed" but does **not** specify whether the EXIT trap should restart the app in this case.
 
-### 🟡 AC5: 404 instead of 204 is a breaking API change
+**Two interpretations:**
+1. Keep `RESTORE_OK=0` → trap restarts app (may be wrong if container registration is just slow)
+2. Set `RESTORE_OK` to a distinct value (e.g., `2`) to signal "restore done, container-register failed" → avoid restart
 
-**Issue:** Changing HTTP status from `204 No Content` to `404 Not Found` is a **breaking change** to the API contract. The AC requires a "caller sweep" but assumes all callers are in the codebase.
-
-**Risk:** If any external clients (mobile app, third-party integrations) are calling this endpoint and expecting `204`, they will break. They may have special-case logic for "204 = no active tier" and will interpret `404` as a real error.
-
-**Mitigation:** The AC's mitigation is solid:
-- Grep `src/frontend/src/api/*.api.js` and callers → confirmed in Dev Agent Record
-- Note: if *no* frontend caller exists yet, this is a non-issue (new endpoint behavior)
-- If external clients exist, this needs a deprecation period or explicit sign-off
-
-**Note:** The project-owner decision `2026-09-08: 404, not 200+null` is explicit, so this is authorized. Just needs to be **recorded in the Dev Agent Record** as "breaking change — all known callers verified in codebase."
+**Recommendation:** Dev agent should clarify with the owner or CLAUDE.md: should the app start or not if the retry exhausts? The test `bash -n + shellcheck` won't catch the logic error.
 
 ---
 
-## Behavior/Logic Assumptions to Watch
+#### AC5: Deploy smoke — SSH/transport failure separation
 
-### AC1: Exception-swallowing scope is broad
+**Issue:** The AC says "capture the `ssh` exit status separately from the remote script's stdout" but doesn't explain **how** given the current pipe structure.
 
-**Issue:** The AC swallows `catch (RuntimeException e)` in `BookingBatchStatusListener.onBookingStatusChanged`. This catches:
-- `IllegalArgumentException` from `findById(null)` ✓ (intended)
-- `PessimisticLockingFailureException` from batch update ✓ (intended)
-- Any other `RuntimeException` from the listener itself (e.g., if there's a bug in the listener code)
+**Current code (verified):**
+```bash
+ssh ... "<remote script>" 2>/dev/null || echo 0
+```
 
-**Risk:** A bug in the listener (division by zero, NPE in a new helper method, etc.) will be silently swallowed as "batch status is now stale" instead of surfacing the real error.
+**The gap:** The implementation must:
+- Capture `ssh`'s exit code (255 for transport failure) **separately** from the remote script's exit code
+- Skip iterations that are transport failures (don't count them as health failures)
+- Exit with `result=error` (not `result=fail`) if **every** iteration is a transport failure
 
-**Mitigation:** This is acceptable **if and only if**:
-1. The listener is short and simple (it is — just one service call)
-2. The ERROR log will surface it to monitoring (AC notes it logs ERROR)
-3. The self-healing assumption (stale batch status recovers on next status change) is documented
+**Missing details:**
+1. **How?** The current pipe collapses both exit codes. Suggestion: run `ssh` separately, capture $?, then check if 255. But the implementation is not spelled out.
+2. **"Every iteration"?** Is this a threshold (e.g., > 20 of 24), or truly all? AC5 says "if every iteration is a transport failure" but doesn't clarify whether 1 or 2 DNS timeouts should trigger the error path.
+3. **Verification:** The test says `bash -n` + re-read the workflow — but "re-read" is weaker than a test that *forces* transport failure and verifies the path is taken.
 
-The AC does this well — the comment cites `deferred-101 AC1` and documents the self-healing. **No change needed**, but the Dev Agent Record should note: "RuntimeException catch is intentional; listener has only one external call, and batch status self-heals."
-
----
-
-### AC2: Option A's return-boolean shape is good, but verify all callers
-
-**Issue:** Changing `reconcileToReady` to return `boolean` is a clean API change, but it requires **all callers** to be updated.
-
-**Risk:** If a caller is missed (e.g., a private helper method somewhere), it will silently not update the incident row, and the bug persists.
-
-**Mitigation:** The AC says "Update the two callers (`ReconciliationWorkerScheduler` here + grep for `AdminVideoService` / any other)". The grep is mandatory. The Dev Agent Record must list all callers found and the changes made to each.
+**Recommendation:** Implementation should document the SSH exit-code capture in a comment block (AC5 already asks for one) and pick a threshold for "all failed" (e.g., current iteration count > 80% failed).
 
 ---
 
-### AC3: Orphan asset tracking assumes the sweeper runs
+#### AC6: Provisioning — `deploy` user permission model
 
-**Issue:** The AC records `priorAssetId` for the sweeper but doesn't address: what if the sweeper is broken or disabled?
+**Issue:** The AC moves the checkout from `/opt/skillars` (root-owned) to `/opt/skillars/app` (deploy-owned) and moves runtime data outside. But the permission contract for the deploy user is undefined.
 
-**Risk:** `pending_provider_asset` rows accumulate forever, billing continues.
+**Questions not answered:**
+1. **Who runs the deploy scripts?** The SSH user is `deploy`, but what about cron jobs, systemd services, or manual re-deploys? Do all of these switch to `deploy`?
+2. **Can `deploy` touch `data/**`?** The AC says "leave `data/**` owned by the service UIDs" (postgres, redis, etc.) but doesn't explain how `deploy` writes to those directories during deployment. Does `deploy` join those groups? Or do the service directories have broad permissions?
+3. **Does `deploy` need sudo?** The AC says "add it to the `docker` group" (so it can run `docker` without sudo) but doesn't say if it needs sudo for other operations like restarting systemd services or mounting volumes.
+4. **Secrets access:** Where do deployment secrets come from (SSH key, AWS creds)? Do they live in `deploy`'s home, or in a shared location? The `secrets.SSH_USER` workflow variable changes to `deploy`, but are there other secrets?
 
-**Mitigation:** This is acceptable because:
-1. The sweeper is a separate component with its own observability
-2. Stale tracking rows don't break correctness (they just don't get cleaned up)
-3. This is no worse than the current state (asset is leaked with no tracking row at all)
+**Risk:** If the permission model is wrong, the deploy will fail at runtime on the first production deployment, which is the exact scenario AC6 aims to prevent.
 
-**No change needed**, but the AC is relying on the sweeper being operational. The Dev Agent Record should note: "Relies on `sweepOrphanedProviderAssets` scheduler running; alert on broken sweeper is a separate concern."
-
----
-
-### AC6: `pg_terminate_backend` is safe but assumes single script invocation
-
-**Issue:** The termination SQL uses `pid <> pg_backend_pid()` to spare the script's own connection. This works correctly for a single invocation.
-
-**Risk:** If two `restore-from-dump.sh` invocations run concurrently on the same host, they will terminate each other's connections (unless in separate containers, which `docker exec` provides).
-
-**Mitigation:** The script is used inside a container (`:108` `docker compose ... stop app`), so concurrent invocations are not possible. The lock-in-time assumption is fine.
-
-**No change needed.**
+**Recommendation:** The dev agent should confirm with the owner (or document in the branch) the exact permission model before writing code. Update AC6's fix approach with explicit answers to the 4 questions above.
 
 ---
 
-### AC9: Three options for test isolation — is the guidance clear enough?
+#### AC11: Revenue running balance — pagination tiebreaker prerequisite
 
-**Issue:** The AC offers three options for `ConfigGuardIT`:
-1. `try/finally` wrapping the mutation
-2. `@AfterAll` static restore net
-3. Stop mutating shared state at all (preferred but "only if small")
+**Issue:** The AC depends on the existence of a deterministic tiebreaker in the page query, but doesn't verify it exists at HEAD.
 
-The AC says "dev's call" but "Best" is option 3. This creates ambiguity: **when is option 3 "genuinely small"?**
+**Relevant quote:**
+> "The page is ordered by `(createdAt, <tiebreaker>)`. The opening balance must sum every row that sorts **before the first row of this page**, which means "`createdAt < oldest.createdAt`" **plus** "`createdAt = oldest.createdAt` **and** tiebreaker `<`"
+> 
+> "Identify the actual sort tiebreaker used by the page query (likely `id` or a sequence column)"
+> 
+> "If the page query has **no** deterministic tiebreaker, that is the real bug — add one (`ORDER BY created_at, id`) and make the opening-balance sum match."
 
-**Mitigation:** The AC adds a pragmatic caveat: "Only do this if it's genuinely small; otherwise the try/finally is the pragmatic fix." This is reasonable because:
-- The test has one mutation point and one clear value to restore
-- `try/finally` is 2 lines of code
-- The dev can judge "small" in context
+**The gap:** The AC says "identify" (verify it exists) but doesn't state whether the tiebreaker **does** exist at HEAD.
 
-**Dev guidance:** Pick option 1 (try/finally) unless option 3 is obviously smaller (e.g., the test can be rewritten in <5 minutes without logic changes).
+**Verified at HEAD:** The story says `:233` calls `sumByParentIdAndCreatedAtBefore` but doesn't confirm the page query's order clause. This requires reading `ParentCreditLedgerRepository.findPageByParentId` (or wherever the page is fetched).
 
----
+**Risk:** If the tiebreaker doesn't exist, the implementation becomes: (1) add the tiebreaker to the page query, (2) verify it's deterministic (e.g., `ORDER BY created_at, id`), (3) add the compound-predicate repo method. This is a larger change than AC11 implies.
 
-## False Positives / Over-Scoping
-
-**None detected.** The story respects its scope boundaries:
-
-✓ AC12 is explicitly "docs + ledger only — NO migration code"  
-✓ "Not in Scope" section blocks re-litigation of `deferred-91` AFTER_COMMIT items outside `CancellationRefundService`  
-✓ AC4 footnote explicitly excludes `packSessionService.restoreSession` idempotency  
-✓ AC8 excludes the `maxlength="200"` client-side UI fix (separate rationale)  
-✓ AC13 says "do NOT scope-creep into fixing" the re-verified deploy-* items
+**Recommendation:** Dev agent should verify the tiebreaker at implementation start and flag if it's missing as a scope expansion.
 
 ---
 
-## Missed Flows / Corner Cases
+#### AC14: Messaging N+1 — entirely conditional
 
-### AC1: What if the listener is invoked concurrently?
+**Issue:** AC14 is not a concrete acceptance criterion; it's "investigate, then do one of two different things depending on findings."
 
-**Status:** ✓ Handled. `@Transactional(REQUIRES_NEW)` gives each invocation its own transaction. Concurrent invocations do not block each other. **No issue.**
+**The AC:**
+> "Determine the actual per-request query count of `getConversations` at HEAD; if there is a residual per-row lookup in `toSummary` / `buildSummaryContext`, batch it; if the cost is already constant, add a query-count IT as the regression guard and close the ledger item as measured."
 
-### AC4: What if the business transaction rolls back after the listener enqueues?
+**The gap:** This is a conditional AC with two paths:
+- Path A: Residual N+1 exists → add batching
+- Path B: No N+1 exists → add a test and close
 
-**Status:** ✓ Handled. The AC tests this: "force the business transaction to roll back **after** the listener would have enqueued → assert **zero** `outbox` rows." **No issue.**
+The story doesn't specify which path to take. The implementation is exploratory.
 
-### AC5: What if a coach has no active tier? (current behavior)
+**Risk:** The test bar is different for each path (Path B adds a test, but Path A doesn't explicitly say to add one). The AC19 ledger entry depends on which path was taken (close the item? Keep it?)
 
-**Status:** ✓ Addressed. `sessionPackPaymentService.getActiveCoachTier(coachId)` returns `null` for "no active tier" — this is verified in the AC. The fix translates null → `404`. **No issue.**
-
-### AC10: Is one representative 401 IT enough?
-
-**Status:** ✓ Acknowledged. The AC explicitly says "the fix is *representative* coverage, not exhaustive." This is a documented tradeoff. **No issue.**
-
----
-
-## Ledger Consistency Check
-
-The story closes these ledger bullets:
-- deferred-100 code review (AC1, AC2, AC3, AC11)
-- skillars-10-2 code review D1 (AC4)
-- Group 3 deferred D11 (AC5)
-- deploy-3-4 code review (AC6)
-- deploy-1-3 code review (AC7)
-- skillars-4-5 Round 2 code review W5 (AC8)
-- skillars-deferred-1 D1, D2 (AC9, AC10)
-- Six migration-lock bullets (AC12)
-- skillars-3-1 code review + deploy-2-2 Fail workflow (AC13)
-
-**Verification:** All AC **Ledger** lines are present and match the deletions in AC13. Cross-referenced entries look correct.
-
-✓ Ledger consistency is good.
+**Recommendation:** Implementation should read `toSummary` and `buildSummaryContext` in full at the start and decide on path. Add a test in both cases (AC19 should close the ledger regardless). The story should be clearer: add a `MessagingConversationsQueryCountIT` *always*, and conditionally add batching if it's needed.
 
 ---
 
-## Test Coverage Assessment
+### 🟡 Minor Specificity Gaps (flag but likely resolvable)
 
-| AC | Test Type | Coverage | Risk |
-|---|---|---|---|
-| AC1 | Unit | null-id, exception isolation (2 mutations) | Low — simple happy path + failure branch |
-| AC2 | IT | concurrent already-READY (1 mutation) | Low — one clear race condition |
-| AC3 | IT | retry → tracking row → sweeper (1 mutation) | Low — end-to-end flow |
-| AC4 | IT | rollback atomicity, happy path (2 mutations) | **Medium** — requires verifying strike-ordering first |
-| AC5 | IT | 404 + error body, 200 unchanged (1 mutation) | Low — simple status-code change |
-| AC6 | Shell | bash -n, manual trace | N/A — deterministic; no edge cases |
-| AC7 | Compose | config parse | N/A — purely syntactic |
-| AC8 | Code-read | 5 actions match (0 mutations) | Low — already tested by siblings |
-| AC9 | Logic | restore-on-failure (1 reasoning check) | **Medium** — depends on test-ordering isolation |
-| AC10 | Unit + IT | boundary values, real 401 (2 mutations) | Low — representative coverage noted |
-| AC11 | Unit | version bump + allow-list move | **Medium** — depends on concurrent-writer testing |
-| AC12 | Docs | migration-conventions.md sections | N/A — no code |
-| AC13 | Ledger | line-for-line reconstruction | N/A — mechanical cleanup |
+#### AC3: "armed dirs" is vague
 
-**Medium-risk items:** AC4 (strike ordering), AC9 (test isolation assumption), AC11 (concurrent writers during version bump). All are **acceptable with verification**, which the AC requires.
+**Quote:**
+> `:417-427` does `stat -c '%a %u:%g'` ownership/mode checks on `traefik/acme.json` and each **armed dir**.
+
+**The gap:** "Armed dir" is jargon. Which directories are these? The AC should list them explicitly (e.g., `traefik/acme.json`, `postgres/`, `redis/`) so the implementation doesn't guess.
+
+**Recommendation:** List the directories explicitly in AC3's fix approach, or grep `provision.sh` for the current `stat` checks and cite them.
 
 ---
 
-## Recommendations for Implementation
+#### AC4: Iteration count is underspecified
 
-1. **Before coding AC4:** Explicitly verify the `onBookingCancelledByAdmin` strike-ordering in the Dev Agent Record. If it depends on AFTER_COMMIT semantics, this listener stays put.
+**Quote:**
+> "Bump the iteration count (e.g. `seq 1 24` at 5 s = ~180 s post-startup) — **pick the number** from `docker-compose.yml`'s `app` `start_period` + observed cold-start, and leave a comment with the arithmetic."
 
-2. **Before merging AC8:** Grep all `sessionStore.createTemplate` callers and add a checklist to the Dev Agent Record confirming each caller has error handling.
+**The gap:** "Pick the number" is subjective. Does the dev agent:
+- Read `docker-compose.yml`, see `start_period: 60s`, and guess "180s total is 60 + 120 = 24 × 5"?
+- Run a test deploy and time the JVM cold-start?
+- Ask the owner?
 
-3. **Document in Dev Agent Record (AC5):** Record that the 204→404 change is authorized by project-owner decision 2026-09-08 and that all known frontend callers have been verified in-codebase.
-
-4. **AC9:** Pick `try/finally` unless you have a genuinely small rewrite (< 5 min). Document your choice in the Dev Agent Record.
-
-5. **AC11:** Test the version bump with `AuthResourceIT`, `AuthServiceIT`, and the GDPR erasure IT. If `OptimisticLockException` occurs, fall back to the allow-list + guard-test approach documented in the AC.
-
----
-
-## No Blocking Issues
-
-The story is **ready to implement**. All critical assumptions are documented, all edge cases are either handled or explicitly out-of-scope, and the test discipline is sound.
-
-The **three items flagged as Critical** (AC4 strike ordering, AC8 caller impact, AC5 breaking change) are not blockers — they just require explicit verification before shipping, which the AC structure supports.
+**Recommendation:** The AC should recommend a concrete default (e.g., "24 iterations ≈ 180s post-startup, or adjust based on observed start times"). The comment block in the code should show the math.
 
 ---
 
-## Overall Assessment
+#### AC18: openpdf 3.x release notes dependency
 
-- **Correctness:** ✓ No logical errors detected
-- **Completeness:** ✓ All flows addressed or explicitly out-of-scope
-- **Scope:** ✓ Well-bounded, no over-scoping
-- **Test Design:** ✓ Mutations verify the fix in both directions
-- **Risk:** ⚠️ Low, with three documented assumptions requiring pre-implementation verification
-- **Ledger Discipline:** ✓ Clean and consistent
+**Quote:**
+> "openpdf 3.x is API-compatible with iText 2.x / openpdf 1.x at the class level — `Document`, `PdfWriter.getInstance`, `PdfPTable`, `PdfPCell`, `FontFactory`, `Image.getInstance`, `PageSize` all keep their signatures; only the package changed. Compile-check for any method that *was* removed in 3.x and adjust."
 
-**Verdict:** Ready to implement. Flag the three critical assumptions in the Dev Agent Record and proceed.
+**The gap:** The AC doesn't list which methods (if any) were removed. The implementation must check the openpdf 3.0.5 release notes separately, and the AC doesn't provide a link or guidance.
+
+**Recommendation:** Implementation should check openpdf 3.0.5 release notes before starting. If methods were removed, the AC should have listed them. The compile-check will catch it, but a pre-compile search would be faster.
+
+---
+
+### 🔵 Unresolved Dependencies
+
+#### AC6 ↔ AC7 ordering
+
+AC7 depends on AC6's path choice:
+> "After AC6 moves the checkout to its own path, confirm that path is **not** under `${MOUNT_POINT}`"
+
+If AC6 chooses `/opt/skillars/app` (under `/opt/skillars`), and the mount point is `/opt/skillars/data`, then the checkout **is** `/opt/skillars/app` and is a sibling of `data/`, not under it. This is correct.
+
+But if AC6 had chosen `/srv/skillars` instead, AC7 would be trivial. The story notes to "confirm details with the owner," which is good, but the implementation should prioritize the `/opt/skillars/app` choice to keep the blast radius small (as the story recommends).
+
+**No gap here, just a dependency to watch.**
+
+---
+
+#### AC19 depends on AC14 outcome
+
+AC19 says:
+> "If a standalone `skillars-8-1` bullet still exists, delete it; otherwise add one line to the `deferred-101` audit block's 'Items re-verified still open' list noting D2 is now closed/measured by `deferred-102` AC14."
+
+This means AC19's ledger entry is conditional on whether AC14 finds an N+1 or not. This is fine, but the implementation should note it.
+
+---
+
+### ✅ Well-Specified Areas
+
+- **AC1, AC8, AC9:** Shell edits are clear and concise.
+- **AC10:** Schema change is straightforward and follows conventions.
+- **AC12, AC13:** Constants/filters are well-scoped.
+- **AC15, AC16, AC17, AC18:** Verification/fix tasks are clear, even if exploratory.
+- **Dev Notes (sequencing):** Correct identification of AC6/AC7 as high-risk and highest-priority.
+- **Testing standards:** Good reference to project conventions.
+- **Project structure notes:** Filesystem/module boundaries are clear (via memory notes).
+
+---
+
+## Potential False Assumptions
+
+1. **AC1:** Assumes the trap's `rm` doesn't fail mid-file. Edge case: if `rm` fails with EROFS, the trap doesn't fail (no `-e` guard). Minor issue, but worth a comment: `trap 'rm -f "${DUMP_FILE}" || true' EXIT` is safer.
+
+2. **AC3:** Assumes `rsync -aHAXcni` doesn't have performance impact. The AC says "small tree" so this is likely fine, but a very large `postgres/` dir could make this a bottleneck. Low probability, but worth noting in the test.
+
+3. **AC4:** Assumes the JVM cold-start is deterministic and predictable. If it varies wildly (e.g., when under memory pressure), 24 × 5s might not be enough. The comment in the code should say "adjust if cold-start times increase."
+
+4. **AC6:** Assumes the owner wants to *avoid* the "accept & document risk" option. The story says D3 decided on "non-root user," but there was a trade-off considered. If the owner later changes their mind, this whole AC is wasted work.
+
+5. **AC11:** Assumes the pagination uses a deterministic order. If the current query is `ORDER BY created_at` with no tiebreaker, adding one is a behavior change (rows may reorder). Unlikely to cause data corruption, but worth verifying.
+
+6. **AC14:** Assumes `buildSummaryContext` is where the N+1 would hide. The AC already checked and found only `toSummary` is questionable. Implementation should verify this is still true.
+
+---
+
+## Ledger Hygiene (AC19) — Verification Checklist
+
+AC19 must delete bullets named by AC1–AC18. The story lists the "Ledger" line for each AC, but implementation must:
+
+1. **Re-verify each bullet exists in `deferred-work.md` at time of implementation** (line numbers will have drifted since 2026-09-08).
+2. **Check `sprint-status.yaml` for `skillars-deferred-97`** — set to `withdrawn`. (Not mentioned in "Files in play" table; should be added.)
+3. **Confirm the Reconstruction check** statement is accurate after deletes.
+
+---
+
+## Testing & Verification Gaps
+
+| AC | Gap | Severity |
+|----|-----|----------|
+| AC2 | No test that forces APP_CID retry to exhaust and verifies exit contract | Medium |
+| AC5 | No test that forces SSH exit 255 and verifies transport-failure path is taken | Medium |
+| AC6 | No dry-run that verifies permission model end-to-end | High |
+| AC11 | No verification that tiebreaker exists before implementation | High |
+| AC14 | Outcome-dependent; test plan differs by path | Medium |
+| AC16 | Manual "attribute and ref agree" is subjective; no automation possible | Low |
+
+---
+
+## Recommendations for Dev Agent
+
+1. **Before implementation:** Clarify AC2 exit contract, AC5 transport-failure threshold, and AC6 permission model with the owner or document in CLAUDE.md.
+2. **At implementation start:** Verify AC11's pagination tiebreaker exists; if not, expand scope or flag as blocker.
+3. **During AC14:** Read the full `toSummary` and `buildSummaryContext` code; decide on path (add batching vs. add test) and document.
+4. **During AC3, AC4, AC18:** Use explicit lists/numbers in code comments (armed dirs, iteration formula, openpdf release notes).
+5. **Final check (AC19):** Re-verify all ledger bullets exist before deletion; check `sprint-status.yaml` for `skillars-deferred-97`.
+
+---
+
+## Conclusion
+
+**Ready for dev with minor clarifications.** No false positives detected; all findings are genuine implementation dependencies or specificity gaps. The story's design is sound and well-grounded in HEAD state. The 5 critical gaps above will require 30–60 minutes of clarification before code write, but no scope rework is needed.
