@@ -32,9 +32,12 @@ public class VideoLifecycleService {
 
     private static final Map<OperationalState, Set<OperationalState>> VALID_TRANSITIONS = Map.of(
         OperationalState.UPLOADING,    Set.of(OperationalState.PROCESSING, OperationalState.FAILED),
-        OperationalState.PROCESSING,   Set.of(OperationalState.SCANNING, OperationalState.READY, OperationalState.FAILED),
-        // PROCESSING→READY kept for backward compat: encoding.success webhook fires before Story 6.3 is deployed.
-        // TODO Story 6.5: remove PROCESSING→READY once deployment confirms all PROCESSING→READY events have ceased.
+        // skillars-deferred-100 AC5: PROCESSING→READY removed. Its original producer — the
+        // encoding.success webhook firing before Story 6.3 was deployed — is gone
+        // (WebhookEventProcessorScheduler records encodingCompletedAt and explicitly does NOT
+        // complete transcoding). The only remaining legitimate PROCESSING→READY writes are
+        // provider-driven reconciliation corrections, which now go through reconcileToReady().
+        OperationalState.PROCESSING,   Set.of(OperationalState.SCANNING, OperationalState.FAILED),
         OperationalState.SCANNING,     Set.of(OperationalState.TRANSCODING, OperationalState.LOCKED, OperationalState.HIDDEN, OperationalState.FAILED),
         OperationalState.TRANSCODING,  Set.of(OperationalState.READY, OperationalState.FAILED),
         OperationalState.FAILED,       Set.of(OperationalState.UPLOADING),
@@ -66,11 +69,17 @@ public class VideoLifecycleService {
             return video; // idempotent
         }
 
-        // Detect backward-compat bypass BEFORE the validity check so the counter fires even though
-        // PROCESSING→READY is a legal transition (kept in VALID_TRANSITIONS until Story 6.5 cleanup).
+        // skillars-deferred-100 AC5: PROCESSING→READY is no longer a valid transition and its only
+        // legitimate callers (reconciliation / admin corrections) now use reconcileToReady(). If
+        // the plain lifecycle path is ever asked for it again, that is a regression that bypasses
+        // the entire moderation pipeline — make it LOUD (ERROR + the bypass counter), not silent,
+        // then throw. Kept before the generic validity check purely so the counter still fires.
         if (current == OperationalState.PROCESSING && newState == OperationalState.READY) {
-            log.warn("PROCESSING→READY bypass taken for videoId={} — moderation pipeline was not run", videoId);
+            log.error("PROCESSING→READY requested on the plain lifecycle path for videoId={} — this "
+                + "bypasses the moderation pipeline and is no longer a valid transition; "
+                + "reconciliation corrections must call reconcileToReady()", videoId);
             meterRegistry.counter("video.moderation.bypass", "from", "PROCESSING", "to", "READY").increment();
+            throw new TerminalStateViolationException(videoId, current.name());
         }
 
         if (!VALID_TRANSITIONS.getOrDefault(current, Set.of()).contains(newState)) {
@@ -86,6 +95,50 @@ public class VideoLifecycleService {
 
         publisher.publishEvent(new VideoStatusChangedEvent(videoId, newState));
 
+        return saved;
+    }
+
+    /**
+     * skillars-deferred-100 AC5: the dedicated path for the only legitimate PROCESSING→READY
+     * writes — provider-driven reconciliation corrections ({@code ReconciliationWorkerScheduler},
+     * {@code AdminVideoService}) where the provider reports the asset READY but the local row is
+     * stuck at PROCESSING. It makes the same state write and fires the same
+     * {@link VideoStatusChangedEvent} as {@link #transitionOperationalState} would, but does
+     * <strong>not</strong> touch the {@code video.moderation.bypass} counter or log the alarming
+     * "moderation pipeline was not run" line — driving these corrections through the plain method
+     * (now that PROCESSING→READY is not in {@code VALID_TRANSITIONS}) would be a false positive.
+     * The durable record of a legitimate correction is the caller's
+     * {@code ReconciliationIncident(STATE_CORRECTED, …)} row; here we only log an INFO tied to
+     * {@code reason}.
+     *
+     * <p>Idempotent when the video is already READY (a prior correction won the race). Any other
+     * non-PROCESSING state means the correction no longer applies — a
+     * {@link VideoStateConflictException} for the caller, not a 5xx.
+     *
+     * <p>skillars-deferred-100 code review (2026-09-08): every applied correction increments
+     * {@code video.reconciliation.state_corrected}. This path deliberately does not fire
+     * {@code video.moderation.bypass}, but a PROCESSING→READY jump still skips the SCANNING
+     * moderation step, so it must stay observable — alert on a rate/level here.
+     */
+    @Observed(name = "video.lifecycle.reconcileToReady")
+    @Transactional
+    public Video reconcileToReady(UUID videoId, String reason) {
+        Video video = videoRepository.findById(videoId)
+            .orElseThrow(() -> new VideoNotFoundException(videoId));
+
+        OperationalState current = video.getOperationalState();
+        if (current == OperationalState.READY) {
+            return video; // already corrected — idempotent
+        }
+        if (current != OperationalState.PROCESSING) {
+            throw new VideoStateConflictException(videoId, OperationalState.PROCESSING.name(), current.name());
+        }
+
+        video.setOperationalState(OperationalState.READY);
+        Video saved = videoRepository.save(video);
+        publisher.publishEvent(new VideoStatusChangedEvent(videoId, OperationalState.READY));
+        meterRegistry.counter("video.reconciliation.state_corrected").increment();
+        log.info("Reconciliation correction PROCESSING→READY for videoId={} reason={}", videoId, reason);
         return saved;
     }
 

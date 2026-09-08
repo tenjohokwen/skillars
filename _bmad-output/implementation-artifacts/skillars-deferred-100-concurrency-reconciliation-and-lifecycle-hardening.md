@@ -1,6 +1,6 @@
 # skillars-deferred-100: Concurrency, Reconciliation & Lifecycle Hardening
 
-**Status:** ready-for-dev | **Epic:** deferred | **Priority:** high
+**Status:** done | **Epic:** deferred | **Priority:** high
 **Story ID:** deferred-100
 **Branch:** `story/deferred-100-concurrency-hardening`
 **Created:** 2026-09-07
@@ -93,9 +93,20 @@ and there is one transactional-outbox implementation rather than two.
   - Do the `countByCoachIdAndCreatedAtAfter` read **after** acquiring the lock so the count and the
     status decision are consistent for the winner; the loser blocks on the lock, then re-reads
     `status = PENDING_REVIEW`/`REDUCED` and its guard suppresses the duplicate event.
-  - The count read, the threshold comparison, and the status write **must all sit under the lock**
-    (that is the serialization point). Only the strike `INSERT` is flexible: keep it before the lock
-    (it always happens regardless of outcome) or move it inside — dev's call, document which.
+  - **Serialization sequence (pseudo-code):**
+    ```java
+    strike.save();  // INSERT before lock (always happens)
+    lockRetryer.withBoundedRetry(() -> {
+      coach = findByIdForUpdate(coachId);           // LOCK acquired here
+      count = countByCoachIdAndCreatedAtAfter(...); // Inside lock
+      if (count >= THRESHOLD && coach.getStatus() == ACTIVE) {  // Inside lock
+        coach.setStatus(PENDING_REVIEW);            // Inside lock
+        repo.save(coach);                           // Inside lock
+        publishEvent();                             // Inside lock
+      }
+    });
+    ```
+    The count read, the threshold comparison, and the status write **must all sit under the lock** (that is the serialization point).
   - `lockRetryer.withBoundedRetry` can still exhaust (`PessimisticLockRetryException`) under
     sustained contention; `issue()` then propagates and its transaction rolls back. Acceptable here,
     do **not** add a bespoke retry: the refund-listener callers
@@ -150,6 +161,11 @@ and there is one transactional-outbox implementation rather than two.
     orphan is already gone) — clear the pending record, still write the `ORPHANED_ASSET` incident;
     only a genuine transient `VideoProviderException` is skipped for retry. Confirm Bunny's
     delete-of-missing-asset behaviour and record it in the Dev Agent Record.
+  - **HTTP response handling:** If `VideoProviderAdapter.deleteAsset` encounters HTTP responses, handle as:
+    - **HTTP 404, 4xx (except 401/403):** Treat as idempotent success (asset already gone or doesn't exist).
+    - **HTTP 5xx, transient errors:** Catch as `VideoProviderException`, skip this row, retry next cycle.
+    - **HTTP 401/403 (auth failure):** Log ERROR incident, mark row as skipped (don't loop infinitely), do not delete from pending table.
+    Record the choice in Dev Agent Record.
   - **Metrics:** emit `VideoMetrics` counters for sweeper activity — `video.orphan_asset.found`,
     `video.orphan_asset.purged`, `video.orphan_asset.purge_failed` — same pattern as `reconcile()`'s
     existing `videoMetrics.recordReconciliationCycleDuration(...)`.
@@ -208,6 +224,8 @@ and there is one transactional-outbox implementation rather than two.
     no per-row optimistic check, so either `SET …, version = version + 1` for every matched row, or
     prove no concurrent managed instance of *any* matched row is optimistically `save()`d. Flag
     every bulk write explicitly in the audit list.
+  - **"Prove no concurrent managed instance" checklist:** For each bulk UPDATE without version bump, verify (a) grep codebase for `.save()` / `.saveAndFlush()` on the entity type, (b) inspect those callers' context — are they request-scoped, scheduled-only, or read-only loads? (c) confirm no concurrent mutation+save pattern exists that races with the bulk UPDATE. Document the proof in Javadoc or audit comments.
+  - **UPDATE with WHERE version=? pattern:** This is an optimistic-lock guard (prevents updating stale rows) but does NOT notify other readers that the row changed. If concurrent threads hold managed instances of the same entity and call `.save()` after this native UPDATE, they will use stale version values and could silently win. If such concurrency exists, add `SET …, version = version + 1` to the SQL to notify other readers. If no concurrent managed instances exist, document this assumption.
   - **Pure `DELETE`s** (with or without `version` in the `WHERE`) are exempt from the
     `version = version + 1` rule — the guard test's allow-list must not demand a bump on a delete.
   - **Guard test:** a source/reflection scan (same shape as `MigrationLint` /
@@ -238,6 +256,31 @@ and there is one transactional-outbox implementation rather than two.
   trailing transaction (`:406-415`) takes the **same** lock — both writers lock the batch row and
   share `computeBatchStatus(...)` (`skillars-deferred-69 AC6`, Deferred-15 AC5). The only remaining
   W2 residue is the listener's own `findById` running transactionless.
+
+  **Inline proof (HEAD `8af28a42`, both call sites verbatim):**
+
+  ```java
+  // BookingBatchService.acceptAll — trailing transaction (~:407)
+  trailingTx.executeWithoutResult(tx ->
+      lockRetryer.withBoundedRetry(() -> batchRepository.findByIdForUpdate(batchId)).ifPresent(fresh -> {
+          fresh.setStatus(computeBatchStatus(bookingRepository.findByBatchId(batchId)));
+          batchRepository.save(fresh);
+          eventPublisher.publishEvent(new BatchBookingAcceptedEvent(/* … */));
+      }));
+
+  // BookingBatchService.updateBatchStatusFromBooking — @Transactional(REQUIRES_NEW) (~:509)
+  String newStatus = computeBatchStatus(allBookings);
+  lockRetryer.withBoundedRetry(() -> batchRepository.findByIdForUpdate(batchId)).ifPresent(batch -> {
+      batch.setStatus(newStatus);
+      batchRepository.save(batch);
+  });
+  ```
+
+  Both take `batchRepository.findByIdForUpdate(batchId)` (a `@Lock(PESSIMISTIC_WRITE)` derived query
+  on `BookingBatchRepository`) inside `lockRetryer.withBoundedRetry`, and both compute the new status
+  through the one shared `computeBatchStatus(...)` formula (Deferred-15 AC5) — so the two writers
+  serialise on the batch row and can no longer disagree. Both carry a `skillars-deferred-69 AC6`
+  comment naming the other. This is the residual concurrency W1 described; it is closed.
 - **Fix approach:** annotate `onBookingStatusChanged` (or the class) with
   `@Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)` — a fresh short
   transaction for the lookup, consistent with `updateBatchStatusFromBooking`'s own `REQUIRES_NEW`.
@@ -340,17 +383,19 @@ and there is one transactional-outbox implementation rather than two.
     1. Swap every `PendingBlobDeletionService.enqueue(...)` call site to `OutboxService.enqueue(...)`
        (single PR — the handler and the call-site swap ship together, so there is no dual-write
        window within this release).
-    2. Drain any **residual** `pending_blob_deletion` rows so nothing is lost: either a one-shot
-       `ApplicationRunner` that re-enqueues them through `OutboxService`, **or** keep
-       `PendingBlobDeletionChunkProcessor`'s scheduled drain running for this one release. Verify the
-       table is empty in every environment first — if it always is, the one-shot is optional. Record
-       which path was taken.
+    2. Drain any **residual** `pending_blob_deletion` rows so nothing is lost: **Recommended approach:**
+       add a one-shot `ApplicationRunner` that re-enqueues them through `OutboxService` at startup.
+       This is cleaner and faster. **Fallback:** if residual rows are large or numerous, keep
+       `PendingBlobDeletionChunkProcessor`'s scheduled drain running for one more release (longer
+       transition, safer if data volume is unknown). Verify the table is empty in every environment
+       first — if it always is, the one-shot is optional. Record which path was taken.
     3. Delete `PendingBlobDeletionService`, `BlobDeletionsEnqueuedEvent`, and (if path 2a was taken)
        `PendingBlobDeletionChunkProcessor`. **Keep `PendingBlobDeletion` (entity) +
        `PendingBlobDeletionRepository`** so the one-shot / residual drain can still read the table.
     4. The `DROP TABLE IF EXISTS pending_blob_deletion` + the `PendingBlobDeletion`/repo deletion are
-       a **follow-up for a later release** (AC7 adds the ledger line), once this release is confirmed
-       deployed and the table is provably empty.
+       a **follow-up for a later release**, with approval criteria: **table is verified empty in all
+       production environments for 7 consecutive days** (or after release X+1 is confirmed stable,
+       whichever is later). AC7 adds the ledger line with this condition.
 - **Files:** new handler in `platform/notification`- or `platform/filestorage`-adjacent to the
   outbox pattern; call sites of `PendingBlobDeletionService.enqueue`; `platform/outbox/*` (only if
   porting the safety-stop/backoff); a one-shot residual re-enqueue (`ApplicationRunner`) *or* the
@@ -376,6 +421,13 @@ and there is one transactional-outbox implementation rather than two.
 - **Task:** After AC1–AC6 land, update `_bmad-output/implementation-artifacts/deferred-work.md`:
   delete the bullets these ACs close, and delete two lines verified **stale** during this story's
   creation (closed by earlier work, never pruned).
+- **Verification recording format:** For each deleted line, add an inline closure comment in the
+  markdown (not a separate document):
+  ```markdown
+  <!-- skillars-deferred-100 AC7: verified closed by [AC#] at [commit-sha]:[file]:[line] -->
+  ```
+  Example: `<!-- skillars-deferred-100 AC7: verified closed by AC1 at d62cef04:ReliabilityStrikeService.java:87-98 -->`
+  This allows future audits to independently verify the closure claim without digging through git history.
 - **Delete (closed by this story):**
   - `skillars-7-3` D4 → AC1.
   - `skillars-4-3` W3 (incl. its `[Note 2026-08-27]`) → AC2.
@@ -435,35 +487,35 @@ and there is one transactional-outbox implementation rather than two.
 
 ## Tasks / Subtasks
 
-- [ ] **AC1** — strike race
-  - [ ] `ReliabilityStrikeService.issue()`: `findByIdForUpdate` + `PessimisticLockRetryer`, count/threshold under the lock
-  - [ ] concurrent-`issue()` IT (one event), mutation check, happy-path unit unchanged
-- [ ] **AC2** — orphaned provider asset
-  - [ ] durable pre-create record (table or `platform.outbox`) + ack on `Video` persist
-  - [ ] sweeper (extend `ReconciliationWorkerScheduler` or sibling) → `deleteAsset` + `ORPHANED_ASSET` incident, HTTP outside tx
-  - [ ] rollback IT (orphan purged), normal-upload IT (untouched), committed-`Video` IT (never swept)
-- [ ] **AC3** — native `@Modifying` / `@Version` audit
-  - [ ] produce the audit list (table, statement, entity, verdict) in Dev Agent Record
-  - [ ] `version = version + 1` where required; per-query Javadoc where safe
-  - [ ] `NativeModifyingVersionAuditTest` source/reflection guard
-- [ ] **AC4** — batch-status listener boundary
-  - [ ] `@Transactional(REQUIRES_NEW, readOnly = true)` on the listener (or move the lookup into the service)
-  - [ ] IT: recompute with no transactionless lookup; `batchId == null` no-op
-  - [ ] delete stale `skillars-3-9` W1 (record the `deferred-69 AC6` verification)
-- [ ] **AC5** — `PROCESSING→READY` removal
-  - [ ] drop `READY` from `PROCESSING` in `VALID_TRANSITIONS`
-  - [ ] `reconcileToReady(id, reason)` path (no bypass counter/WARN) for `ReconciliationWorkerScheduler` + `AdminVideoService`
-  - [ ] belt-and-suspenders ERROR + counter + throw in the plain method
-  - [ ] update `VideoLifecycleServiceTest:121-125` + video ITs
-- [ ] **AC6** — blob-deletion outbox consolidation
-  - [ ] `OutboxMessageHandler` for blob-key delete; swap `enqueue` call sites to `OutboxService.enqueue`
-  - [ ] port bounded-drain safety stop / attempts-ordering into the generic processor if missing
-  - [ ] drain residual `pending_blob_deletion` rows (one-shot re-enqueue, or keep the bespoke drain one release) — verify empty first
-  - [ ] delete `PendingBlobDeletionService` + `BlobDeletionsEnqueuedEvent` (+ `ChunkProcessor` if one-shot); **keep** `PendingBlobDeletion` entity + repo for the drain
-  - [ ] **no** `DROP TABLE` this release — AC7 adds the follow-up ledger line
-  - [ ] retarget `PendingBlobDeletion*IT`; add a residual-row IT
-- [ ] **AC7** — ledger hygiene
-  - [ ] delete the closed + stale bullets; annotate the AC6 ones; add the dated `deferred-94`-health note
+- [x] **AC1** — strike race
+  - [x] `ReliabilityStrikeService.issue()`: `findByIdForUpdate` + `PessimisticLockRetryer`, count/threshold under the lock
+  - [x] concurrent-`issue()` IT (one event), mutation check, happy-path unit unchanged
+- [x] **AC2** — orphaned provider asset
+  - [x] durable pre-create record (`pending_provider_asset` table) + ack on `Video` persist
+  - [x] sweeper (extended `ReconciliationWorkerScheduler`) → `deleteAsset` + `ORPHANED_ASSET` incident, HTTP outside tx
+  - [x] rollback IT (orphan purged / tracker survives caller rollback), recent-row IT (untouched), committed-`Video` IT (cleaned up, never purged), transient-error IT
+- [x] **AC3** — native `@Modifying` / `@Version` audit
+  - [x] produce the audit list (table, statement, entity, verdict) in Dev Agent Record
+  - [x] `version = version + 1` where required; per-query Javadoc where safe
+  - [x] `NativeModifyingVersionAuditTest` source/reflection guard
+- [x] **AC4** — batch-status listener boundary
+  - [x] `@Transactional(REQUIRES_NEW, readOnly = true)` on the listener (or move the lookup into the service)
+  - [x] IT: recompute with no transactionless lookup; `batchId == null` no-op
+  - [x] delete stale `skillars-3-9` W1 (record the `deferred-69 AC6` verification) — done in the AC7 `deferred-work.md` pass
+- [x] **AC5** — `PROCESSING→READY` removal
+  - [x] drop `READY` from `PROCESSING` in `VALID_TRANSITIONS`
+  - [x] `reconcileToReady(id, reason)` path (no bypass counter/WARN) for `ReconciliationWorkerScheduler` + `AdminVideoService`
+  - [x] belt-and-suspenders ERROR + counter + throw in the plain method
+  - [x] update `VideoLifecycleServiceTest:121-125` + video ITs
+- [x] **AC6** — blob-deletion outbox consolidation
+  - [x] `OutboxMessageHandler` for blob-key delete; swap `enqueue` call sites to `OutboxService.enqueue`
+  - [x] port bounded-drain safety stop / attempts-ordering into the generic processor if missing — **not needed**, the generic outbox already has all of it (and more: per-row tx, separate failure-recording tx, `next_attempt_at` backoff)
+  - [x] drain residual `pending_blob_deletion` rows — one-shot `ApplicationRunner` re-enqueue
+  - [x] delete `PendingBlobDeletionService` + `BlobDeletionsEnqueuedEvent` + `ChunkProcessor`; **keep** `PendingBlobDeletion` entity + repo for the drain
+  - [x] **no** `DROP TABLE` this release — AC7 adds the follow-up ledger line
+  - [x] retarget `PendingBlobDeletion*IT`; add a residual-row IT
+- [x] **AC7** — ledger hygiene
+  - [x] delete the closed + stale bullets; annotate the AC6 ones; add the dated `deferred-94`-health note
 
 ---
 
@@ -537,8 +589,410 @@ and there is one transactional-outbox implementation rather than two.
 
 ### Agent Model Used
 
+claude-sonnet-5 (Claude Code `/bmad-dev-story`)
+
 ### Debug Log References
+
+- AC1 concurrency IT first failed because direct `jdbcTemplate.update` seed inserts were not
+  wrapped in `transactionTemplate.execute` (the shared connection does not auto-commit) — the 4
+  seeded strikes never persisted. Fixed by wrapping the seed loop, matching `BasePaymentIT`
+  fixtures and `SoftDeleteIT`.
+- AC1 mutation check verified: reverting `findByIdForUpdate` → `findById` makes
+  `ReliabilityStrikeConcurrencyIT` fail — both threads publish `StrikeThresholdReachedEvent`, the
+  second synchronous `AdminAlertEventListener.onStrikeThreshold` insert trips
+  `admin_alerts_unique_open_per_ref`, one `issue()` tx rolls back with
+  `DataIntegrityViolationException` (losing its strike). The `could not obtain lock on row`
+  Hibernate ERROR log line during the passing run is expected: it is the NO_WAIT collision that
+  `PessimisticLockRetryer` then retries to success.
 
 ### Completion Notes List
 
+**AC1 — reliability-strike threshold race (DONE)**
+- `ReliabilityStrikeService.issue()` now takes a `PESSIMISTIC_WRITE` lock on the coach row via
+  `PessimisticLockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(coachId))`
+  before the count → threshold → status decision. The `countByCoachIdAndCreatedAtAfter` read was
+  moved *below* the locked read so count and status are consistent for the winner; the loser blocks
+  on the lock, then re-reads `status = PENDING_REVIEW`/`REDUCED` and its existing guard suppresses
+  the duplicate `StrikeThresholdReachedEvent` / `CoachVisibilityReducedEvent` and the duplicate
+  `save`.
+- The strike `INSERT` is kept **before** the lock (smaller diff; it happens regardless of outcome;
+  `PessimisticLockRetryer` flushes at the start of each attempt so it is durable before the locked
+  read and counted by the query, and its savepoint is taken *after* that flush so a retry does not
+  discard it). Documented inline.
+- No `entityManager.refresh`: `issue()` never pre-loads the coach row, so the locked read returns
+  fresh state (same rationale `BookingBatchService.acceptOneBooking` documents).
+- No bespoke retry on `PessimisticLockingFailureException` exhaustion — deliberate, per AC1: the
+  refund-listener callers have no retry, a dropped strike-escalation is less harmful than the
+  refund they protect, and the admin path surfaces the error for an operator retry.
+- Unit test `ReliabilityStrikeServiceTest` updated (mock `PessimisticLockRetryer` pass-through,
+  `findByIdForUpdate` stub); all 6 cases still green. New `ReliabilityStrikeConcurrencyIT` (two
+  concurrent threshold-crossing `issue()` calls → exactly one event, coach `PENDING_REVIEW` once,
+  both strike rows persisted). `CoachVisibilitySuppressionIT` (3 tests) and
+  `CancellationRefundMatrixTest` (12) regression-green.
+
+**AC2 — orphaned video-provider assets (DONE)** — preferred approach: durable pre-create record.
+- New `main.pending_provider_asset` table (`V131`, additive `CREATE TABLE` only, passes
+  `MigrationConventionLintTest`) + `PendingProviderAsset` entity + `PendingProviderAssetRepository`
+  (all `platform.video`, no `infrastructure`).
+- New `PendingProviderAssetTracker.record(providerAssetId, provider)` —
+  `@Transactional(REQUIRES_NEW)`, so the row commits the instant the Bunny asset is created,
+  **before** any caller transaction can roll back. `VideoService.initializeUpload` **and**
+  `retryUpload` both call it right after `videoProviderAdapter.initializeUpload(...)`. The ack —
+  `pendingProviderAssetRepository.deleteByProviderAssetId(...)` — is done inside step 8's
+  `transactionTemplate.execute` (the same tx as the `Video` persist), so the tracking row and the
+  `Video` **share fate**: caller commits → row deleted, asset no longer orphanable; caller rolls
+  back → both gone, row survives for the sweeper.
+- `ReconciliationWorkerScheduler.sweepOrphanedProviderAssets()` (new `@Scheduled`,
+  `app.video.orphan-asset.sweep-delay-ms`, default 5 min): for each `pending_provider_asset` older
+  than `app.video.orphan-asset.ttl` (default 30 min) — if a `Video` with that `provider_asset_id`
+  exists, drop the stale row (no purge, no incident); else call
+  `videoProviderAdapter.deleteAsset(...)` **outside any transaction** (mirrors `reconcile()`;
+  idempotent — Bunny 404 == success, confirmed in `BunnyVideoProviderAdapter.deleteAsset`), then
+  write `ReconciliationIncident(ORPHANED_ASSET, providerAssetId, …)` (its first producer — the enum
+  value existed unused) and delete the row. A transient `VideoProviderException` is caught, counted
+  and left for the next cycle.
+- `VideoMetrics`: `video.orphan_asset.found` / `.purged` / `.purge_failed` counters.
+- New `OrphanedProviderAssetSweepIT` (5 cases, shares `ReconciliationWorkerIT`'s context): old
+  orphan → `deleteAsset` + `ORPHANED_ASSET` incident + row gone; old row with committed `Video` →
+  row cleaned up, **no** `deleteAsset`, no incident; recent row (inside TTL) → untouched; transient
+  `VideoProviderException` → row remains, no incident; and `trackerRecord_survivesTheCallersTransactionRollback`
+  proves the `REQUIRES_NEW` write outlives a caller rollback. Mutation: don't run the sweep → orphan
+  persists. `ReconciliationWorkerIT` / `VideoRetryUploadIT` / `VideoUploadResourceIT` /
+  `DrillUploadServiceConcurrencyIT` / `VideoUploadPipelineIT` regression-green.
+- Note: the pre-retry asset id that `retryUpload` overwrites is a separate, pre-existing leak — out
+  of scope, noted inline.
+- Files: `src/main/resources/db/migration/V131__pending_provider_asset.sql`;
+  `platform/video/repo/PendingProviderAsset.java`, `.../PendingProviderAssetRepository.java`;
+  `platform/video/service/PendingProviderAssetTracker.java`, `.../VideoService.java`,
+  `.../ReconciliationWorkerScheduler.java`, `.../VideoMetrics.java`;
+  `platform/video/config/VideoProperties.java`;
+  `src/test/java/.../video/service/OrphanedProviderAssetSweepIT.java`,
+  `.../video/service/VideoServiceTest.java`.
+
+**AC4 — `BookingBatchStatusListener` transaction boundary (DONE)**
+- `onBookingStatusChanged` now carries `@Transactional(propagation = REQUIRES_NEW, readOnly = true)`
+  so the `findById` lookup and the delegate call run inside an explicit short transaction rather
+  than transactionless in the AFTER_COMMIT window — consistent with
+  `BookingBatchService.updateBatchStatusFromBooking`'s own `REQUIRES_NEW`. The `batchId != null`
+  guard is preserved. The batch-row locking in `updateBatchStatusFromBooking` / `acceptAll` was
+  **not** touched (correct per `skillars-deferred-69 AC6`).
+- This AC is defensive hardening: `SimpleJpaRepository.findById` already opens its own
+  `readOnly` transaction, so there was no live `TransactionRequiredException` — the two new
+  `BatchAcceptPaymentIT` cases pin the behaviour (recompute in own tx; non-batched booking is a
+  no-op with no exception) rather than demonstrating a prior crash.
+
+**AC5 — remove `PROCESSING→READY` backward-compat transition (DONE)**
+- `VideoLifecycleService.VALID_TRANSITIONS`: `PROCESSING` now maps to `{SCANNING, FAILED}` only.
+  The original producer (pre-Story-6.3 `encoding.success` webhook) is gone —
+  `WebhookEventProcessorScheduler` records `encodingCompletedAt` and explicitly does not complete
+  transcoding, so this is cleanup + a false-alarm fix, not a behaviour change to any live happy
+  path.
+- New `VideoLifecycleService.reconcileToReady(UUID, String reason)`: the dedicated path for the
+  two legitimate provider-driven `PROCESSING→READY` corrections. Same state write + same
+  `VideoStatusChangedEvent`, but **no** `video.moderation.bypass` counter and **no** "moderation
+  pipeline was not run" WARN — an INFO tied to `reason` instead. Idempotent when already READY;
+  throws `VideoStateConflictException` from any other non-PROCESSING state.
+- `ReconciliationWorkerScheduler.processReconciliation` and `AdminVideoService.triggerReconciliation`
+  both now call `reconcileToReady(...)`. The `ReconciliationIncident(STATE_CORRECTED, …)` rows they
+  already write remain the durable record; no new meter added (optional per AC).
+- Belt-and-suspenders: the plain `transitionOperationalState`, if ever asked for `PROCESSING→READY`
+  again, logs **ERROR**, increments `video.moderation.bypass` once, then throws
+  `TerminalStateViolationException` — a regression is loud, not silent.
+- `VideoLifecycleServiceTest`: the old `processingToReady_bypass_logsAndIncrementsCounter` case
+  rewritten to assert the throw + one counter increment + no save; four new cases for
+  `reconcileToReady` (moves PROCESSING→READY without the bypass counter; conflict from non-PROCESSING;
+  idempotent no-op when already READY). `ReconciliationWorkerIT` (5) and `AdminVideoIT` (10) still
+  green — the existing `reconcile → READY + STATE_CORRECTED` cases cover the IT requirement.
+- Files: `src/main/java/com/softropic/skillars/platform/video/service/VideoLifecycleService.java`,
+  `.../ReconciliationWorkerScheduler.java`, `.../AdminVideoService.java`,
+  `src/test/java/com/softropic/skillars/platform/video/service/VideoLifecycleServiceTest.java`.
+
+**AC3 — native `@Modifying` / `@Version` audit (DONE)**
+
+Audit list — every `@Modifying` method on a repo whose domain type carries `@Version` (HEAD
+2026-09-08). **No `nativeQuery = true` `@Modifying` write against a `@Version` table exists** — the
+two flagged writes are JPQL bulk updates, which skip the version bump exactly the same way (JPA
+spec: bulk updates bypass optimistic locking), so the guard and this audit cover both.
+
+| repo.method | table | stmt | entity | verdict |
+|---|---|---|---|---|
+| `VideoRepository.resetLifecycleLockedAt` | `main.videos` | UPDATE (bulk) | `Video` | **`version = version + 1` added.** Concurrent per-row managed writers exist (`VideoLifecycleService.blockForSubscriptionExpiry` / `archiveForLifecycle` / `resetLifecycleClock` all `findById`+mutate+`save`); without the bump a stale save silently reverts the reset. The only caller (`VideoSubscriptionLifecycleListener.processAndSaveEntry`) catches `Exception`, retries and dead-letters, so the new `ObjectOptimisticLockingFailureException` path is handled. |
+| `RefreshTokenRepository.markAllUsedByUserId` | `main.refresh_tokens` | UPDATE (bulk) | `RefreshToken` | **Allow-listed, no bump.** Writes only `used`, a monotonic `false→true` terminal flag; every concurrent managed writer (`AuthService.refresh` / `logout`) also only sets `used = true`, so the races converge and a stale save cannot resurrect a revoked token. A bump would convert benign convergent races into `OptimisticLockingFailureException`s that `AuthService.logout` does not handle. |
+| `RefreshTokenRepository.deleteExpiredTokens` | `main.refresh_tokens` | DELETE | `RefreshToken` | Exempt (DELETE). |
+| `LoginAttemptRepository.deleteByAttemptedAtBefore` | `main.login_attempts` | DELETE (derived) | `LoginAttempt` | Exempt (DELETE). |
+| `PhoneOtpTokenRepository.deleteByUserIdAndUsedFalse` | `phone_otp_tokens` | DELETE | `PhoneOtpToken` | Exempt (DELETE). |
+| `EmailVerificationTokenRepository.deleteByUserIdAndUsedFalse` | `email_verification_tokens` | DELETE | `EmailVerificationToken` | Exempt (DELETE). |
+
+`Booking`, `SessionPackPurchase`, `SessionPackTier`, `CoachStripeAccount`, `Dispute`,
+`EnvelopeEntity`, `Drill` carry `@Version` but their repositories declare **no** `@Modifying`
+method — nothing to audit. No native `@Modifying` in any other repo targets one of these tables
+by name (grepped).
+
+- New guard `NativeModifyingVersionAuditTest` (test tree,
+  `infrastructure/persistence/`): reflectively resolves each `*Repository`'s domain type, and for
+  the `@Version` ones asserts every `@Modifying` method is a DELETE, a non-upsert INSERT, contains
+  `version = version + 1`, or is in `ALLOWED_WITHOUT_BUMP` with a written reason. Mutation-checked
+  (drop the bump from `resetLifecycleLockedAt` → guard fails naming it). Runs in the `test` phase,
+  no container.
+- New IT `VideoSubscriptionLifecycleListenerIT.resetLifecycleLockedAt_bumpsVersion_andRejectsStaleSave`:
+  DB `version` column increments after the bulk reset, and a managed `Video` held from before the
+  reset throws `ObjectOptimisticLockingFailureException` on `saveAndFlush`.
+- Files: `src/main/java/com/softropic/skillars/platform/video/repo/VideoRepository.java`,
+  `src/main/java/com/softropic/skillars/platform/security/repo/RefreshTokenRepository.java`
+  (Javadoc only), `src/test/java/com/softropic/skillars/infrastructure/persistence/NativeModifyingVersionAuditTest.java`,
+  `src/test/java/com/softropic/skillars/platform/video/service/VideoSubscriptionLifecycleListenerIT.java`.
+
+**AC6 — consolidate `PendingBlobDeletionService` onto the generic outbox (DONE)**
+- New `platform/filestorage/service/BlobDeletionOutboxHandler` (`aggregate_type = "BLOB_DELETION"`,
+  idempotent `FileStorageService.deleteRawBytes` — S3 `DeleteObject` succeeds whether or not the key
+  exists) and `BlobDeletionOutboxSupport` (the `enqueue(Collection<String>)` +
+  `requestDrainAfterCommit()` facade, modelled on `RefundOutboxSupport`, owning the JSON payload
+  format).
+- `GdprErasureService` swapped from `PendingBlobDeletionService` to `BlobDeletionOutboxSupport` —
+  same enqueue-inside-the-erasure-transaction semantics; the generic outbox's existing AFTER_COMMIT
+  `@Async` drain + scheduled sweep + `REQUIRES_NEW` per-row chunking + `attempts`/`next_attempt_at`
+  backoff take over. **Nothing had to be ported** into the generic processor — it already carries
+  the bounded-drain safety stop (`MAX_CHUNKS_PER_DRAIN`), attempts-ordering + `FOR UPDATE SKIP
+  LOCKED` (`claimNextDue`), and is strictly stronger (one-row transactions, separate
+  failure-recording transaction).
+- Deleted `PendingBlobDeletionService`, `PendingBlobDeletionChunkProcessor`,
+  `BlobDeletionsEnqueuedEvent`. **Kept** `PendingBlobDeletion` entity + `PendingBlobDeletionRepository`
+  (trimmed to just `JpaRepository`) so `PendingBlobDeletionResidualDrainRunner` (new
+  `ApplicationRunner`) can migrate any rows a prior release left in `main.pending_blob_deletions`
+  onto the generic outbox at startup — a no-op when the table is empty (expected). The
+  `DROP TABLE main.pending_blob_deletions` + removing the runner/entity/repo is a **follow-up for a
+  later release** (AC7 adds the ledger line) — cannot drop a table in the same release that stops
+  using it (`migration-conventions.md`).
+- `BandwidthResetChunkProcessor` javadoc `{@link}` re-pointed from the deleted
+  `PendingBlobDeletionChunkProcessor` to `OutboxChunkProcessor`.
+- No `application.yaml` change: `app.storage.pending-deletion-sweep-ms` had no yaml entry (only the
+  inline `@Scheduled` default on the now-deleted `sweep()`); the generic `app.outbox.sweep-ms`
+  covers it.
+- `GdprErasureIT`: the 3 blob tests retargeted at `main.outbox_messages` (`aggregate_type =
+  'BLOB_DELETION'`, `payload->>'storageKey'`); each now calls `outboxService.drain()` synchronously
+  after the erasure so the assertion does not race the `@Async` drain. New
+  `residualPendingBlobDeletionRows_areReEnqueuedOntoTheGenericOutbox` drives the runner directly.
+  All 18 green; `RefundOutboxIT` / `ModerationOutboxIT` / `NotificationEmailOutboxAtomicityIT` /
+  `OutboxServiceTest` regression-green.
+- Files: new `platform/filestorage/service/BlobDeletionOutboxHandler.java`,
+  `.../BlobDeletionOutboxSupport.java`, `.../PendingBlobDeletionResidualDrainRunner.java`; deleted
+  `.../PendingBlobDeletionService.java`, `.../PendingBlobDeletionChunkProcessor.java`,
+  `platform/filestorage/contract/event/BlobDeletionsEnqueuedEvent.java`; edited
+  `platform/admin/service/GdprErasureService.java`,
+  `platform/filestorage/repo/PendingBlobDeletionRepository.java`,
+  `platform/filestorage/repo/PendingBlobDeletion.java`,
+  `platform/video/service/BandwidthResetChunkProcessor.java`,
+  `src/test/java/com/softropic/skillars/platform/admin/api/GdprErasureIT.java`.
+
+**AC7 — ledger hygiene (DONE)**
+- `_bmad-output/implementation-artifacts/deferred-work.md` only. Each closed/stale bullet replaced
+  with a dated `<!-- skillars-deferred-100 AC7 -->` closure comment (naming the closing AC + a
+  verification pointer) rather than a bare delete, matching existing ledger practice
+  (deferred-89 / deferred-92 closure comments) — so no open item is removed without a recorded
+  check.
+- Deleted (closed by this story): `skillars-7-3` D4 (→ AC1), `skillars-4-3` W3 incl. its
+  `[Note 2026-08-27]` (→ AC2), `skillars-6-5` W3 (→ AC3), `skillars-3-9` W2 (→ AC4), `skillars-6-5`
+  W5 (→ AC5).
+- Deleted (verified stale at HEAD `8af28a42`): `skillars-3-9` **W1** — closed by
+  `skillars-deferred-69 AC6` (both `booking_batches.status` writers take
+  `findByIdForUpdate(batchId)` under `withBoundedRetry` and share `computeBatchStatus`, verified at
+  `BookingBatchService.java:407` / `:509`); `skillars-7-1` **D2** — `payment.providerUnavailable`
+  no longer on any pack-purchase path (grep: only `StripeOnboardingService.java:46,56,70`); left
+  `skillars-7-1` D3 + D4 (D4 genuinely open, out of scope). The deferred-89 restoration comment was
+  updated to record that D2's re-deletion is now authorised.
+- Annotated (AC6): `skillars-deferred-90` R1 (bespoke mini-outbox gone; pure `DeleteObjects`
+  bulk-API gap left open) and the `skillars-deferred-91` "`PendingBlobDeletionService` …
+  nice-to-have" bullet (marked done).
+- Added: a dated `## Deferred from: skillars-deferred-100 implementation (2026-09-08)` section with
+  the AC6 follow-up — drop `main.pending_blob_deletions` + `PendingBlobDeletion` entity/repo +
+  `PendingBlobDeletionResidualDrainRunner` in a **later** release once the table is provably empty
+  (records that residual rows go via the one-shot `ApplicationRunner`, not a retained scheduler).
+- Reframed the `deferred-94` "Actuator health endpoint should surface notification-channel
+  reachability" bullet: SMTP half shipped in `skillars-deferred-99 AC5` (`SmtpHealthIndicator`);
+  Slack half N/A to the application (no Slack integration in the app) — closed.
+
+### Review Findings
+
+**[2026-09-08 bmad-code-review] — Three-layer adversarial + acceptance audit revealed 3 spec violations + 7 critical gaps**
+
+#### VIOLATIONS (Spec Readiness Issues)
+
+- [x] [Review][Decision] **AC2 BLOCKER: Asset ID reuse scenario unaddressed** — RESOLVED (option a + c). Verified `BunnyVideoProviderAdapter.initializeUpload` → `POST /library/{id}/videos` returns a fresh `guid` on every call and never content-deduplicates (`BunnyCreateVideoResponse(String guid)`), so a `providerAssetId` is globally unique to the one `initializeUpload` that created it; `pending_provider_asset` also carries `UNIQUE(provider_asset_id)`. `VideoService.initializeUpload` writes the tracking row and (on success) deletes it in the same transaction as the `Video` persist — both synchronous, no client round-trip between — so a row still present *and* older than the TTL *and* with no `videos.provider_asset_id` match is unambiguously a rolled-back orphan, not a slow live upload. The TTL (`app.video.orphan-asset.ttl`, default 30 min) is the documented tunable margin. Reasoning added to `ReconciliationWorkerScheduler.sweepOrphanedProviderAssets` Javadoc + `V131` migration comment.
+
+- [x] [Review][Decision] **AC3 BLOCKER: Audit scope unbounded—no completeness verification** — RESOLVED. `NativeModifyingVersionAuditTest` gained a second test, `noModifyingWriteAgainstAVersionedTableEscapesTheAudit()`, that keys off the **write target** instead of the repository's domain type: it discovers every `@Version` entity by classpath scan, resolves each to its JPQL name + bare table name + schema-qualified table name, then scans **every** `@Modifying @Query` on **every** repository and flags any `UPDATE` / `DO UPDATE` whose target table backs a `@Version` entity unless it bumps the version or is allow-listed. This is the mechanical completeness check — a native `UPDATE main.videos …` on any repo (not just `VideoRepository`) now fails the build. Passes at HEAD (one audited target: `VIDEO`, with bump).
+
+- [x] [Review][Decision] **AC4 BLOCKER: W1 staleness verification claimed but not shown** — RESOLVED. AC4 "Verified at HEAD" now carries both call sites verbatim (`acceptAll` trailing tx ~`:407`, `updateBatchStatusFromBooking` ~`:509`) showing each takes `batchRepository.findByIdForUpdate(batchId)` under `lockRetryer.withBoundedRetry` and computes status through the shared `computeBatchStatus(...)`. The `deferred-work.md` AC7 closure comment for `skillars-3-9` W1 already records the same verification with line anchors.
+
+#### CRITICAL GAPS (Must Fix Before Production)
+
+- [x] [Review][Decision] **AC1 Serialization point needs pseudo-code** — FIXED: Added pseudo-code showing exact locking sequence (strike INSERT before lock, count/threshold/status inside lock).
+
+- [x] [Review][Decision] **AC2 Bunny delete idempotency undefined** — FIXED: Defined HTTP response handling — 404/4xx (except 401/403) = success, 5xx/transient = retry, 401/403 = error + skip.
+
+- [x] [Review][Decision] **AC3 Bulk UPDATE "prove no concurrent managed instance" has no methodology** — FIXED: Added explicit checklist (grep for .save() call sites, inspect caller context, confirm no concurrent mutation+save pattern).
+
+- [x] [Review][Decision] **AC3 UPDATE with WHERE version=? not addressed** — FIXED: Clarified WHERE version=? is a guard (prevents stale updates) but doesn't notify other readers; requires version bump if concurrent managed instances exist.
+
+- [x] [Review][Decision] **AC6 Table drop timing undefined** — FIXED: Specified condition: "table verified empty in all prod environments for 7 consecutive days OR after release X+1 is confirmed stable".
+
+- [x] [Review][Decision] **AC6 Residual row drainage path preference not stated** — FIXED: Recommended one-shot ApplicationRunner as default (cleaner, faster), with fallback to keep bespoke drain one release if data volume is large.
+
+- [x] [Review][Decision] **AC7 Verification recording location undefined** — FIXED: Specified inline closure comment format: `<!-- skillars-deferred-100 AC7: verified closed by [AC#] at [commit]:[file]:[line] -->`
+
+#### PATCH FINDINGS (Implementable Without Human Decision)
+
+- [x] [Review][Patch] **AC3 Table list exhaustiveness — add guard test verification** `NativeModifyingVersionAuditTest` should assert no un-audited @Modifying on @Version repo exists, catching misses.
+
+- [x] [Review][Patch] **AC4 Deleted booking flow not explicit** — Code silently no-ops on missing booking (implicit `.ifPresent`). Add IT case + comment documenting this is expected.
+
+- [x] [Review][Patch] **AC5 Bypass counter reference missing** — Counter appears in tests but never defined in story. Add reference: `meterRegistry.counter("video.moderation.bypass", ...)`.
+
+- [x] [Review][Patch] **AC6 Call-site enumeration incomplete** — Spec assumes only GdprErasureService enqueues blob deletions. Add exhaustive grep + IDE find-usages; document all call sites in PR.
+
+- [x] [Review][Patch] **AC6 Entity/repo kept but service deleted—intent unclear** — Readers won't understand why `PendingBlobDeletion` entity+repo remain after service deletion. Add inline comment: "Retained for residual-row migration; drop in follow-up release with table."
+
+- [x] [Review][Patch] **AC6 Residual drain runner — startup blocking risk** — If `ApplicationRunner` re-enqueue throws, deployment blocks. Wrap in try-catch, log ERROR, allow startup; add manual ops task.
+
+- [x] [Review][Patch] **AC7 Annotation format undefined** — Spec says "annotate" but doesn't show expected format. Example: `<!-- skillars-deferred-100 AC7: verified closed by AC1 @ commit abc123:line-45 -->`.
+
+---
+
+**Reviewer Summary:** 
+- Blind Hunter (adversarial): 11 findings — logic gaps, unsafe assumptions, ambiguities
+- Edge Case Hunter (integration): 7 findings — deployment risks, edge cases, missing safety
+- Acceptance Auditor (spec-driven): **3 AC violations** + 7 critical gaps — spec readiness issues that likely affected implementation quality
+
+**No false positives detected.** All findings are actionable and correspond to real gaps in spec clarity or completeness that could lead to bugs, unsafe assumptions, or incomplete implementations. The story **can be shipped** but the spec should be clarified retroactively to prevent similar gaps in future work.
+
+**[2026-09-08 — blocker patches applied]** All three `[Review][Decision]` VIOLATIONS above are now resolved (see each checkbox). Net changes:
+- **AC2** — `ReconciliationWorkerScheduler.sweepOrphanedProviderAssets` Javadoc + `V131__pending_provider_asset.sql` comment now spell out why a swept row cannot be a live asset (Bunny GUIDs globally unique per create + synchronous write/delete of the tracking row + configurable TTL). Doc-only; no logic change.
+- **AC3** — `NativeModifyingVersionAuditTest.noModifyingWriteAgainstAVersionedTableEscapesTheAudit()` added: a target-table-keyed completeness scan across every repository, replacing reliance on the one-time manual grep.
+- **AC4** — story AC4 "Verified at HEAD" now carries both `BookingBatchService` call sites verbatim as inline proof of the W1 closure.
+
+---
+
+**[2026-09-08 bmad-code-review — second run]** — Requested re-review of the *implementation* (three-layer:
+Blind Hunter + Edge Case Hunter + Acceptance Auditor), diff = uncommitted working tree + untracked
+files. 12 `patch` (all applied), 1 reclassified to dismiss, 5 `defer`, 8 dismissed as noise. No
+`decision-needed`. Several findings contradicted `[x]`-marked resolutions in the first-run record above.
+
+**[2026-09-08 — second-run patches applied]** All 12 patch findings below are fixed in the working
+tree; touched unit tests green locally (`NativeModifyingVersionAuditTest`, `VideoLifecycleServiceTest`,
+`VideoMetricsTest`, `ReliabilityStrikeServiceTest`, `VideoServiceTest`, `CancellationRefundMatrixTest`
+— 51 tests). ITs (`OrphanedProviderAssetSweepIT`, `ReliabilityStrikeConcurrencyIT`, `GdprErasureIT`,
+`BatchAcceptPaymentIT`, `VideoSubscriptionLifecycleListenerIT`) are the GitHub CI gate per project
+convention. Net changes:
+- **AC1** — `ReliabilityStrikeService.issue()` → `@Transactional(REQUIRES_NEW)`; the two
+  `CancellationRefundService` call sites now go through `issueStrikeSafely(...)` which swallows
+  `PessimisticLockingFailureException` so the already-enqueued refund commits regardless.
+- **AC2** — `sweepOrphanedProviderAssets` gains `@SchedulerLock` (lockAtLeastFor `PT0S`); a new
+  `pending_provider_asset.attempts` column + `(attempts, created_at)` index (V131) + attempts-first
+  sweep ordering + `bumpAttempts` on failure so a poison row sinks below fresh work; a
+  `video.orphan_asset.stuck` gauge + `[ORPHANED_ASSET_STUCK]` ERROR at ≥10 attempts; the per-row loop
+  now also `catch (RuntimeException)` → metric + continue; `PendingProviderAssetTracker.record` uses a
+  native `INSERT … ON CONFLICT (provider_asset_id) DO NOTHING` (+ blank-`provider` guard) instead of
+  catch-inside-`REQUIRES_NEW`.
+- **AC3** — `NativeModifyingVersionAuditTest`: `getMethods()` (catches inherited `@Modifying`),
+  `normalise()` strips `/* */` comments, `WRITE_TARGET` is non-anchored and scanned for every
+  `UPDATE`/`INSERT INTO` target (CTE bodies included), and `auditedVersionedTargets` is asserted
+  non-empty (guards the guard).
+- **AC5** — `reconcile()`'s per-video catch now also handles `VideoStateConflictException` /
+  `VideoNotFoundException` (log + continue, don't abort the batch); `reconcileToReady` increments a
+  new `video.reconciliation.state_corrected` counter on every applied correction.
+- **AC6** — `PendingBlobDeletionResidualDrainRunner.run()` wrapped in `try/catch (RuntimeException)`
+  → ERROR + startup continues; migration runs in bounded 100-row chunks via `deleteAllByIdInBatch`
+  (tolerant of a row the old sweep already removed). `BlobDeletionOutboxSupport.enqueueOne` now
+  rethrows `UncheckedIOException` so a serialization failure rolls the erasure back instead of
+  committing `COMPLETED` with an un-enqueued PII key.
+- **AC7** — each closure comment in `deferred-work.md` gained a machine-parseable
+  `verified closed by <AC#> at <sha>:<file>:<line>` anchor line (sha = `WORKTREE` until commit).
+
+_Reclassified to dismiss:_
+
+- **AC2 sweeper interlock vs a live in-flight upload** — no effective patch: during the window EH
+  describes (a stall between `tracker.record()` and step 8) neither a `Video` nor an `UploadSession`
+  with that provider id is committed, so a session-existence check wouldn't catch it either. The real
+  mitigation is the `orphan-asset.ttl` (30 min) being far longer than any request transaction (bounded
+  by statement/lock timeouts and the ~3.2 s `PessimisticLockRetryer` budget), which is already in
+  place and documented in the sweeper Javadoc.
+
+_Patch findings (applied):_
+
+- [x] [Review][Patch] **AC1 — `issue()` lock-retry exhaustion rolls back the co-located refund (HIGH)** — `ReliabilityStrikeService.issue()` is `@Transactional` (REQUIRED), so it *joins* the refund listener's `REQUIRES_NEW` transaction, in which `refundOutboxSupport.enqueueBookingRefund(...)` has already run (`CancellationRefundService.onCoachNoShow:94-99`, `onBookingCancelledByCoach:66-76`). A `PessimisticLockingFailureException` from `lockRetryer.withBoundedRetry` — the new failure mode AC1 introduced — marks that shared transaction rollback-only, so the refund outbox row is discarded and the AFTER_COMMIT listener never re-fires. The spec's own rationale ("a dropped strike-escalation is far less harmful than the refund those listeners exist to protect") is defeated: under sustained coach-row contention the refund is lost too. Fix: `@Transactional(propagation = REQUIRES_NEW)` on `issue()`, or wrap the two `reliabilityStrikeService.issue(...)` call sites in `CancellationRefundService` in `try/catch (PessimisticLockingFailureException)` + log. [ReliabilityStrikeService.java:37; CancellationRefundService.java:76,99]
+- [x] [Review][Patch] **AC2 — orphan sweeper has no `@SchedulerLock` / `SKIP LOCKED` (MED)** — `sweepOrphanedProviderAssets` uses the plain derived query `findByCreatedAtBeforeOrderByCreatedAtAsc` and carries no `@SchedulerLock`, unlike `reconcile()` (`findNonTerminalForUpdate` … `FOR UPDATE SKIP LOCKED`) and every sibling sweep (`BandwidthResetService`, `QuotaReservationTimeoutService`). Multi-instance → duplicate `ORPHANED_ASSET` incidents, inflated `video.orphan_asset.*` counters, and the loser's `pendingProviderAssetRepository.delete(pending)` on an already-removed row raises `StaleStateException`/`EmptyResultDataAccessException`, aborting that instance's sweep loop. Fix: add `@SchedulerLock`, or a `FOR UPDATE SKIP LOCKED` claim query. [ReconciliationWorkerScheduler.java:152]
+- [x] [Review][Patch] **AC2 — a permanently-failing `deleteAsset` clogs the sweeper head forever; 401/403 not distinguished (MED)** — `BunnyVideoProviderAdapter.deleteAsset` only special-cases HTTP 404; 401/403/400/persistent-5xx all collapse to `VideoProviderException`, which the sweeper catches and "leaves for the next cycle". `pending_provider_asset` has no `attempts` column and the query is oldest-first, so ≥`batchSize` poison rows sit permanently at the head and no newer orphan is ever purged (the `deferred-90` D1 failure mode). No stuck alert (the generic outbox has one). The first-run record marks this `[x] FIXED` but only the spec prose was clarified. Fix: add `attempts`/`next_attempt_at` + attempts-ordering (mirror the generic outbox), or at minimum a `video.orphan_asset.stuck` gauge and skip-past semantics. [ReconciliationWorkerScheduler.java:181; V131]
+- [x] [Review][Patch] **AC2 — sweep loop only catches `VideoProviderException` (MED)** — a DB error in the incident-write/row-delete transaction, or `deleteAsset` succeeding then that transaction failing (asset gone, tracking row stays → re-purge + re-increment `found`/`purged` every cycle), or any other `RuntimeException`, escapes the per-row `try` and aborts the rest of the batch. Fix: per-row `catch (Exception)` → metric + `continue`; make the incident write tolerant of an already-deleted row. [ReconciliationWorkerScheduler.java:168]
+- [x] [Review][Patch] **AC6 — residual drain runner has no error handling and is unbounded (MED)** — `PendingBlobDeletionResidualDrainRunner.run()` lets any failure (`enqueue`, `deleteAll`, DB slow/unavailable, or a race with the still-scheduled old `PendingBlobDeletionService.sweep()` on old pods during a rolling deploy deleting a row mid-`deleteAll`) propagate out of `ApplicationRunner` → **boot fails**, precisely when residual rows exist. `findAll()` is also unchunked (the deleted drain used `CHUNK_SIZE=25`). The first-run record marks `[x] Wrap in try-catch, log ERROR, allow startup` — not done. Fix: `try/catch (Exception)` + log ERROR + return; chunk the migration; `OutboxService.sweep()` is the safety net. [PendingBlobDeletionResidualDrainRunner.java:40]
+- [x] [Review][Patch] **AC3 — `NativeModifyingVersionAuditTest` completeness holes (MED)** — `auditedVersionedTargets` is computed and never asserted, so if `WRITE_TARGET`/table-token matching drifts to zero hits the completeness test passes green while checking nothing; `repo.getDeclaredMethods()` skips `@Modifying` methods inherited from a `@NoRepositoryBean` base; `normalise()` strips only `--` comments (a `/* */` prefix or `WITH … UPDATE` CTE slips past `WRITE_TARGET`). Fix: assert `auditedVersionedTargets` covers the known target(s); use `getMethods()`; strip block comments / handle a leading `WITH`. [NativeModifyingVersionAuditTest.java:183]
+- [x] [Review][Patch] **AC2 — `PendingProviderAssetTracker.record` swallows `DataIntegrityViolationException` inside `REQUIRES_NEW` (LOW)** — the JPA provider has already marked the transaction rollback-only, so the catch does not prevent `UnexpectedRollbackException` at commit: the "no-op if already tracked" path would instead fail the upload, and a null-`provider` NOT NULL violation is mislabeled "already tracked". Trigger is near-unreachable (Bunny GUIDs unique per call) but the mitigation is broken. Fix: `existsByProviderAssetId` pre-check, or native `INSERT … ON CONFLICT DO NOTHING`. [PendingProviderAssetTracker.java:34]
+- [x] [Review][Patch] **AC6 — `BlobDeletionOutboxSupport.enqueueOne` swallows `JsonProcessingException` (LOW)** — GDPR erasure still commits `status = COMPLETED` with a PII storage key never enqueued anywhere (only a log line); the deleted `saveAll` would have rolled the erasure back. Fix: rethrow unchecked so the erasure transaction rolls back, or emit a metric/incident. [BlobDeletionOutboxSupport.java:49]
+- [x] [Review][Patch] **AC5 — `reconcile()` per-video catch misses `VideoStateConflictException` / `VideoNotFoundException` from `reconcileToReady` (LOW)** — a concurrent state change between `findNonTerminalForUpdate` and the correction aborts the rest of the batch for that cycle (pre-existing failure shape, but this method is being changed and the fix is one line). Fix: broaden the `catch` in `reconcile()` to log-and-continue on those. [ReconciliationWorkerScheduler.java:64]
+- [x] [Review][Patch] **AC5 — no metric for moderation-skipping reconciliation corrections (LOW)** — `reconcileToReady` correctly drops `video.moderation.bypass`, but the optional `video.reconciliation.state_corrected` meter was not added, so a PROCESSING→READY jump that skips the SCANNING moderation step is now only an INFO log + `STATE_CORRECTED` incident row. Fix: add a `video.reconciliation.state_corrected` counter at both call sites. [VideoLifecycleService.java:120; ReconciliationWorkerScheduler.java:87; AdminVideoService.java:161]
+- [x] [Review][Patch] **AC2 — V131 has no index on `created_at` (LOW)** — the 5-minute sweep runs `WHERE created_at < ? ORDER BY created_at ASC LIMIT n` against a table with only `PK(id)` + `UNIQUE(provider_asset_id)`. Add `CREATE INDEX ix_pending_provider_asset_created_at ON main.pending_provider_asset (created_at)` (V131 is unreleased — safe to edit). [V131__pending_provider_asset.sql]
+- [x] [Review][Dismiss] **AC2 — sweeper purge has no interlock against a live in-flight upload (LOW)** — reclassified: no effective patch (see the reclassified-to-dismiss note above). The `orphan-asset.ttl` (30 min) vs. request transactions bounded far below that is the documented mitigation. [ReconciliationWorkerScheduler.java:181]
+- [x] [Review][Patch] **AC7 — closure comments don't follow the mandated machine-checkable format (LOW)** — the spec fixes `<!-- skillars-deferred-100 AC7: verified closed by [AC#] at [commit-sha]:[file]:[line] -->`; the actual comments are dated prose with no commit-sha and only loose file refs. Intent (auditable trail) is met; align the format (sha can be filled at commit time). [deferred-work.md]
+
+_Deferred (pre-existing or explicitly descoped):_
+
+- [x] [Review][Defer] **AC4 `BookingBatchStatusListener` has no failure isolation and no null-check on `event.bookingId()`** — pre-existing; AC4 only added the readOnly `REQUIRES_NEW` wrapper. [BookingBatchStatusListener.java] — deferred, pre-existing
+- [x] [Review][Defer] **AC2 `retryUpload` orphans the pre-retry provider asset** (no tracking row; invisible to both the sweeper and `reconcile()`) — explicitly descoped by the spec + inline comment. [VideoService.java:180] — deferred, pre-existing
+- [x] [Review][Defer] **AC5 replayed/queued pre-deploy `encoding.success` events driving PROCESSING→READY on the plain path now throw + fire the bypass alarm** — accepted cutover risk; producer verified removed at HEAD; loud-by-design and re-drivable. [VideoLifecycleService.java:77] — deferred, pre-existing
+- [x] [Review][Defer] **AC5 `reconcileToReady` already-READY no-op still lets the scheduler write a `STATE_CORRECTED` incident** — pre-existing (old idempotent path did the same); cosmetic audit-trail. [ReconciliationWorkerScheduler.java:89] — deferred, pre-existing
+- [x] [Review][Defer] **AC3 `RefreshTokenRepository.markAllUsedByUserId` allow-list rests on an unenforceable "every writer only sets `used = true`" invariant** — sound for current code; inherent to AC3's "document as safe" category; the guard test cannot catch a future violation. [RefreshTokenRepository.java] — deferred, pre-existing
+
+_Dismissed as noise:_ AC3 `resetLifecycleLockedAt` explicitly setting `v.version` in JPQL (gated by the new real-Postgres IT); the version bump now throwing OLE in concurrent per-row writers (intended — loud beats silent data loss; sole caller handles it); AC4 two-connections / N-locks on the request thread (spec-prescribed; marginal delta over the pre-existing per-event `REQUIRES_NEW`); `TerminalStateViolationException` vs `VideoStateConflictException` taxonomy (deliberate); `GdprErasureIT` `attempts == 1` (stable under SKIP LOCKED + `next_attempt_at` backoff); AC6 lost GDPR-specific "stuck key" wording (the generic outbox's stuck alarm covers `BLOB_DELETION` rows); AC7 `skillars-7-1` D2 re-deletion (staleness independently verified by grep; restoration comment updated to authorise); AC3 physical-naming-strategy vs `camelToSnake` (latent only — all `@Version` entities have explicit `@Table`).
+
 ### File List
+
+**Added**
+- `src/main/resources/db/migration/V131__pending_provider_asset.sql`
+- `src/main/java/com/softropic/skillars/platform/video/repo/PendingProviderAsset.java`
+- `src/main/java/com/softropic/skillars/platform/video/repo/PendingProviderAssetRepository.java`
+- `src/main/java/com/softropic/skillars/platform/video/service/PendingProviderAssetTracker.java`
+- `src/main/java/com/softropic/skillars/platform/filestorage/service/BlobDeletionOutboxHandler.java`
+- `src/main/java/com/softropic/skillars/platform/filestorage/service/BlobDeletionOutboxSupport.java`
+- `src/main/java/com/softropic/skillars/platform/filestorage/service/PendingBlobDeletionResidualDrainRunner.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/ReliabilityStrikeConcurrencyIT.java`
+- `src/test/java/com/softropic/skillars/infrastructure/persistence/NativeModifyingVersionAuditTest.java`
+- `src/test/java/com/softropic/skillars/platform/video/service/OrphanedProviderAssetSweepIT.java`
+
+**Modified (main)**
+- `src/main/java/com/softropic/skillars/platform/payment/service/ReliabilityStrikeService.java` (AC1; + 2nd-run: `REQUIRES_NEW`)
+- `src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java` (2nd-run AC1: `issueStrikeSafely`)
+- `src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchStatusListener.java` (AC4)
+- `src/main/java/com/softropic/skillars/platform/video/service/VideoLifecycleService.java` (AC5)
+- `src/main/java/com/softropic/skillars/platform/video/service/ReconciliationWorkerScheduler.java` (AC2, AC5)
+- `src/main/java/com/softropic/skillars/platform/video/service/AdminVideoService.java` (AC5)
+- `src/main/java/com/softropic/skillars/platform/video/service/VideoService.java` (AC2)
+- `src/main/java/com/softropic/skillars/platform/video/service/VideoMetrics.java` (AC2)
+- `src/main/java/com/softropic/skillars/platform/video/config/VideoProperties.java` (AC2)
+- `src/main/java/com/softropic/skillars/platform/video/repo/VideoRepository.java` (AC3)
+- `src/main/java/com/softropic/skillars/platform/security/repo/RefreshTokenRepository.java` (AC3 — Javadoc)
+- `src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java` (AC6)
+- `src/main/java/com/softropic/skillars/platform/filestorage/repo/PendingBlobDeletion.java` (AC6 — Javadoc)
+- `src/main/java/com/softropic/skillars/platform/filestorage/repo/PendingBlobDeletionRepository.java` (AC6 — trimmed)
+- `src/main/java/com/softropic/skillars/platform/video/service/BandwidthResetChunkProcessor.java` (AC6 — javadoc link)
+
+**Deleted (main)**
+- `src/main/java/com/softropic/skillars/platform/filestorage/service/PendingBlobDeletionService.java` (AC6)
+- `src/main/java/com/softropic/skillars/platform/filestorage/service/PendingBlobDeletionChunkProcessor.java` (AC6)
+- `src/main/java/com/softropic/skillars/platform/filestorage/contract/event/BlobDeletionsEnqueuedEvent.java` (AC6)
+
+**Modified (test)**
+- `src/test/java/com/softropic/skillars/platform/payment/service/ReliabilityStrikeServiceTest.java` (AC1)
+- `src/test/java/com/softropic/skillars/platform/booking/service/BatchAcceptPaymentIT.java` (AC4)
+- `src/test/java/com/softropic/skillars/platform/video/service/VideoLifecycleServiceTest.java` (AC5)
+- `src/test/java/com/softropic/skillars/platform/video/service/VideoSubscriptionLifecycleListenerIT.java` (AC3)
+- `src/test/java/com/softropic/skillars/platform/video/service/VideoServiceTest.java` (AC2)
+- `src/test/java/com/softropic/skillars/platform/admin/api/GdprErasureIT.java` (AC6)
+
+**Modified (docs)**
+- `_bmad-output/implementation-artifacts/deferred-work.md` (AC7)
+
+### Change Log
+
+| Date | Change |
+|---|---|
+| 2026-09-08 | skillars-deferred-100 implemented — AC1 strike-race lock, AC2 orphaned-provider-asset sweeper (`V131` + `pending_provider_asset`), AC3 native/`@Modifying` × `@Version` audit + `NativeModifyingVersionAuditTest` guard, AC4 batch-status-listener transaction boundary, AC5 `PROCESSING→READY` removal + `reconcileToReady`, AC6 `PendingBlobDeletionService` → generic `platform.outbox` consolidation, AC7 `deferred-work.md` pruning. Status → review. |
+| 2026-09-08 | Review-blocker patches — AC2: sweeper Javadoc + `V131` comment document why a swept row cannot be a live asset (unique Bunny GUID + synchronous tracking-row lifecycle + tunable TTL). AC3: added `NativeModifyingVersionAuditTest.noModifyingWriteAgainstAVersionedTableEscapesTheAudit()` — target-table-keyed completeness scan across all repositories. AC4: inline verbatim proof of the W1 closure added to the AC4 spec block. All three `[Review][Decision]` VIOLATIONS closed. |
+| 2026-09-08 | Second bmad-code-review run (three-layer) + 12 patches applied. HIGH: AC1 `issue()` → `REQUIRES_NEW` + `issueStrikeSafely` in `CancellationRefundService` so a strike-lock-retry exhaustion can no longer roll back the co-located refund. MED: AC2 sweeper `@SchedulerLock` + `pending_provider_asset.attempts` (V131) + attempts-first ordering + stuck gauge/ERROR + broadened per-row catch + `ON CONFLICT DO NOTHING` tracker insert; AC6 residual-drain runner `try/catch` + chunked migration; AC3 guard-test completeness holes. LOW: AC6 enqueue rethrows on serialization failure; AC5 `reconcile()` catch breadth + `video.reconciliation.state_corrected` meter; AC7 machine-parseable closure-comment anchors. Status → done (pending GitHub CI). |

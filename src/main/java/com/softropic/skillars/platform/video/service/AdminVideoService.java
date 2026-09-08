@@ -156,7 +156,9 @@ public class AdminVideoService {
                 ReconciliationIncident incident = null;
 
                 if (providerStatus == AssetStatus.READY && fresh.getOperationalState() == OperationalState.PROCESSING) {
-                    videoLifecycleService.transitionOperationalState(videoId, OperationalState.READY);
+                    // skillars-deferred-100 AC5: reconcileToReady() — this admin-triggered correction
+                    // is legitimate and must not trip the video.moderation.bypass alarm.
+                    videoLifecycleService.reconcileToReady(videoId, "admin reconcile: provider READY, local PROCESSING");
                     incident = saveIncident(fresh, ReconciliationIncidentType.STATE_CORRECTED,
                             "Admin reconcile: local PROCESSING corrected to READY");
                     log.info("Admin reconcile STATE_CORRECTED for video {}: PROCESSING → READY", videoId);

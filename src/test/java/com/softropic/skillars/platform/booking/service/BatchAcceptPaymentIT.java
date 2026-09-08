@@ -2,10 +2,12 @@ package com.softropic.skillars.platform.booking.service;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
+import com.softropic.skillars.platform.booking.contract.BookingStatusChangedEvent;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -35,6 +37,7 @@ class BatchAcceptPaymentIT extends AbstractIntegrationTest {
     @Autowired private BookingRepository bookingRepository;
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
+    @Autowired private ApplicationEventPublisher eventPublisher;
 
     private static final long PARENT_ID     = 9611000001L;
     private static final long PLAYER_ID     = 9611000011L;
@@ -187,6 +190,63 @@ class BatchAcceptPaymentIT extends AbstractIntegrationTest {
             Integer.class, goodPack))
             .as("the healthy booking's pack unit must stay deducted")
             .isEqualTo(4);
+    }
+
+    /**
+     * skillars-deferred-100 AC4: {@code BookingBatchStatusListener.onBookingStatusChanged} is an
+     * AFTER_COMMIT listener; before the fix its {@code bookingRepository.findById} ran with no
+     * transaction at all. With {@code @Transactional(REQUIRES_NEW, readOnly = true)} the lookup +
+     * the delegate {@code updateBatchStatusFromBooking} recompute the batch status cleanly, no
+     * {@code TransactionRequiredException}-class failure and no open-session-in-view reliance.
+     */
+    @Test
+    void batchStatusListener_recomputesBatchStatusInItsOwnTransaction() {
+        UUID batchId = insertBatch();
+        UUID b1 = insertBatchBooking(batchId, 10, null);
+        UUID b2 = insertBatchBooking(batchId, 11, null);
+        setStatus(b1, "PAYMENT_PENDING");
+        setStatus(b2, "PAYMENT_PENDING");
+
+        // Publish from inside a committed transaction so the AFTER_COMMIT listener actually fires.
+        transactionTemplate.execute(s -> {
+            eventPublisher.publishEvent(new BookingStatusChangedEvent(this, b1, "PAYMENT_PENDING"));
+            return null;
+        });
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM booking.booking_batches WHERE id = ?", String.class, batchId))
+            .as("the AFTER_COMMIT listener must recompute the batch status in its own transaction")
+            .isEqualTo("FULLY_ACCEPTED");
+    }
+
+    /**
+     * skillars-deferred-100 AC4: a booking with {@code batch_id == null} must be a no-op — the
+     * listener's guard stays, and {@code updateBatchStatusFromBooking(null)} is never called.
+     */
+    @Test
+    void batchStatusListener_nonBatchedBooking_isNoOp() {
+        UUID bookingId = UUID.randomUUID();
+        Instant start = Instant.now().plus(9, ChronoUnit.DAYS);
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO booking.bookings " +
+                "(id, parent_id, player_id, coach_id, requested_start_time, requested_end_time, " +
+                " status, canonical_timezone, batch_id, version, created_at, updated_at) " +
+                "VALUES (?, ?, ?, ?, ?, ?, 'CONFIRMED', ?, NULL, 0, ?, ?)",
+                bookingId, PARENT_ID, PLAYER_ID, coachProfileId,
+                Timestamp.from(start), Timestamp.from(start.plus(1, ChronoUnit.HOURS)), TZ,
+                Timestamp.from(Instant.now()), Timestamp.from(Instant.now()));
+            return null;
+        });
+
+        transactionTemplate.execute(s -> {
+            eventPublisher.publishEvent(new BookingStatusChangedEvent(this, bookingId, "CONFIRMED"));
+            return null;
+        });
+
+        assertThat(statusOf(bookingId))
+            .as("no exception, booking untouched")
+            .isEqualTo("CONFIRMED");
     }
 
     private void setStatus(UUID bookingId, String status) {

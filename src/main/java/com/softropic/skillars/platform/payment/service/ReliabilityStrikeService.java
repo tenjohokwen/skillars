@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.payment.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
@@ -15,6 +16,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
@@ -30,24 +32,61 @@ public class ReliabilityStrikeService {
     private final CoachProfileRepository coachProfileRepository;
     private final ConfigService configService;
     private final ApplicationEventPublisher eventPublisher;
+    private final PessimisticLockRetryer lockRetryer;
 
-    @Transactional
+    // skillars-deferred-100 code review (2026-09-08): REQUIRES_NEW, not the default REQUIRED. The
+    // AFTER_COMMIT refund listeners (CancellationRefundService.onCoachNoShow /
+    // onBookingCancelledByCoach) call issue() *after* refundOutboxSupport.enqueueBookingRefund(...)
+    // has already written the refund row into their own REQUIRES_NEW transaction. If issue() joined
+    // that transaction (REQUIRED) and its lockRetryer.withBoundedRetry exhausted
+    // (PessimisticLockingFailureException), the shared transaction would be marked rollback-only and
+    // the refund would be lost with the strike. A separate transaction here contains an issue()
+    // failure to the strike alone; the two call sites additionally catch the exception so the refund
+    // enqueue commits regardless. The admin path (AdminCoachEnforcementService) still sees the
+    // propagated exception and surfaces it for an operator retry.
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public CoachReliabilityStrike issue(UUID coachId, UUID bookingId, String reason) {
         CoachReliabilityStrike strike = new CoachReliabilityStrike();
         strike.setCoachId(coachId);
         strike.setBookingId(bookingId);
         strike.setReason(reason);
         strike.setAcknowledged(false);
+        // skillars-deferred-100 AC1: the strike INSERT stays *before* the lock. It happens
+        // regardless of the threshold outcome, and keeping it here is the smaller diff. The
+        // PessimisticLockRetryer flushes the persistence context at the start of every attempt, so
+        // the row is durable before the locked read and is counted by the query below (same as the
+        // pre-change autoflush-before-query behaviour). A full retry exhaustion still rolls the whole
+        // transaction back, strike included — acceptable, see the lock comment below.
         CoachReliabilityStrike saved = strikeRepository.save(strike);
 
-        long count = strikeRepository.countByCoachIdAndCreatedAtAfter(coachId, OffsetDateTime.now().minusDays(30));
         long suspensionThreshold = configService.getBoundedLong(
             ReliabilityStrikeConfig.SUSPENSION_THRESHOLD_KEY, ReliabilityStrikeConfig.DEFAULT_SUSPENSION_THRESHOLD, 1L, Long.MAX_VALUE);
         long visibilityThreshold = configService.getBoundedLong(
             ReliabilityStrikeConfig.VISIBILITY_THRESHOLD_KEY, ReliabilityStrikeConfig.DEFAULT_VISIBILITY_THRESHOLD, 1L, Long.MAX_VALUE);
 
-        CoachProfile coach = coachProfileRepository.findById(coachId)
-            .orElseThrow(() -> new ResourceNotFoundException("Coach not found", "coach_profile"));
+        // skillars-deferred-100 AC1: serialize the count -> threshold -> status decision on the
+        // coach row. Two concurrent issue() calls for the same coach previously both read an
+        // unlocked count = N and an unlocked status = ACTIVE, both passed the guard, and both
+        // published StrikeThresholdReachedEvent / CoachVisibilityReducedEvent. CoachProfile carries
+        // no @Version, so there was no optimistic-lock backstop either — both commits landed. Taking
+        // the PESSIMISTIC_WRITE lock here makes the loser block until the winner commits, then
+        // re-read status = PENDING_REVIEW / REDUCED so its guard suppresses the duplicate event and
+        // the duplicate save. The count read is deliberately moved *below* this line so the count
+        // and the status decision are consistent for the winner. No entityManager.refresh: this
+        // method never pre-loads the coach row, so the locked read genuinely returns fresh state
+        // (same rationale as BookingBatchService.acceptOneBooking / updateBatchStatusFromBooking).
+        //
+        // withBoundedRetry can still exhaust under sustained contention
+        // (PessimisticLockingFailureException); issue() then propagates and its transaction rolls
+        // back. That is acceptable and deliberately not given a bespoke retry: the refund-listener
+        // callers (CancellationRefundService.onCoachCancellationUnexcused / onCoachNoShow) have no
+        // retry, a dropped strike-escalation is far less harmful than the refund those listeners
+        // exist to protect, and the admin path (AdminCoachEnforcementService.issueManualStrike)
+        // surfaces the error for the operator to retry.
+        CoachProfile coach = lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(coachId)
+            .orElseThrow(() -> new ResourceNotFoundException("Coach not found", "coach_profile")));
+
+        long count = strikeRepository.countByCoachIdAndCreatedAtAfter(coachId, OffsetDateTime.now().minusDays(30));
 
         // Check PENDING_REVIEW threshold first (mutually exclusive per AC 9)
         if (count >= suspensionThreshold) {

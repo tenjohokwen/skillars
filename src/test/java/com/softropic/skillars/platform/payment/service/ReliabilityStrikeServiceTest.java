@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.payment.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
@@ -21,11 +22,13 @@ import org.springframework.context.ApplicationEventPublisher;
 import java.time.OffsetDateTime;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -37,6 +40,7 @@ class ReliabilityStrikeServiceTest {
     @Mock CoachProfileRepository coachProfileRepository;
     @Mock ConfigService configService;
     @Mock ApplicationEventPublisher eventPublisher;
+    @Mock PessimisticLockRetryer lockRetryer;
 
     @InjectMocks ReliabilityStrikeService service;
 
@@ -55,8 +59,11 @@ class ReliabilityStrikeServiceTest {
         coach.setDisplayName("Test Coach");
         coach.setCanonicalTimezone("UTC");
         coach.setStatus(CoachProfileStatus.ACTIVE);
-        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(strikeRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        // The retryer is a pass-through in unit context: run the supplier inline.
+        lenient().when(lockRetryer.withBoundedRetry(any())).thenAnswer(inv ->
+            ((Supplier<?>) inv.getArgument(0)).get());
     }
 
     @Test

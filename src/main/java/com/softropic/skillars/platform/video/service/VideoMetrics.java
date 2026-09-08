@@ -22,9 +22,12 @@ public class VideoMetrics {
     public static final String UPLOAD_SESSION_ACTIVE = "video.upload.session.active";
     public static final String ERROR_COUNT = "video.error.count";
 
+    public static final String ORPHAN_ASSET_STUCK = "video.orphan_asset.stuck";
+
     private final MeterRegistry meterRegistry;
     private final AtomicLong webhookQueueDepth = new AtomicLong(0L);
     private final AtomicLong activeUploadSessions = new AtomicLong(0L);
+    private final AtomicLong orphanAssetStuckCount = new AtomicLong(0L);
 
     public VideoMetrics(MeterRegistry meterRegistry) {
         this.meterRegistry = meterRegistry;
@@ -37,6 +40,9 @@ public class VideoMetrics {
             .register(meterRegistry);
         Gauge.builder(UPLOAD_SESSION_ACTIVE, activeUploadSessions, AtomicLong::get)
             .description("Count of PENDING upload sessions")
+            .register(meterRegistry);
+        Gauge.builder(ORPHAN_ASSET_STUCK, orphanAssetStuckCount, AtomicLong::get)
+            .description("Count of pending_provider_asset rows the sweeper has repeatedly failed to purge")
             .register(meterRegistry);
     }
 
@@ -82,6 +88,24 @@ public class VideoMetrics {
             .tag("error_code", errorCode)
             .register(meterRegistry)
             .increment();
+    }
+
+    /** skillars-deferred-100 AC2: orphaned-provider-asset sweeper counters. */
+    public void recordOrphanAssetFound() {
+        meterRegistry.counter("video.orphan_asset.found").increment();
+    }
+
+    public void recordOrphanAssetPurged() {
+        meterRegistry.counter("video.orphan_asset.purged").increment();
+    }
+
+    public void recordOrphanAssetPurgeFailed() {
+        meterRegistry.counter("video.orphan_asset.purge_failed").increment();
+    }
+
+    /** skillars-deferred-100 code review (2026-09-08): rows the sweeper keeps failing to purge. */
+    public void updateOrphanAssetStuckCount(long count) {
+        orphanAssetStuckCount.set(count);
     }
 
     public void updateWebhookQueueDepth(long count) {
