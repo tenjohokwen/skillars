@@ -481,14 +481,14 @@
 			<artifactId>httpclient5</artifactId>
 		</dependency>
 		<dependency>
-			<!-- openpdf 2.0.5 is the last release compiled for Java 17 (class file v61);
+			<!-- openpdf 3.0.5 is the last release compiled for Java 17 (class file v61);
 			     2.1.0+ and 3.x are compiled for Java 21 (v65) and cannot load on this
 			     project's Java 17 toolchain. Dependabot #141 (3.0.5) is therefore blocked
 			     until the project moves to Java 21. 2.x keeps the com.lowagie.text.* package
 			     (the rename to org.openpdf.text.* landed in 3.x only). -->
 			<groupId>com.github.librepdf</groupId>
 			<artifactId>openpdf</artifactId>
-			<version>2.0.5</version>
+			<version>3.0.5</version>
 		</dependency>
 	</dependencies>
 
