@@ -137,8 +137,9 @@ class VideoLifecycleServiceTest {
         when(videoRepository.findById(id)).thenReturn(Optional.of(v));
         when(videoRepository.save(v)).thenReturn(v);
 
-        service.reconcileToReady(id, "test reason");
+        boolean corrected = service.reconcileToReady(id, "test reason");
 
+        assertThat(corrected).isTrue();
         assertThat(v.getOperationalState()).isEqualTo(OperationalState.READY);
         verify(publisher).publishEvent(any(VideoStatusChangedEvent.class));
         // Never the moderation-bypass alarm...
@@ -166,8 +167,9 @@ class VideoLifecycleServiceTest {
         Video v = videoWith(id, OperationalState.READY, AccessState.ACTIVE);
         when(videoRepository.findById(id)).thenReturn(Optional.of(v));
 
-        service.reconcileToReady(id, "test");
+        boolean corrected = service.reconcileToReady(id, "test");
 
+        assertThat(corrected).isFalse();
         verify(videoRepository, never()).save(any());
         verify(publisher, never()).publishEvent(any());
     }

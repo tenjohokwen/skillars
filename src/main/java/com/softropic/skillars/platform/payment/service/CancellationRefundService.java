@@ -35,38 +35,24 @@ public class CancellationRefundService {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onBookingCancelledByParent(BookingCancelledByParentEvent event) {
+        // skillars-deferred-101 AC4: refund enqueue now handled by RefundEnqueueListener (BEFORE_COMMIT)
         if (event.getSessionPackPurchaseId() != null) {
             if (event.isRefundEligible()) {
                 packSessionService.restoreSession(event.getSessionPackPurchaseId());
                 log.info("Pack session restored for parent cancellation >24h: bookingId={}", event.getBookingId());
             }
             // else: forfeited, no action — session consumed
-        } else {
-            if (event.isRefundEligible()) {
-                refundOutboxSupport.enqueueBookingRefund(
-                event.getParentId(), event.getSessionPrice(), event.getBookingId(),
-                "Parent cancellation >24h — full refund");
-                log.info("BOOKING_REFUND issued for parent cancellation: bookingId={}", event.getBookingId());
-            }
-            // else: forfeited, no action
         }
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onBookingCancelledByCoach(BookingCancelledByCoachEvent event) {
+        // skillars-deferred-101 AC4: refund enqueue now handled by RefundEnqueueListener (BEFORE_COMMIT)
         if (event.getSessionPackPurchaseId() != null) {
-            if (event.isPackExpiredAtCancellation()) {
-                refundOutboxSupport.enqueueBookingRefund(
-                event.getParentId(), event.getSessionPrice(), event.getBookingId(),
-                "Coach cancellation — expired pack refund");
-            } else {
+            if (!event.isPackExpiredAtCancellation()) {
                 packSessionService.restoreSession(event.getSessionPackPurchaseId());
             }
-        } else {
-            refundOutboxSupport.enqueueBookingRefund(
-                event.getParentId(), event.getSessionPrice(), event.getBookingId(),
-                "Coach cancellation — full refund");
         }
 
         // Always record cancellation history — ALL coach cancellations (excused AND unexcused)
@@ -83,18 +69,11 @@ public class CancellationRefundService {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onCoachNoShow(CoachNoShowEvent event) {
+        // skillars-deferred-101 AC4: refund enqueue now handled by RefundEnqueueListener (BEFORE_COMMIT)
         if (event.getSessionPackPurchaseId() != null) {
-            if (event.isPackExpiredAtCancellation()) {
-                refundOutboxSupport.enqueueBookingRefund(
-                event.getParentId(), event.getSessionPrice(), event.getBookingId(),
-                "Coach no-show — expired pack refund");
-            } else {
+            if (!event.isPackExpiredAtCancellation()) {
                 packSessionService.restoreSession(event.getSessionPackPurchaseId());
             }
-        } else {
-            refundOutboxSupport.enqueueBookingRefund(
-                event.getParentId(), event.getSessionPrice(), event.getBookingId(),
-                "Coach no-show — full refund");
         }
 
         issueStrikeSafely(event.getCoachId(), event.getBookingId(), "COACH_NO_SHOW");
@@ -102,9 +81,10 @@ public class CancellationRefundService {
     }
 
     /**
-     * skillars-deferred-100 code review (2026-09-08): the refund enqueue above has already run in
-     * this listener's transaction and MUST survive. {@code ReliabilityStrikeService.issue} is
-     * {@code REQUIRES_NEW}, so a strike failure rolls back only the strike; here we additionally
+     * skillars-deferred-100 code review (2026-09-08): the refund enqueue must survive strike failures.
+     * skillars-deferred-101 AC4: refund enqueue is now a sibling {@link RefundEnqueueListener}
+     * (BEFORE_COMMIT), committed atomically with the booking state. {@code ReliabilityStrikeService.issue}
+     * is {@code REQUIRES_NEW}, so a strike failure rolls back only the strike; here we additionally
      * swallow {@link PessimisticLockingFailureException} (bounded-retry exhaustion under sustained
      * coach-row contention) so it cannot propagate out of the listener and roll back the refund.
      * A dropped strike-escalation is the deliberately-accepted cost (see the {@code issue()}
@@ -122,14 +102,10 @@ public class CancellationRefundService {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onBookingCancelledByAdmin(BookingCancelledByAdminEvent event) {
+        // skillars-deferred-101 AC4: refund enqueue now handled by RefundEnqueueListener (BEFORE_COMMIT)
         if (event.getSessionPackPurchaseId() != null) {
             packSessionService.restoreSession(event.getSessionPackPurchaseId());
             log.info("Pack session restored for admin suspension: bookingId={}", event.getBookingId());
-        } else {
-            refundOutboxSupport.enqueueBookingRefund(
-                event.getParentId(), event.getSessionPrice(), event.getBookingId(),
-                "Admin coach suspension — full refund");
-            log.info("BOOKING_REFUND issued for admin suspension: bookingId={}", event.getBookingId());
         }
     }
 

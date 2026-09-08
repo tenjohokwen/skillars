@@ -37,7 +37,11 @@ public class RefundOutboxSupport {
     private final OutboxService outboxService;
     private final ObjectMapper objectMapper;
 
-    /** MUST be called inside the producing listener's transaction. */
+    /**
+     * skillars-deferred-101 AC4: requires an active transaction for atomicity. MANDATORY propagation
+     * enforces that the caller (RefundEnqueueListener.BEFORE_COMMIT) has already begun a transaction.
+     */
+    @org.springframework.transaction.annotation.Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
     public void enqueueBookingRefund(Long parentId, BigDecimal amount, UUID bookingId, String description) {
         try {
             String json = objectMapper.writeValueAsString(
