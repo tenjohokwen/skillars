@@ -1,5 +1,5 @@
 generated: 2026-05-25
-last_updated: '2026-09-08'  # skillars-deferred-101 created (ready-for-dev)
+last_updated: '2026-09-08'  # skillars-deferred-102 created (ready-for-dev); skillars-deferred-97 withdrawn (absorbed)
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -258,11 +258,12 @@ development_status:
   skillars-deferred-93-genuine-one-off-bugs-and-otp-security-fixes: done
   skillars-deferred-94-deploy-hardening-security-operational-and-listener-safety: done
   skillars-deferred-96-deployment-visibility-smoke-error-channel-health: review
-  skillars-deferred-97-backup-and-deployment-smoke-resilience-hardening: backlog
+  skillars-deferred-97-backup-and-deployment-smoke-resilience-hardening: withdrawn # superseded by skillars-deferred-102 (absorbs its 4 backup/deploy-smoke items as AC1/AC2/AC4/AC5)
   skillars-deferred-98-slu-perf-signal-and-frontend-ux-precision: done
   frontend-test-framework-initiative: backlog # cited by skillars-deferred-98 AC3 (2026-09-07 code review); see deferred-work.md
   skillars-deferred-99-genuine-one-off-bugs-reliability-i18n-migration-safety-and-video-hardening: done
   skillars-deferred-100-concurrency-reconciliation-and-lifecycle-hardening: done
   skillars-deferred-101-residual-bugs-refund-atomicity-and-api-hygiene: done
+  skillars-deferred-102-deploy-backup-resilience-and-cross-module-bug-sweep: ready-for-dev
   ? skillars-deferred-92-outbox-enqueue-atomicity-executor-shutdown-migration-ordering-and-lock-timeout-default-bundle-parity-fr-fr-idiom-prettier-conformance-and-genuine-bug-fixes
   : review
