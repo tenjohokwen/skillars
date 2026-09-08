@@ -270,6 +270,29 @@ that situation. The expand/contract standard is enforced from `V122` onward inst
 | `V117` | unbatched orphan `DELETE` + `ADD CONSTRAINT fk_crp_player_id … REFERENCES` (validating) + non-`CONCURRENTLY` `CREATE INDEX ix_crp_player_id` on `development.coach_radar_preferences` | `coach_radar_preferences` grows (per coach × player) | Yes — the FK `ADD CONSTRAINT` validates under `ACCESS EXCLUSIVE` (scans both tables); the plain `CREATE INDEX` takes a `SHARE` lock blocking writes for the build. | No production rows. A redo would `DROP` the valid FK + index and re-create them `NOT VALID` / `CONCURRENTLY` for an identical end state. Rules 3 (`NOT VALID` FK) and 4 (`CONCURRENTLY`) bind any future index/FK here. |
 | `AdminAlertType` widen (`V70`/`V91` `admin_alerts_type_check`) | `DROP`/`ADD` the `type` CHECK to admit `MODERATION_UNRESOLVED` | `admin_alerts` grows slowly (moderation queue) | Yes in principle, but `admin_alerts` is a bounded work-queue (OPEN rows are actioned and resolved). | Small bounded table. The *read* side is now tolerant per skillars-deferred-91 AC6 (`AdminQueueService` skips an unknown `alert_type` with a WARN instead of 500ing the page). |
 
+### Known lock-unsafe applied migrations (pre-production)
+
+**Migrations V60, V94, V97, V98, and V117 use patterns that would not pass the current
+linting rules.** They are applied and immutable (Flyway checksums the contents). Each is safe
+to deploy as-written **only because there is no production data yet** — the tables affected are
+empty or near-empty at this revision. **Before the first production deploy**, each must either:
+
+1. Be rewritten following the expand/contract pattern (see specific rewrites below), or
+2. Be accepted if the affected table is confirmed to remain small at go-live.
+
+The responsibility is divided: until a redo is taken, operations must agree on go-live
+table sizes and lock-hold risk; this decision is documented below per-migration.
+
+**Specific lock-unsafe patterns and safe rewrites:**
+
+| Migration | Unsafe pattern | Safe rewrite | Status |
+| :--- | :--- | :--- | :--- |
+| `V60` | `ADD CONSTRAINT … CHECK` on `main.videos` under `ACCESS EXCLUSIVE` (validating scan at scale) | `ADD CONSTRAINT … CHECK … NOT VALID` now; `VALIDATE CONSTRAINT` in a later release after backfill window closes. | No production rows; redo is churn. Future `videos` constraints use `NOT VALID` + `VALIDATE` (rule 2). |
+| `V94` | `DROP` + re-`ADD CONSTRAINT … CHECK` on `booking_payments` (enum-value widen, validating at scale) | `ADD CONSTRAINT … NOT VALID` first; `VALIDATE` later; or accept if `booking_payments` stays small. | No production rows; re-ADD is identical end state. Future widening here must be split (rule 5 applies from `V122+`). |
+| `V97` | `DROP COLUMN` pair on `bookings` | None needed — `DROP COLUMN` is metadata-only in PostgreSQL, no scan or rewrite. Lock held briefly regardless of table size. | Safe as-written; kept for record. |
+| `V98` | Unbatched full-table `UPDATE` backfill on `player_radar_composites` | Chunk the backfill: `WHERE` on a key range or `ctid` batch loop, multiple transactions. | No production rows; one unbatched backfill is already applied. Subsequent backfills on this or other tables must be batched (rule 6, from `V122+`). |
+| `V117` | Validating `ADD CONSTRAINT FK` + non-`CONCURRENTLY` `CREATE INDEX` on `coach_radar_preferences` | `ADD CONSTRAINT FK … NOT VALID` then `VALIDATE` later; `CREATE INDEX CONCURRENTLY` (its own migration, no other statements). | No production rows; redo would `DROP` and re-create `NOT VALID` / `CONCURRENTLY`. Future index/FK here follow rules 2 & 3. |
+
 ## What the guard now covers (skillars-deferred-91 AC7)
 
 The three blind spots this section used to name are now checked by `MigrationLint`:

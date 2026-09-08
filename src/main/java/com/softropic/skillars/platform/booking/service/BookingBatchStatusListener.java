@@ -26,14 +26,26 @@ public class BookingBatchStatusListener {
      * {@code REQUIRES_NEW}; the batch-row locking there is correct and untouched. The
      * {@code batchId != null} guard below stays — a non-batched booking must be a no-op, and
      * {@code updateBatchStatusFromBooking(null)} must never be called.
+     *
+     * skillars-deferred-101 AC1: added null-check on event.bookingId() for defence-in-depth, and
+     * failure isolation so exceptions during batch-status refresh do not poison the committed
+     * transaction's commit() call. Swallowed exceptions self-heal on the next status change.
      */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     public void onBookingStatusChanged(BookingStatusChangedEvent event) {
-        bookingRepository.findById(event.bookingId()).ifPresent(booking -> {
-            if (booking.getBatchId() != null) {
-                bookingBatchService.updateBatchStatusFromBooking(booking.getBatchId());
-            }
-        });
+        if (event.bookingId() == null) {
+            log.warn("BookingStatusChangedEvent with null bookingId — ignoring");
+            return;
+        }
+        try {
+            bookingRepository.findById(event.bookingId()).ifPresent(booking -> {
+                if (booking.getBatchId() != null) {
+                    bookingBatchService.updateBatchStatusFromBooking(booking.getBatchId());
+                }
+            });
+        } catch (RuntimeException e) {
+            log.error("Batch-status refresh failed for bookingId={} — batch status may be stale until the next status change on this batch", event.bookingId(), e);
+        }
     }
 }

@@ -123,6 +123,9 @@ public class VideoService {
             throw new VideoValidationException("Retry is only permitted for videos in FAILED state");
         }
 
+        // skillars-deferred-101 AC3: capture prior asset id before retry for orphan tracking
+        String priorAssetId = video.getProviderAssetId();
+
         // Enforce video-type-specific size limits on retry
         if (video.getVideoType() != null) {
             videoTypeConstraints.validate(video.getVideoType(), request.fileSizeBytes(), 0);
@@ -175,8 +178,8 @@ public class VideoService {
 
             // skillars-deferred-100 AC2: track the retry's new provider asset the same way
             // initializeUpload does — a caller rollback after this point would otherwise orphan it.
-            // (The pre-retry asset id this write overwrites is a separate, pre-existing leak, out of
-            // scope here.)
+            // skillars-deferred-101 AC3: the pre-retry asset is now tracked for the sweeper;
+            // see the second tx below.
             pendingProviderAssetTracker.record(credentials.providerUploadId(), properties.getProvider());
 
             // expiresAt derived from TUS credential expiry to avoid clock-drift between the two values
@@ -191,6 +194,14 @@ public class VideoService {
                 s.setProviderUploadId(credentials.providerUploadId());
                 s.setExpiresAt(expiresAt);
                 uploadSessionRepository.save(s);
+
+                // skillars-deferred-101 AC3: if the prior asset differs, track it for the sweeper
+                // so it is deleted and not leaked (bills + stores PII). tracker.record() is REQUIRES_NEW
+                // so commits in its own tx; if the pointer-swap rolls back here, the stale tracking row
+                // is harmless — the sweeper's findByProviderAssetId guard will drop it.
+                if (priorAssetId != null && !priorAssetId.equals(credentials.providerUploadId())) {
+                    pendingProviderAssetTracker.record(priorAssetId, properties.getProvider());
+                }
 
                 pendingProviderAssetRepository.deleteByProviderAssetId(credentials.providerUploadId());
                 return null;

@@ -133,6 +133,9 @@ fi
 log "Dropping and recreating database ${POSTGRES_DB:-skillars}..."
 PGPASSWORD="${POSTGRES_PASSWORD}" docker exec -e PGPASSWORD "$CID" \
   psql -U "${POSTGRES_USER:-postgres}" -d postgres \
+  -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${POSTGRES_DB:-skillars}' AND pid <> pg_backend_pid();"
+PGPASSWORD="${POSTGRES_PASSWORD}" docker exec -e PGPASSWORD "$CID" \
+  psql -U "${POSTGRES_USER:-postgres}" -d postgres \
   -c "DROP DATABASE IF EXISTS \"${POSTGRES_DB:-skillars}\";"
 PGPASSWORD="${POSTGRES_PASSWORD}" docker exec -e PGPASSWORD "$CID" \
   psql -U "${POSTGRES_USER:-postgres}" -d postgres \

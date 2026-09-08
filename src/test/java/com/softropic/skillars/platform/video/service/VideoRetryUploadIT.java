@@ -12,6 +12,8 @@ import com.softropic.skillars.platform.video.contract.RetryUploadRequest;
 import com.softropic.skillars.platform.video.contract.UploadSessionStatus;
 import com.softropic.skillars.platform.video.contract.Visibility;
 import com.softropic.skillars.platform.video.contract.exception.VideoValidationException;
+import com.softropic.skillars.platform.video.repo.PendingProviderAsset;
+import com.softropic.skillars.platform.video.repo.PendingProviderAssetRepository;
 import com.softropic.skillars.platform.video.repo.UploadSession;
 import com.softropic.skillars.platform.video.repo.UploadSessionRepository;
 import com.softropic.skillars.platform.video.repo.Video;
@@ -49,10 +51,14 @@ class VideoRetryUploadIT extends BaseVideoIT {
     @Autowired
     UploadSessionRepository uploadSessionRepository;
 
+    @Autowired
+    PendingProviderAssetRepository pendingProviderAssetRepository;
+
     @BeforeEach
     void setUp() {
         uploadSessionRepository.deleteAll();
         videoRepository.deleteAll();
+        pendingProviderAssetRepository.deleteAll();
         wireMockServer.resetAll();
         when(quotaProvider.check(anyString(), anyLong())).thenReturn(true);
         when(quotaProvider.reserve(anyString(), anyLong())).thenReturn("retry-handle");
@@ -114,6 +120,34 @@ class VideoRetryUploadIT extends BaseVideoIT {
         List<UploadSession> sessions = uploadSessionRepository.findAll();
         assertThat(sessions).hasSize(1);
         assertThat(sessions.get(0).getStatus()).isEqualTo(UploadSessionStatus.COMMITTED);
+    }
+
+    @Test
+    void retryUpload_tracksPriorProviderAssetForSweeper() {
+        // skillars-deferred-101 AC3: retryUpload overwrites Video.providerAssetId with the retry's
+        // new id. Without tracking, the prior asset ("old-bunny-guid") becomes invisible to BOTH
+        // ReconciliationWorkerScheduler.reconcile() (iterates rows that HAVE a Video, now pointing
+        // at the new id) AND sweepOrphanedProviderAssets() (iterates pending_provider_asset rows) —
+        // so it leaks on the provider forever. AC3 records the prior id so the orphan sweeper
+        // deletes it.
+        Video failed = seedFailedVideo("owner-orphan");
+        assertThat(providerAssetTracked("old-bunny-guid")).isFalse();
+
+        videoService.retryUpload(new RetryUploadRequest(failed.getId(), "owner-orphan", 1024L));
+
+        Video video = videoRepository.findById(failed.getId()).orElseThrow();
+        assertThat(video.getProviderAssetId()).isEqualTo("new-bunny-guid");
+
+        // The prior asset is now tracked — the sweeper will delete it and write an ORPHANED_ASSET incident.
+        assertThat(providerAssetTracked("old-bunny-guid")).isTrue();
+        // The retry's own tracking row was cleaned up on success (skillars-deferred-100 AC2 path).
+        assertThat(providerAssetTracked("new-bunny-guid")).isFalse();
+    }
+
+    private boolean providerAssetTracked(String providerAssetId) {
+        return pendingProviderAssetRepository.findAll().stream()
+            .map(PendingProviderAsset::getProviderAssetId)
+            .anyMatch(providerAssetId::equals);
     }
 
     @Test

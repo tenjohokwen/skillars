@@ -122,24 +122,24 @@ public class VideoLifecycleService {
      */
     @Observed(name = "video.lifecycle.reconcileToReady")
     @Transactional
-    public Video reconcileToReady(UUID videoId, String reason) {
+    public boolean reconcileToReady(UUID videoId, String reason) {
         Video video = videoRepository.findById(videoId)
             .orElseThrow(() -> new VideoNotFoundException(videoId));
 
         OperationalState current = video.getOperationalState();
         if (current == OperationalState.READY) {
-            return video; // already corrected — idempotent
+            return false; // already corrected — idempotent no-op
         }
         if (current != OperationalState.PROCESSING) {
             throw new VideoStateConflictException(videoId, OperationalState.PROCESSING.name(), current.name());
         }
 
         video.setOperationalState(OperationalState.READY);
-        Video saved = videoRepository.save(video);
+        videoRepository.save(video);
         publisher.publishEvent(new VideoStatusChangedEvent(videoId, OperationalState.READY));
         meterRegistry.counter("video.reconciliation.state_corrected").increment();
         log.info("Reconciliation correction PROCESSING→READY for videoId={} reason={}", videoId, reason);
-        return saved;
+        return true; // state was actually written PROCESSING→READY
     }
 
     @Observed(name = "video.lifecycle.setAccessState")

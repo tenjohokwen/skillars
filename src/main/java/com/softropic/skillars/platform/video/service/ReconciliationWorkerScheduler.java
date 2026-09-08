@@ -97,13 +97,16 @@ public class ReconciliationWorkerScheduler {
                 // skillars-deferred-100 AC5: reconcileToReady(), not transitionOperationalState() —
                 // PROCESSING→READY is no longer a valid plain transition, and this legitimate
                 // provider-driven correction must not trip the video.moderation.bypass alarm.
-                videoLifecycleService.reconcileToReady(video.getId(),
+                boolean corrected = videoLifecycleService.reconcileToReady(video.getId(),
                     "reconciliation: provider reports READY, local state stuck at PROCESSING");
-                recordIncident(video, ReconciliationIncidentType.STATE_CORRECTED,
-                    "Local state PROCESSING corrected to READY based on provider status");
+                if (corrected) {
+                    recordIncident(video, ReconciliationIncidentType.STATE_CORRECTED,
+                        "Local state PROCESSING corrected to READY based on provider status");
+                    log.info("Reconciliation STATE_CORRECTED for video {}: PROCESSING → READY", video.getId());
+                }
                 return null;
             });
-            log.info("Reconciliation STATE_CORRECTED for video {}: PROCESSING → READY", video.getId());
+            // skillars-deferred-101 AC2: gate incident write on actual correction
 
         } else if (providerStatus == AssetStatus.DELETED) {
             transactionTemplate.execute(txStatus -> {

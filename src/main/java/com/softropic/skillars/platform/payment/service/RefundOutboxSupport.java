@@ -37,7 +37,19 @@ public class RefundOutboxSupport {
     private final OutboxService outboxService;
     private final ObjectMapper objectMapper;
 
-    /** MUST be called inside the producing listener's transaction. */
+    /**
+     * Enqueue a booking refund for processing. <strong>Load-bearing contract:</strong> this method
+     * MUST be invoked from within an active transaction, specifically from a
+     * {@code @TransactionalEventListener(phase = BEFORE_COMMIT)} listener (see
+     * {@link RefundEnqueueListener}). The {@code MANDATORY} propagation will throw
+     * {@code IllegalTransactionStateException} if called outside a transaction context.
+     *
+     * <p>Atomicity: the outbox row commits in the same transaction as the booking CANCELLED write,
+     * ensuring the refund is durably recorded or the entire event is rolled back to the caller.
+     *
+     * <p>skillars-deferred-101 AC4: this ensures a committed cancellation always enqueues a refund.
+     */
+    @org.springframework.transaction.annotation.Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
     public void enqueueBookingRefund(Long parentId, BigDecimal amount, UUID bookingId, String description) {
         try {
             String json = objectMapper.writeValueAsString(

@@ -10,6 +10,8 @@ import com.softropic.skillars.platform.development.repo.SluWeeklySnapshotReposit
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -202,6 +204,30 @@ class NeglectedSkillDetectionServiceTest {
         detectionService.detectNeglectedSkills();
 
         verify(snapshotRepository, never()).findByPlayerIdAndWeek(anyLong(), anyShort(), anyShort());
+    }
+
+    // skillars-deferred-101 AC10: boundary-value tests for isInValidRange()
+    // Valid range: (0, 1) — strictly greater than 0, strictly less than 1
+    @ParameterizedTest
+    @CsvSource({
+        "0,      false",      // Boundary: exactly 0 (invalid) — must NOT invoke repo
+        "0.0001, true",       // Just inside lower bound (valid) — must invoke repo
+        "0.5,    true",       // Middle of range (valid) — must invoke repo
+        "0.9999, true",       // Just inside upper bound (valid) — must invoke repo
+        "1.0,    false"       // Boundary: exactly 1 (invalid) — must NOT invoke repo
+    })
+    void isInValidRange_boundaryValues(String value, boolean shouldInvoke) {
+        when(configService.getString("slu.neglected.threshold")).thenReturn(value);
+        lenient().when(sluTargetRepository.findDistinctPlayerIds()).thenReturn(List.of(PLAYER_ID));
+        lenient().when(sluTargetRepository.findMaxTargetPerSkill(PLAYER_ID)).thenReturn(List.of());
+
+        detectionService.detectNeglectedSkills();
+
+        if (shouldInvoke) {
+            verify(sluTargetRepository).findMaxTargetPerSkill(PLAYER_ID);
+        } else {
+            verify(sluTargetRepository, never()).findMaxTargetPerSkill(anyLong());
+        }
     }
 
     private PlayerSluWeeklySnapshot makeSnapshot(short year, short week, String skill, BigDecimal slu) {
