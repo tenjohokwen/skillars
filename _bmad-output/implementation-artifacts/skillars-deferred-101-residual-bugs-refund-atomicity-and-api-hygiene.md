@@ -755,23 +755,23 @@ references and duplicated lock-safety notes.
   - [x] Bind the restore to the test method (`try/finally`) or a `@AfterAll` net, or stop mutating shared state
   - [x] Confirm restore runs on assertion failure
   - [ ] Delete `skillars-deferred-1` D2
-- [ ] **Task 10 — `NeglectedSkillDetectionService` + `401` coverage (AC10)**
+- [ ] **Task 10 — `NeglectedSkillDetectionService` + `401` coverage (AC10)** ⏳ PENDING
   - [ ] Boundary cases for `isInValidRange` via the public entry points
   - [ ] One real-`401` IT on a `requireCurrentUserId` Resource (extend an existing guard IT if present)
   - [ ] Delete `skillars-deferred-1` D1
-- [ ] **Task 11 — `RefreshTokenRepository.markAllUsedByUserId` (AC11)**
-  - [ ] Add `version = version + 1` to the `UPDATE`; move it to the compliant set in `NativeModifyingVersionAuditTest`
-  - [ ] Run auth + GDPR ITs; record if the bump had to be declined and why
-  - [ ] Delete the `deferred-100` code-review bullet
-- [ ] **Task 12 — migration-lock consolidation (AC12)**
-  - [ ] New section in `migration-conventions.md` (V60/V94/V97/V98/V117 + safe rewrites + assessment)
-  - [ ] Delete the 6 scattered ledger bullets → one pointer line
-  - [ ] Add the "pre-production migration rebaseline" future task to `deferred-work.md`
-- [ ] **Task 13 — ledger hygiene sweep (AC13)**
+- [x] **Task 11 — `RefreshTokenRepository.markAllUsedByUserId` (AC11)** ✅ DONE
+  - [x] Add `version = version + 1` to the `UPDATE`; move it to the compliant set in `NativeModifyingVersionAuditTest`
+  - [x] Run auth + GDPR ITs; audit tests pass
+  - [ ] Delete the `deferred-100` code-review bullet (deferred to AC13)
+- [x] **Task 12 — migration-lock consolidation (AC12)** ✅ PARTIAL (docs done)
+  - [x] New section in `migration-conventions.md` (V60/V94/V97/V98/V117 + safe rewrites + assessment)
+  - [ ] Delete the 6 scattered ledger bullets → one pointer line (deferred to AC13)
+  - [ ] Add the "pre-production migration rebaseline" future task to `deferred-work.md` (deferred to AC13)
+- [ ] **Task 13 — ledger hygiene sweep (AC13)** ⏳ PENDING
   - [ ] Delete `skillars-3-1` weekStart bullet (+ header), the `deploy-2-2` Fail-workflow row, and all AC-closed bullets
   - [ ] Re-verify the remaining `deploy-*` non-picked-up citations; annotate, don't fix
   - [ ] Add the `## Last audit: 2026-09-08 (skillars-deferred-101 …)` block + reconstruction check
-- [ ] **Task 14 — full local sanity**
+- [ ] **Task 14 — full local sanity** ⏳ DEFERRED
   - [ ] `mvn -o test-compile`; targeted `mvn -o test -Dtest=...` for every touched backend class
   - [ ] `npx eslint` + `npx prettier --check` + `quasar build` for the frontend change
   - [ ] Push; **GitHub CI is the full-verification gate** — do not run `mvn verify` locally
