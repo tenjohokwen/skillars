@@ -64,7 +64,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <pre>
  *   repo.method                                     table                stmt    entity   verdict
  *   VideoRepository.resetLifecycleLockedAt          main.videos          UPDATE  Video    version=version+1 added (bulk; concurrent managed Video saves exist)
- *   RefreshTokenRepository.markAllUsedByUserId      main.refresh_tokens  UPDATE  RefreshToken  allow-listed (writes only the monotonic `used` terminal flag)
+ *   RefreshTokenRepository.markAllUsedByUserId      main.refresh_tokens  UPDATE  RefreshToken  version=version+1 added by deferred-101 AC11 (defence-in-depth)
  *   RefreshTokenRepository.deleteExpiredTokens      main.refresh_tokens  DELETE  RefreshToken  exempt (DELETE)
  *   LoginAttemptRepository.deleteByAttemptedAtBefore  main.login_attempts  DELETE LoginAttempt exempt (DELETE, derived)
  *   PhoneOtpTokenRepository.deleteByUserIdAndUsedFalse  phone_otp_tokens  DELETE PhoneOtpToken exempt (DELETE)
@@ -80,13 +80,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class NativeModifyingVersionAuditTest {
 
     /** methodKey ("SimpleName#method") -> why the missing version bump is safe. */
-    private static final Map<String, String> ALLOWED_WITHOUT_BUMP = Map.of(
-        "RefreshTokenRepository#markAllUsedByUserId",
-        "Writes only `used`, a monotonic false->true terminal flag; every concurrent managed writer "
-            + "of these rows also only sets used=true, so the races converge. A version bump would "
-            + "turn benign convergent races into OptimisticLockingFailureExceptions that "
-            + "AuthService.logout does not handle. See the method Javadoc."
-    );
+    private static final Map<String, String> ALLOWED_WITHOUT_BUMP = Map.of();
+    // skillars-deferred-101 AC11: RefreshTokenRepository.markAllUsedByUserId moved from allow-list
+    // to compliant (now includes version = version + 1) for defence-in-depth.
 
     private static final Pattern VERSION_BUMP = Pattern.compile(
         "version\\s*=\\s*(?:[a-zA-Z_][\\w]*\\.)?version\\s*\\+\\s*1", Pattern.CASE_INSENSITIVE);
