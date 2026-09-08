@@ -22,7 +22,9 @@ fi
 . "$GUARD_PATH"
 require_env_vars "restore-from-volume-backup" "restore" HOS_ACCESS_KEY HOS_SECRET_KEY HOS_BUCKET HOS_ENDPOINT
 
-COMPOSE_FILE="/opt/skillars/docker-compose.yml"
+# skillars-deferred-102 AC6: checkout moved to /opt/skillars/app; .env stays at /opt/skillars/.env.
+COMPOSE_FILE="/opt/skillars/app/docker-compose.yml"
+DC="docker compose --env-file /opt/skillars/.env -f ${COMPOSE_FILE}"
 DATA_DIR="/opt/skillars/data"
 PREFIX="${HOS_VOLUME_BACKUP_PREFIX:-volume-backups/}"
 PREFIX="${PREFIX%/}/"
@@ -51,14 +53,14 @@ if [ -z "$KEY" ] || [ "$KEY" = "None" ]; then
 fi
 
 log "Restoring ${KEY}..."
-docker compose -f "${COMPOSE_FILE}" down
+${DC} down
 
 # From here on, any failure must not leave services stopped indefinitely — restart with
 # whatever data is currently on disk (pre-restore, or partially restored) rather than leaving an
 # incident silent.
 restore_failed() {
   err "restore step failed — restarting services with the data currently on disk so the app does not stay down"
-  docker compose -f "${COMPOSE_FILE}" up -d
+  ${DC} up -d
 }
 trap restore_failed ERR
 
@@ -113,16 +115,16 @@ for d in $VOLUME_SUBDIRS; do
   esac
 done
 
-docker compose -f "${COMPOSE_FILE}" up -d
+${DC} up -d
 trap - ERR
 
-APP_CID=$(docker compose -f "${COMPOSE_FILE}" ps -q app 2>/dev/null | head -1)
+APP_CID=$(${DC} ps -q app 2>/dev/null | head -1)
 log "Waiting for app health (up to 120s)..."
 DEADLINE=$(($(date +%s) + 120))
 until [ "$(docker inspect --format '{{.State.Health.Status}}' "${APP_CID}" 2>/dev/null)" = "healthy" ]; do
   if [ "$(date +%s)" -ge "${DEADLINE}" ]; then
     err "App did not become healthy within 120s."
-    err "Check logs: docker compose -f ${COMPOSE_FILE} logs app --tail=50"
+    err "Check logs: ${DC} logs app --tail=50"
     exit 1
   fi
   sleep 5

@@ -10,12 +10,18 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 DEPLOY_ROOT="/opt/skillars"
+# skillars-deferred-102 AC6/AC7: the git checkout lives at ${APP_DIR}, a SIBLING of the Volume
+# mount ${DEPLOY_ROOT}/data — never a parent of it. A `git clean -fdx` run inside the checkout
+# therefore cannot reach the runtime data tree (PostgreSQL / Redis AOF / LGTM / Traefik acme.json).
+# The checkout is owned by the unprivileged `deploy` user (section 6b); ${DEPLOY_ROOT}/data stays
+# owned by the individual service UIDs; ${DEPLOY_ROOT}/.env stays root:root 0600. provision.sh and
+# the cron backup scripts still run as root; only the deploy.yml SSH user is `deploy`.
+APP_DIR="${DEPLOY_ROOT}/app"
+DEPLOY_USER="deploy"
 
-# Note: repo is cloned manually in docs/deployment/first-time-setup.md before provision.sh runs.
-# This is benign because repo has no /data/ content today. If future changes add repo files
-# under /data/, that manual clone step would need to move to AFTER provision.sh mounts the Volume.
-# Repo cloned as root into /opt/skillars. Runtime data is mounted at /opt/skillars/data.
-# Separate deploy user or sparse-checkout is deferred as outside this story's scope.
+# Note: repo is cloned manually in docs/deployment/first-time-setup.md into ${APP_DIR} before
+# provision.sh runs (provision.sh is ${APP_DIR}/deploy/provision.sh). The checkout is outside the
+# Volume mount, so the clone ordering vs the mount no longer matters.
 
 # skillars-deferred-89 AC8 — optional. When set, section 5 scopes the host firewall's port-22 rule
 # to this single source IP for the window between this script finishing and
@@ -98,7 +104,7 @@ prune_stale_allowlisted_ssh_rules() {
 # parallelism.
 #
 # The self-re-exec idiom below only works when the script is invoked from a FILE
-# (`bash /opt/skillars/deploy/provision.sh` — the only documented invocation, per
+# (`bash /opt/skillars/app/deploy/provision.sh` — the only documented invocation, per
 # docs/deployment/first-time-setup.md) — NOT under `curl … | bash`, where $0 is `bash` / `-bash`
 # with no path. Every documented invocation path is file-based.
 LOCK_FILE="/var/lock/skillars-provision.lock"
@@ -114,7 +120,7 @@ if [ "${_PROVISION_LOCKED:-}" != "1" ]; then
   # invocation fail fast and distinguishably (99) instead of hanging; any other non-zero code is the
   # re-exec'd child's own failure and must propagate. Invoked as `bash "$0"` (not bare "$0") so a
   # checkout without the execute bit still works — the only documented invocation is
-  # `bash /opt/skillars/deploy/provision.sh` anyway.
+  # `bash /opt/skillars/app/deploy/provision.sh` anyway.
   #
   # Capture flock's status DIRECTLY with `|| _flock_rc=$?` — `if cmd; then …; fi` followed by `$?`
   # yields the *if-construct's* status (0 when no branch ran), never cmd's.
@@ -134,7 +140,8 @@ fi
 log "Installing system packages..."
 apt-get update -qq
 # rsync: used by section 7 to stage/migrate a pre-Volume data/ tree onto the Hetzner Volume.
-apt-get install -y curl git unzip jq rsync fail2ban ufw ca-certificates gnupg lsb-release awscli
+# AWS CLI v2 installed separately below (official installer, not Ubuntu-apt v1).
+apt-get install -y curl git unzip jq rsync fail2ban ufw ca-certificates gnupg lsb-release
 
 # ──────────────────────────────────────────────────
 # 2. Docker Engine (official Docker APT repo)
@@ -160,6 +167,63 @@ else
 fi
 
 log "Docker Compose version: $(docker compose version)"
+
+# ──────────────────────────────────────────────────
+# 2b. AWS CLI v2 (official installer)
+# ──────────────────────────────────────────────────
+# Replace Ubuntu-apt v1 with official v2 to avoid provider-specific edge cases with Hetzner Object
+# Storage. Idempotent: --update reinstalls if already present. Signature verification is FAIL-CLOSED
+# — a bad/absent signature aborts provisioning rather than installing an unverified root binary.
+AWS_CLI_VERSION="2.22.35"  # pinned; bump from https://github.com/aws/aws-cli/tags (v2 tags)
+# Fingerprint of the AWS CLI team's OpenPGP public key, published at
+# https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html (Verify section).
+AWS_CLI_KEY_FPR="FB5DB77FD5C118B80511ADA8A6310ACC4672475C"
+if ! command -v aws >/dev/null 2>&1 || ! aws --version 2>&1 | grep -q "aws-cli/2"; then
+  log "Installing AWS CLI v2 (version ${AWS_CLI_VERSION})..."
+  ARCH=$(uname -m)
+  case "${ARCH}" in
+    x86_64)  AWS_ARCH="x86_64" ;;
+    aarch64) AWS_ARCH="aarch64" ;;
+    *)
+      err "Unsupported architecture: ${ARCH}"
+      exit 1
+      ;;
+  esac
+
+  AWS_WORK="$(mktemp -d /tmp/aws-cli-install.XXXXXX)"
+  # shellcheck disable=SC2064  # expand AWS_WORK now, not at trap time
+  trap "rm -rf '${AWS_WORK}'" EXIT
+  AWS_ZIP="${AWS_WORK}/awscliv2.zip"
+  AWS_KEYRING="${AWS_WORK}/aws-cli.gpg"
+  # Versioned URL so the pin above is real (the unversioned URL is 'latest' and ignores the pin).
+  AWS_BASE_URL="https://awscli.amazonaws.com/awscli-exe-linux-${AWS_ARCH}-${AWS_CLI_VERSION}.zip"
+
+  log "Downloading AWS CLI v2 ${AWS_CLI_VERSION} for ${AWS_ARCH}..."
+  curl -fsSL -o "${AWS_ZIP}"        "${AWS_BASE_URL}"
+  curl -fsSL -o "${AWS_ZIP}.sig"    "${AWS_BASE_URL}.sig"
+  curl -fsSL -o "${AWS_WORK}/aws-cli-public.key" "https://static.aws.amazon.com/aws-cli/public.key"
+
+  log "Verifying GPG signature (fail-closed)..."
+  gpg --no-default-keyring --keyring "${AWS_KEYRING}" --import "${AWS_WORK}/aws-cli-public.key"
+  if ! gpg --no-default-keyring --keyring "${AWS_KEYRING}" --list-keys "${AWS_CLI_KEY_FPR}" >/dev/null 2>&1; then
+    err "AWS CLI public key does not match the expected fingerprint ${AWS_CLI_KEY_FPR} — aborting."
+    exit 1
+  fi
+  if ! gpg --no-default-keyring --keyring "${AWS_KEYRING}" --verify "${AWS_ZIP}.sig" "${AWS_ZIP}"; then
+    err "AWS CLI v2 installer signature verification FAILED — refusing to install. Aborting."
+    exit 1
+  fi
+
+  log "Extracting and installing AWS CLI v2..."
+  unzip -q "${AWS_ZIP}" -d "${AWS_WORK}"
+  "${AWS_WORK}/aws/install" --update
+
+  rm -rf "${AWS_WORK}"
+  trap - EXIT
+  log "AWS CLI v2 installed: $(aws --version)"
+else
+  log "AWS CLI v2 already installed — skipping: $(aws --version)"
+fi
 
 # ──────────────────────────────────────────────────
 # 3. SSH hardening
@@ -278,12 +342,52 @@ ufw status verbose
 # ──────────────────────────────────────────────────
 # 6. Directory structure
 # ──────────────────────────────────────────────────
+# ${DEPLOY_ROOT}/data  → Volume mount (section 7), owned by the individual service UIDs.
+# ${DEPLOY_ROOT}/app   → git checkout (SIBLING of data/, section 6b), owned by ${DEPLOY_USER}.
+# ${DEPLOY_ROOT}/.env  → root:root 0600 (section 6.5), OUTSIDE the checkout so `git clean` can't reach it.
 log "Creating deployment directory structure..."
 mkdir -p \
   "${DEPLOY_ROOT}/data/postgres" \
   "${DEPLOY_ROOT}/lgtm"
 
 log "Deployment directories created (or already exist)."
+
+# ──────────────────────────────────────────────────
+# 6b. Dedicated non-root deploy user (skillars-deferred-102 AC6, decision D3)
+# ──────────────────────────────────────────────────
+# The deploy.yml SSH user runs only `git pull` in ${APP_DIR} and `docker compose` — nothing else.
+# It needs: the `docker` group, and ownership of ${APP_DIR}. NOT: sudo, write access to
+# ${DEPLOY_ROOT}/data/**, or membership of any service group. Containers write data/** as their own
+# UIDs via the compose bind mounts; provision.sh and the cron backup scripts stay root-run.
+if ! id -u "${DEPLOY_USER}" >/dev/null 2>&1; then
+  log "Creating system user '${DEPLOY_USER}'..."
+  # --shell /bin/bash + locked password: no password login, but `ssh ${DEPLOY_USER}@host` with a key
+  # works for deploy and manual debugging. Home is ${APP_DIR} so ~/.ssh/authorized_keys lives there.
+  useradd --system --create-home --home-dir "${APP_DIR}" --shell /bin/bash "${DEPLOY_USER}"
+  passwd -l "${DEPLOY_USER}" >/dev/null
+else
+  log "System user '${DEPLOY_USER}' already exists."
+fi
+# `docker` group is created by section 2 (Docker Engine). Adding is idempotent.
+usermod -aG docker "${DEPLOY_USER}"
+if id -nG "${DEPLOY_USER}" | tr ' ' '\n' | grep -qx sudo; then
+  err "${DEPLOY_USER} is in the 'sudo' group — it must not be. Remove it: gpasswd -d ${DEPLOY_USER} sudo"
+  exit 1
+fi
+# Own the checkout (not data/, not .env). ${APP_DIR} exists — provision.sh is ${APP_DIR}/deploy/provision.sh.
+if [ -d "${APP_DIR}" ]; then
+  chown_if_needed "${DEPLOY_USER}:${DEPLOY_USER}" "${APP_DIR}"
+else
+  err "${APP_DIR} does not exist — clone the repo there first (see docs/deployment/first-time-setup.md)."
+  exit 1
+fi
+# `docker compose` loads .env from the compose file's project dir (${APP_DIR}), not from the real
+# location ${DEPLOY_ROOT}/.env. The scripts pass `--env-file` explicitly, but a symlink here also
+# lets a bare `cd ${APP_DIR} && docker compose ...` (docs, manual ops) resolve it. It is gitignored
+# (see .gitignore) and points OUT of the checkout, so `git clean -fdx` removing it is a no-op that a
+# re-run of provision.sh restores; the real secrets never leave ${DEPLOY_ROOT}/.env (root:root 0600).
+ln -sfn "${DEPLOY_ROOT}/.env" "${APP_DIR}/.env"
+log "Deploy user '${DEPLOY_USER}' ready (docker group; owns ${APP_DIR}; no sudo; no data/** access)."
 
 # ──────────────────────────────────────────────────
 # 6.5 Security file permissions
@@ -343,18 +447,13 @@ VOLUME_LINK=""
 if [ -n "${HETZNER_VOLUME_ID:-}" ]; then
   if [ -e "/dev/disk/by-id/scsi-0HC_Volume_${HETZNER_VOLUME_ID}" ]; then
     VOLUME_LINK="/dev/disk/by-id/scsi-0HC_Volume_${HETZNER_VOLUME_ID}"
-  elif [ "${_vol_count}" -gt 1 ]; then
-    # id set but unresolvable AND more than one Volume attached — the dangerous case: an operator
-    # who believes they pinned the device. Do NOT fall back to a guess (which today would readlink
-    # the lexically-first symlink and mkfs.ext4 it if unformatted).
-    err "HETZNER_VOLUME_ID=${HETZNER_VOLUME_ID} does not resolve to an attached Volume"
-    err "(/dev/disk/by-id/scsi-0HC_Volume_${HETZNER_VOLUME_ID} is absent) and ${_vol_count} Volumes are"
-    err "attached — refusing to fall back to a guess. Set HETZNER_VOLUME_ID to the digits after"
-    err "scsi-0HC_Volume_ for the intended Volume and re-run."
-    exit 1
   else
-    # Exactly one (or zero) Volume attached — unambiguous, keep the warn-then-fall-back behaviour.
-    err "HETZNER_VOLUME_ID=${HETZNER_VOLUME_ID} is set but /dev/disk/by-id/scsi-0HC_Volume_${HETZNER_VOLUME_ID} does not exist (typo, stale id, or the Volume is not attached) — falling back to the single attached Volume / /dev/sdb."
+    # id set but does not resolve — hard-fail regardless of Volume count. An operator who pinned
+    # an id and typo'd it is the case most likely to be on the wrong host; don't guess.
+    err "HETZNER_VOLUME_ID=${HETZNER_VOLUME_ID} does not resolve to an attached Volume"
+    err "(/dev/disk/by-id/scsi-0HC_Volume_${HETZNER_VOLUME_ID} is absent). Either fix the id or"
+    err "unset HETZNER_VOLUME_ID entirely (to fall back to the single attached Volume, if exactly one)."
+    exit 1
   fi
 elif [ "${_vol_count}" -gt 1 ]; then
   err "${_vol_count} Hetzner Volumes are attached and HETZNER_VOLUME_ID is not set — refusing to guess"
@@ -401,11 +500,11 @@ migrate_pre_volume_data() {
   log "Migrating pre-Volume data from ${STAGING} onto ${MOUNT_POINT}..."
   rsync -aHAX --numeric-ids "${STAGING}/" "${MOUNT_POINT}/"
 
-  # Post-copy re-check. A torn rsync (SIGKILL, Volume ENOSPC mid-transfer) can leave the top-level
-  # dirs present with the right mode+owner but missing contents — which the per-path stat checks
-  # below would still pass. A dry-run rsync re-run must report nothing left to transfer; `^\.d`
-  # (a directory that already exists, at most an attribute restat) is the only benign line.
-  pending="$(rsync -aHAXni --numeric-ids "${STAGING}/" "${MOUNT_POINT}/" 2>/dev/null \
+  # Post-copy re-check with content-level verification. A torn rsync (SIGKILL, Volume ENOSPC mid-transfer)
+  # can leave files at the expected size with wrong content; the -c (--checksum) flag catches this.
+  # A dry-run rsync re-run must report nothing left to transfer; `^\.d` (a directory that already
+  # exists, at most an attribute restat) is the only benign line.
+  pending="$(rsync -aHAXcni --numeric-ids "${STAGING}/" "${MOUNT_POINT}/" 2>/dev/null \
     | grep -Ev '^\.d|^$' || true)"
   if [ -n "${pending}" ]; then
     err "Pre-Volume data migration is INCOMPLETE — a dry-run rsync still reports pending transfers:"
@@ -517,6 +616,14 @@ if [ -b "${VOLUME_DEVICE}" ]; then
 
     log "Mounting ${VOLUME_DEVICE} at ${MOUNT_POINT}..."
     mount "${VOLUME_DEVICE}" "${MOUNT_POINT}"
+    # skillars-deferred-102 AC7: fail loudly if the mount did not take, rather than letting the
+    # data-dir mkdir/chown below (and the first `docker compose up`) silently write to the ROOT
+    # DISK under the mount point. The checkout itself is at ${APP_DIR}, a sibling of ${MOUNT_POINT},
+    # so it is never shadowed by this mount; this guard is for the data tree only.
+    if ! mountpoint -q "${MOUNT_POINT}"; then
+      err "mount '${VOLUME_DEVICE}' at '${MOUNT_POINT}' reported success but it is not a mountpoint — aborting."
+      exit 1
+    fi
   fi
 
   # /etc/fstab maintenance — OUTSIDE the mount if/else so it also runs on the steady-state re-run of

@@ -10,6 +10,7 @@ import com.softropic.skillars.platform.booking.service.BookingStateMachine;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.session.contract.CreateSessionPlanRequest;
+import com.softropic.skillars.platform.session.repo.SessionStatus;
 import com.softropic.skillars.platform.session.contract.DrillMetadata;
 import com.softropic.skillars.platform.session.contract.DrillResponse;
 import com.softropic.skillars.platform.session.contract.SessionBlockData;
@@ -99,7 +100,7 @@ public class SessionPlanService {
         session.setSessionDna(dna);
         session.setEquipmentList(equipment);
         session.setDevelopmentFocus(req.developmentFocus());
-        session.setStatus("DRAFT");
+        session.setStatus(SessionStatus.DRAFT);
 
         Session saved;
         try {
@@ -125,7 +126,7 @@ public class SessionPlanService {
                 SessionErrorCode.SESSION_BOOKING_NOT_OWNED);
         }
 
-        if ("COMPLETED".equals(session.getStatus()) || "CANCELLED".equals(session.getStatus())) {
+        if (SessionStatus.COMPLETED.equals(session.getStatus()) || SessionStatus.CANCELLED.equals(session.getStatus())) {
             throw new OperationNotAllowedException(
                 "Completed sessions cannot be modified",
                 SessionErrorCode.SESSION_PLAN_LOCKED);
@@ -167,8 +168,8 @@ public class SessionPlanService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void handleBookingCompleted(BookingCompletedEvent event) {
         sessionRepository.findByBookingId(event.getBookingId()).ifPresentOrElse(session -> {
-            if (!"COMPLETED".equals(session.getStatus())) {
-                session.setStatus("COMPLETED");
+            if (!SessionStatus.COMPLETED.equals(session.getStatus())) {
+                session.setStatus(SessionStatus.COMPLETED);
                 try {
                     sessionRepository.save(session);
                 } catch (DataIntegrityViolationException e) {
@@ -194,13 +195,14 @@ public class SessionPlanService {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void handleBookingTerminalNonCompletion(BookingStatusChangedEvent event) {
-        if ("COMPLETED".equals(event.newStatus())
+        // event.newStatus() is a BookingStatus name, not a session status — compare with BookingStatus.
+        if (BookingStatus.COMPLETED.name().equals(event.newStatus())
                 || !bookingStateMachine.isTerminal(BookingStatus.valueOf(event.newStatus()))) {
             return;
         }
         sessionRepository.findByBookingId(event.bookingId()).ifPresent(session -> {
-            if ("DRAFT".equals(session.getStatus()) || "SAVED".equals(session.getStatus())) {
-                session.setStatus("CANCELLED");
+            if (SessionStatus.DRAFT.equals(session.getStatus()) || SessionStatus.SAVED.equals(session.getStatus())) {
+                session.setStatus(SessionStatus.CANCELLED);
                 try {
                     sessionRepository.save(session);
                 } catch (DataIntegrityViolationException e) {

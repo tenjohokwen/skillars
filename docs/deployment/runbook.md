@@ -321,7 +321,7 @@ this state; doing so risks double-charging the parent.
 ```bash
 # 1. List every outstanding reservation (both still-pending and timed-out):
 docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" \
-  "$(docker compose -f /opt/skillars/docker-compose.yml ps -q postgres)" \
+  "$(docker compose -f /opt/skillars/app/docker-compose.yml ps -q postgres)" \
   psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-skillars}" -c \
   "SELECT bp.booking_id, bp.status, bp.reserved_at, bp.batch_payment_intent_id,
           bp.credit_debited, bp.stripe_charged, b.parent_id, b.coach_id, b.status AS booking_status
@@ -404,7 +404,7 @@ second overwrite.
 # No CAPTURE_PENDING rows should remain, and the counter stops incrementing on the next sweep
 # (within 15 minutes):
 docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" \
-  "$(docker compose -f /opt/skillars/docker-compose.yml ps -q postgres)" \
+  "$(docker compose -f /opt/skillars/app/docker-compose.yml ps -q postgres)" \
   psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-skillars}" -c \
   "SELECT count(*) FROM payment.booking_payments WHERE status = 'CAPTURE_PENDING';"
 # Expected: 0
@@ -485,11 +485,18 @@ needs its opt-out, the item is not closed.
 
 ## Repository cleanup safety
 
-**⚠️ WARNING:** `git clean -fdx` deletes the entire production data tree (PostgreSQL, Redis, LGTM stack, Traefik certificates). Only use `git clean -fd` (without the `-x` flag) for day-to-day cleanup.
+**skillars-deferred-102 AC6:** the git checkout now lives at `/opt/skillars/app`, a **sibling** of the
+runtime data mount `/opt/skillars/data` — **not a parent of it**. `/opt/skillars/.env` also lives
+outside the checkout. A `git clean` of any flavour run inside `/opt/skillars/app` therefore
+**cannot reach** the database, Redis AOF, LGTM data, TLS certificates, or the secrets file — they
+are not under the directory being cleaned. The checkout is owned by the unprivileged `deploy` user;
+`git`/`docker compose` on the Node run as `deploy`.
 
-The repository is cloned directly into `/opt/skillars`, and runtime data is mounted at `/opt/skillars/data` on the Node. `.gitignore` entries protect `/data/` from being tracked by git and from being removed by `git clean -fd`. However:
+`.gitignore` still carries a `/data/` entry as defence-in-depth against a stray `./data/` ever
+appearing in the repo root, but it is no longer load-bearing: the isolation is structural now, not
+`.gitignore`-dependent.
 
-- `git clean -fd` respects `.gitignore` and only removes untracked files outside `/data/` — it is **safer than `-fdx`**, but still deletes untracked content (local artifacts, editor temp files, uncommitted scripts)
-- `git clean -fdx` or `git clean -fdX` (both capital and lowercase `-x`) ignore `.gitignore` rules entirely — they will delete `/data/` **and all production data on the Node**, including every PostgreSQL database, Redis AOF, LGTM metrics/logs, and Traefik TLS certificates
-
-**Always use `git clean -fd` on the Node. Never use `-x` without manual confirmation of what will be deleted.**
+Day-to-day cleanup with `git clean -fd` in `/opt/skillars/app` is safe. `git clean -fdx` there is
+also safe for the data tree (it is outside the checkout), though `-x` still deletes untracked
+local artifacts/editor temp files inside the checkout and the `app/.env` symlink (harmless — a
+`provision.sh` re-run recreates it; the real secrets never leave `/opt/skillars/.env`).

@@ -237,7 +237,7 @@ forged events.
 >
 > ```bash
 > ssh root@<UAT_NODE_IP> '
->   cd /opt/skillars && docker compose down
+>   cd /opt/skillars/app && docker compose down
 >   mkdir -p /opt/skillars/data/traefik && chmod 700 /opt/skillars/data/traefik
 >   # Preserve mode 600, or Traefik refuses to start.
 >   mv /opt/skillars/traefik/acme.json /opt/skillars/data/traefik/acme.json
@@ -264,17 +264,17 @@ forged events.
 > skillars_redis-data` afterwards reclaims the old volume's disk.
 
 ```bash
-ssh root@<UAT_NODE_IP> "cd /opt/skillars && git pull"
+ssh root@<UAT_NODE_IP> "cd /opt/skillars/app && git pull"
 scp .env.uat root@<UAT_NODE_IP>:/opt/skillars/.env.uat
 ssh root@<UAT_NODE_IP> "chmod 600 /opt/skillars/.env.uat"
 ssh root@<UAT_NODE_IP> \
-  "cd /opt/skillars && docker compose -f docker-compose.yml -f docker-compose.uat.yml --env-file .env.uat up -d"
+  "cd /opt/skillars/app && docker compose -f docker-compose.yml -f docker-compose.uat.yml --env-file .env.uat up -d"
 ```
 
 Watch startup status the same way as `first-time-setup.md` Step 6:
 
 ```bash
-ssh root@<UAT_NODE_IP> "cd /opt/skillars && docker compose -f docker-compose.yml -f docker-compose.uat.yml --env-file .env.uat ps"
+ssh root@<UAT_NODE_IP> "cd /opt/skillars/app && docker compose -f docker-compose.yml -f docker-compose.uat.yml --env-file .env.uat ps"
 ```
 
 `docker compose up -d` with no explicit service list brings up everything
@@ -348,11 +348,11 @@ Add three variables to `.env.uat`, deploy, then take the password back out:
 scp .env.uat root@<UAT_NODE_IP>:/opt/skillars/.env.uat
 ssh root@<UAT_NODE_IP> "chmod 600 /opt/skillars/.env.uat"
 ssh root@<UAT_NODE_IP> \
-  "cd /opt/skillars && docker compose -f docker-compose.yml -f docker-compose.uat.yml --env-file .env.uat up -d"
+  "cd /opt/skillars/app && docker compose -f docker-compose.yml -f docker-compose.uat.yml --env-file .env.uat up -d"
 
 # 3. Confirm the account was created — look for this line, once:
 ssh root@<UAT_NODE_IP> \
-  "cd /opt/skillars && docker compose -f docker-compose.yml -f docker-compose.uat.yml --env-file .env.uat logs app | grep admin_bootstrap"
+  "cd /opt/skillars/app && docker compose -f docker-compose.yml -f docker-compose.uat.yml --env-file .env.uat logs app | grep admin_bootstrap"
 #    ... "Admin bootstrap created the first administrator" ... login=admin@yourdomain.com ... authority=ROLE_ADMIN
 
 # 4. Remove APP_BOOTSTRAP_ADMIN_PASSWORD from .env.uat, re-scp, and redeploy.

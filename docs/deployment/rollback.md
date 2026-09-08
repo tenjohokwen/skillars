@@ -96,7 +96,7 @@ All subsequent commands in Steps 3–5 run on the Node.
 The `.env` file lives at `/opt/skillars/.env`. The `APP_IMAGE` line controls which image the `app` service uses.
 
 ```bash
-cd /opt/skillars
+cd /opt/skillars/app
 
 # Back up .env before modifying it
 cp .env .env.bak
@@ -127,7 +127,7 @@ Authenticate to GHCR and restart only the `app` service:
 > **If you cannot retrieve `GHCR_PAT`** (GitHub Actions secrets are write-only after creation and cannot be viewed): generate a new Personal Access Token at [github.com/settings/tokens](https://github.com/settings/tokens) with `read:packages` scope. Use the new token below, then after the incident update the `GHCR_PAT` GitHub Actions secret with the new value.
 
 ```bash
-cd /opt/skillars
+cd /opt/skillars/app
 
 # Authenticate to GHCR (required to pull from the private registry)
 echo "<GHCR_PAT>" | docker login ghcr.io -u <github-username> --password-stdin

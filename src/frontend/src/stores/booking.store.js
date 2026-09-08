@@ -585,10 +585,27 @@ export const useBookingStore = defineStore('booking', () => {
   // optional.
   const batchAcceptResultsByBatch = ref({})
 
+  // skillars-deferred-102 AC17 (skillars-deferred-37): loadCoachBookingRequests prunes entries whose
+  // batch dropped out of the visible list, but ONLY on its success path — a streak of failed
+  // refreshes with repeated accept-all calls would otherwise grow this map without bound. Cap it on
+  // every write, independent of any refresh: keep the MAX most-recently-written batch ids, evict the
+  // oldest. The success-path prune still does the precise "no longer visible" cleanup within the cap.
+  const MAX_BATCH_ACCEPT_RESULTS = 200
+  function setBatchAcceptResult(batchId, value) {
+    const next = { ...batchAcceptResultsByBatch.value }
+    delete next[batchId] // re-inserting moves the key to the most-recent (last) position
+    next[batchId] = value
+    const keys = Object.keys(next)
+    for (const stale of keys.slice(0, Math.max(0, keys.length - MAX_BATCH_ACCEPT_RESULTS))) {
+      delete next[stale]
+    }
+    batchAcceptResultsByBatch.value = next
+  }
+
   async function handleAcceptAllBatch(batchId) {
     batchAcceptLoading.value = true
     batchAcceptError.value = null
-    batchAcceptResultsByBatch.value = { ...batchAcceptResultsByBatch.value, [batchId]: null }
+    setBatchAcceptResult(batchId, null)
     try {
       // acceptAllBatch resolves through the shared axios response interceptor (boot/axios.js), which
       // already unwraps to response.data before resolving — `results` here IS the response body
@@ -596,10 +613,7 @@ export const useBookingStore = defineStore('booking', () => {
       // `response.data` on this already-unwrapped value was always undefined, silently poisoning both
       // batchAcceptResultsByBatch and this function's own return value).
       const results = await acceptAllBatch(batchId)
-      batchAcceptResultsByBatch.value = {
-        ...batchAcceptResultsByBatch.value,
-        [batchId]: results,
-      }
+      setBatchAcceptResult(batchId, results)
       // Returns its own refresh outcome AND its own results — see the CONTRACT note above
       // loadCoachBookingRequests. Callers must read results from here, not from
       // batchAcceptResultsByBatch[batchId]: AC1's pruning (inside loadCoachBookingRequests, called next)

@@ -17,7 +17,7 @@ import java.time.Instant;
 public class StripeWebhookEvent {
 
     @Id
-    @Column(name = "event_id")
+    @Column(name = "event_id", length = 255)
     private String eventId;
 
     @Column(name = "event_type", nullable = false)

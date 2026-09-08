@@ -20,15 +20,23 @@ public interface ParentCreditLedgerRepository extends JpaRepository<ParentCredit
     @Query("SELECT COALESCE(SUM(ABS(l.amount)), 0) FROM ParentCreditLedger l WHERE l.type = 'BOOKING_REFUND' AND l.referenceId IN :bookingIds")
     BigDecimal sumRefundsByBookingIds(@Param("bookingIds") List<UUID> bookingIds);
 
-    @Query("SELECT l FROM ParentCreditLedger l WHERE l.parentId = :parentId AND l.createdAt BETWEEN :from AND :to ORDER BY l.createdAt DESC")
+    @Query("SELECT l FROM ParentCreditLedger l WHERE l.parentId = :parentId AND l.createdAt BETWEEN :from AND :to ORDER BY l.createdAt DESC, l.txId DESC")
     Page<ParentCreditLedger> findByParentAndPeriod(@Param("parentId") Long parentId,
                                                    @Param("from") Instant from,
                                                    @Param("to") Instant to,
                                                    Pageable pageable);
 
-    @Query("SELECT COALESCE(SUM(l.amount), 0) FROM ParentCreditLedger l WHERE l.parentId = :parentId AND l.createdAt < :before")
-    BigDecimal sumByParentIdAndCreatedAtBefore(@Param("parentId") Long parentId,
-                                               @Param("before") Instant before);
+    /**
+     * Opening balance for the credit statement: sum of every row that sorts strictly <em>after</em>
+     * the anchor {@code (createdAt, txId)} in the page query's {@code createdAt DESC, txId DESC}
+     * order — i.e. everything older, including a row that shares the anchor's exact {@code createdAt}
+     * but sorts onto a later page (smaller {@code txId}). skillars-deferred-102 AC11: replaces the
+     * old {@code createdAt < :before} anchor, which dropped such a twin and understated the balance.
+     */
+    @Query("SELECT COALESCE(SUM(l.amount), 0) FROM ParentCreditLedger l WHERE l.parentId = :parentId AND (l.createdAt < :createdAt OR (l.createdAt = :createdAt AND l.txId < :txId))")
+    BigDecimal sumByParentIdBeforeAnchor(@Param("parentId") Long parentId,
+                                        @Param("createdAt") Instant createdAt,
+                                        @Param("txId") UUID txId);
 
     @Query("SELECT COALESCE(SUM(ABS(l.amount)), 0) FROM ParentCreditLedger l WHERE l.type = 'BOOKING_REFUND' AND l.createdAt BETWEEN :from AND :to")
     BigDecimal sumTotalRefundCredit(@Param("from") Instant from, @Param("to") Instant to);

@@ -318,8 +318,8 @@ function loadLanguagePreference() {
 }
 
 function onToggleTheme() {
-  bootToggleTheme()
-  darkMode.value = isDarkMode()
+  // Take the state toggleTheme just applied — do NOT re-read the DOM (skillars-deferred-102 AC16).
+  darkMode.value = bootToggleTheme()
 }
 
 function onStorageThemeChange(event) {

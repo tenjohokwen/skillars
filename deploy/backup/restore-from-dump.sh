@@ -27,6 +27,11 @@ if [ -z "$DUMP_KEY" ]; then
   exit 1
 fi
 
+# skillars-deferred-102 AC6: the checkout moved to /opt/skillars/app; .env stays at /opt/skillars/.env
+# (outside the checkout). `docker compose` loads .env from the compose file's project dir, so pass it
+# explicitly. This cron script still runs as root.
+DC="docker compose --env-file /opt/skillars/.env -f /opt/skillars/app/docker-compose.yml"
+
 GUARD_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env-guard.sh"
 if [ -d "$GUARD_PATH" ]; then
   err "${GUARD_PATH} is a directory, not a file — cannot load credential guard"
@@ -105,7 +110,7 @@ if ! gunzip -t "${LOCAL_DUMP}" 2>/dev/null; then
 fi
 
 log "Stopping app service..."
-docker compose -f /opt/skillars/docker-compose.yml stop app
+${DC} stop app
 
 # From here on, any failure must not leave the app stopped indefinitely — restart it against
 # whatever database is currently on disk rather than leaving an incident silent. Same intent and
@@ -120,11 +125,11 @@ RESTORE_OK=0
 restore_failed() {
   [ "${RESTORE_OK}" -eq 1 ] && return 0
   err "restore did not complete — restarting the app service with the database currently on disk so it does not stay down"
-  docker compose -f /opt/skillars/docker-compose.yml start app || true
+  ${DC} start app || true
 }
 trap restore_failed EXIT
 
-CID=$(docker compose -f /opt/skillars/docker-compose.yml ps -q postgres 2>/dev/null | head -1)
+CID=$(${DC} ps -q postgres 2>/dev/null | head -1)
 if [ -z "$CID" ]; then
   err "postgres container not running."
   exit 1
@@ -195,13 +200,26 @@ fi
 log "Integrity check: flyway_schema_history intact (${FLYWAY_ROWS} rows, 0 failed)."
 
 log "Starting app service..."
-docker compose -f /opt/skillars/docker-compose.yml start app
+${DC} start app
 
-APP_CID=$(docker compose -f /opt/skillars/docker-compose.yml ps -q app 2>/dev/null | head -1)
-# Single unretried `docker compose ps -q app` can race container registration; slow registration aborts restore.
-# Retry outside script if observed.
+# Retry the APP_CID capture up to 5 times (2 s apart) to handle slow container registration
+# without aborting a restore whose integrity checks have already passed. On success, proceed;
+# on timeout, emit a diagnostic that distinguishes "restore succeeded, container was slow" from
+# "restore failed" so the operator understands the database is intact.
+APP_CID=""
+for attempt in 1 2 3 4 5; do
+  APP_CID=$(${DC} ps -q app 2>/dev/null | head -1)
+  if [ -n "${APP_CID}" ]; then
+    log "app container found on attempt ${attempt}."
+    break
+  fi
+  if [ "${attempt}" -lt 5 ]; then
+    sleep 2
+  fi
+done
+
 if [ -z "${APP_CID}" ]; then
-  err "app container not found after 'docker compose start app' — cannot wait for health, failing fast instead of burning the 90s timeout."
+  err "app container did not register within 10s of 'docker compose start'; the DB restore itself completed and is intact — the EXIT trap will attempt to (re)start the app; if it does not come up, run the health wait manually."
   exit 1
 fi
 log "Waiting for app health (up to 90s)..."
