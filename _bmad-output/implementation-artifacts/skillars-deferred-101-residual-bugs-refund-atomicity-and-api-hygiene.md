@@ -709,7 +709,7 @@ references and duplicated lock-safety notes.
   - [x] Grep `new BookingStatusChangedEvent(` in `src/main`; record whether `bookingId` can be null
   - [x] Add null-guard + `try/catch (RuntimeException)` swallow-with-ERROR; cite `deferred-101 AC1`
   - [x] Unit tests: null-id no-op; `updateBatchStatusFromBooking` throws → listener returns, ERROR logged
-  - [ ] Delete the ledger bullet
+  - [x] Delete the ledger bullet
 - [x] **Task 2 — reconciliation no-op incident (AC2)** ✅ DONE
   - [x] Change `reconcileToReady` to report whether it wrote (boolean) — Option A
   - [x] Update `ReconciliationWorkerScheduler` + any other caller (grep) to gate incident + INFO log
