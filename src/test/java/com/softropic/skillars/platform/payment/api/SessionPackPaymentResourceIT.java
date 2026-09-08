@@ -280,11 +280,27 @@ class SessionPackPaymentResourceIT {
 
     @Test
     @WithMockUser(roles = "PLAYER")
-    void getActiveCoachTier_playerRole_returns204WhenNoActiveTier() throws Exception {
+    void getActiveCoachTier_playerRole_returns404WhenNoActiveTier() throws Exception {
         java.util.UUID coachId = java.util.UUID.randomUUID();
         when(sessionPackPaymentService.getActiveCoachTier(coachId)).thenReturn(null);
 
         mockMvc.perform(get("/api/payment/coaches/" + coachId + "/session-pack-tiers"))
-            .andExpect(status().isNoContent());
+            .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @WithMockUser(roles = "PLAYER")
+    void getActiveCoachTier_playerRole_returns200WithTierWhenActive() throws Exception {
+        java.util.UUID coachId = java.util.UUID.randomUUID();
+        java.util.UUID tierId = java.util.UUID.randomUUID();
+        com.softropic.skillars.platform.payment.contract.SessionPackTierResponse tier =
+            new com.softropic.skillars.platform.payment.contract.SessionPackTierResponse(
+                tierId, coachId, "Basic", 5, BigDecimal.valueOf(49.99), BigDecimal.valueOf(9.99), true, Instant.now());
+        when(sessionPackPaymentService.getActiveCoachTier(coachId)).thenReturn(tier);
+
+        mockMvc.perform(get("/api/payment/coaches/" + coachId + "/session-pack-tiers"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.label").value("Basic"))
+            .andExpect(jsonPath("$.sessionCount").value(5));
     }
 }

@@ -249,6 +249,9 @@ services:
           memory: 768m
     restart: unless-stopped
     stop_grace_period: 30s
+    depends_on:
+      app:
+        condition: service_started
     logging: *default-logging
     networks:
       - skillars-observability

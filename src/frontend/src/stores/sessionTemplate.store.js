@@ -20,9 +20,14 @@ export const useSessionTemplateStore = defineStore('sessionTemplate', () => {
   }
 
   async function createTemplate(sessionId, name) {
-    const res = await sessionApi.createTemplate({ sessionId, name })
-    templates.value.unshift(res)
-    return res
+    try {
+      const res = await sessionApi.createTemplate({ sessionId, name })
+      templates.value.unshift(res)
+      return res
+    } catch (e) {
+      error.value = e
+      throw e
+    }
   }
 
   async function renameTemplate(templateId, name) {

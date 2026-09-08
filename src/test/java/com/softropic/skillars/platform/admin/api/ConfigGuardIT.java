@@ -101,10 +101,6 @@ class ConfigGuardIT extends AbstractIntegrationTest {
                 "INSERT INTO marketplace.coach_reliability_strikes (id, coach_id, booking_id, reason, created_at, acknowledged) VALUES (?, ?, ?, 'COACH_NO_SHOW', ?, false)",
                 strikeId, coachProfileId, bookingId, Timestamp.from(Instant.now()));
 
-            // Corrupt the config value the deleteStrike() flow reads (AC 1)
-            jdbcTemplate.update(
-                "UPDATE main.platform_config SET value = 'not-a-number' WHERE key = ?", VISIBILITY_THRESHOLD_KEY);
-
             return null;
         });
         configService.invalidate();
@@ -113,8 +109,6 @@ class ConfigGuardIT extends AbstractIntegrationTest {
     @AfterEach
     void tearDown() {
         transactionTemplate.execute(status -> {
-            jdbcTemplate.update(
-                "UPDATE main.platform_config SET value = ? WHERE key = ?", originalThresholdValue, VISIBILITY_THRESHOLD_KEY);
             jdbcTemplate.update("DELETE FROM admin.admin_action_log WHERE reference_id = ?", coachProfileId.toString());
             jdbcTemplate.update("DELETE FROM admin.admin_alerts WHERE reference_id = ?", coachProfileId.toString());
             jdbcTemplate.update("DELETE FROM marketplace.coach_reliability_strikes WHERE coach_id = ?", coachProfileId);
@@ -133,18 +127,34 @@ class ConfigGuardIT extends AbstractIntegrationTest {
 
     @Test
     void deleteStrike_withNonNumericThresholdConfig_returns200InsteadOf500() {
-        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+        try {
+            transactionTemplate.execute(status -> {
+                jdbcTemplate.update(
+                    "UPDATE main.platform_config SET value = 'not-a-number' WHERE key = ?", VISIBILITY_THRESHOLD_KEY);
+                return null;
+            });
+            configService.invalidate();
 
-        ResponseEntity<Void> resp = httpTestClient.makeHttpRequest(
-            baseUrl() + "/api/admin/coaches/" + coachProfileId + "/strikes/" + strikeId + "?reason=Config+guard+smoke+test",
-            HttpMethod.DELETE, null, authenticatedHeaders(adminCookies), Void.class);
+            String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
 
-        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+            ResponseEntity<Void> resp = httpTestClient.makeHttpRequest(
+                baseUrl() + "/api/admin/coaches/" + coachProfileId + "/strikes/" + strikeId + "?reason=Config+guard+smoke+test",
+                HttpMethod.DELETE, null, authenticatedHeaders(adminCookies), Void.class);
 
-        Long remainingStrikes = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM marketplace.coach_reliability_strikes WHERE coach_id = ?",
-            Long.class, coachProfileId);
-        assertThat(remainingStrikes).isEqualTo(0L);
+            assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+            Long remainingStrikes = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM marketplace.coach_reliability_strikes WHERE coach_id = ?",
+                Long.class, coachProfileId);
+            assertThat(remainingStrikes).isEqualTo(0L);
+        } finally {
+            transactionTemplate.execute(status -> {
+                jdbcTemplate.update(
+                    "UPDATE main.platform_config SET value = ? WHERE key = ?", originalThresholdValue, VISIBILITY_THRESHOLD_KEY);
+                return null;
+            });
+            configService.invalidate();
+        }
     }
 
     // ── helpers ──

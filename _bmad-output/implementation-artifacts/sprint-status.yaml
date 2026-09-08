@@ -1,5 +1,5 @@
 generated: 2026-05-25
-last_updated: '2026-09-08'
+last_updated: '2026-09-08'  # skillars-deferred-101 created (ready-for-dev)
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -263,5 +263,6 @@ development_status:
   frontend-test-framework-initiative: backlog # cited by skillars-deferred-98 AC3 (2026-09-07 code review); see deferred-work.md
   skillars-deferred-99-genuine-one-off-bugs-reliability-i18n-migration-safety-and-video-hardening: done
   skillars-deferred-100-concurrency-reconciliation-and-lifecycle-hardening: done
+  skillars-deferred-101-residual-bugs-refund-atomicity-and-api-hygiene: in-progress
   ? skillars-deferred-92-outbox-enqueue-atomicity-executor-shutdown-migration-ordering-and-lock-timeout-default-bundle-parity-fr-fr-idiom-prettier-conformance-and-genuine-bug-fixes
   : review

@@ -132,7 +132,7 @@ public class SessionPackPaymentResource {
     public ResponseEntity<SessionPackTierResponse> getActiveCoachTier(@PathVariable UUID coachId) {
         SessionPackTierResponse tier = sessionPackPaymentService.getActiveCoachTier(coachId);
         if (tier == null) {
-            return ResponseEntity.noContent().build();
+            throw new ResourceNotFoundException("Active session pack tier not found for coach " + coachId, "SessionPackTier");
         }
         return ResponseEntity.ok(tier);
     }
