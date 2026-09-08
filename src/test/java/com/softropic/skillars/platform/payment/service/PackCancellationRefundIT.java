@@ -96,10 +96,12 @@ class PackCancellationRefundIT extends BasePaymentIT {
 
     @Test
     void coachCancels_packExpired_creditWritten_sessionNotRestored() {
-        UUID bookingId = UUID.randomUUID();
         BookingCancelledByCoachEvent event = coachEvent(packId, "MUTUAL_AGREEMENT", true);
 
-        eventPublisher.publishEvent(event);
+        transactionTemplate.execute(status -> {
+            eventPublisher.publishEvent(event);
+            return null;
+        });
 
         long ledgerCount = countLedgerEntries(event.getBookingId());
         assertThat(ledgerCount).isEqualTo(1);
@@ -116,7 +118,10 @@ class PackCancellationRefundIT extends BasePaymentIT {
         int remainingBefore = getRemainingSessions();
         BookingCancelledByParentEvent event = parentEvent(packId, 25);
 
-        eventPublisher.publishEvent(event);
+        transactionTemplate.execute(status -> {
+            eventPublisher.publishEvent(event);
+            return null;
+        });
 
         int remainingAfter = getRemainingSessions();
         assertThat(remainingAfter).isEqualTo(remainingBefore + 1);
@@ -130,7 +135,10 @@ class PackCancellationRefundIT extends BasePaymentIT {
         int remainingBefore = getRemainingSessions();
         BookingCancelledByParentEvent event = parentEvent(packId, 6);
 
-        eventPublisher.publishEvent(event);
+        transactionTemplate.execute(status -> {
+            eventPublisher.publishEvent(event);
+            return null;
+        });
 
         int remainingAfter = getRemainingSessions();
         assertThat(remainingAfter).isEqualTo(remainingBefore);

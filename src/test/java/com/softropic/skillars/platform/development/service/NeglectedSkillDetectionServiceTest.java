@@ -218,12 +218,13 @@ class NeglectedSkillDetectionServiceTest {
     })
     void isInValidRange_boundaryValues(String value, boolean shouldInvoke) {
         when(configService.getString("slu.neglected.threshold")).thenReturn(value);
-        lenient().when(sluTargetRepository.findMaxTargetPerSkill(anyLong())).thenReturn(List.of());
+        lenient().when(sluTargetRepository.findDistinctPlayerIds()).thenReturn(List.of(PLAYER_ID));
+        lenient().when(sluTargetRepository.findMaxTargetPerSkill(PLAYER_ID)).thenReturn(List.of());
 
         detectionService.detectNeglectedSkills();
 
         if (shouldInvoke) {
-            verify(sluTargetRepository).findMaxTargetPerSkill(anyLong());
+            verify(sluTargetRepository).findMaxTargetPerSkill(PLAYER_ID);
         } else {
             verify(sluTargetRepository, never()).findMaxTargetPerSkill(anyLong());
         }
