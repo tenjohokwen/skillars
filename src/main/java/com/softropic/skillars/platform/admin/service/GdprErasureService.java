@@ -15,7 +15,7 @@ import com.softropic.skillars.platform.development.repo.RadarAssessmentRepositor
 import com.softropic.skillars.platform.development.repo.SluRepository;
 import com.softropic.skillars.platform.development.repo.SluTargetRepository;
 import com.softropic.skillars.platform.development.repo.SluWeeklySnapshotRepository;
-import com.softropic.skillars.platform.filestorage.service.PendingBlobDeletionService;
+import com.softropic.skillars.platform.filestorage.service.BlobDeletionOutboxSupport;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.messaging.repo.MessageRepository;
 import com.softropic.skillars.platform.reviews.repo.CoachReviewRepository;
@@ -68,7 +68,7 @@ public class GdprErasureService {
     private final PerformanceReportRepository performanceReportRepository;
     private final PlayerTimelineRepository playerTimelineRepository;
     private final HomeworkCompletionRepository homeworkCompletionRepository;
-    private final PendingBlobDeletionService pendingBlobDeletionService;
+    private final BlobDeletionOutboxSupport blobDeletionOutboxSupport;
     private final RefreshTokenRepository refreshTokenRepository;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -118,7 +118,7 @@ public class GdprErasureService {
 
         // skillars-deferred-90 AC13: collect every S3 storage key that needs deleting into a durable
         // outbox row instead of issuing N blocking deleteObject calls inside this transaction. The
-        // AFTER_COMMIT drain in PendingBlobDeletionService deletes them off this request path and
+        // AFTER_COMMIT drain in the generic platform.outbox deletes them off this request path and
         // retries failures on the next drain.
         List<String> blobKeysToDelete = new ArrayList<>();
 
@@ -143,8 +143,8 @@ public class GdprErasureService {
 
         // Persist the pending-deletion rows inside THIS transaction (so a post-commit S3 failure is
         // re-drivable) and ask for the drain to run once, after this transaction commits.
-        pendingBlobDeletionService.enqueue(blobKeysToDelete);
-        pendingBlobDeletionService.requestDrainAfterCommit();
+        blobDeletionOutboxSupport.enqueue(blobKeysToDelete);
+        blobDeletionOutboxSupport.requestDrainAfterCommit();
 
         // Mark erasure complete
         request.setStatus("COMPLETED");

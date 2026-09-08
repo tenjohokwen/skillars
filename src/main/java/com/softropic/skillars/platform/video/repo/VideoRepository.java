@@ -103,7 +103,20 @@ public interface VideoRepository extends JpaRepository<Video, UUID> {
     List<Video> findByOwnerIdAndOperationalStateNotInOrderByCreatedAtDesc(
         String ownerId, java.util.Collection<OperationalState> excludedStates);
 
+    /**
+     * skillars-deferred-100 AC3: this is a bulk {@code UPDATE} against {@code main.videos}, whose
+     * entity {@link Video} carries {@code @Version}. A bulk update bypasses optimistic locking, so
+     * the {@code version = version + 1} is added by hand — {@code VideoLifecycleService}'s
+     * per-row writers ({@code blockForSubscriptionExpiry}, {@code archiveForLifecycle},
+     * {@code resetLifecycleClock}) load a managed {@link Video} and {@code save()} it, and one of
+     * those running concurrently with this reset for the same owner would otherwise re-persist a
+     * stale {@code lifecycleLockedAt} without ever seeing the bulk change (matching version). The
+     * bump turns that silent overwrite into a loud {@link org.springframework.orm.ObjectOptimisticLockingFailureException},
+     * which the only caller ({@code VideoSubscriptionLifecycleListener.processAndSaveEntry}) already
+     * catches, retries and dead-letters.
+     */
     @Modifying
-    @Query("UPDATE Video v SET v.lifecycleLockedAt = CURRENT_TIMESTAMP WHERE v.ownerId = :ownerId AND v.accessState = com.softropic.skillars.platform.video.contract.AccessState.BLOCKED")
+    @Query("UPDATE Video v SET v.lifecycleLockedAt = CURRENT_TIMESTAMP, v.version = v.version + 1 "
+        + "WHERE v.ownerId = :ownerId AND v.accessState = com.softropic.skillars.platform.video.contract.AccessState.BLOCKED")
     void resetLifecycleLockedAt(@Param("ownerId") String ownerId);
 }

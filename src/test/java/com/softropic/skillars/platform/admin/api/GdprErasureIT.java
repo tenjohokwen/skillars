@@ -58,7 +58,9 @@ class GdprErasureIT extends AbstractIntegrationTest {
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private HttpTestClient httpTestClient;
     @Autowired private PasswordEncoder passwordEncoder;
-    @Autowired private com.softropic.skillars.platform.filestorage.service.PendingBlobDeletionService pendingBlobDeletionService;
+    @Autowired private com.softropic.skillars.platform.outbox.service.OutboxService outboxService;
+    @Autowired private com.softropic.skillars.platform.filestorage.service.PendingBlobDeletionResidualDrainRunner residualDrainRunner;
+    @Autowired private com.softropic.skillars.platform.filestorage.repo.PendingBlobDeletionRepository legacyPendingBlobDeletionRepository;
 
     @LocalServerPort private int randomServerPort;
 
@@ -90,6 +92,12 @@ class GdprErasureIT extends AbstractIntegrationTest {
 
             insertUser(PLAYER_ID, PLAYER_EMAIL, passwordHash, "PLAYER");
             grantAuthority(PLAYER_ID, "ROLE_PLAYER");
+
+            // skillars-deferred-100 AC6: the blob-deletion outbox is now the shared generic
+            // platform.outbox. Scope the reset to this test family's aggregate_type so a leftover
+            // BLOB_DELETION row from a prior test cannot be drained (and its mock key deleted) here.
+            jdbcTemplate.update("DELETE FROM main.outbox_messages WHERE aggregate_type = 'BLOB_DELETION'");
+            jdbcTemplate.update("DELETE FROM main.pending_blob_deletions");
 
             return null;
         });
@@ -324,16 +332,20 @@ class GdprErasureIT extends AbstractIntegrationTest {
         httpTestClient.makeHttpRequest(
             baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class);
 
+        // The erasure's requestDrainAfterCommit() fires an @Async drain; call drain() synchronously
+        // too so the assertion does not race it (both are SKIP-LOCKED, so the row is handled once).
+        outboxService.drain();
+
         verify(fileStorageService).deleteRawBytes(storageKey);
         int count = jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM development.performance_reports WHERE id = ?", Integer.class, reportId);
         assertThat(count).isZero();
     }
 
-    // ── skillars-deferred-90 AC13: durable pending-deletion outbox + AFTER_COMMIT drain ──────────
+    // ── skillars-deferred-100 AC6: storage-key deletions ride the generic platform.outbox ──────────
 
     @Test
-    void erase_playerUser_reportKeyGoesThroughPendingOutbox_thenDrainClearsIt() {
+    void erase_playerUser_reportKeyGoesThroughOutbox_thenDrainClearsIt() {
         UUID reportId = UUID.randomUUID();
         String storageKey = "reports/" + reportId + "/report.pdf";
         transactionTemplate.execute(status -> {
@@ -349,14 +361,15 @@ class GdprErasureIT extends AbstractIntegrationTest {
         httpTestClient.makeHttpRequest(
             baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class);
 
-        // The AFTER_COMMIT drain ran the S3 delete for the enqueued key, and — on success — removed
-        // its outbox row, so the table holds nothing for this key.
+        outboxService.drain();
+
+        // The drain ran the S3 delete for the enqueued key and, on success, removed its outbox row.
         verify(fileStorageService).deleteRawBytes(storageKey);
-        assertThat(pendingRowCount(storageKey)).isZero();
+        assertThat(blobOutboxRowCount(storageKey)).isZero();
     }
 
     @Test
-    void erase_playerUser_s3DeleteFails_leavesPendingRow_reDrivableOnNextDrain() {
+    void erase_playerUser_s3DeleteFails_leavesOutboxRow_reDrivableOnceBackoffExpires() {
         UUID reportId = UUID.randomUUID();
         String storageKey = "reports/" + reportId + "/report.pdf";
         transactionTemplate.execute(status -> {
@@ -373,26 +386,56 @@ class GdprErasureIT extends AbstractIntegrationTest {
         httpTestClient.makeHttpRequest(
             baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class);
 
+        outboxService.drain();
+
         // Erasure still completed (DB row gone) …
         assertThat(jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM development.performance_reports WHERE id = ?", Integer.class, reportId)).isZero();
-        // … and the failed S3 delete left its outbox row behind with attempts incremented.
+        // … and the failed S3 delete left its outbox row behind with attempts incremented and a
+        // future next_attempt_at (the generic outbox's backoff — deferred-91 review D6).
         Integer attempts = jdbcTemplate.queryForObject(
-            "SELECT attempts FROM main.pending_blob_deletions WHERE storage_key = ?", Integer.class, storageKey);
-        // Exactly one AFTER_COMMIT drain runs in this scenario (the scheduled sweep is disabled
-        // under the test profile), so >= 1 could not fail where it mattered — it also passed if the
-        // sweep mis-fired and retried the row repeatedly, which is the thing worth catching.
+            "SELECT attempts FROM main.outbox_messages WHERE aggregate_type = 'BLOB_DELETION' AND payload->>'storageKey' = ?",
+            Integer.class, storageKey);
         assertThat(attempts).isEqualTo(1);
 
-        // Re-drivable: with S3 healthy again, a plain drain empties the table.
+        // Re-drivable: with S3 healthy again and the backoff wound back, a plain drain empties it.
         reset(fileStorageService);
-        pendingBlobDeletionService.drain();
-        assertThat(pendingRowCount(storageKey)).isZero();
+        transactionTemplate.execute(s -> jdbcTemplate.update(
+            "UPDATE main.outbox_messages SET next_attempt_at = now() - interval '1 minute' "
+                + "WHERE aggregate_type = 'BLOB_DELETION' AND payload->>'storageKey' = ?",
+            storageKey));
+        outboxService.drain();
+        assertThat(blobOutboxRowCount(storageKey)).isZero();
     }
 
-    private int pendingRowCount(String storageKey) {
+    /**
+     * skillars-deferred-100 AC6: any {@code main.pending_blob_deletions} rows a prior release left
+     * behind are migrated onto the generic outbox by {@code PendingBlobDeletionResidualDrainRunner}
+     * at startup — nothing lost.
+     */
+    @Test
+    void residualPendingBlobDeletionRows_areReEnqueuedOntoTheGenericOutbox() {
+        String storageKey = "reports/" + UUID.randomUUID() + "/legacy-residual.pdf";
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.pending_blob_deletions (storage_key, attempts) VALUES (?, 0)", storageKey);
+            return null;
+        });
+
+        residualDrainRunner.run(new org.springframework.boot.DefaultApplicationArguments());
+
+        assertThat(legacyPendingBlobDeletionRepository.count())
+            .as("the legacy table is drained by the one-shot runner").isZero();
+
+        outboxService.drain();
+        verify(fileStorageService).deleteRawBytes(storageKey);
+        assertThat(blobOutboxRowCount(storageKey)).isZero();
+    }
+
+    private int blobOutboxRowCount(String storageKey) {
         Integer c = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM main.pending_blob_deletions WHERE storage_key = ?", Integer.class, storageKey);
+            "SELECT COUNT(*) FROM main.outbox_messages WHERE aggregate_type = 'BLOB_DELETION' AND payload->>'storageKey' = ?",
+            Integer.class, storageKey);
         return c != null ? c : -1;
     }
 

@@ -13,9 +13,13 @@ import lombok.Setter;
 import java.time.Instant;
 
 /**
- * skillars-deferred-90 AC13: one pending storage-key deletion. Written inside a business
- * transaction (e.g. GDPR erasure) and drained off the request path by
- * {@code PendingBlobDeletionService} after that transaction commits.
+ * skillars-deferred-90 AC13: one pending storage-key deletion.
+ *
+ * <p>skillars-deferred-100 AC6 folded this bespoke mini-outbox onto the generic
+ * {@code platform.outbox}. This entity is retained for one release only, so
+ * {@code PendingBlobDeletionResidualDrainRunner} can migrate any rows a prior release left in
+ * {@code main.pending_blob_deletions}; the table + entity + repo are dropped in a later release
+ * (see skillars-deferred-100 AC7). Nothing writes this table any more.
  */
 @Entity
 @Table(schema = "main", name = "pending_blob_deletions")

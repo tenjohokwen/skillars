@@ -52,6 +52,8 @@ class VideoServiceTest {
     @Mock VideoLifecycleService videoLifecycleService;
     @Mock ApplicationEventPublisher publisher;
     @Mock VideoTypeConstraints videoTypeConstraints;
+    @Mock PendingProviderAssetTracker pendingProviderAssetTracker;
+    @Mock com.softropic.skillars.platform.video.repo.PendingProviderAssetRepository pendingProviderAssetRepository;
 
     VideoService service;
 
@@ -65,7 +67,8 @@ class VideoServiceTest {
         };
         service = new VideoService(validationChain, quotaProvider, videoProviderAdapter, videoRepository,
             uploadSessionRepository, new VideoProperties(), txTemplate, rateLimitingService, videoMetrics,
-            videoLifecycleService, publisher, videoTypeConstraints);
+            videoLifecycleService, publisher, videoTypeConstraints,
+            pendingProviderAssetTracker, pendingProviderAssetRepository);
     }
 
     @Test

@@ -22,6 +22,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -143,6 +144,40 @@ class VideoSubscriptionLifecycleListenerIT extends BaseVideoIT {
 
         SubscriptionLifecycleOutbox processed = outboxRepository.findById(entry.getId()).orElseThrow();
         assertThat(processed.getStatus()).isEqualTo("PROCESSED");
+    }
+
+    /**
+     * skillars-deferred-100 AC3: {@code resetLifecycleLockedAt} is a bulk {@code UPDATE} against
+     * {@code main.videos} (a {@code @Version} table) and now carries {@code version = version + 1}.
+     * A subsequently-loaded row must see the bumped version, and a stale managed {@code save()}
+     * held from before the reset must be rejected with an optimistic-lock failure rather than
+     * silently overwriting the reset.
+     */
+    @Test
+    void resetLifecycleLockedAt_bumpsVersion_andRejectsStaleSave() {
+        Video seeded = seedBlockedReadyVideo(PLAYER_ID);
+        UUID videoId = seeded.getId();
+
+        Long versionBefore = jdbcTemplate.queryForObject(
+            "SELECT version FROM main.videos WHERE id = ?", Long.class, videoId);
+
+        // A managed instance loaded *before* the bulk reset — the stale writer.
+        Video stale = transactionTemplate.execute(s -> videoRepository.findById(videoId).orElseThrow());
+
+        transactionTemplate.execute(s -> {
+            videoRepository.resetLifecycleLockedAt(String.valueOf(PLAYER_ID));
+            return null;
+        });
+
+        Long versionAfter = jdbcTemplate.queryForObject(
+            "SELECT version FROM main.videos WHERE id = ?", Long.class, videoId);
+        assertThat(versionAfter)
+            .as("bulk reset must bump the @Version column")
+            .isEqualTo(versionBefore + 1);
+
+        stale.setTitle("stale-overwrite.mp4");
+        assertThatThrownBy(() -> transactionTemplate.execute(s -> videoRepository.saveAndFlush(stale)))
+            .isInstanceOf(org.springframework.orm.ObjectOptimisticLockingFailureException.class);
     }
 
     // ─── At-least-once: retry on failure ─────────────────────────────────────

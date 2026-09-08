@@ -4,6 +4,7 @@ import lombok.Getter;
 import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.time.Duration;
 import java.util.List;
 
 @Getter
@@ -17,6 +18,7 @@ public class VideoProperties {
     private Reconciliation reconciliation = new Reconciliation();
     private Webhook webhook = new Webhook();
     private Bunny bunny = new Bunny();
+    private OrphanAsset orphanAsset = new OrphanAsset();
 
     @Getter
     @Setter
@@ -58,6 +60,20 @@ public class VideoProperties {
     public static class Webhook {
         private int maxAttempts = 3;
         private long processorDelayMs = 5000L;
+    }
+
+    /** skillars-deferred-100 AC2: orphaned-provider-asset sweeper. */
+    @Getter
+    @Setter
+    public static class OrphanAsset {
+        /**
+         * How long a tracked provider asset may exist with no local {@code Video} row before the
+         * sweeper treats it as a rolled-back orphan and purges it. Comfortably longer than a normal
+         * upload's initialize→confirm window.
+         */
+        private Duration ttl = Duration.ofMinutes(30);
+        private int batchSize = 50;
+        private long sweepDelayMs = 300000L;
     }
 
     @Getter

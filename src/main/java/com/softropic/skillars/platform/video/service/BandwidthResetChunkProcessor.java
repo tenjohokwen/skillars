@@ -22,9 +22,10 @@ import java.time.ZoneOffset;
  * proxy and the propagation would silently have no effect — every chunk would join one long
  * transaction, every row lock would be held until the end, and the result would be strictly
  * <em>worse</em> than the single {@code UPDATE} it replaced. skillars-deferred-90's 3-layer review
- * already forced {@code PendingBlobDeletionService} off exactly that shape; see
- * {@link com.softropic.skillars.platform.filestorage.service.PendingBlobDeletionChunkProcessor},
- * which this mirrors.
+ * already forced the storage-key deletion outbox off exactly that shape; see
+ * {@link com.softropic.skillars.platform.outbox.service.OutboxChunkProcessor}, which this mirrors
+ * (skillars-deferred-100 AC6 folded the bespoke {@code PendingBlobDeletionChunkProcessor} onto that
+ * generic outbox).
  *
  * <p><strong>Race window and acceptable risk (skillars-deferred-93 AC5):</strong> The reset
  * processes rows in 500-row chunks, releasing row locks between chunks. A concurrent

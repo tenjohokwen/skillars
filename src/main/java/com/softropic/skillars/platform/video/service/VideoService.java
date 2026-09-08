@@ -58,6 +58,8 @@ public class VideoService {
     private final VideoLifecycleService videoLifecycleService;
     private final ApplicationEventPublisher publisher;
     private final VideoTypeConstraints videoTypeConstraints;
+    private final PendingProviderAssetTracker pendingProviderAssetTracker;
+    private final com.softropic.skillars.platform.video.repo.PendingProviderAssetRepository pendingProviderAssetRepository;
 
     @Transactional(readOnly = true)
     public Video findById(UUID videoId) {
@@ -171,6 +173,12 @@ public class VideoService {
             UploadCredentials credentials = videoProviderAdapter.initializeUpload(
                 video.getTitle(), request.fileSizeBytes());
 
+            // skillars-deferred-100 AC2: track the retry's new provider asset the same way
+            // initializeUpload does — a caller rollback after this point would otherwise orphan it.
+            // (The pre-retry asset id this write overwrites is a separate, pre-existing leak, out of
+            // scope here.)
+            pendingProviderAssetTracker.record(credentials.providerUploadId(), properties.getProvider());
+
             // expiresAt derived from TUS credential expiry to avoid clock-drift between the two values
             Instant expiresAt = Instant.ofEpochSecond(credentials.tusAuthorizationExpire());
 
@@ -183,6 +191,8 @@ public class VideoService {
                 s.setProviderUploadId(credentials.providerUploadId());
                 s.setExpiresAt(expiresAt);
                 uploadSessionRepository.save(s);
+
+                pendingProviderAssetRepository.deleteByProviderAssetId(credentials.providerUploadId());
                 return null;
             });
 
@@ -294,6 +304,15 @@ public class VideoService {
             UploadCredentials credentials = videoProviderAdapter.initializeUpload(
                 request.fileName(), request.fileSizeBytes());
 
+            // skillars-deferred-100 AC2: track the just-created provider asset in its OWN committed
+            // transaction *before* step 8, so if the CALLER's transaction rolls back after this point
+            // (DrillUploadService.initiateUpload is @Transactional + retries under a
+            // PessimisticLockRetryer that can exhaust) the asset is not orphaned — step 8's Video row
+            // would vanish with the rollback, and ReconciliationWorkerScheduler only revisits assets
+            // that have a Video. The sweeper purges any tracking row older than the TTL with no
+            // matching videos.provider_asset_id.
+            pendingProviderAssetTracker.record(credentials.providerUploadId(), properties.getProvider());
+
             // expiresAt derived from TUS credential expiry to avoid drift between two separate Instant.now() calls
             Instant expiresAt = Instant.ofEpochSecond(credentials.tusAuthorizationExpire());
 
@@ -307,6 +326,11 @@ public class VideoService {
                 session.setProviderUploadId(credentials.providerUploadId());
                 session.setExpiresAt(expiresAt);
                 uploadSessionRepository.save(session);
+
+                // AC2 ack: same transaction as the Video persist, so the tracking row and the Video
+                // share fate — if this transaction (or an enclosing caller's) rolls back, the row
+                // stays for the sweeper; if it commits, the asset is no longer orphanable.
+                pendingProviderAssetRepository.deleteByProviderAssetId(credentials.providerUploadId());
                 return null;
             });
 

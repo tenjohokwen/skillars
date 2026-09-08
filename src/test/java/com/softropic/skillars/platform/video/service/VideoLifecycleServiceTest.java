@@ -42,6 +42,9 @@ class VideoLifecycleServiceTest {
     void setUp() {
         lenient().when(meterRegistry.counter(anyString(), anyString(), anyString(), anyString(), anyString()))
             .thenReturn(counter);
+        // skillars-deferred-100 code review (2026-09-08): reconcileToReady() now also increments the
+        // single-arg counter "video.reconciliation.state_corrected".
+        lenient().when(meterRegistry.counter(anyString())).thenReturn(counter);
         lenient().doNothing().when(counter).increment();
     }
 
@@ -112,18 +115,61 @@ class VideoLifecycleServiceTest {
     }
 
     @Test
-    void processingToReady_bypass_logsAndIncrementsCounter() {
+    void processingToReady_onPlainPath_incrementsBypassCounterAndThrows() {
+        UUID id = UUID.randomUUID();
+        Video v = videoWith(id, OperationalState.PROCESSING, AccessState.ACTIVE);
+        when(videoRepository.findById(id)).thenReturn(Optional.of(v));
+
+        // skillars-deferred-100 AC5: PROCESSING→READY is no longer a valid plain transition.
+        // The belt-and-suspenders branch still fires the bypass counter (loudly) and then throws.
+        assertThatThrownBy(() -> service.transitionOperationalState(id, OperationalState.READY))
+            .isInstanceOf(TerminalStateViolationException.class);
+
+        verify(meterRegistry).counter("video.moderation.bypass", "from", "PROCESSING", "to", "READY");
+        verify(counter).increment();
+        verify(videoRepository, never()).save(any());
+    }
+
+    @Test
+    void reconcileToReady_movesProcessingToReady_withoutTouchingBypassCounter() {
         UUID id = UUID.randomUUID();
         Video v = videoWith(id, OperationalState.PROCESSING, AccessState.ACTIVE);
         when(videoRepository.findById(id)).thenReturn(Optional.of(v));
         when(videoRepository.save(v)).thenReturn(v);
 
-        // PROCESSING→READY is a bypass path (not in VALID_TRANSITIONS for PROCESSING after Story 6.3)
-        // but it is allowed via the explicit compat check in the service
-        service.transitionOperationalState(id, OperationalState.READY);
+        service.reconcileToReady(id, "test reason");
 
-        verify(meterRegistry).counter("video.moderation.bypass", "from", "PROCESSING", "to", "READY");
+        assertThat(v.getOperationalState()).isEqualTo(OperationalState.READY);
+        verify(publisher).publishEvent(any(VideoStatusChangedEvent.class));
+        // Never the moderation-bypass alarm...
+        verify(meterRegistry, never()).counter("video.moderation.bypass", "from", "PROCESSING", "to", "READY");
+        // ...but skillars-deferred-100 code review (2026-09-08): a state_corrected counter so the
+        // moderation-skipping correction stays observable.
+        verify(meterRegistry).counter("video.reconciliation.state_corrected");
         verify(counter).increment();
+    }
+
+    @Test
+    void reconcileToReady_whenNotProcessing_throwsConflict() {
+        UUID id = UUID.randomUUID();
+        Video v = videoWith(id, OperationalState.SCANNING, AccessState.ACTIVE);
+        when(videoRepository.findById(id)).thenReturn(Optional.of(v));
+
+        assertThatThrownBy(() -> service.reconcileToReady(id, "test"))
+            .isInstanceOf(com.softropic.skillars.platform.video.contract.exception.VideoStateConflictException.class);
+        verify(videoRepository, never()).save(any());
+    }
+
+    @Test
+    void reconcileToReady_whenAlreadyReady_isIdempotentNoop() {
+        UUID id = UUID.randomUUID();
+        Video v = videoWith(id, OperationalState.READY, AccessState.ACTIVE);
+        when(videoRepository.findById(id)).thenReturn(Optional.of(v));
+
+        service.reconcileToReady(id, "test");
+
+        verify(videoRepository, never()).save(any());
+        verify(publisher, never()).publishEvent(any());
     }
 
     @Test

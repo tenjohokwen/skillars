@@ -9,6 +9,7 @@ import com.softropic.skillars.platform.payment.repo.CoachCancellationHistory;
 import com.softropic.skillars.platform.payment.repo.CoachCancellationHistoryRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -73,7 +74,7 @@ public class CancellationRefundService {
         saveCancellationHistory(event.getCoachId(), event.getBookingId(), reason);
 
         if (!EXCUSED_REASONS.contains(reason)) {
-            reliabilityStrikeService.issue(event.getCoachId(), event.getBookingId(), "COACH_CANCELLATION_UNEXCUSED");
+            issueStrikeSafely(event.getCoachId(), event.getBookingId(), "COACH_CANCELLATION_UNEXCUSED");
         }
 
         log.info("Coach cancellation processed: bookingId={} reason={}", event.getBookingId(), reason);
@@ -96,8 +97,26 @@ public class CancellationRefundService {
                 "Coach no-show — full refund");
         }
 
-        reliabilityStrikeService.issue(event.getCoachId(), event.getBookingId(), "COACH_NO_SHOW");
+        issueStrikeSafely(event.getCoachId(), event.getBookingId(), "COACH_NO_SHOW");
         log.info("Coach no-show processed: bookingId={}", event.getBookingId());
+    }
+
+    /**
+     * skillars-deferred-100 code review (2026-09-08): the refund enqueue above has already run in
+     * this listener's transaction and MUST survive. {@code ReliabilityStrikeService.issue} is
+     * {@code REQUIRES_NEW}, so a strike failure rolls back only the strike; here we additionally
+     * swallow {@link PessimisticLockingFailureException} (bounded-retry exhaustion under sustained
+     * coach-row contention) so it cannot propagate out of the listener and roll back the refund.
+     * A dropped strike-escalation is the deliberately-accepted cost (see the {@code issue()}
+     * Javadoc); it is far less harmful than the refund this listener exists to protect.
+     */
+    private void issueStrikeSafely(UUID coachId, UUID bookingId, String reason) {
+        try {
+            reliabilityStrikeService.issue(coachId, bookingId, reason);
+        } catch (PessimisticLockingFailureException e) {
+            log.warn("Strike issuance skipped for coachId={} bookingId={} reason={} — coach-row lock "
+                + "retry exhausted; the refund is unaffected", coachId, bookingId, reason, e);
+        }
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
