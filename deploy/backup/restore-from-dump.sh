@@ -197,11 +197,24 @@ log "Integrity check: flyway_schema_history intact (${FLYWAY_ROWS} rows, 0 faile
 log "Starting app service..."
 docker compose -f /opt/skillars/docker-compose.yml start app
 
-APP_CID=$(docker compose -f /opt/skillars/docker-compose.yml ps -q app 2>/dev/null | head -1)
-# Single unretried `docker compose ps -q app` can race container registration; slow registration aborts restore.
-# Retry outside script if observed.
+# Retry the APP_CID capture up to 5 times (2 s apart) to handle slow container registration
+# without aborting a restore whose integrity checks have already passed. On success, proceed;
+# on timeout, emit a diagnostic that distinguishes "restore succeeded, container was slow" from
+# "restore failed" so the operator understands the database is intact.
+APP_CID=""
+for attempt in 1 2 3 4 5; do
+  APP_CID=$(docker compose -f /opt/skillars/docker-compose.yml ps -q app 2>/dev/null | head -1)
+  if [ -n "${APP_CID}" ]; then
+    log "app container found on attempt ${attempt}."
+    break
+  fi
+  if [ "${attempt}" -lt 5 ]; then
+    sleep 2
+  fi
+done
+
 if [ -z "${APP_CID}" ]; then
-  err "app container not found after 'docker compose start app' — cannot wait for health, failing fast instead of burning the 90s timeout."
+  err "app container did not register within 10s of 'docker compose start'; the DB restore itself completed and is intact — the EXIT trap will attempt to (re)start the app; if it does not come up, run the health wait manually."
   exit 1
 fi
 log "Waiting for app health (up to 90s)..."

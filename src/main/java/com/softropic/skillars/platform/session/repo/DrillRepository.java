@@ -16,7 +16,8 @@ public interface DrillRepository extends JpaRepository<Drill, UUID> {
 
     List<Drill> findByLibraryTypeAndStatus(String libraryType, String status);
 
-    List<Drill> findByOwnerCoachIdAndStatus(UUID ownerCoachId, String status);
+    @Query("SELECT d FROM Drill d WHERE d.ownerCoachId = :coachId AND d.libraryType = 'COACH' AND d.status = :status")
+    List<Drill> findByOwnerCoachIdAndStatus(@Param("coachId") UUID coachId, @Param("status") String status);
 
     // Story Deferred-75 AC5: mirrors CoachProfileRepository.findByIdForUpdate's NO_WAIT + retry pattern,
     // closing the DrillUploadService initiateUpload/deleteVideo TOCTOU races.

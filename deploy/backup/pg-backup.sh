@@ -22,6 +22,12 @@ DUMP_FILE="/tmp/skillars-${TIMESTAMP}.sql.gz"
 PREFIX="${HOS_BACKUP_PREFIX:-pg-backups/}"
 PREFIX="${PREFIX%/}/"
 
+# Register cleanup trap before the dump pipeline runs — if pg_dump fails under set -euo pipefail,
+# the trap executes before exiting, ensuring a partial dump is not left behind. This prevents
+# a repeated cron failure from filling the node's disk with multi-GB truncated dumps until pg_dump
+# itself starts failing. Mirrors volume-backup.sh's `trap cleanup EXIT`.
+trap 'rm -f "${DUMP_FILE}" || true' EXIT
+
 CID=$(docker compose -f /opt/skillars/docker-compose.yml ps -q postgres 2>/dev/null | head -1)
 if [ -z "$CID" ]; then
   echo "[pg-backup][error] postgres container not running" >&2
@@ -32,11 +38,6 @@ echo "[pg-backup] Running pg_dump..."
 PGPASSWORD="${POSTGRES_PASSWORD}" docker exec -e PGPASSWORD "$CID" \
   pg_dump -U "${POSTGRES_USER:-postgres}" "${POSTGRES_DB:-skillars}" \
   | gzip > "${DUMP_FILE}"
-
-# Always remove the local dump on exit — every `exit 1` in the verification block below returns
-# before the explicit `rm`, and a repeated cron failure would otherwise fill the node's disk with
-# multi-GB dumps until pg_dump itself starts failing. Mirrors volume-backup.sh's `trap cleanup EXIT`.
-trap 'rm -f "${DUMP_FILE}"' EXIT
 
 if [ ! -s "${DUMP_FILE}" ]; then
   echo "[pg-backup][error] dump file is empty or missing — aborting upload" >&2

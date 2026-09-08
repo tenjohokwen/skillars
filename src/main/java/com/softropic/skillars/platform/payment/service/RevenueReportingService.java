@@ -230,7 +230,7 @@ public class RevenueReportingService {
 
         List<ParentCreditLedger> entries = page.getContent();
         ParentCreditLedger oldest = entries.get(entries.size() - 1);
-        BigDecimal openingBalance = parentCreditLedgerRepository.sumByParentIdAndCreatedAtBefore(parentId, oldest.getCreatedAt());
+        BigDecimal openingBalance = parentCreditLedgerRepository.sumByParentIdBeforeAnchor(parentId, oldest.getCreatedAt(), oldest.getTxId());
 
         List<ParentCreditLedger> asc = new ArrayList<>(entries);
         Collections.reverse(asc);

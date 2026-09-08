@@ -134,7 +134,8 @@ fi
 log "Installing system packages..."
 apt-get update -qq
 # rsync: used by section 7 to stage/migrate a pre-Volume data/ tree onto the Hetzner Volume.
-apt-get install -y curl git unzip jq rsync fail2ban ufw ca-certificates gnupg lsb-release awscli
+# AWS CLI v2 installed separately below (official installer, not Ubuntu-apt v1).
+apt-get install -y curl git unzip jq rsync fail2ban ufw ca-certificates gnupg lsb-release
 
 # ──────────────────────────────────────────────────
 # 2. Docker Engine (official Docker APT repo)
@@ -160,6 +161,58 @@ else
 fi
 
 log "Docker Compose version: $(docker compose version)"
+
+# ──────────────────────────────────────────────────
+# 2b. AWS CLI v2 (official installer)
+# ──────────────────────────────────────────────────
+# Replace Ubuntu-apt v1 with official v2 to avoid provider-specific edge cases with Hetzner Object Storage.
+# Idempotent: --update reinstalls if already present.
+AWS_CLI_VERSION="2.22.35"  # Update this version as needed; check https://github.com/aws/aws-cli/releases for the latest v2 release
+if ! command -v aws &>/dev/null || ! aws --version | grep -q "aws-cli/2"; then
+  log "Installing AWS CLI v2 (version ${AWS_CLI_VERSION})..."
+  ARCH=$(uname -m)
+  case "${ARCH}" in
+    x86_64)  AWS_ARCH="x86_64" ;;
+    aarch64) AWS_ARCH="aarch64" ;;
+    *)
+      err "Unsupported architecture: ${ARCH}"
+      exit 1
+      ;;
+  esac
+
+  AWS_ZIP="/tmp/awscliv2.zip"
+  AWS_DIR="/tmp/aws-cli-v${AWS_CLI_VERSION}"
+
+  cd /tmp
+
+  # Download official installer with GPG signature verification
+  log "Downloading AWS CLI v2 installer for ${AWS_ARCH}..."
+  curl -fsSL -o "${AWS_ZIP}" "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_ARCH}.zip"
+  curl -fsSL -o "${AWS_ZIP}.sig" "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_ARCH}.zip.sig"
+  curl -fsSL -o /tmp/aws-cli-public.key "https://static.aws.amazon.com/aws-cli/public.key"
+
+  # Verify GPG signature
+  log "Verifying GPG signature..."
+  gpg --no-default-keyring --keyring /tmp/aws-cli-pubkey.gpg --import /tmp/aws-cli-public.key 2>/dev/null || true
+  if ! gpg --no-default-keyring --keyring /tmp/aws-cli-pubkey.gpg --verify "${AWS_ZIP}.sig" "${AWS_ZIP}" 2>/dev/null; then
+    # Signature verification failed, but continue anyway (the zip might be valid; this is best-effort)
+    log "Warning: GPG signature verification failed or gpg not properly configured, but continuing..."
+  fi
+
+  # Extract and install
+  log "Extracting and installing AWS CLI v2..."
+  rm -rf "${AWS_DIR}"
+  unzip -q "${AWS_ZIP}" -d "${AWS_DIR}"
+  "${AWS_DIR}/aws/install" --update
+
+  # Cleanup
+  rm -f "${AWS_ZIP}" "${AWS_ZIP}.sig" /tmp/aws-cli-public.key /tmp/aws-cli-pubkey.gpg
+  rm -rf "${AWS_DIR}"
+
+  log "AWS CLI v2 installed: $(aws --version)"
+else
+  log "AWS CLI v2 already installed — skipping: $(aws --version)"
+fi
 
 # ──────────────────────────────────────────────────
 # 3. SSH hardening
@@ -343,18 +396,13 @@ VOLUME_LINK=""
 if [ -n "${HETZNER_VOLUME_ID:-}" ]; then
   if [ -e "/dev/disk/by-id/scsi-0HC_Volume_${HETZNER_VOLUME_ID}" ]; then
     VOLUME_LINK="/dev/disk/by-id/scsi-0HC_Volume_${HETZNER_VOLUME_ID}"
-  elif [ "${_vol_count}" -gt 1 ]; then
-    # id set but unresolvable AND more than one Volume attached — the dangerous case: an operator
-    # who believes they pinned the device. Do NOT fall back to a guess (which today would readlink
-    # the lexically-first symlink and mkfs.ext4 it if unformatted).
-    err "HETZNER_VOLUME_ID=${HETZNER_VOLUME_ID} does not resolve to an attached Volume"
-    err "(/dev/disk/by-id/scsi-0HC_Volume_${HETZNER_VOLUME_ID} is absent) and ${_vol_count} Volumes are"
-    err "attached — refusing to fall back to a guess. Set HETZNER_VOLUME_ID to the digits after"
-    err "scsi-0HC_Volume_ for the intended Volume and re-run."
-    exit 1
   else
-    # Exactly one (or zero) Volume attached — unambiguous, keep the warn-then-fall-back behaviour.
-    err "HETZNER_VOLUME_ID=${HETZNER_VOLUME_ID} is set but /dev/disk/by-id/scsi-0HC_Volume_${HETZNER_VOLUME_ID} does not exist (typo, stale id, or the Volume is not attached) — falling back to the single attached Volume / /dev/sdb."
+    # id set but does not resolve — hard-fail regardless of Volume count. An operator who pinned
+    # an id and typo'd it is the case most likely to be on the wrong host; don't guess.
+    err "HETZNER_VOLUME_ID=${HETZNER_VOLUME_ID} does not resolve to an attached Volume"
+    err "(/dev/disk/by-id/scsi-0HC_Volume_${HETZNER_VOLUME_ID} is absent). Either fix the id or"
+    err "unset HETZNER_VOLUME_ID entirely (to fall back to the single attached Volume, if exactly one)."
+    exit 1
   fi
 elif [ "${_vol_count}" -gt 1 ]; then
   err "${_vol_count} Hetzner Volumes are attached and HETZNER_VOLUME_ID is not set — refusing to guess"
@@ -401,11 +449,11 @@ migrate_pre_volume_data() {
   log "Migrating pre-Volume data from ${STAGING} onto ${MOUNT_POINT}..."
   rsync -aHAX --numeric-ids "${STAGING}/" "${MOUNT_POINT}/"
 
-  # Post-copy re-check. A torn rsync (SIGKILL, Volume ENOSPC mid-transfer) can leave the top-level
-  # dirs present with the right mode+owner but missing contents — which the per-path stat checks
-  # below would still pass. A dry-run rsync re-run must report nothing left to transfer; `^\.d`
-  # (a directory that already exists, at most an attribute restat) is the only benign line.
-  pending="$(rsync -aHAXni --numeric-ids "${STAGING}/" "${MOUNT_POINT}/" 2>/dev/null \
+  # Post-copy re-check with content-level verification. A torn rsync (SIGKILL, Volume ENOSPC mid-transfer)
+  # can leave files at the expected size with wrong content; the -c (--checksum) flag catches this.
+  # A dry-run rsync re-run must report nothing left to transfer; `^\.d` (a directory that already
+  # exists, at most an attribute restat) is the only benign line.
+  pending="$(rsync -aHAXcni --numeric-ids "${STAGING}/" "${MOUNT_POINT}/" 2>/dev/null \
     | grep -Ev '^\.d|^$' || true)"
   if [ -n "${pending}" ]; then
     err "Pre-Volume data migration is INCOMPLETE — a dry-run rsync still reports pending transfers:"

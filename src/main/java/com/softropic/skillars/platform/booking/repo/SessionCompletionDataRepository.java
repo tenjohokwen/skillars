@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.booking.repo;
 
+import com.softropic.skillars.platform.booking.contract.BookingStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -20,8 +21,13 @@ public interface SessionCompletionDataRepository extends JpaRepository<SessionCo
           AND EXISTS (
               SELECT b FROM Booking b
               WHERE b.id = s.bookingId
-                AND b.status = 'COMPLETED_PENDING_CONFIRMATION'
+                AND b.status = :targetStatus
           )
         """)
-    List<SessionCompletionData> findPendingQuickCompletes(@Param("cutoff") Instant cutoff);
+    List<SessionCompletionData> findPendingQuickCompletes(@Param("cutoff") Instant cutoff,
+                                                          @Param("targetStatus") String targetStatus);
+
+    default List<SessionCompletionData> findPendingQuickCompletes(Instant cutoff) {
+        return findPendingQuickCompletes(cutoff, BookingStatus.COMPLETED_PENDING_CONFIRMATION);
+    }
 }

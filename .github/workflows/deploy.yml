@@ -96,21 +96,40 @@ jobs:
           (
             echo "Waiting 60s for JVM startup (matches docker-compose start_period)..."
             sleep 60
-            RESULT="fail"
-            for i in $(seq 1 12); do
-              STATUS=$(ssh -o ConnectTimeout=10 -o BatchMode=yes "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "
+            result="fail"
+            transport_fail=0
+            # 60s pre-wait + 24*5s poll = ~180s; app start_period is 60s, cold-start ~120s observed.
+            # Three possible per-iteration outcomes:
+            # - SSH returns 255 (connect timeout/refused, auth failure, DNS, etc): transport failure
+            # - SSH returns 0 with status==1: app is UP
+            # - SSH returns 0 with status==0: app not UP yet (real health miss)
+            # Verdict: if we got pass → result=pass; if all 24 attempts were SSH 255 → result=error
+            # (host unreachable, infrastructure issue); else → result=fail (host reachable but app down).
+            for i in $(seq 1 24); do
+              OUT=$(ssh -o ConnectTimeout=10 -o BatchMode=yes "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "
                 CID=\$(cd /opt/skillars && docker compose ps -q --status running app 2>/dev/null | head -1)
                 [ -n \"\$CID\" ] && docker exec \"\$CID\" wget -qO- http://localhost:8367/manage/health/smoke 2>/dev/null \
                   | grep -q '\"status\":\"UP\"' && echo 1 || echo 0
-              " 2>/dev/null || echo 0)
-              if [ "$STATUS" = "1" ]; then
-                RESULT="pass"
+              " 2>/dev/null)
+              SSH_RC=$?
+              if [ $SSH_RC -eq 255 ]; then
+                transport_fail=$((transport_fail + 1))
+                continue
+              fi
+              if [ $SSH_RC -eq 0 ] && [ "$OUT" = "1" ]; then
+                result="pass"
                 break
               fi
-              sleep 5
+              [ "$i" -lt 24 ] && sleep 5
             done
-            echo "result=$RESULT" >> $GITHUB_OUTPUT
-            exit $([ "$RESULT" = "pass" ] && echo 0 || echo 1)
+            # Apply verdict rule after loop
+            if [ "$result" != "pass" ]; then
+              if [ $transport_fail -eq 24 ]; then
+                result="error"
+              fi
+            fi
+            echo "result=$result" >> $GITHUB_OUTPUT
+            exit $([ "$result" = "pass" ] && echo 0 || echo 1)
           )
           EXIT_CODE=$?
           # Ensure output is written even if step errors or is interrupted
