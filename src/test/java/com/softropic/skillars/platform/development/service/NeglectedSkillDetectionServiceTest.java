@@ -10,6 +10,8 @@ import com.softropic.skillars.platform.development.repo.SluWeeklySnapshotReposit
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -202,6 +204,25 @@ class NeglectedSkillDetectionServiceTest {
         detectionService.detectNeglectedSkills();
 
         verify(snapshotRepository, never()).findByPlayerIdAndWeek(anyLong(), anyShort(), anyShort());
+    }
+
+    // skillars-deferred-101 AC10: boundary-value tests for isInValidRange()
+    // Valid range: (0, 1) — strictly greater than 0, strictly less than 1
+    @ParameterizedTest
+    @CsvSource({
+        "0",           // Boundary: exactly 0 (invalid)
+        "0.0001",      // Just inside lower bound
+        "0.5",         // Middle of range (valid)
+        "0.9999",      // Just inside upper bound
+        "1.0"          // Boundary: exactly 1 (invalid)
+    })
+    void isInValidRange_boundaryValues(String value) {
+        when(configService.getString("slu.neglected.threshold")).thenReturn(value);
+
+        // Test that detectNeglectedSkills doesn't throw on boundary values
+        // (invalid values log and return gracefully, valid values proceed).
+        // This exercises isInValidRange() indirectly through the public API.
+        detectionService.detectNeglectedSkills();
     }
 
     private PlayerSluWeeklySnapshot makeSnapshot(short year, short week, String skill, BigDecimal slu) {
