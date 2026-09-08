@@ -133,8 +133,10 @@ class RevenueReportingServiceTest {
 
         when(parentCreditLedgerRepository.findByParentAndPeriod(eq(parentId), any(), any(), eq(pageable)))
             .thenReturn(page);
-        // Opening balance before e2's createdAt = 50.00
-        when(parentCreditLedgerRepository.sumByParentIdAndCreatedAtBefore(eq(parentId), eq(e2.getCreatedAt())))
+        // Opening balance for everything sorting after the page's oldest row (e2) in the
+        // (createdAt DESC, txId DESC) order = 50.00. skillars-deferred-102 AC11: the anchor is now
+        // (createdAt, txId), not createdAt alone, so a prior-page createdAt-twin is not dropped.
+        when(parentCreditLedgerRepository.sumByParentIdBeforeAnchor(eq(parentId), eq(e2.getCreatedAt()), eq(e2.getTxId())))
             .thenReturn(new BigDecimal("50.00"));
 
         var result = service.getCreditStatement(parentId, from, to, pageable);

@@ -100,7 +100,7 @@ public class SessionPlanService {
         session.setSessionDna(dna);
         session.setEquipmentList(equipment);
         session.setDevelopmentFocus(req.developmentFocus());
-        session.setStatus("DRAFT");
+        session.setStatus(SessionStatus.DRAFT);
 
         Session saved;
         try {
@@ -195,12 +195,13 @@ public class SessionPlanService {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void handleBookingTerminalNonCompletion(BookingStatusChangedEvent event) {
-        if (SessionStatus.COMPLETED.equals(event.newStatus())
+        // event.newStatus() is a BookingStatus name, not a session status — compare with BookingStatus.
+        if (BookingStatus.COMPLETED.name().equals(event.newStatus())
                 || !bookingStateMachine.isTerminal(BookingStatus.valueOf(event.newStatus()))) {
             return;
         }
         sessionRepository.findByBookingId(event.bookingId()).ifPresent(session -> {
-            if ("DRAFT".equals(session.getStatus()) || "SAVED".equals(session.getStatus())) {
+            if (SessionStatus.DRAFT.equals(session.getStatus()) || SessionStatus.SAVED.equals(session.getStatus())) {
                 session.setStatus(SessionStatus.CANCELLED);
                 try {
                     sessionRepository.save(session);

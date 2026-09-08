@@ -96,37 +96,46 @@ jobs:
           (
             echo "Waiting 60s for JVM startup (matches docker-compose start_period)..."
             sleep 60
-            result="fail"
-            transport_fail=0
-            # 60s pre-wait + 24*5s poll = ~180s; app start_period is 60s, cold-start ~120s observed.
+            # MAX_ITERS is used twice (loop bound AND the all-transport-failed threshold) — keep it
+            # in one place or the 'error' verdict silently becomes unreachable.
+            MAX_ITERS=24
+            # 60s pre-wait + MAX_ITERS*5s poll = ~180s; app start_period is 60s, cold-start ~120s observed.
             # Three possible per-iteration outcomes:
             # - SSH returns 255 (connect timeout/refused, auth failure, DNS, etc): transport failure
             # - SSH returns 0 with status==1: app is UP
             # - SSH returns 0 with status==0: app not UP yet (real health miss)
-            # Verdict: if we got pass → result=pass; if all 24 attempts were SSH 255 → result=error
-            # (host unreachable, infrastructure issue); else → result=fail (host reachable but app down).
-            for i in $(seq 1 24); do
+            # Verdict: pass → result=pass; ALL MAX_ITERS attempts were SSH 255 → result=error
+            # (host unreachable, infrastructure issue, do NOT auto-revert); else → result=fail.
+            result="fail"
+            transport_fail=0
+            last_ssh_err=""
+            for i in $(seq 1 "$MAX_ITERS"); do
+              SSH_ERRFILE=$(mktemp)
               OUT=$(ssh -o ConnectTimeout=10 -o BatchMode=yes "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "
                 CID=\$(cd /opt/skillars && docker compose ps -q --status running app 2>/dev/null | head -1)
                 [ -n \"\$CID\" ] && docker exec \"\$CID\" wget -qO- http://localhost:8367/manage/health/smoke 2>/dev/null \
                   | grep -q '\"status\":\"UP\"' && echo 1 || echo 0
-              " 2>/dev/null)
+              " 2>"$SSH_ERRFILE")
               SSH_RC=$?
-              if [ $SSH_RC -eq 255 ]; then
+              if [ "$SSH_RC" -eq 255 ]; then
                 transport_fail=$((transport_fail + 1))
+                last_ssh_err=$(tr -d '\r' < "$SSH_ERRFILE" | tail -1)
+                rm -f "$SSH_ERRFILE"
                 continue
               fi
-              if [ $SSH_RC -eq 0 ] && [ "$OUT" = "1" ]; then
+              rm -f "$SSH_ERRFILE"
+              if [ "$SSH_RC" -eq 0 ] && [ "$OUT" = "1" ]; then
                 result="pass"
                 break
               fi
-              [ "$i" -lt 24 ] && sleep 5
+              [ "$i" -lt "$MAX_ITERS" ] && sleep 5
             done
             # Apply verdict rule after loop
-            if [ "$result" != "pass" ]; then
-              if [ $transport_fail -eq 24 ]; then
-                result="error"
-              fi
+            if [ "$result" != "pass" ] && [ "$transport_fail" -eq "$MAX_ITERS" ]; then
+              result="error"
+              echo "SMOKE: every one of $MAX_ITERS SSH attempts failed at the transport layer" \
+                   "(exit 255). This is an infrastructure/connectivity problem, not an unhealthy" \
+                   "deploy — NOT auto-reverting. Last ssh stderr: ${last_ssh_err:-<none captured>}"
             fi
             echo "result=$result" >> $GITHUB_OUTPUT
             exit $([ "$result" = "pass" ] && echo 0 || echo 1)
@@ -148,7 +157,11 @@ jobs:
 
       - name: Auto-Revert on smoke test failure
         id: revert
-        if: failure() && (steps.smoke.outputs.result == 'fail' || steps.smoke.outcome == 'failure')
+        # result=='error' means every SSH attempt failed at the transport layer (host unreachable) —
+        # that is an infrastructure problem, NOT an unhealthy deploy, so do not revert a build that
+        # may well be fine. The 'outcome == failure' clause still covers a smoke step that broke
+        # before it could persist a verdict (result then unset, != 'error').
+        if: failure() && (steps.smoke.outputs.result == 'fail' || (steps.smoke.outcome == 'failure' && steps.smoke.outputs.result != 'error'))
         timeout-minutes: 10
         run: |
           PREV="${{ steps.pre_deploy.outputs.image }}"

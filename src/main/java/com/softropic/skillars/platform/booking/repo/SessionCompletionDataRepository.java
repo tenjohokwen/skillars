@@ -28,6 +28,7 @@ public interface SessionCompletionDataRepository extends JpaRepository<SessionCo
                                                           @Param("targetStatus") String targetStatus);
 
     default List<SessionCompletionData> findPendingQuickCompletes(Instant cutoff) {
-        return findPendingQuickCompletes(cutoff, BookingStatus.COMPLETED_PENDING_CONFIRMATION);
+        // Booking.status is a plain String column; bind the enum's name(), not the enum.
+        return findPendingQuickCompletes(cutoff, BookingStatus.COMPLETED_PENDING_CONFIRMATION.name());
     }
 }

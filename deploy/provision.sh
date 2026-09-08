@@ -165,10 +165,14 @@ log "Docker Compose version: $(docker compose version)"
 # ──────────────────────────────────────────────────
 # 2b. AWS CLI v2 (official installer)
 # ──────────────────────────────────────────────────
-# Replace Ubuntu-apt v1 with official v2 to avoid provider-specific edge cases with Hetzner Object Storage.
-# Idempotent: --update reinstalls if already present.
-AWS_CLI_VERSION="2.22.35"  # Update this version as needed; check https://github.com/aws/aws-cli/releases for the latest v2 release
-if ! command -v aws &>/dev/null || ! aws --version | grep -q "aws-cli/2"; then
+# Replace Ubuntu-apt v1 with official v2 to avoid provider-specific edge cases with Hetzner Object
+# Storage. Idempotent: --update reinstalls if already present. Signature verification is FAIL-CLOSED
+# — a bad/absent signature aborts provisioning rather than installing an unverified root binary.
+AWS_CLI_VERSION="2.22.35"  # pinned; bump from https://github.com/aws/aws-cli/tags (v2 tags)
+# Fingerprint of the AWS CLI team's OpenPGP public key, published at
+# https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html (Verify section).
+AWS_CLI_KEY_FPR="FB5DB77FD5C118B80511ADA8A6310ACC4672475C"
+if ! command -v aws >/dev/null 2>&1 || ! aws --version 2>&1 | grep -q "aws-cli/2"; then
   log "Installing AWS CLI v2 (version ${AWS_CLI_VERSION})..."
   ARCH=$(uname -m)
   case "${ARCH}" in
@@ -180,35 +184,36 @@ if ! command -v aws &>/dev/null || ! aws --version | grep -q "aws-cli/2"; then
       ;;
   esac
 
-  AWS_ZIP="/tmp/awscliv2.zip"
-  AWS_DIR="/tmp/aws-cli-v${AWS_CLI_VERSION}"
+  AWS_WORK="$(mktemp -d /tmp/aws-cli-install.XXXXXX)"
+  # shellcheck disable=SC2064  # expand AWS_WORK now, not at trap time
+  trap "rm -rf '${AWS_WORK}'" EXIT
+  AWS_ZIP="${AWS_WORK}/awscliv2.zip"
+  AWS_KEYRING="${AWS_WORK}/aws-cli.gpg"
+  # Versioned URL so the pin above is real (the unversioned URL is 'latest' and ignores the pin).
+  AWS_BASE_URL="https://awscli.amazonaws.com/awscli-exe-linux-${AWS_ARCH}-${AWS_CLI_VERSION}.zip"
 
-  cd /tmp
+  log "Downloading AWS CLI v2 ${AWS_CLI_VERSION} for ${AWS_ARCH}..."
+  curl -fsSL -o "${AWS_ZIP}"        "${AWS_BASE_URL}"
+  curl -fsSL -o "${AWS_ZIP}.sig"    "${AWS_BASE_URL}.sig"
+  curl -fsSL -o "${AWS_WORK}/aws-cli-public.key" "https://static.aws.amazon.com/aws-cli/public.key"
 
-  # Download official installer with GPG signature verification
-  log "Downloading AWS CLI v2 installer for ${AWS_ARCH}..."
-  curl -fsSL -o "${AWS_ZIP}" "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_ARCH}.zip"
-  curl -fsSL -o "${AWS_ZIP}.sig" "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_ARCH}.zip.sig"
-  curl -fsSL -o /tmp/aws-cli-public.key "https://static.aws.amazon.com/aws-cli/public.key"
-
-  # Verify GPG signature
-  log "Verifying GPG signature..."
-  gpg --no-default-keyring --keyring /tmp/aws-cli-pubkey.gpg --import /tmp/aws-cli-public.key 2>/dev/null || true
-  if ! gpg --no-default-keyring --keyring /tmp/aws-cli-pubkey.gpg --verify "${AWS_ZIP}.sig" "${AWS_ZIP}" 2>/dev/null; then
-    # Signature verification failed, but continue anyway (the zip might be valid; this is best-effort)
-    log "Warning: GPG signature verification failed or gpg not properly configured, but continuing..."
+  log "Verifying GPG signature (fail-closed)..."
+  gpg --no-default-keyring --keyring "${AWS_KEYRING}" --import "${AWS_WORK}/aws-cli-public.key"
+  if ! gpg --no-default-keyring --keyring "${AWS_KEYRING}" --list-keys "${AWS_CLI_KEY_FPR}" >/dev/null 2>&1; then
+    err "AWS CLI public key does not match the expected fingerprint ${AWS_CLI_KEY_FPR} — aborting."
+    exit 1
+  fi
+  if ! gpg --no-default-keyring --keyring "${AWS_KEYRING}" --verify "${AWS_ZIP}.sig" "${AWS_ZIP}"; then
+    err "AWS CLI v2 installer signature verification FAILED — refusing to install. Aborting."
+    exit 1
   fi
 
-  # Extract and install
   log "Extracting and installing AWS CLI v2..."
-  rm -rf "${AWS_DIR}"
-  unzip -q "${AWS_ZIP}" -d "${AWS_DIR}"
-  "${AWS_DIR}/aws/install" --update
+  unzip -q "${AWS_ZIP}" -d "${AWS_WORK}"
+  "${AWS_WORK}/aws/install" --update
 
-  # Cleanup
-  rm -f "${AWS_ZIP}" "${AWS_ZIP}.sig" /tmp/aws-cli-public.key /tmp/aws-cli-pubkey.gpg
-  rm -rf "${AWS_DIR}"
-
+  rm -rf "${AWS_WORK}"
+  trap - EXIT
   log "AWS CLI v2 installed: $(aws --version)"
 else
   log "AWS CLI v2 already installed — skipping: $(aws --version)"

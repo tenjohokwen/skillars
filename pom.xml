@@ -481,7 +481,10 @@
 			<artifactId>httpclient5</artifactId>
 		</dependency>
 		<dependency>
-			<groupId>org.openpdf</groupId>
+			<!-- openpdf 3.x publishes only under the historic com.github.librepdf groupId
+			     (org.openpdf:openpdf:3.0.5 is not on Maven Central). Matches Dependabot #141.
+			     The Java package was renamed com.lowagie.text.* -> org.openpdf.text.* in 3.x. -->
+			<groupId>com.github.librepdf</groupId>
 			<artifactId>openpdf</artifactId>
 			<version>3.0.5</version>
 		</dependency>
