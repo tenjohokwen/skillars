@@ -54,12 +54,10 @@ Every item below was checked against the live file at `c2c47c1`, not against the
 | `deploy-3-1` PGPASSWORD via `docker exec -e` | `[PICKED UP by skillars-deferred-94 AC1]` — all 5 occurrences fixed; environment-variable inheritance pattern applied. |
 | `deploy-3-1` credentials in `/proc/<pid>/environ` | open, unchanged, project-wide |
 | `deploy-3-1` awscli v1 from Ubuntu apt | open, unchanged — `provision.sh:131` |
-| `deploy-2-2` `Fail workflow` unreachable | open, **citation stale** — `:139-143` -> `:184-188`, four notification steps now precede it |
 | `deploy-1-5` repo cloned before the Volume is mounted | open, unchanged |
 | `deploy-1-5` repo cloned as root, `.git` beside runtime data | open, unchanged |
 | `deploy-1-5` no rollback / DR documentation | **CLOSED, deleted** — `rollback.md`, `backup-restore.md` and `runbook.md` all shipped with Epic 3, exactly as the item predicted |
 | `deploy-1-5` `git clean` vs the data subdirectory | open, **narrowed** — `.gitignore` now covers `/data/`; only `git clean -fdx` still reaches it |
-| `deploy-1-3` Prometheus has no `depends_on: app` | open, verified — `docker-compose.yml:217-235` has no `depends_on`; `grafana` at `:328` does |
 | `deploy-1-3` LGTM `mkdir -p` gated inside the `[ -b ]` check | `[PICKED UP by skillars-deferred-94 AC14]` — clarifying comment added; no code change. |
 
 Net: 18 items examined, **3 closed or stale and deleted**, 6 corrected in place (stale citations, narrowed or
@@ -778,7 +776,7 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - Polling fallback has no exponential backoff — 2 s fixed interval is spec-prescribed degraded mode; add backoff if hammering becomes observable in production [booking.store.js]
 
 ## Deferred from: code review of skillars-3-1-coach-availability-management (2026-06-13)
-- No date-range guard on `weekStart` GET parameter — far past/future dates are harmless for a 7-day view; address if API is ever exposed to untrusted external callers [AvailabilityResource.java:421]
+(closed by skillars-deferred-101)
 
 ## Deferred from: code review of skillars-2-3-coach-public-profile-page (2026-06-13)
 - N+1 queries — `getPublicProfile` fires 8 sequential DB round-trips; acceptable for single-entity load now, but batch loading or `@EntityGraph` should be considered before Epic 3 traffic ramp [CoachProfileService.java] `[RE-EVALUATED by skillars-deferred-70: not a classic N+1 — getPublicProfile(coachId) is called once per single-coach page view, not once per row in a larger collection. 8 small, indexed, single-row queries for one profile view is unlikely to be the bottleneck it was originally framed as. Left open and unpicked rather than closed — a real fix (EntityGraph/batch-loading) is still reasonable if this page's latency is ever actually measured and found wanting, but should wait for that evidence rather than being done speculatively.]`
@@ -923,7 +921,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - RW2: scanned_at misleading on upsert retry path — `@Column(updatable=false)` retains original failed-attempt timestamp even when SLA retry overwrites outcome to PASSED. Fix requires append-only per-attempt rows (architectural scope beyond this story). [`VideoModerationScan.java:39`]
 
 ## Deferred from: code review of skillars-6-6-player-video-management-portal (2026-06-24)
-- W3: V60 DDL ACCESS EXCLUSIVE lock risk — `ALTER TABLE main.videos DROP CONSTRAINT / ADD CONSTRAINT` takes table-level ACCESS EXCLUSIVE lock with no `SET lock_timeout`; can cause connection pile-up under concurrent video uploads. [`V60__video_approval_portal.sql`]
 - W5: `@GeneratedValue(AUTO)` on `VideoApprovalRequest` entity vs `UUID DEFAULT gen_random_uuid()` in SQL — Hibernate 6 AUTO may allocate a sequence-based Long for AUTO strategy on non-Long PK; pre-existing entity pattern; verify Hibernate dialect resolves UUID correctly. [`VideoApprovalRequest.java`]
 
 ## Deferred from: code review of skillars-7-2-session-payment-lifecycle-credit-wallet (2026-06-24)
