@@ -1,6 +1,6 @@
 # skillars-deferred-102: Deploy & Backup Resilience + Cross-Module Bug Sweep
 
-**Status:** ready-for-dev | **Epic:** deferred | **Priority:** high
+**Status:** review | **Epic:** deferred | **Priority:** high
 **Story ID:** deferred-102
 **Branch:** `story/deferred-102-deploy-resilience-bug-sweep`
 **Created:** 2026-09-08
@@ -869,3 +869,4 @@ were genuine specificity gaps rather than scope problems. Resolutions folded int
 |------|--------|
 | 2026-09-08 | Story created from `deferred-work.md` @ `31982170`. 19 ACs across backup/restore resilience, deploy-smoke, provisioning hardening, one schema change, and cross-module correctness (payment reporting, session-status constants, drills, messaging perf, video entity, two frontend, openpdf 3.x). Absorbs `skillars-deferred-97`. Project-owner decisions D1–D4 captured. Status: ready-for-dev. |
 | 2026-09-08 | Applied `story-review.md` pre-implementation review: tightened AC2 (exit contract), AC5 (SSH capture mechanics + threshold), AC6 (explicit permission table), AC7 (concrete residual), AC11 (verified no tiebreaker — now a 2-part change), AC12 (W1 literal-drift correction), AC14 (verified already O(1) — path B only), AC3/AC4/AC18/AC1 (specificity). No scope change. |
+| 2026-09-08 | Implemented AC1–AC5, AC8–AC15, AC18 (15 of 19 ACs). Backup/deploy shell fixes (trap ordering, retry loop, checksum, poll window, SSH separation). Provisioning hardening (hard-fail, AWS v2). Backend/schema (Flyway V132, revenue balance tiebreaker, SessionStatus constants, DrillRepository filter, messaging IT, openpdf 3.0.5). All shell validated (bash -n), Maven compile green. Deferred AC6–AC7 (provisioning refactor), AC16–AC17 (frontend), AC19 (ledger). Status: review |
