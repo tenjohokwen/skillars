@@ -1148,10 +1148,6 @@ Two pre-existing issues identified during code review but deferred as out-of-sco
 
 - **Exception messages use imperative "retry" language that could confuse users.** All `OptimisticLockingFailureException` handlers throw with message "Booking status changed concurrently — retry", which uses imperative language ("retry") that might mislead end-users into thinking they should manually retry (click buttons again) rather than understanding the system will auto-retry. Found during review of skillars-deferred-66 AC2. This is a pre-existing message pattern already used consistently across endSession/pauseSession/resumeSession/confirmCompletion, not introduced by this story. Deferred: This message design is a pre-existing choice; consistency with existing code is the point for now.
 
-## Deferred from: code review of skillars-deferred-75 (2026-08-27)
-
-Code review (parallel adversarial layers: Blind Hunter, Edge Case Hunter, Acceptance Auditor) identified:
-
 ## Deferred from: code review of skillars-deferred-81-parent-name-batching-cross-drill-video-lock-video-error-toast-and-self-booking-packs (2026-08-28)
 
 Four pre-existing issues identified during code review:
@@ -1174,16 +1170,6 @@ Four pre-existing issues identified during code review:
 3-layer adversarial review (Blind Hunter / Edge Case Hunter / Acceptance Auditor). 0 AC violations, all 12 ACs implemented. 1 decision-needed + 10 patches handled on the story; the items below are real but pre-existing or spec-sanctioned and out of this story's scope:
 
 - **AC5 single-Volume + explicit-but-unresolvable `HETZNER_VOLUME_ID` still warns-then-falls-back to the lone attached Volume.** When exactly one `scsi-0HC_Volume_*` symlink exists and `HETZNER_VOLUME_ID` is set but does not resolve (typo / wrong host / detached), the script warns and proceeds with the single attached Volume — and would `mkfs.ext4` it if unformatted. This matches AC5 spec case (h) exactly ("single-Volume is unambiguous"), but an operator who explicitly pinned a device by id and got it wrong is the case most likely to be on the wrong host. Promoting this to a hard fail is a follow-up hardening decision. [`deploy/provision.sh` device resolution, ~L194-218]
-
-## Deferred from: skillars-deferred-89 story creation (2026-08-31)
-
-Surfaced by the story-creation audit and by implementation (2026-09-01). One residual + one observation, none owed an AC by this story:
-
-- **Observation (not a residual):** skillars-deferred-89 AC7 takes the count of `permitAll()` OTP-email endpoints from 1 (parent) to 3 (parent + coach + player). Each is `@RateLimited(capacity = 3, duration = 30)` (per client IP) and V121's `uq_pot_one_active_per_user` blocks a concurrent second active token. The AC7 code review flagged that the IP bucket alone lets a distributed caller who knows a victim's `userId` repeatedly delete their in-flight OTP / bomb their inbox — so a **per-user** `rateLimitingService.tryConsume(userId, "<role>_resend_otp_user", 3, 30, MINUTES)` guard was added to `resendPhoneOtp` in all three services (parent included, to keep parity), mirroring the existing `verifyPhone` per-user limit. Cross-role misuse (`/player/resend-otp` with a coach's id) is still possible but low-value — both endpoints require a valid id + `EMAIL_VERIFIED` and only ever mail the account's own address; left as-is (parent has no role check either). [`CoachRegistrationService.java`, `PlayerRegistrationService.java`, `ParentRegistrationService.java`, `AppEndpoints.java`]
-
-## Deferred from: code review of skillars-deferred-89-slu-detail-uniqueness-snapshot-write-gating-drill-video-deletion-existence-guard-scheduler-lock-transaction-ordering-perf-test-deflake-resend-otp-parity-and-provisioning-ops-doc-hardening (2026-09-01)
-
-Six items triaged `defer` by `bmad-code-review`. Two (`resendPhoneOtp` triplication and the `resend-otp**` same-segment-sibling pattern) were **closed by skillars-deferred-91 AC16 / AC15** (2026-09-03): `RegistrationOtpResendSupport` now holds the single shared body, and every `AppEndpoints` `permitAll()` pattern is anchored (exact, or a `/`-preceded `/**`) with `AppEndpointsConventionTest` failing the build on a bare trailing `**`. The rest:
 
 ## Deferred from: code review of 1-7b-session-refresh-rint-contract-fix (2026-09-02)
 
@@ -1323,17 +1309,6 @@ _bmad-code-review Chunk 3 (i18n, AC12–AC14). Three `[Review][Defer]` findings.
 
 - **Parent-facing legal copy in all three frontend bundles is AI-authored and unreviewed.** `parentTosBody`, `parentPrivacyBody` and `parentConsentBody` (terms, privacy and guardian-consent text a parent must scroll and accept) were extracted and translated into de-DE and fr-FR during AC14 without human legal or native review. A mistranslated guardian-consent clause is a compliance exposure, not a copy nit, and no dev agent can close it. Same shape as the carried-forward de-DE native-speaker residual: **AI-authored to native quality, not human-verified.** `src/frontend/src/i18n/fr-FR/index.js:913`
 ---
-
-## Deferred from: code review of skillars-deferred-92, chunk 4 (2026-09-04)
-
-_bmad-code-review Chunk 4 (frontend one-offs, AC16/AC22/AC25/AC28). One `[Review][Defer]` finding. The chunk's other 14 findings are patch items in the story file._
-
-
----
-
-## Deferred from: re-review of the applied skillars-deferred-92 patches (2026-09-04)
-
-_bmad-code-review of the fixes themselves — the working-tree changes answering chunks 1 and 2, rather than a diff chunk. Two `[Review][Defer]` findings; the pass's one patch item (`V128`'s `setval` aborting on an empty table) was fixed and verified against `postgres:17-alpine`._
 
 ## Deferred from: code review of skillars-deferred-93 (2026-09-05)
 
