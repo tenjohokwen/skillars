@@ -523,6 +523,17 @@ production deploy, and `deferred-work.md` reflects only work that genuinely stil
 - **Test:** `@Testcontainers` `DrillRepositoryIT` / `DrillLibraryServiceIT`: seed a COACH drill and
   (bypassing the constraint via direct SQL, or asserting the query text) confirm the private list
   returns only `library_type = 'COACH'` rows. `mvn -o test -Dtest=DrillLibraryServiceIT`.
+- **RESOLUTION (2026-09-08, post-CI): the filter value is `'PRIVATE'`, not `'COACH'`.** The
+  `skillars-4-1` D7 citation (2026-06-17) and this AC's text both say `library_type = 'COACH'`, but
+  `V110__drill_library_type_private_rename.sql` (Story Deferred-75 AC8) renamed the value
+  `'COACH'` → `'PRIVATE'` — the live CHECK constraint is `IN ('PLATFORM', 'PRIVATE')` and every
+  service call site uses `"PRIVATE"` (`DrillLibraryService.setLibraryType("PRIVATE")` on clone;
+  the `"PRIVATE".equals(...)` ownership guards). The first implementation shipped
+  `d.libraryType = 'COACH'` in `findByOwnerCoachIdAndStatus`, which matched **zero** rows, so a
+  coach's private library always listed empty and
+  `DrillLibraryResourceIT.cloneDrill_activePlatformDrill_returns201AndDrillInPrivateLibrary:195`
+  failed ("Expecting actual not to be empty") in CI build `34277588192`. Fixed: `'COACH'` →
+  `'PRIVATE'` in the `@Query`. The defense-in-depth intent is unchanged; only the literal was stale.
 
 ---
 
@@ -973,3 +984,4 @@ were genuine specificity gaps rather than scope problems. Resolutions folded int
 | 2026-09-08 | Implemented AC1–AC5, AC8–AC15, AC18 (15 of 19 ACs). Backup/deploy shell fixes (trap ordering, retry loop, checksum, poll window, SSH separation). Provisioning hardening (hard-fail, AWS v2). Backend/schema (Flyway V132, revenue balance tiebreaker, SessionStatus constants, DrillRepository filter, messaging IT, openpdf 3.0.5). All shell validated (bash -n), Maven compile green. Deferred AC6–AC7 (provisioning refactor), AC16–AC17 (frontend), AC19 (ledger). Status: review |
 | 2026-09-08 | Implemented remaining AC6/AC7 (dedicated non-root `deploy` user owns `/opt/skillars/app` checkout, `mountpoint -q` mount assertion, all `docker compose` call sites + operator docs swept), AC16/AC17 (theme-toggle re-entrancy latch + returned state; `booking.store.js` bounded `batchAcceptResultsByBatch` at 200), AC19 (ledger pruned — 13 bullet clusters + 3 empty headers), AC15 (no-op — `VideoApprovalRequest` already `GenerationType.UUID` at HEAD). All 19 ACs closed. Shell `bash -n` + YAML parse clean, `eslint` clean on the 3 frontend files, Maven compile green. Known gap: AC6 deploy-path move has no CI harness — staging walkthrough required before first production deploy. Status: done |
 | 2026-09-08 | CI build `34276549441` failed: AC18's openpdf **3.0.5** is Java-21 bytecode (class v65), unloadable on the Java-17 toolchain — the single real error, which cascaded into ~200 spurious Lombok `cannot find symbol` errors across `infrastructure`. **Retargeted AC18 to openpdf 2.0.5** (last Java-17 release; keeps `com.lowagie.text.*`): `pom.xml` → `2.0.5`, imports reverted, no API-call change. Dependabot #141 (3.0.5) blocked until a Java 21 upgrade — to be closed with a comment. Project-owner decision (2026-09-08): retarget rather than revert AC18. Status: done |
+| 2026-09-08 | CI build `34277588192` failed one IT: **AC13's filter literal was stale.** `V110` (Deferred-75 AC8) renamed `library_type` `'COACH'` → `'PRIVATE'`; AC13 shipped `d.libraryType = 'COACH'`, matching zero rows, so a coach's private drill library listed empty and `DrillLibraryResourceIT.cloneDrill_activePlatformDrill_returns201AndDrillInPrivateLibrary` failed. Fixed: `'COACH'` → `'PRIVATE'` in `DrillRepository.findByOwnerCoachIdAndStatus`. Status: done |
