@@ -198,7 +198,7 @@ application read them but no deploy supplied them. Defaults below are the applic
 
 > **After placing the updated `.env`**, run the backup cron installer:
 > ```bash
-> bash /opt/skillars/deploy/backup/install-crons.sh
+> bash /opt/skillars/app/deploy/backup/install-crons.sh
 > ```
 > This is required once per Node. Re-running is safe (idempotent).
 
@@ -291,7 +291,7 @@ compromise-triggered or policy-triggered rotation of a single secret.
    PASSWORD '<literal>'` does when `log_statement`/`log_min_duration_statement` are on), and a `'`
    in the password is handled for you:
    ```bash
-   docker compose -f /opt/skillars/docker-compose.yml exec -it postgres \
+   docker compose -f /opt/skillars/app/docker-compose.yml exec -it postgres \
      psql -U "<POSTGRES_USER>" -d postgres -c '\password <POSTGRES_USER>'
    ```
    Only if a non-interactive path is unavoidable, `ALTER ROLE "<POSTGRES_USER>" WITH PASSWORD
@@ -300,12 +300,12 @@ compromise-triggered or policy-triggered rotation of a single secret.
 2. Update `POSTGRES_PASSWORD` in `/opt/skillars/.env`.
 3. Recreate every consumer so it picks up the new value:
    ```bash
-   cd /opt/skillars && docker compose up -d
+   cd /opt/skillars/app && docker compose up -d
    ```
    `app` reads it via `SPRING_DATASOURCE_*`; `pg-backup.sh` and `restore-from-dump.sh` read
    `POSTGRES_PASSWORD` from the same `.env`, so no separate update is needed for the backup cron.
 4. Confirm: `docker compose logs app --tail=50` shows a clean datasource start, and
-   `bash /opt/skillars/deploy/backup/pg-backup.sh` completes with `Upload verified`.
+   `bash /opt/skillars/app/deploy/backup/pg-backup.sh` completes with `Upload verified`.
 
 ### JWT signing key
 
@@ -320,7 +320,7 @@ Treat rotation as a one-off DBA + ops task, not a documented button.
 > **Before you start.** This is a destructive, downtime-bearing procedure — do it in a planned
 > maintenance window. Both paths below run `docker compose down`, which stops **the entire stack**
 > (app, Traefik, Grafana, the LGTM containers), not just the app. First:
-> 1. Take a fresh database dump: `bash /opt/skillars/deploy/backup/pg-backup.sh` and confirm it
+> 1. Take a fresh database dump: `bash /opt/skillars/app/deploy/backup/pg-backup.sh` and confirm it
 >    ends with `Upload verified`.
 > 2. Dry-run the delete as a read to confirm exactly one row matches:
 >    ```bash
@@ -334,7 +334,7 @@ Two supported ways to force a new key:
   `JwtSecretBootstrapRunner` recreate it (it only INSERTs when none exists), then disable the runner
   again:
   ```bash
-  cd /opt/skillars && docker compose down          # FULL-STACK DOWNTIME STARTS HERE
+  cd /opt/skillars/app && docker compose down          # FULL-STACK DOWNTIME STARTS HERE
   docker compose up -d postgres
   docker compose exec postgres psql -U "<POSTGRES_USER>" -d "<POSTGRES_DB>" \
     -c "DELETE FROM sec WHERE version = 'v1' AND bus_id = 'jot';"
@@ -359,7 +359,7 @@ re-reads the `volatile` cache. All users must re-authenticate. Roll during a low
 ### `GF_SECURITY_ADMIN_PASSWORD`
 
 1. Update `GF_SECURITY_ADMIN_PASSWORD` in `/opt/skillars/.env`.
-2. Recreate the Grafana container: `cd /opt/skillars && docker compose up -d grafana`.
+2. Recreate the Grafana container: `cd /opt/skillars/app && docker compose up -d grafana`.
    Grafana persists the admin user in `/opt/skillars/data/grafana`, so the env var only takes effect
    on a container **recreate**, and a password that was already changed from within the Grafana UI is
    **not** overridden by the env var (documented Grafana behaviour).

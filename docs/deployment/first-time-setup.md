@@ -112,18 +112,26 @@ SSH to the Node and run the provisioning script:
 
 ```bash
 ssh root@<NODE_IP>
-git clone <REPO_URL> /opt/skillars   # your GitHub repository URL, e.g. https://github.com/<org>/skillars.git
-cd /opt/skillars
+git clone <REPO_URL> /opt/skillars/app   # your GitHub repository URL, e.g. https://github.com/<org>/skillars.git
+cd /opt/skillars/app
 bash deploy/provision.sh
 ```
 
+> **Layout (skillars-deferred-102 AC6):** the git checkout is `/opt/skillars/app`, owned by an
+> unprivileged **`deploy`** user that `provision.sh` creates. The Hetzner Volume mounts at
+> `/opt/skillars/data` — a **sibling** of the checkout, not a child — and stays owned by the
+> individual service UIDs. `/opt/skillars/.env` (root:root, mode 600) lives **outside** the
+> checkout. A `git clean -fdx` run inside `/opt/skillars/app` therefore cannot reach the database,
+> Redis AOF, LGTM data, TLS certs, or the secrets file. All `docker compose` / `git pull` on the
+> Node run as `deploy`; `provision.sh` and the cron backup scripts still run as `root`.
+
 What `provision.sh` does (all steps are idempotent — safe to re-run):
 
-1. Installs system packages: Docker Engine, Docker Compose plugin, fail2ban, ufw
+1. Installs system packages: Docker Engine, Docker Compose plugin, fail2ban, ufw, AWS CLI v2 (official installer, signature-verified)
 2. Applies SSH hardening: password authentication disabled, root login key-only
 3. Configures fail2ban: sshd jail, maxretry=5, bantime=3600s
 4. Enables `ufw` (host-level firewall): allows SSH (22), HTTP (80), and HTTPS (443), then sets default-deny-incoming / default-allow-outgoing — SSH is allowed *before* `ufw` is enabled so the active provisioning session is not terminated
-5. Creates the base directory structure: `/opt/skillars/data/postgres`, `/opt/skillars/lgtm`
+5. Creates the base directory structure: `/opt/skillars/data/postgres`, `/opt/skillars/lgtm`; creates the `deploy` user (docker group, owns `/opt/skillars/app`, no sudo) and a `/opt/skillars/app/.env` → `/opt/skillars/.env` symlink
 6. Mounts the Hetzner Volume (resolved via its stable `/dev/disk/by-id` path) at `/opt/skillars/data`, then creates the data subdirectories that live on it (`postgres`, `prometheus`, `loki`, `tempo`, `grafana`) with correct ownership
 7. **After** the mount: creates `/opt/skillars/data/redis` (owned by uid 999, the redis image's user) and `/opt/skillars/data/traefik/acme.json` with mode 600 (required by Traefik; no manual step needed)
 
@@ -150,7 +158,7 @@ Whenever `/opt/skillars/data` is a mount and a `data/` tree was written to the *
 that path before the Volume was mounted, that root-disk copy is now hidden beneath the mount. It is
 harmless (it consumes root-disk space but is never read), but to reclaim the space:
 
-1. Stop the stack: `docker compose -f /opt/skillars/docker-compose.yml down`
+1. Stop the stack: `docker compose -f /opt/skillars/app/docker-compose.yml down`
 2. `umount /opt/skillars/data`
 3. `rm -rf /opt/skillars/data/*` (this now targets the **root-disk** directory, not the Volume)
 4. `mount /opt/skillars/data` (or re-run `provision.sh`)
@@ -339,7 +347,7 @@ Re-run `provision.sh` to enforce mode 600 on the file (or set it manually):
 
 ```bash
 # Option A — idempotent re-run (recommended):
-ssh root@<NODE_IP> "bash /opt/skillars/deploy/provision.sh"
+ssh root@<NODE_IP> "bash /opt/skillars/app/deploy/provision.sh"
 
 # Option B — manual:
 ssh root@<NODE_IP> "chmod 600 /opt/skillars/.env"
@@ -352,7 +360,7 @@ ssh root@<NODE_IP> "chmod 600 /opt/skillars/.env"
 Wait for DNS propagation (verify with `dig` as shown in Step 2), then start all services:
 
 ```bash
-ssh root@<NODE_IP> "cd /opt/skillars && docker compose up -d"
+ssh root@<NODE_IP> "cd /opt/skillars/app && docker compose up -d"
 ```
 
 > **Docker Hub pull rate limits.** Unauthenticated pulls from Docker Hub are rate-limited per
@@ -368,7 +376,7 @@ ssh root@<NODE_IP> "cd /opt/skillars && docker compose up -d"
 Watch the startup status:
 
 ```bash
-ssh root@<NODE_IP> "cd /opt/skillars && docker compose ps"
+ssh root@<NODE_IP> "cd /opt/skillars/app && docker compose ps"
 ```
 
 All services should reach the `healthy` state within **~60 seconds**. The `app` container may take up to **120 seconds** on first start — Docker waits 60 seconds before the first health check begins, then the app needs additional time to complete database migrations. If `docker compose ps` still shows `starting` after 2 minutes, check logs with `docker compose logs app --tail=50`.
@@ -394,7 +402,7 @@ curl -s https://<DOMAIN>/actuator/health
 
 If you see a certificate error, wait 2–5 more minutes — Traefik may still be obtaining the Let's Encrypt certificate.
 
-Full service health reference — run `docker compose` commands from `/opt/skillars` on the Node:
+Full service health reference — run `docker compose` commands from `/opt/skillars/app` on the Node:
 
 | Service | Health endpoint / command |
 |---|---|
@@ -488,7 +496,7 @@ After setup is complete:
 
 ## Troubleshooting
 
-All `docker compose` commands below must be run from `/opt/skillars` on the Node. If starting a new SSH session, run `cd /opt/skillars` first.
+All `docker compose` commands below must be run from `/opt/skillars/app` on the Node. If starting a new SSH session, run `cd /opt/skillars/app` first.
 
 **TLS certificate not issued / HTTPS returns a certificate error**
 - Confirm DNS is propagated for **both** `DOMAIN` and `MONITORING_DOMAIN`: `dig +short <DOMAIN> @8.8.8.8` and `dig +short <MONITORING_DOMAIN> @8.8.8.8` must each return the Node IP
@@ -504,7 +512,7 @@ All `docker compose` commands below must be run from `/opt/skillars` on the Node
 
 **Volume not mounted / PostgreSQL data not on persistent storage**
 - If `provision.sh` section 7 logged a warning, the Volume was not attached at provisioning time
-- Attach the Volume in the Hetzner Cloud Console, then re-run: `ssh root@<NODE_IP> "bash /opt/skillars/deploy/provision.sh"`
+- Attach the Volume in the Hetzner Cloud Console, then re-run: `ssh root@<NODE_IP> "bash /opt/skillars/app/deploy/provision.sh"`
 
 **SSH access locked out after firewall**
 - The firewall restricts SSH to the IP you specified in `SSH_ALLOWLIST_IP`

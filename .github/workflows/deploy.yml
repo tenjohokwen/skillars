@@ -52,8 +52,8 @@ jobs:
         timeout-minutes: 3
         run: |
           PREV=$(ssh -o ConnectTimeout=10 -o BatchMode=yes "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
-            "cd /opt/skillars && \
-             CID=\$(docker compose ps -q --status running app 2>/dev/null | head -1) && \
+            "cd /opt/skillars/app && \
+             CID=\$(docker compose --env-file /opt/skillars/.env ps -q --status running app 2>/dev/null | head -1) && \
              [ -n \"\$CID\" ] && docker inspect --format='{{.Config.Image}}' \"\$CID\" || echo 'none'")
           PREV="${PREV:-none}"
           echo "image=$PREV" >> $GITHUB_OUTPUT
@@ -83,10 +83,10 @@ jobs:
         run: |
           IMAGE="ghcr.io/${{ github.repository }}:${IMAGE_TAG}"
           ssh -o ConnectTimeout=10 -o BatchMode=yes "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
-            "cd /opt/skillars && \
-             docker compose pull app && \
-             sed -i \"s|^APP_IMAGE=.*|APP_IMAGE=${IMAGE}|\" .env && \
-             docker compose up -d --no-deps app"
+            "cd /opt/skillars/app && \
+             sed -i \"s|^APP_IMAGE=.*|APP_IMAGE=${IMAGE}|\" /opt/skillars/.env && \
+             docker compose --env-file /opt/skillars/.env pull app && \
+             docker compose --env-file /opt/skillars/.env up -d --no-deps app"
 
       - name: Smoke test
         id: smoke
@@ -112,7 +112,7 @@ jobs:
             for i in $(seq 1 "$MAX_ITERS"); do
               SSH_ERRFILE=$(mktemp)
               OUT=$(ssh -o ConnectTimeout=10 -o BatchMode=yes "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "
-                CID=\$(cd /opt/skillars && docker compose ps -q --status running app 2>/dev/null | head -1)
+                CID=\$(cd /opt/skillars/app && docker compose --env-file /opt/skillars/.env ps -q --status running app 2>/dev/null | head -1)
                 [ -n \"\$CID\" ] && docker exec \"\$CID\" wget -qO- http://localhost:8367/manage/health/smoke 2>/dev/null \
                   | grep -q '\"status\":\"UP\"' && echo 1 || echo 0
               " 2>"$SSH_ERRFILE")
@@ -172,10 +172,10 @@ jobs:
             echo "ERROR: previous image reference contains unsafe characters; aborting revert." >&2
             echo "outcome=failed" >> $GITHUB_OUTPUT
           elif ssh -o ConnectTimeout=10 -o BatchMode=yes "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
-                 "cd /opt/skillars && \
-                  (docker image inspect '${PREV}' >/dev/null 2>&1 || docker compose pull app) && \
-                  sed -i \"s|^APP_IMAGE=.*|APP_IMAGE=${PREV}|\" .env && \
-                  docker compose up -d --no-deps app"; then
+                 "cd /opt/skillars/app && \
+                  sed -i \"s|^APP_IMAGE=.*|APP_IMAGE=${PREV}|\" /opt/skillars/.env && \
+                  (docker image inspect '${PREV}' >/dev/null 2>&1 || docker compose --env-file /opt/skillars/.env pull app) && \
+                  docker compose --env-file /opt/skillars/.env up -d --no-deps app"; then
             echo "outcome=succeeded" >> $GITHUB_OUTPUT
           else
             echo "outcome=failed" >> $GITHUB_OUTPUT

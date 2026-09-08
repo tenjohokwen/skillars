@@ -677,7 +677,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - D5: `stripe_customers.last_payment_intent_id` not in AC 1 spec schema — intentional addition to support cash-out refund flow (Group 2 Decision D1 resolution); AC 1 should be updated to document this column [`V62__session_payment_credit_wallet.sql`, `StripeCustomer.java`]
 
 ## Deferred from: code review of skillars-7-1-stripe-connect-onboarding-commission-engine (2026-06-24)
-- D3: Unbounded `VARCHAR` on `stripe_webhook_events.event_id` — Stripe event IDs are well-formed in practice; low B-tree risk [`V61__payment_module_init.sql`]
 - D4: `acceptBooking` fires `INITIATE_PAYMENT` → `PAYMENT_CAPTURED` state transitions without performing actual payment — pre-existing state machine flow, not introduced by Story 7.1; Story 7.2 must retrofit a failure path and prevent the state being committed before capture succeeds [`BookingService.java:203-204`]
 <!-- skillars-deferred-89 code review (2026-09-01): D2 and D4 above were removed by this story's AC10 pass without any AC authorising it — restored here. They are untagged, still-open Story 7.2 follow-up work; their sibling D3 was left in place. The AC10 pass DID also delete ~34 already-closed/-tagged bullets and 7 spent section headings as ledger hygiene (the "2026-08-24 audit" delete-outright convention) — that prune is retained; only these two open items are put back. -->
 <!-- skillars-deferred-100 AC7: verified stale at 8af28a42 by AC7 staleness-check — grep providerUnavailable -> src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java:46 (onboarding only, no pack-purchase path) -->
@@ -747,7 +746,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - D2: V39 seed drills use `gen_random_uuid()` — non-deterministic IDs differ between environments; migration already written; deterministic UUIDs would require a V40 fix migration [`V39__session_foundation_20_drills.sql`]
 - D3: Feature gate config key format relies on `tier.name()` matching DB key suffix exactly — new tier addition requires a matching migration; acceptable by convention; no compile-time enforcement [`DrillLibraryService.java:86`]
 - D6: New coach with no profile gets `ResourceNotFoundException` → 404 from `getCoachIdByUserId` on private drill list — edge case; Story 4.2 to guard on the frontend; backend always requires a complete profile [`CoachProfileService.java`]
-- D7: `listPrivateDrills` no explicit `library_type = 'COACH'` filter — safe today due to DB `chk_drill_owner` constraint preventing PLATFORM drills from having a non-null `owner_coach_id` [`DrillRepository.java`]
 
 ## Deferred from: code review of skillars-3-7-session-pause-resume (2026-06-16)
 - D1: SSE race during in-flight pause — if remote resume (SSE `IN_PROGRESS`) arrives while local pause API is in-flight, `watch` restarts timer while `pausing=true`; UI self-corrects on next event; multi-device edge case [`ActiveSessionScreen.vue`]
@@ -756,7 +754,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - D4: `completionLoading` flag shared across pause/resume/end — consumers cannot distinguish which operation is in-flight; component uses local `pausing`/`resuming` refs for buttons so user-visible impact is nil; pre-existing store design [`booking.store.js`]
 
 ## Deferred from: code review of skillars-3-6-session-completion-live-mode-quick-complete (2026-06-16)
-- W1: JPQL string literal `'COMPLETED'` in `findPendingQuickCompletes` is fragile against `BookingStatus` enum rename — pre-existing pattern project-wide [`SessionCompletionDataRepository.java:22`]
 - W3: `BookingCompletedEvent` has no retry/DLQ mechanism if listener fails after commit — infrastructure limitation, pre-existing across all event consumers [`BookingEmailListener.java`]
 - W5: Auto-return after wrap-up reloads `selectedWeek` instead of current week — minor UX edge case when coach was browsing a different week [`CoachCommandCenterPage.vue:305`]
 - W6: V33 migration uses hardcoded `id = 39` for `platform_config` insert — low collision risk given sequential pattern; validate before deploying to environments with manual config inserts [`V33__session_completion_data.sql:3`]
@@ -838,7 +835,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 ## Deferred from: code review of skillars-1-2-skillars-design-system-foundation (2026-06-11)
 - W3: `app-bg` class has no boot-failure fallback in `App.vue` — boot file is the canonical owner per spec design; fallback in App.vue would duplicate logic; acceptable exceptional-case gap
 - W4: `onSessionExpired` in MainLayout clears username but does not redirect to `/login` — pre-existing behaviour not introduced by this story
-- W6: Rapid double-click theme toggle can briefly desync DOM attribute and `darkMode` ref — `toggleTheme` is synchronous so window is negligible in practice; acceptable
 - W7: No CSP header coverage for `fonts.googleapis.com` — infrastructure/deployment concern outside story scope
 
 ## Deferred from: code review of skillars-1-1-feature-gate-configuration-layer (2026-06-11)
@@ -848,7 +844,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 
 ## Deferred from: code review of deploy-3-4-operational-documentation-suite (2026-06-05)
 - Hardcoded container UIDs (65534/10001/472) not tied to Docker image versions — upstream UID changes (historically seen with Grafana) would silently break subdirectory ownership after snapshot restore [docs/deployment/backup-restore.md] `[AUDIT 2026-08-27: re-verified, still open, still a legitimate low-probability accepted tradeoff — hardcoded UIDs remain untied to image versions in provision.sh/restore-from-volume-backup.sh; monitor upstream image changelogs rather than fix now]` `[PICKED UP by skillars-deferred-94 AC2: guard comment added]`
-- APP_CID capture races container registration immediately after `docker compose start app` — a single non-retried `docker compose ps -q app` right after the start. **[AUDIT 2026-09-04: still open, partly mitigated.** `restore-from-dump.sh:197-199` now fails fast with an explicit diagnostic when `APP_CID` is empty instead of burning the 90 s health-wait timeout, so the symptom is no longer a confusing timeout — but the unretried capture itself is unchanged, and a slow registration still aborts a restore that in fact succeeded. Citation corrected: the code is `deploy/backup/restore-from-dump.sh`, not `backup-restore.md`.]** [`deploy/backup/restore-from-dump.sh:197-199`]
 
 ## Deferred from: code review of deploy-3-3-external-uptime-monitoring-alert-rules (2026-06-05)
 - Double notification risk if Alertmanager added later — Prometheus rules and Grafana alerting both evaluate the same infra alerts; currently no Alertmanager so only Grafana notifies, but future Alertmanager addition would cause duplicate ops notifications for every infra alert
@@ -858,14 +853,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 ## Deferred from: code review of deploy-3-1-postgresql-backup-automation (2026-06-04)
 - PGPASSWORD exposed via `docker exec -e` (visible in `ps aux` for the duration of the call) — spec-prescribed pattern; fixing it needs Docker secrets or a wrapper script. **[AUDIT 2026-09-04: still open and WIDER than recorded.** The cited line has moved (`pg-backup.sh:22` -> `:32`), and the same pattern occurs three more times in `restore-from-dump.sh` (`:135`, `:138`, `:142` — DROP DATABASE, CREATE DATABASE and the dump replay), which the original entry did not cover.]** `[PICKED UP by skillars-deferred-94 AC1: environment-variable inheritance pattern applied to all 5 occurrences]` [`deploy/backup/pg-backup.sh:32`, `deploy/backup/restore-from-dump.sh:134,137,143,152`]
 - Credentials visible in `/proc/<pid>/environ` when `.env` is sourced — project-wide pattern, not introduced by this story
-- awscli v1 from Ubuntu apt may have `--endpoint-url` edge cases with Hetzner Object Storage — spec-approved as sufficient; revisit if upload failures occur in production
-
-## Deferred from: code review of deploy-1-5-first-time-setup-documentation (2026-06-04)
-- Repo cloned to `/opt/skillars` before Hetzner Volume mounted — volume mount overlays `/opt/skillars/data`; benign today since repo has no `data/` content, but fragile if repo structure changes.
-
-## Deferred from: code review of deploy-1-5-first-time-setup-documentation (2026-06-03)
-- Repo cloned as root into `/opt/skillars` — `.git` directory sits alongside runtime data and secrets. Pre-existing architectural decision; would require a deploy-user or sparse-checkout approach to change.
-- git clone root (`/opt/skillars`) contains the volume data subdirectory (`/opt/skillars/data`). **[AUDIT 2026-09-04: still open, narrowed.** `.gitignore:86-89` now carries an explicit `/data/` entry with a comment naming the Hetzner Volume mount, so the "if `.gitignore` coverage lapses" premise no longer holds and `git clean -fd` is safe. `git clean -fdx` still deletes the entire production data tree — PostgreSQL, Redis AOF, the LGTM stack and Traefik's `acme.json` — because `-x` ignores `.gitignore` by definition. The hazard is now one specific flag on a root shell in `/opt/skillars`, not a general one.]** `[PICKED UP by skillars-deferred-94 AC9: qualified safety claim added to docs]` [`.gitignore:86-89`, `deploy/provision.sh:14-17`, `docs/deployment/runbook.md:488-494`]
 
 ## Deferred from: code review of deploy-1-3-lgtm-observability-stack (2026-06-03)
 - LGTM data `mkdir -p` calls gated inside Hetzner Volume device `if [ -b ]` check — consistent with existing postgres pattern. If volume is absent at provision time, Docker auto-creates dirs as root (further compounds the permission issue once it's resolved).
@@ -1030,10 +1017,6 @@ Recorded per AC4 — items explicitly excluded from this story's coach-subscript
 
 - **D1 — `DrillMetadata.repDensity` cannot represent "coach never set this" at all — it is a Java primitive `int`, not `Integer`.** Found during this story's AC4 spec audit (adversarial review of the story's own AC text, pre-implementation): a missing key in the incoming JSON payload deserializes silently to `0` via Jackson, and an explicit JSON `null` would throw a deserialization exception rather than pass through — so a `repDensity != null` guard anywhere downstream (frontend or backend) can never observe the "unset" case as `null`; it is indistinguishable from a legitimately-zero drill today and will remain so under the current contract. AC4 of this story added a frontend-only defensive guard (protects against `undefined`/`null` arriving from a stale cache, a manually-edited dev fixture, or a future API contract change) but explicitly could not close this gap — doing so needs a backend change: make `repDensity` a nullable `Integer` (propagating through `DrillMetadata`, its JSONB Hibernate mapping, and every backend site that reads it arithmetically) or add an explicit "no density data" signal, plus a decision on whether that is a real product need (do coaches uploading custom drills currently have any path that leaves `repDensity` unset, or does upload validation already require it?). [`src/main/java/com/softropic/skillars/platform/session/contract/DrillMetadata.java:12`, `src/frontend/src/components/session/DrillDetailPanel.vue`] **[AUDIT 2026-08-24: skillars-deferred-63 story creation investigated this live.** No live path constructs a `Drill` with coach-submitted metadata today — `grep -rn "new Drill(\|Drill.builder()\|new DrillMetadata(" src/main/java` finds exactly one non-test construction site, `DrillLibraryService.java:129`'s `clone.setMetadata(source.getMetadata())`, which copies an already-persisted drill's metadata rather than deserializing a fresh payload; `DrillUploadService`/`DrillUploadResource` (the only "drill upload" surface) handle the drill video file only — `DrillUploadInitiateRequest` has no `DrillMetadata` field at all. Every `Drill.metadata` is populated exclusively by migration/seed data under full app-team control. The "coach never set repDensity" scenario has no reachable trigger today — not picked up as an AC by skillars-deferred-63. Re-open if a future story adds a real coach-facing metadata-submitting endpoint.]**
 
-## Deferred from: code review of skillars-deferred-37-batch-accept-result-map-pruning-and-rebuild-cost-bound (2026-08-19)
-
-- **`batchAcceptResultsByBatch` pruning (`skillars-deferred-37` AC1) only runs on `loadCoachBookingRequests`'s success path, per AC1's own explicit requirement mirroring the function's existing stale-on-failure CONTRACT — so a streak of failed refreshes lets the map keep growing unboundedly for as long as the failures persist.** The exact growth this story exists to bound is not airtight under a specific real-world condition (a flaky network/backend). Spec-intentional, not an oversight in the diff; low priority, consistent with this story's own documented tradeoffs. [`src/frontend/src/stores/booking.store.js:321-353`]
-
 ## Deferred from: code review of skillars-deferred-38-coach-refresh-request-sequencing-guard (2026-08-19)
 
 - **No automated test coverage for `loadCoachBookingRequests()`'s concurrency/request-sequencing guard.** Standing repo-wide gap — no frontend test harness exists for `booking.store.js` (same accepted gap `skillars-deferred-35`/`36`/`37` recorded). [`src/frontend/src/stores/booking.store.js:326-371`]
@@ -1163,13 +1146,6 @@ Four pre-existing issues identified during code review:
 3-layer adversarial review (Blind Hunter / Edge Case Hunter / Acceptance Auditor). All 7 ACs satisfied to spec, 0 AC violations. 1 decision-needed + 7 patches handled on the story; the items below are real but pre-existing or spec-accepted design and out of this story's scope:
 
 - **CI `:latest` freezes permanently after a `master` history rewrite.** Once the commit in `:latest`'s `org.opencontainers.image.revision` label is unreachable (force-push / rebased-away branch), `git merge-base --is-ancestor "${published_rev}" "$GITHUB_SHA"` returns 1 or 128 on *every* subsequent run, so `:latest` is never advanced again and there is no manual-override path. This is a direct consequence of AC6's explicit fail-safe design (exit ≠ 0 → publish the `sha-` tag only, never abort). `master` force-push is outside normal operations; recovery is a manual `docker buildx imagetools create`/re-tag of `:latest`. A `workflow_dispatch` "force-publish :latest" escape hatch would be a separate follow-up. [`.github/workflows/ci.yml:137-144`] `[PARTIALLY CLOSED by skillars-deferred-88 AC6 — a workflow_dispatch force_publish_latest input now force-publishes :latest for the current commit without the ancestor check (master-ref-gated: ::error:: + exit 1 on any other ref). The automatic ancestor check still cannot self-recover from a history rewrite, by design.]`
-- **Pre-Volume migration verify is stat-only on the armed paths; `postgres/` is migrated but never verified before `rm -rf "${STAGING}"`.** `migrate_pre_volume_data` compares only `stat -c '%a %u:%g'` on each armed top-level dir (`traefik/acme.json` + `redis|grafana|loki|tempo|prometheus/`) — never inner files, never `postgres/`, never a content/checksum re-check. A torn `rsync` (SIGKILL / Volume ENOSPC after the dirs exist but before their contents finish) passes verification, `${STAGING}` is deleted, and the incomplete copy is the only one left. Matches the story-review-approved AC5 scope ("verify only source paths"). Surfaced as a decision-needed item on the story; the project owner's resolution is recorded there. [`deploy/provision.sh:233-264`]
-
-## Deferred from: code review of skillars-deferred-88-review-moderation-epoch-provision-concurrency-and-fstab-safety-ci-latest-recovery-grafana-single-channel-receiver-egress-firewall-and-auth-otp-hardening (2026-08-31)
-
-3-layer adversarial review (Blind Hunter / Edge Case Hunter / Acceptance Auditor). 0 AC violations, all 12 ACs implemented. 1 decision-needed + 10 patches handled on the story; the items below are real but pre-existing or spec-sanctioned and out of this story's scope:
-
-- **AC5 single-Volume + explicit-but-unresolvable `HETZNER_VOLUME_ID` still warns-then-falls-back to the lone attached Volume.** When exactly one `scsi-0HC_Volume_*` symlink exists and `HETZNER_VOLUME_ID` is set but does not resolve (typo / wrong host / detached), the script warns and proceeds with the single attached Volume — and would `mkfs.ext4` it if unformatted. This matches AC5 spec case (h) exactly ("single-Volume is unambiguous"), but an operator who explicitly pinned a device by id and got it wrong is the case most likely to be on the wrong host. Promoting this to a hard fail is a follow-up hardening decision. [`deploy/provision.sh` device resolution, ~L194-218]
 
 ## Deferred from: code review of 1-7b-session-refresh-rint-contract-fix (2026-09-02)
 
@@ -1317,16 +1293,8 @@ _bmad-code-review Chunk 3 (i18n, AC12–AC14). Three `[Review][Defer]` findings.
 
 ## Deferred from: code review of skillars-deferred-94 (2026-09-07)
 
-- **`restore-from-dump.sh` empty `APP_CID` fails a restore that already succeeded.** `deploy/backup/restore-from-dump.sh:197` — if `docker compose ps -q app` returns empty, `exit 1` fires after all integrity checks passed: `RESTORE_OK` stays 0, the EXIT trap restarts the app, and `rm -f "${LOCAL_DUMP}"` is skipped (dump leaks). AC3's added comment blames a "container registration race," but `docker compose start app` restarts a pre-existing stopped container, so that is not the real exposure. AC3 was deliberately scoped doc-only; a bounded retry loop around the `ps -q` capture is the real fix. `[PICKED UP by skillars-deferred-97 AC2]`
-- **`pg-backup.sh` leaks a truncated dump on `pg_dump` failure.** `deploy/backup/pg-backup.sh:32` — the `pg_dump ... | gzip > "${DUMP_FILE}"` pipeline runs before `trap 'rm -f "${DUMP_FILE}"' EXIT` is registered (:39). Under `set -euo pipefail` a `pg_dump` failure aborts with a partial `${DUMP_FILE}` already written and never cleaned; repeated cron failures accumulate multi-GB files until the disk fills. Pre-existing. `[PICKED UP by skillars-deferred-97 AC1]`
 - **Hardcoded container-UID `chown` values are never verified against the image's real runtime UID.** `deploy/provision.sh:599-610` and `deploy/backup/restore-from-volume-backup.sh:89-101` — a future `grafana`/`loki`/`tempo`/`prometheus` image bump that shifts the container's runtime uid (Grafana's has moved historically, 104→472) makes `chown -R <old-uid>` produce a data dir the new image cannot write; provision/restore "succeeds" and the container silently crash-loops or starts empty. `[PICKED UP by skillars-deferred-94 AC2: guard comments added; accepted mitigation for now]`
-- **Repo cloned as root directly into `/opt/skillars` alongside runtime data and secrets.** `deploy/provision.sh` / `docs/deployment/runbook.md` — a single `git clean -fdx` in `/opt/skillars` wipes every PostgreSQL database, Redis AOF, LGTM metrics/logs, and Traefik TLS cert. `[PICKED UP by skillars-deferred-94 AC8: documented as accepted design limitation; AC7 comment reworded for clarity]` AC8 explicitly accepts this as out-of-scope, and the deferred-94 story adds prose warnings, but no follow-up story is tracked for a separate deploy user or sparse-checkout. Needs a tracked deploy-hardening follow-up.
 - **Actuator health endpoint should surface notification-channel reachability.** `[skillars-deferred-100 AC7 (2026-09-08) reframe: the SMTP half SHIPPED in skillars-deferred-99 AC5 — `SmtpHealthIndicator` reports `mail` DOWN when the SMTP host is unreachable (`application.yaml:175`). The Slack half does NOT apply to the application: the app has no Slack integration; Slack notification lives only in `.github/workflows/deploy.yml`, so a Slack `HealthIndicator` inside Spring Boot would monitor a channel the app never uses. Nothing left to do here — closing.]`
-
-## Deferred from: code review of skillars-deferred-96 (2026-09-07)
-
-- **Deploy smoke poll window is effectively ~55s after the initial 60s wait.** `.github/workflows/deploy.yml:96-107` — the `sleep 5` sits after the status check, so the 12th iteration checks then sleeps pointlessly; a slow-starting JVM that needs >~115s total can be reverted needlessly. Pre-existing loop behaviour, reindented but not changed by deferred-96. Deferred at code review. `[PICKED UP by skillars-deferred-97 AC3]`
-- **Deploy smoke SSH failures are swallowed to `echo 0`.** `.github/workflows/deploy.yml:97-101` — `2>/dev/null` at three levels means a bad SSH key or DNS failure on the runner reports the same generic smoke failure as a genuinely unhealthy app (and can auto-revert a good deploy). Pre-existing. Deferred at code review. `[PICKED UP by skillars-deferred-97 AC4]`
 
 ## Backlog: frontend-test-framework-initiative
 
@@ -1431,11 +1399,95 @@ bullets: none touched (24 `DISMISSED` + 10 `DECIDED` remain, same as before). `[
 bullets: none touched.
 
 **Items re-verified still open** (not picked up, not re-fixed, citations confirmed to still resolve):
-- `deploy-3-1` awscli v1 from Ubuntu apt — real, open
-- `deploy-1-3` LGTM `mkdir -p` gated inside the `[ -b ]` check — real, open
-- `deploy-1-5` repo cloned as root into `/opt/skillars` beside runtime data — real, open (needs a
-  tracked deploy-hardening follow-up per deferred-94)
-- `deploy-1-5` repo cloned before the Volume is mounted — real, open
-- `skillars-8-1` D2 N+1 in `getConversations` — real, open (MVP-volume perf tradeoff, explicitly parked)
+- `deploy-3-1` awscli v1 from Ubuntu apt — ~~real, open~~ **CLOSED by skillars-deferred-102 AC9**
+  (official v2 installer, signature-verified, in `provision.sh`).
+- `deploy-1-3` LGTM `mkdir -p` gated inside the `[ -b ]` check — real, open. *(skillars-deferred-102
+  examined it: at HEAD `${DEPLOY_ROOT}/lgtm` and `data/postgres` are created unconditionally in
+  provision.sh section 6, so the "gated inside `[ -b ]`" premise looks stale/narrowed — flag for the
+  next deploy audit to confirm and delete rather than change code on an unverified premise.)*
+- `deploy-1-5` repo cloned as root into `/opt/skillars` beside runtime data — ~~real, open~~
+  **CLOSED by skillars-deferred-102 AC6** (checkout moved to `/opt/skillars/app`, owned by a
+  dedicated non-root `deploy` user; `/opt/skillars/data` is now a sibling, not a child).
+- `deploy-1-5` repo cloned before the Volume is mounted — ~~real, open~~ **CLOSED by
+  skillars-deferred-102 AC7** (checkout is outside `${MOUNT_POINT}`; a `mountpoint -q` assertion now
+  guards the data-dir writes).
+- `skillars-8-1` D2 N+1 in `getConversations` — ~~real, open~~ **CLOSED/measured by
+  skillars-deferred-102 AC14**: `getConversations` is already O(1) queries (batched by deferred-90
+  AC13 + deferred-91 AC19); `MessagingConversationsQueryCountIT` pins it.
 - `skillars-deferred-100` code review: the legacy `encoding.success` webhook grace-path bullet
   (accepted cutover risk, kept above)
+
+---
+
+## Last audit: 2026-09-08 (skillars-deferred-102 implementation)
+
+skillars-deferred-102 ("Deploy & Backup Resilience + Cross-Module Bug Sweep") shipped 19 ACs. It
+absorbed the never-filed `skillars-deferred-97` stub (its four backup/deploy-smoke items became
+AC1/AC2/AC4/AC5) — `skillars-deferred-97` is `withdrawn` in `sprint-status.yaml`.
+
+**Bullets deleted this audit** (each verified against HEAD before removal, per this file's
+delete-outright convention — no `[CLOSED by …]` tag left behind):
+
+- `deploy-3-4` code review — "APP_CID capture races container registration" → **AC2**
+  (bounded retry loop around the `docker compose ps -q app` capture in `restore-from-dump.sh`).
+- `deploy-3-1` code review — "awscli v1 from Ubuntu apt … `--endpoint-url` edge cases" → **AC9**
+  (official AWS CLI v2 installer, GPG-fingerprint-pinned + signature-verified fail-closed).
+- `## Deferred from: code review of deploy-1-5-… (2026-06-04)` header + "Repo cloned to
+  `/opt/skillars` before Hetzner Volume mounted" → **AC7** (header emptied and removed).
+- `## Deferred from: code review of deploy-1-5-… (2026-06-03)` header + both bullets ("Repo cloned
+  as root into `/opt/skillars`", "git clone root … contains the volume data subdirectory") → **AC6**
+  (header emptied and removed). Decision **D3**: closed via a dedicated non-root `deploy` user owning
+  a `/opt/skillars/app` checkout that is a *sibling* of `/opt/skillars/data`, not "accept + document".
+- `## Deferred from: code review of skillars-deferred-37-…` header + its sole bullet
+  (`batchAcceptResultsByBatch` unbounded growth on a failed-refresh streak) → **AC17** (LRU cap of
+  200 entries, evicted on every write; header emptied and removed).
+- `## Deferred from: code review of skillars-deferred-88-…` header + intro + its sole bullet
+  (single-Volume + unresolvable `HETZNER_VOLUME_ID` warns-then-falls-back) → **AC8** (hard-fail
+  regardless of Volume count; header + intro removed).
+- `skillars-deferred-87` code review — "Pre-Volume migration verify is stat-only … `postgres/` …
+  never verified" → **AC3**. The `postgres/`-not-verified half was already false at HEAD (the `-ni`
+  dry-run covers the whole tree); AC3 added `--checksum` to that dry-run for the torn-same-size-file
+  residual. The section's other bullet (CI `:latest` freeze) is untouched.
+- `skillars-deferred-94` code review — "`restore-from-dump.sh` empty `APP_CID`" → **AC2**;
+  "`pg-backup.sh` leaks a truncated dump" → **AC1** (trap registered before the pipeline);
+  "Repo cloned as root directly into `/opt/skillars` … Needs a tracked deploy-hardening follow-up"
+  → **AC6** (this story *is* that follow-up). The section's hardcoded-UID-chown and
+  actuator-health bullets are untouched.
+- `## Deferred from: code review of skillars-deferred-96 (2026-09-07)` — both bullets ("Deploy smoke
+  poll window ~55s" → **AC4**; "Deploy smoke SSH failures swallowed to `echo 0`" → **AC5**). Section
+  emptied and removed.
+- `skillars-7-1` code review D3 (unbounded `VARCHAR` on `stripe_webhook_events.event_id`) → **AC10**
+  (`V132`, `VARCHAR(255)` with a bounded `lock_timeout`). D4 (`acceptBooking` fires
+  `PAYMENT_CAPTURED` without a real capture) **stays** — genuinely open, its own payment-architecture
+  concern.
+- `skillars-3-6` code review W1 (JPQL `'COMPLETED'` literal in `findPendingQuickCompletes`) → **AC12**.
+  Citation had drifted — the literal at HEAD was `'COMPLETED_PENDING_CONFIRMATION'`; the concern
+  (hardcoded status string in JPQL) is closed regardless (`SessionStatus` / `BookingStatus.name()`
+  bound params).
+- `skillars-4-1` code review D7 (`listPrivateDrills` no explicit `library_type = 'COACH'` filter)
+  → **AC13**.
+- `skillars-1-2` code review W6 (rapid double-click theme-toggle desync) → **AC16** (`toggleTheme`
+  now returns the applied state; the caller no longer re-reads the DOM; a sync re-entrancy latch).
+
+**Also updated (not deleted):** the `## Last audit: 2026-09-08 (skillars-deferred-101 …)` block's
+"Items re-verified still open" list — the `deploy-3-1` awscli, both `deploy-1-5` clone bullets and
+`skillars-8-1` D2 entries are struck through and annotated as closed by this story; the `deploy-1-3`
+LGTM `mkdir -p` entry carries a note that its "gated inside `[ -b ]`" premise looks stale at HEAD.
+
+**Not folded in / stays deferred:** completion-gated coach payout (`deferred-91` AC5 Part B — decision
+**D2**, its own future story); the `frontend-test-framework-initiative` backlog; the pre-production
+migration rebaseline; the `main.pending_blob_deletions` table drop; `deploy-3-3` Alertmanager /
+node_exporter; `deploy-3-1` `/proc/<pid>/environ`; `deploy-1-3` LGTM `mkdir -p`; and every wont-fix
+decision bullet — none touched (13 `[DECIDED …]` + 27 `[DISMISSED …]` tagged bullets, same as master).
+
+**Reconstruction check:** every surviving non-blank line matches the pre-edit file (master @
+`31982170`), in order, with nothing reworded or reordered — the only differences are the bullets
+listed above, the three now-empty `## Deferred from:` headers removed with them, the strike-through
+annotations added to the deferred-101 audit block's still-open list, and this block. Wont-fix
+decision bullets (`[DECIDED …]` / `[DISMISSED …]`): none touched. **`[PICKED UP by …]` bullets: five
+removed** — the four `[PICKED UP by skillars-deferred-97 …]` bullets (that stub is now *withdrawn*
+and absorbed here) and the one `[PICKED UP by skillars-deferred-94 AC9]` clone-as-root
+data-subdirectory bullet — all five are the items AC1/AC2/AC4/AC5/AC6 actually closed, not
+speculative claims by a still-pending story. No other `[PICKED UP]` bullet touched. One known
+residual inconsistency: two `<!-- skillars-deferred-100 AC7 … -->` HTML comments in the `skillars-7-1`
+section still say "D3 and D4 remain" — left as historical audit-trail comments rather than edited.

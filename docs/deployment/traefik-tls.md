@@ -96,10 +96,10 @@ print(len(certs), 'certificate(s) stored')
 
 ## What to Do If a Certificate Fails to Renew
 
-All `docker compose` commands in this section must be run from `/opt/skillars` (the project root):
+All `docker compose` commands in this section must be run from `/opt/skillars/app` (the project root):
 
 ```bash
-cd /opt/skillars
+cd /opt/skillars/app
 ```
 
 ### Scenario A: Traefik is running but the certificate is not renewing

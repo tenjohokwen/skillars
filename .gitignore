@@ -83,7 +83,8 @@ coverage/
 .cache/
 tmp/
 
-# Production deploy data directory (Hetzner Volume mounts here at /opt/skillars/data on the Node —
-# PostgreSQL, Redis AOF, LGTM stack data, Traefik acme.json). Must never be tracked or matched by
-# `git clean`; the repo is cloned directly into /opt/skillars, the same directory this mounts under.
+# skillars-deferred-102 AC6: the Node checkout moved to /opt/skillars/app, and the Hetzner Volume
+# (PostgreSQL, Redis AOF, LGTM stack data, Traefik acme.json) mounts at /opt/skillars/data — now a
+# SIBLING of the checkout, not a child, so `git clean -fdx` inside the checkout cannot reach it.
+# This entry is kept as defence-in-depth against a stray ./data/ ever appearing in the repo root.
 /data/

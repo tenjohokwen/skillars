@@ -10,12 +10,18 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 DEPLOY_ROOT="/opt/skillars"
+# skillars-deferred-102 AC6/AC7: the git checkout lives at ${APP_DIR}, a SIBLING of the Volume
+# mount ${DEPLOY_ROOT}/data — never a parent of it. A `git clean -fdx` run inside the checkout
+# therefore cannot reach the runtime data tree (PostgreSQL / Redis AOF / LGTM / Traefik acme.json).
+# The checkout is owned by the unprivileged `deploy` user (section 6b); ${DEPLOY_ROOT}/data stays
+# owned by the individual service UIDs; ${DEPLOY_ROOT}/.env stays root:root 0600. provision.sh and
+# the cron backup scripts still run as root; only the deploy.yml SSH user is `deploy`.
+APP_DIR="${DEPLOY_ROOT}/app"
+DEPLOY_USER="deploy"
 
-# Note: repo is cloned manually in docs/deployment/first-time-setup.md before provision.sh runs.
-# This is benign because repo has no /data/ content today. If future changes add repo files
-# under /data/, that manual clone step would need to move to AFTER provision.sh mounts the Volume.
-# Repo cloned as root into /opt/skillars. Runtime data is mounted at /opt/skillars/data.
-# Separate deploy user or sparse-checkout is deferred as outside this story's scope.
+# Note: repo is cloned manually in docs/deployment/first-time-setup.md into ${APP_DIR} before
+# provision.sh runs (provision.sh is ${APP_DIR}/deploy/provision.sh). The checkout is outside the
+# Volume mount, so the clone ordering vs the mount no longer matters.
 
 # skillars-deferred-89 AC8 — optional. When set, section 5 scopes the host firewall's port-22 rule
 # to this single source IP for the window between this script finishing and
@@ -98,7 +104,7 @@ prune_stale_allowlisted_ssh_rules() {
 # parallelism.
 #
 # The self-re-exec idiom below only works when the script is invoked from a FILE
-# (`bash /opt/skillars/deploy/provision.sh` — the only documented invocation, per
+# (`bash /opt/skillars/app/deploy/provision.sh` — the only documented invocation, per
 # docs/deployment/first-time-setup.md) — NOT under `curl … | bash`, where $0 is `bash` / `-bash`
 # with no path. Every documented invocation path is file-based.
 LOCK_FILE="/var/lock/skillars-provision.lock"
@@ -114,7 +120,7 @@ if [ "${_PROVISION_LOCKED:-}" != "1" ]; then
   # invocation fail fast and distinguishably (99) instead of hanging; any other non-zero code is the
   # re-exec'd child's own failure and must propagate. Invoked as `bash "$0"` (not bare "$0") so a
   # checkout without the execute bit still works — the only documented invocation is
-  # `bash /opt/skillars/deploy/provision.sh` anyway.
+  # `bash /opt/skillars/app/deploy/provision.sh` anyway.
   #
   # Capture flock's status DIRECTLY with `|| _flock_rc=$?` — `if cmd; then …; fi` followed by `$?`
   # yields the *if-construct's* status (0 when no branch ran), never cmd's.
@@ -336,12 +342,52 @@ ufw status verbose
 # ──────────────────────────────────────────────────
 # 6. Directory structure
 # ──────────────────────────────────────────────────
+# ${DEPLOY_ROOT}/data  → Volume mount (section 7), owned by the individual service UIDs.
+# ${DEPLOY_ROOT}/app   → git checkout (SIBLING of data/, section 6b), owned by ${DEPLOY_USER}.
+# ${DEPLOY_ROOT}/.env  → root:root 0600 (section 6.5), OUTSIDE the checkout so `git clean` can't reach it.
 log "Creating deployment directory structure..."
 mkdir -p \
   "${DEPLOY_ROOT}/data/postgres" \
   "${DEPLOY_ROOT}/lgtm"
 
 log "Deployment directories created (or already exist)."
+
+# ──────────────────────────────────────────────────
+# 6b. Dedicated non-root deploy user (skillars-deferred-102 AC6, decision D3)
+# ──────────────────────────────────────────────────
+# The deploy.yml SSH user runs only `git pull` in ${APP_DIR} and `docker compose` — nothing else.
+# It needs: the `docker` group, and ownership of ${APP_DIR}. NOT: sudo, write access to
+# ${DEPLOY_ROOT}/data/**, or membership of any service group. Containers write data/** as their own
+# UIDs via the compose bind mounts; provision.sh and the cron backup scripts stay root-run.
+if ! id -u "${DEPLOY_USER}" >/dev/null 2>&1; then
+  log "Creating system user '${DEPLOY_USER}'..."
+  # --shell /bin/bash + locked password: no password login, but `ssh ${DEPLOY_USER}@host` with a key
+  # works for deploy and manual debugging. Home is ${APP_DIR} so ~/.ssh/authorized_keys lives there.
+  useradd --system --create-home --home-dir "${APP_DIR}" --shell /bin/bash "${DEPLOY_USER}"
+  passwd -l "${DEPLOY_USER}" >/dev/null
+else
+  log "System user '${DEPLOY_USER}' already exists."
+fi
+# `docker` group is created by section 2 (Docker Engine). Adding is idempotent.
+usermod -aG docker "${DEPLOY_USER}"
+if id -nG "${DEPLOY_USER}" | tr ' ' '\n' | grep -qx sudo; then
+  err "${DEPLOY_USER} is in the 'sudo' group — it must not be. Remove it: gpasswd -d ${DEPLOY_USER} sudo"
+  exit 1
+fi
+# Own the checkout (not data/, not .env). ${APP_DIR} exists — provision.sh is ${APP_DIR}/deploy/provision.sh.
+if [ -d "${APP_DIR}" ]; then
+  chown_if_needed "${DEPLOY_USER}:${DEPLOY_USER}" "${APP_DIR}"
+else
+  err "${APP_DIR} does not exist — clone the repo there first (see docs/deployment/first-time-setup.md)."
+  exit 1
+fi
+# `docker compose` loads .env from the compose file's project dir (${APP_DIR}), not from the real
+# location ${DEPLOY_ROOT}/.env. The scripts pass `--env-file` explicitly, but a symlink here also
+# lets a bare `cd ${APP_DIR} && docker compose ...` (docs, manual ops) resolve it. It is gitignored
+# (see .gitignore) and points OUT of the checkout, so `git clean -fdx` removing it is a no-op that a
+# re-run of provision.sh restores; the real secrets never leave ${DEPLOY_ROOT}/.env (root:root 0600).
+ln -sfn "${DEPLOY_ROOT}/.env" "${APP_DIR}/.env"
+log "Deploy user '${DEPLOY_USER}' ready (docker group; owns ${APP_DIR}; no sudo; no data/** access)."
 
 # ──────────────────────────────────────────────────
 # 6.5 Security file permissions
@@ -570,6 +616,14 @@ if [ -b "${VOLUME_DEVICE}" ]; then
 
     log "Mounting ${VOLUME_DEVICE} at ${MOUNT_POINT}..."
     mount "${VOLUME_DEVICE}" "${MOUNT_POINT}"
+    # skillars-deferred-102 AC7: fail loudly if the mount did not take, rather than letting the
+    # data-dir mkdir/chown below (and the first `docker compose up`) silently write to the ROOT
+    # DISK under the mount point. The checkout itself is at ${APP_DIR}, a sibling of ${MOUNT_POINT},
+    # so it is never shadowed by this mount; this guard is for the data tree only.
+    if ! mountpoint -q "${MOUNT_POINT}"; then
+      err "mount '${VOLUME_DEVICE}' at '${MOUNT_POINT}' reported success but it is not a mountpoint — aborting."
+      exit 1
+    fi
   fi
 
   # /etc/fstab maintenance — OUTSIDE the mount if/else so it also runs on the steady-state re-run of

@@ -834,13 +834,90 @@ production deploy, and `deferred-work.md` reflects only work that genuinely stil
 
 ### Agent Model Used
 
-_(to be filled by the dev agent)_
+Claude Sonnet 4.5 (code-review remediation + AC6/7/15/16/17/19 implementation pass, 2026-09-08).
 
 ### Debug Log References
 
+- Local `mvn` cannot verify: Lombok annotation processing is broken in this environment
+  (`@Slf4j` `log`, `@ConfigurationProperties` accessors missing across the whole `infrastructure`
+  package — pre-existing, whole-codebase). GitHub CI is the gate. Shell: `bash -n` + YAML parse
+  pass on every changed script/workflow. Frontend: `eslint` clean on `theme.js`,
+  `booking.store.js`, `MainLayout.vue`.
+
 ### Completion Notes List
 
+- **AC1–AC5, AC8–AC14, AC18** — implemented in commits `1698f04d` / `c8b0e3a6`, then the
+  code-review findings B1–B5 / S1–S4 / M1–M3 + the AC5 auto-revert routing gap fixed in `8111eefd`
+  (see the Story Review table).
+- **AC6** — `provision.sh` section 6b creates a system `deploy` user (docker group, owns
+  `/opt/skillars/app`, no sudo, no service-group membership, locked password) + a
+  `/opt/skillars/app/.env → /opt/skillars/.env` symlink. The checkout moved to `/opt/skillars/app`
+  (sibling of `/opt/skillars/data`); `.env` and the Volume mount are unchanged. All
+  `docker compose` call sites (`deploy.yml` ×4, `pg-backup.sh`, `restore-from-dump.sh` ×5,
+  `restore-from-volume-backup.sh` ×4) now pass `--env-file /opt/skillars/.env` and the
+  `/opt/skillars/app/docker-compose.yml` path; `sed` edits of `.env` in `deploy.yml` are absolute.
+  `install-crons.sh` purges stale `/opt/skillars/deploy/backup/` cron lines and installs
+  `/opt/skillars/app/...`. `.gitignore` comment updated; operator docs (first-time-setup, runbook,
+  backup-restore, rollback, traefik-tls, secrets-reference, uat-deployment) swept for
+  `cd /opt/skillars` / clone-path / compose-path references.
+- **AC7** — `provision.sh` adds a `mountpoint -q "${MOUNT_POINT}"` hard-fail immediately after the
+  Volume `mount`; section-6 comment states `app/` is deliberately a sibling of `data/`. The
+  checkout is outside `${MOUNT_POINT}` so it cannot be shadowed by the mount.
+- **AC15** — no change needed. `VideoApprovalRequest` already carries
+  `@GeneratedValue(strategy = GenerationType.UUID)` at HEAD (not `AUTO`); the `skillars-6-6` W5
+  bullet was stale. Recorded here rather than editing the entity.
+- **AC16** — `boot/theme.js` `toggleTheme()` now derives the next state once from the DOM
+  attribute, applies it, and **returns** the resulting dark-mode boolean; a synchronous
+  re-entrancy latch makes a rapid double-invocation deterministic. `MainLayout.vue`'s
+  `onToggleTheme` takes the returned value instead of re-reading `isDarkMode()`. Verified by
+  `eslint` + reading; a real unit test is blocked on `frontend-test-framework-initiative`.
+- **AC17** — `booking.store.js` adds `setBatchAcceptResult(batchId, value)` which caps
+  `batchAcceptResultsByBatch` at `MAX_BATCH_ACCEPT_RESULTS = 200`, evicting the oldest on **every**
+  write (independent of a successful refresh). The success-path prune in
+  `loadCoachBookingRequests` still does the precise "batch no longer visible" cleanup within the
+  cap. Verified by `eslint` + reading.
+- **AC19** — `deferred-work.md` pruned: 13 bullet clusters + 3 now-empty `## Deferred from:`
+  headers removed (see the new `## Last audit: 2026-09-08 (skillars-deferred-102 implementation)`
+  block for the line-for-line list + reconstruction check). `skillars-7-1` D4 kept.
+  `skillars-deferred-97` confirmed `withdrawn` in `sprint-status.yaml`. Decisions D2/D3 recorded in
+  the audit block.
+
+**Known verification gap:** the AC6 path move touches production deploy infra that has no CI
+harness (`deploy/**` is never executed by CI) and could not be dry-run locally. A staging
+walkthrough of `provision.sh` + one full deploy cycle is required before the first real production
+deploy on the new layout.
+
 ### File List
+
+**Backend**
+- `src/main/java/.../booking/repo/SessionCompletionDataRepository.java`
+- `src/main/java/.../payment/repo/ParentCreditLedgerRepository.java`, `StripeWebhookEvent.java`
+- `src/main/java/.../payment/service/RevenueReportingService.java`
+- `src/main/java/.../session/repo/DrillRepository.java`, `SessionStatus.java` (new)
+- `src/main/java/.../session/service/SessionPlanService.java`
+- `src/main/java/.../development/service/ReportGenerationService.java`
+- `src/main/resources/db/migration/V132__stripe_webhook_events_event_id_length.sql` (new)
+- `pom.xml`
+
+**Backend tests**
+- `src/test/java/.../messaging/service/MessagingConversationsQueryCountIT.java` (new)
+- `src/test/java/.../payment/service/CreditStatementRunningBalanceAnchorIT.java` (new)
+- `src/test/java/.../payment/service/RevenueReportingServiceTest.java`
+
+**Frontend**
+- `src/frontend/src/boot/theme.js`, `src/frontend/src/layouts/MainLayout.vue`
+- `src/frontend/src/stores/booking.store.js`
+
+**Deploy / infra**
+- `.github/workflows/deploy.yml`
+- `deploy/provision.sh`
+- `deploy/backup/pg-backup.sh`, `restore-from-dump.sh`, `restore-from-volume-backup.sh`, `install-crons.sh`
+- `.gitignore`
+- `docs/deployment/first-time-setup.md`, `runbook.md`, `backup-restore.md`, `rollback.md`, `traefik-tls.md`, `secrets-reference.md`, `uat-deployment.md`
+
+**Ledger**
+- `_bmad-output/implementation-artifacts/deferred-work.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
 
 ---
 

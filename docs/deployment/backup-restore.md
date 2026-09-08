@@ -14,7 +14,7 @@ data loss, corruption, or hardware failure requires recovery. For reverting a ba
 | Database corruption, accidental data deletion, application bug | pg_dump restore (Section A) |
 | Quarterly restore drill | Either path — record result in `deploy/backup/drill-log.md` |
 
-Both restore scripts require SSH access to the Node as root and must be run from `/opt/skillars`.
+Both restore scripts require SSH access to the Node as root and must be run from `/opt/skillars/app`.
 
 > **File-level volume backup runs daily.** `deploy/backup/volume-backup.sh` archives everything
 > under `/opt/skillars/data` — Loki, Prometheus, Grafana, Tempo, Redis AOF, `acme.json` — to Hetzner
@@ -54,7 +54,7 @@ bucket, so:
 without deleting anything:
 
 ```bash
-sudo /opt/skillars/deploy/backup/prune-backups.sh --dry-run
+sudo /opt/skillars/app/deploy/backup/prune-backups.sh --dry-run
 ```
 
 ---
@@ -63,10 +63,10 @@ sudo /opt/skillars/deploy/backup/prune-backups.sh --dry-run
 
 Script: `deploy/backup/restore-from-dump.sh`
 
-Run as root on the Node from `/opt/skillars`:
+Run as root on the Node from `/opt/skillars/app`:
 
 ```bash
-cd /opt/skillars
+cd /opt/skillars/app
 
 # Restore the latest dump:
 sudo bash deploy/backup/restore-from-dump.sh latest
@@ -124,7 +124,7 @@ Script: `deploy/backup/restore-from-volume-backup.sh`
 Run as root on the Node:
 
 ```bash
-cd /opt/skillars
+cd /opt/skillars/app
 
 # Restore the latest volume backup:
 sudo bash deploy/backup/restore-from-volume-backup.sh
@@ -182,7 +182,7 @@ docker exec "$APP_CID" wget -qO- http://localhost:8367/manage/health
 After a volume backup restore, all services start automatically when the script completes. If any service failed to start or you need to restart manually:
 
 ```bash
-cd /opt/skillars
+cd /opt/skillars/app
 
 # Start any stopped service:
 docker compose start <service>

@@ -28,7 +28,9 @@ PREFIX="${PREFIX%/}/"
 # itself starts failing. Mirrors volume-backup.sh's `trap cleanup EXIT`.
 trap 'rm -f "${DUMP_FILE}" || true' EXIT
 
-CID=$(docker compose -f /opt/skillars/docker-compose.yml ps -q postgres 2>/dev/null | head -1)
+# skillars-deferred-102 AC6: checkout is /opt/skillars/app; .env stays at /opt/skillars/.env
+# (outside the checkout) so pass it explicitly. Runs as root.
+CID=$(docker compose --env-file /opt/skillars/.env -f /opt/skillars/app/docker-compose.yml ps -q postgres 2>/dev/null | head -1)
 if [ -z "$CID" ]; then
   echo "[pg-backup][error] postgres container not running" >&2
   exit 1
