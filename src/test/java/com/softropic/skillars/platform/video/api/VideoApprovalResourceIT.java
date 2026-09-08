@@ -121,6 +121,22 @@ class VideoApprovalResourceIT {
             .andExpect(status().isUnauthorized());
     }
 
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void listPendingApprovals_principalWithoutValidUserId_returns401NotServerError() throws Exception {
+        // skillars-deferred-101 AC10(b) / skillars-deferred-1 D1: a request that PASSES @PreAuthorize
+        // (PARENT role present) but whose principal has no parseable business id makes
+        // SecurityUtil.requireCurrentUserId() throw InsufficientAuthenticationException from inside
+        // the controller. That must surface as 401, never a 500. Mutation: map the exception to 5xx
+        // (or let it propagate unmapped) and this flips.
+        when(securityUtil.requireCurrentUserId())
+            .thenThrow(new org.springframework.security.authentication.InsufficientAuthenticationException(
+                "Principal businessId is not a valid user ID"));
+
+        mockMvc.perform(get("/api/video/approvals"))
+            .andExpect(status().isUnauthorized());
+    }
+
     // ─── PUT /api/video/approvals/{id}/approve ────────────────────────────────
 
     @Test
