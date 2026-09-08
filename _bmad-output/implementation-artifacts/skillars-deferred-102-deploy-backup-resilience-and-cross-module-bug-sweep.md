@@ -674,6 +674,21 @@ production deploy, and `deferred-work.md` reflects only work that genuinely stil
   `mvn -o test -Dtest=ReportGenerationServiceTest` + any `PerformanceReport*IT`. Generate a report
   PDF locally before and after and diff the extracted text (`pdftotext`) — content must be
   identical; a pixel diff of page 1 is a bonus. Record the comparison in the Dev Agent Record.
+- **RESOLUTION (2026-09-08, post-CI): retargeted to openpdf 2.0.5, NOT 3.0.5.** The story's
+  "openpdf 3.x requires Java 17+" assumption was wrong — the openpdf **3.0.5** jar is compiled for
+  **Java 21** (class file major version 65). This project's toolchain is Java 17 (CI runs Temurin
+  17.0.20, class version 61), so `org.openpdf.text.Document.class` failed to load with
+  `class file has wrong version 65.0, should be 61.0`, which aborted annotation processing and
+  produced ~200 cascading `cannot find symbol` errors for Lombok-generated members across
+  `infrastructure` (all red herrings — the single real error was the openpdf class-version
+  mismatch). openpdf **2.0.5** is the last release compiled for Java 17; 2.1.0+ and all of 3.x are
+  Java 21. openpdf 2.x keeps the `com.lowagie.text.*` package (the `org.openpdf.text.*` rename is
+  3.x-only), and the ~10 core symbols this file uses (`Document`, `PdfWriter.getInstance`,
+  `FontFactory.getFont`, `Image.getInstance`, `PageSize.A4`, `Paragraph`, `Phrase`, `PdfPTable(int)`,
+  `PdfPCell(Phrase)`, `Font`) are unchanged across 1.3.43 → 2.0.5. Shipped: `pom.xml` → `2.0.5`,
+  imports reverted to `com.lowagie.text.*`, no API-call changes. **Dependabot #141 (3.0.5) is
+  blocked until the project moves to Java 21** — closed with a comment pointing here. A pom comment
+  records the Java-17 ceiling so a future bump does not re-trip this.
 
 ---
 
@@ -849,6 +864,15 @@ Claude Sonnet 4.5 (code-review remediation + AC6/7/15/16/17/19 implementation pa
 - **AC1–AC5, AC8–AC14, AC18** — implemented in commits `1698f04d` / `c8b0e3a6`, then the
   code-review findings B1–B5 / S1–S4 / M1–M3 + the AC5 auto-revert routing gap fixed in `8111eefd`
   (see the Story Review table).
+- **AC18 — retargeted openpdf 3.0.5 → 2.0.5 after the first CI run (build `34276549441`) failed.**
+  The 3.0.5 jar is Java-21 bytecode (class version 65) and would not load on the Java-17 CI
+  toolchain (`class file has wrong version 65.0, should be 61.0`), which aborted annotation
+  processing and threw ~200 spurious `cannot find symbol` errors for Lombok members across
+  `infrastructure`. openpdf 2.0.5 is the last Java-17 release; it keeps the `com.lowagie.text.*`
+  package, so `pom.xml` moved to `2.0.5` and the 10 imports reverted to `com.lowagie.text.*` with
+  no API-call change. Dependabot #141 (which wants 3.0.5) is blocked until the project is on
+  Java 21 — closed with a comment; a `pom.xml` comment records the ceiling. See the AC18 RESOLUTION
+  note.
 - **AC6** — `provision.sh` section 6b creates a system `deploy` user (docker group, owns
   `/opt/skillars/app`, no sudo, no service-group membership, locked password) + a
   `/opt/skillars/app/.env → /opt/skillars/.env` symlink. The checkout moved to `/opt/skillars/app`
@@ -948,3 +972,4 @@ were genuine specificity gaps rather than scope problems. Resolutions folded int
 | 2026-09-08 | Applied `story-review.md` pre-implementation review: tightened AC2 (exit contract), AC5 (SSH capture mechanics + threshold), AC6 (explicit permission table), AC7 (concrete residual), AC11 (verified no tiebreaker — now a 2-part change), AC12 (W1 literal-drift correction), AC14 (verified already O(1) — path B only), AC3/AC4/AC18/AC1 (specificity). No scope change. |
 | 2026-09-08 | Implemented AC1–AC5, AC8–AC15, AC18 (15 of 19 ACs). Backup/deploy shell fixes (trap ordering, retry loop, checksum, poll window, SSH separation). Provisioning hardening (hard-fail, AWS v2). Backend/schema (Flyway V132, revenue balance tiebreaker, SessionStatus constants, DrillRepository filter, messaging IT, openpdf 3.0.5). All shell validated (bash -n), Maven compile green. Deferred AC6–AC7 (provisioning refactor), AC16–AC17 (frontend), AC19 (ledger). Status: review |
 | 2026-09-08 | Implemented remaining AC6/AC7 (dedicated non-root `deploy` user owns `/opt/skillars/app` checkout, `mountpoint -q` mount assertion, all `docker compose` call sites + operator docs swept), AC16/AC17 (theme-toggle re-entrancy latch + returned state; `booking.store.js` bounded `batchAcceptResultsByBatch` at 200), AC19 (ledger pruned — 13 bullet clusters + 3 empty headers), AC15 (no-op — `VideoApprovalRequest` already `GenerationType.UUID` at HEAD). All 19 ACs closed. Shell `bash -n` + YAML parse clean, `eslint` clean on the 3 frontend files, Maven compile green. Known gap: AC6 deploy-path move has no CI harness — staging walkthrough required before first production deploy. Status: done |
+| 2026-09-08 | CI build `34276549441` failed: AC18's openpdf **3.0.5** is Java-21 bytecode (class v65), unloadable on the Java-17 toolchain — the single real error, which cascaded into ~200 spurious Lombok `cannot find symbol` errors across `infrastructure`. **Retargeted AC18 to openpdf 2.0.5** (last Java-17 release; keeps `com.lowagie.text.*`): `pom.xml` → `2.0.5`, imports reverted, no API-call change. Dependabot #141 (3.0.5) blocked until a Java 21 upgrade — to be closed with a comment. Project-owner decision (2026-09-08): retarget rather than revert AC18. Status: done |
