@@ -142,7 +142,10 @@ public class ApiAdvice {
         // skillars-deferred-91 code review D4: V125/V127's partial unique index on
         // parent_credit_ledger. Unmapped it surfaced as an untranslated 400 generic.dataError while
         // silently rolling back the enclosing dispute resolution, with no indication of the cause.
-        "uq_pcl_booking_refund", "payment.refundAlreadyIssued"
+        "uq_pcl_booking_refund", "payment.refundAlreadyIssued",
+        // skillars-deferred-103 AC1: partial unique index on session_pack_tiers — a concurrent
+        // tier creation race resolved to a 409 retryable conflict, not a 500.
+        "idx_spt_one_active_per_coach", "payment.tierRaceConflict"
     );
 
     // Unique constraints that represent idempotent-retry collisions → 409 Conflict (not 400 Bad Request)
@@ -156,7 +159,10 @@ public class ApiAdvice {
         "uq_pot_one_active_per_user",
         // A second BOOKING_REFUND for a booking is an idempotent-retry collision, not bad input:
         // the first refund stands and the caller should treat this as "already done".
-        "uq_pcl_booking_refund"
+        "uq_pcl_booking_refund",
+        // skillars-deferred-103 AC1: concurrent tier creation on the same coach is a retryable race,
+        // not an input error.
+        "idx_spt_one_active_per_coach"
     );
 
     // PostgreSQL exclusion-constraint violations (SQLSTATE 23P01) are not in Hibernate's

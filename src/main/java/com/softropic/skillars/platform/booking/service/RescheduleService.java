@@ -449,7 +449,7 @@ public class RescheduleService {
         try {
             bookingRepository.save(booking);
         } catch (OptimisticLockingFailureException e) {
-            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+            throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
         }
         lockedReq.setStatus("ACCEPTED");
         rescheduleRepo.save(lockedReq);

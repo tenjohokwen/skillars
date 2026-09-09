@@ -15,6 +15,8 @@ import com.softropic.skillars.infrastructure.security.SecurityError;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -128,9 +130,9 @@ public class ReliabilityStrikeService {
     }
 
     @Transactional(readOnly = true)
-    public List<CoachReliabilityStrike> getCoachStrikes(Long coachUserId) {
+    public Page<CoachReliabilityStrike> getCoachStrikes(Long coachUserId, Pageable pageable) {
         CoachProfile coach = coachProfileRepository.findByUserId(coachUserId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
-        return strikeRepository.findByCoachIdOrderByCreatedAtDesc(coach.getId());
+        return strikeRepository.findByCoachId(coach.getId(), pageable);
     }
 }

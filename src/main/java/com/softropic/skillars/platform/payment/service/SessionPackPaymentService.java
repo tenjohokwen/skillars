@@ -194,6 +194,12 @@ public class SessionPackPaymentService {
         tier.setTotalPrice(totalPrice);
         tier.setPricePerSession(pricePerSession);
         tier.setActive(true);
+        // Concurrency note (skillars-deferred-103 AC1): two racing transactions may both deactivate
+        // overlapping sets and both attempt an insert. The DB partial unique index
+        // idx_spt_one_active_per_coach (V62:58) lets exactly one insert commit and rejects the other.
+        // ApiAdvice maps this constraint violation to 409 Conflict (idempotent-retry collision).
+        // The deactivate loop is safe: neither transaction's writes are visible to the other until
+        // commit; the loser's whole transaction rolls back, including its deactivations.
         SessionPackTier saved = sessionPackTierRepository.save(tier);
 
         log.info("Session pack tier created: coachId={} label={} sessions={}", coachId, label, sessionCount);

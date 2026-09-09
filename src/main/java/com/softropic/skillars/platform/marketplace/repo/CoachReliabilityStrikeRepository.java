@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.marketplace.repo;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -21,4 +23,6 @@ public interface CoachReliabilityStrikeRepository extends JpaRepository<CoachRel
     long countByCoachIdAndCreatedAtAfter(UUID coachId, OffsetDateTime since);
 
     List<CoachReliabilityStrike> findByCoachIdOrderByCreatedAtDesc(UUID coachId);
+
+    Page<CoachReliabilityStrike> findByCoachId(UUID coachId, Pageable pageable);
 }

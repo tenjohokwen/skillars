@@ -58,7 +58,7 @@ Every item below was checked against the live file at `c2c47c1`, not against the
 | `deploy-1-5` repo cloned as root, `.git` beside runtime data | open, unchanged |
 | `deploy-1-5` no rollback / DR documentation | **CLOSED, deleted** — `rollback.md`, `backup-restore.md` and `runbook.md` all shipped with Epic 3, exactly as the item predicted |
 | `deploy-1-5` `git clean` vs the data subdirectory | open, **narrowed** — `.gitignore` now covers `/data/`; only `git clean -fdx` still reaches it |
-| `deploy-1-3` LGTM `mkdir -p` gated inside the `[ -b ]` check | `[PICKED UP by skillars-deferred-94 AC14]` — clarifying comment added; no code change. |
+| `deploy-1-3` LGTM `mkdir -p` gated inside the `[ -b ]` check | ~~`[PICKED UP by skillars-deferred-94 AC14]` — clarifying comment added; no code change.~~ **CLOSED — premise stale (skillars-deferred-103 AC12, 2026-09-09):** `mkdir -p "${DEPLOY_ROOT}/lgtm"` runs unconditionally at `provision.sh:349`, well before the `if [ -b "${VOLUME_DEVICE}" ]` gate at `:567`. Bullet deleted. |
 
 Net: 18 items examined, **3 closed or stale and deleted**, 6 corrected in place (stale citations, narrowed or
 widened scope), 9 confirmed unchanged, **0 new `deploy-*` findings filed** — the one bullet originally filed
@@ -654,7 +654,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - VideoDeletionService self-field null check: Missing defensive null check before `self.deleteVideo()` dereference. Spring-level concern: if autowiring fails, application won't start; defensive null-check would mask configuration failure with a misleading video-deletion error. `[DISMISSED 2026-08-29 (skillars-deferred-83 story creation): same Spring-level reasoning as the self-injection-failure bullet above — a defensive null-check would mask, not fix, a startup-time configuration failure.]`
 
 ## Deferred from: code review of skillars-deferred-11-stripe-card-collection (2026-08-04)
-- `PaymentMethodCard.vue`'s `stripeUnavailable` state has no retry affordance short of a full page reload — AC2 only requires the unavailable message + disabled submit, which is satisfied; a retry action would be a UX enhancement beyond spec scope. [`PaymentMethodCard.vue:86-106`]
 - No frontend tests (Vitest/Vue Test Utils) were added for `PaymentMethodCard.vue` or the new `payment.store.js` actions (`fetchStripeConfig`, `fetchSavedPaymentMethod`) — real coverage gap on a component with non-trivial lifecycle logic. [`PaymentMethodCard.vue`, `payment.store.js`]
 
 ## Deferred from: code review of skillars-10-1 patches (2026-06-30)
@@ -662,17 +661,12 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - D2: Context window (`findBeforePivot`/`findAfterPivot`) excludes soft-deleted messages while `findAllForAdmin` includes them — chronological gap in admin message detail view with no indication; intentional spec asymmetry between views; UX concern for service layer mapping. [MessageRepository.java:33-40]
 
 ## Deferred from: code review of skillars-8-4 (2026-06-27)
-- W5: `@PreAuthorize(IS_AUTHENTICATED)` on report endpoints instead of party-check annotation — consistent with module pattern; 403 preserved at service layer. Architectural note for future hardening. [`MessagingResource.java:140,151,168`]
+- W5: `@PreAuthorize(IS_AUTHENTICATED)` on report endpoints instead of party-check annotation — consistent with module pattern; 403 preserved at service layer. Architectural note for future hardening. [`MessagingResource.java:140,151,168`] `[DECIDED 2026-09-09 (skillars-deferred-103 AC10): IS_AUTHENTICATED + MessagingReportService.verifyIsParty service-layer gate is the deliberate module-wide pattern; no reusable party-scoped method-security expression exists to swap in. Code comment added at both sites (reportMessage, reportConversation).]`
 
 ## Deferred from: code review of skillars-8-3 (2026-06-26)
 - W1: TOCTOU — age policy + party checks run without a transaction before committed message save; spec-designed (NOT_SUPPORTED), window is narrow [`MessagingService.java:129-145`]
 
-## Deferred from: adversarial code review of skillars-7-2 Group 2 Service Layer (2026-06-24)
-- D1: Non-atomic idempotency check in `onBookingAccepted` (`existsById` bare SELECT outside TX) — root cause addressed by P3 (TX boundary restructure); revisit if duplicate event replay observed in production [`PaymentLifecycleService.java:52-55`]
-- D3: `createTier` TOCTOU under concurrent coach requests — two active tiers briefly possible; DB UNIQUE partial index `idx_spt_one_active_per_coach` enforces constraint at commit, causing one to fail with constraint violation; low probability in production [`SessionPackPaymentService.java:createTier`]
-
 ## Deferred from: adversarial code review of skillars-7-2 Group 1 DB+Entities (2026-06-24)
-- D1: `parent_credit_balance` VIEW returns 0 rows (not a zero-balance row) for parents with no ledger history — safe via JPQL path; latent trap for native SQL consumers [`V62__session_payment_credit_wallet.sql`]
 - D3: `SessionPackPurchase.expiresAt` mutable with no `updatable=false` — service-layer enforced via `extendPack()` business rules; open setter is a footgun [`SessionPackPurchase.java`]
 - D5: `stripe_customers.last_payment_intent_id` not in AC 1 spec schema — intentional addition to support cash-out refund flow (Group 2 Decision D1 resolution); AC 1 should be updated to document this column [`V62__session_payment_credit_wallet.sql`, `StripeCustomer.java`]
 
@@ -854,9 +848,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - PGPASSWORD exposed via `docker exec -e` (visible in `ps aux` for the duration of the call) — spec-prescribed pattern; fixing it needs Docker secrets or a wrapper script. **[AUDIT 2026-09-04: still open and WIDER than recorded.** The cited line has moved (`pg-backup.sh:22` -> `:32`), and the same pattern occurs three more times in `restore-from-dump.sh` (`:135`, `:138`, `:142` — DROP DATABASE, CREATE DATABASE and the dump replay), which the original entry did not cover.]** `[PICKED UP by skillars-deferred-94 AC1: environment-variable inheritance pattern applied to all 5 occurrences]` [`deploy/backup/pg-backup.sh:32`, `deploy/backup/restore-from-dump.sh:134,137,143,152`]
 - Credentials visible in `/proc/<pid>/environ` when `.env` is sourced — project-wide pattern, not introduced by this story
 
-## Deferred from: code review of deploy-1-3-lgtm-observability-stack (2026-06-03)
-- LGTM data `mkdir -p` calls gated inside Hetzner Volume device `if [ -b ]` check — consistent with existing postgres pattern. If volume is absent at provision time, Docker auto-creates dirs as root (further compounds the permission issue once it's resolved).
-
 ## Deferred from: code review of skillars-3-9-bulk-session-request-from-calendar (2026-06-16)
 <!-- skillars-deferred-100 AC7: W1 verified stale — closed by skillars-deferred-69 AC6 at 8af28a42:src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java:509 (+ :407); W2 verified closed by AC4 at WORKTREE:src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchStatusListener.java:31 (@Transactional REQUIRES_NEW readOnly) -->
 <!-- skillars-deferred-100 AC7 (2026-09-08): W1 deleted as STALE — closed by skillars-deferred-69 AC6 (verified at HEAD 8af28a42): both writers of booking_batches.status now take batchRepository.findByIdForUpdate(batchId) under lockRetryer.withBoundedRetry and share computeBatchStatus(...) — updateBatchStatusFromBooking (BookingBatchService.java:509) and acceptAll's trailing tx (:407). W2 closed by AC4 — BookingBatchStatusListener.onBookingStatusChanged is now @Transactional(propagation = REQUIRES_NEW, readOnly = true), giving the findById lookup an explicit boundary consistent with updateBatchStatusFromBooking's own REQUIRES_NEW; the batchId != null guard is kept. -->
@@ -902,7 +893,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 
 ## Deferred from: code review of skillars-7-3-cancellation-refund-reliability-strikes (2026-06-25)
 - D1: `buildSort()` has identical branches for "price" and "rating" — pre-existing; both fall back to `displayName`; price sort is applied in Java post-enrichment [`CoachSearchService.java:buildSort`]
-- D3: `GET /coaches/me/strikes` has no pagination — unbounded list; low risk at current scale [`ReliabilityStrikeResource.java`]
 <!-- skillars-deferred-100 AC7: verified closed by AC1 at WORKTREE:src/main/java/com/softropic/skillars/platform/payment/service/ReliabilityStrikeService.java:85 (findByIdForUpdate under lockRetryer before the count/threshold/status decision; ReliabilityStrikeConcurrencyIT) -->
 <!-- skillars-deferred-100 AC7 (2026-09-08): D4 (concurrent strike issuance race — two simultaneous issue() calls both read count=N and both fire StrikeThresholdReachedEvent) closed by AC1. ReliabilityStrikeService.issue() now takes a PESSIMISTIC_WRITE lock on the coach row via lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(coachId)) before the count/threshold/status decision; the count read moved under the lock so the loser blocks, re-reads status = PENDING_REVIEW/REDUCED, and its existing guard suppresses the duplicate event. ReliabilityStrikeConcurrencyIT covers it. -->
 - D5: `CoachCancellationHistory.createdAt` with `@Column(updatable=false)` + `@PrePersist` — in-memory entity is null until DB round-trip if ever used with batch `saveAll`; low risk given single-save usage [`CoachCancellationHistory.java`]
@@ -911,16 +901,12 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - D1: `V89__drop_legacy_session_packs.sql`'s `DROP TABLE` has no `IF EXISTS` guard — not blocking (Flyway won't re-run an applied migration, table confirmed empty at this dev/UAT stage), but there's no prior DROP TABLE in this codebase to establish a convention either way; adopt `IF EXISTS` for future destructive migrations. [`src/main/resources/db/migration/V89__drop_legacy_session_packs.sql`]
 ## Deferred from: code review of skillars-11-1-payment-path-parity-gaps (2026-08-03)
 - D1: Partial/mismatched `confirmedCancellationIds` lets `PackSessionService.pausePack()` apply the pause even when not all currently-conflicting bookings are confirmed for cancellation (or the confirmed ids don't match any real conflict) — verified byte-for-byte identical to legacy `SessionPackService.pausePack()`; AC4 explicitly requires mirroring legacy here. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`]
-- D2: Silent `.orElse(null)`/`.orElse("")` defaulting for missing coach/parent records in `pausePack` and `SessionPackForfeitureScheduler` (blank email, `"Coach"` placeholder) — identical to legacy's own resolution pattern. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`, `SessionPackForfeitureScheduler.java`]
-- D3: `pauseStartDate` "in the past" check truncates to UTC day boundary, ignoring coach/parent timezone — byte-for-byte identical to legacy `SessionPackService.pausePack()` lines 205-216. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`]
-- D4: `configService.getLong("pack.pause.maxDays")` has no defensive default if the config key is missing/non-numeric — identical usage to legacy, same pre-existing risk profile. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`]
 - D5: `pausePack` holds a pessimistic row lock across booking cancellations and event publishing within one `@Transactional` method — same single-transaction shape as the legacy method this story mirrors. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`]
 - D7: `SessionPackForfeitureScheduler` doesn't re-verify `expiresAt` immediately before forfeiting inside the per-row transaction, leaving a window where a concurrent extension could still get forfeited — inherent to the legacy-mirrored select-then-per-row-transaction scheduler shape. [`src/main/java/com/softropic/skillars/platform/payment/service/SessionPackForfeitureScheduler.java`]
 - D8: TOCTOU between the conflicting-bookings query and the per-booking `cancelDueToPause` calls in `pausePack` — same risk shape as the legacy method being mirrored. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`]
 - D9: Stringly-typed computed `status` field and hardcoded `CONFLICT_STATUSES` list rather than shared enums — consistent with existing codebase convention; legacy also uses string status constants. [`src/main/java/com/softropic/skillars/platform/payment/contract/SessionPackPurchaseResponse.java`, `PackSessionService.java`]
 
 ## Deferred from: code review of skillars-deferred-15-payment-pending-sweeper-accept-path-integrity (2026-08-05)
-- D1: `SessionPackExpiryNotifier` stamps `expiryWarnedAt` in the same transaction that publishes the warning event, before the `AFTER_COMMIT` listener actually attempts delivery — a mail-send failure in the listener permanently loses the warning with no retry. Mirrors the identical accepted tradeoff already in `SessionPackForfeitureScheduler`, and is the same platform-wide `AFTER_COMMIT`-listener-reliability gap `skillars-10-2` D1 already tracks generally; not a new pattern introduced by this diff. [`src/main/java/com/softropic/skillars/platform/payment/service/SessionPackExpiryNotifier.java:72-87`]
 - D2: `BookingService.acceptBooking` / `RescheduleService.acceptReschedule` call `coachProfileRepository.findByIdForUpdate` and then immediately `entityManager.refresh(lockedCoach, PESSIMISTIC_WRITE)` — two separate `SELECT ... FOR UPDATE` round trips on the same row for the same lock. Verified this is the exact idiom already established in `BookingService.createBookingRequest:201-215` (`skillars-deferred-12` AC3), which this diff was explicitly directed to mirror byte-for-byte — a pre-existing pattern, not introduced here. [`src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java:279-289`]
 - D3: `BookingRepository.findPaymentPendingOlderThan`'s correctness assumes `updatedAt` reflects only the transition into `PAYMENT_PENDING`. `@PreUpdate` stamps `updatedAt` on any field change, so an unrelated write to a `PAYMENT_PENDING` booking would silently reset the stranded-booking clock and let it evade the sweep indefinitely. Verified no such write path exists anywhere in `src/main` today — speculative risk against a future path, not a live defect. [`src/main/java/com/softropic/skillars/platform/booking/repo/BookingRepository.java`]
 
@@ -1059,16 +1045,6 @@ above rather than duplicated here. This section holds only what the story-creati
 
 ## Deferred from: code review of skillars-deferred-56-drill-upload-error-code-assertions-and-pack-deduction-exception-safety (2026-08-22)
 
-- `handlePackBasedBooking`'s catch clause widening from `PaymentGatewayException` to bare `RuntimeException`
-  (rather than a narrower type) will also silently absorb unrelated programming bugs from `deductSession` (NPE,
-  `IllegalStateException`, etc.), funneling them into the same "expected business failure" `persistPaymentFailure`
-  + `log.error` path already used for pack-exhausted/not-found — collapsing the distinction between an expected
-  business failure and an unexpected system defect into one code path and one log signature, which could make
-  future regressions harder to triage from logs/alerts alone. Deferred: pre-existing design trade-off the
-  story's own Dev Notes already explicitly reasoned through and defended (narrowest common supertype covering
-  both known throw sites and any future unchecked throw, deliberately excluding `Error`); revisit only if a
-  future pass needs finer-grained handling of this call's failure categories.
-  [`src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java:167`]
 - `sprint-status.yaml`'s `last_updated` field has grown into a single, unbounded YAML comment line spanning the
   cumulative history of 56+ stories — effectively unreviewable in normal diff/PR tooling and a guaranteed
   merge-conflict/diff-noise hotspot on every future story. Deferred: pre-existing repo-wide bookkeeping
@@ -1119,12 +1095,6 @@ above rather than duplicated here. This section holds only what the story-creati
 
 - **A coach still cannot contest, rebut, or even view a dispute a parent already filed on a booking.** `skillars-deferred-63` AC5 gave a coach a symmetric first-raise right on a booking with no dispute yet, but `DisputeService.raiseDispute`'s `disputeRepository.findOpenByBookingId(bookingId)` check has no `raisedBy` filter — it 409s (`disputes.alreadyRaised`) on *any* open dispute regardless of who raised it — and `getDispute` 403s any caller who isn't the original raiser (`dispute.getRaisedBy().equals(requesterId)`). So a coach cannot respond to, or even read, a dispute a parent already filed against them through this API. Found during `skillars-deferred-63`'s own story-review (2026-08-24). A real fix is a genuine two-sided-dispute design question, not a mechanical change: does a second, opposing dispute on one booking need to be resolved jointly with the first? does the admin `AdminDisputeDetailDto`/UI support two open disputes on the same booking? [`src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java:76-79,107-120`] `[DECIDED 2026-08-25: keep first-raiser-wins as final; no two-sided contest mechanism planned]`
 - **`CoachProfileService.saveStep4` still writes each availability window's `canonicalTimezone` from the request payload rather than from the coach's own profile, so new profile/window timezone drift can still occur.** `skillars-deferred-63` AC6 backfilled *existing* diverged rows (`V103__availability_window_timezone_backfill.sql`, closing the immediate half of the `skillars-deferred-17` D8 item above) but deliberately did not change `saveStep4`'s write behavior this round: `ProfileBuilderStep4.vue` ships a real, coach-editable per-window `TimezoneSelect` with helper copy reading "Windows above are interpreted in this timezone," and forcing `saveStep4` to silently discard that value without a coordinated frontend change would make the picker and its own helper text actively lie about what the screen does. Found during `skillars-deferred-63`'s own story-review (2026-08-24). A follow-up story needs to change both sides together: drop or make the picker read-only (e.g. "change it in Step 1"), *then* make `saveStep4` stop trusting the request's `canonicalTimezone` value. [`src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java:251`, `src/frontend/src/components/profileBuilder/ProfileBuilderStep4.vue:66-68`] `[DECIDED 2026-08-25: per-window coach timezone is a deliberate feature, not a bug; saveStep4's write behavior stays as-is; no further action planned beyond skillars-deferred-63's one-time backfill]`
-## Deferred from: code review of skillars-deferred-66 (2026-08-25)
-
-Two pre-existing issues identified during code review but deferred as out-of-scope for this story:
-
-- **Exception messages use imperative "retry" language that could confuse users.** All `OptimisticLockingFailureException` handlers throw with message "Booking status changed concurrently — retry", which uses imperative language ("retry") that might mislead end-users into thinking they should manually retry (click buttons again) rather than understanding the system will auto-retry. Found during review of skillars-deferred-66 AC2. This is a pre-existing message pattern already used consistently across endSession/pauseSession/resumeSession/confirmCompletion, not introduced by this story. Deferred: This message design is a pre-existing choice; consistency with existing code is the point for now.
-
 ## Deferred from: code review of skillars-deferred-81-parent-name-batching-cross-drill-video-lock-video-error-toast-and-self-booking-packs (2026-08-28)
 
 Four pre-existing issues identified during code review:
@@ -1395,10 +1365,11 @@ bullets: none touched.
 **Items re-verified still open** (not picked up, not re-fixed, citations confirmed to still resolve):
 - `deploy-3-1` awscli v1 from Ubuntu apt — ~~real, open~~ **CLOSED by skillars-deferred-102 AC9**
   (official v2 installer, signature-verified, in `provision.sh`).
-- `deploy-1-3` LGTM `mkdir -p` gated inside the `[ -b ]` check — real, open. *(skillars-deferred-102
-  examined it: at HEAD `${DEPLOY_ROOT}/lgtm` and `data/postgres` are created unconditionally in
-  provision.sh section 6, so the "gated inside `[ -b ]`" premise looks stale/narrowed — flag for the
-  next deploy audit to confirm and delete rather than change code on an unverified premise.)*
+- `deploy-1-3` LGTM `mkdir -p` gated inside the `[ -b ]` check — ~~real, open~~ **CLOSED by
+  skillars-deferred-103 AC12 (2026-09-09):** confirmed stale — `mkdir -p "${DEPLOY_ROOT}/lgtm"` and
+  `data/postgres` are created unconditionally at `provision.sh:349`, before the `[ -b ]` gate at
+  `:567`. The bullet under `## Deferred from: code review of deploy-1-3-...` was deleted and its
+  now-empty section header removed.
 - `deploy-1-5` repo cloned as root into `/opt/skillars` beside runtime data — ~~real, open~~
   **CLOSED by skillars-deferred-102 AC6** (checkout moved to `/opt/skillars/app`, owned by a
   dedicated non-root `deploy` user; `/opt/skillars/data` is now a sibling, not a child).
@@ -1511,3 +1482,72 @@ deleted here per this file's delete-outright convention (no `[CLOSED by …]` ta
 `768a513a`), in order, with nothing reworded or reordered — the only differences are the two bullets
 above, the two now-empty `## Deferred from:` headers removed with them, and this block.
 `[DECIDED …]` / `[DISMISSED …]` bullets: none touched. `[PICKED UP by …]` bullets: none touched.
+
+## Last audit: 2026-09-09 (skillars-deferred-103 story implementation + AC12)
+
+`skillars-deferred-103` closed twelve verified-open items. Each AC deleted its own ledger bullet(s);
+AC12 additionally removed the stale `deploy-1-3` bullet and ran this pass.
+
+**Bullets deleted (closed by the code that shipped in `skillars-deferred-103`):**
+
+- `## Deferred from: code review of deploy-1-3-lgtm-observability-stack (2026-06-03)` — the sole
+  bullet (`LGTM data mkdir -p gated inside [ -b ]`). Premise false at HEAD: `mkdir -p
+  "${DEPLOY_ROOT}/lgtm"` is unconditional at `provision.sh:349`. **Header removed** (section empty,
+  bullet untagged).
+- `## Deferred from: adversarial code review of skillars-7-2 Group 2 Service Layer (2026-06-24)` —
+  **D3** (`createTier` TOCTOU — closed by AC1: DB partial unique index + 409 mapping + IT) and
+  **D1** (`onBookingAccepted` `existsById` bare SELECT outside TX — stale; idempotency is now
+  `isSettled()` + `hasReservation()` inside `@Transactional(REQUIRES_NEW)`). **Header removed**
+  (both bullets gone, both untagged).
+- `## Deferred from: adversarial code review of skillars-7-2 Group 1 DB+Entities (2026-06-24)` —
+  **D1** (`parent_credit_balance` view returns no row for a zero-history parent). Closed by AC11:
+  `docs/dev-docs/payment/index.html` now documents "absence = zero" for both the JPQL and native
+  paths, and `CreditWalletZeroHistoryBalanceIT` pins the `getBalance` guarantee. D3, D5 kept;
+  header kept.
+- `## Deferred from: code review of skillars-7-3-cancellation-refund-reliability-strikes
+  (2026-06-25)` — **D3** (`/coaches/me/strikes` unbounded). Closed by AC2: paginated `Page<>`
+  response + `size` clamp; covered by `ReliabilityStrikePaginationIT`. D1, D5 kept; header kept.
+- `## Deferred from: code review of skillars-11-1-payment-path-parity-gaps (2026-08-03)` — **D2**
+  (silent `.orElse(null)`/`.orElse("")` for missing coach/parent), **D3** (`pauseStartDate` past
+  check truncates to UTC day), **D4** (`pack.pause.maxDays` no defensive default). Closed by
+  AC5/AC6/AC7. D1, D5, D7, D8, D9 kept (project-owner decision D1 = safe subset only); header kept.
+- `## Deferred from: code review of
+  skillars-deferred-15-payment-pending-sweeper-accept-path-integrity (2026-08-05)` — **D1**
+  (`SessionPackExpiryNotifier` stamps `expiryWarnedAt` before an `AFTER_COMMIT` send). Verified
+  already fixed by `skillars-deferred-92` (BEFORE_COMMIT + `enqueueEmail`/`MANDATORY`); AC4 was a
+  no-op confirmation. D2, D3 kept; header kept.
+- `## Deferred from: code review of skillars-deferred-56-… (2026-08-22)` — the
+  `handlePackBasedBooking` bare-`RuntimeException` bullet. Closed by AC3 (+ code-review resolution):
+  catch narrowed to `PaymentGatewayException | TransientDataAccessException`; genuine bugs
+  propagate. Covered by `CreditRoutingTest`. The `sprint-status.yaml` `last_updated` line-length
+  bullet kept (project-wide, out of scope); header kept.
+- `## Deferred from: code review of skillars-deferred-66 (2026-08-25)` — the imperative-"retry"
+  message bullet (its only bullet). Closed by AC8: throw sites use
+  `BookingError.CONCURRENT_MODIFICATION_MESSAGE`; `booking.concurrentModification` reworded
+  in-place across `messages{,_en,_de,_fr}.properties` + the three frontend `index.js` bundles.
+  **Header removed** (section empty, bullet untagged).
+
+**Retagged in place (not deleted):**
+
+- `## Deferred from: code review of skillars-8-4 (2026-06-27)` **W5** — AC10 shipped as
+  documentation-only (option b), so the bullet is kept and tagged `[DECIDED 2026-09-09
+  (skillars-deferred-103 AC10)]`. Header kept.
+
+**Prior audit-block references updated:** the `2026-09-04` `deploy-*` re-audit table row and the
+`2026-09-08 (skillars-deferred-101 …)` "Items re-verified still open" list both had their
+`deploy-1-3` LGTM entry struck through and annotated closed.
+
+**Not folded in / still deferred:** two new pre-existing items surfaced by this story's own code
+review are filed below (`pack.pause.maxDays ≤ 0`; `SessionPackExpiryNotifier` stale javadoc).
+
+**Reconstruction check:** every surviving non-blank line matches the pre-edit file (master @
+`d0be17e8`), in order, with nothing reworded or reordered — the only differences are the deleted
+bullets enumerated above, the three now-empty `## Deferred from:` headers removed with them
+(`deploy-1-3-lgtm-observability-stack`, `skillars-7-2 Group 2 Service Layer`, `skillars-deferred-66`),
+the two strike-through annotations in prior audit blocks, the W5 retag, and this block.
+`[DECIDED]` / `[DISMISSED]` bullets: none touched. `[PICKED UP by …]` bullets: none touched.
+
+## Deferred from: code review of skillars-deferred-103-payment-reliability-pack-pause-hardening-and-cross-module-cleanup (2026-09-09)
+
+- **`pack.pause.maxDays` misconfigured `≤ 0` silently blocks every pause.** `PackSessionService.pausePack` reads `configService.getLong("pack.pause.maxDays", DEFAULT_PACK_PAUSE_MAX_DAYS)` — the 2-arg overload guards only an *absent* key (which is what `skillars-deferred-103` AC6 asked for). It is not range-checked, so an operator-stored `0` or negative value is accepted and makes every request with `pauseDurationDays >= 1` fail as `booking.pauseDurationInvalid`, with nothing indicating the config is the cause. Pre-existing pattern across many `ConfigService.getLong` call sites; a `getLongInRange`-style clamp (or a startup assertion) would close it.
+- **`SessionPackExpiryNotifier` class javadoc is stale about the listener transaction phase.** The javadoc at `SessionPackExpiryNotifier.java:37,44` still describes `SessionPackEmailListener` as `@TransactionalEventListener(AFTER_COMMIT)` with a "(fallible, unretried) send"; since `skillars-deferred-92` the listener is `BEFORE_COMMIT` + `enqueueEmail(Propagation.MANDATORY)`. `skillars-deferred-103` AC4 verified the runtime behaviour is already correct and needs no code change — only this doc comment is wrong.

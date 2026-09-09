@@ -25,9 +25,13 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
+import java.time.DateTimeException;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -35,12 +39,15 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import static org.springframework.util.StringUtils.hasText;
+
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class PackSessionService {
 
     private static final List<String> CONFLICT_STATUSES = List.of("REQUESTED", "ACCEPTED", "CONFIRMED", "UPCOMING");
+    private static final long DEFAULT_PACK_PAUSE_MAX_DAYS = 90L;
 
     private final SessionPackPurchaseRepository sessionPackPurchaseRepository;
     private final ApplicationEventPublisher eventPublisher;
@@ -50,6 +57,7 @@ public class PackSessionService {
     private final CoachProfileRepository coachProfileRepository;
     private final UserRepository userRepository;
     private final PessimisticLockRetryer lockRetryer;
+    private final Clock clock;
 
     @Transactional
     public void deductSession(UUID purchaseId) {
@@ -138,13 +146,32 @@ public class PackSessionService {
             throw new BatchRuleViolationException("booking.packAlreadyPaused");
         }
 
-        long maxDays = configService.getLong("pack.pause.maxDays");
+        // skillars-deferred-103 AC5: load coach early to get timezone for past-date check.
+        // skillars-deferred-103 code-review P11: a missing coach here is a data-integrity failure,
+        // not an authorization problem — session_pack_purchases.coach_id carries an FK
+        // (fk_spp_coach), so the parent has rights and the referenced row has vanished. Throw
+        // IllegalStateException so ApiAdvice maps it to 500 + ERROR alerting (see
+        // ApiAdvice.illegalStateExceptionHandler), instead of a misleading 403 MISSING_RIGHTS.
+        UUID coachId = purchase.getCoachId();
+        CoachProfile coach = coachProfileRepository.findById(coachId)
+            .orElseThrow(() -> new IllegalStateException(
+                "Coach profile " + coachId + " referenced by session pack " + purchaseId
+                    + " does not exist — data-integrity failure (FK fk_spp_coach)"));
+
+        // skillars-deferred-103 AC6: defensive default for max pause days config
+        long maxDays = configService.getLong("pack.pause.maxDays", DEFAULT_PACK_PAUSE_MAX_DAYS);
         if (req.pauseDurationDays() < 1 || req.pauseDurationDays() > maxDays) {
             throw new BatchRuleViolationException("booking.pauseDurationInvalid");
         }
 
+        // skillars-deferred-103 AC5: timezone-aware past-date check. Resolve coach's zone;
+        // fall back to UTC with a WARN for legacy rows whose canonicalTimezone is blank OR holds a
+        // non-canonical / deprecated id that ZoneId.of() rejects (skillars-deferred-103 P6).
         Instant pauseStart = req.pauseStartDate();
-        if (pauseStart.isBefore(Instant.now().truncatedTo(ChronoUnit.DAYS))) {
+        ZoneId zone = resolveCoachZone(coach.getCanonicalTimezone(), coachId);
+        LocalDate pauseStartDate = LocalDate.ofInstant(pauseStart, zone);
+        LocalDate todayInCoachZone = LocalDate.now(clock.withZone(zone));
+        if (pauseStartDate.isBefore(todayInCoachZone)) {
             throw new BatchRuleViolationException("booking.pauseStartInPast");
         }
         if (!pauseStart.isBefore(purchase.getExpiresAt())) {
@@ -153,7 +180,6 @@ public class PackSessionService {
         Instant pauseEnd = pauseStart.plus(Duration.ofDays(req.pauseDurationDays()));
 
         Long playerId = purchase.getPlayerId();
-        UUID coachId = purchase.getCoachId();
         List<Booking> conflicting = bookingRepository.findConflictingBookingsForPause(
             playerId, coachId, pauseStart, pauseEnd, CONFLICT_STATUSES);
 
@@ -188,16 +214,43 @@ public class PackSessionService {
         purchase.setExpiresAt(purchase.getExpiresAt().plus(Duration.ofDays(req.pauseDurationDays())));
         sessionPackPurchaseRepository.save(purchase);
 
-        // Publish parent's single confirmation event
-        CoachProfile coach = coachProfileRepository.findById(coachId).orElse(null);
-        String parentEmail = userRepository.findById(parentId).map(u -> u.getEmail()).orElse("");
-        String coachDisplayName = coach != null ? coach.getDisplayName() : "Coach";
-        String canonicalTimezone = coach != null ? coach.getCanonicalTimezone() : "UTC";
-        eventPublisher.publishEvent(new PackPausedEvent(
-            this, purchase.getPurchaseId(), parentId, parentEmail, coachDisplayName,
-            purchase.getExpiresAt(), cancelledTimes, canonicalTimezone
-        ));
+        // skillars-deferred-103 AC7: publish confirmation event only if parent email is available.
+        // Coach is already loaded (AC5) and guaranteed non-null, so use it directly.
+        String parentEmail = userRepository.findById(parentId)
+            .map(u -> u.getEmail())
+            .filter(email -> hasText(email))
+            .orElse(null);
+        if (parentEmail == null) {
+            log.error("Pack pause notification skipped — parent email missing/blank: "
+                + "parentId={} purchaseId={} coachId={}",
+                parentId, purchaseId, coachId);
+        } else {
+            eventPublisher.publishEvent(new PackPausedEvent(
+                this, purchase.getPurchaseId(), parentId, parentEmail, coach.getDisplayName(),
+                purchase.getExpiresAt(), cancelledTimes, coach.getCanonicalTimezone()
+            ));
+        }
 
         return new PauseConflictResponse(true, List.of(), purchase.getExpiresAt());
+    }
+
+    /**
+     * Resolves a coach's stored {@code canonicalTimezone} to a {@link ZoneId}, falling back to UTC
+     * (with a WARN) when the value is blank or is not a zone id {@link ZoneId#of} accepts — legacy
+     * rows can hold {@code ""}, {@code "PST"}, {@code "Europe/Nowhere"} or a deprecated id, none of
+     * which should turn a pause request into a 500.
+     */
+    private ZoneId resolveCoachZone(String canonicalTimezone, UUID coachId) {
+        if (hasText(canonicalTimezone)) {
+            try {
+                return ZoneId.of(canonicalTimezone);
+            } catch (DateTimeException e) {
+                log.warn("Coach profile has an unrecognised canonicalTimezone '{}', falling back to UTC: coachId={}",
+                    canonicalTimezone, coachId);
+                return ZoneOffset.UTC;
+            }
+        }
+        log.warn("Coach profile has blank canonicalTimezone, falling back to UTC: coachId={}", coachId);
+        return ZoneOffset.UTC;
     }
 }

@@ -41,15 +41,42 @@ public class SessionPackForfeitureScheduler {
         for (SessionPackPurchase purchase : expired) {
             try {
                 transactionTemplate.execute(status -> {
+                    // skillars-deferred-103 AC7: explicit error handling for missing/blank records
                     CoachProfile coach = coachProfileRepository.findById(purchase.getCoachId()).orElse(null);
+                    if (coach == null) {
+                        // Deliberately left unstamped, mirroring SessionPackExpiryNotifier: the pack
+                        // keeps being selected so the ERROR repeats every run until the row is
+                        // repaired. session_pack_purchases.coach_id carries an FK (fk_spp_coach), so
+                        // reaching here is a data-integrity failure, not an ordinary missing coach —
+                        // stamping it would silence the only signal that it happened.
+                        log.error("Session pack expiry notification skipped — coach profile missing: "
+                            + "purchaseId={} coachId={} parentId={}",
+                            purchase.getPurchaseId(), purchase.getCoachId(), purchase.getParentId());
+                        return null;
+                    }
                     String parentEmail = userRepository.findById(purchase.getParentId())
-                        .map(u -> u.getEmail()).orElse("");
+                        .map(u -> u.getEmail())
+                        .filter(email -> org.springframework.util.StringUtils.hasText(email))
+                        .orElse(null);
+                    if (parentEmail == null) {
+                        // A parent legitimately without an email is not a repairable data bug and a
+                        // retry cannot change the outcome — stamp it so the forfeiture is finalised
+                        // once and the purchase stops being re-selected every cycle (the query
+                        // filters expiredNotifiedAt IS NULL). The skipped notification is the only
+                        // loss, and it is logged.
+                        log.error("Session pack expiry notification skipped — parent email missing/blank: "
+                            + "parentId={} purchaseId={} coachId={}",
+                            purchase.getParentId(), purchase.getPurchaseId(), purchase.getCoachId());
+                        purchase.setExpiredNotifiedAt(now);
+                        sessionPackPurchaseRepository.save(purchase);
+                        return null;
+                    }
                     purchase.setExpiredNotifiedAt(now);
                     sessionPackPurchaseRepository.save(purchase);
                     eventPublisher.publishEvent(new SessionPackExpiredEvent(
                         this, purchase.getPurchaseId(), purchase.getPlayerId(), purchase.getCoachId(),
                         purchase.getParentId(), parentEmail,
-                        coach != null ? coach.getDisplayName() : "Coach",
+                        coach.getDisplayName(),
                         purchase.getRemainingSessions()
                     ));
                     log.info("Forfeited session pack purchase {} ({} sessions remaining)",

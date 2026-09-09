@@ -538,6 +538,8 @@ export default {
       rescheduleAlreadyPending:
         'Für diese Sitzung wartet bereits eine Verschiebungsanfrage auf eine Antwort.',
       rescheduleNotPending: 'Diese Verschiebungsanfrage wurde bereits bearbeitet.',
+      concurrentModification:
+        'Die Buchung wurde soeben von einer anderen Person geändert. Aktualisieren Sie die Seite, um den aktuellen Status zu sehen.',
       listMayBeStale:
         'Diese Liste ist möglicherweise nicht aktuell. Laden Sie die Seite neu, um den neuesten Stand zu sehen.',
       requestNotAllowed: 'Sie sind nicht berechtigt, diese Aktion auszuführen.',

@@ -1058,6 +1058,8 @@ export default {
       rescheduleAlreadyPending:
         'A reschedule request for this session is already awaiting a response.',
       rescheduleNotPending: 'This reschedule request has already been handled.',
+      concurrentModification:
+        'The booking was just updated by someone else. Refresh to see its current status.',
       listMayBeStale: 'This list may be out of date. Reload the page to see the latest.',
       // Deliberately object-agnostic: shared by 5 call sites across 4 pages (BookingRequestPage's
       // submit()/submitBatchRequest(), CoachBookingRequestsPage's handleAcceptAll,

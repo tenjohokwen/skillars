@@ -155,6 +155,9 @@ public class MessagingResource {
     }
 
     @PostMapping("/conversations/{conversationId}/messages/{messageId}/report")
+    // skillars-deferred-103 AC10: IS_AUTHENTICATED here is deliberate; party authorization is enforced
+    // at the service layer in MessagingReportService.verifyIsParty, consistent with every other
+    // endpoint in this resource. No reusable party-scoped method-security expression exists.
     @PreAuthorize(SecurityConstants.IS_AUTHENTICATED)
     @Observed(name = "messaging.reportMessage")
     public ResponseEntity<ReportResponse> reportMessage(
@@ -171,6 +174,9 @@ public class MessagingResource {
     }
 
     @PostMapping("/conversations/{conversationId}/report")
+    // skillars-deferred-103 AC10: IS_AUTHENTICATED here is deliberate; party authorization is enforced
+    // at the service layer in MessagingReportService.verifyIsParty, consistent with every other
+    // endpoint in this resource. No reusable party-scoped method-security expression exists.
     @PreAuthorize(SecurityConstants.IS_AUTHENTICATED)
     @Observed(name = "messaging.reportConversation")
     public ResponseEntity<ReportResponse> reportConversation(

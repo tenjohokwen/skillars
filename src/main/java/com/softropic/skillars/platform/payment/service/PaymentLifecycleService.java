@@ -14,6 +14,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -164,7 +165,18 @@ public class PaymentLifecycleService {
                                         Instant requestedStartTime, String canonicalTimezone) {
         try {
             packSessionService.deductSession(purchaseId);
-        } catch (RuntimeException e) {
+        } catch (PaymentGatewayException | TransientDataAccessException e) {
+            // skillars-deferred-103 AC3 (+ code-review resolution 2026-09-09): record a payment
+            // failure for the two outcomes the parent must be told about —
+            //   * PaymentGatewayException  → expected business failure (pack not found / exhausted);
+            //   * TransientDataAccessException → the row-lock retry budget in deductSession's
+            //     PessimisticLockRetryer was exhausted under contention. It is not a business
+            //     failure, but this listener is AFTER_COMMIT: an escaping exception is only logged
+            //     and never retried, so treating it as an unresolved payment (record + notify) is
+            //     strictly better than silently stranding the booking.
+            // Any other RuntimeException (NPE, IllegalStateException, IllegalArgumentException)
+            // indicates a programming defect and is deliberately left to propagate — it must not be
+            // disguised as an expected business failure.
             log.error("Pack session deduction failed: bookingId={} purchaseId={} error={}",
                 bookingId, purchaseId, e.getMessage(), e);
             try {

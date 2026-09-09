@@ -55,7 +55,7 @@ public class BookingCompletionService {
         try {
             bookingService.transition(bookingId, BookingEvent.START, new TransitionContext(ActorRole.COACH, coachUserId));
         } catch (OptimisticLockingFailureException e) {
-            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+            throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
         }
     }
 
@@ -73,7 +73,7 @@ public class BookingCompletionService {
         try {
             bookingService.transition(bookingId, BookingEvent.COMPLETE_PENDING, new TransitionContext(ActorRole.COACH, coachUserId));
         } catch (OptimisticLockingFailureException e) {
-            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+            throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
         }
     }
 
@@ -86,7 +86,7 @@ public class BookingCompletionService {
         try {
             bookingService.transition(bookingId, BookingEvent.PAUSE, new TransitionContext(ActorRole.COACH, coachUserId));
         } catch (OptimisticLockingFailureException e) {
-            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+            throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
         }
     }
 
@@ -99,7 +99,7 @@ public class BookingCompletionService {
         try {
             bookingService.transition(bookingId, BookingEvent.RESUME, new TransitionContext(ActorRole.COACH, coachUserId));
         } catch (OptimisticLockingFailureException e) {
-            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+            throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
         }
     }
 
@@ -116,7 +116,7 @@ public class BookingCompletionService {
         try {
             bookingService.transition(bookingId, BookingEvent.COMPLETE_PENDING, new TransitionContext(ActorRole.COACH, coachUserId));
         } catch (OptimisticLockingFailureException e) {
-            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+            throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
         }
     }
 
@@ -157,7 +157,7 @@ public class BookingCompletionService {
             try {
                 bookingService.transition(bookingId, BookingEvent.QUICK_COMPLETE, new TransitionContext(ActorRole.COACH, coachUserId));
             } catch (OptimisticLockingFailureException e) {
-                throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+                throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
             }
             eventPublisher.publishEvent(new BookingCompletedEvent(
                 this, bookingId, booking.getCoachId(), booking.getPlayerId(), booking.getParentId(),
@@ -187,7 +187,7 @@ public class BookingCompletionService {
         try {
             bookingService.transition(bookingId, BookingEvent.COMPLETE, new TransitionContext(ActorRole.PARENT, parentUserId));
         } catch (OptimisticLockingFailureException e) {
-            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+            throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
         }
 
         SessionCompletionData scd = completionDataRepository.findByBookingId(bookingId)
