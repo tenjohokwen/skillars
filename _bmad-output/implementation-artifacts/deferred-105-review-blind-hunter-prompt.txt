@@ -1,0 +1,161 @@
+BLIND HUNTER REVIEW PROMPT
+=========================
+
+Task: Review this diff for correctness bugs, logic errors, and potential vulnerabilities.
+- Analyze ONLY the code changes (the diff).
+- Do NOT reference the spec or story context.
+- Focus on what could break at runtime.
+- Output findings as a Markdown list with short titles and evidence from the diff.
+- Find at least 10 issues to investigate (or note if fewer exist).
+
+DIFF TO REVIEW:
+===============
+
+diff --git a/.github/actions/docker-build/action.yml b/.github/actions/docker-build/action.yml
+index bd95104c..8ad18a0c 100644
+--- a/.github/actions/docker-build/action.yml
++++ b/.github/actions/docker-build/action.yml
+@@ -38,7 +38,7 @@ runs:
+
+     - name: Build
+       id: build
+-      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
++      uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+       with:
+         context: .
+         platforms: ${{ inputs.platforms }}
+
+diff --git a/Dockerfile b/Dockerfile
+index 94c07953..fe9c4277 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -1,5 +1,5 @@
+ # Stage 1: Build (Java + Quasar frontend via frontend-maven-plugin)
+-FROM --platform=linux/amd64 maven:3.9-eclipse-temurin-17 AS builder
++FROM maven:3.9-eclipse-temurin-17 AS builder
+ WORKDIR /app
+
+ # Layer: Java dependencies (cached until pom.xml changes)
+@@ -12,7 +12,7 @@ COPY .git/ .git/
+ RUN mvn package -Dmaven.test.skip=true -B
+
+ # Stage 2: Runtime (minimal JRE image)
+-FROM --platform=linux/amd64 eclipse-temurin:17-jre-alpine
++FROM eclipse-temurin:17-jre-alpine
+ WORKDIR /app
+
+ # Patch OS packages before dropping privileges. The eclipse-temurin:17-jre-alpine tag
+
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/contract/CoachProfileMapper.java b/src/main/java/com/softropic/skillars/platform/marketplace/contract/CoachProfileMapper.java
+index 6f901e1f..51b27e5e 100644
+--- a/src/main/java/com/softropic/skillars/platform/marketplace/contract/CoachProfileMapper.java
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/contract/CoachProfileMapper.java
+@@ -19,6 +19,10 @@ public interface CoachProfileMapper {
+     @Mapping(target = "photoUrl", ignore = true)
+     @Mapping(target = "status", ignore = true)
+     @Mapping(target = "createdAt", ignore = true)
++    @Mapping(target = "verificationTier", ignore = true)
++    @Mapping(target = "averageRating", ignore = true)
++    @Mapping(target = "reviewCount", ignore = true)
++    @Mapping(target = "statusChangedAt", ignore = true)
+     CoachProfile toEntity(ProfileBuilderStep1Request req, Long userId);
+
+     @Mapping(target = "id", ignore = true)
+
+diff --git a/src/main/java/com/softropic/skillars/platform/marketplace/service/CoachSearchSpecification.java b/src/main/java/com/softropic/skillars/platform/marketplace/service/CoachSearchSpecification.java
+index 3361596a..08b3e09c 100644
+--- a/src/main/java/com/softropic/skillars/platform/marketplace/service/CoachSearchSpecification.java
++++ b/src/main/java/com/softropic/skillars/platform/marketplace/service/CoachSearchSpecification.java
+@@ -20,8 +20,7 @@ public final class CoachSearchSpecification {
+     private CoachSearchSpecification() {}
+
+     public static Specification<CoachProfile> build(CoachSearchParams p) {
+-        return Specification
+-            .where(isActive())
++        return isActive()
+             .and(inCity(p.city()))
+             .and(inDistrict(p.district()))
+             .and(hasSkill(p.skill()))
+
+diff --git a/src/main/java/com/softropic/skillars/platform/security/api/ApiAdvice.java b/src/main/java/com/softropic/skillars/platform/security/api/ApiAdvice.java
+index 5085e62e..94b0e94e 100644
+--- a/src/main/java/com/softropic/skillars/platform/security/api/ApiAdvice.java
++++ b/src/main/java/com/softropic/skillars/platform/security/api/ApiAdvice.java
+@@ -686,7 +686,7 @@ public class ApiAdvice {
+
+     private ErrorDto logErrorAndReturnDTO(Throwable throwable, String defaultMsg, String msgKey, String... args) {
+         final String helpCode = logError(throwable, defaultMsg);
+-        return toErrorDTO(msgKey, defaultMsg, helpCode, args);
++        return toErrorDTO(msgKey, defaultMsg, helpCode, (Object[]) args);
+     }
+
+     private ErrorDto toErrorDTO(final String msgKey, final String defaultMessage, String helpCode, final Object... args) {
+
+diff --git a/src/main/java/com/softropic/skillars/platform/security/audit/api/AuditTrailMapper.java b/src/main/java/com/softropic/skillars/platform/security/audit/api/AuditTrailMapper.java
+index 7c09643f..607bee54 100644
+--- a/src/main/java/com/softropic/skillars/platform/security/audit/api/AuditTrailMapper.java
++++ b/src/main/java/com/softropic/skillars/platform/security/audit/api/AuditTrailMapper.java
+@@ -4,11 +4,18 @@ package com.softropic.skillars.platform.security.audit.api;
+
+ import com.softropic.skillars.platform.security.audit.repository.AuditLog;
+
++import org.mapstruct.BeanMapping;
+ import org.mapstruct.Mapper;
+ import org.mapstruct.MappingConstants;
++import org.mapstruct.ReportingPolicy;
+
+ @Mapper(componentModel = MappingConstants.ComponentModel.SPRING)
+ public interface AuditTrailMapper {
+     AuditTrail toAuditTrail(AuditLog auditLog);
++
++    @BeanMapping(unmappedTargetPolicy = ReportingPolicy.IGNORE)
++    AuditLog toAuditLog(AuditTrail auditTrail);
+ }
+
+diff --git a/src/main/java/com/softropic/skillars/platform/security/service/UserMapper.java b/src/main/java/com/softropic/skillars/platform/security/service/UserMapper.java
+index 34ee2677..8ce2020a 100644
+--- a/src/main/java/com/softropic/skillars/platform/security/service/UserMapper.java
++++ b/src/main/java/com/softropic/skillars/platform/security/service/UserMapper.java
+@@ -11,9 +11,11 @@ import com.softropic.skillars.platform.security.repo.Authority;
+ import com.softropic.skillars.platform.security.repo.User;
+
+ import org.mapstruct.AfterMapping;
++import org.mapstruct.BeanMapping;
+ import org.mapstruct.Mapper;
+ import org.mapstruct.Mapping;
+ import org.mapstruct.MappingTarget;
++import org.mapstruct.ReportingPolicy;
+
+ import java.util.Set;
+ import java.util.stream.Collectors;
+@@ -30,6 +32,10 @@ public interface UserMapper {
+     @Mapping(target = "email", expression = "java(StringUtils.lowerCase(user.getEmail()))")
+     UserDto toUserDto(User user);
+
++    @BeanMapping(unmappedTargetPolicy = ReportingPolicy.IGNORE)
+     @Mapping(source = "dob", target = "dateOfBirth")
+     User toUser(UserDto userDto);
+
+
+diff --git a/src/test/java/com/softropic/skillars/platform/security/config/AppEndpointsConventionTest.java b/src/test/java/com/softropic/skillars/platform/security/config/AppEndpointsConventionTest.java
+index e2bfcd13..60707a41 100644
+--- a/src/test/java/com/softropic/skillars/platform/security/config/AppEndpointsConventionTest.java
++++ b/src/test/java/com/softropic/skillars/platform/security/config/AppEndpointsConventionTest.java
+@@ -101,6 +101,12 @@ class AppEndpointsConventionTest {
+      * depending on which matcher Spring resolved, so the assertions above would be describing a
+      * different security surface from the one the application enforces.
+      */
++    // AntPathRequestMatcher is compared against PathPatternRequestMatcher here on purpose: this method
++    // is a static semantic-equivalence assertion between the two matchers production may resolve at
++    // runtime (see class javadoc). When Spring Security actually removes AntPathRequestMatcher, this
++    // test's premise ("runtime picks Ant *or* PathPattern") must be re-evaluated — not just the import
++    // swapped.
++    @SuppressWarnings("removal")
+     @Test
+     void everyPatternMatchesIdenticallyUnderBothSemantics() {
+         List<String> probes = List.of(
+
+END OF DIFF
+===========
+
+Review complete. Output findings as a Markdown list.

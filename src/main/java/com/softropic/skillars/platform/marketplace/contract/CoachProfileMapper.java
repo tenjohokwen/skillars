@@ -19,6 +19,10 @@ public interface CoachProfileMapper {
     @Mapping(target = "photoUrl", ignore = true)
     @Mapping(target = "status", ignore = true)
     @Mapping(target = "createdAt", ignore = true)
+    @Mapping(target = "verificationTier", ignore = true)
+    @Mapping(target = "averageRating", ignore = true)
+    @Mapping(target = "reviewCount", ignore = true)
+    @Mapping(target = "statusChangedAt", ignore = true)
     CoachProfile toEntity(ProfileBuilderStep1Request req, Long userId);
 
     @Mapping(target = "id", ignore = true)

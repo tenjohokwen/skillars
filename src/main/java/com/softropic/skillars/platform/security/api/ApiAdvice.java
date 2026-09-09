@@ -686,7 +686,7 @@ public class ApiAdvice {
 
     private ErrorDto logErrorAndReturnDTO(Throwable throwable, String defaultMsg, String msgKey, String... args) {
         final String helpCode = logError(throwable, defaultMsg);
-        return toErrorDTO(msgKey, defaultMsg, helpCode, args);
+        return toErrorDTO(msgKey, defaultMsg, helpCode, (Object[]) args);
     }
 
     private ErrorDto toErrorDTO(final String msgKey, final String defaultMessage, String helpCode, final Object... args) {

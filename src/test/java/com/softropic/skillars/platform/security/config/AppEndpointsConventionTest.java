@@ -101,6 +101,12 @@ class AppEndpointsConventionTest {
      * depending on which matcher Spring resolved, so the assertions above would be describing a
      * different security surface from the one the application enforces.
      */
+    // AntPathRequestMatcher is compared against PathPatternRequestMatcher here on purpose: this method
+    // is a static semantic-equivalence assertion between the two matchers production may resolve at
+    // runtime (see class javadoc). When Spring Security actually removes AntPathRequestMatcher, this
+    // test's premise ("runtime picks Ant *or* PathPattern") must be re-evaluated — not just the import
+    // swapped.
+    @SuppressWarnings("removal")
     @Test
     void everyPatternMatchesIdenticallyUnderBothSemantics() {
         List<String> probes = List.of(
