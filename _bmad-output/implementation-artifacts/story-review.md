@@ -1,251 +1,215 @@
-# Story Review: skillars-deferred-102
+# Senior Dev Audit: skillars-deferred-103
 
-**Status:** Review complete | **Date:** 2026-09-08
-
----
-
-## Executive Summary
-
-The story is well-structured and comprehensive, with each AC grounded in verified HEAD state. However, there are **5 implementation-time gaps** that will require design decisions or clarifications during dev:
-
-1. **AC2** — restore exit contract undefined when container registration exhausts
-2. **AC5** — SSH exit-status separation lacks implementation detail; transport-failure threshold unclear
-3. **AC6** — permission model for `deploy` user touching service-owned `data/**` is unspecified
-4. **AC11** — pagination tiebreaker must exist; implementation is conditional on verification
-5. **AC14** — entirely exploratory (measure → act on findings); AC19 ledger closure depends on outcome
-
-Additionally, **3 minor specificity gaps** (AC3 "armed dirs", AC4 iteration count, AC18 openpdf release notes) should be resolved before implementation to avoid churn. These are flagged in the detail below.
-
-**Recommendation:** The story is ready for dev after the dev agent resolves the 5 design gaps via CLAUDE.md clarifications or inline comments during implementation. No scope change needed.
+**Reviewed:** 2026-09-09  
+**Auditor Role:** Senior dev verification of corner cases, false assumptions, missed flows, and clarity issues
 
 ---
 
-## Detailed Findings
+## Summary
 
-### 🔴 Critical Gaps (must resolve before / during dev)
-
-#### AC2: `restore-from-dump.sh` — APP_CID retry exit contract
-
-**Issue:** The AC specifies a retry loop around `docker compose ps -q app` to handle slow container registration, but leaves the exit/signal contract undefined when retries exhaust.
-
-**Current situation (verified):**
-- `:119` `RESTORE_OK=0` initially
-- `:121` EXIT trap: `if [ "$RESTORE_OK" -eq 0 ]; then docker-compose start app; fi`
-- `:141-142` After health wait succeeds, `RESTORE_OK=1`
-- If the retry-exhausted path keeps `RESTORE_OK=0`, the trap **restarts the app**
-
-**The gap:** AC2 says "emit a distinct diagnostic so the operator knows the DB restore itself completed" but does **not** specify whether the EXIT trap should restart the app in this case.
-
-**Two interpretations:**
-1. Keep `RESTORE_OK=0` → trap restarts app (may be wrong if container registration is just slow)
-2. Set `RESTORE_OK` to a distinct value (e.g., `2`) to signal "restore done, container-register failed" → avoid restart
-
-**Recommendation:** Dev agent should clarify with the owner or CLAUDE.md: should the app start or not if the retry exhausts? The test `bash -n + shellcheck` won't catch the logic error.
+The story is well-structured and most ACs are sound. **Three significant ambiguities and one real corner case** found that could trip up the dev agent. No false positives that rise to bug level, but several assumptions warrant explicit verification.
 
 ---
 
-#### AC5: Deploy smoke — SSH/transport failure separation
+## Critical Issues (Will Impact Implementation)
 
-**Issue:** The AC says "capture the `ssh` exit status separately from the remote script's stdout" but doesn't explain **how** given the current pipe structure.
+### AC4: Email enqueue atomicity — partial-commit trap
 
-**Current code (verified):**
-```bash
-ssh ... "<remote script>" 2>/dev/null || echo 0
-```
+**Issue:** The AC states that on `BEFORE_COMMIT`, enqueue must be atomic with `expiryWarnedAt` write. But the AC doesn't clarify what happens if enqueue throws: does the entire transaction roll back (preventing `expiryWarnedAt` from being stamped), or does the transactional listener failure not affect the producing transaction?
 
-**The gap:** The implementation must:
-- Capture `ssh`'s exit code (255 for transport failure) **separately** from the remote script's exit code
-- Skip iterations that are transport failures (don't count them as health failures)
-- Exit with `result=error` (not `result=fail`) if **every** iteration is a transport failure
+**Impact:** If a `@TransactionalEventListener(BEFORE_COMMIT)` with `Propagation.MANDATORY` throws, **the producing transaction still commits** (BEFORE_COMMIT failures don't abort the parent). So `expiryWarnedAt` will be stamped even though the email enqueue failed. This breaks the atomicity guarantee the AC claims to establish. 
 
-**Missing details:**
-1. **How?** The current pipe collapses both exit codes. Suggestion: run `ssh` separately, capture $?, then check if 255. But the implementation is not spelled out.
-2. **"Every iteration"?** Is this a threshold (e.g., > 20 of 24), or truly all? AC5 says "if every iteration is a transport failure" but doesn't clarify whether 1 or 2 DNS timeouts should trigger the error path.
-3. **Verification:** The test says `bash -n` + re-read the workflow — but "re-read" is weaker than a test that *forces* transport failure and verifies the path is taken.
+**Verify:** Check how `RefundEnqueueListener` (the deferred-92 pattern referenced) handles listener-side exceptions. If it swallows/logs them without propagating, then the guarantee is actually "best-effort enqueue + guaranteed stamp", not true atomicity. The story must clarify this before the dev codes blindly into the wrong semantics.
 
-**Recommendation:** Implementation should document the SSH exit-code capture in a comment block (AC5 already asks for one) and pick a threshold for "all failed" (e.g., current iteration count > 80% failed).
+**Recommendation:** Explicitly test and document whether `expiryWarnedAt` gets stamped when enqueue fails. If the pattern is "stamp even if mail fails", update the AC language to say "enqueue attempted atomically" not "atomically with"; if the pattern is "enqueue must succeed or no stamp", verify the exception-propagation chain won't silently swallow it.
 
 ---
 
-#### AC6: Provisioning — `deploy` user permission model
+### AC7 + AC5 + AC6 interdependency — missing evaluation order
 
-**Issue:** The AC moves the checkout from `/opt/skillars` (root-owned) to `/opt/skillars/app` (deploy-owned) and moves runtime data outside. But the permission contract for the deploy user is undefined.
+**Issue:** These three ACs all apply to `pausePack` logic, but the story lists them sequentially with no explicit dependency call-out. AC5 (timezone check) and AC6 (config default) both run *after* AC7 (coach/parent lookup). If the coach/parent is missing, AC7 fails fast — so AC5's `coach.getCanonicalTimezone()` call assumes the coach exists.
 
-**Questions not answered:**
-1. **Who runs the deploy scripts?** The SSH user is `deploy`, but what about cron jobs, systemd services, or manual re-deploys? Do all of these switch to `deploy`?
-2. **Can `deploy` touch `data/**`?** The AC says "leave `data/**` owned by the service UIDs" (postgres, redis, etc.) but doesn't explain how `deploy` writes to those directories during deployment. Does `deploy` join those groups? Or do the service directories have broad permissions?
-3. **Does `deploy` need sudo?** The AC says "add it to the `docker` group" (so it can run `docker` without sudo) but doesn't say if it needs sudo for other operations like restarting systemd services or mounting volumes.
-4. **Secrets access:** Where do deployment secrets come from (SSH key, AWS creds)? Do they live in `deploy`'s home, or in a shared location? The `secrets.SSH_USER` workflow variable changes to `deploy`, but are there other secrets?
+**Impact:** Low-level — AC7's guard will naturally prevent AC5 from executing on a missing coach. But the story doesn't state this order dependency, so the dev might implement them in isolation and not realize AC7 must run first. Alternatively, the dev might add the coach/parent check *after* the timezone logic and introduce an NPE path.
 
-**Risk:** If the permission model is wrong, the deploy will fail at runtime on the first production deployment, which is the exact scenario AC6 aims to prevent.
-
-**Recommendation:** The dev agent should confirm with the owner (or document in the branch) the exact permission model before writing code. Update AC6's fix approach with explicit answers to the 4 questions above.
+**Recommendation:** Reorder ACs so AC7 runs first (or update AC5 language to "after AC7 validates the coach exists, resolve the timezone"). Add a note: "AC7 is a prerequisite guard for AC5 and AC6."
 
 ---
 
-#### AC11: Revenue running balance — pagination tiebreaker prerequisite
+## Significant Ambiguities (Likely to Cause Rework)
 
-**Issue:** The AC depends on the existence of a deterministic tiebreaker in the page query, but doesn't verify it exists at HEAD.
+### AC2: Pagination response format — no baseline given
 
-**Relevant quote:**
-> "The page is ordered by `(createdAt, <tiebreaker>)`. The opening balance must sum every row that sorts **before the first row of this page**, which means "`createdAt < oldest.createdAt`" **plus** "`createdAt = oldest.createdAt` **and** tiebreaker `<`"
-> 
-> "Identify the actual sort tiebreaker used by the page query (likely `id` or a sequence column)"
-> 
-> "If the page query has **no** deterministic tiebreaker, that is the real bug — add one (`ORDER BY created_at, id`) and make the opening-balance sum match."
+**Issue:** The AC says "match how other list endpoints in this codebase paginate" and "match its `PagedResponse` / `Page` wrapper shape exactly; do not invent a new envelope". But the story doesn't name which sibling endpoint to use as the template, or show what `PagedResponse` looks like.
 
-**The gap:** The AC says "identify" (verify it exists) but doesn't state whether the tiebreaker **does** exist at HEAD.
+**Impact:** The dev must grep/explore to find a reference. If they pick the wrong one, or if the codebase has multiple inconsistent pagination shapes, they'll implement it wrong and either fail the manual code review or encounter a test failure that points back to "match the shape exactly".
 
-**Verified at HEAD:** The story says `:233` calls `sumByParentIdAndCreatedAtBefore` but doesn't confirm the page query's order clause. This requires reading `ParentCreditLedgerRepository.findPageByParentId` (or wherever the page is fetched).
-
-**Risk:** If the tiebreaker doesn't exist, the implementation becomes: (1) add the tiebreaker to the page query, (2) verify it's deterministic (e.g., `ORDER BY created_at, id`), (3) add the compound-predicate repo method. This is a larger change than AC11 implies.
-
-**Recommendation:** Dev agent should verify the tiebreaker at implementation start and flag if it's missing as a scope expansion.
+**Recommendation:** Cite a specific endpoint: e.g., "match `GET /coaches/{id}/revenue-history` which uses Spring Data `Page<RevenueResponse>`" with a line reference. Or add a quick snippet showing the expected JSON envelope.
 
 ---
 
-#### AC14: Messaging N+1 — entirely conditional
+### AC8: Exception message wording — no final phrasing approved
 
-**Issue:** AC14 is not a concrete acceptance criterion; it's "investigate, then do one of two different things depending on findings."
+**Issue:** The AC suggests `"Booking status changed — please reload and try again"` but says "stop instructing the end user". The suggestion still contains "try again", which *is* an instruction. The exact wording is not approved; the story leaves it to the dev agent's judgment.
 
-**The AC:**
-> "Determine the actual per-request query count of `getConversations` at HEAD; if there is a residual per-row lookup in `toSummary` / `buildSummaryContext`, batch it; if the cost is already constant, add a query-count IT as the regression guard and close the ledger item as measured."
+**Impact:** The dev might choose wording that the next code review rejects as still being imperative (e.g., "Retry" vs "Reload" vs "Please try again later"). This will cause a rework loop.
 
-**The gap:** This is a conditional AC with two paths:
-- Path A: Residual N+1 exists → add batching
-- Path B: No N+1 exists → add a test and close
-
-The story doesn't specify which path to take. The implementation is exploratory.
-
-**Risk:** The test bar is different for each path (Path B adds a test, but Path A doesn't explicitly say to add one). The AC19 ledger entry depends on which path was taken (close the item? Keep it?)
-
-**Recommendation:** Implementation should read `toSummary` and `buildSummaryContext` in full at the start and decide on path. Add a test in both cases (AC19 should close the ledger regardless). The story should be clearer: add a `MessagingConversationsQueryCountIT` *always*, and conditionally add batching if it's needed.
+**Recommendation:** Provide the exact approved wording, or explicitly state "the dev may choose wording that avoids imperative instructions; code review will verify non-imperative tone."
 
 ---
 
-### 🟡 Minor Specificity Gaps (flag but likely resolvable)
+### AC10: Authorization choice — (b) is not really "closing" the issue
 
-#### AC3: "armed dirs" is vague
+**Issue:** Option (b) is "just add a comment recording the decision". But a comment can rot and provide no security value over time. The AC says "or" — implying both are equally valid closure. However, option (a) (tightening the authorization) actually fixes a potential exposure; option (b) is a documentation-only non-fix.
 
-**Quote:**
-> `:417-427` does `stat -c '%a %u:%g'` ownership/mode checks on `traefik/acme.json` and each **armed dir**.
+**Impact:** The dev might choose (b), which leaves the latent authorization weakness in place. A future security audit will ask "why is report-message endpoint only `IS_AUTHENTICATED` and not party-scoped?" If the comment isn't found or is overlooked, the issue gets re-raised.
 
-**The gap:** "Armed dir" is jargon. Which directories are these? The AC should list them explicitly (e.g., `traefik/acme.json`, `postgres/`, `redis/`) so the implementation doesn't guess.
-
-**Recommendation:** List the directories explicitly in AC3's fix approach, or grep `provision.sh` for the current `stat` checks and cite them.
+**Recommendation:** Reframe as "(a) if a reusable party-check expression exists, apply it [preferred]; (b) if no such expression exists, the code stays unchanged but you **must** record the decision in a GitHub issue / backlog item for the platform team to revisit, not just a code comment." Or: "Strongly prefer (a). (b) is acceptable only if no existing reusable expression and the PM/security team approves the documented deferral."
 
 ---
 
-#### AC4: Iteration count is underspecified
+## Missed Corner Cases
 
-**Quote:**
-> "Bump the iteration count (e.g. `seq 1 24` at 5 s = ~180 s post-startup) — **pick the number** from `docker-compose.yml`'s `app` `start_period` + observed cold-start, and leave a comment with the arithmetic."
+### AC1: Race condition with partial deactivations
 
-**The gap:** "Pick the number" is subjective. Does the dev agent:
-- Read `docker-compose.yml`, see `start_period: 60s`, and guess "180s total is 60 + 120 = 24 × 5"?
-- Run a test deploy and time the JVM cold-start?
-- Ask the owner?
+**Scenario:** Two threads race to `createTier` for the same coach. Both call `findAllByCoachIdAndIsActiveTrue` and see the same set of existing active tiers (isolation at READ_COMMITTED or above, this is possible if the reads happen before either deactivation is flushed). Both enter the deactivate loop. Thread A deactivates tier #1 and saveAndFlush. Thread B reads tier #1 again and deactivates it again (redundant, but OK). Thread A tries to insert its new tier and succeeds. Thread B tries to insert and gets the unique constraint violation, throws 409. Both threads now see an updated state.
 
-**Recommendation:** The AC should recommend a concrete default (e.g., "24 iterations ≈ 180s post-startup, or adjust based on observed start times"). The comment block in the code should show the math.
+**Corner case:** If the isolation level is READ_UNCOMMITTED, both threads might read committed tiers, deactivate different overlapping sets, and end up with **zero active tiers** before either insert. Then one insert succeeds, leaving exactly one active tier. The other fails with 409. Correct outcome.
 
----
+**Status:** Not a bug — `@Transactional` + proper isolation ensures this works. But the test should verify the happy-path scenario: `createTier` twice in sequence (not concurrent) must also leave exactly one active tier (test covers the rollback behavior of the first call).
 
-#### AC18: openpdf 3.x release notes dependency
-
-**Quote:**
-> "openpdf 3.x is API-compatible with iText 2.x / openpdf 1.x at the class level — `Document`, `PdfWriter.getInstance`, `PdfPTable`, `PdfPCell`, `FontFactory`, `Image.getInstance`, `PageSize` all keep their signatures; only the package changed. Compile-check for any method that *was* removed in 3.x and adjust."
-
-**The gap:** The AC doesn't list which methods (if any) were removed. The implementation must check the openpdf 3.0.5 release notes separately, and the AC doesn't provide a link or guidance.
-
-**Recommendation:** Implementation should check openpdf 3.0.5 release notes before starting. If methods were removed, the AC should have listed them. The compile-check will catch it, but a pre-compile search would be faster.
+**Recommendation:** The story already requires a sequential test; no change needed. But the dev should document why the deactivate loop is safe even in a concurrent environment (atomicity + isolation, not optimistic locking).
 
 ---
 
-### 🔵 Unresolved Dependencies
+### AC4: Listener-phase exception behavior
 
-#### AC6 ↔ AC7 ordering
+**Scenario:** The story references `deferred-92` AC4 as the pattern for pack-expiry email, stating that ~23 emails were moved to `BEFORE_COMMIT`. But if any of those listeners throw an exception, does the producing transaction abort, or does the exception get swallowed by Spring's listener error handler?
 
-AC7 depends on AC6's path choice:
-> "After AC6 moves the checkout to its own path, confirm that path is **not** under `${MOUNT_POINT}`"
+**Corner case:** If Spring's listener error handler swallows the exception (logs it, doesn't propagate), then `expiryWarnedAt` gets stamped even though the email enqueue failed. This breaks the atomicity guarantee the AC claims to establish.
 
-If AC6 chooses `/opt/skillars/app` (under `/opt/skillars`), and the mount point is `/opt/skillars/data`, then the checkout **is** `/opt/skillars/app` and is a sibling of `data/`, not under it. This is correct.
-
-But if AC6 had chosen `/srv/skillars` instead, AC7 would be trivial. The story notes to "confirm details with the owner," which is good, but the implementation should prioritize the `/opt/skillars/app` choice to keep the blast radius small (as the story recommends).
-
-**No gap here, just a dependency to watch.**
+**Recommendation:** The AC should include a test that verifies: (1) email enqueue success → expiryWarnedAt stamped in same transaction, (2) email enqueue failure → confirm whether expiryWarnedAt is still stamped (it will be, if Spring swallows the listener exception). The test should document the actual behavior.
 
 ---
 
-#### AC19 depends on AC14 outcome
+### AC5: Timezone fallback with missing coach
 
-AC19 says:
-> "If a standalone `skillars-8-1` bullet still exists, delete it; otherwise add one line to the `deferred-101` audit block's 'Items re-verified still open' list noting D2 is now closed/measured by `deferred-102` AC14."
+**Scenario:** AC5 says "fallback `"UTC"` with a WARN, matching every other read-side zone fallback in the codebase". But what if the coach profile exists but the `canonicalTimezone` field is null? The story doesn't clarify whether `.getCanonicalTimezone()` can return null, or if it always returns a string.
 
-This means AC19's ledger entry is conditional on whether AC14 finds an N+1 or not. This is fine, but the implementation should note it.
+**Corner case:** If it can return null, the fallback logic is correct. If it cannot (always returns a non-null IANA string), the fallback is dead code and might confuse future readers.
 
----
-
-### ✅ Well-Specified Areas
-
-- **AC1, AC8, AC9:** Shell edits are clear and concise.
-- **AC10:** Schema change is straightforward and follows conventions.
-- **AC12, AC13:** Constants/filters are well-scoped.
-- **AC15, AC16, AC17, AC18:** Verification/fix tasks are clear, even if exploratory.
-- **Dev Notes (sequencing):** Correct identification of AC6/AC7 as high-risk and highest-priority.
-- **Testing standards:** Good reference to project conventions.
-- **Project structure notes:** Filesystem/module boundaries are clear (via memory notes).
+**Recommendation:** Verify the type of `CoachProfile.canonicalTimezone` in the codebase. If nullable, the AC is correct and the test should cover this fallback. If never null by constraint, remove the fallback and document why.
 
 ---
 
-## Potential False Assumptions
+### AC7: Silent null email in the forfeiture scheduler
 
-1. **AC1:** Assumes the trap's `rm` doesn't fail mid-file. Edge case: if `rm` fails with EROFS, the trap doesn't fail (no `-e` guard). Minor issue, but worth a comment: `trap 'rm -f "${DUMP_FILE}" || true' EXIT` is safer.
+**Scenario:** The story says "a blank `parentEmail` must never reach the mail layer". But in `SessionPackForfeitureScheduler`, the parent lookup is `.map(u -> u.getEmail()).orElse("")`. If the User exists but `u.getEmail()` is null, `.orElse("")` still applies and produces an empty string. But if the User doesn't exist, `.orElse("")` also produces an empty string. Both cases are indistinguishable at the mail layer.
 
-2. **AC3:** Assumes `rsync -aHAXcni` doesn't have performance impact. The AC says "small tree" so this is likely fine, but a very large `postgres/` dir could make this a bottleneck. Low probability, but worth noting in the test.
+**Corner case:** The scheduler should log ERROR in both cases, but the AC only mentions "missing coach/parent record". If a User exists but has a null email (data corruption), the scheduler will silently skip it and the data corruption remains invisible.
 
-3. **AC4:** Assumes the JVM cold-start is deterministic and predictable. If it varies wildly (e.g., when under memory pressure), 24 × 5s might not be enough. The comment in the code should say "adjust if cold-start times increase."
-
-4. **AC6:** Assumes the owner wants to *avoid* the "accept & document risk" option. The story says D3 decided on "non-root user," but there was a trade-off considered. If the owner later changes their mind, this whole AC is wasted work.
-
-5. **AC11:** Assumes the pagination uses a deterministic order. If the current query is `ORDER BY created_at` with no tiebreaker, adding one is a behavior change (rows may reorder). Unlikely to cause data corruption, but worth verifying.
-
-6. **AC14:** Assumes `buildSummaryContext` is where the N+1 would hide. The AC already checked and found only `toSummary` is questionable. Implementation should verify this is still true.
+**Recommendation:** AC7 should say "a blank or null email must never reach the mail layer. For both missing User and User-with-null-email, log ERROR and skip." The test should cover both scenarios.
 
 ---
 
-## Ledger Hygiene (AC19) — Verification Checklist
+### AC12: Deletion order sensitivity in ledger re-mine
 
-AC19 must delete bullets named by AC1–AC18. The story lists the "Ledger" line for each AC, but implementation must:
+**Scenario:** AC12 says "for every untagged bullet, diff its cited location against HEAD. Delete any that are demonstrably closed". Seven bullets are listed as examples. But the story doesn't specify: if a section has multiple bullets and all are deleted, should the section header also be deleted? What if some bullets in a section are `[DECIDED]` (keep) and others are closed (delete) — does the section stay or go?
 
-1. **Re-verify each bullet exists in `deferred-work.md` at time of implementation** (line numbers will have drifted since 2026-09-08).
-2. **Check `sprint-status.yaml` for `skillars-deferred-97`** — set to `withdrawn`. (Not mentioned in "Files in play" table; should be added.)
-3. **Confirm the Reconstruction check** statement is accurate after deletes.
+**Corner case:** If the dev leaves orphaned section headers (with no bullets), the file becomes malformed. If the dev deletes the header when the last bullet is deleted, they might accidentally delete a `[DECIDED]` bullet that was intentionally placed under that header.
 
----
-
-## Testing & Verification Gaps
-
-| AC | Gap | Severity |
-|----|-----|----------|
-| AC2 | No test that forces APP_CID retry to exhaust and verifies exit contract | Medium |
-| AC5 | No test that forces SSH exit 255 and verifies transport-failure path is taken | Medium |
-| AC6 | No dry-run that verifies permission model end-to-end | High |
-| AC11 | No verification that tiebreaker exists before implementation | High |
-| AC14 | Outcome-dependent; test plan differs by path | Medium |
-| AC16 | Manual "attribute and ref agree" is subjective; no automation possible | Low |
+**Recommendation:** AC12 should clarify: "Delete bullets but leave section headers if any bullets remain; if all bullets in a section are deleted, delete the header too. Do not delete any `[DECIDED]` bullets even if their section becomes empty — move them to a `[DECIDED Items Awaiting Future Stories]` section if needed." (This might already be the intended behavior, but it should be explicit.)
 
 ---
 
-## Recommendations for Dev Agent
+## Weak Assumptions (Won't Cause Bugs, But Worth Verifying)
 
-1. **Before implementation:** Clarify AC2 exit contract, AC5 transport-failure threshold, and AC6 permission model with the owner or document in CLAUDE.md.
-2. **At implementation start:** Verify AC11's pagination tiebreaker exists; if not, expand scope or flag as blocker.
-3. **During AC14:** Read the full `toSummary` and `buildSummaryContext` code; decide on path (add batching vs. add test) and document.
-4. **During AC3, AC4, AC18:** Use explicit lists/numbers in code comments (armed dirs, iteration formula, openpdf release notes).
-5. **Final check (AC19):** Re-verify all ledger bullets exist before deletion; check `sprint-status.yaml` for `skillars-deferred-97`.
+### AC1: Constraint name assumption
+The story assumes the unique constraint is named exactly `idx_spt_one_active_per_coach`. It references `V62__session_payment_credit_wallet.sql`. If a later migration renamed the index (common in production DB iterations), the catch-by-name will fail and the exception will propagate as a 500 instead of a 409.
+
+**Recommendation:** Verify the constraint name at HEAD before the story starts. Add a comment in the code naming the constraint so future maintainers know it's a brittle dependency. Consider adding a fallback catch that logs WARN if the constraint name doesn't match (defensive programming).
 
 ---
 
-## Conclusion
+### AC2: Page size default
+The story says "use the project's established default page size — check a sibling paginated resource". It doesn't say what that size is. If the codebase uses 50 for most endpoints but the dev accidentally uses 20, it's inconsistent but not wrong. The test should verify the actual default applied.
 
-**Ready for dev with minor clarifications.** No false positives detected; all findings are genuine implementation dependencies or specificity gaps. The story's design is sound and well-grounded in HEAD state. The 5 critical gaps above will require 30–60 minutes of clarification before code write, but no scope rework is needed.
+**Recommendation:** No change to the AC, but the test should explicitly assert the page size (e.g., `assertEquals(20, response.getSize())`).
+
+---
+
+### AC3: Narrow exception type is not specified
+The story says "Identify `deductSession`'s declared / reachable business exceptions (grep `PackSessionService.deductSession` — expect a domain exception such as `PackExhaustedException` / `ResourceNotFoundException` / a `SessionPackException` supertype)". The exact type is unknown; the dev must discover it.
+
+**If the discovery is wrong** (e.g., `deductSession` can throw `IllegalArgumentException`, which the dev treats as a business exception and catches), then a legitimate programming bug (e.g., invalid session ID) gets swallowed and logged as a business failure.
+
+**Recommendation:** Include "verify by reading the implementation and Javadoc of `PackSessionService.deductSession` before narrowing the catch type" in the AC's verification section.
+
+---
+
+### AC9: `loadStripe()` function placement
+The story says "extract the `onMounted` init body into a named `async function loadStripe()`". It doesn't specify whether this should be a top-level function, a ref function, or a method on the component instance. In a `<script setup>`, the convention is usually a top-level `async function`.
+
+**Recommendation:** No bug here, just style. The dev should follow `<script setup>` conventions (top-level function, not ref-wrapped).
+
+---
+
+## Clarity Issues (Not Bugs, But Could Slow Down Development)
+
+1. **AC11 branching decision point:** The story says "pick based on what the grep finds — record the choice". But it doesn't say whether the dev should grep and decide, or whether the PM/architect has already decided and the story just hasn't communicated it. A pre-decision would save time.
+
+2. **AC12 reconstruction check:** The story says "every surviving non-blank line must match the pre-edit file in order, nothing reworded". But `deferred-work.md` might have blank lines within sections (for readability). What counts as "non-blank"? A line with only whitespace? The exact definition matters for the check.
+
+3. **Project-owner decision D2 mentions deferred-91 Part B:** The story defers payment-state-machine changes to `deferred-91` AC5 Part B, and says that story needs `docs/architecture/payout-and-capture-pending.md` D1–D5 signed off first. But is that doc actually in the repo, and is it in DRAFT status? If it's missing, the dev can't verify the dependency.
+
+---
+
+## Test Coverage Observations
+
+- **AC1:** Tests specify concurrent race + sequential case. ✓ Solid.
+- **AC2:** Tests specify multi-page retrieval and metadata correctness. ✓ Solid.
+- **AC3:** Tests specify business-exception path and unchecked-exception propagation. ✓ Solid.
+- **AC4:** Tests specify outbox atomicity + retry behavior. ✓ Solid, but see Critical Issue above about listener exception handling.
+- **AC5:** Tests specify timezone fallback with UTC+14 edge case. ✓ Solid.
+- **AC6:** Tests specify absent key, non-numeric value, and numeric value paths. ✓ Solid, but see Weak Assumption above about fallback logic.
+- **AC7:** Tests specify missing coach/parent in both pausePack and scheduler. ✓ Solid, but see Missed Corner Case above about null email.
+- **AC8:** Tests specify JSON error key is preserved. ✓ Solid, but frontend bundle parity check is mentioned as existing ("must stay green") — unclear if a regression test actually enforces it or if it's manual.
+- **AC9:** Tests are manual dev-server exercise. ✓ Appropriate given no frontend test framework yet, but high reliance on manual verification.
+- **AC10:** Tests specify both party and non-party access control. ✓ Solid.
+- **AC11:** Tests specify zero-ledger parent and native-SQL query guarantee. ✓ Solid.
+- **AC12:** Tests are `git diff` review. ✓ Appropriate for a documentation change.
+
+**Minor gap:** AC8 mentions "Frontend bundle parity check and MessageBundleParityTest must stay green" but doesn't name the test class or point to where it runs. The dev will need to search for it.
+
+---
+
+## No False Positives Found
+
+All concerns above are either legitimate clarification needs or edge cases worth documenting. The core approach of each AC is sound. The story is not over-cautious or introducing unnecessary complexity.
+
+---
+
+## Recommendations Summary
+
+### Before Dev Starts
+1. ✅ **AC4:** Verify the listener exception-handling semantics in `deferred-92`'s `RefundEnqueueListener`. Document whether `expiryWarnedAt` gets stamped when email enqueue fails.
+2. ✅ **AC1:** Verify the constraint name `idx_spt_one_active_per_coach` exists at HEAD in the exact migration cited.
+3. ✅ **AC11:** Clarify whether the decision between view-LEFT-JOIN and document+test has been pre-made, or whether the dev should decide based on what exists.
+4. ✅ **AC2:** Cite a specific sibling paginated endpoint as the template for response shape.
+
+### During Dev
+1. ✅ **AC7:** Order implementation as AC7 first (coach/parent guard), then AC5/AC6.
+2. ✅ **AC3:** Grep and document the exact exception types caught by `deductSession`.
+3. ✅ **AC12:** Explicitly check constraint names (not re-discovered at test time).
+
+### Test/Review Phase
+1. ✅ **AC4:** Test listener exception behavior explicitly.
+2. ✅ **AC5:** Test timezone fallback only if the field is nullable.
+3. ✅ **AC8:** Run the frontend bundle parity check (identify the exact test name).
+
+---
+
+## Final Verdict
+
+**Status: READY FOR DEV** with the above clarifications addressed.
+
+The story is comprehensive, well-structured, and based on real verified issues. The ACs are achievable and the test specs are concrete. No blocking issues; the ambiguities are resolvable with brief verification before coding starts. The dev agent should be able to complete this story without major rework loops if the four pre-start verifications are done first.

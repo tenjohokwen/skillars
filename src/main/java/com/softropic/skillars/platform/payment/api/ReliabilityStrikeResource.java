@@ -15,8 +15,14 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.List;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.web.bind.annotation.RequestParam;
+
 import java.util.UUID;
+
+import static org.springframework.data.domain.Sort.Direction.DESC;
 
 @Observed(name = "payment.reliability")
 @RestController
@@ -24,22 +30,30 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class ReliabilityStrikeResource {
 
+    private static final int MAX_PAGE_SIZE = 100;
+
     private final ReliabilityStrikeService reliabilityStrikeService;
     private final SecurityUtil securityUtil;
 
     @GetMapping("/coaches/me/strikes")
     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
-    public ResponseEntity<List<ReliabilityStrikeResponse>> getMyStrikes() {
-        List<CoachReliabilityStrike> strikes = reliabilityStrikeService.getCoachStrikes(currentCoachUserId());
-        List<ReliabilityStrikeResponse> response = strikes.stream()
-            .map(s -> new ReliabilityStrikeResponse(
-                s.getId(),
-                s.getBookingId(),
-                s.getReason(),
-                s.getCreatedAt().toInstant(),
-                s.isAcknowledged()
-            ))
-            .toList();
+    public ResponseEntity<Page<ReliabilityStrikeResponse>> getMyStrikes(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        // skillars-deferred-103 P7: clamp caller-supplied paging so a negative page / zero size
+        // cannot 500 via PageRequest.of, and a huge size cannot reinstate the unbounded read AC2
+        // set out to remove.
+        int safePage = Math.max(page, 0);
+        int safeSize = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+        Page<CoachReliabilityStrike> strikes = reliabilityStrikeService.getCoachStrikes(
+            currentCoachUserId(), PageRequest.of(safePage, safeSize, Sort.by(DESC, "createdAt")));
+        Page<ReliabilityStrikeResponse> response = strikes.map(s -> new ReliabilityStrikeResponse(
+            s.getId(),
+            s.getBookingId(),
+            s.getReason(),
+            s.getCreatedAt().toInstant(),
+            s.isAcknowledged()
+        ));
         return ResponseEntity.ok(response);
     }
 

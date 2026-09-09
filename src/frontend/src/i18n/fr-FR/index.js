@@ -1329,6 +1329,8 @@ export default {
       rescheduleAlreadyPending:
         'Une demande de report est déjà en attente de réponse pour cette séance.',
       rescheduleNotPending: 'Cette demande de report a déjà été traitée.',
+      concurrentModification:
+        "La réservation vient d'être modifiée par une autre personne. Actualisez la page pour voir son statut actuel.",
       listMayBeStale:
         'Cette liste n’est peut-être plus à jour. Rechargez la page pour voir les dernières données.',
       requestNotAllowed: 'Vous n’avez pas la permission d’effectuer cette action.',

@@ -10,6 +10,7 @@ import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,6 +26,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -179,20 +181,40 @@ class CreditRoutingTest {
     }
 
     @Test
-    void packBasedBooking_deductSessionFailsWithNonPaymentGatewayException_callsPersistFailureWithZeroReversal() {
+    void packBasedBooking_deductSessionFailsWithTransientDataAccess_callsPersistFailure_doesNotPropagate() {
+        // skillars-deferred-103 AC3 (code-review resolution): row-lock retry exhaustion inside
+        // deductSession is a TransientDataAccessException. This listener is AFTER_COMMIT, so an
+        // escaping exception is only logged and never retried — record a payment failure + notify
+        // rather than silently strand the booking.
         UUID packId = UUID.randomUUID();
-        doThrow(new IllegalStateException("simulated repository failure"))
+        doThrow(new PessimisticLockingFailureException("row is locked"))
             .when(packSessionService).deductSession(packId);
 
         service.onBookingAccepted(event(packId));
 
-        verify(creditWalletService, never()).getBalance(any());
-        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any());
         verify(persistenceService, never()).persistPaymentSuccess(
             any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(persistenceService).persistPaymentFailure(
             eq(BOOKING_ID), eq(BigDecimal.ZERO),
             eq(PARENT_ID), anyString(), anyString(), any(Instant.class), anyString());
+    }
+
+    @Test
+    void packBasedBooking_deductSessionFailsWithProgrammingBug_propagates_andDoesNotRecordFailure() {
+        // skillars-deferred-103 AC3: an IllegalStateException / NPE is a defect, not an expected
+        // business failure — it must NOT be disguised as a payment failure. It propagates so the
+        // listener's error handler / alerting sees it.
+        UUID packId = UUID.randomUUID();
+        doThrow(new IllegalStateException("null coach in deductSession"))
+            .when(packSessionService).deductSession(packId);
+
+        assertThatThrownBy(() -> service.onBookingAccepted(event(packId)))
+            .isInstanceOf(IllegalStateException.class);
+
+        verify(persistenceService, never()).persistPaymentSuccess(
+            any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        verify(persistenceService, never()).persistPaymentFailure(
+            any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test

@@ -26,7 +26,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -53,20 +53,27 @@ class SessionPackForfeitureSchedulerTest {
             TransactionCallback<?> callback = inv.getArgument(0);
             return callback.doInTransaction(null);
         });
+        lenient().when(sessionPackPurchaseRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+    }
+
+    private CoachProfile coach(String displayName) {
+        CoachProfile c = new CoachProfile();
+        c.setDisplayName(displayName);
+        return c;
+    }
+
+    private User userWithEmail(String email) {
+        User u = new User();
+        u.setEmail(email);
+        return u;
     }
 
     @Test
-    void forfeitExpiredPacks_marksNotifiedAndPublishesEventOnce() {
-        SessionPackPurchase purchase = buildPurchase();
-        CoachProfile coach = new CoachProfile();
-        coach.setDisplayName("Forfeit Coach");
-
+    void forfeitExpiredPacks_coachAndEmailPresent_marksNotifiedAndPublishesEventOnce() {
+        SessionPackPurchase purchase = buildPurchase(COACH_ID);
         when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any())).thenReturn(List.of(purchase));
-        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
-        User parentUser = mock(User.class);
-        when(parentUser.getEmail()).thenReturn("parent@test.com");
-        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(parentUser));
-        when(sessionPackPurchaseRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach("Forfeit Coach")));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(userWithEmail("parent@test.com")));
 
         scheduler.forfeitExpiredPacks();
 
@@ -80,19 +87,50 @@ class SessionPackForfeitureSchedulerTest {
     }
 
     @Test
-    void forfeitExpiredPacks_secondRun_doesNotReNotifyAlreadyNotifiedPack() {
-        // First run: pack is found and notified
-        SessionPackPurchase purchase = buildPurchase();
+    void forfeitExpiredPacks_missingCoach_isLeftUnstamped_soItKeepsSurfacing() {
+        // skillars-deferred-103 AC7 + P5: coach_id is FK-backed (fk_spp_coach), so a missing coach
+        // is a data-integrity failure. It is deliberately NOT stamped — the pack keeps being
+        // selected and the ERROR repeats until the row is repaired.
+        SessionPackPurchase purchase = buildPurchase(COACH_ID);
         when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any())).thenReturn(List.of(purchase));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.empty());
-        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
-        when(sessionPackPurchaseRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        scheduler.forfeitExpiredPacks();
+
+        assertThat(purchase.getExpiredNotifiedAt()).isNull();
+        verify(sessionPackPurchaseRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void forfeitExpiredPacks_blankParentEmail_finalisesWithoutNotifying() {
+        // skillars-deferred-103 P5: a parent legitimately without an email is not a repairable bug
+        // and a retry cannot change the outcome — the forfeiture is stamped once (so the pack stops
+        // being re-selected every hour) and only the notification is skipped.
+        SessionPackPurchase purchase = buildPurchase(COACH_ID);
+        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any())).thenReturn(List.of(purchase));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach("Coach")));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(userWithEmail("  ")));
+
+        scheduler.forfeitExpiredPacks();
+
+        assertThat(purchase.getExpiredNotifiedAt()).isNotNull();
+        verify(sessionPackPurchaseRepository).save(purchase);
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void forfeitExpiredPacks_secondRun_doesNotReNotifyAlreadyFinalisedPack() {
+        SessionPackPurchase purchase = buildPurchase(COACH_ID);
+        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any()))
+            .thenReturn(List.of(purchase))
+            .thenReturn(List.of());
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach("Coach")));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(userWithEmail("parent@test.com")));
 
         scheduler.forfeitExpiredPacks();
         assertThat(purchase.getExpiredNotifiedAt()).isNotNull();
 
-        // Second run: repository query now excludes the already-notified pack (simulated by returning empty)
-        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any())).thenReturn(List.of());
         scheduler.forfeitExpiredPacks();
 
         verify(eventPublisher, times(1)).publishEvent(any(SessionPackExpiredEvent.class));
@@ -100,19 +138,22 @@ class SessionPackForfeitureSchedulerTest {
 
     @Test
     void forfeitExpiredPacks_oneFailure_othersContinue() {
-        SessionPackPurchase purchase1 = buildPurchase();
-        SessionPackPurchase purchase2 = buildPurchase();
+        UUID otherCoach = UUID.randomUUID();
+        SessionPackPurchase failing = buildPurchase(COACH_ID);
+        SessionPackPurchase healthy = buildPurchase(otherCoach);
 
-        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any())).thenReturn(List.of(purchase1, purchase2));
-        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.empty());
-        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
-        when(sessionPackPurchaseRepository.save(purchase1)).thenThrow(new RuntimeException("DB error"));
-        when(sessionPackPurchaseRepository.save(purchase2)).thenAnswer(inv -> inv.getArgument(0));
+        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any()))
+            .thenReturn(List.of(failing, healthy));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach("Coach A")));
+        when(coachProfileRepository.findById(otherCoach)).thenReturn(Optional.of(coach("Coach B")));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(userWithEmail("parent@test.com")));
+        when(sessionPackPurchaseRepository.save(failing)).thenThrow(new RuntimeException("DB error"));
+        when(sessionPackPurchaseRepository.save(healthy)).thenAnswer(inv -> inv.getArgument(0));
 
         scheduler.forfeitExpiredPacks();
 
-        assertThat(purchase2.getExpiredNotifiedAt()).isNotNull();
-        verify(sessionPackPurchaseRepository, times(2)).save(any());
+        assertThat(healthy.getExpiredNotifiedAt()).isNotNull();
+        verify(sessionPackPurchaseRepository).save(healthy);
     }
 
     @Test
@@ -125,12 +166,12 @@ class SessionPackForfeitureSchedulerTest {
         verify(sessionPackPurchaseRepository, never()).save(any());
     }
 
-    private SessionPackPurchase buildPurchase() {
+    private SessionPackPurchase buildPurchase(UUID coachId) {
         SessionPackPurchase purchase = new SessionPackPurchase();
         purchase.setPurchaseId(UUID.randomUUID());
         purchase.setParentId(PARENT_ID);
         purchase.setPlayerId(PLAYER_ID);
-        purchase.setCoachId(COACH_ID);
+        purchase.setCoachId(coachId);
         purchase.setRemainingSessions(3);
         purchase.setExpiresAt(Instant.now().minus(1, ChronoUnit.DAYS));
         return purchase;

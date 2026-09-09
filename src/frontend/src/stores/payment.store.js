@@ -107,7 +107,9 @@ export const usePaymentStore = defineStore('payment', {
       this.loading.coachStrikes = true
       this.error.coachStrikes = null
       try {
-        this.coachStrikes = await fetchMyStrikes()
+        // skillars-deferred-103 AC2: endpoint returns a Spring `Page` envelope; unwrap `.content`.
+        const res = await fetchMyStrikes()
+        this.coachStrikes = Array.isArray(res) ? res : (res?.content ?? [])
       } catch (err) {
         this.error.coachStrikes = err
       } finally {

@@ -105,6 +105,21 @@ class ApiAdviceTest {
     }
 
     @Test
+    void integrityViolationHandler_sessionPackTierRace_returns409TierRaceConflict() {
+        // skillars-deferred-103 AC1: two concurrent createTier calls for the same coach both
+        // deactivate + insert; the partial unique index idx_spt_one_active_per_coach (V62:58) lets
+        // exactly one commit and the loser must surface as a retryable 409, not a raw 500.
+        DataIntegrityViolationException ex = dive(
+            "ERROR: duplicate key value violates unique constraint \"idx_spt_one_active_per_coach\"",
+            "23505", "idx_spt_one_active_per_coach");
+
+        ResponseEntity<ErrorDto> response = apiAdvice.integrityViolationHandler(ex);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody().getErrorMsg().errorKey()).isEqualTo("payment.tierRaceConflict");
+    }
+
+    @Test
     void integrityViolationHandler_mappedNonConflictConstraint_returns400WithMappedKey() {
         DataIntegrityViolationException ex = dive(
             "ERROR: duplicate key value violates unique constraint \"user_email_key\"",

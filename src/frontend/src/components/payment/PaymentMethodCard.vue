@@ -4,8 +4,16 @@
       <q-spinner size="32px" />
     </div>
 
-    <div v-else-if="stripeUnavailable" class="text-body2 text-secondary">
-      {{ t('payment.card.unavailable') }}
+    <div v-else-if="stripeUnavailable" class="text-body2 text-secondary q-mb-md">
+      <div class="q-mb-md">{{ t('payment.card.unavailable') }}</div>
+      <q-btn
+        flat
+        no-caps
+        :label="t('common.retry')"
+        @click="loadStripeConfig({ isRetry: true })"
+        :loading="retrying"
+        :disable="retrying"
+      />
     </div>
 
     <template v-else>
@@ -76,6 +84,7 @@ const emit = defineEmits(['saved'])
 
 const cardElementRef = ref(null)
 const loadingInitial = ref(true)
+const retrying = ref(false)
 const stripeUnavailable = ref(false)
 const elementsReady = ref(false)
 const editing = ref(false)
@@ -158,6 +167,25 @@ function cancelEditing() {
   editing.value = false
 }
 
+// skillars-deferred-103 AC9: shared init used by onMounted and the "Try again" button in the
+// stripeUnavailable state. On a retry it drives the button's own spinner (retrying) rather than
+// loadingInitial, so the unavailable block with the button stays visible while the refetch runs;
+// a failed refetch re-raises stripeUnavailable so the affordance stays put.
+async function loadStripeConfig({ isRetry = false } = {}) {
+  if (isRetry) retrying.value = true
+  stripeUnavailable.value = false
+  try {
+    await Promise.all([paymentStore.fetchStripeConfig(), paymentStore.fetchSavedPaymentMethod()])
+  } catch {
+    stripeUnavailable.value = true
+    return
+  } finally {
+    loadingInitial.value = false
+    retrying.value = false
+  }
+  if (showForm.value) await mountCardElement()
+}
+
 async function submit() {
   if (!cardElement) return
   cardError.value = null
@@ -186,12 +214,7 @@ async function submit() {
 }
 
 onMounted(async () => {
-  try {
-    await Promise.all([paymentStore.fetchStripeConfig(), paymentStore.fetchSavedPaymentMethod()])
-  } finally {
-    loadingInitial.value = false
-  }
-  if (showForm.value) await mountCardElement()
+  await loadStripeConfig()
 })
 
 onBeforeUnmount(() => {

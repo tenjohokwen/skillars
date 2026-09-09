@@ -384,6 +384,21 @@ sequenceDiagram
       run at <code>SERIALIZABLE</code> isolation specifically to prevent two concurrent cash-out requests
       from both reading a stale balance and double-spending the same credit.</p>
     </div>
+    <div class="callout warn">
+      <p><strong>A parent with no ledger history has <em>no balance row</em> — treat absence as zero.</strong>
+      There is no "all parents" master table in the <code>payment</code> schema (parents are
+      <code>security.users</code> rows with a role authority), so both the JPQL aggregate
+      <code>ledgerRepository.sumByParentId</code> and the <code>payment.parent_credit_balance</code> view
+      (<code>SELECT parent_id, COALESCE(SUM(amount), 0) ... GROUP BY parent_id</code>) return <strong>zero
+      rows</strong> for a parent who has never had a credit movement — <code>GROUP BY</code> over an empty
+      set yields nothing, and the view's <code>COALESCE</code> only guards a present-but-null <code>SUM</code>,
+      never absence. The safe consumer is <code>CreditWalletService.getBalance</code>, which reads the JPQL
+      path as <code>Optional&lt;BigDecimal&gt;</code> and maps empty to <code>BigDecimal.ZERO</code>. Any new
+      reader — JPQL <em>or</em> a native <code>SELECT balance FROM payment.parent_credit_balance WHERE
+      parent_id = ?</code> — must <code>COALESCE</code> the scalar or treat "no row" as zero.
+      <code>CreditWalletZeroHistoryBalanceIT</code> pins the JPQL guarantee: drop the <code>.orElse</code>
+      and it fails. (skillars-deferred-103 AC11.)</p>
+    </div>
     <div class="callout">
       <p><strong>A coach can't be charged through until Stripe onboarding is COMPLETE.</strong>
       <code>StripePaymentGateway.resolveCoachStripeAccountId</code> throws

@@ -106,4 +106,8 @@ public enum BookingError implements ErrorCode {
             case BLOCK_OVERLAPS_BOOKING    -> "booking.blockOverlapsBooking";
         };
     }
+
+    // skillars-deferred-103 AC8: consistent message for concurrent-modification races.
+    // Keep this constant singular so all ~14 throw sites use identical developer-facing text.
+    public static final String CONCURRENT_MODIFICATION_MESSAGE = "booking status changed under concurrent modification";
 }

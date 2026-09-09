@@ -392,7 +392,7 @@ public class BookingService {
         try {
             acceptAndInitiatePayment(bookingId, ctx);
         } catch (OptimisticLockingFailureException e) {
-            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+            throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
         }
 
         Booking updated = getBookingOrThrow(bookingId);
@@ -457,7 +457,7 @@ public class BookingService {
         try {
             transition(bookingId, BookingEvent.DECLINE, ctx);
         } catch (OptimisticLockingFailureException e) {
-            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+            throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
         }
 
         eventPublisher.publishEvent(new BookingDeclinedEvent(
@@ -669,7 +669,7 @@ public class BookingService {
         try {
             transition(bookingId, BookingEvent.CANCEL_DUE_TO_PAUSE, new TransitionContext(ActorRole.SYSTEM, null));
         } catch (OptimisticLockingFailureException e) {
-            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+            throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
         }
         CoachProfile coach = coachProfileRepository.findById(coachId).orElse(null);
         String coachEmail = coach != null ? resolveEmail(coach.getUserId(), bookingId) : "";
@@ -800,7 +800,7 @@ public class BookingService {
             booking.setCancelReason(resolvedReason);
             bookingRepository.save(booking);
         } catch (OptimisticLockingFailureException e) {
-            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+            throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
         }
 
         eventPublisher.publishEvent(new BookingCancelledByCoachEvent(
@@ -824,7 +824,7 @@ public class BookingService {
         try {
             transition(bookingId, BookingEvent.NO_SHOW_PLAYER, new TransitionContext(ActorRole.COACH, coachUserId));
         } catch (OptimisticLockingFailureException e) {
-            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+            throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
         }
 
         eventPublisher.publishEvent(new PlayerNoShowEvent(
@@ -860,7 +860,7 @@ public class BookingService {
         try {
             transition(bookingId, BookingEvent.NO_SHOW_COACH, new TransitionContext(ActorRole.PARENT, parentUserId));
         } catch (OptimisticLockingFailureException e) {
-            throw new OperationNotAllowedException("Booking status changed concurrently — retry", e, BookingError.CONCURRENT_MODIFICATION);
+            throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
         }
 
         eventPublisher.publishEvent(new CoachNoShowEvent(

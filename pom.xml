@@ -60,7 +60,8 @@
 			             reachable code path, not a dormant dependency.
 			  netty      CVE-2026-59901 (netty-codec), CVE-2026-55831/55833/56745
 			             (netty-codec-http), CVE-2026-56819 (http2), CVE-2026-44249/45416/50010
-			             (netty-handler). Fix on the 4.1.x line is 4.1.136.Final.
+			             and CVE-2026-75595 (netty-handler). Fix on the 4.1.x line is 4.1.137.Final
+			             (4.1.136.Final covered all but CVE-2026-75595, flagged 2026-09-09).
 			  postgresql CVE-2026-42198, CVE-2026-54291. The 3.5.16 parent manages 42.7.11,
 			             which fixes only the first; 42.7.12 fixes both.
 			  httpcore5  CVE-2026-54399 - denial of service via excessive HTTP headers. The
@@ -73,7 +74,7 @@
 			             broke every AWS SDK sync client at runtime.
 			-->
 			<thymeleaf.version>3.1.5.RELEASE</thymeleaf.version>
-			<netty.version>4.1.136.Final</netty.version>
+			<netty.version>4.1.137.Final</netty.version>
 			<postgresql.version>42.7.12</postgresql.version>
 			<httpcore5.version>5.4.3</httpcore5.version>
 		</properties>
