@@ -98,18 +98,31 @@ Platform/Admin → Frontend/UX → Payment/Stripe → Infrastructure/Deployment 
   row; the DB partial unique index `idx_spt_one_active_per_coach` (see
   `V62__session_payment_credit_wallet.sql` / later) rejects the loser with a bare
   `DataIntegrityViolationException` that `ApiAdvice`'s name-keyed maps cannot classify → `500`.
+- **Constraint name — confirmed at HEAD:** `src/main/resources/db/migration/V62__session_payment_credit_wallet.sql:58`
+  — `CREATE UNIQUE INDEX idx_spt_one_active_per_coach ON payment.session_pack_tiers(coach_id)
+  WHERE is_active = true;` (a **partial** unique index). No later migration renames it (grep
+  `one_active_per_coach` / `session_pack_tiers` across `db/migration` returns only V62). The
+  catch-by-name is therefore safe today — but add a code comment at the catch site naming the
+  index as a brittle string dependency, so a future rename is caught in review.
 - **Fix approach:**
   - Annotate `createTier` `@Transactional` — without it the deactivate loop and the insert are not
     atomic even single-threaded (a failure mid-loop leaves some tiers deactivated and no new active
-    tier).
-  - Wrap the `save`/flush in a `try/catch (DataIntegrityViolationException e)`; if the constraint
-    name is `idx_spt_one_active_per_coach` (use the same
-    `ApiAdvice.CONSTRAINT_MAPPINGS`/`CONFLICT_CONSTRAINTS` convention the rest of the codebase uses —
-    prefer registering the constraint there over a local catch if that is how sibling races are
-    handled) throw an `OperationNotAllowedException` with a `CONFLICT`-class error so the client gets
-    409 + a retryable message. Any other `DataIntegrityViolationException` rethrows unchanged.
-  - Do **not** add an application-level pre-check "does an active tier exist" — the DB index is the
-    correct serialization point; the fix is to classify its failure, not to race it in Java.
+    tier). Note `deactivateTier` immediately below it *is* annotated — this is a genuine omission,
+    not a style choice.
+  - Wrap the `save`/flush in a `try/catch (DataIntegrityViolationException e)`; if the violated
+    constraint is `idx_spt_one_active_per_coach` (prefer the codebase's
+    `ApiAdvice.CONSTRAINT_MAPPINGS`/`CONFLICT_CONSTRAINTS` registration if that is how sibling races
+    are classified — grep for an existing entry; only fall back to a local catch if there is no such
+    mechanism) throw an `OperationNotAllowedException` with a `CONFLICT`-class error so the client
+    gets 409 + a retryable message. Any other `DataIntegrityViolationException` rethrows unchanged.
+  - Do **not** add an application-level pre-check "does an active tier exist" — the DB partial index
+    is the correct serialization point; the fix is to classify its failure, not to race it in Java.
+  - **Why the deactivate loop is safe under concurrency** (document this in a code comment): the
+    guarantee rests on `@Transactional` + the DB partial unique index, **not** on optimistic
+    locking. Two racing transactions may both deactivate overlapping sets and both attempt an
+    insert; the index lets exactly one insert commit and rejects the other — which AC1 now maps to
+    409. There is no lost-update window because neither transaction's writes are visible to the
+    other until commit, and the loser's whole transaction (deactivations included) rolls back.
 - **Ledger:** `## Deferred from: adversarial code review of skillars-7-2 Group 2 Service Layer
   (2026-06-24)` — delete the **D3** bullet (`createTier` TOCTOU). The sibling **D1** bullet in the
   same section is already stale (see the Story Overview table) — delete it too, with a one-line note
@@ -126,30 +139,43 @@ Platform/Admin → Frontend/UX → Payment/Stripe → Infrastructure/Deployment 
 
 ### AC2: `GET /coaches/me/strikes` — paginate the response
 
-- **Task:** Replace the unbounded `List<ReliabilityStrikeResponse>` return with a `Page`
-  (or `Slice`) driven by a `Pageable`, matching how other list endpoints in this codebase paginate.
-- **Verified at HEAD:** `src/main/java/com/softropic/skillars/platform/payment/api/ReliabilityStrikeResource.java:30-44`
-  — `getMyStrikes()` takes no arguments, calls `reliabilityStrikeService.getCoachStrikes(currentCoachUserId())`
-  and returns `ResponseEntity<List<ReliabilityStrikeResponse>>` with no bound. `ReliabilityStrikeService.getCoachStrikes`
-  returns a plain `List`. `CoachReliabilityStrike` rows accrue over a coach's lifetime and are never
-  pruned.
+- **Task:** Replace the unbounded `List<ReliabilityStrikeResponse>` return with a paginated
+  `Page<ReliabilityStrikeResponse>`, following the **exact** pattern of the sibling endpoint named
+  below — same param style, same default size, same return wrapper.
+- **Verified at HEAD:**
+  - `src/main/java/com/softropic/skillars/platform/payment/api/ReliabilityStrikeResource.java:30-44`
+    — `getMyStrikes()` takes no arguments, calls
+    `reliabilityStrikeService.getCoachStrikes(currentCoachUserId())` and returns
+    `ResponseEntity<List<ReliabilityStrikeResponse>>` with no bound.
+    `ReliabilityStrikeService.getCoachStrikes` returns a plain `List`. `CoachReliabilityStrike`
+    rows accrue over a coach's lifetime and are never pruned.
+  - **Template to copy — `RevenueResource.getCoachTransactions`
+    (`src/main/java/com/softropic/skillars/platform/payment/api/RevenueResource.java:51-62`):** a
+    `/coaches/me/...` `@GetMapping` that takes `@RequestParam(defaultValue = "0") int page` +
+    `@RequestParam(defaultValue = "20") int size`, calls the service with
+    `PageRequest.of(page, size)`, and returns `ResponseEntity<Page<TransactionDto>>`. **This
+    codebase paginates with explicit `page`/`size` request params, not a `@PageableDefault
+    Pageable` argument** — match that. Default size is **20**.
 - **Fix approach:**
-  - Add a `@PageableDefault(size = 20, sort = "createdAt", direction = DESC)` `Pageable` parameter
-    (use the project's established default page size — check a sibling paginated resource such as a
-    revenue or booking list — and match its `PagedResponse` / `Page` wrapper shape exactly; do not
-    invent a new envelope).
+  - Add `@RequestParam(defaultValue = "0") int page` and `@RequestParam(defaultValue = "20") int
+    size` to `getMyStrikes`; call the service with `PageRequest.of(page, size)`; return
+    `ResponseEntity<Page<ReliabilityStrikeResponse>>` — byte-for-byte the `getCoachTransactions`
+    shape.
   - Push the `Pageable` through `ReliabilityStrikeService.getCoachStrikes` into a
     `Page<CoachReliabilityStrike> findByCoachId(UUID coachId, Pageable pageable)` repository method
     (Spring Data derives it). Map to `Page<ReliabilityStrikeResponse>`.
-  - Keep `@PreAuthorize` and `@Observed` unchanged. Preserve the existing default ordering
-    (most-recent-first) as the default sort.
+  - Sort: keep the existing most-recent-first ordering as the default (pass it in the
+    `PageRequest.of(page, size, Sort.by(DESC, "createdAt"))` if the current finder does not already
+    sort — check `getCoachStrikes`'s current query).
+  - Keep `@PreAuthorize` and `@Observed` unchanged.
 - **Ledger:** `## Deferred from: code review of skillars-7-3-cancellation-refund-reliability-strikes
   (2026-06-25)` — delete the **D3** bullet. Leave D1 (`buildSort` identical branches) and D5
   (`CoachCancellationHistory.createdAt`) — both untouched by this change.
 - **Test:** `ReliabilityStrikeResourceIT` — seed >1 page of strikes for one coach; assert page 0
-  returns exactly `size` items newest-first, `page=1` returns the remainder, and the total-count /
-  `hasNext` metadata is correct. Assert the JSON envelope matches the sibling paginated endpoint's
-  shape (guard against an accidental new response format).
+  returns exactly 20 items newest-first (`assertThat(body.getSize()).isEqualTo(20)` — pin the
+  resolved default explicitly), `page=1` returns the remainder, and `totalElements` / `hasNext`
+  are correct. Assert the JSON envelope key set matches `getCoachTransactions`'s response (guard
+  against an accidental new format).
 
 ---
 
@@ -170,10 +196,14 @@ Platform/Admin → Frontend/UX → Payment/Stripe → Infrastructure/Deployment 
   chain — **do not** widen scope to it unless it shares the exact same "business vs defect"
   collapse; note it in the Dev Agent Record if it does and is left alone.
 - **Fix approach:**
-  - Identify `deductSession`'s declared / reachable business exceptions (grep
-    `PackSessionService.deductSession` — expect a domain exception such as
-    `PackExhaustedException` / `ResourceNotFoundException` / a `SessionPackException` supertype).
-  - Catch that supertype for the `persistPaymentFailure` path. Let anything else propagate — the
+  - **Read the implementation and Javadoc of `PackSessionService.deductSession` before choosing the
+    catch type** — do not infer from the name. Identify its declared / reachable *business*-failure
+    exceptions (expect a domain exception such as `PackExhaustedException` /
+    `ResourceNotFoundException` / a `SessionPackException` supertype). If `deductSession` can also
+    throw `IllegalArgumentException` / `IllegalStateException` for a *caller* mistake (bad id, wrong
+    state), those must **not** be in the caught set — they are the exact "programming bug logged as
+    business failure" this AC exists to stop.
+  - Catch the identified business supertype for the `persistPaymentFailure` path. Let anything else propagate — the
     `@TransactionalEventListener(AFTER_COMMIT)` + `REQUIRES_NEW` boundary means an escaped exception
     is logged by Spring's listener error handler with a distinct signature, which is the point.
   - If the codebase's own Dev Notes for `skillars-deferred-56` argued the bare catch was
@@ -206,14 +236,28 @@ Platform/Admin → Frontend/UX → Payment/Stripe → Infrastructure/Deployment 
   (`BookingEmailListener` / `SessionPackEmailListener` were moved to `BEFORE_COMMIT` +
   `Propagation.MANDATORY` `enqueueEmail` by `deferred-92` AC4/AC29 — check whether the *expiry
   warning* specifically was included or missed).
+- **Atomicity semantics — get this right (it is the whole point of the AC):** a
+  `@TransactionalEventListener(phase = BEFORE_COMMIT)` runs **inside** the commit sequence, in
+  `TransactionSynchronization.beforeCommit()`, *before* the physical commit. If that listener
+  throws, the exception propagates and the transaction manager **rolls the producing transaction
+  back** (contrast `AFTER_COMMIT`, where a listener exception is logged and swallowed because the
+  commit already happened). Combined with `Propagation.MANDATORY` on `enqueueEmail` (which joins the
+  *same* transaction rather than starting its own), the outbox INSERT and the `expiryWarnedAt`
+  UPDATE are one atomic unit: **enqueue fails → whole transaction rolls back → `expiryWarnedAt` is
+  NOT stamped.** This is exactly why `RefundEnqueueListener`
+  (`src/main/java/.../platform/payment/service/RefundEnqueueListener.java:33` — verified at HEAD,
+  four `@TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)` methods, its own
+  javadoc: *"skillars-deferred-101 AC4: dedicated BEFORE_COMMIT listener for BOOKING_REFUND enqueue
+  atomicity"*) uses this phase. Do not talk yourself into "BEFORE_COMMIT doesn't abort the parent" —
+  it does.
 - **Fix approach:**
   - If the expiry-warning email still publishes on `AFTER_COMMIT`: move its enqueue to a
     `@TransactionalEventListener(BEFORE_COMMIT)` listener calling the generic-outbox
     `enqueueEmail` on `Propagation.MANDATORY`, exactly mirroring
-    `deferred-92`'s `RefundEnqueueListener` / the 23 email listeners. The outbox drainer already
-    handles retry/backoff.
+    `RefundEnqueueListener` / the 23 `deferred-92` email listeners. The outbox drainer already
+    handles retry/backoff after the row is committed.
   - `expiryWarnedAt` continues to be stamped in the producing transaction — that is now correct
-    because the enqueue commits atomically with it.
+    because the enqueue commits atomically with it (per the semantics above).
   - If it turns out the expiry warning was **already** migrated by `deferred-92` and the ledger
     bullet is stale: make **no** code change, and instead delete the `skillars-deferred-15` D1
     bullet with a note in the audit block ("verified migrated by deferred-92 AC4; stamp-then-send
@@ -225,37 +269,71 @@ Platform/Admin → Frontend/UX → Payment/Stripe → Infrastructure/Deployment 
   listener attempts delivery). Leave D2 (double `SELECT … FOR UPDATE` idiom) and D3
   (`findPaymentPendingOlderThan` `updatedAt` assumption) — both explicitly speculative /
   pre-existing.
-- **Test:** IT in the pattern of `NotificationEmailOutboxAtomicityIT` — with the outbox drainer
-  paused, run the expiry-warning path; assert an outbox row exists **and** `expiryWarnedAt` is set,
-  in the same committed transaction. Simulate a drainer send failure; assert the outbox row is
-  retained (not deleted) and re-attempted, i.e. the warning is not lost. If the "already migrated"
-  branch applies, no new test — record the verification.
+- **Test:** IT in the pattern of `NotificationEmailOutboxAtomicityIT`:
+  - **Happy path** — with the outbox drainer paused, run the expiry-warning path; assert an outbox
+    row exists **and** `expiryWarnedAt` is set, both committed.
+  - **Enqueue failure → atomic rollback** — make `enqueueEmail` throw inside the BEFORE_COMMIT
+    listener; assert the whole producing transaction rolled back: **no outbox row AND
+    `expiryWarnedAt` still null** (the warning is not marked "sent"). This is the guarantee the AC
+    establishes; if the test shows `expiryWarnedAt` stamped despite the failure, the listener is
+    on the wrong phase — fix it, don't accept it.
+  - **Drainer send failure → retry** — commit normally, then simulate a drainer send failure;
+    assert the outbox row is retained (not deleted) and re-attempted.
+  - If the "already migrated by deferred-92" branch applies, no new test — record the
+    verification (the diff you compared) in the Dev Agent Record.
 
 ---
+
+> **Implementation order for the pack-pause block (AC5–AC7).** `pausePack` is already
+> `@Transactional`. Read `PackSessionService.pausePack` end-to-end first — its shape at HEAD:
+> lock+load `purchase` (`findByIdForUpdate`) → ownership/active/`pausedUntil` guards →
+> `maxDays = configService.getLong("pack.pause.maxDays")` (**AC6**, ~`:141`) →
+> `pauseStart.isBefore(Instant.now().truncatedTo(DAYS))` past-date check (**AC5**, ~`:147`) →
+> conflict resolution + `cancelDueToPause` loop → apply pause + `save` → **then** the notification
+> block that does `coachProfileRepository.findById(coachId).orElse(null)` /
+> `userRepository.findById(parentId).map(User::getEmail).orElse("")` (**AC7**, ~`:192-194`).
+> The coach is **not loaded** at the AC5 point. `coachId` *is* available early
+> (`purchase.getCoachId()`). **Do AC5's early coach load first** — one
+> `coachProfileRepository.findById(purchase.getCoachId())` read before the past-date check, reused
+> by the AC7 notification block (deletes the duplicate `findById` at `:192`). AC7's fail-fast then
+> makes the `coach != null ? … : "Coach"/"UTC"` ternaries at `:192-194` dead — simplify them to
+> direct access. AC5 and AC6 are not otherwise ordered relative to each other.
 
 ### AC5: `PackSessionService.pausePack` — timezone-correct "pause start is in the past" check (11-1 D3)
 
 - **Task:** Replace the UTC-day-truncated past-date comparison with one that reflects the actor's
-  (coach's or parent's) local day, so a pause legitimately starting "today" is not rejected as past
-  for actors ahead of UTC (and vice-versa).
+  local day, so a pause legitimately starting "today" is not rejected as past for actors ahead of
+  UTC (and vice-versa).
 - **Verified at HEAD:** `src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java:146-148`
   — `Instant pauseStart = req.pauseStartDate();` then
   `if (pauseStart.isBefore(Instant.now().truncatedTo(ChronoUnit.DAYS))) { …reject… }`.
-  `truncatedTo(ChronoUnit.DAYS)` truncates to **UTC** midnight.
+  `truncatedTo(ChronoUnit.DAYS)` truncates to **UTC** midnight. At this point in the method **no
+  `CoachProfile` has been loaded** — the coach `findById` is ~45 lines later in the notification
+  block. `coachId` is available as `purchase.getCoachId()`.
 - **Fix approach:**
-  - Resolve the relevant zone. The pack purchase links a coach; `CoachProfile.canonicalTimezone`
-    exists and is IANA-validated on write (`skillars-deferred-63` AC6 backfill + `@IanaTimezone`).
-    Use `coach.getCanonicalTimezone()` (fallback `"UTC"` with a WARN, matching every other
-    read-side zone fallback in the codebase).
-  - Compare `LocalDate.ofInstant(pauseStart, zone)` against `LocalDate.now(zone)` — reject only when
-    strictly before. Keep the existing error key.
+  - Add one `CoachProfile coach = coachProfileRepository.findById(purchase.getCoachId())…` read
+    **before** the past-date check and reuse that same instance for the AC7 notification block
+    (removing the duplicate lookup at ~`:192`). If the row is absent, this is the same
+    data-integrity fault AC7 handles — **fail fast** (do not fall through to a UTC guess for a pack
+    whose coach has vanished).
+  - Resolve the zone as `coach.getCanonicalTimezone()`. **This field can be blank/null for legacy
+    rows** — `skillars-deferred-63` AC6 backfilled *diverged* window rows and `@IanaTimezone`
+    guards new writes, but the `skillars-deferred-17`/`-18` implementation outcomes recorded that a
+    real coach with a blank `canonicalTimezone` keeps a `"UTC"` fallback on the read side. So:
+    `ZoneId zone = hasText(coach.getCanonicalTimezone()) ? ZoneId.of(coach.getCanonicalTimezone())
+    : ZoneOffset.UTC;` with a WARN on the fallback, matching the existing read-side pattern (grep
+    `"UTC"` fallbacks in `AvailabilityService` / `RevenueReportingService` for the exact idiom).
+  - Compare `LocalDate.ofInstant(pauseStart, zone)` against `LocalDate.now(clock.withZone(zone))`
+    (inject/observe the codebase's `Clock` if `pausePack` already has one; otherwise
+    `LocalDate.now(zone)`) — reject only when strictly before. Keep the existing error key.
   - Do **not** change `req.pauseStartDate()`'s type or the wire contract; only the comparison.
 - **Ledger:** `## Deferred from: code review of skillars-11-1-payment-path-parity-gaps (2026-08-03)`
   — delete the **D3** bullet. (D1, D5, D7, D8, D9 stay — project-owner decision D1.)
 - **Test:** `PackSessionServiceTest` — fixed clock; coach zone `Pacific/Kiritimati` (UTC+14);
   `pauseStartDate` = the coach's "today" but still "yesterday" in UTC → assert **accepted**.
-  `pauseStartDate` = the coach's "yesterday" → assert **rejected**. Reverting to the UTC-truncated
-  check must flip the first assertion.
+  `pauseStartDate` = the coach's "yesterday" → assert **rejected**. A coach with a blank
+  `canonicalTimezone` → the check runs against UTC + a WARN is logged (assert both). Reverting to
+  the UTC-truncated check must flip the first assertion.
 
 ---
 
@@ -263,52 +341,76 @@ Platform/Admin → Frontend/UX → Payment/Stripe → Infrastructure/Deployment 
 
 - **Task:** Give `configService.getLong("pack.pause.maxDays")` a defensive default so a missing or
   non-numeric config value degrades to a sane bound instead of throwing out of `pausePack`.
-- **Verified at HEAD:** `PackSessionService.java:141` — `long maxDays = configService.getLong("pack.pause.maxDays");`
-  with no default overload. Confirm `ConfigService` exposes a `getLong(String key, long default)`
-  overload (grep — sibling call sites such as `pack.pause` neighbours or `slu.*` reads may already
-  use one); if it does not, add it following the existing `getLong` implementation, or guard at the
-  call site.
+- **Verified at HEAD:**
+  - `PackSessionService.java:141` — `long maxDays = configService.getLong("pack.pause.maxDays");`
+    (the single-arg form).
+  - `ConfigService` lives at
+    `src/main/java/com/softropic/skillars/platform/config/service/ConfigService.java` and
+    **already exposes a `getLong(String key, long default)` overload** — it is used widely
+    (`configService.getLong("platform.video.deletion.max_attempts", 5L)`,
+    `getLong("platform.video.lifecycle.blocked_to_archived_days", 30L)`, etc.). No new overload is
+    needed; this is a one-line call-site change.
 - **Fix approach:**
-  - Prefer `configService.getLong("pack.pause.maxDays", DEFAULT_PACK_PAUSE_MAX_DAYS)` where the
-    default is a named constant in `PackSessionService` (pick the value the seed migration inserts —
-    grep `pack.pause.maxDays` in `db/migration` — so the default matches production config exactly).
-  - If `getLong` currently throws `NumberFormatException` on a non-numeric stored value, the
-    overload must catch that and fall back too (log WARN with the offending value).
+  - Replace with `configService.getLong("pack.pause.maxDays", DEFAULT_PACK_PAUSE_MAX_DAYS)` where
+    the default is a named `private static final long` constant in `PackSessionService`. Set it to
+    the value the seed migration inserts — grep `pack.pause.maxDays` in
+    `src/main/resources/db/migration/` and use that exact number so the default matches production
+    config.
+  - Read the existing 2-arg `getLong` overload: confirm it already falls back on a **non-numeric**
+    stored value (not just an absent key). If it only guards absence and would still throw
+    `NumberFormatException` on `"abc"`, harden the call site with a `try/catch` (WARN + default) —
+    do **not** change `ConfigService` behaviour for every other caller in this story.
 - **Ledger:** same section as AC5 — delete the **D4** bullet.
-- **Test:** `PackSessionServiceTest` / `ConfigServiceTest` — key absent → `getLong` returns the
-  default; key present but `"abc"` → returns the default + WARN logged; key present and numeric →
-  returns the stored value.
+- **Test:** `PackSessionServiceTest` — key absent → uses the default; key present and numeric →
+  uses the stored value; key present but `"abc"` → uses the default + WARN logged (this last case
+  only if the overload/call-site actually guards it — assert whatever the implementation
+  guarantees, and document it).
 
 ---
 
-### AC7: `pausePack` + `SessionPackForfeitureScheduler` — do not silently proceed on a missing coach/parent record (11-1 D2)
+### AC7: `pausePack` + `SessionPackForfeitureScheduler` — do not silently proceed on a missing/blank coach or parent-email (11-1 D2)
 
 - **Task:** Replace the silent `.orElse(null)` (coach) / `.orElse("")` (parent email) fallbacks
-  with an explicit outcome: log ERROR naming the missing id and either skip the notification cleanly
-  or fail the operation — never send a "Dear , your pack…" email with a blank recipient or a null
-  coach reference downstream.
+  with an explicit outcome: log ERROR naming the id and either skip the notification cleanly
+  (scheduler) or fail the operation (`pausePack`) — never send a "Dear , your pack…" email with a
+  blank recipient or carry a null coach reference downstream.
 - **Verified at HEAD:**
-  - `PackSessionService.java:107` — `.orElse(null)` (context: confirm which lookup — likely a
-    coach/profile resolve inside the conflict-handling path).
-  - `PackSessionService.java:192-193` —
+  - `PackSessionService.java:191-194` (the notification block after the pause is applied) —
     `CoachProfile coach = coachProfileRepository.findById(coachId).orElse(null);`
     `String parentEmail = userRepository.findById(parentId).map(u -> u.getEmail()).orElse("");`
+    `String coachDisplayName = coach != null ? coach.getDisplayName() : "Coach";`
+    `String canonicalTimezone = coach != null ? coach.getCanonicalTimezone() : "UTC";`
   - `SessionPackForfeitureScheduler.java:44,46` — identical shape
     (`coachProfileRepository.findById(purchase.getCoachId()).orElse(null)` and
     `…map(User::getEmail).orElse("")`).
+  - **Not in scope:** `PackSessionService.java:107` (`.orElse(null)` in `getActivePackId`) — that
+    is a legitimate "no active pack found → null" for a read-only helper, unrelated to D2. Leave it.
+- **`.orElse("")` also masks a present-but-null email:** `Optional.map` returns an **empty**
+  Optional when the mapper yields `null`, so `userRepository.findById(parentId).map(User::getEmail)
+  .orElse("")` produces `""` for *both* "no `User` row" and "`User` row with a null `email`" (data
+  corruption). Treat them identically: ERROR + skip/fail, and assert both in the test.
 - **Fix approach:**
-  - For each site, decide skip-vs-fail by context: an interactive `pausePack` call should fail fast
-    with a clear error (a pack whose coach/parent row has vanished is a data-integrity fault the
-    caller must see); the scheduler should `log.error(… missing coach/parent id=… — skipping
-    notification for purchase=…)` and continue the loop (do not abort the batch).
-  - A blank `parentEmail` must never reach the mail layer — guard before `enqueueEmail`.
+  - `pausePack`: the coach load is now done early (AC5). If it is absent, fail fast with a
+    data-integrity error before applying the pause (do not pause a pack whose coach row is gone).
+    If `parentEmail` resolves blank/null after the pause is applied, log ERROR naming `parentId`
+    and skip the notification only (the pause itself already committed and is correct) — do not
+    roll it back for a missing email.
+  - `SessionPackForfeitureScheduler`: `log.error("… missing coach id=… / blank parent email for
+    parentId=… — skipping notification for purchase=…")` and `continue` the loop — never abort the
+    batch, never enqueue an email with a blank recipient.
+  - A blank/null `parentEmail` must never reach `enqueueEmail` — guard immediately before it at
+    every call site touched here.
+  - Once the ternaries at `:192-194` have a guaranteed-non-null `coach` (AC5 fail-fast), replace
+    `coach != null ? coach.getX() : "…"` with direct `coach.getX()`.
   - Match the codebase's precedent for orphaned-profile handling (`skillars-deferred-83` /
-    `-81` AC4 established "explicit error, not a placeholder" for the messaging module) — reference
-    that in the Dev Agent Record.
+    `-81` AC4: "explicit error, not a placeholder") — reference it in the Dev Agent Record.
 - **Ledger:** same section as AC5 — delete the **D2** bullet.
-- **Test:** `PackSessionServiceTest` — stub the coach lookup empty → `pausePack` throws the
-  data-integrity error, no email enqueued. `SessionPackForfeitureSchedulerTest` — one purchase with
-  a missing coach among several → that one logs ERROR and is skipped, the others still process.
+- **Test:** `PackSessionServiceTest` — (1) coach lookup empty → `pausePack` throws the
+  data-integrity error, pause not applied, no email enqueued; (2) coach present, `User` present but
+  `email == null` → pause applied, ERROR logged, no email enqueued; (3) coach present, `User`
+  missing → same as (2). `SessionPackForfeitureSchedulerTest` — one purchase with a missing coach
+  and one with a null-email parent among several healthy ones → each logs ERROR and is skipped,
+  the healthy ones still process, batch completes.
 
 ---
 
@@ -326,23 +428,46 @@ Platform/Admin → Frontend/UX → Payment/Stripe → Infrastructure/Deployment 
     message string — leave the enum, it is fine).
   - `BookingError.java:100` maps `CONCURRENT_MODIFICATION -> "booking.concurrentModification"`.
 - **Fix approach:**
-  - Replace the message with something like `"Booking status changed — please reload and try
-    again"` (the internal exception message is a developer/log string; the *user-facing* text is the
-    i18n value, so the priority is the bundle key). Keep it identical across all sites — consider a
-    `BookingError`-level constant or a small helper so they cannot drift again (the ledger's own
-    `skillars-deferred-66` note says "consistency… is the point").
-  - Update `booking.concurrentModification` in all three frontend bundles
-    (`src/frontend/src/i18n/{en-US,de-DE,fr-FR}/index.js`) to the reworded, non-imperative text.
-    `de-DE` stays formal `Sie`; `fr-FR` stays formal — match the register the rest of each bundle
-    uses (do not introduce informal forms; `MessageBundleParityTest` / the frontend parity check
-    must stay green).
-  - `eslint.config.js`'s `vue/no-bare-strings-in-template` does not apply (these are JS message
-    values), but run `prettier --check` on the touched bundle files.
+  - **Two distinct strings — do not conflate them:**
+    - The Java exception `message` argument is a **developer/log** string. Change it to a terse
+      non-imperative phrase, e.g. `"booking status changed under concurrent modification"`. It is
+      never shown to an end user.
+    - The **user-facing** text is the i18n value for `booking.concurrentModification`. **Approved
+      wording** (implement exactly this intent; the dev may adjust phrasing for natural language
+      but code review will reject any imperative aimed at the user — no "retry", "try again",
+      "click again", "reload and…"):
+      - `en-US`: `"The booking was just updated by someone else. Refresh to see its current
+        status."`
+      - `de-DE`: the formal-`Sie` equivalent (e.g. *"Die Buchung wurde soeben von einer anderen
+        Person geändert. Aktualisieren Sie die Seite, um den aktuellen Status zu sehen."*).
+      - `fr-FR`: the formal equivalent (e.g. *"La réservation vient d'être modifiée par une autre
+        personne. Actualisez la page pour voir son statut actuel."*).
+    - "Refresh"/"Aktualisieren"/"Actualisez" describes what the UI will show, not a demand that the
+      user recover a failed action — that is the line this AC draws.
+  - Keep the Java message identical across all ~18 sites — introduce a `BookingError`-level
+    `private static final String` constant (or a tiny throw helper) so they cannot drift again
+    (the ledger's own `skillars-deferred-66` note: "consistency… is the point").
+  - Update `booking.concurrentModification` in all three bundles
+    (`src/frontend/src/i18n/{en-US,de-DE,fr-FR}/index.js`). `de-DE` stays formal `Sie`; `fr-FR`
+    stays formal — match each bundle's existing register; introduce no informal forms and no
+    `{placeholder}` drift.
+  - Run `prettier --check` on the touched `.js` bundle files (mandatory per project rules).
+- **Parity gate — what actually exists:** the backend `MessageBundleParityTest`
+  (`src/test/java/com/softropic/skillars/i18n/MessageBundleParityTest.java`, runs in the `test`
+  phase, CI-gated) covers the backend `messages_{en,de,fr}.properties` bundles — relevant **only
+  if** this change also touches a `messages_*.properties` key (check whether
+  `booking.concurrentModification` resolves from a backend bundle as well as the frontend one; if
+  so, keep all three `.properties` in sync too). The **frontend** `src/frontend/src/i18n/*/index.js`
+  bundles have **no automated parity test today** (that gap is part of `skillars-deferred-104`) —
+  keep them key-aligned by a manual key-count diff across the three files and rely on `eslint` +
+  `quasar build`.
 - **Ledger:** `## Deferred from: code review of skillars-deferred-66 (2026-08-25)` — delete the
   "imperative 'retry' language" bullet. That is the section's only bullet → remove the header too.
 - **Test:** no new backend test for a copy change; assert (existing IT or a new tiny one) that a
   `CONCURRENT_MODIFICATION` response still carries `errorKey = "booking.concurrentModification"`
-  (guard against an accidental key rename). Frontend: `prettier --check` + the bundle parity check.
+  (guard against an accidental key rename). If a backend `messages_*.properties` key was touched,
+  `MessageBundleParityTest` must stay green. Frontend: `prettier --check` + manual key-count diff of
+  the three `index.js` bundles.
 
 ---
 
@@ -358,8 +483,10 @@ Platform/Admin → Frontend/UX → Payment/Stripe → Infrastructure/Deployment 
   blocks. `:190` `onMounted`: `await Promise.all([paymentStore.fetchStripeConfig(),
   paymentStore.fetchSavedPaymentMethod()])`.
 - **Fix approach:**
-  - Extract the `onMounted` init body into a named `async function loadStripe()` (or similar);
-    call it from `onMounted` and from the new retry button.
+  - Extract the `onMounted` init body into a top-level `async function loadStripe()` in
+    `<script setup>` (not a `ref`-wrapped function, not a method object — plain top-level function
+    per the project's `<script setup>` convention); call it from `onMounted` and from the new
+    retry button.
   - `loadStripe()` sets `stripeUnavailable.value = false` before trying, and `true` again on
     failure — so a successful retry flips the UI back to the normal card state.
   - Button: `<q-btn flat no-caps :label="t('common.retry')" @click="loadStripe" :loading="…" />`
@@ -393,17 +520,25 @@ Platform/Admin → Frontend/UX → Payment/Stripe → Infrastructure/Deployment 
   endpoint in the file (`:57,:86,:96,:109,:146,:189`) is `IS_AUTHENTICATED`, with the real gate in
   the service.
 - **Fix approach (pick one, record which and why in the Dev Agent Record):**
-  - **(a) Tighten:** if a reusable method-security bean/expression for "is a party to this
-    conversation" already exists (grep `@messagingSecurity` / a `PermissionEvaluator` / a
-    `hasPermission` usage), apply it. Do **not** invent a new security infrastructure for two
-    endpoints.
-  - **(b) Document:** if no such expression exists, add a 2-line comment at both annotations
-    ("Party check is enforced in `MessagingReportService.verifyIsParty`; consistent with every
-    other endpoint in this resource — `IS_AUTHENTICATED` here is deliberate, not an oversight") and
-    treat the item as closed-by-decision.
-  - This is defense-in-depth only — the service-layer 403 is not changing. Keep scope minimal.
-- **Ledger:** `## Deferred from: code review of skillars-8-4 (2026-06-27)` — delete the **W5**
-  bullet (it is the section's only bullet → remove the header).
+  - **(a) Tighten — strongly preferred:** if a reusable method-security bean/expression for "is a
+    party to this conversation" already exists (grep `@messagingSecurity` / a `PermissionEvaluator`
+    / a `hasPermission` / a `@bean.method(...)` SpEL usage in other `@PreAuthorize` annotations),
+    apply it at both sites. Do **not** invent new security infrastructure for two endpoints — this
+    is only worth doing if the expression is already there.
+  - **(b) Document — fallback only:** if no such reusable expression exists, add a 2-line comment
+    at both annotations ("Party check is enforced in `MessagingReportService.verifyIsParty`;
+    consistent with every other endpoint in this resource — `IS_AUTHENTICATED` here is deliberate,
+    not an oversight, see `skillars-8-4` W5 / `skillars-deferred-103` AC10") and treat the item as
+    **decided-not-fixed**.
+  - This is defense-in-depth only — the service-layer 403 does not change either way. Keep scope
+    minimal.
+- **Ledger:** `## Deferred from: code review of skillars-8-4 (2026-06-27)`:
+  - If **(a)** shipped — delete the **W5** bullet (section's only bullet → remove the header).
+  - If **(b)** shipped — **do not delete** the bullet. Retag it in place:
+    `[DECIDED 2026-09-09 (skillars-deferred-103 AC10): IS_AUTHENTICATED + MessagingReportService
+    .verifyIsParty service-layer gate is the deliberate module-wide pattern; no reusable
+    party-scoped method-security expression exists to swap in. Code comment added at both sites.]`
+    The file's convention keeps `[DECIDED]` items so they are not re-litigated — leave the header.
 - **Test:** `MessagingResourceIT` / `MessagingAccessControlIT` — a non-party authenticated user
   reporting a message they are not party to still gets 403 (unchanged); a party user still succeeds.
   If (a) was chosen, the 403 now comes from method security — assert it still returns the same
@@ -428,18 +563,22 @@ Platform/Admin → Frontend/UX → Payment/Stripe → Infrastructure/Deployment 
   present-but-null `SUM`, never absence. Confirm the current consumers: grep
   `parent_credit_balance` across `src/main`. If **every** live read is JPQL/`@Query` with its own
   `COALESCE(..., 0)` (the ledger says "safe via JPQL path"), this is latent only.
-- **Fix approach (pick based on what the grep finds — record the choice):**
-  - **If a clean "all parents" anchor exists** (e.g. a `parents` view, or `player_profiles` /
-    `users` filtered to the parent role): ship a new migration (`> V132`, follows
-    `docs/deployment/migration-conventions.md` — a `CREATE OR REPLACE VIEW` is metadata-only, no
-    lock concern, but still add the `-- migration-lint:` context if the linter flags it) that
-    `LEFT JOIN`s the ledger so every parent yields `(parent_id, COALESCE(SUM(amount), 0))`.
-  - **If there is no clean anchor** (likely — the ledger schema has no parent master table):
-    do **not** contort the view. Instead (1) add an SQL comment to a new no-op-safe migration *or*
-    a `docs/` note stating the view is "present-parents only; consumers must `COALESCE` the scalar
-    or treat absence as zero", and (2) add a repository/IT regression test that pins the JPQL
-    read-path's zero-for-absent guarantee so a future refactor that drops the `COALESCE` fails
-    the build. This is the minimum that makes the trap non-silent.
+- **This is a dev judgment call — there is no pre-made architectural decision.** Default to the
+  document + regression-test path below; only take the view-rewrite route if the grep turns up a
+  clean anchor.
+- **Fix approach (record which path and why):**
+  - **Default — document + pin (expected):** the `payment` schema has no "all parents" master
+    table (parents are `security.users` rows with a role authority; there is no `parents` table or
+    view). Do **not** contort the view against `users`/`player_profiles`. Instead: (1) add an
+    explicit note — a comment in a new no-op-safe migration `> V132`, *or* a paragraph in the
+    payment/credit-wallet doc under `docs/` — stating the view is "present-parents only; a parent
+    with no ledger history returns **no row**; consumers must `COALESCE` the scalar or treat
+    absence as zero"; and (2) add a repository/IT regression test that pins the JPQL read-path's
+    zero-for-absent guarantee so a future refactor that drops its `COALESCE` fails the build. That
+    is the minimum that makes the trap non-silent.
+  - **Only if a clean anchor exists:** ship a `> V132` `CREATE OR REPLACE VIEW` (metadata-only, no
+    lock concern; add the `-- migration-lint:` context if flagged) that `LEFT JOIN`s the ledger so
+    every parent yields `(parent_id, COALESCE(SUM(amount), 0))`.
   - Either way: **no behavior change for existing JPQL consumers** — they already return 0.
 - **Ledger:** `## Deferred from: adversarial code review of skillars-7-2 Group 1 DB+Entities
   (2026-06-24)` — delete the **D1** bullet. Leave D3 (`SessionPackPurchase.expiresAt` mutable — the
@@ -475,13 +614,22 @@ Platform/Admin → Frontend/UX → Payment/Stripe → Infrastructure/Deployment 
   - Re-mine the whole file: for every untagged bullet, diff its cited location against HEAD. Delete
     any that are demonstrably closed (the Story Overview table already names seven —
     `skillars-6-5` Run2 Def17, `skillars-6-2` Def22, `skillars-1-2` W4, `skillars-3-4` /
-    `skillars-3-7` D2, `skillars-4-1` D6, `skillars-3-9` W3, `skillars-7-2` G2 D1 — confirm each
-    and delete; some carry `[DECIDED]` and stay by the file's convention, so **verify tag status
-    first**). Do **not** touch `[DECIDED]` / `[DISMISSED]` / `[PICKED UP]` bullets.
+    `skillars-3-7` D2, `skillars-4-1` D6, `skillars-3-9` W3, `skillars-7-2` G2 D1 — re-confirm each
+    against HEAD before deleting; note `Def17`/`Def22` are also `[DECIDED 2026-08-28]` so they are
+    kept regardless — the table lists them as "fixed" context, not as deletions). Do **not** touch
+    `[DECIDED]` / `[DISMISSED]` / `[PICKED UP]` bullets — the file keeps them by design.
   - The bullets AC1–AC11 close are deleted by their own ACs; this AC covers everything *else*.
-  - Reconstruction check: every surviving non-blank line must match the pre-edit file in order,
-    nothing reworded — record it in the audit block, matching the `deferred-101` / `-102` audit
-    blocks' style.
+  - **Section-header rule (matches the file's own 2026-08-24 pruning-pass convention):** delete a
+    `## Deferred from:` / `###` header **only when every bullet under it has been removed AND none
+    of the removed bullets carried `[DECIDED]` / `[DISMISSED]` / `[PICKED UP]`**. If a
+    tagged-and-kept bullet is the last one under a header, the header stays with it. Never delete a
+    tagged bullet to empty a section. A header's non-bullet intro paragraph is deleted with the
+    header only when the whole section goes.
+  - **Reconstruction check:** every surviving *non-blank* line (a line containing at least one
+    non-whitespace character — intentional blank lines between bullets/sections are not compared)
+    must match the pre-edit file in order, nothing reworded or reordered. Record it in the audit
+    block, matching the `deferred-101` / `-102` audit blocks' style (list every deleted bullet +
+    every removed header; state that `[DECIDED]`/`[DISMISSED]`/`[PICKED UP]` counts are unchanged).
 - **Ledger:** this AC *is* the ledger change. The audit block enumerates every deletion.
 - **Test:** none (documentation). `git diff` of `deferred-work.md` reviewed against the audit
   block's enumerated list — they must match exactly.
@@ -496,7 +644,7 @@ Platform/Admin → Frontend/UX → Payment/Stripe → Infrastructure/Deployment 
 | Payment — strikes pagination | `src/main/java/.../platform/payment/api/ReliabilityStrikeResource.java`, `.../payment/service/ReliabilityStrikeService.java`, `.../payment/repo/CoachReliabilityStrikeRepository.java` (or wherever the finder lives) |
 | Payment — pack-based booking catch | `src/main/java/.../platform/payment/service/PaymentLifecycleService.java` |
 | Payment — expiry-warning outbox | `src/main/java/.../platform/payment/service/SessionPackExpiryNotifier.java`, `.../payment/service/SessionPackEmailListener.java` |
-| Payment — pack-pause hardening | `src/main/java/.../platform/payment/service/PackSessionService.java`, `.../payment/service/SessionPackForfeitureScheduler.java`; possibly `infrastructure` `ConfigService` (getLong overload) |
+| Payment — pack-pause hardening | `src/main/java/.../platform/payment/service/PackSessionService.java`, `.../payment/service/SessionPackForfeitureScheduler.java` (`ConfigService` at `.../platform/config/service/ConfigService.java` — read-only, its 2-arg `getLong` overload already exists) |
 | Booking — exception copy | `BookingCompletionService.java`, `RescheduleService.java`, `BookingService.java`, `BookingError.java`; `src/frontend/src/i18n/{en-US,de-DE,fr-FR}/index.js` |
 | Frontend — Stripe retry | `src/frontend/src/components/payment/PaymentMethodCard.vue`; `src/frontend/src/i18n/*/index.js` (`common.retry`) |
 | Messaging — report auth | `src/main/java/.../platform/messaging/api/MessagingResource.java` |
@@ -521,9 +669,12 @@ Platform/Admin → Frontend/UX → Payment/Stripe → Infrastructure/Deployment 
   *services* but never `BookingStateMachine` / `BookingEvent` transitions.
 - **No frontend test framework** (decision D3). AC9's verification is `eslint` + `quasar build` +
   code reading + a documented manual dev-server exercise, exactly as ~15 prior stories.
-- **`de-DE` stays formal `Sie`, `fr-FR` stays formal** (AC8, AC9). The frontend bundle parity check
-  and `MessageBundleParityTest` must stay green; do not add informal forms or leave `{placeholder}`
-  drift.
+- **`de-DE` stays formal `Sie`, `fr-FR` stays formal** (AC8, AC9). Do not add informal forms or
+  leave `{placeholder}` drift. Parity gates that actually exist: `MessageBundleParityTest`
+  (`src/test/java/com/softropic/skillars/i18n/MessageBundleParityTest.java`, CI-gated) covers the
+  **backend** `messages_*.properties` only; the **frontend** `src/frontend/src/i18n/*/index.js`
+  bundles have **no** automated parity test yet (that gap is `skillars-deferred-104`) — verify
+  frontend bundle alignment with a manual key-count diff across the three `index.js` files.
 - **Migrations `> V121` must follow `docs/deployment/migration-conventions.md`** and pass
   `MigrationConventionLintTest`. AC11's view change (if any) is metadata-only but still gets the
   lint context comment if flagged.
@@ -534,10 +685,10 @@ Platform/Admin → Frontend/UX → Payment/Stripe → Infrastructure/Deployment 
 
 ### Project Structure Notes
 
-- All backend work stays inside `com.softropic.skillars.platform.{payment,booking,messaging}` per
-  the module layer rules (`api` / `service` / `repo` / `contract` / `config`). No `infrastructure`
-  change except a possible `ConfigService.getLong(key, default)` overload (AC6) — that is a
-  business-agnostic technical capability and belongs there if added.
+- All backend work stays inside `com.softropic.skillars.platform.{payment,booking,messaging,config}`
+  per the module layer rules (`api` / `service` / `repo` / `contract` / `config`). **No
+  `infrastructure` change** — AC6 uses an existing `ConfigService.getLong(key, default)` overload
+  (`platform.config.service`), not a new one.
 - New migration (AC11, conditional) → `src/main/resources/db/migration/` only, next free `V` number.
 - Frontend: i18n keys in `src/frontend/src/i18n/*/index.js`; component in
   `src/frontend/src/components/payment/`.
@@ -554,8 +705,11 @@ Platform/Admin → Frontend/UX → Payment/Stripe → Infrastructure/Deployment 
   Instancio+AssertJ+Testcontainers / `@PreAuthorize` mandatory / Flyway-only DDL / Prettier
   mandatory.
 - [Source: `docs/deployment/migration-conventions.md`] — rolling-deploy migration safety (AC11).
-- [Source: `docs/architecture/payout-and-capture-pending.md`] — the DRAFT doc that gates
-  `skillars-7-1` D4 / `deferred-91` AC5 Part B (decision D2 — out of scope here).
+- [Source: `docs/architecture/payout-and-capture-pending.md`] — **confirmed present at HEAD**
+  (~13.8 KB). Header: *"Status: DRAFT — awaiting project-owner review (skillars-deferred-91 AC5,
+  Task 0). Confirmed still DRAFT by the 2026-09-03 code review (decision D8): D1–D5 below remain
+  unanswered."* This is the doc that gates `skillars-7-1` D4 / `deferred-91` AC5 Part B — decision
+  D2 keeps all of that out of `deferred-103`; the dependency is real and unmet.
 
 ## Dev Agent Record
 
@@ -576,3 +730,4 @@ _(to be filled by the dev agent)_
 | Date | Change |
 |------|--------|
 | 2026-09-09 | Story created from `deferred-work.md` @ `ef37c039`. 12 ACs across payment reliability (tier race, strikes pagination, pack-based-booking catch narrowing, expiry-warning outbox atomicity), pack-pause hardening (timezone-correct past check, config default, non-silent record resolution — project-owner decision D1 = safe subset only), booking exception-message copy + i18n, a frontend Stripe-retry affordance, a messaging authorization decision, a credit-balance-view native-consumer trap, and a ledger-hygiene re-mine. Project-owner decisions D1–D5 captured. The "genuine one-off bugs & gaps" class is confirmed exhausted; seven ledger bullets verified stale/fixed at HEAD during creation and slated for deletion in AC12. Status: ready-for-dev. |
+| 2026-09-09 | Applied `story-review.md` (senior-dev audit) fixes. **Rejected as false positive:** the AC4 "BEFORE_COMMIT doesn't abort the parent" claim — a `@TransactionalEventListener(BEFORE_COMMIT)` exception *does* propagate and roll the producing transaction back (that is the atomicity mechanism `RefundEnqueueListener` relies on); AC4 now spells the semantics out and the test asserts `expiryWarnedAt` stays null on enqueue failure. **Applied:** AC1 — constraint name `idx_spt_one_active_per_coach` confirmed at `V62:58` + deactivate-loop safety rationale added. AC2 — cite `RevenueResource.getCoachTransactions` as the exact template (explicit `page`/`size` params, default 20, `Page<>` return — *not* `@PageableDefault`); test pins the resolved size. AC3 — "read the impl+Javadoc; exclude `IllegalArgumentException`/`IllegalStateException` from the caught set". AC5/AC6/AC7 — added an implementation-order note (coach is not loaded at the AC5 point; load it early once, reuse for AC7's notification block, collapse the `coach != null ? …` ternaries); AC5 fallback justified (field can be blank for legacy rows); AC6 — `ConfigService.getLong(key, default)` overload confirmed to already exist (no `infrastructure` change); AC7 — dropped the wrong `:107` citation, expanded to cover a present-`User`-with-null-`email` (also yields `""` via `Optional.map`). AC8 — approved en/de/fr wording provided; named `MessageBundleParityTest`; noted the frontend `index.js` bundles have no automated parity gate yet. AC9 — `loadStripe()` = top-level `<script setup>` function. AC10 — if option (b) documentation-only, the bullet is retagged `[DECIDED]` and kept, not deleted. AC11 — stated it is a dev judgment call, default to document + regression-test. AC12 — added the section-header / `[DECIDED]`-retention rule and a "non-blank line" definition, per the file's own 2026-08-24 convention. `payout-and-capture-pending.md` confirmed present + DRAFT. Status unchanged: ready-for-dev. |
