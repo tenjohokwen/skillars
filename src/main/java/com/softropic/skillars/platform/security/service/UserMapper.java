@@ -11,9 +11,11 @@ import com.softropic.skillars.platform.security.repo.Authority;
 import com.softropic.skillars.platform.security.repo.User;
 
 import org.mapstruct.AfterMapping;
+import org.mapstruct.BeanMapping;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.MappingTarget;
+import org.mapstruct.ReportingPolicy;
 
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -30,6 +32,11 @@ public interface UserMapper {
     @Mapping(target = "email", expression = "java(StringUtils.lowerCase(user.getEmail()))")
     UserDto toUserDto(User user);
 
+    // toUser intentionally builds a partial entity — audit plumbing plus fields only the persistence
+    // / registration layer sets (status, activationKey, skillarsRole, verificationStatus, addresses,
+    // …) stay unset here. Per-method IGNORE only silences the report; the sibling methods
+    // (toUserDto, addressToAddressDto, @AfterMapping helpers) keep their default WARN guard.
+    @BeanMapping(unmappedTargetPolicy = ReportingPolicy.IGNORE)
     @Mapping(source = "dob", target = "dateOfBirth")
     User toUser(UserDto userDto);
 

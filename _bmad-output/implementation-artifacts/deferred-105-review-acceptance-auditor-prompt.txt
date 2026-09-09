@@ -1,0 +1,76 @@
+ACCEPTANCE AUDITOR REVIEW PROMPT
+=================================
+
+Task: Review this diff against the story spec. Check for:
+1. Violations of the acceptance criteria (AC1–AC7)
+2. Deviations from spec intent
+3. Missing implementation of specified behavior
+4. Contradictions between spec constraints and actual code
+
+Output findings as a Markdown list. Each finding: which AC it violates, short title, and evidence from diff.
+
+STORY SPEC SUMMARY:
+===================
+
+Story: skillars-deferred-105 CI Build-Warning Cleanup
+Goal: Drive all 7 CI build-warning classes to zero. Warnings-only story — no functional change.
+
+ACCEPTANCE CRITERIA:
+
+AC1: Bump docker/build-push-action v6.19.2 → v7.3.0 (commit SHA 53b7df96c91f9c12dcc8a07bcb9ccacbed38856a)
+  - Expected: .github/actions/docker-build/action.yml line 41 updates to new SHA/version comment
+  - Verify: PR CI shows no Node.js 20 deprecated warning; Docker build/push still works
+
+AC2: Remove --platform=linux/amd64 from both FROM lines in Dockerfile
+  - Expected: L2 and L15 both change from "FROM --platform=linux/amd64 …" to "FROM …"
+  - Verify: No FromPlatformFlagConstDisallowed warning; Trivy scan still runs; image functional
+
+AC3: Suppress AntPathRequestMatcher removal warning in AppEndpointsConventionTest
+  - Expected: Add @SuppressWarnings("removal") + explanatory comment at line 135
+  - Do NOT remove or change the AntPathRequestMatcher usage itself
+  - Verify: Test compiles with no deprecation warning; test passes
+
+AC4: Fix varargs call in ApiAdvice.logErrorAndReturnDTO
+  - Expected: Cast args to (Object[]) at line 689
+  - Do NOT change method signatures
+  - Verify: No warning; error-envelope tests pass; message substitution works
+
+AC5: Replace Specification.where(...) in CoachSearchSpecification.build
+  - Expected: Drop Specification.where() wrapper; start chain with isActive()
+  - Do NOT use Specification.unrestricted() or allOf() (allOf acceptable per D3 discretion)
+  - Verify: No deprecation warning; coach-search tests pass; filters still work
+
+AC6a: AuditTrailMapper.toAuditLog — add @BeanMapping(unmappedTargetPolicy = ReportingPolicy.IGNORE)
+  - Expected: Add annotation + imports; per-method only (toAuditTrail keeps WARN)
+  - Verify: No unmapped-target warning; audit tests pass
+
+AC6b: UserMapper.toUser — add @BeanMapping(unmappedTargetPolicy = ReportingPolicy.IGNORE)
+  - Expected: Add annotation + imports; per-method only; keep existing @Mapping(source="dob"...)
+  - Verify: No unmapped-target warning; user-DTO round-trip tests pass
+
+AC6c: CoachProfileMapper.toEntity(...ProfileBuilderStep1Request...) — add 4 explicit @Mapping(ignore=true)
+  - Expected: Add for verificationTier, averageRating, reviewCount, statusChangedAt
+  - Do NOT touch the second toEntity overload (AvailabilityWindowRequest, UUID)
+  - Verify: No unmapped-target warning; coach profile-builder tests pass
+
+AC7: Sibling sweep + CI green
+  - Expected: Grep for Specification.where(), AntPathRequestMatcher, build-push-action, unmappedTargetPolicy
+  - Fix trivial siblings or log follow-ups
+  - Verify: PR CI build shows no warnings
+
+DECISION RATIONALE (to verify against):
+
+D1: MapStruct split strategy — CoachProfileMapper explicit, AuditTrailMapper/UserMapper per-method
+D2: Delete --platform flag (no $BUILDPLATFORM or renaming)
+D3: Start from isActive() (not allOf, not unrestricted)
+D4: v7.3.0 (latest, not v7.0.0)
+
+DIFF TO AUDIT:
+==============
+
+[Complete diff included — same as above in Blind Hunter prompt]
+
+END OF DIFF
+===========
+
+Audit complete. Output findings as a Markdown list with AC violations noted.

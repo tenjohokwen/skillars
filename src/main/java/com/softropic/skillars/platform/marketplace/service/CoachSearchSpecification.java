@@ -20,8 +20,7 @@ public final class CoachSearchSpecification {
     private CoachSearchSpecification() {}
 
     public static Specification<CoachProfile> build(CoachSearchParams p) {
-        return Specification
-            .where(isActive())
+        return isActive()
             .and(inCity(p.city()))
             .and(inDistrict(p.district()))
             .and(hasSkill(p.skill()))

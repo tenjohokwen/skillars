@@ -1,5 +1,5 @@
 # Stage 1: Build (Java + Quasar frontend via frontend-maven-plugin)
-FROM --platform=linux/amd64 maven:3.9-eclipse-temurin-17 AS builder
+FROM maven:3.9-eclipse-temurin-17 AS builder
 WORKDIR /app
 
 # Layer: Java dependencies (cached until pom.xml changes)
@@ -12,7 +12,7 @@ COPY .git/ .git/
 RUN mvn package -Dmaven.test.skip=true -B
 
 # Stage 2: Runtime (minimal JRE image)
-FROM --platform=linux/amd64 eclipse-temurin:17-jre-alpine
+FROM eclipse-temurin:17-jre-alpine
 WORKDIR /app
 
 # Patch OS packages before dropping privileges. The eclipse-temurin:17-jre-alpine tag
