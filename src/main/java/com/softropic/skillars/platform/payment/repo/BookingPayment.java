@@ -51,4 +51,14 @@ public class BookingPayment {
      */
     @Column(name = "reserved_at")
     private Instant reservedAt;
+
+    /**
+     * skillars-deferred-106 AC3.5 / AC4.2: the {@code platform.commission.rate} in force when the
+     * parent was charged. The coach payout net is computed from THIS rate (locked at capture), never
+     * from {@code platform.commission.rate} re-read at completion — the rate may have changed in
+     * between. Nullable — a row from before V133 has no stamp; the payout / cutover code falls back
+     * to the live rate for those legacy already-CAPTURED rows only.
+     */
+    @Column(name = "commission_rate", precision = 5, scale = 4)
+    private BigDecimal commissionRate;
 }

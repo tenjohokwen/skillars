@@ -48,6 +48,7 @@ import static org.mockito.Mockito.when;
 class RevenueReportingServiceTest {
 
     @Mock private BookingPaymentRepository bookingPaymentRepository;
+    @Mock private com.softropic.skillars.platform.payment.repo.CoachPayoutRepository coachPayoutRepository;
     @Mock private ParentCreditLedgerRepository parentCreditLedgerRepository;
     @Mock private BookingRepository bookingRepository;
     @Mock private PaymentCoachSubscriptionRepository paymentCoachSubscriptionRepository;
@@ -66,7 +67,7 @@ class RevenueReportingServiceTest {
     @BeforeEach
     void setUp() {
         service = new RevenueReportingService(
-            bookingPaymentRepository, parentCreditLedgerRepository, bookingRepository,
+            bookingPaymentRepository, coachPayoutRepository, parentCreditLedgerRepository, bookingRepository,
             paymentCoachSubscriptionRepository, paymentPlayerSubscriptionRepository,
             coachReliabilityStrikeRepository, playerProfileRepository, coachProfileRepository,
             configService
@@ -79,36 +80,47 @@ class RevenueReportingServiceTest {
         when(configService.getString("payment.stripe.feeFixed")).thenReturn("0.25");
     }
 
-    // ── Revenue summary ──────────────────────────────────────────
+    private void stubStripeFeeRates() {
+        when(configService.getString("payment.stripe.feeRate")).thenReturn("0.014");
+        when(configService.getString("payment.stripe.feeFixed")).thenReturn("0.25");
+    }
+
+    // ── Revenue summary (skillars-deferred-106 AC12: RELEASED coach_payouts, not CAPTURED) ────────
 
     @Test
-    void summary_oneCapturedSession_calculatesCorrectly() {
-        stubConfigRates();
-        when(bookingPaymentRepository.sumGrossByCoachAndPeriod(coachId, from, to))
-            .thenReturn(Optional.of(new BigDecimal("100.00")));
-        when(bookingPaymentRepository.countCapturedByCoachAndPeriod(coachId, from, to)).thenReturn(1L);
-        when(bookingPaymentRepository.findBookingIdsByCoachAndPeriod(coachId, from, to)).thenReturn(List.of());
+    void summary_oneReleasedPayout_calculatesFromLedger() {
+        stubStripeFeeRates();
+        when(coachPayoutRepository.sumReleasedGrossByCoachAndPeriod(coachId, from, to)).thenReturn(new BigDecimal("100.00"));
+        when(coachPayoutRepository.sumReleasedCommissionByCoachAndPeriod(coachId, from, to)).thenReturn(new BigDecimal("10.00"));
+        when(coachPayoutRepository.sumReleasedNetByCoachAndPeriod(coachId, from, to)).thenReturn(new BigDecimal("90.00"));
+        when(coachPayoutRepository.countReleasedByCoachAndPeriod(coachId, from, to)).thenReturn(1L);
+        when(coachPayoutRepository.findReleasedBookingIdsByCoachAndPeriod(coachId, from, to)).thenReturn(List.of());
+        when(coachPayoutRepository.sumPendingReleaseNetByCoachAndPeriod(coachId, from, to)).thenReturn(new BigDecimal("15.00"));
+        when(coachPayoutRepository.countPendingReleaseByCoachAndPeriod(coachId, from, to)).thenReturn(2L);
 
         RevenueSummaryDto dto = service.getCoachRevenueSummary(coachId, from, to);
 
-        // commission = 100 * 0.10 = 10.00
-        // stripeFees = 100 * 0.014 + 0.25 * 1 = 1.65
-        // netPayout  = 100 - 10 - 1.65 = 88.35
+        // stripeFees = 100 * 0.014 + 0.25 * 1 = 1.65 ; netPayout = 90 (ledger net) - 1.65 = 88.35
         assertThat(dto.grossEarnings()).isEqualByComparingTo("100.00");
         assertThat(dto.commissionDeducted()).isEqualByComparingTo("10.00");
         assertThat(dto.stripeFees()).isEqualByComparingTo("1.65");
         assertThat(dto.netPayout()).isEqualByComparingTo("88.35");
         assertThat(dto.sessionCount()).isEqualTo(1L);
         assertThat(dto.currency()).isEqualTo("EUR");
+        assertThat(dto.pendingReleaseAmount()).isEqualByComparingTo("15.00");
+        assertThat(dto.pendingReleaseCount()).isEqualTo(2L);
     }
 
     @Test
-    void summary_noBookings_returnsAllZero() {
-        stubConfigRates();
-        when(bookingPaymentRepository.sumGrossByCoachAndPeriod(coachId, from, to))
-            .thenReturn(Optional.empty());
-        when(bookingPaymentRepository.countCapturedByCoachAndPeriod(coachId, from, to)).thenReturn(0L);
-        when(bookingPaymentRepository.findBookingIdsByCoachAndPeriod(coachId, from, to)).thenReturn(List.of());
+    void summary_noPayouts_returnsAllZero() {
+        stubStripeFeeRates();
+        when(coachPayoutRepository.sumReleasedGrossByCoachAndPeriod(coachId, from, to)).thenReturn(BigDecimal.ZERO);
+        when(coachPayoutRepository.sumReleasedCommissionByCoachAndPeriod(coachId, from, to)).thenReturn(BigDecimal.ZERO);
+        when(coachPayoutRepository.sumReleasedNetByCoachAndPeriod(coachId, from, to)).thenReturn(BigDecimal.ZERO);
+        when(coachPayoutRepository.countReleasedByCoachAndPeriod(coachId, from, to)).thenReturn(0L);
+        when(coachPayoutRepository.findReleasedBookingIdsByCoachAndPeriod(coachId, from, to)).thenReturn(List.of());
+        when(coachPayoutRepository.sumPendingReleaseNetByCoachAndPeriod(coachId, from, to)).thenReturn(BigDecimal.ZERO);
+        when(coachPayoutRepository.countPendingReleaseByCoachAndPeriod(coachId, from, to)).thenReturn(0L);
 
         RevenueSummaryDto dto = service.getCoachRevenueSummary(coachId, from, to);
 
@@ -117,6 +129,7 @@ class RevenueReportingServiceTest {
         assertThat(dto.stripeFees()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(dto.netPayout()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(dto.sessionCount()).isZero();
+        assertThat(dto.pendingReleaseCount()).isZero();
     }
 
     // ── Running balance pagination ───────────────────────────────
@@ -170,16 +183,18 @@ class RevenueReportingServiceTest {
     }
 
     @Test
-    void coachReceipt_frozenPayment_logsDistinguishingWarnAndReturns404() {
+    void coachReceipt_payoutNotReleased_logsDistinguishingWarnAndReturns404() {
+        // skillars-deferred-106 AC12.2: a coach receipt is gated on a RELEASED coach_payouts row.
         UUID bookingId = UUID.randomUUID();
         Booking booking = new Booking();
         booking.setId(bookingId);
         booking.setCoachId(coachId);
         when(bookingRepository.findByIdAndCoachId(bookingId, coachId)).thenReturn(Optional.of(booking));
-        BookingPayment payment = new BookingPayment();
-        payment.setBookingId(bookingId);
-        payment.setStatus("FROZEN");
-        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(payment));
+        com.softropic.skillars.platform.payment.repo.CoachPayout payout =
+            new com.softropic.skillars.platform.payment.repo.CoachPayout();
+        payout.setBookingId(bookingId);
+        payout.setStatus("HOLD");
+        when(coachPayoutRepository.findById(bookingId)).thenReturn(Optional.of(payout));
 
         Logger serviceLogger = (Logger) LoggerFactory.getLogger(RevenueReportingService.class);
         ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
@@ -193,11 +208,11 @@ class RevenueReportingServiceTest {
         }
 
         assertThat(logCapture.list)
-            .as("must warn distinctly, naming the actual non-CAPTURED status found, before the 404")
+            .as("must warn distinctly, naming the actual non-RELEASED status found, before the 404")
             .anySatisfy(event -> {
                 assertThat(event.getLevel()).isEqualTo(Level.WARN);
                 assertThat(event.getFormattedMessage())
-                    .contains("FROZEN")
+                    .contains("HOLD")
                     .contains(bookingId.toString())
                     .contains(coachId.toString());
             });

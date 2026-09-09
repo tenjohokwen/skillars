@@ -117,7 +117,7 @@ class AdminFinanceResourceIT {
         UUID coachId = UUID.randomUUID();
         CoachRevenueAdminDto dto = new CoachRevenueAdminDto(
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            0L, BigDecimal.ZERO, "EUR", 0, 0
+            0L, BigDecimal.ZERO, "EUR", 0, 0, BigDecimal.ZERO, 0L
         );
         when(revenueReportingService.getAdminCoachRevenue(eq(coachId), any(), any())).thenReturn(dto);
 

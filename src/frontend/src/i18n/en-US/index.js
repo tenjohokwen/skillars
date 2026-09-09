@@ -1236,7 +1236,12 @@ export default {
     gross: 'Gross',
     commission: 'Commission',
     stripeFees: 'Stripe Fees',
-    netPayout: 'Net Payout',
+    netPayout: 'Released to your Stripe account',
+    pendingRelease: 'Pending release',
+    pendingReleaseNote:
+      'Completed sessions whose payout has not yet been released to your Stripe account. Payouts are held briefly after a session completes.',
+    releasedNote:
+      '"Released" means the transfer to your Stripe account has been initiated. Stripe then pays out to your bank on its own schedule.',
     refunds: 'Refunds',
     sessions: 'Sessions',
     transactions: 'Transactions',
@@ -1256,7 +1261,7 @@ export default {
       sessionDate: 'Session Date',
       gross: 'Session Fee',
       commission: 'Platform Commission',
-      net: 'Net Received',
+      net: 'Released to your Stripe account',
       totalCharged: 'Total Charged',
       notFound: 'Receipt not found.',
     },

@@ -10,6 +10,7 @@ import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.payment.contract.BookingPaymentStatus;
 import com.softropic.skillars.platform.payment.repo.BookingPayment;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
@@ -44,6 +45,7 @@ public class BookingPaymentPersistenceService {
     private final ApplicationEventPublisher eventPublisher;
     private final MeterRegistry meterRegistry;
     private final PessimisticLockRetryer lockRetryer;
+    private final ConfigService configService;
 
     private Counter settleConflictCounter;
     private Counter settleErrorCounter;
@@ -137,6 +139,24 @@ public class BookingPaymentPersistenceService {
     }
 
     /**
+     * skillars-deferred-106 AC3.5: {@code platform.commission.rate} at this instant, stamped onto the
+     * {@code booking_payments} row so the coach payout net (AC4.2) is computed from the rate that was
+     * in force when the parent was charged — matching what the old destination charge's
+     * {@code application_fee_amount} already locked at capture. A malformed config value must not
+     * block a settle that has otherwise succeeded; leave the column NULL and let the payout code fall
+     * back to the live rate (same as a pre-V133 row).
+     */
+    private BigDecimal currentCommissionRate() {
+        try {
+            return new BigDecimal(configService.getString("platform.commission.rate"));
+        } catch (IllegalStateException | NumberFormatException e) {
+            log.error("Could not stamp booking_payments.commission_rate — platform.commission.rate "
+                + "unreadable ({}); leaving NULL, payout will fall back to the live rate", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * UAT.3 AC4. Every settle-side transition runs inside an AFTER_COMMIT listener, where a
      * {@link BookingStateTransitionException} produced no application-level ERROR and no meter at
      * all — the failure was completely silent. AC1–AC3 make the known route here unreachable; this
@@ -206,6 +226,9 @@ public class BookingPaymentPersistenceService {
         bp.setBatchPaymentIntentId(batchPaymentIntentId);
         bp.setStatus(BookingPaymentStatus.CAPTURED);
         bp.setCapturedAt(Instant.now());
+        // skillars-deferred-106 AC3.5: lock the commission rate at capture. The coach payout net is
+        // computed from this stored rate, never from platform.commission.rate re-read at completion.
+        bp.setCommissionRate(currentCommissionRate());
         bookingPaymentRepository.save(bp);
         transitionOrReport(bookingId, BookingEvent.PAYMENT_CAPTURED);
         eventPublisher.publishEvent(BookingConfirmedEvent.builder()
@@ -248,6 +271,9 @@ public class BookingPaymentPersistenceService {
         bp.setStripeCharged(BigDecimal.ZERO);
         bp.setStatus(BookingPaymentStatus.CAPTURED);
         bp.setCapturedAt(Instant.now());
+        // skillars-deferred-106 AC3.5: lock the commission rate at capture. The coach payout net is
+        // computed from this stored rate, never from platform.commission.rate re-read at completion.
+        bp.setCommissionRate(currentCommissionRate());
         bookingPaymentRepository.save(bp);
         transitionOrReport(bookingId, BookingEvent.PAYMENT_CAPTURED);
         eventPublisher.publishEvent(BookingConfirmedEvent.builder()
@@ -273,6 +299,9 @@ public class BookingPaymentPersistenceService {
         bp.setStripePaymentIntentId(paymentIntentId);
         bp.setStatus(BookingPaymentStatus.CAPTURED);
         bp.setCapturedAt(Instant.now());
+        // skillars-deferred-106 AC3.5: lock the commission rate at capture. The coach payout net is
+        // computed from this stored rate, never from platform.commission.rate re-read at completion.
+        bp.setCommissionRate(currentCommissionRate());
         bookingPaymentRepository.save(bp);
         transitionOrReport(bookingId, BookingEvent.PAYMENT_CAPTURED);
         eventPublisher.publishEvent(BookingConfirmedEvent.builder()

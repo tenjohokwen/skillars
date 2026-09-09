@@ -56,6 +56,8 @@ class DisputeServiceTest {
     @Mock private AdminActionLogRepository adminActionLogRepository;
     @Mock private ConfigService configService;
     @Mock private CreditWalletService creditWalletService;
+    @Mock private com.softropic.skillars.platform.payment.repo.CoachPayoutRepository coachPayoutRepository;
+    @Mock private com.softropic.skillars.platform.payment.service.CoachPayoutOutboxSupport coachPayoutOutboxSupport;
     @Mock private ApplicationEventPublisher eventPublisher;
 
     private DisputeService service;
@@ -68,7 +70,7 @@ class DisputeServiceTest {
         service = new DisputeService(
             disputeRepository, bookingRepository, bookingPaymentRepository, coachProfileRepository,
             coachCancellationHistoryRepository, adminAlertRepository, adminActionLogRepository,
-            configService, creditWalletService, eventPublisher
+            configService, creditWalletService, coachPayoutRepository, coachPayoutOutboxSupport, eventPublisher
         );
     }
 

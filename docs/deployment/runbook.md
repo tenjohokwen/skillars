@@ -415,6 +415,127 @@ docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" \
 > money twice. The `booking_payments` row exists precisely so that a human has something durable to
 > reconcile against — before UAT.3 there was no record at all, and this situation was undetectable.
 
+### A later Stripe event on a `CAPTURE_ABANDONED` booking (skillars-deferred-91 audit #1)
+
+Once a row is `CAPTURE_ABANDONED` the booking is terminal (`DECLINED`) and **nothing in the app
+consumes a later `payment_intent.succeeded` for it** — there is no automatic tie-back. So the
+reconciliation step above must **always** query Stripe (or the `payment.stripe_webhook_events` audit
+log) for events on the `PaymentIntent`, not trust the local terminal state. Worth adding a
+dashboard/alert for "a successful charge whose `metadata.referenceId` maps to a `CAPTURE_ABANDONED`
+booking".
+
+### `stripe_charged` → action map (skillars-deferred-91 audit #2)
+
+- **`stripe_charged = 0`** — check the `PaymentIntent` in Stripe for a failure reason. If it never
+  captured, there is nothing to reverse; just tidy the local state.
+- **`stripe_charged > 0`** — the column value is only a hint. Confirm the capture state in Stripe.
+  If it captured, then **before deciding refund vs. transfer-reversal**, query Stripe Transfers by
+  `metadata.transfer_group` (= the booking id) / `metadata.referenceId`:
+  - no transfer — a plain `Refund.create` on the `PaymentIntent` returns the money; the coach was
+    never paid (this is the normal B-1 pre-completion case).
+  - a transfer exists — the coach was paid; a refund alone leaves the platform short. Reverse the
+    transfer first (`Transfer.createReversal`), or record a `payment.coach_payouts` row so the
+    ledger reflects it, then refund.
+
+---
+
+## Scenario 5: Coach Payout Held or Reversal Failed
+
+**A `payment.coach_payouts` row in `HOLD`, `REVERSAL_FAILED`, or `FAILED_PERMANENT` needs a human.**
+skillars-deferred-106 moved the coach's share of a session fee off the Stripe destination charge
+(paid at capture) and onto a **platform-initiated `Transfer` on session completion**, run through the
+durable outbox. The happy path is fully automatic: on `BookingCompletedEvent` a `coach_payouts` row
+is written `PENDING_RELEASE`, and after `payment.payout.hold_hours` (default 48) the
+`COACH_PAYOUT_TRANSFER` outbox handler calls `Transfer.create` and moves the row to `RELEASED`. This
+scenario is the exceptions.
+
+### Detection
+
+```bash
+docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" \
+  "$(docker compose -f /opt/skillars/app/docker-compose.yml ps -q postgres)" \
+  psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-skillars}" -c \
+  "SELECT booking_id, coach_id, status, net_amount, currency, last_error, release_after, updated_at
+     FROM payment.coach_payouts
+    WHERE status IN ('HOLD', 'REVERSAL_FAILED', 'FAILED_PERMANENT')
+    ORDER BY updated_at DESC;"
+```
+
+Alert on the metrics: `coach.payout.held{reason=...}` (a `HOLD` was written — the destination
+account could not receive) and `coach.payout.reversal_failed{reason=...}` (a post-payout dispute
+reversal failed). The `[COACH_PAYOUT_HELD]` WARN and `[COACH_PAYOUT_REVERSAL]` ERROR log lines carry
+the `booking_id` / `coach_id` / `reason`. A retryable failure never reaches these states — it stays
+`PENDING_RELEASE` and surfaces via the outbox's own `[OUTBOX_STUCK]` after 10 attempts.
+
+### `HOLD` — invalid / disconnected destination (B.7.5)
+
+The coach disconnected, closed, or restricted their Stripe connected account between
+`BookingCompletedEvent` and the transfer (or the `transfers` capability is not active). The payout is
+blocked and the handler will not retry on its own (a `HOLD` is a decision, not a transient error).
+
+1. **Message the coach** (adapt to the channel in use):
+   > *"Your Stripe payout account was disconnected before we could release payment for session
+   > {ref}. Please reconnect it at {link}, then reply here — we'll verify and retry automatically."*
+2. When the coach confirms and the account shows `COMPLETE` + `charges_enabled` again, flip the row
+   back and re-enqueue exactly one outbox message:
+
+   ```sql
+   UPDATE payment.coach_payouts
+      SET status = 'PENDING_RELEASE', last_error = NULL, updated_at = now()
+    WHERE booking_id = '<booking-id>' AND status = 'HOLD';
+
+   INSERT INTO main.outbox_messages (aggregate_type, payload)
+   VALUES ('COACH_PAYOUT_TRANSFER', jsonb_build_object('bookingId', '<booking-id>'));
+   ```
+
+   The next drain (≤ 5 min, or trigger the sweep) picks it up. The handler re-checks
+   `status = PENDING_RELEASE` and `release_after`, so a double-insert is harmless.
+
+### `REVERSAL_FAILED` — coach withdrew the balance / account closed (B.7.3)
+
+A dispute was upheld after the payout `RELEASED`, a `COACH_PAYOUT_REVERSAL` ran, and
+`Transfer.createReversal` failed non-retryably (the connected-account balance no longer covers it).
+There is no automatic recovery.
+
+1. Establish what is actually recoverable in Stripe — partial reversal, negative balance, or the
+   coach must repay out of band.
+2. Record the manual reversal / recovery once done:
+
+   ```sql
+   UPDATE payment.coach_payouts
+      SET status = 'REVERSED', reversed_at = now(),
+          last_error = 'manual reversal by <operator>, <ref>', updated_at = now()
+    WHERE booking_id = '<booking-id>' AND status = 'REVERSAL_FAILED';
+   ```
+
+### `FAILED_PERMANENT` — unrecoverable (operator-only)
+
+Nothing auto-transitions here — not `[OUTBOX_STUCK]`, not a scheduler, not an age threshold. It is
+the state an operator writes when a `HOLD` / `REVERSAL_FAILED` case is judged unrecoverable (coach
+account permanently closed, coach left the platform):
+
+```sql
+UPDATE payment.coach_payouts
+   SET status = 'FAILED_PERMANENT',
+       last_error = 'closed unrecoverable by <operator> on <date>: <reason>', updated_at = now()
+ WHERE booking_id = '<booking-id>' AND status IN ('HOLD', 'REVERSAL_FAILED');
+```
+
+A re-driven `COACH_PAYOUT_TRANSFER` / `COACH_PAYOUT_REVERSAL` outbox row for a `FAILED_PERMANENT`
+booking is a no-op (the handler gates on the row not being payable / not `RELEASED`), so any stray
+outbox row left over does no harm.
+
+### Verification
+
+```bash
+docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" \
+  "$(docker compose -f /opt/skillars/app/docker-compose.yml ps -q postgres)" \
+  psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-skillars}" -c \
+  "SELECT status, count(*) FROM payment.coach_payouts GROUP BY status ORDER BY status;"
+# A resolved HOLD is RELEASED; a resolved REVERSAL_FAILED is REVERSED; a closed case is
+# FAILED_PERMANENT. The coach.payout.held / coach.payout.reversal_failed counters stop climbing.
+```
+
 ---
 
 ## Config change appears to have no effect

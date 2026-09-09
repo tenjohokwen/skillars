@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.payment.service;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -40,6 +41,7 @@ class BookingPaymentPersistenceServiceTest {
     @Mock BookingService bookingService;
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock PessimisticLockRetryer lockRetryer;
+    @Mock ConfigService configService;
     @Spy MeterRegistry meterRegistry = new SimpleMeterRegistry();
 
     @InjectMocks BookingPaymentPersistenceService service;
@@ -50,6 +52,9 @@ class BookingPaymentPersistenceServiceTest {
     @BeforeEach
     void setUp() {
         lenient().when(bookingPaymentRepository.findById(BOOKING_ID)).thenReturn(Optional.empty());
+        // skillars-deferred-106 AC3.5: persistPaymentSuccess stamps booking_payments.commission_rate
+        // from platform.commission.rate at capture. persistPaymentFailure never reads it (lenient).
+        lenient().when(configService.getString("platform.commission.rate")).thenReturn("0.15");
         // @InjectMocks constructs the service but never invokes @PostConstruct — Mockito is not a
         // Spring container. Without this, every settle*Counter field stays null.
         service.initializeCounters();

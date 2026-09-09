@@ -1234,7 +1234,12 @@ export default {
     gross: 'Brutto',
     commission: 'Provision',
     stripeFees: 'Stripe-Gebühren',
-    netPayout: 'Netto-Auszahlung',
+    netPayout: 'An Ihr Stripe-Konto ausgezahlt',
+    pendingRelease: 'Auszahlung ausstehend',
+    pendingReleaseNote:
+      'Abgeschlossene Einheiten, deren Auszahlung noch nicht an Ihr Stripe-Konto freigegeben wurde. Auszahlungen werden nach Abschluss einer Einheit kurz zurückgehalten.',
+    releasedNote:
+      '„Ausgezahlt“ bedeutet, dass die Überweisung an Ihr Stripe-Konto veranlasst wurde. Stripe zahlt anschließend nach eigenem Zeitplan an Ihre Bank aus.',
     refunds: 'Erstattungen',
     sessions: 'Einheiten',
     transactions: 'Transaktionen',
@@ -1254,7 +1259,7 @@ export default {
       sessionDate: 'Sitzungsdatum',
       gross: 'Sitzungsgebühr',
       commission: 'Plattformprovision',
-      net: 'Netto erhalten',
+      net: 'An Ihr Stripe-Konto ausgezahlt',
       totalCharged: 'Gesamtbetrag',
       notFound: 'Quittung nicht gefunden.',
     },

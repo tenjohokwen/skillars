@@ -7,6 +7,8 @@ import com.stripe.model.PaymentMethod;
 import com.stripe.model.Refund;
 import com.stripe.model.SetupIntent;
 import com.stripe.model.Subscription;
+import com.stripe.model.Transfer;
+import com.stripe.model.TransferReversal;
 import com.stripe.net.RequestOptions;
 import com.stripe.param.CustomerCreateParams;
 import com.stripe.param.PaymentIntentCreateParams;
@@ -14,6 +16,8 @@ import com.stripe.param.RefundCreateParams;
 import com.stripe.param.SetupIntentCreateParams;
 import com.stripe.param.SubscriptionCreateParams;
 import com.stripe.param.SubscriptionUpdateParams;
+import com.stripe.param.TransferCreateParams;
+import com.stripe.param.TransferReversalCollectionCreateParams;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -61,6 +65,34 @@ public class StripeClient {
 
     public SetupIntent createSetupIntent(SetupIntentCreateParams params) throws StripeException {
         return SetupIntent.create(params);
+    }
+
+    /**
+     * skillars-deferred-106 AC5.2: creates a Stripe {@code Transfer} from the platform balance to a
+     * connected account, under a caller-supplied deterministic idempotency key
+     * ({@code transfer-{bookingId}}). A re-driven {@code COACH_PAYOUT_TRANSFER} outbox row must
+     * replay the original transfer at Stripe, never create a second — same rationale as
+     * {@link #createRefund(RefundCreateParams, String)} (skillars-deferred-99 AC1).
+     */
+    public Transfer createTransfer(TransferCreateParams params, String idempotencyKey) throws StripeException {
+        RequestOptions options = RequestOptions.builder()
+            .setIdempotencyKey(idempotencyKey)
+            .build();
+        return Transfer.create(params, options);
+    }
+
+    /**
+     * skillars-deferred-106 AC5.2: reverses (part of) a previously created {@code Transfer} — the
+     * post-payout dispute path. Deterministic key {@code reversal-{stripeTransferId}} so a re-driven
+     * {@code COACH_PAYOUT_REVERSAL} outbox row replays rather than double-reversing.
+     */
+    public TransferReversal createTransferReversal(String transferId,
+                                                   TransferReversalCollectionCreateParams params,
+                                                   String idempotencyKey) throws StripeException {
+        RequestOptions options = RequestOptions.builder()
+            .setIdempotencyKey(idempotencyKey)
+            .build();
+        return Transfer.retrieve(transferId, options).getReversals().create(params, options);
     }
 
     public Customer createCustomer(CustomerCreateParams params) throws StripeException {

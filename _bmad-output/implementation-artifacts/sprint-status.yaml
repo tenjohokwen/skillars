@@ -1,5 +1,5 @@
 generated: 2026-05-25
-last_updated: '2026-09-09'  # skillars-deferred-105 (CI build-warning cleanup) → done
+last_updated: '2026-09-09'  # skillars-deferred-106 (completion-gated coach payout) → done (AC0-AC15.5 done + code-review EC-4 applied; AC15.6/AC15.7 Stripe test-mode owned by Mbah)
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -269,3 +269,4 @@ development_status:
   ? skillars-deferred-92-outbox-enqueue-atomicity-executor-shutdown-migration-ordering-and-lock-timeout-default-bundle-parity-fr-fr-idiom-prettier-conformance-and-genuine-bug-fixes
   : review
   skillars-deferred-105-ci-build-warning-cleanup: done # deferred-104 reserved for frontend-test-framework-initiative (deferred-103 D3); GitHub CI build-warning sweep
+  skillars-deferred-106-completion-gated-coach-payout: done # Part B of payout-and-capture-pending.md (deferred-91 AC5 Part B); B-1 separate charges & transfers; AC0 owner sign-off done 2026-09-09 (hold_hours=48, no post-completion cancel, one story, revenue on coach_payouts.RELEASED); code-review triaged (7 FPs), EC-4 locked-read applied; AC15.6/AC15.7 Stripe test-mode owned by Mbah

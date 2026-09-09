@@ -1,9 +1,15 @@
 # Completion-gated coach payout & the `CAPTURE_PENDING` dead-end — design pass
 
-**Status:** DRAFT — awaiting project-owner review (skillars-deferred-91 AC5, Task 0).
-Confirmed still DRAFT by the 2026-09-03 code review (decision D8): **D1–D5 below remain unanswered.**
-Part A shipped on a verbal scope call; obtaining this sign-off is the first task of the Part B story.
-Nothing in "Part B" below is implemented yet; "Part A" is implementable as specified once this doc is signed off.
+**Status:** Part A **IMPLEMENTED & merged** (skillars-deferred-91 AC5, commit `c2c47c1e`) —
+`CAPTURE_ABANDONED` status, `reserved_at` clock (V124), `PaymentPendingSweeper.abandonCapture`,
+`CAPTURE_TIMEOUT` metric, and runbook Scenario 4 all shipped. Owner decisions **D1–D6 are all
+resolved** (outcomes recorded below). Part B (B-1 separate charges & transfers) is now an
+**implementation story: `skillars-deferred-106-completion-gated-coach-payout`** — all B.7 open
+questions were folded into its ACs (AC7.2/AC9/AC8.3/AC10/AC8.2+AC14.1) and resolved with the owner
+on 2026-09-09.
+The 2026-09-09 story audit (`_bmad-output/implementation-artifacts/story-review.md`) is folded in:
+its Part A points became the A.2 clarifications (items 3–7, tagged "audit #N"); its Part B
+points became section B.7.
 
 **Context:** skillars-deferred-91 AC5 folds together two long-standing residuals:
 `skillars-uat-3` D3 / skillars-deferred-90 line 1325 (an unrecoverable `CAPTURE_PENDING`
@@ -97,13 +103,33 @@ operator must reconcile the Stripe side" alert.
      additive-only (widen the CHECK), and the code that writes `CAPTURE_ABANDONED`
      ships in the **next** story, OR V124 + the writing code ship together and the
      migration is flagged `-- migration-lint: allow-... enum-widen-same-release`
-     with the reason "no production data; single-node deploy". **Owner decision:
-     one-release gap, or same-release with the documented opt-out?**
+     with the reason "no production data; single-node deploy".
+     - **Resolved (D2): same-release with the documented opt-out.** V124 widens the
+       CHECK and `PaymentPendingSweeper.abandonCapture` writes the value in the same
+       release, flagged `migration-lint: allow-enum-widen-same-release` under the
+       standing "no production system exists" project fact. V124's own comment
+       records that this must be split into widen-then-write across two releases
+       before the first production deploy.
 
 3. **`PaymentPendingSweeper.sweepOne` gains a `CAPTURE_PENDING` age branch** (it
    already re-reads the row under the booking-row lock):
+
+   > **Resolved (audit #3): the clock is a new nullable `booking_payments.reserved_at`
+   > column, not `created_at`.** V124 adds `reserved_at TIMESTAMPTZ` (nullable, no
+   > default — catalog-only `ADD COLUMN`); `BookingPaymentPersistenceService.reserveCapture`
+   > stamps it when it writes the `CAPTURE_PENDING` row, i.e. the timeout is measured
+   > from when capture was *reserved*, immediately before the Stripe call — never from
+   > booking creation. A row with `reserved_at IS NULL` (created before V124) **cannot
+   > be aged** and stays on the existing `CAPTURE_UNCONFIRMED` manual path indefinitely.
+   > (The audit's "measured from booking time, timeout fires too early" scenario does
+   > not apply: `existing` is the `booking_payments` row, whose `created_at`/`reserved_at`
+   > is the reservation instant, not the booking's creation time. `reserved_at` is
+   > still preferred over the row's `created_at` because `reserveCapture` is the only
+   > writer of a fresh `CAPTURE_PENDING` row and stamping an explicit field keeps the
+   > semantics unambiguous.)
+
    - if `existing.status == CAPTURE_PENDING` **and**
-     `existing.created_at` (or a new `capture_reserved_at`) is older than
+     `existing.reserved_at` is non-null and older than
      `capture_pending_max_hours`:
      - write `existing.status = CAPTURE_ABANDONED` (keep `stripe_charged` as-is —
        do **not** zero it, the amount may be real);
@@ -112,12 +138,25 @@ operator must reconcile the Stripe side" alert.
        the slot frees, and the parent's cancel is unblocked;
      - `meterRegistry.counter("booking.payment_pending.unrecoverable", "reason",
        "CAPTURE_TIMEOUT").increment()`;
-     - `log.error("[CAPTURE_TIMEOUT] booking {} — CAPTURE_PENDING for > {}h, "
-       + "marked CAPTURE_ABANDONED and slot released; reconcile the Stripe side "
-       + "by hand (runbook: CAPTURE_PENDING)", ...)`.
-   - if it is younger than the timeout: unchanged — `reportUnrecoverable(...,
-     "CAPTURE_UNCONFIRMED")` as today (so the existing alert still fires every
-     sweep until the timeout, then flips to `CAPTURE_TIMEOUT`).
+     - `log.error("[CAPTURE_TIMEOUT] booking {} — CAPTURE_PENDING past "
+       + "capture_pending_max_hours, marked CAPTURE_ABANDONED and slot released; "
+       + "reconcile the Stripe side by hand (runbook: CAPTURE_ABANDONED)", ...)`;
+     - publish `BookingPaymentUnresolvedEvent` to the parent — **not**
+       `BookingDeclinedEvent` (code-review D10: the declined template tells the
+       parent their session credits "have not been affected", the one claim
+       `CAPTURE_ABANDONED` exists to avoid making).
+   - if it is younger than the timeout (or `reserved_at IS NULL`): unchanged —
+     `reportUnrecoverable(..., "CAPTURE_UNCONFIRMED")` as today (so the existing
+     alert still fires every sweep until the timeout, then flips to
+     `CAPTURE_TIMEOUT`).
+   - **Concurrent / repeat sweeps are a no-op (audit #4).** Once `abandonCapture`
+     has run the booking is no longer `PAYMENT_PENDING`, so `findPaymentPendingOlderThan`
+     stops returning it and `sweepOne`'s own `status == PAYMENT_PENDING` re-check
+     (under the booking-row lock) bails out first anyway. Even a sweep that raced in
+     before that transition committed re-reads the payment row under the same lock
+     and gates on `status == CAPTURE_PENDING`. No extra idempotency key is needed.
+     (The `@SchedulerLock lockAtMostFor` is 2× the fixed delay for the same
+     reason — see the sweeper class comment.)
 
 4. **No automatic charge, confirm, or refund.** Part A only changes local booking
    state. `PaymentIntent` reconciliation stays manual, per `skillars-uat-3`'s own
@@ -128,10 +167,30 @@ operator must reconcile the Stripe side" alert.
    cancel through. Confirm no code path treats `CAPTURE_ABANDONED` as "still in
    flight" (grep every `CAPTURE_PENDING.equals(...)` / `isTerminal` caller).
 
-6. **Runbook** — add a `CAPTURE_ABANDONED` section to
-   `docs/deployment/runbook.md`: how to find the PaymentIntent by
-   `metadata.referenceId` / `metadata.coachId`, and how to either (a) refund it if
-   it captured, or (b) leave it if it never captured.
+6. **Runbook** — **shipped** as `docs/deployment/runbook.md` Scenario 4 ("A Booking
+   Stuck in `CAPTURE_PENDING`"): how to find the PaymentIntent by
+   `metadata.referenceId` / `metadata.coachId`, the detection query over
+   `('CAPTURE_PENDING', 'CAPTURE_ABANDONED')` rows, and the re-open / tidy /
+   refund branches for a captured vs. never-captured charge. It also states that
+   `credit_debited` / `stripe_charged` on a stuck row are **a reconciliation hint,
+   not a ledger** — a card booking carries `credit_debited = 0` and the whole
+   price under `stripe_charged`; the real split is only written by the CAPTURE
+   step that never ran.
+
+7. **Two runbook additions from the 2026-09-09 audit** (fold into Scenario 4):
+   - **Post-abandonment Stripe event (audit #1).** After a row is
+     `CAPTURE_ABANDONED` the booking is `PAYMENT_FAILED`/terminal and nothing in
+     the app consumes a later `payment_intent.succeeded` for it — there is no
+     automatic tie-back. The runbook's reconciliation step must therefore
+     *always* query Stripe (or the webhook audit log) for events on the
+     PaymentIntent, not trust the local terminal state, and a "successful charge
+     on a `CAPTURE_ABANDONED` booking" dashboard/alert is worth adding.
+   - **`stripe_charged` → action map (audit #2).** Make the branch explicit:
+     `stripe_charged = 0` → check the PaymentIntent for a failure reason; if it
+     never captured there is nothing to reverse. `stripe_charged > 0` → the
+     PaymentIntent value is only a hint; confirm capture state in Stripe, and if
+     captured, query Stripe Transfers by `metadata.referenceId` to see whether the
+     coach transfer also went through before deciding refund vs. transfer-reversal.
 
 ### A.3 Test plan (Part A)
 
@@ -139,16 +198,24 @@ operator must reconcile the Stripe side" alert.
   timeout → `CAPTURE_ABANDONED` + `PAYMENT_FAILED` transition + `CAPTURE_TIMEOUT`
   counter; a young one → unchanged, `CAPTURE_UNCONFIRMED` still reported.
 - IT (extend an existing payment IT context, no new `@TestPropertySource`): seed a
-  `CAPTURE_PENDING` row with `created_at` well in the past, run
+  `CAPTURE_PENDING` row with `reserved_at` well in the past, run
   `sweepStrandedPayments()` (release the ShedLock first), assert the booking left
   `PAYMENT_PENDING`, the slot is free (a second booking for the same slot now
   inserts), and the parent cancel endpoint returns 2xx.
+- A `reserved_at IS NULL` (pre-V124) row is never aged — sweeper leaves it
+  `CAPTURE_PENDING` on the manual path.
 
-### A.4 ACs that fall out of Part A (proposed for this story, pending owner sign-off)
+_Delivered in `PaymentPendingSweeperTest` (incl.
+`capturePendingRow_withNullReservedAt_isNeverAged`) / `PaymentPendingSweeperIT`._
 
-- **AC5a-1** new `CAPTURE_ABANDONED` status + V124 CHECK widen.
-- **AC5a-2** `PaymentPendingSweeper` timeout branch + `CAPTURE_TIMEOUT` metric + ERROR.
-- **AC5a-3** runbook section.
+### A.4 ACs that fell out of Part A — **all delivered** (skillars-deferred-91 AC5, `c2c47c1e`)
+
+- **AC5a-1** ✅ new `CAPTURE_ABANDONED` status + V124 (`reserved_at` column + CHECK widen).
+- **AC5a-2** ✅ `PaymentPendingSweeper.abandonCapture` timeout branch +
+  `booking.payment_pending.unrecoverable{reason="CAPTURE_TIMEOUT"}` metric + `[CAPTURE_TIMEOUT]`
+  ERROR + `BookingPaymentUnresolvedEvent` to the parent (code-review D10: **not**
+  `BookingDeclinedEvent` — that would wrongly tell the parent their credits were unaffected).
+- **AC5a-3** ✅ runbook Scenario 4 (see items 6–7 above for the audit follow-ups still to fold in).
 
 ---
 
@@ -165,11 +232,13 @@ signal** instead.
 
 ### B.2 What "completion signal" means here
 
-The booking lifecycle already produces exactly one:
+The booking lifecycle is intended to produce **one** `BookingCompletedEvent` per
+booking (see B.7.1 for the exactly-once caveat the Part B story must nail down):
 
 - **`BookingCompletedEvent`** — published by `QuickCompleteTimeoutService`
   (auto-confirm after `booking.quick_complete_timeout_hours`) and by the
-  coach/parent explicit-complete paths. This is the natural payout trigger.
+  coach/parent explicit-complete paths (`BookingCompletionService.submitWrapUp`
+  LIVE path and `confirmCompletion`). This is the natural payout trigger.
 - Parent confirmation is *within* the quick-complete window and also ends in
   `BookingCompletedEvent`, so gating on the event covers both.
 - `recordNoShowCoach` (`BookingService.java:739-758`) is `UPCOMING`-only by a
@@ -220,7 +289,8 @@ coach's bank. In-app "completed & paid" therefore means "transfer initiated", no
 
 ### B.6 Recommendation
 
-1. **Part A ships in this story** (bounded, low-risk, closes a real slot-hold bug).
+1. **Part A ✅ shipped** in skillars-deferred-91 (bounded, low-risk, closed a real
+   slot-hold bug).
 2. **Part B (B-1) is its own story.** It is a payment-architecture change that
    touches `StripePaymentGateway`, `PaymentLifecycleService`,
    `BookingPaymentPersistenceService`, `CancellationRefundService`, every
@@ -231,12 +301,65 @@ coach's bank. In-app "completed & paid" therefore means "transfer initiated", no
    (AC20) as **"Completion-gated coach payout (B-1 separate charges & transfers) —
    own story"** with this doc as the input.
 
-**Owner decisions needed:**
+### B.7 Open questions the Part B story must answer (2026-09-09 audit #5–#9)
 
-- **D1** — Confirm Part A scope (A.4) is right for this story.
-- **D2** — Part A: `CAPTURE_ABANDONED` CHECK widen one release ahead (rule 5), or
-  same release with a documented `migration-lint` opt-out (no prod data)?
-- **D3** — Part A default `capture_pending_max_hours` = 72 acceptable?
-- **D4** — Confirm Part B (B-1) is deferred to its own story, with this doc as input.
-- **D5** — Part B, when built: `payout_hold_hours` default 0 (pay on completion) —
-  agreed, or do you want a non-zero default rebuttal gap?
+Not blockers for Part A (already shipped) — but each must be resolved inside the
+Part B story before B-1 is built, and each should become an explicit AC there.
+
+1. **`BookingCompletedEvent` exactly-once (audit #5).** Today "one event per
+   booking" rests on state-machine guards, not an idempotency key: the three
+   publish sites (`QuickCompleteTimeoutService`,
+   `BookingCompletionService.submitWrapUp` LIVE path,
+   `BookingCompletionService.confirmCompletion`) each run after a `verifyStatus` +
+   optimistic-locked `transition`, and the completed-state transition can only
+   commit once. Probably sufficient — but Part B must **not** depend on it
+   silently. Required: make the `COACH_PAYOUT_TRANSFER` outbox handler
+   **idempotent per booking id** (the outbox already dedupes — that is the right
+   place), plus a test that a duplicate `BookingCompletedEvent` yields at most one
+   `Transfer.create`.
+2. **Post-completion state transitions (audit #6).** Spec explicitly whether a
+   parent or coach can cancel/refund *after* `BookingCompletedEvent` has fired and
+   the coach has been paid. If yes → that path is a `Transfer` reversal (B.4's
+   dispute route), not a charge refund. If no → document the post-completion
+   booking state as immutable and have the cancel endpoints reject it.
+3. **`Transfer.createReversal` failure handling (audit #7).** B.4 routes
+   post-payout refunds through `DisputeService` but is silent on the reversal
+   itself failing (coach withdrew the balance, network timeout, account closed).
+   Part B needs: retry with backoff, an alert carrying booking id + coach id, and
+   a DLQ / manual-follow-up path for unrecoverable reversals. "An operator owns
+   it" must name the runbook entry.
+4. **`DisputeService` dependency surface (audit #8).** Confirm `DisputeService`
+   can (a) apply reversals idempotently, (b) handle both pre-payout (charge
+   refund) and post-payout (transfer reversal) disputes, and (c) honour a
+   configurable `payout_hold_hours` gap. Document reused vs. new flows; new flows
+   are in scope for the Part B story.
+5. **Coach connected-account disconnect between event and transfer (audit #9).**
+   Coach disconnects their Stripe account after `BookingCompletedEvent` but before
+   `CoachPayoutTransferHandler` runs → `Transfer.create` fails invalid-destination.
+   Part B: the outbox retry holds the payout; add a runbook entry ("invalid
+   destination → ask the coach to reconnect; manual transfer if needed") and an
+   alert after N failed attempts.
+
+**Owner decisions:**
+
+- **D1 — RESOLVED.** Part A scope (A.4) shipped as specified in skillars-deferred-91.
+- **D2 — RESOLVED: same release with the documented `migration-lint` opt-out.**
+  V124 widens the CHECK and `abandonCapture` writes `CAPTURE_ABANDONED` in the
+  same release, under the "no production system exists" project fact; V124's
+  comment flags the pre-prod split-into-two-releases requirement.
+- **D3 — RESOLVED: default `capture_pending_max_hours` = 72** (bounded 6–720),
+  shipped.
+- **D4 — RESOLVED (2026-09-09): build B-1 (separate charges & transfers)** as its
+  own story, `skillars-deferred-106-completion-gated-coach-payout`, with this doc
+  as input. B-2 (manual capture — breaks on the >7-day booking window) and B-3
+  (status quo + reversal — does not meet the AC) are rejected.
+- **D5 — RESOLVED (2026-09-09): `payment.payout.hold_hours` default 48**, not 0.
+  Bounded 0–336h (14d dispute window); 0 restores release-on-completion with no
+  code change. A dispute raised inside the 48h hold cancels the still-pending
+  `COACH_PAYOUT_TRANSFER` outbox row outright (no pay-then-reverse); a dispute
+  after release takes the `Transfer.createReversal` path.
+- **D6 — RESOLVED (2026-09-09): yes.** B.7.1–B.7.5 are explicit ACs in
+  `skillars-deferred-106` — AC7.2 (#5 exactly-once), AC9 (#6 post-completion
+  immutable — cancellation rejected, disputes only), AC8.3 + AC14.1 (#7 reversal
+  failure), AC10 (#8 `DisputeService` surface), AC8.2 + AC14.1 (#9 connected-account
+  disconnect).
