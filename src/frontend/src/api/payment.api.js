@@ -58,7 +58,8 @@ export const confirmCardSetup = async (stripePublishableKey, clientSecret, cardE
 // ({ content, totalElements, ... }). The reliability page shows a flat, un-paged list, so we ask
 // for the max page size (100) and the store unwraps `.content`. If this list ever needs true
 // paging, thread page/size through here.
-export const fetchMyStrikes = () => api.get('/api/payment/coaches/me/strikes', { params: { size: 100 } })
+export const fetchMyStrikes = () =>
+  api.get('/api/payment/coaches/me/strikes', { params: { size: 100 } })
 export const acknowledgeStrike = (strikeId) =>
   api.put(`/api/payment/coaches/strikes/${strikeId}/acknowledge`)
 
