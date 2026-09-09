@@ -158,6 +158,6 @@ class SessionPauseResumeServiceTest {
 
         assertThatThrownBy(() -> service.pauseSession(BOOKING_ID, COACH_USER_ID))
             .isInstanceOf(OperationNotAllowedException.class)
-            .hasMessageContaining("concurrently");
+            .hasMessageContaining("concurrent modification");
     }
 }
