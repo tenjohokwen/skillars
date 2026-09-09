@@ -666,6 +666,7 @@ public class BookingService {
         if (!Objects.equals(booking.getParentId(), parentId) || !Objects.equals(booking.getCoachId(), coachId)) {
             throw new OperationNotAllowedException("Booking does not belong to this parent/pack", SecurityError.MISSING_RIGHTS);
         }
+        rejectIfPostCompletion(booking); // skillars-deferred-106 AC9.2
         try {
             transition(bookingId, BookingEvent.CANCEL_DUE_TO_PAUSE, new TransitionContext(ActorRole.SYSTEM, null));
         } catch (OptimisticLockingFailureException e) {
@@ -688,6 +689,23 @@ public class BookingService {
         } catch (IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Booking " + booking.getId() + " has unrecognised status '" + booking.getStatus() + "'");
+        }
+    }
+
+    /**
+     * skillars-deferred-106 AC9.2: a {@code COMPLETED} booking is immutable for cancellation — the
+     * coach payout has been (or is being) released, so cancelling / no-showing / refunding on top of
+     * it would chase money that has left the platform. The only post-completion route is
+     * {@code DisputeService} (AC10). {@code BookingStateMachine} already blocks the {@code CANCEL_*}
+     * transition from {@code COMPLETED}; this fail-fast check makes the rejection an explicit,
+     * i18n-coded {@code OperationNotAllowedException} (not a raw {@code BookingStateTransitionException})
+     * and keeps the guard visible so a future refactor cannot open the path silently.
+     */
+    private void rejectIfPostCompletion(Booking booking) {
+        if (BookingStatus.COMPLETED.name().equals(booking.getStatus())) {
+            throw new OperationNotAllowedException(
+                "A completed booking cannot be cancelled — raise a dispute instead",
+                BookingError.BOOKING_ALREADY_COMPLETED);
         }
     }
 
@@ -723,6 +741,7 @@ public class BookingService {
         // getBookingOrThrow above (Hibernate's persistence-context identity map), so without this
         // refresh the "locked" read never actually re-reads the row FOR UPDATE just acquired.
         entityManager.refresh(booking, LockModeType.PESSIMISTIC_WRITE);
+        rejectIfPostCompletion(booking); // skillars-deferred-106 AC9.2
         long hoursBeforeSession = ChronoUnit.HOURS.between(Instant.now(), booking.getRequestedStartTime());
         // Deferred-12 AC4: money only ever leaves the parent (credit debit / pack unit deduction)
         // once payment has been captured, i.e. from CONFIRMED onwards. Everything else — notably
@@ -780,6 +799,7 @@ public class BookingService {
         if (!Objects.equals(booking.getCoachId(), coach.getId())) {
             throw new OperationNotAllowedException("Coach does not own this booking", SecurityError.MISSING_RIGHTS);
         }
+        rejectIfPostCompletion(booking); // skillars-deferred-106 AC9.2
         if (cancelReason != null && !VALID_CANCEL_REASONS.contains(cancelReason)) {
             throw new OperationNotAllowedException("Invalid cancel reason: " + cancelReason, SecurityError.MISSING_RIGHTS);
         }
@@ -819,6 +839,7 @@ public class BookingService {
         if (!Objects.equals(booking.getCoachId(), coach.getId())) {
             throw new OperationNotAllowedException("Coach does not own this booking", SecurityError.MISSING_RIGHTS);
         }
+        rejectIfPostCompletion(booking); // skillars-deferred-106 AC9.2
         String coachEmail = resolveCoachEmail(booking.getCoachId(), bookingId);
 
         try {
@@ -839,6 +860,7 @@ public class BookingService {
         if (!Objects.equals(booking.getParentId(), parentUserId)) {
             throw new OperationNotAllowedException("Parent does not own this booking", SecurityError.MISSING_RIGHTS);
         }
+        rejectIfPostCompletion(booking); // skillars-deferred-106 AC9.2
         // Deferred-63 AC4: without this, a parent could report a no-show before the session's own
         // scheduled start time — before there was anything to fail to show up to — and still trigger
         // the same automatic full-refund + coach-strike consequence a genuine no-show gets.

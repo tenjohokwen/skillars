@@ -58,6 +58,14 @@ public class OutboxService {
     }
 
     /**
+     * Enqueue one message that must not be claimed before {@code notBefore} (skillars-deferred-106
+     * AC4.3: the coach-payout hold window). MUST be called inside the producing business transaction.
+     */
+    public void enqueue(String aggregateType, String payload, java.time.Instant notBefore) {
+        repository.save(new OutboxMessage(aggregateType, payload, notBefore));
+    }
+
+    /**
      * Publish inside the business transaction so exactly one drain fires, AFTER it commits.
      *
      * <p>skillars-deferred-91 review: "exactly one" is enforced per <em>transaction</em>, not per

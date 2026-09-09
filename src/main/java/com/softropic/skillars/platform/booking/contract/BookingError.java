@@ -80,7 +80,16 @@ public enum BookingError implements ErrorCode {
     AVAILABILITY_CHANGED,
     WEEK_START_OUT_OF_RANGE,
     SLOT_BLOCKED_BY_COACH,
-    BLOCK_OVERLAPS_BOOKING;
+    BLOCK_OVERLAPS_BOOKING,
+    /**
+     * skillars-deferred-106 AC9: a {@code COMPLETED} booking is immutable for cancellation. Once the
+     * session is confirmed complete the coach payout has been (or is being) released, so a cancel /
+     * no-show / refund would be chasing money that has left the platform. Any post-completion
+     * grievance goes through {@code DisputeService}, which owns the transfer-reversal path. Added as
+     * a fail-fast guard even though {@code BookingStateMachine} already blocks the transition, so a
+     * future refactor cannot open the path silently.
+     */
+    BOOKING_ALREADY_COMPLETED;
 
     @Override
     public String getErrorCode() {
@@ -104,6 +113,7 @@ public enum BookingError implements ErrorCode {
             case WEEK_START_OUT_OF_RANGE   -> "booking.weekStartOutOfRange";
             case SLOT_BLOCKED_BY_COACH     -> "booking.slotBlockedByCoach";
             case BLOCK_OVERLAPS_BOOKING    -> "booking.blockOverlapsBooking";
+            case BOOKING_ALREADY_COMPLETED -> "booking.alreadyCompleted";
         };
     }
 

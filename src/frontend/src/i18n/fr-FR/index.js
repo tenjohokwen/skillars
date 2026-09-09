@@ -1052,7 +1052,12 @@ export default {
     gross: 'Brut',
     commission: 'Commission',
     stripeFees: 'Frais Stripe',
-    netPayout: 'Versement net',
+    netPayout: 'Versé sur votre compte Stripe',
+    pendingRelease: 'Versement en attente',
+    pendingReleaseNote:
+      'Séances terminées dont le versement n’a pas encore été libéré vers votre compte Stripe. Les versements sont retenus brièvement après la fin d’une séance.',
+    releasedNote:
+      '« Versé » signifie que le transfert vers votre compte Stripe a été initié. Stripe procède ensuite au paiement vers votre banque selon son propre calendrier.',
     refunds: 'Remboursements',
     sessions: 'Séances',
     transactions: 'Transactions',
@@ -1072,7 +1077,7 @@ export default {
       sessionDate: 'Date de la séance',
       gross: 'Frais de séance',
       commission: 'Commission de la plateforme',
-      net: 'Net reçu',
+      net: 'Versé sur votre compte Stripe',
       totalCharged: 'Total facturé',
       notFound: 'Reçu introuvable.',
     },

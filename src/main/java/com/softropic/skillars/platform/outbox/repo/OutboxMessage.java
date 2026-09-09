@@ -61,4 +61,14 @@ public class OutboxMessage {
         this.aggregateType = aggregateType;
         this.payload = payload;
     }
+
+    /**
+     * skillars-deferred-106 AC4.3: an enqueue that must not be claimed before {@code notBefore} — the
+     * coach-payout hold window ({@code completed_at + payment.payout.hold_hours}). The row is still a
+     * normal outbox row from then on; the backoff column just starts in the future instead of now.
+     */
+    public OutboxMessage(String aggregateType, String payload, Instant notBefore) {
+        this(aggregateType, payload);
+        this.nextAttemptAt = notBefore;
+    }
 }

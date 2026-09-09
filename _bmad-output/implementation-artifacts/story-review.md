@@ -1,219 +1,261 @@
-# Story Review: skillars-deferred-105 CI Build-Warning Cleanup
+# Story Review: skillars-deferred-106 (Completion-gated Coach Payout)
 
-**Reviewer:** Senior Dev Audit  
-**Date:** 2026-09-09  
-**Overall Assessment:** Story is well-structured and ready for dev. No false positives detected. Seven minor validation gaps identified below.
-
----
-
-## Findings by Acceptance Criterion
-
-### AC1: docker/build-push-action Bump to v7.3.0
-
-**Status:** ✅ Ready, one verification gap
-
-**Identified gaps:**
-1. **Missing release-notes check for v7.1.x and v7.2.x** — The story documents that v7.0.0 made no breaking input changes and only removed two deprecated env vars. However, it does not verify release notes for v7.1.0 through v7.3.0 for additional removals or input changes. This is a *minor* gap because:
-   - v7.0.0 was the major bump; minor/patch releases historically don't remove inputs
-   - The dev agent instruction already says "re-resolve the SHA against the tag" and implicitly review GitHub for any issues
-   - Worth confirming: dev should scan `https://github.com/docker/build-push-action/releases/tag/v7.3.0` for "BREAKING" or "removed" in release notes
-
-2. **PR runner platform assumption** — The story says "the runner is amd64" (line 106) and assumes PR runs use the same platform as CI runs. GitHub-hosted `ubuntu-latest` is amd64, but this assumption is not explicitly stated. It's safe (GitHub's hosted runners are amd64), but should be explicit for audit clarity.
-
-**Verification coverage:** ✅ Adequate
-- The grep checks for deprecated env vars (`DOCKER_BUILD_NO_SUMMARY`, `DOCKER_BUILD_EXPORT_RETENTION_DAYS`) are correct and comprehensive.
-- The check that "no self-hosted runners are in use" is thorough.
-- Post-merge verification (PR CI shows no warning, Docker build still succeeds) is solid.
+**Story:** `skillars-deferred-106-completion-gated-coach-payout.md`  
+**Review Date:** 2026-09-09  
+**Status:** ready-for-dev  
+**Reviewer Assessment:** Comprehensive and well-structured. Seven findings requiring clarification or explicit test coverage during implementation. No blockers; all deferred decisions are pragmatic and documented.
 
 ---
 
-### AC2: Remove `--platform=linux/amd64` from Dockerfile
+## Findings Summary
 
-**Status:** ✅ Ready, two assumptions should be verified
-
-**Identified gaps:**
-
-1. **Base image platform-specific behavior not checked** — The story claims removing the flag won't affect builds because BuildKit + `docker/build-push-action`'s `platforms: linux/amd64` input already constrain the arch. However, it does not verify:
-   - Whether `maven:3.9-eclipse-temurin-17` or `eclipse-temurin:17-jre-alpine` have platform-specific setup scripts or behaviors that might be triggered/bypassed by the flag
-   - This is a *very low risk* — modern base images are platform-agnostic — but "assume" is present
-
-2. **"Behavior-preserving" claim needs test execution** — The story lists verification steps (local `docker build .` emits no warning; Trivy scan still runs; image is functional), but does not require running these *before* the PR. The story says `pr-build.yml` and `ci.yml` will exercise the change, which is correct. However, the phrasing "A local docker build…" on line 117 reads like a suggestion, not a requirement. Clarification: this test *will* run in CI; no local-before-push is needed per project policy.
-
-**Verification coverage:** ✅ Adequate
-- The story correctly identifies that `platforms: linux/amd64` in `docker/build-push-action` already constrains the build.
-- The reference to `.trivyignore` and `APK_UPGRADE_CACHE_BUST` as "leave exactly as-is" correctly preserves unrelated mechanisms.
-- Post-merge CI verification (Trivy scan, healthcheck endpoint reachable) is comprehensive.
+| Severity | Count | Category |
+|----------|-------|----------|
+| 🔴 CRITICAL | 2 | Ambiguous AC semantics, idempotency logic needs clarification |
+| 🟡 MAJOR | 5 | Deferred implementation decisions, edge case test coverage required |
+| 🟠 MINOR | 1 | Documentation completeness |
+| ✅ No-Op | 5 | Story adequately handles the concern |
 
 ---
 
-### AC3: Suppress `AntPathRequestMatcher` Deprecation Warning
+## Critical Findings
 
-**Status:** ✅ Ready, one architectural assumption unchallenged
+### 🔴 Finding #1: AC10.4 dispute-within-hold-window semantics ambiguous
 
-**Identified gaps:**
+**AC Location:** AC10.4 — "a dispute raised **within** the hold window...mark the `coach_payouts` row `REVERSED`/`HOLD`"
 
-1. **Runtime bean selection logic not explicitly verified** — The story claims:
-   - "requestMatchers(String...) in SecurityConfiguration picks **at runtime** between AntPathRequestMatcher and PathPatternRequestMatcher depending on whether a unique PathPatternRequestMatcher.Builder bean exists."
-   - The test "asserts every permitAll pattern resolves to the **same** set of URLs under *both* matchers."
-   
-   The story does not verify:
-   - That the `PathPatternRequestMatcher.Builder` bean existence is actually checked at runtime in `SecurityConfiguration`
-   - That the test currently exercises both code paths (with and without the bean in the test context)
-   - What happens if the bean is present vs. absent during the test run
-   
-   **Why this matters:** If the test only exercises one code path (e.g., always without the bean), then removing the AntPathRequestMatcher comparison would be harmless, and the @SuppressWarnings is burying a non-functional assertion, not protecting a guard.
-   
-   **Risk level:** *Low* — The story references `skillars-deferred-91` AC15 and `skillars-deferred-92` AC15.1 as prior decisions. Those stories presumably validated the two-matcher guard, so this is audit heritage, not new code.
+**Issue:** The `coach_payouts` row is created by the handler (AC7.3: "On success the handler writes..."), which means it doesn't exist during the hold window (before the handler fires). The AC is ambiguous about how to mark a non-existent row:
 
-**Verification coverage:** ✅ Adequate
-- The story correctly prohibits switching to `PathPatternRequestMatcher` (which would make the test compare PathPattern to itself).
-- The scoped `@SuppressWarnings("removal")` + explanatory comment is the right fix.
-- Test passes verification is included.
+**Three possible interpretations:**
+1. Dispute-resolution directly inserts a `coach_payouts` row in REVERSED status → handler idempotency check sees it and no-ops.
+2. Dispute-resolution deletes/cancels the outbox row so handler never runs → no payout row created.
+3. Dispute-resolution enqueues a reversal message that no-ops if payout never transferred.
+
+**Risk:** Implementation might choose the wrong approach, creating gaps:
+- Double-transfer if reversal isn't properly queued.
+- Orphaned outbox rows if approach #2 isn't atomic.
+- Unrecoverable state if approach #3 has a race.
+
+**Impact:** Race condition between payout and dispute; silent failures in edge cases.
+
+**Action Required:** Before dev-story phase, clarify which approach is intended. Recommend documenting in AC10 and adding an explicit IT test: "dispute filed within hold window → verify payout is cancelled and no transfer occurs, and `coach_payouts` row correctly reflects cancellation or non-existence."
 
 ---
 
-### AC4: Fix Non-Varargs Varargs Call in `ApiAdvice.logErrorAndReturnDTO`
+### 🔴 Finding #2: AC7.1 idempotency incomplete for non-RELEASED rows
 
-**Status:** ✅ Ready, no gaps
+**AC Location:** AC7.1 — "idempotent per booking id: it no-ops if a `RELEASED` row already exists"
 
-**Identified gaps:** None
+**Issue:** The AC only checks for RELEASED rows, but AC8.2 allows HOLD rows (non-retryable failures) to exist. When the handler re-drives (e.g., after config change or manual re-trigger), it doesn't check for existing HOLD rows.
 
-**Notes:**
-- The cast `(Object[]) args` correctly suppresses the javac ambiguity warning without changing runtime behavior.
-- The three `handleSecErrorAndReturnDTO` overloads correctly remain untouched (they have no mismatch: `String... args` → `String...`).
-- Verification (existing tests still pass; localized message substitution still works) is adequate.
+**Scenario:**
+1. Handler runs, `Transfer.create()` fails with `invalid_destination` → writes HOLD row (AC8.2).
+2. Coach reconnects Stripe account.
+3. System re-enqueues the payout or re-drives the outbox.
+4. Handler runs again. Does it check if a HOLD row exists? The AC doesn't say.
 
----
+**Risk:** Handler might create a duplicate transfer attempt or overwrite the HOLD status with a new state.
 
-### AC5: Replace Deprecated `Specification.where(...)`
+**Impact:** Silent state corruption; duplicate transfers at Stripe level (prevented by idempotency key, but confusing for logs/metrics).
 
-**Status:** ✅ Ready, two precondition assumptions unchallenged
-
-**Identified gaps:**
-
-1. **`isActive()` always-non-null assumption not explicitly verified** — The story claims:
-   - "isActive() → always returns a non-null Specification (status IN (ACTIVE, REDUCED))."
-   
-   This assumption is stated as fact but not verified against the actual method. The story should have:
-   - Quoted or verified the `isActive()` method definition
-   - Confirmed it unconditionally returns a Specification (no branches that could return null)
-   
-   **Why this matters:** If `isActive()` can return null under any condition, the new chain starting with `isActive().and(...)` would throw NPE instead of the current (deprecated) `Specification.where(null)` null-check.
-   
-   **Risk level:** *Very low* — `isActive()` building a "status IN (ACTIVE, REDUCED)" constant spec is unlikely to have branches. But this is an assumption, not verified.
-
-2. **`inCity(String)` "city is required" assumption** — The story claims:
-   - "inCity(String) → always non-null (city is required; unconditional cb.equal)."
-   
-   The story does not verify:
-   - That the caller `CoachSearchService` enforces city as required (i.e., does not pass null)
-   - That the ProfileBuilderStep1Request marks city as @NotNull
-   - What happens downstream if city is unexpectedly null at runtime
-   
-   **Why this matters:** The fix depends on `inCity(p.city())` never being null. If city can be null at the call site, the new chain would throw NPE.
-   
-   **Risk level:** *Low* — The story says "city is required" as domain fact. The verification includes "city / district / skill filters each still applied when their param is set and skipped when it is null", which implicitly tests city=null handling. But the assumption is not cross-verified with the caller.
-
-**Verification coverage:** ✅ Adequate
-- The alternative `Specification.allOf(...)` is correctly noted as acceptable.
-- The decision to start from `isActive()` instead of using `allOf(...)` is sound (smaller diff, reads like existing code).
-- Post-merge test verification (ACTIVE/REDUCED coaches returned, filters skipped when null) validates the behavior is preserved.
+**Action Required:** During AC7 implementation, explicitly document: "handler checks if **any** row exists for the booking (regardless of status) and returns early if found." This applies to AC8.2's HOLD flow and any future re-trigger. Add a test: "handler called twice for same booking with HOLD status in between → verify no duplicate transfer created."
 
 ---
 
-### AC6: Resolve MapStruct Unmapped Target Properties
+## Major Findings
 
-**Status:** ✅ Ready, one consistency assumption and one test-coverage gap
+### 🟡 Finding #3: Partial credit-funded bookings — exact split undefined (AC4.4)
 
-**Identified gaps:**
+**AC Location:** AC4.4 — "decide and document the exact split during impl and add a test"
 
-1. **AC6a and AC6b: Per-method @BeanMapping scope is correct, but edge case not considered** — The story correctly uses `@BeanMapping(unmappedTargetPolicy = ReportingPolicy.IGNORE)` on only the forward mapping (toAuditLog, toUser), so reverse mappings keep the WARN guard for new columns.
-   
-   However, the story does not explicitly verify:
-   - What happens if a new audit/persistence field is added to the source DTO (e.g., a new field in AuditLog that should trigger a warning in toAuditTrail)
-   - The story says "Per-method only" to preserve the guard, which is correct, but doesn't document what the guard should catch
-   
-   **Risk level:** *Very low* — The strategy (per-method IGNORE, mapper-wide WARN default) is architecturally sound. This is documentation, not a bug.
+**Issue:** For a $100 session with $40 credit-covered (so $60 `stripe_charged`), the story doesn't specify whether the coach gets:
+- **Option A:** Net of $60 only (30% commission = $42 to coach)
+- **Option B:** Pro-rata share of full net (net of $100 = $70 pro-rata to $60 = $42 to coach)
+- **Option C:** Something else
 
-2. **AC6c: CoachProfileMapper.toEntity consistency** — The story says:
-   - "This mapper already enumerates every field explicitly (`id`, `bio`, `photoUrl`, `status`, `createdAt` are already `ignore = true`), so keeping that style preserves the 'new column ⇒ build tells you' guard."
-   - The story adds 4 new `@Mapping(target = …, ignore = true)` lines for the unmapped fields.
-   
-   The story does not verify:
-   - That the 4 new fields (`verificationTier`, `averageRating`, `reviewCount`, `statusChangedAt`) are truly server-derived and should **never** be mapped
-   - Whether there are tests that would catch if these fields were incorrectly set (e.g., a test that checks verificationTier is correctly left as its default/null value)
-   
-   **Risk level:** *Low* — The story contextualizes these as "server-derived / lifecycle fields, never client-supplied", which is domain knowledge. The decision is correct. But no test is explicitly cited to validate that the fields remain unset.
+Both options result in $42 in this example, but with different rates or splits they diverge significantly.
 
-**Verification coverage:** ✅ Adequate
-- The decision to split AC6 into three different approaches (per-method IGNORE for 6a/6b, explicit @Mapping for 6c) is well-justified and internally consistent.
-- Post-merge tests (audit-trail, user-DTO round-trip, coach profile-builder tests) validate behavior is preserved.
-- No new tests required; existing suites cover regression.
+**Risk:** Silent underpayment or overpayment to coach; no error signal; difficult to detect in testing.
+
+**Impact:** Coach revenue incorrect; platform overpays or underpays.
+
+**Action Required:** During AC4 implementation, **decide and document explicitly** which approach is used. Add a comment in the code explaining the rationale. Add an integration test with multiple split ratios (e.g., 50/50 credit, 20/80 credit) to verify the split logic against the chosen option. Example test case: `$100 session, 30% commission, 50% credit-covered → coach gets [decided amount]`.
 
 ---
 
-### AC7: Confirmation and Sibling Sweep
+### 🟡 Finding #4: Stripe error classification for retryable vs non-retryable (AC8.1-8.2)
 
-**Status:** ✅ Ready, one ambiguity in criteria
+**AC Location:** AC8.1-8.2 — "retryable (network timeout, Stripe 5xx, rate-limit)" vs "non-retryable / needs a human"
 
-**Identified gaps:**
+**Issue:** The story lists error types (invalid destination, account closed, insufficient permissions) but provides no Stripe error code mapping. Stripe uses specific codes like `invalid_account`, `account_closed_or_restricted`, `resource_missing`, which the implementation must map to retry/hold decisions.
 
-1. **"Trivial siblings" not explicitly defined** — The story says:
-   - "fix in-story only if each is a one-line mechanical change of the identical kind; otherwise record as a follow-up, do not expand scope silently"
-   
-   The story does not define what "one-line mechanical change of the identical kind" means in context:
-   - For `Specification.where()`: does this mean only the first `.where()` removal, or all removals of the same pattern?
-   - For `AntPathRequestMatcher` usages: does this mean only in tests, or also in production code? (The story searches `src`, which includes both.)
-   - For unmapped-target warnings: does this mean only warnings in the same CI run, or any mapper currently WARN'ing?
-   
-   **Why this matters:** If a sibling call site requires a logic change (e.g., a `Specification.where()` nested inside a conditional), the dev might not know whether to fix it in-story or defer.
-   
-   **Suggested clarification for dev:** All siblings of the exact pattern (e.g., `Specification.where(…).and(…)` → drop `where(`) are in-story fixes. If a sibling requires conditional logic or additional testing, defer as a follow-up story.
+**Scenarios where mapping matters:**
+- Stripe `rate_limit_error` (5xx) → should retry, but implementation might treat as non-retryable.
+- `invalid_account_id` (destination account doesn't exist) → should HOLD, but might retry.
+- `transfer_failed` (vague) → needs investigation to determine if retryable.
 
-**Verification coverage:** ✅ Adequate
-- The grep patterns are comprehensive: `Specification.where(`, `AntPathRequestMatcher`, `build-push-action|node20|node16`, `unmappedTargetPolicy|@Mapper(`.
-- The sweep is required (line 280: "Record the sweep result … in the Dev Agent Record"), which is correct.
-- The instruction to record in the Dev Agent Record ensures traceability.
+**Risk:** Payouts stuck in wrong state (HOLD when they should retry, or infinite retry loops).
+
+**Impact:** Payouts fail to deliver; operator confusion about which runbook section applies.
+
+**Action Required:** During AC8 implementation, create an explicit Stripe error code → retry/hold decision table in a comment or constant. Reference Stripe SDK docs and test with at least 5 different error codes (including one ambiguous case like `transfer_failed`). Example test: mock `createTransfer` with `rate_limit_error` → verify throws (retryable); mock with `invalid_account_id` → verify HOLD path (non-retryable).
 
 ---
 
-## Cross-Cutting Observations
+### 🟡 Finding #5: Post-completion cancellation guard may be incomplete (AC9.3 verification)
 
-### ✅ No False Positives Detected
+**AC Location:** AC9.3 — "grep every caller of `BookingService.transition`...and confirm none can be reached for a `COMPLETED` booking"
 
-All seven acceptance criteria correctly identify real issues:
-1. **AC1:** Node 20 deprecation is real; v7.3.0 is available and safe.
-2. **AC2:** `FromPlatformFlagConstDisallowed` rule is real (Docker build-checks); flag removal is safe for single-arch.
-3. **AC3:** `AntPathRequestMatcher` removal deprecation is real (Spring Security 6 roadmap); suppression with comment is appropriate.
-4. **AC4:** Varargs ambiguity warning is real (javac caveat); cast is correct.
-5. **AC5:** `Specification.where()` deprecation is real (Spring Data JPA 3.5 → 4.0); `.and(null)` remains safe.
-6. **AC6:** MapStruct unmapped-target warnings are real; split strategy (explicit vs. per-method IGNORE) is sound.
-7. **AC7:** Sibling sweep validates no silent scope creep; CI green is the acceptance gate.
+**Issue:** This is framed as a verification task deferred to "during impl", but:
+1. Only checks `BookingService` — other services might transition bookings (e.g., `AdminService`, `DisputeService`, `CoachService`).
+2. It's a negative assertion ("confirm none can be reached") — easy to miss a path if you don't grep the entire codebase.
+3. No assertion in the code itself to prevent future regressions.
 
-### ✅ Project Structure Preserved
+**Scenario:** A future refactor adds a cancel path in a new service; no grep catches it; COMPLETED booking gets refunded while coach is being paid.
 
-- No functional or behavioral change to endpoints, queries, or image contents.
-- Existing test suites provide regression coverage.
-- No new tests required (warnings-only story).
-- Convention alignment (GitHub Actions SHA-pin + comment; MapStruct per-method IGNORE; Java 17 / Spring Boot 3.5.11 versions) is respected.
+**Risk:** Coach double-paid (transfer + refund); logic integrity violation.
 
-### ✅ Decision Rationale Clear
+**Impact:** Financial error; requires manual reconciliation.
 
-All four project-owner decisions (D1–D4) are documented and have signed-off rationale:
-- D1: Split MapStruct strategy balances safety (CoachProfileMapper explicit enumerations catch new columns) vs. noise (AuditTrailMapper/UserMapper audit plumbing).
-- D2: Delete `--platform` flag (redundant with `docker/build-push-action`'s input; revisit only if multi-arch planned).
-- D3: Start chain from `isActive()` (smallest diff, reads like existing code).
-- D4: Bump to v7.3.0 latest (consistent with repo's other v4/v6/v7 major versions).
+**Action Required:** During AC9 implementation, (1) expand grep to all of `src/main` for any booking state transition + cancel/refund entry points; (2) add an explicit assertion in `BookingService.cancel()` and `BookingService.recordNoShowCoach()` that throws `IllegalStateException` if called on COMPLETED booking (fail fast); (3) add an integration test: "attempt cancel/no-show via each endpoint for COMPLETED booking → verify rejection with correct error code." Document the grep result in the Dev Agent Record.
 
 ---
 
-## Summary
+### 🟡 Finding #6: Coach account disconnect between booking and transfer (B.7.5 edge case)
 
-**Recommendation:** Proceed with dev. The seven identified gaps are documentation/verification matters (unchallenged but reasonable assumptions), not design flaws. None would change the acceptance criteria or fix approach.
+**AC Location:** AC1.5, AC8.2, B.7.5 — "coach account invalid between event and transfer"
 
-**For the dev agent:**
-- Before AC1 commit: Scan `docker/build-push-action` v7.3.0 release notes for "BREAKING" or "removed".
-- Before AC5 commit: Spot-check `CoachSearchSpecification.isActive()` and the caller `CoachSearchService.build()` to confirm city parameter is truly required.
-- After AC7 sibling sweep: If a sibling requires logic changes or extra testing, record as deferred follow-up story (do not expand scope).
+**Issue:** The story acknowledges this edge case (B.7.5: "coach disconnected their connected account between event and transfer") and routes it to HOLD + runbook. But doesn't explore operational frequency or UX impact:
+- How often does this happen? (Metrics not defined.)
+- User-facing message: "Why wasn't I paid?" — no clear guidance in AC12.4's copy changes.
+- Operator runbook: asks coach to reconnect, but doesn't specify if it's automatic or manual re-trigger.
 
-No false positives, no missed flows, story is ready.
+**Risk:** Operational overhead; poor UX for the edge case.
+
+**Impact:** Coach frustration; support tickets; unclear runbook steps.
+
+**Action Required:** During AC8.2 implementation, add:
+1. A metric `coach.account.disconnect_between_booking_and_transfer` to track frequency (so we know if this is rare or common).
+2. A WARNING log when account disconnect is detected in the handler (for operational awareness).
+3. Documentation in AC14 runbook with expected copy to send to coaches: *"Your Stripe account disconnected before we could pay you. Please [reconnect at X]. Reply to this ticket when done, and we'll verify and retry your payment."*
+
+---
+
+### 🟡 Finding #7: `FAILED_PERMANENT` status mentioned but undefined (AC3.2)
+
+**AC Location:** AC3.2 — "`FAILED_PERMANENT` (DLQ)"
+
+**Issue:** The status is listed as a domain value, but no AC specifies:
+- When a row transitions to FAILED_PERMANENT.
+- Whether `[OUTBOX_STUCK]` (after 10 retries) triggers an automatic transition.
+- Whether an operator can manually mark HOLD → FAILED_PERMANENT.
+- Whether FAILED_PERMANENT is a terminal state with no further action.
+
+**Scenarios:**
+1. Retryable error occurs 10+ times → `[OUTBOX_STUCK]` logs, but row stays PENDING_RELEASE. When does it move to FAILED_PERMANENT?
+2. Non-retryable error (account closed) → row is HOLD. After 30 days with no reconnect, should it auto-transition to FAILED_PERMANENT?
+
+**Risk:** Payout rows accumulate in intermediate states; no clear end state for unrecoverable failures.
+
+**Impact:** DLQ handling incomplete; no operator procedure for closure.
+
+**Action Required:** During AC3/AC8 implementation, clarify:
+1. Automatic transition: e.g., after `STUCK_ATTEMPTS_THRESHOLD`, automatically write FAILED_PERMANENT (or add a separate scheduler job).
+2. Manual transition: document in AC14 runbook how an operator moves HOLD → FAILED_PERMANENT if the case is unrecoverable.
+3. Add a test: outbox re-drives a FAILED_PERMANENT row → verify no-op and no new transfer attempted.
+
+---
+
+### 🟡 Finding #8: Commission rate immutable assumption (AC4.2)
+
+**AC Location:** AC4.2 — "Compute the net using the **same** `platform.commission.rate`...so the coach's net is identical"
+
+**Issue:** This assumes the commission rate doesn't change between booking and payout. But if the platform changes its rate mid-month, old bookings should use the old rate (captured at booking time), new bookings should use the new rate.
+
+**Scenario:**
+1. Commission rate is 30%.
+2. Booking A created at 2026-09-01 (price $100, coach net = $70).
+3. Rate changed to 25% on 2026-09-10.
+4. Booking A session completes on 2026-09-15; handler computes net using current rate (25%) → coach gets $75 (overpaid by $5).
+
+**Risk:** Coach overpaid or underpaid depending on when the rate changed.
+
+**Impact:** Silent revenue error; difficult to audit.
+
+**Action Required:** During AC4 implementation, confirm: the commission rate used for payout is captured from booking creation time, **not** completion time. Either (1) store `booking_prices.commission_rate` at booking time, or (2) pass the rate in the outbox payload (AC4.2 mentions "pre-computed `netAmount`", so the payload should carry amounts, not just the rate). Add a test: change commission rate mid-test; verify old booking uses old rate, new booking uses new rate.
+
+---
+
+### 🟠 Finding #9: Cutover documentation incomplete (AC11.3)
+
+**AC Location:** AC11.3 — "the cutover reasoning must be written down in the story and the migration header"
+
+**Issue:** AC11.3 says the "no production system" fact makes pragmatism acceptable, but doesn't specify what "written down" means. No example SQL comment block is provided. A future developer might not understand why a pragmatic approach was chosen or might over-engineer a production-safe solution.
+
+**Risk:** Future confusion; possible unnecessary refactoring.
+
+**Impact:** Technical debt; unclear decision rationale.
+
+**Action Required:** During AC11 implementation, when writing the migration header, include an explicit SQL comment:
+```sql
+-- Cutover safety note: This migration [backfills coach_payouts RELEASED rows / adds a payout_model marker column] 
+-- to avoid double-paying coaches when switching from destination-charge to separate-transfer model.
+-- The Skillars project has no production system (see migration-conventions.md Grandfathering), so this pragmatic 
+-- approach is acceptable. In a production system, a rolling-deploy-safe marker column would be required.
+```
+
+---
+
+## No-Op Findings (Adequately Handled)
+
+The following potential issues were considered but are acceptably addressed by the story:
+
+### ✅ Revenue reporting during pending payout (AC12.2)
+**Concern:** Completed sessions in PENDING_RELEASE might be invisible to coaches.  
+**Story handles:** AC12.2 explicitly adds "pending release" figures to DTOs. ✓
+
+### ✅ Refund after transfer succeeds but before Stripe settlement (AC8.3)
+**Concern:** Coach withdraws balance; reversal fails.  
+**Story handles:** AC8.3 covers reversal failure → HOLD/REVERSAL_FAILED + operator runbook. ✓
+
+### ✅ Duplicate BookingCompletedEvent handling (AC7.2)
+**Concern:** Two events → two transfers.  
+**Story handles:** AC7.2 tests duplicate events; idempotency + partial unique index prevent double-transfer. ✓
+
+### ✅ Query N+1 problem for revenue reporting (AC12)
+**Concern:** Checking both `booking_payments` and `coach_payouts` for each booking.  
+**Story handles:** AC12.1 moves entirely to `coach_payouts` RELEASED; single-table queries. ✓
+
+### ✅ Stripe test-mode account provisioning (AC15.5)
+**Concern:** No test account exists.  
+**Story handles:** AC15.5 explicitly marks as PREREQUISITE; named task in Dev Agent Record. ✓
+
+---
+
+## Consistency Checks
+
+| Check | Status | Notes |
+|-------|--------|-------|
+| All ACs numbered and structured | ✅ | AC0–AC15, clear hierarchy |
+| No circular dependencies between ACs | ✅ | AC1 → AC2 → AC3 → AC4 flow is linear |
+| Decision points clearly marked (D4–D6) | ✅ | Owner sign-off completed 2026-09-09 |
+| Deferred decisions documented | ✅ | AC11 (cutover mechanism), AC8.3 (reversal status), AC4.4 (credit split) all noted |
+| Test coverage mentioned for each AC | ✅ | AC13/AC15 outline unit, IT, and Stripe tests |
+| Runbook sections tied to ACs | ✅ | AC14 references AC8.2 / AC10 / audit #1/#2 |
+| Migration strategy clear | ✅ | V130/V131 + optional cutover migration per AC11 |
+
+---
+
+## Recommended Actions Before dev-story Phase
+
+1. **Sync on Critical Findings #1 & #2** with architect/owner (15 min call to clarify AC10.4 + AC7.1 idempotency logic).
+2. **Document Deferred Decisions** for findings #3–#9 as explicit checkpoints in the Dev Agent Record (these are pragmatic; just need to be decided and recorded).
+3. **Verify AC9.3 Grep** plan — decide upfront whether to search all of `src/main` or just `BookingService`, and who will record the result.
+
+---
+
+## Verdict
+
+**Ready for dev-story phase.** Story is comprehensive and well-thought-out. The nine findings are not bugs or missing requirements, but ambiguities and edge cases that will emerge during implementation. Critical findings #1 and #2 should be clarified in a brief sync; the rest are manageable as implementation decisions with explicit test coverage.
+
+No false positives identified. All documented assumptions are reasonable given the "no production system" project state and the owner sign-off already completed (AC0).

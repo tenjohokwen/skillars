@@ -27,6 +27,19 @@ class StubPaymentGateway implements PaymentGateway {
     }
 
     @Override
+    public String transferToCoach(UUID transferGroupId, UUID coachId, BigDecimal netAmount, String currency) {
+        // Deterministic synthetic id — ITs assert on the coach_payouts row (RELEASED +
+        // stripe_transfer_id) rather than on the gateway itself; kept stateless on purpose (see
+        // DatabaseResetTestExecutionListener.resetStatefulStubBeans).
+        return "tr_stub_" + transferGroupId;
+    }
+
+    @Override
+    public void reverseTransfer(String stripeTransferId, BigDecimal amount) {
+        // no-op for tests
+    }
+
+    @Override
     public String createStripeCustomer(Long parentId) {
         return "cus_stub_" + parentId;
     }

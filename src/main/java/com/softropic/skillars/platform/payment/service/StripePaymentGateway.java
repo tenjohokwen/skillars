@@ -6,9 +6,12 @@ import com.stripe.param.CustomerCreateParams;
 import com.stripe.param.PaymentIntentCreateParams;
 import com.stripe.param.RefundCreateParams;
 import com.stripe.param.SetupIntentCreateParams;
+import com.stripe.param.TransferCreateParams;
+import com.stripe.param.TransferReversalCollectionCreateParams;
 import com.softropic.skillars.infrastructure.util.ClockProvider;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
+import com.softropic.skillars.platform.payment.contract.exception.CoachPayoutTransferException;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.softropic.skillars.platform.payment.repo.CoachStripeAccount;
 import com.softropic.skillars.platform.payment.repo.CoachStripeAccountRepository;
@@ -38,32 +41,42 @@ public class StripePaymentGateway implements PaymentGateway {
     private final ConfigService configService;
     private final StripeClient stripeClient;
 
+    /**
+     * skillars-deferred-106 (B-1): charge the <strong>platform</strong> account — no
+     * {@code transfer_data.destination}, no {@code application_fee_amount}. The full price is held on
+     * the platform balance until {@link #transferToCoach} runs on session completion. The commission
+     * is retained implicitly by transferring only the net later; it is no longer a Stripe
+     * {@code application_fee_amount}, and the rate is stamped into {@code booking_payments.commission_rate}
+     * at capture by {@code BookingPaymentPersistenceService} (AC3.5 / AC4.2), never re-read here.
+     *
+     * <p>AC1.5: the coach's connected account is still checked at booking time (fail fast — do not
+     * accept a booking for a coach who can never be paid), but the account id is used only at
+     * transfer time now, not on this {@code PaymentIntent}.
+     */
     @Override
     public String chargeAndCapture(UUID referenceId, Long parentId, UUID coachId, BigDecimal amount) {
-        String coachStripeAccountId = resolveCoachStripeAccountId(coachId);
+        // Fail fast: throws payment.coachStripeNotConfigured if the coach has no COMPLETE +
+        // charges_enabled connected account. The returned id is intentionally discarded — B-1 does
+        // not put it on the PaymentIntent.
+        resolveCoachStripeAccountId(coachId);
 
-        BigDecimal commissionRate;
         String currency;
         try {
-            commissionRate = new BigDecimal(configService.getString("platform.commission.rate"));
             currency = resolveCurrency();
-        } catch (IllegalStateException | NumberFormatException e) {
+        } catch (IllegalStateException e) {
             log.error("Payment configuration unavailable: error={}", e.getMessage());
             throw new PaymentGatewayException("payment.configurationUnavailable", e);
         }
         long amountCents = toCents(amount);
-        long feeCents = toCents(amount.multiply(commissionRate).setScale(2, RoundingMode.HALF_UP));
 
         PaymentIntentCreateParams.Builder builder = PaymentIntentCreateParams.builder()
             .setAmount(amountCents)
             .setCurrency(currency)
             .setConfirm(true)
-            .setTransferData(PaymentIntentCreateParams.TransferData.builder()
-                .setDestination(coachStripeAccountId)
-                .build())
-            .setApplicationFeeAmount(feeCents)
             .putMetadata("referenceId", referenceId != null ? referenceId.toString() : "")
-            .putMetadata("coachId", coachId.toString());
+            .putMetadata("coachId", coachId.toString())
+            // skillars-deferred-106 AC1.2: correlate the later Transfer.create in Stripe.
+            .setTransferGroup(referenceId != null ? referenceId.toString() : "");
 
         StripeCustomer stripeCustomer = null;
         if (parentId != null) {
@@ -78,6 +91,9 @@ public class StripePaymentGateway implements PaymentGateway {
                    .setOffSession(true);
         }
 
+        // skillars-deferred-106 AC1.3: the idempotency-key scheme is preserved UNCHANGED — only the
+        // PaymentIntent params changed.
+        //
         // Key incorporates parentId, not just referenceId: SessionPackPaymentService.purchasePack
         // passes a shared session-pack tier id as referenceId, which repeats across every parent
         // who buys that tier — referenceId alone would let two different parents' purchases
@@ -104,7 +120,7 @@ public class StripePaymentGateway implements PaymentGateway {
                 stripeCustomer.setLastPaymentIntentId(intent.getId());
                 stripeCustomerRepository.save(stripeCustomer);
             }
-            log.info("Stripe charge captured: referenceId={} intentId={}", referenceId, intent.getId());
+            log.info("Stripe charge captured (platform account): referenceId={} intentId={}", referenceId, intent.getId());
             return intent.getId();
         } catch (StripeException e) {
             log.error("Stripe charge failed: referenceId={} error={}", referenceId, e.getMessage());
@@ -115,6 +131,57 @@ public class StripePaymentGateway implements PaymentGateway {
     @Override
     public String chargeAndCaptureForBatch(UUID batchId, Long parentId, UUID coachId, BigDecimal amount) {
         return chargeAndCapture(batchId, parentId, coachId, amount);
+    }
+
+    /**
+     * skillars-deferred-106 AC5: Transfer.create(net -> coach connected account) on session
+     * completion. Deterministic key {@code transfer-{transferGroupId}} so a re-driven
+     * COACH_PAYOUT_TRANSFER outbox row replays the original transfer, never a second (AC5.3).
+     * StripeExceptions are pre-classified (AC8.1) into {@link CoachPayoutTransferException} carrying
+     * the retryable-vs-HOLD decision for the handler.
+     */
+    @Override
+    public String transferToCoach(UUID transferGroupId, UUID coachId, BigDecimal netAmount, String currency) {
+        String coachStripeAccountId = resolveCoachStripeAccountId(coachId);
+        TransferCreateParams params = TransferCreateParams.builder()
+            .setAmount(toCents(netAmount))
+            .setCurrency(currency == null ? resolveCurrency() : currency.toLowerCase(Locale.ROOT))
+            .setDestination(coachStripeAccountId)
+            .setTransferGroup(transferGroupId.toString())
+            .putMetadata("referenceId", transferGroupId.toString())
+            .putMetadata("coachId", coachId.toString())
+            .build();
+        try {
+            String transferId = stripeClient.createTransfer(params, "transfer-" + transferGroupId).getId();
+            log.info("Stripe transfer created: transferGroup={} coach={} net={} transferId={}",
+                transferGroupId, coachId, netAmount, transferId);
+            return transferId;
+        } catch (StripeException e) {
+            StripeTransferErrorClassifier.Decision d = StripeTransferErrorClassifier.classify(e);
+            log.error("Stripe transfer failed: transferGroup={} coach={} retryable={} reason={} error={}",
+                transferGroupId, coachId, d.retryable(), d.reason(), e.getMessage());
+            throw new CoachPayoutTransferException("payment.coachTransferFailed", d.retryable(), d.reason(), e);
+        }
+    }
+
+    /**
+     * skillars-deferred-106 AC5 / AC8.3: reverse (part of) a released transfer — the post-payout
+     * dispute path. Key {@code reversal-{stripeTransferId}}.
+     */
+    @Override
+    public void reverseTransfer(String stripeTransferId, BigDecimal amount) {
+        TransferReversalCollectionCreateParams params = TransferReversalCollectionCreateParams.builder()
+            .setAmount(toCents(amount))
+            .build();
+        try {
+            stripeClient.createTransferReversal(stripeTransferId, params, "reversal-" + stripeTransferId);
+            log.info("Stripe transfer reversal created: transferId={} amount={}", stripeTransferId, amount);
+        } catch (StripeException e) {
+            StripeTransferErrorClassifier.Decision d = StripeTransferErrorClassifier.classify(e);
+            log.error("Stripe transfer reversal failed: transferId={} retryable={} reason={} error={}",
+                stripeTransferId, d.retryable(), d.reason(), e.getMessage());
+            throw new CoachPayoutTransferException("payment.coachTransferReversalFailed", d.retryable(), d.reason(), e);
+        }
     }
 
     @Override

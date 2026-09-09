@@ -54,12 +54,13 @@ class StripePaymentGatewayTest {
     }
 
     private void stubCoachAndCommission() {
+        // skillars-deferred-106: chargeAndCapture no longer reads platform.commission.rate — the rate
+        // is stamped onto booking_payments.commission_rate at capture by BookingPaymentPersistenceService.
         CoachStripeAccount account = new CoachStripeAccount();
         account.setStripeAccountId("acct_test");
         account.setOnboardingStatus("COMPLETE");
         account.setChargesEnabled(true);
         when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
-        when(configService.getString("platform.commission.rate")).thenReturn("0.10");
         when(configService.getString("platform.payment.currency")).thenReturn("eur");
     }
 
@@ -175,34 +176,12 @@ class StripePaymentGatewayTest {
     }
 
     @Test
-    void chargeAndCapture_missingCommissionRateConfig_throwsPaymentGatewayException() throws StripeException {
-        CoachStripeAccount account = new CoachStripeAccount();
-        account.setStripeAccountId("acct_test");
-        account.setOnboardingStatus("COMPLETE");
-        account.setChargesEnabled(true);
-        when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
-        IllegalStateException configError =
-            new IllegalStateException("Missing platform config key: platform.commission.rate");
-        when(configService.getString("platform.commission.rate")).thenThrow(configError);
-
-        assertThatThrownBy(() -> stripePaymentGateway.chargeAndCapture(PACK_TIER_ID, 1001L, COACH_ID, AMOUNT))
-            .isInstanceOf(PaymentGatewayException.class)
-            .satisfies(e -> assertThat(((PaymentGatewayException) e).getErrorCode())
-                .isEqualTo("payment.configurationUnavailable"))
-            .satisfies(e -> assertThat(e.getCause()).isSameAs(configError));
-
-        org.mockito.Mockito.verify(stripeClient, org.mockito.Mockito.never())
-            .createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class));
-    }
-
-    @Test
     void chargeAndCapture_missingCurrencyConfig_throwsPaymentGatewayException() throws StripeException {
         CoachStripeAccount account = new CoachStripeAccount();
         account.setStripeAccountId("acct_test");
         account.setOnboardingStatus("COMPLETE");
         account.setChargesEnabled(true);
         when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
-        when(configService.getString("platform.commission.rate")).thenReturn("0.10");
         IllegalStateException configError =
             new IllegalStateException("Missing platform config key: platform.payment.currency");
         when(configService.getString("platform.payment.currency")).thenThrow(configError);
@@ -225,7 +204,6 @@ class StripePaymentGatewayTest {
         account.setOnboardingStatus("COMPLETE");
         account.setChargesEnabled(true);
         when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
-        when(configService.getString("platform.commission.rate")).thenReturn("0.10");
     }
 
     @Test
@@ -288,25 +266,101 @@ class StripePaymentGatewayTest {
             .createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class));
     }
 
+    // --- skillars-deferred-106: B-1 separate charges & transfers ----------------------------------
+
     @Test
-    void chargeAndCapture_malformedCommissionRateConfig_throwsPaymentGatewayException() throws StripeException {
-        // Review finding: new BigDecimal(...) parsing a non-numeric config value must fail the same
-        // predictable way as a missing key, not leak an unwrapped NumberFormatException.
+    void chargeAndCapture_chargesPlatformAccount_noTransferDataNoAppFee_carriesTransferGroup()
+            throws StripeException {
+        stubCoachAndCommission();
+        stubStripeCustomer(1001L, "cus_1001");
+        when(stripeClient.createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class)))
+            .thenReturn(mockIntent("pi_1"));
+
+        stripePaymentGateway.chargeAndCapture(PACK_TIER_ID, 1001L, COACH_ID, AMOUNT);
+
+        ArgumentCaptor<PaymentIntentCreateParams> captor =
+            ArgumentCaptor.forClass(PaymentIntentCreateParams.class);
+        org.mockito.Mockito.verify(stripeClient).createPaymentIntent(captor.capture(), any(String.class));
+        PaymentIntentCreateParams params = captor.getValue();
+        assertThat(params.getTransferData()).as("no destination charge under B-1").isNull();
+        assertThat(params.getApplicationFeeAmount()).as("commission retained implicitly, not as app fee").isNull();
+        assertThat(params.getTransferGroup()).isEqualTo(PACK_TIER_ID.toString());
+    }
+
+    @Test
+    void chargeAndCapture_coachStripeAccountNotComplete_failsFastBeforeStripe() throws StripeException {
         CoachStripeAccount account = new CoachStripeAccount();
         account.setStripeAccountId("acct_test");
-        account.setOnboardingStatus("COMPLETE");
-        account.setChargesEnabled(true);
+        account.setOnboardingStatus("PENDING");
+        account.setChargesEnabled(false);
         when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
-        when(configService.getString("platform.commission.rate")).thenReturn("not-a-number");
 
         assertThatThrownBy(() -> stripePaymentGateway.chargeAndCapture(PACK_TIER_ID, 1001L, COACH_ID, AMOUNT))
             .isInstanceOf(PaymentGatewayException.class)
             .satisfies(e -> assertThat(((PaymentGatewayException) e).getErrorCode())
-                .isEqualTo("payment.configurationUnavailable"))
-            .satisfies(e -> assertThat(e.getCause()).isInstanceOf(NumberFormatException.class));
+                .isEqualTo("payment.coachStripeNotConfigured"));
 
         org.mockito.Mockito.verify(stripeClient, org.mockito.Mockito.never())
             .createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class));
+    }
+
+    @Test
+    void transferToCoach_buildsExpectedParamsAndDeterministicKey() throws StripeException {
+        CoachStripeAccount account = new CoachStripeAccount();
+        account.setStripeAccountId("acct_coach");
+        account.setOnboardingStatus("COMPLETE");
+        account.setChargesEnabled(true);
+        when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
+        com.stripe.model.Transfer tr = new com.stripe.model.Transfer();
+        tr.setId("tr_1");
+        when(stripeClient.createTransfer(any(com.stripe.param.TransferCreateParams.class), any(String.class)))
+            .thenReturn(tr);
+        UUID bookingId = UUID.randomUUID();
+
+        String id = stripePaymentGateway.transferToCoach(bookingId, COACH_ID, new BigDecimal("46.00"), "eur");
+
+        assertThat(id).isEqualTo("tr_1");
+        ArgumentCaptor<com.stripe.param.TransferCreateParams> pc =
+            ArgumentCaptor.forClass(com.stripe.param.TransferCreateParams.class);
+        ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
+        org.mockito.Mockito.verify(stripeClient).createTransfer(pc.capture(), key.capture());
+        assertThat(key.getValue()).isEqualTo("transfer-" + bookingId);
+        assertThat(pc.getValue().getAmount()).isEqualTo(4600L);
+        assertThat(pc.getValue().getCurrency()).isEqualTo("eur");
+        assertThat(pc.getValue().getDestination()).isEqualTo("acct_coach");
+        assertThat(pc.getValue().getTransferGroup()).isEqualTo(bookingId.toString());
+    }
+
+    @Test
+    void transferToCoach_stripeException_mapsToClassifiedCoachPayoutTransferException() throws StripeException {
+        CoachStripeAccount account = new CoachStripeAccount();
+        account.setStripeAccountId("acct_coach");
+        account.setOnboardingStatus("COMPLETE");
+        account.setChargesEnabled(true);
+        when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
+        when(stripeClient.createTransfer(any(com.stripe.param.TransferCreateParams.class), any(String.class)))
+            .thenThrow(new com.stripe.exception.ApiConnectionException("boom"));
+        UUID bookingId = UUID.randomUUID();
+
+        assertThatThrownBy(() -> stripePaymentGateway.transferToCoach(bookingId, COACH_ID, new BigDecimal("1.00"), "eur"))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.CoachPayoutTransferException.class)
+            .satisfies(e -> assertThat(((com.softropic.skillars.platform.payment.contract.exception.CoachPayoutTransferException) e)
+                .isRetryable()).isTrue());
+    }
+
+    @Test
+    void reverseTransfer_usesDeterministicReversalKey() throws StripeException {
+        when(stripeClient.createTransferReversal(any(String.class),
+                any(com.stripe.param.TransferReversalCollectionCreateParams.class), any(String.class)))
+            .thenReturn(new com.stripe.model.TransferReversal());
+
+        stripePaymentGateway.reverseTransfer("tr_9", new BigDecimal("10.00"));
+
+        ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
+        org.mockito.Mockito.verify(stripeClient).createTransferReversal(
+            org.mockito.ArgumentMatchers.eq("tr_9"),
+            any(com.stripe.param.TransferReversalCollectionCreateParams.class), key.capture());
+        assertThat(key.getValue()).isEqualTo("reversal-tr_9");
     }
 
     @Test

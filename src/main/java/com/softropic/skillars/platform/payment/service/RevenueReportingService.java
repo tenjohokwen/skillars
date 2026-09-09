@@ -13,10 +13,13 @@ import com.softropic.skillars.platform.payment.contract.CoachRevenueAdminDto;
 import com.softropic.skillars.platform.payment.contract.CreditStatementEntryDto;
 import com.softropic.skillars.platform.payment.contract.ParentReceiptDto;
 import com.softropic.skillars.platform.payment.contract.ReceiptDto;
+import com.softropic.skillars.platform.payment.contract.CoachPayoutStatus;
 import com.softropic.skillars.platform.payment.contract.RevenueSummaryDto;
 import com.softropic.skillars.platform.payment.contract.TransactionDto;
 import com.softropic.skillars.platform.payment.repo.BookingPayment;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
+import com.softropic.skillars.platform.payment.repo.CoachPayout;
+import com.softropic.skillars.platform.payment.repo.CoachPayoutRepository;
 import com.softropic.skillars.platform.payment.repo.ParentCreditLedger;
 import com.softropic.skillars.platform.payment.repo.ParentCreditLedgerRepository;
 import com.softropic.skillars.platform.payment.repo.PaymentCoachSubscriptionRepository;
@@ -54,6 +57,7 @@ import java.util.stream.Collectors;
 public class RevenueReportingService {
 
     private final BookingPaymentRepository bookingPaymentRepository;
+    private final CoachPayoutRepository coachPayoutRepository;
     private final ParentCreditLedgerRepository parentCreditLedgerRepository;
     private final BookingRepository bookingRepository;
     private final PaymentCoachSubscriptionRepository paymentCoachSubscriptionRepository;
@@ -68,32 +72,41 @@ public class RevenueReportingService {
             : YearMonth.now(ZoneOffset.UTC).atDay(1).atStartOfDay(ZoneOffset.UTC).toInstant();
         Instant effectiveTo = to != null ? to : Instant.now();
 
-        BigDecimal grossEarnings = bookingPaymentRepository
-            .sumGrossByCoachAndPeriod(coachId, effectiveFrom, effectiveTo)
-            .orElse(BigDecimal.ZERO);
-
-        BigDecimal commissionRate = new BigDecimal(configService.getString("platform.commission.rate"));
-        BigDecimal commissionDeducted = grossEarnings.multiply(commissionRate)
-            .setScale(2, RoundingMode.HALF_UP);
+        // skillars-deferred-106 AC12.1: coach figures reflect payouts actually RELEASED to the coach's
+        // Stripe account (dated by released_at), read straight from the payment.coach_payouts ledger —
+        // no longer bp.status = 'CAPTURED' and no longer recomputed from stripeCharged + creditDebited.
+        BigDecimal grossEarnings = coachPayoutRepository
+            .sumReleasedGrossByCoachAndPeriod(coachId, effectiveFrom, effectiveTo);
+        BigDecimal commissionDeducted = coachPayoutRepository
+            .sumReleasedCommissionByCoachAndPeriod(coachId, effectiveFrom, effectiveTo);
+        BigDecimal netFromLedger = coachPayoutRepository
+            .sumReleasedNetByCoachAndPeriod(coachId, effectiveFrom, effectiveTo);
+        long sessionCount = coachPayoutRepository.countReleasedByCoachAndPeriod(coachId, effectiveFrom, effectiveTo);
 
         BigDecimal stripeFeeRate = new BigDecimal(configService.getString("payment.stripe.feeRate"));
         BigDecimal stripeFeeFixed = new BigDecimal(configService.getString("payment.stripe.feeFixed"));
-
-        long sessionCount = bookingPaymentRepository.countCapturedByCoachAndPeriod(coachId, effectiveFrom, effectiveTo);
-
         BigDecimal stripeFees = grossEarnings.multiply(stripeFeeRate)
             .add(stripeFeeFixed.multiply(BigDecimal.valueOf(sessionCount)))
             .setScale(2, RoundingMode.HALF_UP);
 
-        BigDecimal netPayout = grossEarnings.subtract(commissionDeducted).subtract(stripeFees);
+        // net_amount on the ledger row is gross - commission; the coach's take-home is that minus
+        // the platform's estimated Stripe processing fee.
+        BigDecimal netPayout = netFromLedger.subtract(stripeFees);
 
-        List<UUID> bookingIds = bookingPaymentRepository.findBookingIdsByCoachAndPeriod(coachId, effectiveFrom, effectiveTo);
+        List<UUID> bookingIds = coachPayoutRepository
+            .findReleasedBookingIdsByCoachAndPeriod(coachId, effectiveFrom, effectiveTo);
         BigDecimal refundsIssued = bookingIds.isEmpty()
             ? BigDecimal.ZERO
             : parentCreditLedgerRepository.sumRefundsByBookingIds(bookingIds);
 
+        // AC12.2: completed-but-not-yet-released sessions are a separate line, never folded in.
+        BigDecimal pendingReleaseAmount = coachPayoutRepository
+            .sumPendingReleaseNetByCoachAndPeriod(coachId, effectiveFrom, effectiveTo);
+        long pendingReleaseCount = coachPayoutRepository
+            .countPendingReleaseByCoachAndPeriod(coachId, effectiveFrom, effectiveTo);
+
         return new RevenueSummaryDto(grossEarnings, commissionDeducted, stripeFees, netPayout,
-            sessionCount, refundsIssued, "EUR");
+            sessionCount, refundsIssued, "EUR", pendingReleaseAmount, pendingReleaseCount);
     }
 
     public Page<TransactionDto> getCoachTransactions(UUID coachId, Instant from, Instant to, Pageable pageable) {
@@ -101,16 +114,20 @@ public class RevenueReportingService {
             : YearMonth.now(ZoneOffset.UTC).atDay(1).atStartOfDay(ZoneOffset.UTC).toInstant();
         Instant effectiveTo = to != null ? to : Instant.now();
 
-        BigDecimal commissionRate = new BigDecimal(configService.getString("platform.commission.rate"));
-
-        Page<BookingPayment> page = bookingPaymentRepository.findByCoachAndPeriod(coachId, effectiveFrom, effectiveTo, pageable);
+        // skillars-deferred-106 AC12: one row per coach payout — RELEASED and PENDING_RELEASE (the
+        // status field carries the released-vs-pending distinction). Amounts come straight from the
+        // ledger row, no recompute.
+        Page<CoachPayout> page = coachPayoutRepository
+            .findPayoutTransactionsByCoachAndPeriod(coachId, effectiveFrom, effectiveTo, pageable);
 
         Set<UUID> bookingIds = page.getContent().stream()
-            .map(BookingPayment::getBookingId)
+            .map(CoachPayout::getBookingId)
             .collect(Collectors.toSet());
 
         Map<UUID, Booking> bookings = bookingRepository.findAllById(bookingIds).stream()
             .collect(Collectors.toMap(Booking::getId, b -> b));
+        Map<UUID, BigDecimal> creditByBooking = bookingPaymentRepository.findAllById(bookingIds).stream()
+            .collect(Collectors.toMap(BookingPayment::getBookingId, BookingPayment::getCreditDebited));
 
         Set<Long> playerIds = bookings.values().stream()
             .map(Booking::getPlayerId)
@@ -119,24 +136,21 @@ public class RevenueReportingService {
         Map<Long, String> playerNames = playerProfileRepository.findAllById(playerIds).stream()
             .collect(Collectors.toMap(PlayerProfile::getId, PlayerProfile::getName));
 
-        return page.map(bp -> {
-            Booking booking = bookings.get(bp.getBookingId());
+        return page.map(payout -> {
+            Booking booking = bookings.get(payout.getBookingId());
             String playerName = booking != null
                 ? playerNames.getOrDefault(booking.getPlayerId(), "Unknown")
                 : "Unknown";
             Instant sessionDate = booking != null ? booking.getRequestedStartTime() : null;
-            BigDecimal grossAmount = bp.getStripeCharged().add(bp.getCreditDebited());
-            BigDecimal commissionAmount = grossAmount.multiply(commissionRate).setScale(2, RoundingMode.HALF_UP);
-            BigDecimal netAmount = grossAmount.subtract(commissionAmount);
             return new TransactionDto(
-                bp.getBookingId(),
+                payout.getBookingId(),
                 playerName,
                 sessionDate,
-                grossAmount,
-                commissionAmount,
-                netAmount,
-                bp.getStatus(),
-                bp.getCreditDebited()
+                payout.getGrossAmount(),
+                payout.getCommissionAmount(),
+                payout.getNetAmount(),
+                payout.getStatus(),
+                creditByBooking.getOrDefault(payout.getBookingId(), BigDecimal.ZERO)
             );
         });
     }
@@ -145,19 +159,19 @@ public class RevenueReportingService {
         Booking booking = bookingRepository.findByIdAndCoachId(bookingId, coachId)
             .orElseThrow(() -> new AccessDeniedException("Access denied to booking receipt"));
 
-        // UAT.3 AC1: a booking_payments row may now exist BEFORE the money moves. Rendering a
-        // receipt from a CAPTURE_PENDING row would show a coach income that may never be taken.
-        // Anything non-CAPTURED keeps today's 404.
-        Optional<BookingPayment> coachPaymentLookup = bookingPaymentRepository.findById(bookingId);
-        coachPaymentLookup
-            .filter(bp -> !BookingPaymentStatus.CAPTURED.equals(bp.getStatus()))
-            .ifPresent(bp -> log.warn(
-                "Coach receipt requested for bookingId={} coachId={} but BookingPayment status={} "
-                    + "(not CAPTURED) — returning 404, same as a missing payment record",
-                bookingId, coachId, bp.getStatus()));
-        BookingPayment payment = coachPaymentLookup
-            .filter(bp -> BookingPaymentStatus.CAPTURED.equals(bp.getStatus()))
-            .orElseThrow(() -> new ResourceNotFoundException("Booking payment not found", "booking_payment"));
+        // skillars-deferred-106 AC12.2: a coach receipt is money released to the coach, so it is
+        // gated on a RELEASED payment.coach_payouts row — same reasoning as the old CAPTURED-only
+        // gate (UAT.3 AC1): a receipt for money not yet released is misleading. Anything else 404s.
+        Optional<CoachPayout> payoutLookup = coachPayoutRepository.findById(bookingId);
+        payoutLookup
+            .filter(p -> !CoachPayoutStatus.RELEASED.equals(p.getStatus()))
+            .ifPresent(p -> log.warn(
+                "Coach receipt requested for bookingId={} coachId={} but coach_payouts status={} "
+                    + "(not RELEASED) — returning 404, same as a missing payout record",
+                bookingId, coachId, p.getStatus()));
+        CoachPayout payout = payoutLookup
+            .filter(p -> CoachPayoutStatus.RELEASED.equals(p.getStatus()))
+            .orElseThrow(() -> new ResourceNotFoundException("Coach payout not found", "coach_payout"));
 
         PlayerProfile player = playerProfileRepository.findById(booking.getPlayerId()).orElse(null);
         String playerFirstName = player != null ? extractFirstName(player.getName()) : "Player";
@@ -165,20 +179,15 @@ public class RevenueReportingService {
         CoachProfile coach = coachProfileRepository.findById(coachId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
 
-        BigDecimal commissionRate = new BigDecimal(configService.getString("platform.commission.rate"));
-        BigDecimal grossAmount = payment.getStripeCharged().add(payment.getCreditDebited());
-        BigDecimal commissionDeducted = grossAmount.multiply(commissionRate).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal netReceived = grossAmount.subtract(commissionDeducted);
-
         return new ReceiptDto(
             bookingId,
             booking.getRequestedStartTime(),
             playerFirstName,
             coach.getDisplayName(),
             "Skillars",
-            grossAmount,
-            commissionDeducted,
-            netReceived
+            payout.getGrossAmount(),
+            payout.getCommissionAmount(),
+            payout.getNetAmount()
         );
     }
 
@@ -299,6 +308,7 @@ public class RevenueReportingService {
         int reliabilityStrikeCount = (int) coachReliabilityStrikeRepository
             .countByCoachIdAndCreatedAtAfter(coachId, OffsetDateTime.now().minusDays(30));
 
+        // skillars-deferred-106 AC10.5: wiring the real dispute count stays out of scope here.
         int outstandingDisputeCount = 0; // TODO Story 10.x: wire booking_disputes table
 
         return new CoachRevenueAdminDto(
@@ -310,7 +320,9 @@ public class RevenueReportingService {
             summary.refundsIssued(),
             summary.currency(),
             reliabilityStrikeCount,
-            outstandingDisputeCount
+            outstandingDisputeCount,
+            summary.pendingReleaseAmount(),
+            summary.pendingReleaseCount()
         );
     }
 
