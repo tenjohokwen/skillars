@@ -1,5 +1,5 @@
 generated: 2026-05-25
-last_updated: '2026-09-08'  # skillars-deferred-102 created (ready-for-dev); skillars-deferred-97 withdrawn (absorbed)
+last_updated: '2026-09-09'  # skillars-deferred-102 done + merged (#159); post-102 ledger prune (#160); skillars-deferred-103 created (ready-for-dev)
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -265,5 +265,6 @@ development_status:
   skillars-deferred-100-concurrency-reconciliation-and-lifecycle-hardening: done
   skillars-deferred-101-residual-bugs-refund-atomicity-and-api-hygiene: done
   skillars-deferred-102-deploy-backup-resilience-and-cross-module-bug-sweep: done
+  skillars-deferred-103-payment-reliability-pack-pause-hardening-and-cross-module-cleanup: ready-for-dev
   ? skillars-deferred-92-outbox-enqueue-atomicity-executor-shutdown-migration-ordering-and-lock-timeout-default-bundle-parity-fr-fr-idiom-prettier-conformance-and-genuine-bug-fixes
   : review
