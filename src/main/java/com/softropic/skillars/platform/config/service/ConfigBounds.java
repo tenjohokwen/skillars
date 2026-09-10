@@ -190,11 +190,16 @@ public final class ConfigBounds {
         new BoundedKey("platform.development.radar_composite_dlq.max_attempts", 1L, 100L, false,
             "0/neg → radar-composite DLQ dead-letters on the first attempt (or never)");
 
-    // ── Templated per-enum keys — generated, never hand-listed (AC3) ─────────────────────────────
+    // ── Templated per-enum key segments — DELIBERATELY hand-listed ──────────────────────────────
+    // skillars-deferred-108 AC9 (owner decision 2026-09-10, was deferred-107 code review): these
+    // segments are hand-listed on purpose. Deriving them by iterating CoachSubscriptionTier
+    // (marketplace.contract) / VideoType (video.contract) would give this `config` module a compile
+    // dependency on two business modules it otherwise never touches. ConfigBoundsEnumCoverageTest
+    // is the drift guard: it iterates enum.values() and fails the build when a NEW constant lands
+    // (or is renamed) without a matching bound here. It does NOT catch a REMOVED constant leaving a
+    // stale segment below — harmless (a bound nothing reads), so the guard is one-directional.
     // Segments mirror QuotaConfigService.resolveTierKey (CoachSubscriptionTier lower-cased + the
-    // "athlete" player fallback) and VideoTypeConstraints.configKey (VideoType camel-cased). Kept in
-    // sync with those enums by ConfigBoundsEnumCoverageTest, which fails if a new constant is added
-    // without a matching bound here.
+    // "athlete" player fallback) and VideoTypeConstraints.configKey (VideoType camel-cased).
 
     static final List<String> VIDEO_QUOTA_TIER_SEGMENTS = List.of("scout", "instructor", "academy", "athlete");
     static final List<String> VIDEO_TYPE_SEGMENTS = List.of("homework", "drillDemo", "coachReview");

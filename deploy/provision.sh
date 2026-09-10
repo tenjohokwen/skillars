@@ -75,6 +75,67 @@ chown_if_needed() {
   fi
 }
 
+# skillars-deferred-108 AC8 (deferred-107 code review): bound the two remote docker calls in
+# image_runtime_uid below. Provisioning runs before the stack is up, on hosts that may have no /
+# slow egress or pruned images; `|| return 0` only fires after a `docker pull` / `docker run` has
+# FINISHED failing, so an unreachable registry could stall the run indefinitely.
+#
+# A timeout (exit 124) is indistinguishable from any other probe failure: it falls through the
+# existing `|| return 0`, and chown_probed then takes its `[ -z "$probed_uid" ]` arm, which chowns
+# to the hardcoded fallback SILENTLY. There is no WARN on this path — the WARN below fires only
+# when the probe SUCCEEDS and disagrees with the constant. Read a missing "image now runs as uid"
+# line as "the probe did not run", not as "the probe confirmed the constant".
+#
+# IMAGE_PULL_TIMEOUT is deliberately MUCH larger here than in restore-from-volume-backup.sh, where
+# the same probe carries the same constants at 30s. The two scripts have opposite constraints and
+# the value must not be copied between them (skillars-deferred-108 code review, decision 3):
+#
+#   - provision runs BEFORE the stack is up (see the closing "3. Deploy services: docker compose
+#     up -d" instruction). Nothing is down, and compose is about to pull these same images seconds
+#     later anyway. The bound exists only so a dead registry cannot hang the run forever.
+#   - restore's probe runs INSIDE the `${DC} down` → `${DC} up -d` outage window, where falling back
+#     to the hardcoded constant quickly is the correct trade.
+#
+# At 30s this probe lost the race on any ordinary link and silently disabled itself exactly when it
+# mattered most: on a fresh server every one of the five probed images is a cold pull (~700 MB
+# total; grafana/grafana alone is ~450 MB), so the uid-drift detection deferred-107 AC8 exists to
+# provide degraded to the hardcoded guess on precisely the first run.
+#
+# Worst case adds SERVICE_COUNT × (IMAGE_PULL_TIMEOUT + IMAGE_PROBE_TIMEOUT) to the run; with the
+# five services probed today that is 5 × (300 + 15) ≈ 26min against a registry that is hanging
+# rather than refusing — an unattended provision, not an outage.
+#
+# `-k` matters: plain `timeout` sends SIGTERM only, so a docker client wedged on an unresponsive
+# /var/run/docker.sock would not actually be bounded. Note the daemon-side pull continues after the
+# client is killed — this bounds OUR wait, not the transfer.
+readonly IMAGE_PULL_TIMEOUT=300
+readonly IMAGE_PROBE_TIMEOUT=15
+readonly IMAGE_TIMEOUT_KILL_AFTER=5
+
+# skillars-deferred-108 code review: `timeout` is a new external dependency in this script (GNU
+# coreutils; present on the Ubuntu hosts we provision). If it is ever absent, the command exits 127
+# and is indistinguishable from a failed pull — silently disabling the probe on every run. Degrade
+# to running docker unwrapped instead, so a missing coreutils costs us the bound, not the feature.
+#
+# A timeout is otherwise indistinguishable from "the probe confirmed the constant" (both reach
+# chown_probed's silent `[ -z "$probed_uid" ]` arm), so exit 124 / 137 is WARNed here. Logging goes
+# to stderr: run_bounded is used inside `uid=$(...)` command substitution, and stdout would be
+# captured as the uid.
+if command -v timeout >/dev/null 2>&1; then
+  run_bounded() {
+    local dur="$1"; shift
+    local what="$1" rc=0
+    timeout -k "${IMAGE_TIMEOUT_KILL_AFTER}s" "$dur" "$@" || rc=$?
+    if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+      log "⚠️  image probe: '${what}' exceeded ${dur} — giving up on this probe; the hardcoded uid:gid fallback will be used" >&2
+    fi
+    return "$rc"
+  }
+else
+  log "⚠️  timeout(1) not found — image-probe docker calls will run unbounded"
+  run_bounded() { shift; "$@"; }
+fi
+
 # skillars-deferred-107 AC8: echo the numeric uid the given compose service's image declares (its
 # Config.User), or "" on any failure. Probing the image means an image bump that moves the runtime
 # uid (Grafana's has moved 104->472 historically) is picked up automatically, instead of provision
@@ -91,13 +152,15 @@ image_runtime_uid() {
   img=$(docker compose --env-file "${ENV_FILE}" -f "${APP_DIR}/docker-compose.yml" config --format json 2>/dev/null \
         | jq -r --arg s "$svc" '.services[$s].image // empty' 2>/dev/null) || return 0
   [ -n "${img:-}" ] || return 0
-  docker image inspect "$img" >/dev/null 2>&1 || docker pull "$img" >/dev/null 2>&1 || return 0
+  # skillars-deferred-108 AC8: bound both remote docker calls (constants above the function).
+  docker image inspect "$img" >/dev/null 2>&1 \
+    || run_bounded "${IMAGE_PULL_TIMEOUT}s" docker pull "$img" >/dev/null 2>&1 || return 0
   user=$(docker image inspect --format '{{.Config.User}}' "$img" 2>/dev/null) || return 0
   user="${user%%:*}"                       # drop any ":gid"
   [ -n "$user" ] || return 0               # empty USER = root
   case "$user" in
     ''|*[!0-9]*)                           # a name — resolve it inside the image
-      uid=$(docker run --rm --entrypoint sh "$img" -c "id -u '$user'" 2>/dev/null) || return 0 ;;
+      uid=$(run_bounded "${IMAGE_PROBE_TIMEOUT}s" docker run --rm --entrypoint sh "$img" -c "id -u '$user'" 2>/dev/null) || return 0 ;;
     *) uid="$user" ;;
   esac
   case "${uid:-}" in ''|*[!0-9]*|0) return 0 ;; esac   # unresolved / non-numeric / root => give up
