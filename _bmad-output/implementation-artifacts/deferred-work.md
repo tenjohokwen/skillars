@@ -653,9 +653,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - VideoDeletionService lazy-autowired initialization order: No explicit guard on self-field initialization timing. Pattern precedent exists in `RadarCompositeCalculationService.java:50-52`, confirming this pattern is established in the codebase. `[DISMISSED 2026-08-29 (skillars-deferred-83 story creation): same Spring-level reasoning as the self-injection-failure bullet above — no explicit guard is needed for a failure mode that prevents application startup entirely.]`
 - VideoDeletionService self-field null check: Missing defensive null check before `self.deleteVideo()` dereference. Spring-level concern: if autowiring fails, application won't start; defensive null-check would mask configuration failure with a misleading video-deletion error. `[DISMISSED 2026-08-29 (skillars-deferred-83 story creation): same Spring-level reasoning as the self-injection-failure bullet above — a defensive null-check would mask, not fix, a startup-time configuration failure.]`
 
-## Deferred from: code review of skillars-deferred-11-stripe-card-collection (2026-08-04)
-- No frontend tests (Vitest/Vue Test Utils) were added for `PaymentMethodCard.vue` or the new `payment.store.js` actions (`fetchStripeConfig`, `fetchSavedPaymentMethod`) — real coverage gap on a component with non-trivial lifecycle logic. [`PaymentMethodCard.vue`, `payment.store.js`] `[FRAMEWORK AVAILABLE 2026-09-09 (skillars-deferred-104): Vitest runner now stood up — this line's coverage is now in-scope for its own follow-up story]`
-
 ## Deferred from: code review of skillars-10-1 patches (2026-06-30)
 - D1: `findBeforePivot`/`findAfterPivot` return empty context when pivot message `createdAt` is null at JPA layer — DB NOT NULL prevents this in production; only affects test fixtures that construct Message in-memory without setCreatedAt(). [MessageRepository.java:33-37]
 - D2: Context window (`findBeforePivot`/`findAfterPivot`) excludes soft-deleted messages while `findAllForAdmin` includes them — chronological gap in admin message detail view with no indication; intentional spec asymmetry between views; UX concern for service layer mapping. [MessageRepository.java:33-40]
@@ -908,10 +905,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 ## Deferred from: code review of skillars-deferred-16-messaging-moderation-recovery-identity-safety (2026-08-05)
 - D3: AC4's orphaned-profile fail-safety is list-only, producing three different outcomes for one conversation: `getConversations` excludes it, `getMessages` returns it in full (no age-policy lookup at all — only `verifyIsParty` on `parentId`), and `sendMessage` 404s on the throwing variant. The "excluding from parent's list" ERROR log reads like an access-control decision but is not one. Resolving the inconsistency is a product call about what a parent should see for an unresolvable player, beyond AC4's stated scope. [`src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java:108-116,168,215-228`] `[DECIDED 2026-08-29 (skillars-deferred-82 story creation): leave as-is. No live code path today can actually produce this state — nothing deletes a player_profiles row while leaving it referenced (confirmed during skillars-deferred-81 AC4's own research) — so this remains a documented, non-reachable edge case, not a fix candidate.]`
 
-## Deferred from: code review of skillars-deferred-17-booking-request-slot-payload-timezone-integrity (2026-08-06)
-
-- **D6 — Zero frontend regression coverage for deferred-17's headline fix.** There is no frontend test suite in this repo (no `*.spec.js` outside `node_modules`, no `src/frontend/test`). Every test added or touched by deferred-17 is backend-only, so reverting the `.vue` and `booking.store.js` changes — the edits that actually made booking submission work at all — would leave the entire suite green. The story explicitly forbids introducing a test framework as part of its scope; this restates the standing gap already recorded for `skillars-5-4` W9. `[FRAMEWORK AVAILABLE 2026-09-09 (skillars-deferred-104): Vitest runner now stood up — this line's coverage is now in-scope for its own follow-up story]`
-
 ## Deferred from: skillars-uat-1-admin-bootstrap-and-onboarding-unblock (2026-08-10)
 
 Found while implementing the story. Each was examined and deliberately left alone; none blocks UAT.
@@ -926,8 +919,6 @@ Found or deliberately left while implementing the story. None blocks UAT.
 
 - **D4 — the batch path still has no create-time cross-booking overlap check.** The single path has one (`BookingService.createBookingRequest`); `createBatch` does not, and AC4 deliberately left it that way. Batch rows are created `REQUESTED`, and `V87`'s exclusion constraint deliberately excludes `REQUESTED` — its own comment records that two overlapping `REQUESTED` bookings competing for a slot is expected in-band behaviour that the accept-time re-check resolves, and `acceptAll` already runs that re-check against `ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED`. Adding a create-time check would reject legitimate competing requests. Recorded so a later reviewer does not read the asymmetry as an oversight. AC4 *did* add the intra-batch overlap check (two slots in the same batch overlapping each other), which is a different and unambiguous case.
 
-- **D6 — no frontend test coverage for any of this story's `.vue` changes.** Standing gap (`skillars-deferred-17` D6, `skillars-5-4` W9, `skillars-uat-1`): there is no frontend test suite in this repo, so `ProfileBuilderStep3.vue`'s duration select, `BookingRequestPage.vue`'s merged own-booking rows and coach-timezone week bounds, and `ParentBookingsPage.vue`'s derived read-only reschedule end are verified by code reading and a successful production build only. Reverting all three would leave the entire suite green. `[FRAMEWORK AVAILABLE 2026-09-09 (skillars-deferred-104): Vitest runner now stood up — this line's coverage is now in-scope for its own follow-up story]`
-
 - **D7 — `docker-compose.local.yml` now needs a `redis` override it did not need before.** AC6 replaced the `redis-data` named volume with a bind mount at `/opt/skillars/data/redis`, which is a production path. `docker-compose.local.yml` overrides the volume of every other stateful service but had never needed one for redis, so without the new `skillars-local-redis` override added here, running the local stack would have created `/opt/skillars/data/redis` on a developer's own machine. Fixed in this story; recorded because it is the general hazard of putting absolute host paths in the base compose file — any future service that moves onto the Volume needs the same treatment, and nothing enforces it.
 
 ## Deferred from: skillars-uat-3-payment-capture-integrity-and-backup-retention (2026-08-11)
@@ -938,7 +929,7 @@ Found or deliberately left while implementing the story. The first item is an **
 
 - **D7 — `PaymentWebhookIdempotencyIT` seeded no `booking.bookings` rows at all.** Found in Task 0's triage; the story's regression table predicted only that it might assert "exactly N rows". The class mocks `BookingService` specifically so transitions do not need a real booking, which meant `reserveCapture`'s locked read found nothing, returned `BOOKING_NOT_PENDING`, and left zero payment rows. Fixed by seeding a real `PAYMENT_PENDING` booking in the one test that reaches Stripe — the fixture, not the check, per `uat-2`'s recorded lesson. Recorded because it generalises: **any test that drives a settlement path now needs a real booking row**, which was not true before this story, and the other two tests in that class pass only because they never reach Stripe (full credit cover and pack-funded both skip the reservation).
 
-- **D9 — no frontend test coverage.** Standing gap (`uat-1`, `uat-2` D6, `deferred-17` D6, `deferred-18`): there is no frontend test suite in this repo. This story touches **no** `.vue` file, so unlike its two predecessors nothing here is verified by code reading alone — recorded only to note that the gap is unchanged, not that it bit this story. `[FRAMEWORK AVAILABLE 2026-09-09 (skillars-deferred-104): Vitest runner now stood up — no frontend changes in this story, so nothing to backfill; noted for completeness]`
+- **D9 — no frontend test coverage.** Standing gap (`uat-1`, `uat-2` D6, `deferred-17` D6, `deferred-18`): there is no frontend test suite in this repo. This story touches **no** `.vue` file, so unlike its two predecessors nothing here is verified by code reading alone — recorded only to note that the gap is unchanged, not that it bit this story. `[FRAMEWORK AVAILABLE 2026-09-09 (skillars-deferred-104): Vitest runner now stood up — no frontend changes in this story, so nothing to backfill; noted for completeness]` ~~there is no frontend test suite in this repo~~ `[SUPERSEDED 2026-09-10 (skillars-deferred-108 AC1–AC6): a frontend suite now exists — 12 spec files / 66 tests. The `uat-2` D6, `deferred-17` D6 and `deferred-18` cross-references above were deleted by that story's AC10 and no longer resolve; `uat-1` remains. Applied by the deferred-108 code review — AC10 specified this strike-through but it was not carried out in the implementation commit.]`
 
 ## Deferred from: code review of skillars-uat-3-payment-capture-integrity-and-backup-retention (2026-08-11)
 
@@ -991,14 +982,6 @@ Recorded per AC4 — items explicitly excluded from this story's coach-subscript
 ## Deferred from: skillars-deferred-26-defensive-guards-input-hardening-and-test-coverage-fixes story creation (2026-08-15)
 
 - **D1 — `DrillMetadata.repDensity` cannot represent "coach never set this" at all — it is a Java primitive `int`, not `Integer`.** Found during this story's AC4 spec audit (adversarial review of the story's own AC text, pre-implementation): a missing key in the incoming JSON payload deserializes silently to `0` via Jackson, and an explicit JSON `null` would throw a deserialization exception rather than pass through — so a `repDensity != null` guard anywhere downstream (frontend or backend) can never observe the "unset" case as `null`; it is indistinguishable from a legitimately-zero drill today and will remain so under the current contract. AC4 of this story added a frontend-only defensive guard (protects against `undefined`/`null` arriving from a stale cache, a manually-edited dev fixture, or a future API contract change) but explicitly could not close this gap — doing so needs a backend change: make `repDensity` a nullable `Integer` (propagating through `DrillMetadata`, its JSONB Hibernate mapping, and every backend site that reads it arithmetically) or add an explicit "no density data" signal, plus a decision on whether that is a real product need (do coaches uploading custom drills currently have any path that leaves `repDensity` unset, or does upload validation already require it?). [`src/main/java/com/softropic/skillars/platform/session/contract/DrillMetadata.java:12`, `src/frontend/src/components/session/DrillDetailPanel.vue`] **[AUDIT 2026-08-24: skillars-deferred-63 story creation investigated this live.** No live path constructs a `Drill` with coach-submitted metadata today — `grep -rn "new Drill(\|Drill.builder()\|new DrillMetadata(" src/main/java` finds exactly one non-test construction site, `DrillLibraryService.java:129`'s `clone.setMetadata(source.getMetadata())`, which copies an already-persisted drill's metadata rather than deserializing a fresh payload; `DrillUploadService`/`DrillUploadResource` (the only "drill upload" surface) handle the drill video file only — `DrillUploadInitiateRequest` has no `DrillMetadata` field at all. Every `Drill.metadata` is populated exclusively by migration/seed data under full app-team control. The "coach never set repDensity" scenario has no reachable trigger today — not picked up as an AC by skillars-deferred-63. Re-open if a future story adds a real coach-facing metadata-submitting endpoint.]**
-
-## Deferred from: code review of skillars-deferred-38-coach-refresh-request-sequencing-guard (2026-08-19)
-
-- **No automated test coverage for `loadCoachBookingRequests()`'s concurrency/request-sequencing guard.** Standing repo-wide gap — no frontend test harness exists for `booking.store.js` (same accepted gap `skillars-deferred-35`/`36`/`37` recorded). [`src/frontend/src/stores/booking.store.js:326-371`] `[FRAMEWORK AVAILABLE 2026-09-09 (skillars-deferred-104): Vitest runner now stood up — this line's coverage is now in-scope for its own follow-up story]`
-
-## Deferred from: code review of skillars-deferred-43-player-registration-otp-coverage-and-self-profile-fetch-caching (2026-08-20)
-
-- **No automated test coverage added for `playerStore.js`'s new `fetchSelfPlayerId()`/`resetSelfPlayerId()` caching logic, or for `MainLayout.vue`'s new `resetSelfPlayerId()` call in `handleLogout()`.** Pre-existing gap — matches this repo's standing, repeatedly-accepted absence of frontend test infrastructure (the same reasoning `skillars-deferred-35`/`36`/`37`/`38` have left in place for `booking.store.js`). Ships with zero coverage despite this diff's own stated framing of the cache carrying a cross-account booking-misattribution risk. [`src/frontend/src/stores/playerStore.js:24-33`, `src/frontend/src/layouts/MainLayout.vue:301`] `[FRAMEWORK AVAILABLE 2026-09-09 (skillars-deferred-104): Vitest runner now stood up — this line's coverage is now in-scope for its own follow-up story]`
 
 ## Deferred from: code review of skillars-deferred-49-reschedule-and-duplicate-current-availability-window-enforcement (2026-08-21)
 
@@ -1118,14 +1101,20 @@ Four pre-existing issues identified during code review:
      session-refresh-mechanism.md; the "story-review.md is a rotating file" process observation is
      recorded three more times later in this ledger. -->
 
-- **`sessionManager.js` state machine rewritten with zero frontend tests.** The diff replaces the whole expiry/warning/countdown state machine (`computeTimeUntilExpiry`, the legacy-fallback branch, `tick()`'s warning edges and expiry dispatch, the `refreshSession()` interaction) and adds backend tests only. Three of the confirmed patch findings in this review — the stale-`rint` parse, the countdown-timer leak, and the unevaluated-state window — are each a one-line unit test with a faked `document.cookie` and `Date.now()`. The repo has no frontend unit-test infrastructure, which the story disclosed, so this is a standing gap rather than a story miss. `[NOTE: the early-return tradeoff below is now documented in code with the deferred-90 rationale (verified at HEAD, skillars-deferred-99 AC17).]` [`src/frontend/src/plugins/sessionManager.js`] `[PARTIALLY ADDRESSED 2026-09-09 (skillars-deferred-104 AC8): the three findings named here — stale-`rint` parse, countdown-timer leak on leaving the warning band, unevaluated-state safe default — now have a passing reference spec (`src/frontend/src/plugins/__tests__/sessionManagerSpec.js`), driven through the exported surface with a faked cookie + clock. Remaining `sessionManager.js` coverage (refreshSession success/failure, the deferred-90 "torn down" branch, multi-tab extension) is still open and in-scope for its own follow-up story.]`
+<!-- The `sessionManager.js` state-machine "zero frontend tests" bullet was deleted by
+     skillars-deferred-108 AC10 (2026-09-10). Its three named findings were closed by
+     skillars-deferred-104 AC8's reference spec; the remaining clause (refreshSession
+     success/failure, the deferred-90 "torn down" branch, multi-tab extension) is closed by
+     skillars-deferred-108 AC5 (`src/frontend/src/plugins/__tests__/sessionManagerCoverageSpec.js`).
+     The startSessionMonitoring early-return / re-arm concern is NOT closed — it is a decided item;
+     see the round-2 1-7b and deferred-90 sections below (annotated by AC10, not deleted). -->
 
 ## Deferred from: code review (round 2) of 1-7b-session-refresh-rint-contract-fix (2026-09-02)
 
-- **`startSessionMonitoring()`'s early return leaves no timer armed if the expiry navigation is swallowed.** When the first `tick()` reports an expired session, monitoring returns without arming the 30 s interval and relies entirely on `App.vue`'s `handleSessionExpired` → `router.push()`. That push is not awaited or `.catch()`ed, and Vue Router 4 rejects on an aborted/redirected navigation. If it is aborted, `cleanup()` has already reset the state to look healthy (`showWarning = false`, `timeUntilExpiry = LEGACY_SESSION_TTL`, `checkIntervalId = null`) and nothing re-arms monitoring — `startSessionMonitoring()` is only called from `App.vue` mount and `initSession()`. Deliberately left as-is rather than patched: the alternative (arm the interval anyway) makes the failure noisy instead of silent but re-dispatches `session:expired` — and therefore a backend logout call — every 30 s until navigation completes. Both options have real costs and the abort path is unverified. [`src/frontend/src/plugins/sessionManager.js:startSessionMonitoring`]
+- **`startSessionMonitoring()`'s early return leaves no timer armed if the expiry navigation is swallowed.** When the first `tick()` reports an expired session, monitoring returns without arming the 30 s interval and relies entirely on `App.vue`'s `handleSessionExpired` → `router.push()`. That push is not awaited or `.catch()`ed, and Vue Router 4 rejects on an aborted/redirected navigation. If it is aborted, `cleanup()` has already reset the state to look healthy (`showWarning = false`, `timeUntilExpiry = LEGACY_SESSION_TTL`, `checkIntervalId = null`) and nothing re-arms monitoring — `startSessionMonitoring()` is only called from `App.vue` mount and `initSession()`. Deliberately left as-is rather than patched: the alternative (arm the interval anyway) makes the failure noisy instead of silent but re-dispatches `session:expired` — and therefore a backend logout call — every 30 s until navigation completes. Both options have real costs and the abort path is unverified. [`src/frontend/src/plugins/sessionManager.js:startSessionMonitoring`] `[behaviour pinned by skillars-deferred-108 AC5's characterization spec (2026-09-10); the App.vue router-abort / no-re-arm concern is unchanged and this item stays open]`
 ## Deferred from: skillars-deferred-90 story creation and implementation (2026-09-02)
 
-- **`sessionManager.js` `startSessionMonitoring()`'s early-return-with-no-timer path** — left as documented (project-owner decision). See the round-2 1-7b bullet above; not re-fixed here.
+- **`sessionManager.js` `startSessionMonitoring()`'s early-return-with-no-timer path** — left as documented (project-owner decision). See the round-2 1-7b bullet above; not re-fixed here. `[behaviour pinned by skillars-deferred-108 AC5's characterization spec (2026-09-10); decision unchanged, item stays open]`
 - **The `/resend-otp` → 409 mapping is proven at the `ApiAdvice` slice level only** (AC9). No end-to-end two-connection collision harness — a sequential endpoint call can never collide and `@RateLimited` would mask it (F21).
 - **Backend `messages_de` / `messages_fr` are brought to `messages_en` parity for the keys that exist at story time** (AC12). A later story that adds new `_en` keys re-opens the gap until it also adds the DE/FR rows; `MessageBundleParityTest` will fail the build if it doesn't.
 - **`deferred-work.md` / `sprint-status.yaml` 40k-char single-line hygiene** — explicitly out of scope (project-owner decision 4).
@@ -1148,7 +1137,7 @@ skillars-deferred-91 closed the genuine one-off bugs (AC12–AC19), the rolling-
 
 - **de-DE wording is AI-authored to native quality, not yet human-verified by a native German speaker.** AC9 rewrote every informal `du`/`dein…` and informal imperative to formal `Sie` across the whole `de-DE/index.js` (54 replacement groups, 0 informal forms left) and the frontend bundle parity check confirms 1022/1022 keys with 0 `{placeholder}` drift, but a native-speaker review of register/idiom is still owed. (Carried forward from skillars-deferred-90.)
 - **`getPublicProfile` — leave as-is, measured.** AC11 measured `CoachProfileService.getPublicProfile` at exactly **8** JDBC round-trips, **constant** in profile size (`CoachPublicProfileQueryCountIT` doubles every collection → still 8). Every read is index-covered on `coach_id`; there is no N+1 and the endpoint is a single page view. A `JOIN FETCH` / `@EntityGraph` collapse across the six `@OneToMany` collections would risk `MultipleBagFetchException` / a cartesian row explosion for no measurable gain. The IT stays as the regression guard.
-- **No frontend test framework.** ~6 recorded coverage gaps (`5-4` W9, `deferred-17`/`-18`/`-30`/`-37`/`-38`/`-43` D6) depend on standing up Vitest / Vue Test Utils. Out of scope — its own initiative. Every `.vue` / `.js` change in skillars-deferred-91 (AC14 `handleLogout`, AC9/AC10 i18n) was verified by ESLint + `quasar build` + code reading. `[FRAMEWORK AVAILABLE 2026-09-09 (skillars-deferred-104): Vitest runner now stood up (`5-4` W9 closed by its AC7); the `deferred-91` `handleLogout` / i18n coverage is now in-scope for its own follow-up story]`
+- **No frontend test framework.** ~6 recorded coverage gaps (`5-4` W9, `deferred-17`/`-18`/`-30`/`-37`/`-38`/`-43` D6) depend on standing up Vitest / Vue Test Utils. Out of scope — its own initiative. Every `.vue` / `.js` change in skillars-deferred-91 (AC14 `handleLogout`, AC9/AC10 i18n) was verified by ESLint + `quasar build` + code reading. `[FRAMEWORK AVAILABLE 2026-09-09 (skillars-deferred-104): Vitest runner now stood up (`5-4` W9 closed by its AC7); ~~the `deferred-91` `handleLogout` / i18n coverage is now in-scope for its own follow-up story~~ — **CLOSED by skillars-deferred-108 AC6 (2026-09-10)**: `src/frontend/src/composables/__tests__/useSessionSpec.js` (handleLogout order + `rint` double-clear + bounded wait) and `MainLayoutSpec.js` locale block (`changeLanguage` / `loadLanguagePreference`). The native-DE/FR register review (`:1149`) is untouched — that is not a dev-closable item.]`
 - **`AFTER_COMMIT` reliability catalogue — corrected by `skillars-deferred-92` AC6 (2026-09-04).** The list below supersedes the skillars-deferred-91 version, which is now wrong in two places: it described the email listeners as merely "wired onto the outbox" (they are now `BEFORE_COMMIT`, so the enqueue is *atomic* with the business work — AC4), and it listed `ModerationSlaMonitorService` as not migrated (it now is — AC5). **On the generic outbox and enqueuing inside the producing transaction:** the refund path (`BOOKING_REFUND` — deferred-91 AC2; the enqueue moved off `CancellationRefundService`'s `AFTER_COMMIT` listeners into a dedicated `RefundEnqueueListener` `@TransactionalEventListener(BEFORE_COMMIT)` with `enqueueBookingRefund` on `Propagation.MANDATORY`, so it commits atomically with the booking `CANCELLED` write — deferred-101 AC4; the sibling `AFTER_COMMIT` listeners keep pack-restore / cancellation-history / strike issuance), transactional email (`BookingEmailListener` × 20 + `SessionPackEmailListener` × 3, all 23 now `@TransactionalEventListener(BEFORE_COMMIT)` with `enqueueEmail` on `Propagation.MANDATORY` — deferred-92 AC4/AC29), the SLU snapshot (`SnapshotPersistenceRetrier.@Recover` — deferred-91 AC4), and video-moderation retry + admin alert (`ModerationSlaMonitorService`, each enqueued inside the same `REQUIRES_NEW` chunk as the state change it describes — deferred-92 AC5). **Deliberately NOT migrated, unchanged from deferred-91:** ~~`PendingBlobDeletionService` (its own reviewed outbox; re-expressing it on the generic one is a nice-to-have)~~ `[skillars-deferred-100 AC6 (2026-09-08): DONE — PendingBlobDeletionService / PendingBlobDeletionChunkProcessor / BlobDeletionsEnqueuedEvent deleted; GdprErasureService now enqueues via BlobDeletionOutboxSupport onto the generic platform.outbox, drained by BlobDeletionOutboxHandler. PendingBlobDeletionResidualDrainRunner one-shots any residual pending_blob_deletions rows onto the generic outbox at startup. Table drop is a follow-up — see the deferred-100 AC6 follow-up bullet below.]`; `CancellationRefundService`'s `packSessionService.restoreSession(...)` calls (a pack-session-restore idempotency concern, distinct from the money refund); the registration-email listeners (`{Parent,Coach,Player}RegistrationEmailListener` — they publish inside a live transaction and work today); and the SSE / video / development / admin / reviews / session `@TransactionalEventListener` sites that are neither money- nor compliance-relevant.
 - **`CancellationRefundService` credit-wallet refund via the outbox — the `uq_pcl_reference_type` partial unique index (V125) assumes one `BOOKING_REFUND` per booking across the cancellation *and* dispute paths.** `DisputeService` also writes `BOOKING_REFUND` keyed on the booking id; a booking that is both cancelled-with-refund and later dispute-refunded (not reachable today — a cancelled booking is terminal and not disputed) would collide. If a future flow legitimately double-refunds a booking, narrow the index to exclude the dispute path.
 
@@ -1275,10 +1264,20 @@ residual:
   via `vite-tsconfig-paths` reading `.quasar/tsconfig.json`. [`src/frontend/vitest.config.mjs`,
   `src/frontend/package.json`]
 - **~6 frontend coverage gaps are now unblocked, not closed.** Each dependent line above
-  (`deferred-12` payment, `deferred-17`/`-18` D6, `deferred-35`/`-36`/`-37`/`-38` `booking.store.js`,
+  (`deferred-11` payment [was written `deferred-12` here — a typo; `skillars-deferred-12` is an
+  unrelated backend story, the payment frontend-tests gap was `skillars-deferred-11`'s code-review
+  bullet], `deferred-17`/`-18` D6, `deferred-35`/`-36`/`-37`/`-38` `booking.store.js`,
   `deferred-43` `playerStore.js`, `deferred-90`/`-98` remaining `sessionManager` coverage,
   `deferred-91` `handleLogout` / i18n) still needs its own follow-up story to actually write the
   specs — the runner existing does not write them.
+  `[CLOSED by skillars-deferred-108 AC1–AC6 (2026-09-10): every named gap now has a
+  mutation-sensitive spec — AC1 `paymentStoreSpec.js` + `PaymentMethodCardSpec.js`; AC2
+  `BookingRequestPageSpec.js` + `ParentBookingsPageSpec.js` + `ProfileBuilderStep3Spec.js`; AC3
+  `bookingStoreSpec.js`; AC4 `playerStoreSpec.js` + `MainLayoutSpec.js`; AC5
+  `sessionManagerCoverageSpec.js`; AC6 `useSessionSpec.js` + `MainLayoutSpec.js` locale block.
+  The sibling "Quasar Vitest AE library-only" residual above stays open — still blocked on
+  `@quasar/app-vite` v3. `deferred-30` has no bullet anywhere in this file (pre-existing stray
+  reference; not this story's to fix).]`
 
 ## Deferred from: skillars-deferred-100 implementation (2026-09-08)
 
@@ -1655,8 +1654,7 @@ bullets touched: one — the `deferred-94` hardcoded-UID `chown` bullet, deleted
 
 ## Deferred from: code review of skillars-deferred-107 (2026-09-10)
 
-- **`image_runtime_ugid` adds un-timed `docker pull`s to the disaster-restore path.** `deploy/backup/restore-from-volume-backup.sh:39` runs `docker image inspect "$img" || docker pull "$img"` once per service, between `${DC} down` (`:97`) and `${DC} up -d` (`:160`). On a host with no or slow egress, or one whose images were pruned — the exact conditions a rebuild-from-backup implies — this extends the outage window by however long up to five pulls take to fail, since `|| return 0` only fires once the pull has finished failing. Deferred: inherent to the AC8 probe design, and the fallback contains the correctness risk. Revisit if a restore is ever observed stalling here; a `timeout` wrapper would be the cheap fix.
-- **AC3's "do not hand-list the templated key strings" is violated in letter.** `ConfigBounds.java:180-181` hand-lists `VIDEO_QUOTA_TIER_SEGMENTS` and `VIDEO_TYPE_SEGMENTS` rather than iterating `CoachSubscriptionTier` / `VideoType`. Deferred: the documented reason — keeping the `config` module free of a dependency on `video.contract` / `marketplace.contract` — is sound, and `ConfigBoundsEnumCoverageTest` supplies exactly the drift guard the AC was reaching for (it fails if a new enum constant lands without a matching bound). Needs project-owner sign-off only because `story-review.md` deliberately hardened that wording from "enumerate or skip" to "must iterate".
+- **AC3's "do not hand-list the templated key strings" is violated in letter.** `ConfigBounds.java` hand-lists `VIDEO_QUOTA_TIER_SEGMENTS` and `VIDEO_TYPE_SEGMENTS` rather than iterating `CoachSubscriptionTier` / `VideoType`. Deferred: the documented reason — keeping the `config` module free of a dependency on `video.contract` / `marketplace.contract` — is sound, and `ConfigBoundsEnumCoverageTest` supplies exactly the drift guard the AC was reaching for (it fails if a new enum constant lands without a matching bound). Needs project-owner sign-off only because `story-review.md` deliberately hardened that wording from "enumerate or skip" to "must iterate". `[DECIDED 2026-09-10 (skillars-deferred-108 AC9): accept the hand-listed segments as-is. Iterating the enums would give the `config` module a compile dependency on two business modules; `ConfigBoundsEnumCoverageTest` is the (one-directional) drift guard — it catches an added/renamed constant with no matching bound, not a removed constant leaving a harmless stale segment. `ConfigBounds.java`'s comment reworded to say so. No behaviour change. (This bullet's cite was also shortened from `ConfigBounds.java:180-181` to `ConfigBounds.java` — the line numbers had gone stale. Recorded here by the deferred-108 code review because the AC10 reconstruction check claimed nothing was reworded beyond the enumerated retag.)]`
 
 ## Last audit: 2026-09-10 (post-merge prune — deferred-107 follow-up, hardcoded-UID row)
 
@@ -1686,3 +1684,277 @@ convention):**
 bullet + its now-empty `## Deferred from:` header, the one struck-through audit-table row, and this
 block. `[DISMISSED]` count: unchanged. `[DECIDED]` count: unchanged. `[PICKED UP by …]` bullets
 touched: one — the `deploy-3-4` hardcoded-UID bullet, deleted as a genuine closure.
+
+## Deferred from: skillars-deferred-108 story implementation (2026-09-10)
+
+skillars-deferred-108 filled the six frontend coverage gaps `skillars-deferred-104` unblocked
+(AC1–AC6 — each spec mutation-verified against the fix its ledger item was filed for), bounded the
+`image_runtime_uid` disaster-restore probe with `timeout` (AC8), and recorded the `ConfigBounds`
+templated-key decision (AC9). One residual surfaced:
+
+- **`playerStore.js` `fetchSelfPlayerId()` returns `profile.id` unconditionally.** The
+  `requestGeneration === selfPlayerIdGeneration` guard (added by `skillars-deferred-43`) suppresses
+  only the cached-ref *write* — a `fetchSelfPlayerId()` call superseded by `resetSelfPlayerId()`
+  still *resolves* with the prior account's id. `BookingRequestPage.vue`
+  (`selfPlayerId.value = await playerStore.fetchSelfPlayerId()`) feeds that value straight into the
+  booking submit payload, so this is the residual half of the `deferred-43`
+  cross-account-misattribution concern the test-coverage bullet named — the guard only closed the
+  cached-ref half. Characterized (not fixed) by `skillars-deferred-108` AC4's `playerStoreSpec.js`
+  "cross-account residual" test. Fix is a one-liner — gate the `return` on the generation, or
+  resolve `null` for a superseded call — but out of scope for a test-backfill story.
+  [`src/frontend/src/stores/playerStore.js` `fetchSelfPlayerId`,
+  `src/frontend/src/pages/parent/BookingRequestPage.vue`]
+
+## Last audit: 2026-09-10 (skillars-deferred-108 story implementation)
+
+Scope: close the six `skillars-deferred-104`-unblocked frontend coverage-gap bullets and the two
+`skillars-deferred-107` code-review residuals; no re-mine of the broader ledger (the "genuine
+one-off bugs & gaps" class stays exhausted, re-confirmed at story creation).
+
+**Deleted outright (genuine closures, per this file's delete-when-closed convention — no
+`[CLOSED by …]` tombstone left, with one disclosed exception):**
+
+> **Exception (reworded by the skillars-deferred-108 code review, decision 5):** the `sessionManager.js`
+> entry below was NOT deleted cleanly — it was replaced by an HTML-comment tombstone, following the
+> precedent set by `skillars-deferred-99 AC17`. The heading originally read "no `[CLOSED by …]`
+> tombstone left" without qualification, which contradicted the very list it introduced. The
+> tombstone is kept rather than removed because it carries a live forward-reference to two bullets
+> below it; deleting it to satisfy the heading would lose a working pointer for no gain.
+
+- `## Deferred from: code review of skillars-deferred-11-stripe-card-collection (2026-08-04)` — its
+  sole bullet (payment frontend-tests gap). **Header removed** (section empty). Closed by AC1.
+- `## Deferred from: code review of skillars-deferred-17-booking-request-slot-payload-timezone-integrity (2026-08-06)`
+  — its sole bullet, **D6**. **Header removed.** Closed by AC2.
+- `## Deferred from: skillars-uat-2-session-duration-and-booking-slot-integrity (2026-08-10)` —
+  **D6 bullet only**; D3 / D4 / D7 and the header stay. Closed by AC2.
+- `## Deferred from: code review of skillars-deferred-38-coach-refresh-request-sequencing-guard (2026-08-19)`
+  — its sole bullet. **Header removed.** Closed by AC3.
+- `## Deferred from: code review of skillars-deferred-43-player-registration-otp-coverage-and-self-profile-fetch-caching (2026-08-20)`
+  — its sole bullet. **Header removed.** Closed by AC4 (the *test-coverage* gap; the residual
+  return-value leak AC4 surfaced is filed as a new bullet in the `skillars-deferred-108` section
+  above, so it is not silently lost).
+- The `sessionManager.js` "state machine rewritten with zero frontend tests" bullet in
+  `## Deferred from: code review of 1-7b-session-refresh-rint-contract-fix (2026-09-02)` — replaced
+  by an HTML-comment tombstone; the section's pre-existing HTML comment (about a different deleted
+  section) survives, so the **header stays**. Closed by AC5.
+- The first bullet of `## Deferred from: code review of skillars-deferred-107 (2026-09-10)`
+  (`image_runtime_uid` un-timed docker calls). Header stays (the second bullet remains, retagged).
+  Closed by AC8.
+
+**Annotated, NOT deleted (decided items AC5's characterization spec pins but does not resolve):**
+
+- `## Deferred from: code review (round 2) of 1-7b-session-refresh-rint-contract-fix (2026-09-02)`
+  — the `startSessionMonitoring()` early-return bullet. Appended
+  `[behaviour pinned by skillars-deferred-108 AC5's characterization spec (2026-09-10); the
+  App.vue router-abort / no-re-arm concern is unchanged and this item stays open]`. Header stays.
+- `## Deferred from: skillars-deferred-90 story creation and implementation (2026-09-02)` — the
+  early-return-with-no-timer bullet. Appended the same "pinned … decision unchanged, item stays
+  open" note. Header stays.
+
+**Retagged in place:**
+
+- The second bullet of `## Deferred from: code review of skillars-deferred-107 (2026-09-10)`
+  (`ConfigBounds` hand-listed segments) → `[DECIDED 2026-09-10 (skillars-deferred-108 AC9)]`
+  (owner accepts the hand-listing; `ConfigBounds.java`'s comment reworded; no behaviour change).
+
+**Struck through + annotated (not deleted):**
+
+- `## Deferred from: skillars-deferred-91 story creation and implementation (2026-09-03)` — the
+  "No frontend test framework" bullet: only the trailing `[FRAMEWORK AVAILABLE …]` clause's
+  "the `deferred-91` `handleLogout` / i18n coverage is now in-scope for its own follow-up story"
+  struck, annotated **CLOSED by skillars-deferred-108 AC6**. The rest of the dependent list is NOT
+  blanket-closed; the native-DE/FR register bullet (`:1149`) is untouched. `deferred-30` has no
+  bullet anywhere (pre-existing stray reference — left as-is).
+- `## Deferred from: skillars-deferred-104 implementation (2026-09-09)` — the "~6 frontend coverage
+  gaps are now unblocked, not closed" bullet: the `deferred-12` typo corrected to `deferred-11`
+  inline, and a `[CLOSED by skillars-deferred-108 AC1–AC6 (2026-09-10)]` tag added naming each new
+  spec. The sibling "Quasar Vitest AE library-only" residual bullet is **untouched** — still
+  blocked on `@quasar/app-vite` v3.
+
+**New section added:** `## Deferred from: skillars-deferred-108 story implementation (2026-09-10)`
+— one bullet (the `playerStore.js` `fetchSelfPlayerId` return-value cross-account residual).
+
+**Reconstruction check:** every surviving non-blank line matches the pre-edit file (master @
+`c74abde9` + this story's implementation commits), in order, with nothing reworded or reordered
+apart from the annotations / strike-throughs / retag enumerated above. Line count: 1688 pre-edit →
+1663 after the six bullet deletions + four emptied-header removals (25 lines removed) → 1778 with
+this section + audit block appended (115 lines added). `## Deferred from:` header count: 89 → 85
+(−4: deferred-11, -17, -38, -43) → 86 (+1: this story's new section).
+
+**Correction (skillars-deferred-108 code review, 2026-09-10).** The three line-count figures above
+were originally recorded as "1688 → 1686 … → 1775" and were wrong: the intermediate 1686 implied a
+net −2 from deleting six bullets and four headers (the real figure is −25), and the final 1775 was
+3 short of the file's actual 1778 at the implementation commit. `wc -l` was evidently not re-run
+before the numbers were written down. They are restated correctly above. The header count
+(89 → 85 → 86) was verified and was already right. Since AC10 names this reconstruction check as its
+*only* verification, a mis-recorded count is that AC's own gate failing — flagged here rather than
+silently overwritten so the failure mode stays visible.
+
+**Subsequent appends (same code review).** The review then added, after that 1778-line snapshot:
+the `## Deferred from: code review of skillars-deferred-108 (2026-09-10)` section below, two bullets
+inside it (the `ConfigBounds` seeded-key gap filed under decision 2b, and the `BookingStateChip`
+prop-type item), the `[SUPERSEDED …]` strike-through on the `deferred-90` D9 cross-reference that
+AC10 specified but the implementation commit omitted, and the cite-rewording disclosure appended to
+the `deferred-107` AC9 retag. Header count 86 → 87 (+1, the code-review section). Real `[DISMISSED]`-tagged *items*: unchanged (33). Real
+`[DECIDED]`-tagged *items*: 30 → 31 (+1, the deferred-107 AC9 retag; raw grep counts read higher
+because this audit block's own prose names both tokens, as prior audit blocks do). `[PICKED UP
+by …]` item bullets touched: none.
+
+## Deferred from: code review of skillars-deferred-108 (2026-09-10)
+
+Pre-existing production defects and coverage gaps surfaced by the `/bmad-code-review` Edge Case
+Hunter layer while auditing the deferred-108 spec backfill. None is caused by that change; all are
+in code the new specs now touch, so they are cheap to close next time that surface is opened.
+Decision-needed and patch findings from the same review are tracked in the story file's
+`### Review Findings` section, not here.
+
+- **`PaymentMethodCard.vue:174-187` — Retry after a failed Stripe-config fetch no-ops on the first
+  click.** `loadStripeConfig({isRetry:true})` sets `stripeUnavailable.value = false` *before*
+  `await Promise.all([...])`. That flips `showForm` false→true and queues the pre-flush watcher job,
+  whose microtask runs during the `await`, so `mountCardElement()` → `ensureStripeReady()` reads the
+  still-null `publishableKey` and re-sets `stripeUnavailable = true`. When the successful refetch
+  resolves, `if (showForm.value)` is now false and Elements never mounts. The user must click Retry
+  twice. Defeats deferred-103 AC9's retry affordance in its most common failure mode.
+- **`PaymentMethodCard.vue:178-181` — the `catch` arm is unreachable, and a failed refetch leaves a
+  stale key in use.** `payment.store.js:238-259` swallows into `this.error.*` and resolves, so
+  `Promise.all` never rejects. The store also never nulls `stripeConfig` on error
+  (`payment.store.js:242-244`), so a stale-but-non-null publishable key from an earlier success
+  survives a later failure and the component proceeds with it.
+- **`PaymentMethodCard.vue:23-32` — `hasCard: true` with `brand: null` is uncovered.**
+  `SessionPackPaymentService.java:244` and `:250` both return
+  `new SavedPaymentMethodResponse(true, null, null, null, null)`. The ternary's false arm
+  (`payment.card.detailsUnavailable`) and the "Replace card" button beside it have zero coverage;
+  dropping the ternary would render `savedLabel` with `undefined undefined` and ship green.
+- **`PaymentMethodCard.vue:189-214` — the whole card-save path is stubbed and never exercised.**
+  `createSetupIntent` → `confirmCardSetup` → `savePaymentMethod` are `vi.mock`ed with no assertions.
+  Three reachable failure sub-cases go unpinned, notably a 3DS `requires_action` intent (no `error`,
+  `status !== 'succeeded'`) which surfaces the generic "couldn't save" message, indistinguishable
+  from a hard decline.
+- **`sessionManager.js:140` — the clock-skew cross-check has no regression protection.**
+  `if (remaining <= 0 && localEstimate > 0) return localEstimate` is the single guard between a fast
+  client clock and the unrecoverable logout loop the comment at `:100-105` describes. No fixture ever
+  sets `rint` in the past — every one uses `Date.now() + N` — so deleting line 140 leaves the suite
+  green. The `remaining === 0` and `timeUntilExpiry === WARNING_THRESHOLD` (`:175`) boundaries are
+  likewise untested.
+- **`sessionManager.js:259-264` — a refresh that succeeds without advancing `rint` is treated as
+  success.** No branch checks that the expiry actually moved; `refreshFailed` is set only in the
+  `catch`. A proxy that strips `Set-Cookie` on `GET /refresh`, or any 200 that does not re-issue the
+  cookie, re-enables "Continue session", keeps the countdown ticking, and logs the user out at 0:00
+  with no explanation — exactly the UX deferred-90 AC4 was written to eliminate.
+- **`MainLayout.vue:335-341` — `handleLogout` does not carry deferred-91 AC14's fixes.** No
+  `Promise.race` bound (contrast `useSession.js:93-96`, whose comment notes the axios instance sets
+  no timeout so the request can stay pending indefinitely) and no `document.cookie = 'rint=; …'`
+  clear (contrast `useSession.js:82` and `:104`). On a stalled `POST /logout` the user is stranded on
+  the authenticated page, and sibling tabs keep rendering an authenticated UI until the stale
+  absolute deadline. The app now carries two divergent logout sequences, both pinned as correct by
+  this story's specs.
+- **`MainLayout.vue:305,314` — unguarded `localStorage` access.** `sessionManager.js:28-42` wraps the
+  equivalent `sessionStorage` calls in `try/catch`; MainLayout does not. In Safari private mode
+  `setItem` throws before the `lang` cookie clear at `:310` (the line that exists to unstick a stuck
+  backend cookie) ever runs, and `getItem` throws inside `onMounted` (`:348`), aborting before the
+  `storage` listener registers (`:351`) and before the player self-id fetch (`:353-363`).
+- **`MainLayout.vue:353-363` — the silent-404 contract is unpinned.** `MainLayoutSpec.js` mounts as
+  `PARENT` for every test, so neither arm of `if (err.response?.status !== 404)` is exercised. A
+  regression that logs every 404, or surfaces one as a user-visible error, ships green.
+- **`playerStore.js:32-54` — the reject path (the documented 404) is untested.** Every spec case
+  drives failure through `{id: null}`, which takes the `.then`-throws path. On a real rejection only
+  `.finally` runs, and its `selfPlayerIdRequest === request` reset is the sole thing preventing a
+  permanently poisoned cache — if it regressed, one 404 would pin the rejected promise for the whole
+  tab and the pack dashboard nav would stay dead.
+- **`booking.store.js:605-630` — `handleAcceptAllBatch` rethrows and leaks a `null` LRU entry.**
+  `setBatchAcceptResult(batchId, null)` runs before the `try`; on rejection the catch sets
+  `batchAcceptError` and `throw e`, so `loadCoachBookingRequests()` — the only pruner — is never
+  reached. Every failed accept-all leaves a permanent `batchId → null` entry until the 200-cap
+  evicts it, and callers must `.catch()` or take an unhandled rejection. This is the one rethrowing
+  action in a file whose CONTRACT block (`:358-368`) states its loaders never rethrow.
+- **`booking.store.js:394-395` — no null guard on `res`.** `res.singleBookings ?? []` guards a
+  missing property, not a null response. A 204, or an interceptor that unwraps an empty body to
+  `undefined`, throws a `TypeError` inside the try which the catch files into `coachRequestsError` as
+  though it were an API failure.
+- **`BookingRequestPage.vue:457-462,476` — `slotRows` has no `Number.isNaN` filter on the available
+  branch.** `ownBlockingBookings` (`:437,:443-444`) explicitly filters NaN; the available branch does
+  not. A slot missing `startDatetime` yields `sortKey: NaN` (implementation-defined ordering from the
+  `a.sortKey - b.sortKey` comparator) and `key: slot-undefined` for every such row, causing row-reuse
+  artifacts. This is the branch the deferred-17/-18 rename actually touched.
+- **`ParentBookingsPage.vue:252-266` — `rescheduleProposedEnd` breaks across a DST transition.**
+  `new Date(start)` parses `datetime-local` as browser-local, a fixed instant delta is added, then
+  `toDatetimeLocal` reads `getHours()/getMinutes()` back in wall clock. A 1-hour booking moved to
+  `2026-03-08T01:30` in `America/New_York` displays `03:30` — a 2-hour session the coach never agreed
+  to — and the submitted payload follows. `2026-11-01T01:30` is ambiguous and resolves silently.
+- **`ProfileBuilderStep3.vue` — `submit()` silently discards a partially-filled pack row.** The
+  `.filter((p) => p.sessionCount > 0 && p.totalPrice > 0)` false arm has no user-facing branch: a
+  coach who types `sessionCount: 5` and leaves the price blank sees the pack on screen, completes
+  onboarding, and the pack is never created — no message at any point. (Distinct from the all-null
+  row, which is plausibly intentional.) Related: `durationOptions`' `includes` is strict-equality
+  with no `Number()` coercion, so a string-typed `sessionDurationMinutes` from hydration appends a
+  duplicate synthetic option and `emit-value` then submits the string.
+- **The `skillars-deferred-108` AC1–AC6 specs are real but NOT merge-gating — read the six bullets
+  they closed with that caveat.** `frontend-unit-tests.yml` is deliberately decoupled from the build
+  gate (its own header: not referenced by `ci.yml` or `pr-build.yml`, not a required status check,
+  never invoked by `mvn verify` — the Maven `npm test` execution is a no-op stub). It runs only on
+  manual `workflow_dispatch`, or on a pull request carrying the `frontend-tests` label. So a future
+  PR that re-breaks `slotRows`, the `loadCoachBookingRequests` sequencing guard, `handleLogout`, or
+  the batch-basket `.startDatetime` mapping **can merge green** unless someone remembers the label.
+  deferred-108 AC10 deleted six ledger bullets on the strength of that coverage; the specs do exist
+  and are mutation-sensitive (17 of 18 reverts verified RED at implementation, the 18th closed by the
+  code review's decision 1a), but "closed" here means *a spec guards this*, not *CI enforces this*.
+  Owner decision D2 (2026-09-10) made the job opt-in deliberately — this bullet records the coupling,
+  not a disagreement. Revisit if/when the job is promoted to a required check.
+  [`.github/workflows/frontend-unit-tests.yml`]
+- **`frontend-unit-tests.yml` cannot be triggered by `gh pr create --label frontend-tests` — the
+  label must be added as a second step.** The trigger is `pull_request: types: [labeled, synchronize,
+  reopened]`; without `opened`, a PR that already carries the label at creation time fires nothing,
+  which is why `skillars-deferred-108` AC7 has to specify "add the label AFTER `gh pr create`".
+  Adding `opened` to the `types` list would make the one-step form work; the job-level `if` still
+  gates on the label, so this changes ergonomics only and does **not** make the job gating (that is
+  the separate concern in the bullet above). One-line change, deliberately not made in deferred-108
+  because AC7 forbids workflow edits in that story. Filed by the deferred-108 code review, decision 4.
+  [`.github/workflows/frontend-unit-tests.yml:22-23`]
+- **`ConfigBounds.java:204` — `video.quota.semiPro.*` and `video.quota.pro.*` are seeded but
+  unbounded (decision 2b: filed, not fixed).** `V53__video_quota_system.sql:37-38,44-45` inserts four
+  live `platform_config` rows — `video.quota.semiPro.storageBytes`, `video.quota.pro.storageBytes`,
+  and both `bandwidthBytesMonthly` counterparts — that have no `BoundedKey`.
+  `ConfigStartupAssertion.onApplicationEvent` iterates `ConfigBounds.ALL` only (`:70`), so a row
+  absent from `ALL` is never range-checked, never logged, and never metered: an operator setting
+  `video.quota.pro.storageBytes = -1` gets no fail-fast. The cause is that these keys are templated
+  over a **third** enum dimension the hand-list ignores —
+  `PlayerSubscriptionTierBilling {ATHLETE, SEMI_PRO, PRO}`
+  (`payment/contract/PlayerSubscriptionTierBilling.java:4`, whitelisted by
+  `V64__subscription_tiers.sql:46`) — while `VIDEO_QUOTA_TIER_SEGMENTS` mirrors only
+  `CoachSubscriptionTier` plus the `"athlete"` player fallback from `QuotaConfigService.resolveTierKey`.
+  `ConfigBoundsEnumCoverageTest` iterates `CoachSubscriptionTier` and `VideoType`, so it cannot see
+  the gap and adding the two segments would produce no test failure either way. Note `"athlete"` is
+  itself outside the guard for the same reason: it is a `resolveTierKey` fallback string, not a
+  `CoachSubscriptionTier` constant. **This does not reopen `skillars-deferred-108` AC9** — the owner
+  decision to keep hand-listing the segments stands (2026-09-10, decision 2b); what is filed here is
+  that the hand-list is currently *incomplete*, which is a different claim from *should it be
+  hand-listed at all*. AC9's comment states the guard's only blind spot is a removed constant; that
+  understates it and should be amended whenever this is picked up. Surfaced by the
+  `skillars-deferred-108` code review (Edge Case Hunter).
+  [`src/main/java/com/softropic/skillars/platform/config/service/ConfigBounds.java:204`]
+- **`BookingStateChip.bookingId` is declared `String` but every caller passes a numeric id.**
+  `BookingStateChip.vue:12` declares `bookingId: { type: String, default: null }`;
+  `ParentBookingsPage.vue:134` binds `:booking-id="booking.id"` straight from the API payload, where
+  `id` is a number. Vue logs `Invalid prop: type check failed for prop "bookingId". Expected String
+  with value "42", got Number with value 42` on every render, and `useBookingSse(props.bookingId)`
+  (`:17-18`) receives the unconverted value. Cosmetic today — the SSE subscription interpolates the
+  id into a URL, so a number works — but it is noise in every log and a real type lie. The fix is a
+  one-line prop widening to `[String, Number]` (or `Number`), which is a production `.vue` edit that
+  `skillars-deferred-108` AC7 forbids, so the deferred-108 code review left
+  `ParentBookingsPageSpec.js`'s fixture numeric on purpose: the warning it emits is a faithful
+  reproduction of production, not a test artefact. Coercing the fixture would have hidden this.
+  [`src/frontend/src/components/booking/BookingStateChip.vue:12`]
+- **`ConfigBoundsEnumCoverageTest.java:32` — the drift guard's segment derivation diverges from the
+  key convention.** The tier test expects `tier.name().toLowerCase(Locale.ROOT)`. Every current
+  `CoachSubscriptionTier` constant is single-word so the two coincide, but adding `PRO_ACADEMY` makes
+  the guard demand `video.quota.pro_academy.*` while every multi-word key already in the DB is
+  camelCase (`video.quota.semiPro.*`, `video.drillDemo.*`) and `VideoTypeConstraints.configKey:56-60`
+  camel-cases by hand. The build would go green with the bound and the runtime key pointing at
+  different rows — precisely the drift the guard is claimed to prevent.
+- **`provision.sh:104,106` / `restore-from-volume-backup.sh:52,54,110,117,123,173` — the remaining
+  unbounded calls in the same outage window.** deferred-108 AC8 scoped itself to the `pull` and `run`
+  probe calls. Both `docker image inspect` calls are still unwrapped, and a wedged daemon hangs the
+  *first* one before either wrapped call is reached. In the restore script, `aws s3 cp` (`:123`, no
+  `--cli-read-timeout`/`--cli-connect-timeout`) and `${DC} up -d` (`:173`, which pulls any absent
+  image) sit inside the `${DC} down` → `up -d` window and dwarf the ~225s the change does bound; the
+  ERR-trap recovery `${DC} up -d` (`:117`) can itself hang indefinitely.
