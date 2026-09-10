@@ -55,6 +55,9 @@ src/frontend/src-cordova/
 src/frontend/src-capacitor/
 src/frontend/lib/
 src/frontend/node/node_modules/
+# skillars-deferred-104: Vitest coverage output (`npm run test:unit:ci`). Also matched by the
+# bare `coverage/` rule below; kept explicit here alongside the other src/frontend build outputs.
+src/frontend/coverage/
 
 # ── GSD baseline (auto-generated) ──
 .gsd

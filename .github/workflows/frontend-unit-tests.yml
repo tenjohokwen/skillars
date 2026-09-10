@@ -1,0 +1,64 @@
+# skillars-deferred-104: opt-in frontend unit-test job (Vitest + @vue/test-utils).
+#
+# This workflow is DELIBERATELY decoupled from the build gate:
+#   - it is NOT referenced by ci.yml or pr-build.yml;
+#   - it is NOT a required status check / branch-protection rule;
+#   - `mvn verify` never invokes Vitest (the Maven `npm test` execution calls the no-op
+#     `test` npm script — see pom.xml and docs/testing/frontend-unit-tests.md).
+#
+# It runs only:
+#   1. on manual dispatch (Actions tab → "Frontend Unit Tests" → Run workflow); or
+#   2. on a pull request that carries the `frontend-tests` label (add it when a change
+#      actually touches frontend logic).
+#
+# `pull_request: types: [labeled, …]` fires the workflow on every label add; the job-level
+# `if` is what keeps it a no-op unless the label is `frontend-tests`. `synchronize` /
+# `reopened` keep an already-labelled PR's result fresh on new pushes.
+name: Frontend Unit Tests
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    types: [labeled, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  frontend-unit:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'frontend-tests')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          # Pinned to <node.version> in pom.xml — same value the frontend-quality composite uses.
+          node-version: '22.16.0'
+          cache: npm
+          cache-dependency-path: src/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: src/frontend
+        run: npm ci
+
+      - name: Run Vitest unit suite (with coverage)
+        working-directory: src/frontend
+        run: npm run test:unit:ci
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: frontend-unit-reports-${{ github.run_id }}
+          path: src/frontend/coverage/
+          retention-days: 14
+          if-no-files-found: warn

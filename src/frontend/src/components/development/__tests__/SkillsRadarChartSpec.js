@@ -2,13 +2,27 @@ import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import SkillsRadarChart from '../SkillsRadarChart.vue'
 
-// Factory for a SkillRadarEntry-shaped object
-function makeSkill(code, score, baseline = null, entryCount = null) {
+// Factory for a SkillRadarEntry-shaped object.
+// skillars-deferred-104: `distinctCoachCount` added — SkillsRadarChart.vue drives the confidence
+// dot from it (not `entryCount`), see the NOTE in the component (a single coach logging many
+// assessments must not inflate confidence). Defaults to `entryCount` so callers that only care
+// about "N assessments" still get a matching confidence signal. For an unscored skill
+// (`entryCount = null`) this yields `distinctCoachCount = null` — intentional, and what the real
+// `SkillRadarEntry` DTO carries ("null if no assessments"); the component reads it as an empty,
+// low-confidence dot.
+function makeSkill(
+  code,
+  score,
+  baseline = null,
+  entryCount = null,
+  distinctCoachCount = entryCount,
+) {
   return {
     skillCode: code,
     compositeScore: score,
     baselineScore: baseline,
     entryCount,
+    distinctCoachCount,
     lastUpdatedAt: score !== null ? new Date().toISOString() : null,
   }
 }
@@ -115,8 +129,9 @@ describe('SkillsRadarChart', () => {
     expect(rows).toHaveLength(15)
   })
 
-  it('confidence dot shows filled for entryCount >= 3', () => {
-    const skills = [makeSkill('PAC', 65, null, 3)]
+  it('confidence dot shows filled for distinctCoachCount >= 3', () => {
+    // skillars-deferred-104: the dot is driven by distinctCoachCount, not entryCount — set both.
+    const skills = [makeSkill('PAC', 65, null, 5, 3)]
     const wrapper = mount(SkillsRadarChart, {
       props: { skills },
       ...globalConfig,

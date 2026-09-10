@@ -37,6 +37,23 @@ After making code changes, validate them using the smallest relevant test scope 
 
 GitHub CI is the authoritative environment for the full test suite. Avoid duplicating the full `mvn verify` locally during normal story development.
 
+## Frontend unit tests
+
+The frontend has a Vitest + Vue Test Utils unit suite (`src/frontend`, stood up by
+`skillars-deferred-104`). It is **opt-in and decoupled from the build gate**:
+
+* It is **not** part of `mvn verify`, `ci.yml`'s `test` job, or `pr-build.yml`. The
+  Maven-invoked `npm test` script is a deliberate no-op stub; Vitest is reachable only via
+  `npm run test:unit`.
+* It is **not** part of the default `/bmad-dev-story` validation. Only run it when a story
+  actually changes frontend logic that a spec covers, or when a story's ACs call for it.
+* Run it locally with `cd src/frontend && npm run test:unit`. In CI it runs only on manual
+  dispatch or when a PR carries the `frontend-tests` label
+  (`.github/workflows/frontend-unit-tests.yml`).
+
+See [docs/testing/frontend-unit-tests.md](testing/frontend-unit-tests.md) for the full model.
+The backend guidance above is unaffected.
+
 ## How this is wired in
 
 `bmad-dev-story`'s `customize.toml` exposes a `persistent_facts` array — standing
