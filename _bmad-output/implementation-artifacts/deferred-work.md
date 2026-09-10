@@ -50,7 +50,7 @@ Every item below was checked against the live file at `c2c47c1`, not against the
 | `deploy-3-4` CallbackRateZero endpoint undocumented | **STALE, deleted** — the alert no longer exists |
 | `deploy-3-3` double notification if Alertmanager added | ~~`[PICKED UP by skillars-deferred-94 AC4]` — design gate comment added to docker-compose.yml; decision-deferred (Alertmanager not deployed yet).~~ **DECIDED by `skillars-deferred-107` AC7** — Grafana-only delivery; Prometheus rules stay non-delivering; a future Alertmanager change carries a documented checklist. See `docs/deployment/monitoring.md#alerting-architecture-the-alertmanager-decision`. |
 | `deploy-3-3` node_exporter network isolation | ~~open, **substantially narrowed** by `skillars-deferred-88` AC8 — see the corrected bullet~~ **DECIDED by `skillars-deferred-107` AC5** — accept & document: the only on-host peers are first-party `app`/`grafana`, a compromised `app` already holds the DB/Stripe/Bunny/OTLP credentials, a dedicated network was evaluated and rejected. Full rationale in the `docker-compose.yml` `node_exporter` comment. |
-| `deploy-3-3` DiskDataVolumeHigh needs the Volume mounted | `[PICKED UP by skillars-deferred-94 AC6]` — comment + docs added; volume mount prerequisite documented. |
+| `deploy-3-3` DiskDataVolumeHigh needs the Volume mounted | ~~`[PICKED UP by skillars-deferred-94 AC6]` — comment + docs added; volume mount prerequisite documented.~~ **CLOSED by `skillars-deferred-94` AC6** — the clarifying comment shipped (`deploy/lgtm/alerts.yml:62-65`: "DiskDataVolumeHigh requires the Hetzner volume to be mounted … If unmounted, the … metric is absent and this alert silent") and the volume-mount verification step is documented (`docs/deployment/first-time-setup.md:388`). Standalone bullet deleted 2026-09-10 (post-`deferred-108`-merge prune). |
 | `deploy-3-1` PGPASSWORD via `docker exec -e` | ~~`[PICKED UP by skillars-deferred-94 AC1]`~~ **CLOSED (skillars-deferred-94 AC1, shipped 2026-09-07):** all occurrences now use `PGPASSWORD="…" docker exec -e PGPASSWORD "$CID"` env-var inheritance — no secret in `ps aux`. Bullet deleted 2026-09-10. The separate `/proc/<pid>/environ` bullet remains. |
 | `deploy-3-1` credentials in `/proc/<pid>/environ` | open, unchanged, project-wide |
 | `deploy-3-1` awscli v1 from Ubuntu apt | open, unchanged — `provision.sh:131` |
@@ -835,7 +835,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 ## Deferred from: code review of deploy-3-3-external-uptime-monitoring-alert-rules (2026-06-05)
 - Double notification risk if Alertmanager added later — Prometheus rules and Grafana alerting both evaluate the same infra alerts; currently no Alertmanager so only Grafana notifies, but future Alertmanager addition would cause duplicate ops notifications for every infra alert `[DECIDED 2026-09-10 (skillars-deferred-107 AC7): Grafana-managed alerting is the single delivery path; Prometheus alerts.yml rules stay non-delivering; a future Alertmanager change carries a documented 4-step checklist. See docs/deployment/monitoring.md#alerting-architecture-the-alertmanager-decision and the docker-compose.yml prometheus-service comment.]`
 - node_exporter network isolation — port 9100 reachable from co-networked containers. **[AUDIT 2026-09-04: substantially narrowed by `skillars-deferred-88` AC8, not closed.** node_exporter now sits on `skillars-observability` alone (`internal: true`, no gateway attached) and publishes no host ports, so it is unreachable from off-host and a compromised prometheus/loki/tempo/redis cannot exfiltrate. But `app` and `grafana` join **both** networks by design (they need egress), so a compromised `app` container still reaches `node_exporter:9100` and its full host-level metrics. The original wording — "any compromised container" — is now wrong; the exposure is `app` and `grafana` only.]** [`docker-compose.yml` networks block] `[DECIDED 2026-09-10 (skillars-deferred-107 AC5): accept & document. Rationale corrected by that story's code review: EVERY skillars-observability member can reach node_exporter:9100 (prometheus, loki, tempo, redis, app, grafana — loki/tempo/redis are third-party), BUT the network is internal:true so only app/grafana have egress, and a compromised app already holds the DB/Stripe/Bunny/OTLP credentials — so a compromised infra container cannot exfiltrate host gauges, and app/grafana reaching them is not an escalation. A dedicated prometheus+node_exporter network was evaluated and rejected. Full rationale in the docker-compose.yml node_exporter comment. Revisit if a container with BOTH node_exporter reachability AND its own egress is added.]`
-- DiskDataVolumeHigh requires Hetzner Volume mounted at `/opt/skillars/data` — if volume not provisioned, no metrics series exists and alert never fires; infrastructure provisioning dependency `[PICKED UP by skillars-deferred-94 AC6: clarifying comment added]`
 
 ## Deferred from: code review of deploy-3-1-postgresql-backup-automation (2026-06-04)
 - Credentials visible in `/proc/<pid>/environ` when `.env` is sourced — project-wide pattern, not introduced by this story `[DECIDED 2026-09-10 (skillars-deferred-107 AC6): accept as won't-fix. Mechanism corrected by that story's code review: env-guard.sh bare-sources .env with no `set -a`, so the scripts hold the creds as UNEXPORTED shell vars — NOT in their own /proc/<pid>/environ. The real surfaces are the short-lived `PGPASSWORD=… docker exec -e` child's environ and the postgres/app container envs (via `docker compose --env-file`) — all root-only, single-tenant VPS, `.env` is root:root 0600, `deploy` user has no read. PGPASSFILE evaluated and rejected. See docs/deployment/secrets-reference.md#accepted-credential-exposure-surface and the pointer comments in pg-backup.sh / restore-from-dump.sh. The ps-aux argv half WAS fixed (skillars-deferred-94 AC1).]`
@@ -1958,3 +1957,35 @@ Decision-needed and patch findings from the same review are tracked in the story
   `--cli-read-timeout`/`--cli-connect-timeout`) and `${DC} up -d` (`:173`, which pulls any absent
   image) sit inside the `${DC} down` → `up -d` window and dwarf the ~225s the change does bound; the
   ERR-trap recovery `${DC} up -d` (`:117`) can itself hang indefinitely.
+
+## Last audit: 2026-09-10 (post-merge prune — deferred-108 follow-up, DiskDataVolumeHigh row)
+
+Targeted single-item prune after `skillars-deferred-108` merged (master `7a5b9528`). One
+`[PICKED UP by …]` bullet that its owning story shipped but that every prior prune missed — it has
+sat in the `deploy-3-3` section since 2026-06-05, tagged for `skillars-deferred-94` (merged
+2026-09-07, `done`).
+
+**Deleted (closed by shipped code — `skillars-deferred-94` AC6, per this file's delete-outright
+convention):**
+
+- `## Deferred from: code review of deploy-3-3-external-uptime-monitoring-alert-rules (2026-06-05)`
+  — the **"DiskDataVolumeHigh requires Hetzner Volume mounted"** bullet
+  (`[PICKED UP by skillars-deferred-94 AC6: clarifying comment added]`). Verified shipped at HEAD:
+  `deploy/lgtm/alerts.yml:62-65` carries the "requires the Hetzner volume to be mounted … If
+  unmounted, the `mountpoint="/opt/skillars/data"` metric is absent and this alert silent" comment
+  the bullet asked for, and `docs/deployment/first-time-setup.md:388` documents the pre-deploy
+  volume-mount verification step. The bullet's ask — *document the provisioning dependency* — is
+  delivered. The section keeps its two `[DECIDED 2026-09-10 (skillars-deferred-107 …)]` bullets
+  (Alertmanager double-notification, node_exporter isolation) — **header kept**.
+
+**Retagged in place (not deleted):** the matching `deploy-3-3` "DiskDataVolumeHigh needs the Volume
+mounted" row in the `2026-09-04` `deploy-*` re-audit table — struck through and annotated **CLOSED
+by `skillars-deferred-94` AC6**, matching the sibling struck rows in that table.
+
+**Reconstruction check:** every surviving non-blank line matches the pre-edit file (master @
+`7a5b9528`), in order, with nothing reworded or reordered — the only differences are the one deleted
+bullet, the one struck-through audit-table row, and this block. No `## Deferred from:` header
+emptied. `[DISMISSED]` count: unchanged (33). `[DECIDED]` count: unchanged (31). `[PICKED UP by …]`
+bullets touched: one — the `deploy-3-3` DiskDataVolumeHigh bullet, deleted as a genuine closure.
+Line count: 1960 pre-edit → 1959 after the bullet deletion → 1991 with this block appended
+(`wc -l`, re-run after writing).
