@@ -44,7 +44,7 @@ Every item below was checked against the live file at `c2c47c1`, not against the
 | Item | Verdict |
 |---|---|
 | `deploy-3-4` DROP DATABASE / open connections | ~~open, **narrowed** — `app` is the only container with a datasource; the real blocker is a human `psql` session. Citation corrected to the script.~~ **CLOSED by `skillars-deferred-101` AC6** — `restore-from-dump.sh:140-141` runs `SELECT pg_terminate_backend(pid) … WHERE datname = '<db>' AND pid <> pg_backend_pid();` immediately before `DROP DATABASE IF EXISTS`. Standalone bullet already deleted by `deferred-101`. |
-| `deploy-3-4` hardcoded container UIDs 65534/10001/472 | `[PICKED UP by skillars-deferred-94 AC2]` — comments added; verify no regression. `provision.sh:597-603`, `restore-from-volume-backup.sh:93-99` |
+| `deploy-3-4` hardcoded container UIDs 65534/10001/472 | ~~`[PICKED UP by skillars-deferred-94 AC2]` — comments added; verify no regression.~~ **CLOSED by `skillars-deferred-107` AC8** — `provision.sh` / `restore-from-volume-backup.sh` now probe each service image's real runtime uid (`image_runtime_uid` → `chown_probed`, reads `docker inspect .Config.User`); the numeric constants survive only as a WARN-on-mismatch fallback, so an upstream UID change WARNs instead of silently breaking ownership. Standalone bullet deleted by `deferred-107` post-merge prune (2026-09-10). |
 | `deploy-3-4` APP_CID capture race | ~~open, **partly mitigated** — now fails fast with a diagnostic instead of a 90 s timeout. Citation corrected.~~ **CLOSED by `skillars-deferred-102` AC2** — `restore-from-dump.sh:205-222` is a 5×/2s bounded retry loop around `${DC} ps -q app`, then a clear `err` + EXIT-trap recovery. Standalone bullet already deleted by `deferred-102`. |
 | `deploy-3-4` WebhookPermanentFailure Admin API | **STALE, deleted** — the alert no longer exists |
 | `deploy-3-4` CallbackRateZero endpoint undocumented | **STALE, deleted** — the alert no longer exists |
@@ -834,9 +834,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - `refreshCache()` failure after `invalidate()` causes all subsequent config gets to throw 409 instead of serving stale data during DB outage; acceptable design choice for this scope [ConfigService.java]
 - Scheduled refresh + lazy TTL `ensureFresh()` can both fire near-simultaneously, causing ~2x DB polls per TTL period; minor efficiency concern, spec-designed dual-refresh pattern [ConfigService.java]
 - IT test fixture hardcodes bcrypt hash for test user seed SQL; follows existing project IT test pattern [ConfigResourceIT.java:setUp]
-
-## Deferred from: code review of deploy-3-4-operational-documentation-suite (2026-06-05)
-- Hardcoded container UIDs (65534/10001/472) not tied to Docker image versions — upstream UID changes (historically seen with Grafana) would silently break subdirectory ownership after snapshot restore [docs/deployment/backup-restore.md] `[AUDIT 2026-08-27: re-verified, still open, still a legitimate low-probability accepted tradeoff — hardcoded UIDs remain untied to image versions in provision.sh/restore-from-volume-backup.sh; monitor upstream image changelogs rather than fix now]` `[PICKED UP by skillars-deferred-94 AC2: guard comment added]`
 
 ## Deferred from: code review of deploy-3-3-external-uptime-monitoring-alert-rules (2026-06-05)
 - Double notification risk if Alertmanager added later — Prometheus rules and Grafana alerting both evaluate the same infra alerts; currently no Alertmanager so only Grafana notifies, but future Alertmanager addition would cause duplicate ops notifications for every infra alert `[DECIDED 2026-09-10 (skillars-deferred-107 AC7): Grafana-managed alerting is the single delivery path; Prometheus alerts.yml rules stay non-delivering; a future Alertmanager change carries a documented 4-step checklist. See docs/deployment/monitoring.md#alerting-architecture-the-alertmanager-decision and the docker-compose.yml prometheus-service comment.]`
@@ -1660,3 +1657,32 @@ bullets touched: one — the `deferred-94` hardcoded-UID `chown` bullet, deleted
 
 - **`image_runtime_ugid` adds un-timed `docker pull`s to the disaster-restore path.** `deploy/backup/restore-from-volume-backup.sh:39` runs `docker image inspect "$img" || docker pull "$img"` once per service, between `${DC} down` (`:97`) and `${DC} up -d` (`:160`). On a host with no or slow egress, or one whose images were pruned — the exact conditions a rebuild-from-backup implies — this extends the outage window by however long up to five pulls take to fail, since `|| return 0` only fires once the pull has finished failing. Deferred: inherent to the AC8 probe design, and the fallback contains the correctness risk. Revisit if a restore is ever observed stalling here; a `timeout` wrapper would be the cheap fix.
 - **AC3's "do not hand-list the templated key strings" is violated in letter.** `ConfigBounds.java:180-181` hand-lists `VIDEO_QUOTA_TIER_SEGMENTS` and `VIDEO_TYPE_SEGMENTS` rather than iterating `CoachSubscriptionTier` / `VideoType`. Deferred: the documented reason — keeping the `config` module free of a dependency on `video.contract` / `marketplace.contract` — is sound, and `ConfigBoundsEnumCoverageTest` supplies exactly the drift guard the AC was reaching for (it fails if a new enum constant lands without a matching bound). Needs project-owner sign-off only because `story-review.md` deliberately hardened that wording from "enumerate or skip" to "must iterate".
+
+## Last audit: 2026-09-10 (post-merge prune — deferred-107 follow-up, hardcoded-UID row)
+
+Targeted single-item prune, closing the loop the `2026-09-10 (skillars-deferred-107 story
+implementation)` block above explicitly left open ("The `deploy-3-4` 'hardcoded container UIDs
+65534/10001/472' row and its duplicate bullet … were left untouched … flagged for a future prune").
+
+**Deleted (closed by shipped code — `skillars-deferred-107` AC8, per this file's delete-outright
+convention):**
+
+- `## Deferred from: code review of deploy-3-4-operational-documentation-suite (2026-06-05)` — its
+  sole bullet, **"Hardcoded container UIDs (65534/10001/472) not tied to Docker image versions"**
+  (`[PICKED UP by skillars-deferred-94 AC2: guard comment added]`). `skillars-deferred-107` AC8
+  replaced the accepted-tradeoff comment with a real fix: `provision.sh` and
+  `restore-from-volume-backup.sh` now probe each service image's runtime uid via
+  `docker inspect .Config.User` (`image_runtime_uid` → `chown_probed`); the numeric constants remain
+  only as a WARN-on-mismatch fallback, so an upstream UID drift is surfaced, not silently applied.
+  **Header removed** (section empty, bullet untagged aside from the spent `[PICKED UP]`).
+
+**Retagged in place (not deleted):** the matching `deploy-3-4` "hardcoded container UIDs" row in the
+`2026-09-04` `deploy-*` re-audit table — struck through and annotated **CLOSED by
+`skillars-deferred-107` AC8**, matching the five sibling rows the deferred-107 block already struck.
+
+**Reconstruction check:** every surviving non-blank line matches the pre-edit file (master @
+`918ff206` + this session's post-104/-105/-106 prune + the deferred-107 implementation commit
+`dda1365`), in order, with nothing reworded or reordered — the only differences are the one deleted
+bullet + its now-empty `## Deferred from:` header, the one struck-through audit-table row, and this
+block. `[DISMISSED]` count: unchanged. `[DECIDED]` count: unchanged. `[PICKED UP by …]` bullets
+touched: one — the `deploy-3-4` hardcoded-UID bullet, deleted as a genuine closure.
