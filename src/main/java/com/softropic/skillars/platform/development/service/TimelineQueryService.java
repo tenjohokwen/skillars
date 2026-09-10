@@ -28,7 +28,9 @@ public class TimelineQueryService {
     public TimelineResponse getTimeline(Long playerId, boolean isCoach, UUID coachId) {
         long expiryDays;
         try {
-            expiryDays = configService.getLong("development.timeline.coachAccessExpiryDays");
+            // skillars-deferred-107 AC2: 0/neg → coach timeline access reads as always expired.
+            // A missing key still throws (caught below → 90d fallback); a present bad value clamps.
+            expiryDays = configService.getBoundedLong("development.timeline.coachAccessExpiryDays", 1L, 3650L);
         } catch (Exception e) {
             log.warn("Config key 'development.timeline.coachAccessExpiryDays' missing — defaulting to 90 days", e);
             expiryDays = 90L;

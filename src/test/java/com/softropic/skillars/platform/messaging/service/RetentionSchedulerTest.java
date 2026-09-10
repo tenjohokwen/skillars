@@ -42,7 +42,7 @@ class RetentionSchedulerTest {
         };
         scheduler = new MessageRetentionScheduler(
             messageRepository, conversationRepository, configService, eventPublisher, txTemplate);
-        when(configService.getInt("platform.message_retention_months", 24)).thenReturn(24);
+        when(configService.getBoundedInt("platform.message_retention_months", 24, 1, 600)).thenReturn(24);
     }
 
     @Test
@@ -69,7 +69,7 @@ class RetentionSchedulerTest {
 
     @Test
     void runRetention_usesConfiguredRetentionPeriod() {
-        when(configService.getInt("platform.message_retention_months", 24)).thenReturn(12);
+        when(configService.getBoundedInt("platform.message_retention_months", 24, 1, 600)).thenReturn(12);
         when(messageRepository.deleteOldMessagesWithNoOpenReports(any())).thenReturn(0);
         when(conversationRepository.deleteOrphanConversations(any())).thenReturn(0);
 
@@ -83,5 +83,27 @@ class RetentionSchedulerTest {
         assertThat(cutoff)
             .isAfter(Instant.now().atZone(ZoneOffset.UTC).minusMonths(13).toInstant())
             .isBefore(Instant.now().atZone(ZoneOffset.UTC).minusMonths(11).toInstant());
+    }
+
+    /**
+     * skillars-deferred-107 AC2: a stored {@code platform.message_retention_months} of 0 or negative
+     * would make the cutoff {@code Instant.now()} (or the future), so
+     * {@code deleteOldMessagesWithNoOpenReports} would wipe every message with no open report on the
+     * next run. The read goes through {@code getBoundedInt(key, 24, 1, 600)}, which clamps such a
+     * value to the 24-month default — the "delete everything" path is unreachable from config. Revert
+     * the call site to {@code getInt(key, 24)} and this test fails (cutoff would be ~now).
+     */
+    @Test
+    void runRetention_zeroRetentionConfig_clampsToDefault_neverDeletesEverything() {
+        when(configService.getBoundedInt("platform.message_retention_months", 24, 1, 600)).thenReturn(24);
+        when(messageRepository.deleteOldMessagesWithNoOpenReports(any())).thenReturn(0);
+        when(conversationRepository.deleteOrphanConversations(any())).thenReturn(0);
+
+        scheduler.runRetention();
+
+        ArgumentCaptor<Instant> cutoffCaptor = ArgumentCaptor.forClass(Instant.class);
+        verify(messageRepository).deleteOldMessagesWithNoOpenReports(cutoffCaptor.capture());
+        assertThat(cutoffCaptor.getValue()).isBefore(Instant.now().minus(700, ChronoUnit.DAYS));
+        verify(configService).getBoundedInt("platform.message_retention_months", 24, 1, 600);
     }
 }

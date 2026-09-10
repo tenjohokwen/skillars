@@ -52,7 +52,7 @@ class PlaybackRevocationWindowUnitTest {
         // Valid signing secret (Base64 of 32+ bytes)
         properties.getPlayback().setSigningSecret("dGVzdC1wbGF5YmFjay1zaWduaW5nLXNlY3JldC0zMi1ieXRlcyEh");
 
-        when(configService.getLong("platform.video.playback.signed_url_ttl_minutes", 120L)).thenReturn(120L);
+        when(configService.getBoundedLong("platform.video.playback.signed_url_ttl_minutes", 120L, 1L, 1440L)).thenReturn(120L);
         when(configService.getBoolean("platform.video.playback.ip_binding_enabled", false)).thenReturn(false);
         when(lockRetryer.withBoundedRetry(any()))
             .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());

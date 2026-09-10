@@ -14,12 +14,21 @@ public class VideoTypeConstraints {
 
     private final ConfigService configService;
 
+    // skillars-deferred-107 AC2: 0 would reject every upload of the type. Missing key still throws
+    // (operator must seed it). 24h is an absurd per-clip ceiling. Mirrors ConfigBounds.video.*.
+    private static final long MAX_SIZE_BYTES_MIN = 1L;
+    private static final long MAX_SIZE_BYTES_MAX = Long.MAX_VALUE;
+    private static final long MAX_DURATION_SECONDS_MIN = 1L;
+    private static final long MAX_DURATION_SECONDS_MAX = 86400L;
+
     public long getMaxSizeBytes(VideoType type) {
-        return configService.getLong(configKey(type, "maxSizeBytes"));
+        return configService.getBoundedLong(configKey(type, "maxSizeBytes"),
+            MAX_SIZE_BYTES_MIN, MAX_SIZE_BYTES_MAX);
     }
 
     public int getMaxDurationSeconds(VideoType type) {
-        return (int) configService.getLong(configKey(type, "maxDurationSeconds"));
+        return (int) configService.getBoundedLong(configKey(type, "maxDurationSeconds"),
+            MAX_DURATION_SECONDS_MIN, MAX_DURATION_SECONDS_MAX);
     }
 
     public void validate(VideoType type, long fileSizeBytes, int durationSeconds) {

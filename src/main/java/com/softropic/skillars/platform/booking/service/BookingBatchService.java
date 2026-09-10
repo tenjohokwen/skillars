@@ -98,13 +98,18 @@ public class BookingBatchService {
         "COMPLETED_PENDING_CONFIRMATION", "COMPLETED"
     );
 
+    // skillars-deferred-107 AC2: 0/neg would reject every batch booking as booking.batchSizeExceeded
+    // (failFast); a huge value removes the batch cap entirely. Mirrors ConfigBounds.BOOKING_BATCH_MAX_SIZE.
+    private static final long BATCH_MAX_SIZE_MIN = 1L;
+    private static final long BATCH_MAX_SIZE_MAX = 100L;
+
     public int getMaxBatchSize() {
-        return (int) configService.getLong("booking.batch.maxSize");
+        return (int) configService.getBoundedLong("booking.batch.maxSize", BATCH_MAX_SIZE_MIN, BATCH_MAX_SIZE_MAX);
     }
 
     @Transactional
     public BatchBookingCreatedResponse createBatch(Long parentId, CreateBatchRequest req) {
-        int maxSize = (int) configService.getLong("booking.batch.maxSize");
+        int maxSize = (int) configService.getBoundedLong("booking.batch.maxSize", BATCH_MAX_SIZE_MIN, BATCH_MAX_SIZE_MAX);
         if (req.slots().size() > maxSize) {
             throw new BatchRuleViolationException("booking.batchSizeExceeded");
         }

@@ -82,7 +82,9 @@ public class GdprExportService {
             fileStorageService.storeBytes(zipBytes, storageKey, "application/zip",
                 "attachment; filename=\"gdpr-export-" + requestId + ".zip\"");
 
-            long hours = configService.getLong("gdpr.export.urlExpiryHours", 48L);
+            // skillars-deferred-107 AC2: 0 → a legally-required GDPR export link is dead on arrival
+            // (failFast); huge → compliance exposure. Clamps to 48 + WARN.
+            long hours = configService.getBoundedLong("gdpr.export.urlExpiryHours", 48L, 1L, 720L);
             String url = fileStorageService.signedDownloadUrl(storageKey, Duration.ofHours(hours));
             Instant expiresAt = Instant.now().plus(hours, ChronoUnit.HOURS);
 

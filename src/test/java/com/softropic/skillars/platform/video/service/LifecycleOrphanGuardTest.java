@@ -41,9 +41,9 @@ class LifecycleOrphanGuardTest {
                 return action.doInTransaction(null);
             }
         };
-        when(configService.getLong("platform.video.lifecycle.blocked_to_archived_days", 30L)).thenReturn(30L);
-        when(configService.getLong("platform.video.lifecycle.archived_to_deleted_days", 90L)).thenReturn(90L);
-        when(configService.getInt("platform.video.lifecycle.batch_size", 100)).thenReturn(100);
+        when(configService.getBoundedLong("platform.video.lifecycle.blocked_to_archived_days", 30L, 1L, 3650L)).thenReturn(30L);
+        when(configService.getBoundedLong("platform.video.lifecycle.archived_to_deleted_days", 90L, 1L, 36500L)).thenReturn(90L);
+        when(configService.getBoundedInt("platform.video.lifecycle.batch_size", 100, 1, 10000)).thenReturn(100);
 
         scheduler = new VideoLifecycleScheduler(videoRepository, videoLifecycleLogRepository,
             videoLifecycleService, videoProviderAdapter, configService, txTemplate, quotaService, playerSubscriptionQueryPort);

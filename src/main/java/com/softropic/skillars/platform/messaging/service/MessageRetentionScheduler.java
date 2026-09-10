@@ -27,7 +27,11 @@ public class MessageRetentionScheduler {
 
     @Scheduled(cron = "0 0 2 * * *")
     public void runRetention() {
-        int retentionMonths = configService.getInt("platform.message_retention_months", 24);
+        // skillars-deferred-107 AC2: a stored 0/negative would make the cutoff Instant.now() (or the
+        // future), so deleteOldMessagesWithNoOpenReports would delete EVERY message with no open
+        // report on the next run. Data-destructive → clamps to 24 + WARN here, and
+        // ConfigStartupAssertion refuses to boot on a bad stored value (failFast key).
+        int retentionMonths = configService.getBoundedInt("platform.message_retention_months", 24, 1, 600);
         Instant cutoff = Instant.now().atZone(ZoneOffset.UTC).minusMonths(retentionMonths).toInstant();
 
         int messageCount;

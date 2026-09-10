@@ -30,6 +30,9 @@ fi
 # skillars-deferred-102 AC6: the checkout moved to /opt/skillars/app; .env stays at /opt/skillars/.env
 # (outside the checkout). `docker compose` loads .env from the compose file's project dir, so pass it
 # explicitly. This cron script still runs as root.
+# The DB password reaches the postgres container env via `docker compose --env-file` and, briefly,
+# the `docker exec -e PGPASSWORD` children below — an accepted, root-only surface. See
+# docs/deployment/secrets-reference.md#accepted-credential-exposure-surface (skillars-deferred-107 AC6).
 DC="docker compose --env-file /opt/skillars/.env -f /opt/skillars/app/docker-compose.yml"
 
 GUARD_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env-guard.sh"

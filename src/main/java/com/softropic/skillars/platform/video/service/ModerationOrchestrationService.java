@@ -45,6 +45,11 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class ModerationOrchestrationService {
 
+    // skillars-deferred-107 AC2: 0 → moderation lock is stale on creation (the TOCTOU window RI-9
+    // closes reopens); huge → permanently stuck rows. Mirrors ConfigBounds.MODERATION_LOCK_TIMEOUT_MINUTES.
+    private static final long LOCK_TIMEOUT_MIN_MINUTES = 1L;
+    private static final long LOCK_TIMEOUT_MAX_MINUTES = 1440L;
+
     private final VideoLifecycleService videoLifecycleService;
     private final VideoService videoService;
     private final VideoRepository videoRepository;
@@ -72,7 +77,8 @@ public class ModerationOrchestrationService {
         try {
             transactionTemplate.execute(status -> {
                 videoLifecycleService.transitionOperationalState(videoId, OperationalState.SCANNING);
-                long lockMinutes = configService.getLong("platform.moderation_lock_timeout_minutes");
+                long lockMinutes = configService.getBoundedLong("platform.moderation_lock_timeout_minutes",
+                    LOCK_TIMEOUT_MIN_MINUTES, LOCK_TIMEOUT_MAX_MINUTES);
                 videoRepository.findById(videoId).ifPresent(v -> {
                     v.setModerationLockUntil(Instant.now().plus(lockMinutes, ChronoUnit.MINUTES));
                     videoRepository.save(v);
@@ -397,7 +403,8 @@ public class ModerationOrchestrationService {
     }
 
     private void acquireModerationLock(UUID videoId) {
-        long lockMinutes = configService.getLong("platform.moderation_lock_timeout_minutes");
+        long lockMinutes = configService.getBoundedLong("platform.moderation_lock_timeout_minutes",
+            LOCK_TIMEOUT_MIN_MINUTES, LOCK_TIMEOUT_MAX_MINUTES);
         transactionTemplate.execute(status -> {
             Video v = videoRepository.findById(videoId).orElse(null);
             if (v == null) {

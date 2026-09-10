@@ -32,17 +32,26 @@ public class SessionPackExpiryNotifier {
     /**
      * Deferred-15 AC6 fixed two independent defects here, which had to ship together.
      *
-     * <p><strong>Delivery.</strong> This method published its events with no transaction bound,
-     * while {@code SessionPackEmailListener.onExpiryWarning} is a
-     * {@code @TransactionalEventListener(AFTER_COMMIT)} with the default
-     * {@code fallbackExecution = false} — so every event was discarded and the warning email was
-     * sent ZERO times, not the fourteen the ledger item assumed (reproduced before the fix).
-     * {@code SessionPackForfeitureScheduler} publishes inside {@code transactionTemplate.execute}
-     * and therefore works; that difference was the whole bug.
+     * <p><strong>Delivery.</strong> Each pack's {@code SessionPackExpiryWarningEvent} is published
+     * from inside {@code transactionTemplate.execute(...)} (the per-pack transaction that also stamps
+     * {@code expiryWarnedAt}), and {@code SessionPackEmailListener.onExpiryWarning} is a
+     * {@code @TransactionalEventListener(BEFORE_COMMIT)} that calls
+     * {@code notificationOutboxSupport.enqueueEmail(...)}. So on the happy path the outbox row is
+     * written in the same transaction as the {@code expiryWarnedAt} stamp — both persist or neither
+     * does — and the actual send is the generic notification-outbox drainer's job (retried, not
+     * fire-and-forget). <strong>Carve-out:</strong> {@code onExpiryWarning} wraps its body in
+     * {@code catch (Exception)} and only logs, so if {@code enqueueEmail} itself throws (e.g. an
+     * in-memory serialisation failure building the payload), the transaction still commits
+     * {@code expiryWarnedAt} with no outbox row — that pack's warning is then lost and not retried.
      *
-     * <p><strong>Dedupe.</strong> Once delivery works, a daily cron over a 14-day window selects the
-     * same pack every morning. {@code expiryWarnedAt} is stamped inside the very transaction whose
-     * commit fires the listener, so a delivered warning is always a recorded one.
+     * <p>Before {@code deferred-15}/{@code deferred-92} this method published with no bound
+     * transaction while the listener was {@code AFTER_COMMIT} with {@code fallbackExecution = false},
+     * so every event was silently dropped and the warning email was sent ZERO times — see those
+     * stories. That history is kept here as a lesson, not as a description of current behaviour.
+     *
+     * <p><strong>Dedupe.</strong> A daily cron over a 14-day window selects the same pack every
+     * morning. {@code expiryWarnedAt} is stamped inside the very transaction whose {@code
+     * BEFORE_COMMIT} phase enqueues the email, so a delivered warning is always a recorded one.
      *
      * <p>A pack whose expiry is extended is already excluded by the query's {@code extendedAt IS
      * NULL} predicate; re-warning after an extension would be new product behaviour, not a bug fix.

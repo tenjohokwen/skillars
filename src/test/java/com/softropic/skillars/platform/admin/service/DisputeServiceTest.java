@@ -118,7 +118,7 @@ class DisputeServiceTest {
 
         when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
         when(coachProfileRepository.findById(booking.getCoachId())).thenReturn(Optional.of(coachProfile));
-        when(configService.getLong("disputes.submissionWindowDays", 14L)).thenReturn(14L);
+        when(configService.getBoundedLong("disputes.submissionWindowDays", 14L, 1L, 365L)).thenReturn(14L);
         when(disputeRepository.findOpenByBookingId(bookingId)).thenReturn(Optional.empty());
         when(disputeRepository.save(any(Dispute.class))).thenAnswer(inv -> {
             Dispute d = inv.getArgument(0);

@@ -48,6 +48,10 @@ public class PackSessionService {
 
     private static final List<String> CONFLICT_STATUSES = List.of("REQUESTED", "ACCEPTED", "CONFIRMED", "UPCOMING");
     private static final long DEFAULT_PACK_PAUSE_MAX_DAYS = 90L;
+    // skillars-deferred-107 AC1: a stored pause window longer than 10 years is certainly a
+    // fat-finger, not a real setting. Business cap; mirrors ConfigBounds.PACK_PAUSE_MAX_DAYS.
+    private static final long MIN_PACK_PAUSE_MAX_DAYS = 1L;
+    private static final long MAX_PACK_PAUSE_MAX_DAYS = 3650L;
 
     private final SessionPackPurchaseRepository sessionPackPurchaseRepository;
     private final ApplicationEventPublisher eventPublisher;
@@ -158,8 +162,13 @@ public class PackSessionService {
                 "Coach profile " + coachId + " referenced by session pack " + purchaseId
                     + " does not exist — data-integrity failure (FK fk_spp_coach)"));
 
-        // skillars-deferred-103 AC6: defensive default for max pause days config
-        long maxDays = configService.getLong("pack.pause.maxDays", DEFAULT_PACK_PAUSE_MAX_DAYS);
+        // skillars-deferred-103 AC6: defensive default for max pause days config.
+        // skillars-deferred-107 AC1: also range-guard it — a stored 0/negative/absurd value would
+        // otherwise be accepted verbatim and reject every pauseDurationDays >= 1 as
+        // booking.pauseDurationInvalid with nothing pointing at the config. Clamps to 90 + WARN;
+        // ConfigStartupAssertion additionally refuses to boot on a bad stored value (failFast key).
+        long maxDays = configService.getBoundedLong("pack.pause.maxDays", DEFAULT_PACK_PAUSE_MAX_DAYS,
+            MIN_PACK_PAUSE_MAX_DAYS, MAX_PACK_PAUSE_MAX_DAYS);
         if (req.pauseDurationDays() < 1 || req.pauseDurationDays() > maxDays) {
             throw new BatchRuleViolationException("booking.pauseDurationInvalid");
         }

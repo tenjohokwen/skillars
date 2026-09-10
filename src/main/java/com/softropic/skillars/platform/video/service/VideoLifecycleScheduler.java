@@ -37,9 +37,16 @@ public class VideoLifecycleScheduler {
 
     @Scheduled(cron = "${app.video.lifecycle.cron:0 0 3 * * *}")
     public void runLifecycleJob() {
-        long blockedToArchivedDays = configService.getLong("platform.video.lifecycle.blocked_to_archived_days", 30L);
-        long archivedToDeletedDays = configService.getLong("platform.video.lifecycle.archived_to_deleted_days", 90L);
-        int batchSize = configService.getInt("platform.video.lifecycle.batch_size", 100);
+        // skillars-deferred-107 AC2: 0/neg would archive/delete immediately (or never); 0 batch size
+        // stalls the scheduler. Mirrors ConfigBounds.VIDEO_LIFECYCLE_*.
+        long blockedToArchivedDays = configService.getBoundedLong(
+            "platform.video.lifecycle.blocked_to_archived_days", 30L, 1L, 3650L);
+        // Ceiling 36500 (100y), not 3650: physical deletion + the 4-arg overload falls back to the
+        // 90-day default on out-of-range, so a low ceiling would silently delete years early
+        // (skillars-deferred-107 code review). Mirrors ConfigBounds.VIDEO_LIFECYCLE_ARCHIVED_TO_DELETED_DAYS.
+        long archivedToDeletedDays = configService.getBoundedLong(
+            "platform.video.lifecycle.archived_to_deleted_days", 90L, 1L, 36500L);
+        int batchSize = configService.getBoundedInt("platform.video.lifecycle.batch_size", 100, 1, 10000);
 
         int archivedCount = runBlockedToArchivedPhase(blockedToArchivedDays, batchSize);
         int deletedCount  = runArchivedToDeletedPhase(archivedToDeletedDays, batchSize);

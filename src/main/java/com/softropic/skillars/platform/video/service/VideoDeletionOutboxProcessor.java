@@ -123,7 +123,8 @@ public class VideoDeletionOutboxProcessor {
         transactionTemplate.execute(status -> {
             row.setAttempts(row.getAttempts() + 1);
             row.setLastError(e.getMessage());
-            int maxAttempts = (int) configService.getLong("platform.video.deletion.max_attempts", 5L);
+            // skillars-deferred-107 AC2: 0/neg would dead-letter on the first attempt (or never).
+            int maxAttempts = (int) configService.getBoundedLong("platform.video.deletion.max_attempts", 5L, 1L, 100L);
             if (row.getAttempts() >= maxAttempts) {
                 row.setStatus("DEAD");
                 log.error("[DEAD_LETTER videoId={} triggeredBy={}]", row.getVideoId(), row.getTriggeredBy());

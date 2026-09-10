@@ -56,8 +56,11 @@ public class ModerationSlaMonitorService {
     @Transactional
     @Scheduled(fixedDelayString = "${app.video.moderation.sla-monitor-delay-ms:300000}")
     public void detectSlaViolations() {
-        long slaMinutes = configService.getLong("platform.moderation_sla_minutes");
-        long maxRetries = configService.getLong("platform.moderation_max_retries");
+        // skillars-deferred-107 AC2: 0/neg SLA → every SCANNING video is instantly breached and
+        // re-queued (failFast). maxRetries floor is 0 ("no retries" is legitimate); neg would invert
+        // the retry-count comparison. Mirrors ConfigBounds.MODERATION_SLA_MINUTES / MODERATION_MAX_RETRIES.
+        long slaMinutes = configService.getBoundedLong("platform.moderation_sla_minutes", 1L, 10080L);
+        long maxRetries = configService.getBoundedLong("platform.moderation_max_retries", 0L, 100L);
         Instant threshold = Instant.now().minus(slaMinutes, ChronoUnit.MINUTES);
 
         List<Video> stuckVideos = videoRepository.findScanningOlderThan(threshold, Instant.now(), 50);

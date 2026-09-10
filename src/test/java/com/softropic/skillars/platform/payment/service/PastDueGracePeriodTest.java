@@ -51,7 +51,7 @@ class PastDueGracePeriodTest {
 
     @BeforeEach
     void setUp() {
-        when(configService.getLong("subscription.pastDue.gracePeriodDays")).thenReturn(7L);
+        when(configService.getBoundedLong("subscription.pastDue.gracePeriodDays", 0L, 365L)).thenReturn(7L);
     }
 
     @Test
@@ -121,7 +121,7 @@ class PastDueGracePeriodTest {
         service.checkPastDueGracePeriod();
 
         // Must be called once per invocation — not cached in a field
-        verify(configService, times(3)).getLong("subscription.pastDue.gracePeriodDays");
+        verify(configService, times(3)).getBoundedLong("subscription.pastDue.gracePeriodDays", 0L, 365L);
     }
 
     private PaymentCoachSubscription pastDueCoach(Instant pastDueSince) {

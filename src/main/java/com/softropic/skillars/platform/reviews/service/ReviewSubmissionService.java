@@ -161,7 +161,8 @@ public class ReviewSubmissionService {
     }
 
     private void checkEligibility(UUID coachId, Long authorId) {
-        int windowDays = configService.getInt("reviews.submissionWindowDays", 14);
+        // skillars-deferred-107 AC2: 0/neg → no review can ever be submitted (failFast). Clamps to 14 + WARN.
+        int windowDays = configService.getBoundedInt("reviews.submissionWindowDays", 14, 1, 365);
         Instant windowStart = Instant.now().minus(windowDays, ChronoUnit.DAYS);
         boolean eligible = bookingRepository.existsRecentCompletedBookingByAuthor(
             coachId, authorId, windowStart);
