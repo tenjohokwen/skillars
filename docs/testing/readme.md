@@ -10,6 +10,7 @@ How the integration-test suite is wired, why it is wired that way, and what you 
 | [Container architecture](container-architecture.md) | Why PostgreSQL/Redis/MinIO are JVM-static and deliberately *not* Spring beans. Read before touching `TestConfig`. |
 | [Test data isolation](test-data-isolation.md) | How each test gets a clean database, which tables must never be truncated and why, and the fixture-id registry. |
 | [Pessimistic lock retry](../persistence/pessimistic-lock-retry.md) | Staging a concurrency test against a `NO_WAIT`-locked repository — including why polling `pg_locks` for a "blocked" session no longer works as a staging technique now that contention fails fast instead of blocking. |
+| [Frontend unit tests](frontend-unit-tests.md) | Vitest + Vue Test Utils for `src/frontend`. How to run it, where specs live, the Quasar-AE config model — and why it is deliberately **not** part of `mvn verify` (opt-in: `npm run test:unit` locally, or the `frontend-tests` PR label in CI). |
 
 ---
 
@@ -74,9 +75,12 @@ mvn -o verify -Dit.test=MyIT     # one integration test class
 
 ## Known gaps
 
-- **The frontend has no test runner.** `src/frontend/package.json` maps `npm test` to
-  `echo "No test specified" && exit 0`, and the `frontend-maven-plugin` runs it every build. Standing
-  gap, tracked separately.
+- ~~**The frontend has no test runner.**~~ **Closed** by `skillars-deferred-104`: Vitest +
+  Vue Test Utils are stood up for `src/frontend`. `npm test` is still the
+  `echo "No test specified" && exit 0` stub the `frontend-maven-plugin` runs every build — that
+  is deliberate; the unit suite runs via the separate `npm run test:unit` script and an opt-in
+  CI job only, never inside `mvn verify`. See
+  [frontend-unit-tests.md](frontend-unit-tests.md).
 - ~~Test PostgreSQL is behind production.~~ **Closed.** Tests now run `postgres:17-alpine`, matching
   `docker-compose.yml:64`. See [container-architecture.md](container-architecture.md#image-versions).
 - **`ModerationFailClosedIT` has no reset listener.** It is allowlisted out of

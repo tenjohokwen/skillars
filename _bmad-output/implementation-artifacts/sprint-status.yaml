@@ -1,5 +1,5 @@
 generated: 2026-05-25
-last_updated: '2026-09-09'  # skillars-deferred-106 (completion-gated coach payout) → done (AC0-AC15.5 done + code-review EC-4 applied; AC15.6/AC15.7 Stripe test-mode owned by Mbah)
+last_updated: '2026-09-10'  # skillars-deferred-104-frontend-test-framework-initiative → done (Vitest + Vue Test Utils stand-up; opt-in CI only — stays out of mvn verify)
 project: javatemplate
 project_key: NOKEY
 tracking_system: file-system
@@ -260,7 +260,7 @@ development_status:
   skillars-deferred-96-deployment-visibility-smoke-error-channel-health: review
   skillars-deferred-97-backup-and-deployment-smoke-resilience-hardening: withdrawn # superseded by skillars-deferred-102 (absorbs its 4 backup/deploy-smoke items as AC1/AC2/AC4/AC5)
   skillars-deferred-98-slu-perf-signal-and-frontend-ux-precision: done
-  frontend-test-framework-initiative: backlog # cited by skillars-deferred-98 AC3 (2026-09-07 code review); see deferred-work.md
+  frontend-test-framework-initiative: done # kept as historical record; stood up by skillars-deferred-104 (2026-09-09) — Vitest + @vue/test-utils runner, opt-in CI job, two reference specs
   skillars-deferred-99-genuine-one-off-bugs-reliability-i18n-migration-safety-and-video-hardening: done
   skillars-deferred-100-concurrency-reconciliation-and-lifecycle-hardening: done
   skillars-deferred-101-residual-bugs-refund-atomicity-and-api-hygiene: done
@@ -269,4 +269,5 @@ development_status:
   ? skillars-deferred-92-outbox-enqueue-atomicity-executor-shutdown-migration-ordering-and-lock-timeout-default-bundle-parity-fr-fr-idiom-prettier-conformance-and-genuine-bug-fixes
   : review
   skillars-deferred-105-ci-build-warning-cleanup: done # deferred-104 reserved for frontend-test-framework-initiative (deferred-103 D3); GitHub CI build-warning sweep
+  skillars-deferred-104-frontend-test-framework-initiative: done # slot reserved by deferred-103 D3, cited by deferred-98 AC3; stood up Vitest + @vue/test-utils (library-only AE, quasar.config.js untouched), test:unit scripts, opt-in frontend-unit-tests.yml (never in mvn verify / ci.yml / pr-build.yml), 2 reference specs (12 tests green); closed the frontend-test-framework-initiative backlog item; code review triaged (2 patches applied, 6 false positives)
   skillars-deferred-106-completion-gated-coach-payout: done # Part B of payout-and-capture-pending.md (deferred-91 AC5 Part B); B-1 separate charges & transfers; AC0 owner sign-off done 2026-09-09 (hold_hours=48, no post-completion cancel, one story, revenue on coach_payouts.RELEASED); code-review triaged (7 FPs), EC-4 locked-read applied; AC15.6/AC15.7 Stripe test-mode owned by Mbah

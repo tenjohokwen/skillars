@@ -566,6 +566,21 @@
 							<arguments>install -g @quasar/cli</arguments>
 						</configuration>
 					</execution>
+					<!--
+					  skillars-deferred-104: this calls the `test` npm script, which is a deliberate
+					  no-op stub (`echo "No test specified" && exit 0`). The frontend UNIT suite
+					  (Vitest + @vue/test-utils) is intentionally NOT run here.
+
+					  It runs only on demand: `cd src/frontend && npm run test:unit` locally, and the
+					  standalone `.github/workflows/frontend-unit-tests.yml` job in CI (manual dispatch
+					  or the `frontend-tests` PR label). Vitest is reachable only through the `test:unit`
+					  script; nothing in this pom calls it.
+
+					  Wiring the unit suite into this `test`-phase execution (or pointing `test` at
+					  Vitest) would put it on every `mvn verify` — i.e. every push to master and every
+					  PR — which skillars-deferred-104 explicitly rejects. Do not change the
+					  <arguments>, the phase, or the <skip> wiring, and do not add a new execution.
+					-->
 					<execution>
 						<id>npm test</id>
 						<goals>

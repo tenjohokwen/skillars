@@ -32,6 +32,17 @@ yarn format
 npm run format
 ```
 
+### Run the unit tests
+
+Vitest + Vue Test Utils. Not part of `mvn verify` — opt-in only
+(see [docs/testing/frontend-unit-tests.md](../../docs/testing/frontend-unit-tests.md)).
+
+```bash
+npm run test:unit
+# or, watch mode
+npm run test:unit:watch
+```
+
 ### Build the app for production
 
 ```bash

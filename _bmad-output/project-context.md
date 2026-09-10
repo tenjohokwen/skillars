@@ -61,6 +61,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - **Data Generation:** Use **Instancio** for generating DTO and Entity test data.
 - **Assertions:** Use **AssertJ** (`assertThat`) for all assertions.
 - **Async Testing:** Use **Awaitility** for verifying asynchronous outcomes.
+- **Frontend Unit Tests:** Vitest + `@vue/test-utils` (`happy-dom` env). Specs live beside the code in `__tests__/`, import `describe/it/expect/vi` explicitly (no globals), and run via `cd src/frontend && npm run test:unit`. They are **not** part of `mvn verify` — the Maven-invoked `npm test` script stays a no-op stub; CI runs them only via the opt-in `frontend-unit-tests.yml` job. See `docs/testing/frontend-unit-tests.md`.
 
 ### Code Quality & Style Rules
 
@@ -181,5 +182,5 @@ If any check fails, the class belongs in a platform module.
 - Review quarterly for outdated rules.
 - Remove rules that become obvious over time.
 
-_Last Updated: 2026-05-27_
+_Last Updated: 2026-09-09_
 
