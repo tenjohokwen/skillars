@@ -109,7 +109,7 @@ class BookingBatchServiceTest {
 
     @Test
     void createBatch_validRequest_createsBatchAndBookings() {
-        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
 
         PlayerProfile player = new PlayerProfile();
         player.setParentId(PARENT_ID);
@@ -137,7 +137,7 @@ class BookingBatchServiceTest {
 
     @Test
     void createBatch_matchingAvailabilitySignature_succeeds() {
-        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
         stubOwnershipAndActiveCoach();
 
         CoachAvailabilityWindow window = new CoachAvailabilityWindow();
@@ -167,7 +167,7 @@ class BookingBatchServiceTest {
 
     @Test
     void createBatch_staleAvailabilitySignature_throwsAvailabilityChangedBeforePersisting() {
-        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
         stubOwnershipAndActiveCoach();
 
         CreateBatchRequest base = buildRequest(2);
@@ -192,7 +192,7 @@ class BookingBatchServiceTest {
      */
     @Test
     void createBatch_slotOutsideCoachAvailability_isRejected() {
-        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
         stubOwnershipAndActiveCoach();
         when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any())).thenReturn(false);
 
@@ -211,7 +211,7 @@ class BookingBatchServiceTest {
      */
     @Test
     void createBatch_laterSlotOutsideCoachAvailability_isRejected() {
-        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
         stubOwnershipAndActiveCoach();
 
         CreateBatchRequest req = buildRequest(2);
@@ -230,7 +230,7 @@ class BookingBatchServiceTest {
     /** The window list is fetched ONCE for the batch, not once per slot. */
     @Test
     void createBatch_fetchesTheAvailabilityWindowsOncePerBatchNotPerSlot() {
-        when(configService.getLong("booking.batch.maxSize")).thenReturn(10L);
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(10L);
         stubOwnershipAndActiveCoach();
         BookingBatch savedBatch = new BookingBatch();
         savedBatch.setId(BATCH_ID);
@@ -256,7 +256,7 @@ class BookingBatchServiceTest {
      */
     @Test
     void createBatch_availabilityNarrowsBetweenInitialResolveAndPersist_abortsWholeBatch() {
-        when(configService.getLong("booking.batch.maxSize")).thenReturn(10L);
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(10L);
         stubOwnershipAndActiveCoach();
         when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any()))
             .thenReturn(true, false);
@@ -275,7 +275,7 @@ class BookingBatchServiceTest {
 
     @Test
     void createBatch_slotOverlapsActiveBlock_isRejected() {
-        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
         stubOwnershipAndActiveCoach();
         when(bookingService.isSlotBlocked(any(), any(), any())).thenReturn(true);
 
@@ -296,7 +296,7 @@ class BookingBatchServiceTest {
      */
     @Test
     void createBatch_blockAddedBetweenInitialResolveAndPersist_abortsAtPreCommitStage() {
-        when(configService.getLong("booking.batch.maxSize")).thenReturn(10L);
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(10L);
         stubOwnershipAndActiveCoach();
         when(bookingService.isSlotBlocked(any(), any(), any())).thenReturn(false, true);
 
@@ -312,7 +312,7 @@ class BookingBatchServiceTest {
 
     @Test
     void createBatch_slotWithoutBlock_createsSuccessfully() {
-        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
         stubOwnershipAndActiveCoach();
         when(bookingService.isSlotBlocked(any(), any(), any())).thenReturn(false);
         when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID))
@@ -331,7 +331,7 @@ class BookingBatchServiceTest {
 
     @Test
     void createBatch_slotOfTheWrongLength_isRejected() {
-        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
         stubOwnershipAndActiveCoach();
 
         Instant base = Instant.now().plus(2, ChronoUnit.DAYS);
@@ -353,7 +353,7 @@ class BookingBatchServiceTest {
      */
     @Test
     void createBatch_twoOverlappingSlotsWithDistinctStarts_isRejected() {
-        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
         stubOwnershipAndActiveCoach();
         when(sessionDurationResolver.resolve(COACH_ID)).thenReturn(Duration.ofMinutes(60));
 
@@ -373,7 +373,7 @@ class BookingBatchServiceTest {
     /** Slots that merely touch (one ends exactly where the next starts) are not overlapping. */
     @Test
     void createBatch_backToBackSlots_areAccepted() {
-        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
         stubOwnershipAndActiveCoach();
         BookingBatch savedBatch = new BookingBatch();
         savedBatch.setId(BATCH_ID);
@@ -393,7 +393,7 @@ class BookingBatchServiceTest {
 
     @Test
     void createBatch_exceedsMaxSize_throws400() {
-        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
 
         CreateBatchRequest req = buildRequest(6);
         assertThatThrownBy(() -> service.createBatch(PARENT_ID, req))
@@ -404,7 +404,7 @@ class BookingBatchServiceTest {
 
     @Test
     void createBatch_parentDoesNotOwnPlayer_throws403() {
-        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
 
         PlayerProfile player = new PlayerProfile();
         player.setParentId(999L);
@@ -419,7 +419,7 @@ class BookingBatchServiceTest {
     @Test
     void createBatch_selfRegisteredPlayerBooksForThemselves_succeedsAndWritesOwnUserIdAsParentId() {
         long selfPlayerUserId = 9000005L;
-        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
 
         PlayerProfile selfPlayer = new PlayerProfile();
         selfPlayer.setUserId(selfPlayerUserId);
@@ -447,7 +447,7 @@ class BookingBatchServiceTest {
     /** Self-registered player must not be able to book using someone else's playerId. */
     @Test
     void createBatch_selfRegisteredPlayerUsesSomeoneElsesPlayerId_isRejected() {
-        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
 
         PlayerProfile someoneElsesPlayer = new PlayerProfile();
         someoneElsesPlayer.setUserId(999L);
@@ -462,7 +462,7 @@ class BookingBatchServiceTest {
     /** Exercises the "if" branch from a parent caller against a self-owned player. */
     @Test
     void createBatch_parentAttemptsToBookASelfOwnedPlayer_isRejected() {
-        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
 
         PlayerProfile selfOwnedPlayer = new PlayerProfile();
         selfOwnedPlayer.setUserId(9000005L);
@@ -481,7 +481,7 @@ class BookingBatchServiceTest {
         // since it was already disconnected from the actual payment outcome (batch bookings
         // never carried a sessionPackPurchaseId and always settled via
         // PaymentLifecycleService.onBatchBookingAccepted's credit-wallet/Stripe branch).
-        when(configService.getLong("booking.batch.maxSize")).thenReturn(5L);
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
 
         PlayerProfile player = new PlayerProfile();
         player.setParentId(PARENT_ID);

@@ -86,7 +86,7 @@ class PlaybackServiceTest {
         savedToken.setViewerId(viewerId);
         savedToken.setExpiresAt(Instant.now().plusSeconds(900));
 
-        when(configService.getLong("platform.video.playback.signed_url_ttl_minutes", 120L)).thenReturn(120L);
+        when(configService.getBoundedLong("platform.video.playback.signed_url_ttl_minutes", 120L, 1L, 1440L)).thenReturn(120L);
         when(configService.getBoolean("platform.video.playback.ip_binding_enabled", false)).thenReturn(false);
         when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
         when(videoRepository.findByIdForUpdate(videoId)).thenReturn(Optional.of(video));
@@ -139,7 +139,7 @@ class PlaybackServiceTest {
         savedToken.setViewerId(viewerId);
         savedToken.setExpiresAt(Instant.now().plusSeconds(900));
 
-        when(configService.getLong("platform.video.playback.signed_url_ttl_minutes", 120L)).thenReturn(120L);
+        when(configService.getBoundedLong("platform.video.playback.signed_url_ttl_minutes", 120L, 1L, 1440L)).thenReturn(120L);
         when(configService.getBoolean("platform.video.playback.ip_binding_enabled", false)).thenReturn(false);
         when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
         when(videoRepository.findByIdForUpdate(videoId)).thenReturn(Optional.of(video));
@@ -174,7 +174,7 @@ class PlaybackServiceTest {
         savedToken.setViewerId(viewerId);
         savedToken.setExpiresAt(Instant.now().plusSeconds(900));
 
-        when(configService.getLong("platform.video.playback.signed_url_ttl_minutes", 120L)).thenReturn(120L);
+        when(configService.getBoundedLong("platform.video.playback.signed_url_ttl_minutes", 120L, 1L, 1440L)).thenReturn(120L);
         when(configService.getBoolean("platform.video.playback.ip_binding_enabled", false)).thenReturn(false);
         when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
         when(videoRepository.findByIdForUpdate(videoId)).thenReturn(Optional.of(video));
@@ -216,7 +216,7 @@ class PlaybackServiceTest {
         savedToken.setViewerId(viewerId);
         savedToken.setExpiresAt(Instant.now().plusSeconds(900));
 
-        when(configService.getLong("platform.video.playback.signed_url_ttl_minutes", 120L)).thenReturn(120L);
+        when(configService.getBoundedLong("platform.video.playback.signed_url_ttl_minutes", 120L, 1L, 1440L)).thenReturn(120L);
         when(configService.getBoolean("platform.video.playback.ip_binding_enabled", false)).thenReturn(false);
         when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
         when(videoRepository.findByIdForUpdate(videoId)).thenReturn(Optional.of(video));

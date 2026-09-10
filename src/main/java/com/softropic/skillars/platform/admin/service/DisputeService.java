@@ -106,7 +106,8 @@ public class DisputeService {
                 "Not eligible to raise dispute for this booking", DisputeError.NOT_ELIGIBLE);
         }
 
-        long windowDays = configService.getLong("disputes.submissionWindowDays", 14L);
+        // skillars-deferred-107 AC2: 0/neg → no dispute can ever be filed (failFast). Clamps to 14 + WARN.
+        long windowDays = configService.getBoundedLong("disputes.submissionWindowDays", 14L, 1L, 365L);
         if (booking.getUpdatedAt().isBefore(Instant.now().minus(windowDays, ChronoUnit.DAYS))) {
             throw new OperationNotAllowedException("Dispute window expired", DisputeError.WINDOW_EXPIRED);
         }

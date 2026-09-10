@@ -206,6 +206,21 @@ class NeglectedSkillDetectionServiceTest {
         verify(snapshotRepository, never()).findByPlayerIdAndWeek(anyLong(), anyShort(), anyShort());
     }
 
+    @Test
+    void detectNeglectedSkills_readsWarmupCountThroughRangeBoundedAccessor() {
+        // skillars-deferred-107 AC2 + code review: revert the call site to getLong(key) and this
+        // verify fails — a negative stored warmup count would otherwise invert the neglect predicate.
+        when(configService.getString("slu.neglected.threshold")).thenReturn("0.30");
+        when(configService.getBoundedLong("development.neglectedSkill.warmupSessionCount", 0L, 10000L))
+            .thenReturn(5L);
+        lenient().when(sluTargetRepository.findDistinctPlayerIds()).thenReturn(List.of(PLAYER_ID));
+        lenient().when(sluTargetRepository.findMaxTargetPerSkill(PLAYER_ID)).thenReturn(List.of());
+
+        detectionService.detectNeglectedSkills();
+
+        verify(configService).getBoundedLong("development.neglectedSkill.warmupSessionCount", 0L, 10000L);
+    }
+
     // skillars-deferred-101 AC10: boundary-value tests for isInValidRange()
     // Valid range: (0, 1) — strictly greater than 0, strictly less than 1
     @ParameterizedTest

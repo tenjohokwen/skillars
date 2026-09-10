@@ -57,7 +57,8 @@ public class VideoSubscriptionLifecycleListener {
 
     @Scheduled(fixedDelay = 60_000)
     public void processOutbox() {
-        int maxAttempts = (int) configService.getLong("platform.video.lifecycle.outbox_max_attempts");
+        // skillars-deferred-107 AC2: 0/neg → outbox never drains or attempt math underflows.
+        int maxAttempts = (int) configService.getBoundedLong("platform.video.lifecycle.outbox_max_attempts", 1L, 100L);
 
         List<SubscriptionLifecycleOutbox> pending =
             outboxRepository.findTop100ByStatusAndAttemptsLessThanOrderByCreatedAtAsc("PENDING", maxAttempts);
@@ -70,7 +71,10 @@ public class VideoSubscriptionLifecycleListener {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void processAndSaveEntry(SubscriptionLifecycleOutbox entry, int maxAttempts) {
-        int batchSize = (int) configService.getLong("platform.video.lifecycle.batch_size");
+        // skillars-deferred-107 AC2: 0 → processEntry makes no progress; huge → load spike.
+        // skillars-deferred-107 code review: default 100 (matches VideoLifecycleScheduler) so a
+        // missing seed falls back rather than throwing IllegalStateException here — same key, one contract.
+        int batchSize = configService.getBoundedInt("platform.video.lifecycle.batch_size", 100, 1, 10000);
         entry.setAttempts(entry.getAttempts() + 1);
         try {
             processEntry(entry, batchSize);

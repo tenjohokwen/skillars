@@ -70,7 +70,7 @@ class RadarCompositeDlqProcessorTest {
     void process_failureBelowMaxAttempts_reschedulesAsPending() {
         RadarCompositeDlqEntry row = entry();
         when(dlqRepository.findClaimedBatch()).thenReturn(List.of(row));
-        when(configService.getLong(eq("platform.development.radar_composite_dlq.max_attempts"), anyLong())).thenReturn(5L);
+        when(configService.getBoundedLong(eq("platform.development.radar_composite_dlq.max_attempts"), anyLong(), anyLong(), anyLong())).thenReturn(5L);
         doThrow(new RuntimeException("still failing")).when(compositeCalculationService)
             .recalculateComposite(500L, 600L, Set.of("PAC"));
 
@@ -86,7 +86,7 @@ class RadarCompositeDlqProcessorTest {
         RadarCompositeDlqEntry row = entry();
         row.setAttempts(4);
         when(dlqRepository.findClaimedBatch()).thenReturn(List.of(row));
-        when(configService.getLong(eq("platform.development.radar_composite_dlq.max_attempts"), anyLong())).thenReturn(5L);
+        when(configService.getBoundedLong(eq("platform.development.radar_composite_dlq.max_attempts"), anyLong(), anyLong(), anyLong())).thenReturn(5L);
         doThrow(new RuntimeException("still failing")).when(compositeCalculationService)
             .recalculateComposite(500L, 600L, Set.of("PAC"));
 
@@ -94,5 +94,20 @@ class RadarCompositeDlqProcessorTest {
 
         assertThat(row.getStatus()).isEqualTo("DEAD");
         assertThat(row.getAttempts()).isEqualTo(5);
+    }
+
+    @Test
+    void handleFailure_readsMaxAttemptsThroughTheRangeBoundedAccessor() {
+        // skillars-deferred-107 AC2: revert the call site to getLong(key, 5L) and this verify fails —
+        // a 0/negative stored value must not be able to dead-letter every row on its first attempt.
+        RadarCompositeDlqEntry row = entry();
+        when(dlqRepository.findClaimedBatch()).thenReturn(List.of(row));
+        when(configService.getBoundedLong(eq("platform.development.radar_composite_dlq.max_attempts"), anyLong(), anyLong(), anyLong())).thenReturn(5L);
+        doThrow(new RuntimeException("boom")).when(compositeCalculationService)
+            .recalculateComposite(500L, 600L, Set.of("PAC"));
+
+        processor.process();
+
+        verify(configService).getBoundedLong("platform.development.radar_composite_dlq.max_attempts", 5L, 1L, 100L);
     }
 }

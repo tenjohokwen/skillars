@@ -72,7 +72,8 @@ public class ReviewFlagService {
         }
 
         long openFlagCount = reviewFlagRepository.countByReviewIdAndResolvedAtIsNull(reviewId);
-        int threshold = configService.getInt("reviews.autoHoldFlagThreshold", 3);
+        // skillars-deferred-107 AC2: 0 → the first flag on any review auto-holds it. Clamps to 3 + WARN.
+        int threshold = configService.getBoundedInt("reviews.autoHoldFlagThreshold", 3, 1, 1000);
 
         boolean autoHeld = false;
         if (openFlagCount >= threshold && review.getModerationStatus() == ReviewModerationStatus.APPROVED) {

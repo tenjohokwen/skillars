@@ -53,7 +53,9 @@ public class DevelopmentCorrelationService {
             throw new FeatureGatedException("development.correlation", "ACADEMY");
         }
 
-        long minSessionCount = configService.getLong("development.correlation.minSessionCount");
+        // skillars-deferred-107 AC2: neg → the correlation gate never blocks (every session
+        // qualifies); 0 is legitimate ("no minimum"). Mirrors ConfigBounds.DEVELOPMENT_CORRELATION_MIN_SESSION_COUNT.
+        long minSessionCount = configService.getBoundedLong("development.correlation.minSessionCount", 0L, 10000L);
         Long distinctSessions = sluRepository.countDistinctSessions(playerId);
         if (distinctSessions == null || distinctSessions < minSessionCount) {
             return new CorrelationResponse(true, minSessionCount, List.of(), 0);

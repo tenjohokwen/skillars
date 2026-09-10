@@ -44,8 +44,8 @@ class ModerationSlaMonitorServiceTest {
         // @PostConstruct is not called by Mockito — wire requiresNewTemplate to the same mock
         // so calls inside detectSlaViolations() behave identically to the outer transactionTemplate
         ReflectionTestUtils.setField(service, "requiresNewTemplate", transactionTemplate);
-        lenient().when(configService.getLong("platform.moderation_sla_minutes")).thenReturn(30L);
-        lenient().when(configService.getLong("platform.moderation_max_retries")).thenReturn(5L);
+        lenient().when(configService.getBoundedLong("platform.moderation_sla_minutes", 1L, 10080L)).thenReturn(30L);
+        lenient().when(configService.getBoundedLong("platform.moderation_max_retries", 0L, 100L)).thenReturn(5L);
         lenient().when(transactionTemplate.execute(any())).thenAnswer(inv -> {
             org.springframework.transaction.support.TransactionCallback<?> cb = inv.getArgument(0);
             return cb.doInTransaction(null);

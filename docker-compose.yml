@@ -224,9 +224,12 @@ services:
     restart: unless-stopped
     logging: *default-logging
 
-  # DECISION: Alertmanager integration will use Grafana alerts exclusively; remove or disable
-  # corresponding Prometheus alert rules when Alertmanager is added. Currently, both Prometheus
-  # and Grafana define infra alerts; ensure only one fires the same alert when Alertmanager is deployed.
+  # Alerting architecture: Grafana-managed alerting is the single alert-delivery path. No
+  # Alertmanager is deployed and none is planned. Prometheus alerts.yml rules stay (they give
+  # Grafana alert state / panels via the Prometheus datasource) but deliver nothing on their own.
+  # The full decision + the checklist for a future change that adds Alertmanager is in
+  # docs/deployment/monitoring.md#alerting-architecture-the-alertmanager-decision.
+  # skillars-deferred-107 AC7 / [DECIDED 2026-09-10]
   prometheus:
     image: prom/prometheus:v3.4.1
     volumes:
@@ -380,9 +383,23 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     logging: *default-logging
-    # node_exporter is isolated on `skillars-observability`; `app`/`grafana` can reach it as they
-    # join both networks. A compromised `app` container can read host metrics. This is the accepted
-    # design boundary.
+    # node_exporter network isolation — WON'T FIX (skillars-deferred-107 AC5 / [DECIDED 2026-09-10];
+    # rationale corrected by that story's code review).
+    #  1. node_exporter has no published host ports and sits on `skillars-observability`, which is
+    #     `internal: true` (no gateway) — it is unreachable off-host.
+    #  2. On-host, EVERY container on `skillars-observability` can reach `node_exporter:9100`:
+    #     `prometheus` (must — it scrapes it), `loki`, `tempo`, `redis`, plus `app` and `grafana`
+    #     (which also join it for egress). loki/tempo/redis are third-party images; `app`/`grafana`
+    #     are first-party.
+    #  3. But `skillars-observability` is `internal: true`, so a compromised loki/tempo/redis/
+    #     prometheus has NO route off-host and cannot exfiltrate anything it scrapes from
+    #     node_exporter. The only members with egress are `app` and `grafana` — and a compromised
+    #     `app` already holds the Postgres password, Stripe/Bunny.net keys and the OTLP endpoint, so
+    #     host CPU/memory/disk gauges are not a meaningful escalation on top of that.
+    #  4. A dedicated 2-member `prometheus`+`node_exporter` network was evaluated and REJECTED: it
+    #     adds a fourth bridge network and a scrape-topology special case for negligible security gain.
+    #  5. REVISIT if a container with BOTH node_exporter reachability AND its own egress is ever added
+    #     to `skillars-observability` (today only the first-party `app`/`grafana` have both).
     networks:
       - skillars-observability
 

@@ -90,7 +90,12 @@ public class VideoAccessGuard {
                 Long coachUserId = securityUtil.getCurrentCoachUserId();
                 UUID coachId = coachProfileService.getCoachIdByUserId(coachUserId);
                 Long playerId = Long.parseLong(video.getOwnerId());
-                int windowDays = Math.toIntExact(configService.getLong("platform.video.access.coach_window_days", 90L));
+                // skillars-deferred-107 AC2: 0/neg → a coach with a recent completed booking can no
+                // longer view player videos. Upper bound is a *business* cap (3650d ≈ 10y), chosen
+                // well under the Math.toIntExact ceiling; widen it (still < Integer.MAX_VALUE) rather
+                // than let a legitimate >10y window clamp. Mirrors ConfigBounds.VIDEO_ACCESS_COACH_WINDOW_DAYS.
+                int windowDays = Math.toIntExact(
+                    configService.getBoundedLong("platform.video.access.coach_window_days", 90L, 1L, 3650L));
                 Instant windowStart = Instant.now().minus(windowDays, ChronoUnit.DAYS);
                 if (bookingRepository.existsRecentCompletedBooking(coachId, playerId, windowStart)) {
                     return true;

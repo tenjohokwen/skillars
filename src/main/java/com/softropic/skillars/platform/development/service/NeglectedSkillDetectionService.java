@@ -67,7 +67,10 @@ public class NeglectedSkillDetectionService {
 
         long warmupSessionCount;
         try {
-            warmupSessionCount = configService.getLong("development.neglectedSkill.warmupSessionCount");
+            // skillars-deferred-107 AC2: a negative value inverts the warmup predicate. Now clamped
+            // to 0 (a legitimate "no warmup") + WARN; the explicit negative guard below is kept as
+            // belt-and-suspenders and would only fire if the [0, 10000] bound were ever removed.
+            warmupSessionCount = configService.getBoundedLong("development.neglectedSkill.warmupSessionCount", 0L, 10000L);
             if (warmupSessionCount < 0) {
                 log.error("Neglected skill detection aborted — development.neglectedSkill.warmupSessionCount is negative: {}", warmupSessionCount);
                 return;

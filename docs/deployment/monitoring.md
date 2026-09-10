@@ -57,6 +57,103 @@ All alert rules appear in Grafana under **Alerting → Alert rules → Skillars 
 
 ---
 
+## Alerting architecture: the Alertmanager decision
+
+**Decision (skillars-deferred-107 AC7, [DECIDED 2026-09-10]).** Grafana-managed alerting is the
+single alert-*delivery* path. The Prometheus `deploy/lgtm/alerts.yml` rules stay — they give Grafana
+alert state and panels via the Prometheus datasource — but they **deliver nothing on their own**. No
+Alertmanager is deployed and none is planned. This item had been "decision-deferred" since
+`deploy-3-3` (2026-06-05) purely because Alertmanager was never stood up; the decision is now
+recorded rather than left as a compose comment.
+
+**Why one delivery path.** A second delivery path (Prometheus → Alertmanager → receivers) alongside
+Grafana's own notification policies means two notification configs to keep reconciled, two places a
+contact point can be edited, and — for any alert defined on both sides — double-paging. One path
+means each alert fires exactly once and there is one place to change routing.
+
+**⚠️ Known coverage gap (surfaced by the skillars-deferred-107 code review).** `alerts.yml` defines
+9 rules; `deploy/lgtm/grafana-alerts.yml` provisions Grafana equivalents for only 5
+(`NodeExporterDown`, `AppDown`, `DiskDataVolumeHigh`, `DiskRootHigh`, `MemoryPressureHigh`). The
+four with **no Grafana twin deliver nothing today**:
+
+| Prometheus rule (`alerts.yml`) | What it watches |
+|---|---|
+| `DbConnectionPoolHigh` | HikariCP pool near exhaustion |
+| `JvmHeapHigh` | JVM heap sustained near max |
+| `BookingPaymentSettleFailureRateHigh` | booking payment settlement failure rate (has a `runbook:` link) |
+| `SubscriptionInvoicePaymentFailureHigh` | subscription invoice payment failures (has a `runbook:` link) |
+
+This gap predates AC7 — the decision just makes it explicit. **Close it** by adding the four rules to
+`grafana-alerts.yml` (own follow-up: each needs a threshold, an evaluation window and the
+`notify-ops` contact point), or consciously accept that these four are dashboard-only.
+
+**If Alertmanager is ever added, the same change MUST:**
+
+1. Add an `alerting.alertmanagers` block to `deploy/lgtm/prometheus.yml` pointing at the new service.
+2. Define the Alertmanager `route` + `receivers` and make it the delivery path for the infra alerts
+   currently in `alerts.yml`.
+3. **Disable the twin Grafana notification policies** for every alert that now routes through
+   Alertmanager, so each alert fires exactly once (not once per path).
+4. Update this section and the `# Alerting architecture:` comment above the `prometheus` service in
+   `docker-compose.yml`.
+
+---
+
+## Platform config value ranges
+
+`ConfigStartupAssertion` (skillars-deferred-107 AC3) checks these `platform_config` rows on every
+application start. A value **outside the range** is clamped to a safe number at read time (a WARN is
+logged) **and**:
+
+- for a **fail-fast** key, the application **refuses to boot** in non-`dev` profiles until the row is
+  corrected — the ERROR names every offending key and its range. Fail-fast triggers on an
+  out-of-range value, a present-but-non-numeric value, or (for a key whose call site has no code
+  default) an absent/blank value;
+- for the rest, an ERROR is logged and `config.value.misconfigured` is incremented with
+  `tag("key", …)` and `tag("reason", …)` where `reason` is `out_of_range`, `missing`, or
+  `non_numeric` — the same counter and tag scheme `ConfigService` already uses for feature-gate
+  misconfiguration. The read-time clamp keeps the flow alive.
+
+The ERROR + metric fire in **all** profiles (including `dev`); only the boot-blocking throw is gated
+to non-`dev`, so a developer who hand-edits a row to test still sees the signal.
+
+| Key | Range | Fail-fast? | What a bad value does |
+|---|---|:--:|---|
+| `platform.message_retention_months` | `[1, 600]` | ✅ | 0/neg → the retention job deletes **every** message with no open report on the next run (data-destructive) |
+| `pack.pause.maxDays` | `[1, 3650]` | ✅ | 0/neg → every session-pack pause rejected as `booking.pauseDurationInvalid` |
+| `booking.batch.maxSize` | `[1, 100]` | ✅ | 0/neg → every batch booking rejected as `booking.batchSizeExceeded` |
+| `disputes.submissionWindowDays` | `[1, 365]` | ✅ | 0/neg → no dispute can ever be filed |
+| `reviews.submissionWindowDays` | `[1, 365]` | ✅ | 0/neg → no review can ever be submitted |
+| `platform.moderation_sla_minutes` | `[1, 10080]` | ✅ | 0/neg → every SCANNING video is instantly SLA-breached and re-queued |
+| `platform.moderation_lock_timeout_minutes` | `[1, 1440]` | ✅ | 0 → moderation lock is stale on creation; huge → permanently stuck rows |
+| `platform.video.playback.signed_url_ttl_minutes` | `[1, 1440]` | ✅ | 0 → every signed HLS URL is expired on issue; all playback breaks |
+| `gdpr.export.urlExpiryHours` | `[1, 720]` | ✅ | 0 → a legally-required GDPR export download link is dead on arrival |
+| `platform.moderation_max_retries` | `[0, 100]` | — | neg → retry-count comparison inverts |
+| `booking.quick_complete_timeout_hours` | `[1, 168]` | — | 0 → Quick Complete auto-confirms instantly |
+| `platform.video.lifecycle.blocked_to_archived_days` | `[1, 3650]` | — | 0/neg → BLOCKED videos archived immediately or never |
+| `platform.video.lifecycle.archived_to_deleted_days` | `[1, 36500]` | — | 0/neg → ARCHIVED videos deleted immediately or never |
+| `platform.video.lifecycle.batch_size` | `[1, 10000]` | — | 0 → lifecycle scheduler makes no progress |
+| `platform.video.lifecycle.outbox_max_attempts` | `[1, 100]` | — | 0/neg → subscription-lifecycle outbox never drains |
+| `platform.video.deletion.max_attempts` | `[1, 100]` | — | 0/neg → Bunny.net deletion outbox dead-letters on the first attempt (or never) |
+| `platform.development.radar_composite_dlq.max_attempts` | `[1, 100]` | — | 0/neg → radar-composite DLQ dead-letters on the first attempt (or never) |
+| `platform.video.access.coach_window_days` | `[1, 3650]` | — | 0/neg → a coach with a recent completed booking can no longer view player videos |
+| `platform.video_reservation_timeout_minutes` | `[1, 1440]` | — | 0 → every upload reservation expires instantly |
+| `development.timeline.coachAccessExpiryDays` | `[1, 3650]` | — | 0/neg → coach development-timeline access reads as always expired |
+| `development.correlation.minSessionCount` | `[0, 10000]` | — | neg → correlation gate never blocks |
+| `development.neglectedSkill.warmupSessionCount` | `[0, 10000]` | — | neg → neglected-skill warmup predicate inverts |
+| `subscription.pastDue.gracePeriodDays` | `[0, 365]` | — | neg → PAST_DUE grace cutoff moves into the future |
+| `reviews.autoHoldFlagThreshold` | `[1, 1000]` | — | 0 → the first flag on any review auto-holds it |
+| `video.quota.{scout,instructor,academy,athlete}.storageBytes` | `[0, 2^63-1]` | — | neg → quota math breaks (0 is a legitimate "no upload" sentinel — scout is seeded 0) |
+| `video.quota.{scout,instructor,academy,athlete}.bandwidthBytesMonthly` | `[0, 2^63-1]` | — | neg → quota math breaks (0 is a legitimate "no streaming" sentinel) |
+| `video.{homework,drillDemo,coachReview}.maxSizeBytes` | `[1, 2^63-1]` | — | 0 → every upload of that type rejected |
+| `video.{homework,drillDemo,coachReview}.maxDurationSeconds` | `[1, 86400]` | — | 0 → every upload of that type rejected |
+
+The single source of truth for these numbers is
+`com.softropic.skillars.platform.config.service.ConfigBounds`; each `ConfigService.getBoundedLong(...)`
+/ `getBoundedInt(...)` call site passes the same `[min, max]` literally.
+
+---
+
 ## Alert Inventory and Response Actions
 
 ### Critical Alerts

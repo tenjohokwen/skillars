@@ -35,7 +35,8 @@ public class QuickCompleteTimeoutService {
 
     @Scheduled(fixedDelay = 5, timeUnit = TimeUnit.MINUTES)
     public void processExpiredQuickCompletes() {
-        long timeoutHours = configService.getLong("booking.quick_complete_timeout_hours");
+        // skillars-deferred-107 AC2: 0 → Quick Complete auto-confirms instantly; neg → nonsense cutoff.
+        long timeoutHours = configService.getBoundedLong("booking.quick_complete_timeout_hours", 1L, 168L);
         Instant cutoff = Instant.now().minus(timeoutHours, ChronoUnit.HOURS);
         List<SessionCompletionData> expired = completionDataRepository.findPendingQuickCompletes(cutoff);
 

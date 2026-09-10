@@ -126,12 +126,12 @@ class TierEntitlementGatingTest {
 
     @Test
     void configServiceCalledPerGracePeriodInvocation() {
-        when(configService.getLong("subscription.pastDue.gracePeriodDays")).thenReturn(7L);
+        when(configService.getBoundedLong("subscription.pastDue.gracePeriodDays", 0L, 365L)).thenReturn(7L);
 
         service.checkPastDueGracePeriod();
         service.checkPastDueGracePeriod();
 
-        verify(configService, times(2)).getLong("subscription.pastDue.gracePeriodDays");
+        verify(configService, times(2)).getBoundedLong("subscription.pastDue.gracePeriodDays", 0L, 365L);
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────────

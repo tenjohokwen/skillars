@@ -81,7 +81,7 @@ class ModerationOrchestrationServiceTest {
         });
         lenient().when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
         lenient().when(videoRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        lenient().when(configService.getLong("platform.moderation_lock_timeout_minutes")).thenReturn(15L);
+        lenient().when(configService.getBoundedLong("platform.moderation_lock_timeout_minutes", 1L, 1440L)).thenReturn(15L);
         lenient().when(videoProviderAdapter.getRawVideoUrl(any())).thenReturn("https://cdn.example.com/asset-123/original");
     }
 

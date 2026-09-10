@@ -480,8 +480,10 @@ public class SubscriptionService {
 
     @Transactional
     public void checkPastDueGracePeriod() {
-        // Read per invocation — never cache (ConfigService has its own internal TTL cache)
-        long gracePeriodDays = configService.getLong("subscription.pastDue.gracePeriodDays");
+        // Read per invocation — never cache (ConfigService has its own internal TTL cache).
+        // skillars-deferred-107 AC2: neg → grace cutoff moves into the future (nobody / everybody
+        // downgraded); 0 = "no grace" is legitimate. Mirrors ConfigBounds.SUBSCRIPTION_PAST_DUE_GRACE_PERIOD_DAYS.
+        long gracePeriodDays = configService.getBoundedLong("subscription.pastDue.gracePeriodDays", 0L, 365L);
         Instant graceCutoff = Instant.now().minus(gracePeriodDays, java.time.temporal.ChronoUnit.DAYS);
 
         List<PaymentCoachSubscription> pastDueCoaches =

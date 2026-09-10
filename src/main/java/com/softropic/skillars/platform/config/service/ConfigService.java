@@ -10,8 +10,10 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -68,7 +70,10 @@ public class ConfigService {
     public long getLong(String key) {
         String raw = getString(key);
         try {
-            return Long.parseLong(raw);
+            // trim() to match getLong(key, default) and ConfigStartupAssertion — a whitespace-padded
+            // value must not pass boot validation and then throw here at every bounded call site
+            // (skillars-deferred-107 code review).
+            return Long.parseLong(raw.trim());
         } catch (NumberFormatException e) {
             throw new IllegalStateException("Config key '" + key + "' is not a valid long: " + raw);
         }
@@ -108,6 +113,38 @@ public class ConfigService {
             return defaultValue;
         }
         return value;
+    }
+
+    /**
+     * No-default bounded read for the 1-arg {@link #getLong(String)} call sites — a <em>missing</em>
+     * key still throws {@link IllegalStateException} (the intended "operator must set this" contract),
+     * but a present-yet-out-of-range value is <strong>clamped to the nearest bound</strong> with a
+     * WARN rather than flowing through. Clamp, not throw: fail-fast-on-bad-value is
+     * {@code ConfigStartupAssertion}'s job (one decision per key), not an accident of whether a
+     * given call site happens to pass a default.
+     */
+    public long getBoundedLong(String key, long min, long max) {
+        long value = getLong(key);
+        if (value < min) {
+            log.warn("Config key '{}' has out-of-range value {} (expected [{}, {}]) — clamping to {}",
+                key, value, min, max, min);
+            return min;
+        }
+        if (value > max) {
+            log.warn("Config key '{}' has out-of-range value {} (expected [{}, {}]) — clamping to {}",
+                key, value, min, max, max);
+            return max;
+        }
+        return value;
+    }
+
+    /**
+     * {@code int} counterpart of {@link #getBoundedLong(String, long, long, long)} — mirrors the
+     * existing {@link #getInt(String, int)} narrowing. Out-of-range (or non-numeric / absent) values
+     * fall back to {@code defaultValue} with a WARN.
+     */
+    public int getBoundedInt(String key, int defaultValue, int min, int max) {
+        return (int) getBoundedLong(key, defaultValue, min, max);
     }
 
     public boolean getBoolean(String key) {
@@ -165,11 +202,39 @@ public class ConfigService {
     public ConfigValueResponse updateConfig(String key, String newValue) {
         PlatformConfig entity = configRepository.findByKey(key)
                 .orElseThrow(() -> new ResourceNotFoundException("ConfigEntry", key));
+        rejectOutOfRange(key, newValue);
         entity.setValue(newValue);
         entity.setUpdatedAt(Instant.now());
         configRepository.save(entity);
         invalidate();
         return configMapper.toResponse(entity);
+    }
+
+    /**
+     * skillars-deferred-107 code review: the read-side clamp and {@code ConfigStartupAssertion}
+     * only ever saw values that were bad <em>at the last restart</em> — the {@code PUT /api/config}
+     * path operators actually use wrote the raw string with no check. For a key that
+     * {@link ConfigBounds} bounds, reject a non-numeric or out-of-range write with 400 rather than
+     * let it go live on this node before the response returns.
+     */
+    private void rejectOutOfRange(String key, String newValue) {
+        ConfigBounds.ALL.stream()
+            .filter(b -> b.key().equals(key))
+            .findFirst()
+            .ifPresent(b -> {
+                long value;
+                try {
+                    value = Long.parseLong(newValue.trim());
+                } catch (NumberFormatException e) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Config key '" + key + "' must be an integer in range [" + b.min() + ", " + b.max() + "]");
+                }
+                if (value < b.min() || value > b.max()) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Config key '" + key + "' = " + value + " is outside the required range ["
+                            + b.min() + ", " + b.max() + "] — " + b.note());
+                }
+            });
     }
 
     public void invalidate() {

@@ -75,6 +75,55 @@ chown_if_needed() {
   fi
 }
 
+# skillars-deferred-107 AC8: echo the numeric uid the given compose service's image declares (its
+# Config.User), or "" on any failure. Probing the image means an image bump that moves the runtime
+# uid (Grafana's has moved 104->472 historically) is picked up automatically, instead of provision
+# "succeeding" against a hardcoded guess and leaving a data dir the new image cannot write.
+#
+# `docker inspect --format '{{.Config.User}}'` (not `docker run … id -u`): images that drop
+# privileges in their entrypoint report the pre-drop uid from `id -u` — redis runs its entrypoint as
+# root then gosu's to 999, so `id -u` would say 0. Config.User is what the Dockerfile `USER`
+# declares. It may be a name ("grafana"), "uid:gid", "uid", or "" (= root) — we resolve names via
+# /etc/passwd in the image and take only the numeric uid; "" / 0 / unresolvable all yield "".
+# skillars-deferred-107 code review.
+image_runtime_uid() {
+  local svc="$1" img user uid
+  img=$(docker compose --env-file "${ENV_FILE}" -f "${APP_DIR}/docker-compose.yml" config --format json 2>/dev/null \
+        | jq -r --arg s "$svc" '.services[$s].image // empty' 2>/dev/null) || return 0
+  [ -n "${img:-}" ] || return 0
+  docker image inspect "$img" >/dev/null 2>&1 || docker pull "$img" >/dev/null 2>&1 || return 0
+  user=$(docker image inspect --format '{{.Config.User}}' "$img" 2>/dev/null) || return 0
+  user="${user%%:*}"                       # drop any ":gid"
+  [ -n "$user" ] || return 0               # empty USER = root
+  case "$user" in
+    ''|*[!0-9]*)                           # a name — resolve it inside the image
+      uid=$(docker run --rm --entrypoint sh "$img" -c "id -u '$user'" 2>/dev/null) || return 0 ;;
+    *) uid="$user" ;;
+  esac
+  case "${uid:-}" in ''|*[!0-9]*|0) return 0 ;; esac   # unresolved / non-numeric / root => give up
+  printf '%s' "$uid"
+}
+
+# chown a data dir to the probed image uid, keeping the hardcoded $3's GID pinned (the data dir's
+# group is deliberate and independent of the image's declared group — e.g. redis wants gid 1000
+# while its process is gid 999; grafana's image declares gid 0). Falls back to $3 silently when the
+# probe can't determine a non-root uid (normal for redis / root-group images), and WARNs only when
+# the probe returns a valid non-zero uid that differs from the constant — that is a real image drift.
+# skillars-deferred-107 AC8 + code review.
+chown_probed() {
+  local svc="$1" dir="$2" fallback="$3"
+  local fb_uid="${fallback%%:*}" fb_gid="${fallback##*:}" probed_uid
+  probed_uid="$(image_runtime_uid "$svc")"
+  if [ -z "$probed_uid" ]; then
+    chown_if_needed "$fallback" "$dir"
+  elif [ "$probed_uid" != "$fb_uid" ]; then
+    log "⚠️  ${svc}: image now runs as uid ${probed_uid}, hardcoded constant is ${fb_uid} — using ${probed_uid}:${fb_gid} for ${dir}; update the constant in provision.sh and restore-from-volume-backup.sh"
+    chown_if_needed "${probed_uid}:${fb_gid}" "$dir"
+  else
+    chown_if_needed "$fallback" "$dir"
+  fi
+}
+
 # skillars-deferred-89 AC8 (code review). Delete every `SSH (allowlisted)` ufw rule whose source is
 # NOT $1. Without this, an operator whose egress IP changed between runs (dynamic ISP / VPN) would
 # accumulate a permanent SSH grant for each reassigned address. Rule numbers shift on every delete,
@@ -705,19 +754,20 @@ if [ -b "${VOLUME_DEVICE}" ]; then
   settle_pre_volume_migration
 
   # Recreate sub-directories on mounted volume
-  # Container UIDs are tied to specific image versions (prometheus, loki, tempo, grafana, redis, traefik).
-  # Update these chown calls if the corresponding docker-compose.yml image versions change.
+  # skillars-deferred-107 AC8: the numeric uid:gid below are FALLBACKS — chown_probed reads the
+  # runtime uid from each service's image first (see image_runtime_uid) and only uses these if the
+  # probe can't determine a non-root uid, WARNing when a probed non-zero uid differs from the constant.
   # mkdir-p calls are gated inside the volume-device check. If volume is absent, Docker creates dirs as root;
   # watch for permission errors on first provision.
   mkdir -p "${MOUNT_POINT}/postgres"
   mkdir -p "${MOUNT_POINT}/prometheus"
-  chown_if_needed 65534:65534 "${MOUNT_POINT}/prometheus"
+  chown_probed prometheus "${MOUNT_POINT}/prometheus" 65534:65534
   mkdir -p "${MOUNT_POINT}/loki"
-  chown_if_needed 10001:10001 "${MOUNT_POINT}/loki"
+  chown_probed loki "${MOUNT_POINT}/loki" 10001:10001
   mkdir -p "${MOUNT_POINT}/tempo"
-  chown_if_needed 10001:10001 "${MOUNT_POINT}/tempo"
+  chown_probed tempo "${MOUNT_POINT}/tempo" 10001:10001
   mkdir -p "${MOUNT_POINT}/grafana"
-  chown_if_needed 472:472 "${MOUNT_POINT}/grafana"
+  chown_probed grafana "${MOUNT_POINT}/grafana" 472:472
 else
   log "⚠️  Hetzner Volume device not found (no /dev/disk/by-id/scsi-0HC_Volume_* symlink and no ${VOLUME_DEVICE})."
   log "    Attach the Volume to this server in the Hetzner Cloud Console, then re-run this script."
@@ -736,12 +786,14 @@ fi
 # Docker as root-owned on first `up`. Relocated here from section 6.5 — see the note there.
 #
 # Redis, unlike the LGTM directories in section 7, is here rather than there because it fails HARD
-# on a wrong owner: the image drops to uid 999 and cannot write an AOF into a root-owned directory,
-# so a no-Volume host would end up with a crash-looping redis instead of degraded durability.
-# uid/gid verified from the image itself: `docker run --rm redis:7-alpine id redis`
-# -> uid=999(redis) gid=1000(redis). Do not guess it.
+# on a wrong owner: the container process runs as uid 999 and cannot write an AOF into a root-owned
+# directory, so a no-Volume host would end up with a crash-looping redis instead of degraded
+# durability. uid/gid verified from the image itself: `docker run --rm redis:7-alpine id redis`
+# -> uid=999(redis) gid=1000(redis) — the process is uid 999 / gid 1000, and the data dir is owned
+# 999:1000 to match. The redis image declares no `USER` (it drops privileges via gosu in its
+# entrypoint), so image_runtime_uid returns "" and chown_probed silently uses this 999:1000 constant.
 mkdir -p "${MOUNT_POINT}/redis"
-chown_if_needed 999:1000 "${MOUNT_POINT}/redis"
+chown_probed redis "${MOUNT_POINT}/redis" 999:1000
 
 # acme.json — Traefik refuses to start if this file is missing or has wrong permissions.
 # 700 on the directory matches the manual fallback documented in deploy/traefik/README.md; the

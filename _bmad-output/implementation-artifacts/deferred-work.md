@@ -43,21 +43,21 @@ Every item below was checked against the live file at `c2c47c1`, not against the
 
 | Item | Verdict |
 |---|---|
-| `deploy-3-4` DROP DATABASE / open connections | open, **narrowed** — `app` is the only container with a datasource; the real blocker is a human `psql` session. Citation corrected to the script. |
+| `deploy-3-4` DROP DATABASE / open connections | ~~open, **narrowed** — `app` is the only container with a datasource; the real blocker is a human `psql` session. Citation corrected to the script.~~ **CLOSED by `skillars-deferred-101` AC6** — `restore-from-dump.sh:140-141` runs `SELECT pg_terminate_backend(pid) … WHERE datname = '<db>' AND pid <> pg_backend_pid();` immediately before `DROP DATABASE IF EXISTS`. Standalone bullet already deleted by `deferred-101`. |
 | `deploy-3-4` hardcoded container UIDs 65534/10001/472 | `[PICKED UP by skillars-deferred-94 AC2]` — comments added; verify no regression. `provision.sh:597-603`, `restore-from-volume-backup.sh:93-99` |
-| `deploy-3-4` APP_CID capture race | open, **partly mitigated** — now fails fast with a diagnostic instead of a 90 s timeout. Citation corrected. |
+| `deploy-3-4` APP_CID capture race | ~~open, **partly mitigated** — now fails fast with a diagnostic instead of a 90 s timeout. Citation corrected.~~ **CLOSED by `skillars-deferred-102` AC2** — `restore-from-dump.sh:205-222` is a 5×/2s bounded retry loop around `${DC} ps -q app`, then a clear `err` + EXIT-trap recovery. Standalone bullet already deleted by `deferred-102`. |
 | `deploy-3-4` WebhookPermanentFailure Admin API | **STALE, deleted** — the alert no longer exists |
 | `deploy-3-4` CallbackRateZero endpoint undocumented | **STALE, deleted** — the alert no longer exists |
-| `deploy-3-3` double notification if Alertmanager added | `[PICKED UP by skillars-deferred-94 AC4]` — design gate comment added to docker-compose.yml; decision-deferred (Alertmanager not deployed yet). |
-| `deploy-3-3` node_exporter network isolation | open, **substantially narrowed** by `skillars-deferred-88` AC8 — see the corrected bullet |
+| `deploy-3-3` double notification if Alertmanager added | ~~`[PICKED UP by skillars-deferred-94 AC4]` — design gate comment added to docker-compose.yml; decision-deferred (Alertmanager not deployed yet).~~ **DECIDED by `skillars-deferred-107` AC7** — Grafana-only delivery; Prometheus rules stay non-delivering; a future Alertmanager change carries a documented checklist. See `docs/deployment/monitoring.md#alerting-architecture-the-alertmanager-decision`. |
+| `deploy-3-3` node_exporter network isolation | ~~open, **substantially narrowed** by `skillars-deferred-88` AC8 — see the corrected bullet~~ **DECIDED by `skillars-deferred-107` AC5** — accept & document: the only on-host peers are first-party `app`/`grafana`, a compromised `app` already holds the DB/Stripe/Bunny/OTLP credentials, a dedicated network was evaluated and rejected. Full rationale in the `docker-compose.yml` `node_exporter` comment. |
 | `deploy-3-3` DiskDataVolumeHigh needs the Volume mounted | `[PICKED UP by skillars-deferred-94 AC6]` — comment + docs added; volume mount prerequisite documented. |
-| `deploy-3-1` PGPASSWORD via `docker exec -e` | `[PICKED UP by skillars-deferred-94 AC1]` — all 5 occurrences fixed; environment-variable inheritance pattern applied. |
+| `deploy-3-1` PGPASSWORD via `docker exec -e` | ~~`[PICKED UP by skillars-deferred-94 AC1]`~~ **CLOSED (skillars-deferred-94 AC1, shipped 2026-09-07):** all occurrences now use `PGPASSWORD="…" docker exec -e PGPASSWORD "$CID"` env-var inheritance — no secret in `ps aux`. Bullet deleted 2026-09-10. The separate `/proc/<pid>/environ` bullet remains. |
 | `deploy-3-1` credentials in `/proc/<pid>/environ` | open, unchanged, project-wide |
 | `deploy-3-1` awscli v1 from Ubuntu apt | open, unchanged — `provision.sh:131` |
 | `deploy-1-5` repo cloned before the Volume is mounted | open, unchanged |
 | `deploy-1-5` repo cloned as root, `.git` beside runtime data | open, unchanged |
 | `deploy-1-5` no rollback / DR documentation | **CLOSED, deleted** — `rollback.md`, `backup-restore.md` and `runbook.md` all shipped with Epic 3, exactly as the item predicted |
-| `deploy-1-5` `git clean` vs the data subdirectory | open, **narrowed** — `.gitignore` now covers `/data/`; only `git clean -fdx` still reaches it |
+| `deploy-1-5` `git clean` vs the data subdirectory | ~~open, **narrowed** — `.gitignore` now covers `/data/`; only `git clean -fdx` still reaches it~~ **CLOSED by `skillars-deferred-102` AC6/AC7** — the checkout moved to `/opt/skillars/app`, a *sibling* of the Volume mount `/opt/skillars/data`, owned by non-root `deploy`; `.env` is at `/opt/skillars/.env`, outside the checkout. `git clean -fdx` inside the checkout reaches neither. Standalone bullets already deleted by `deferred-102`. |
 | `deploy-1-3` LGTM `mkdir -p` gated inside the `[ -b ]` check | ~~`[PICKED UP by skillars-deferred-94 AC14]` — clarifying comment added; no code change.~~ **CLOSED — premise stale (skillars-deferred-103 AC12, 2026-09-09):** `mkdir -p "${DEPLOY_ROOT}/lgtm"` runs unconditionally at `provision.sh:349`, well before the `if [ -b "${VOLUME_DEVICE}" ]` gate at `:567`. Bullet deleted. |
 
 Net: 18 items examined, **3 closed or stale and deleted**, 6 corrected in place (stale citations, narrowed or
@@ -839,13 +839,12 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - Hardcoded container UIDs (65534/10001/472) not tied to Docker image versions — upstream UID changes (historically seen with Grafana) would silently break subdirectory ownership after snapshot restore [docs/deployment/backup-restore.md] `[AUDIT 2026-08-27: re-verified, still open, still a legitimate low-probability accepted tradeoff — hardcoded UIDs remain untied to image versions in provision.sh/restore-from-volume-backup.sh; monitor upstream image changelogs rather than fix now]` `[PICKED UP by skillars-deferred-94 AC2: guard comment added]`
 
 ## Deferred from: code review of deploy-3-3-external-uptime-monitoring-alert-rules (2026-06-05)
-- Double notification risk if Alertmanager added later — Prometheus rules and Grafana alerting both evaluate the same infra alerts; currently no Alertmanager so only Grafana notifies, but future Alertmanager addition would cause duplicate ops notifications for every infra alert
-- node_exporter network isolation — port 9100 reachable from co-networked containers. **[AUDIT 2026-09-04: substantially narrowed by `skillars-deferred-88` AC8, not closed.** node_exporter now sits on `skillars-observability` alone (`internal: true`, no gateway attached) and publishes no host ports, so it is unreachable from off-host and a compromised prometheus/loki/tempo/redis cannot exfiltrate. But `app` and `grafana` join **both** networks by design (they need egress), so a compromised `app` container still reaches `node_exporter:9100` and its full host-level metrics. The original wording — "any compromised container" — is now wrong; the exposure is `app` and `grafana` only.]** [`docker-compose.yml` networks block]
+- Double notification risk if Alertmanager added later — Prometheus rules and Grafana alerting both evaluate the same infra alerts; currently no Alertmanager so only Grafana notifies, but future Alertmanager addition would cause duplicate ops notifications for every infra alert `[DECIDED 2026-09-10 (skillars-deferred-107 AC7): Grafana-managed alerting is the single delivery path; Prometheus alerts.yml rules stay non-delivering; a future Alertmanager change carries a documented 4-step checklist. See docs/deployment/monitoring.md#alerting-architecture-the-alertmanager-decision and the docker-compose.yml prometheus-service comment.]`
+- node_exporter network isolation — port 9100 reachable from co-networked containers. **[AUDIT 2026-09-04: substantially narrowed by `skillars-deferred-88` AC8, not closed.** node_exporter now sits on `skillars-observability` alone (`internal: true`, no gateway attached) and publishes no host ports, so it is unreachable from off-host and a compromised prometheus/loki/tempo/redis cannot exfiltrate. But `app` and `grafana` join **both** networks by design (they need egress), so a compromised `app` container still reaches `node_exporter:9100` and its full host-level metrics. The original wording — "any compromised container" — is now wrong; the exposure is `app` and `grafana` only.]** [`docker-compose.yml` networks block] `[DECIDED 2026-09-10 (skillars-deferred-107 AC5): accept & document. Rationale corrected by that story's code review: EVERY skillars-observability member can reach node_exporter:9100 (prometheus, loki, tempo, redis, app, grafana — loki/tempo/redis are third-party), BUT the network is internal:true so only app/grafana have egress, and a compromised app already holds the DB/Stripe/Bunny/OTLP credentials — so a compromised infra container cannot exfiltrate host gauges, and app/grafana reaching them is not an escalation. A dedicated prometheus+node_exporter network was evaluated and rejected. Full rationale in the docker-compose.yml node_exporter comment. Revisit if a container with BOTH node_exporter reachability AND its own egress is added.]`
 - DiskDataVolumeHigh requires Hetzner Volume mounted at `/opt/skillars/data` — if volume not provisioned, no metrics series exists and alert never fires; infrastructure provisioning dependency `[PICKED UP by skillars-deferred-94 AC6: clarifying comment added]`
 
 ## Deferred from: code review of deploy-3-1-postgresql-backup-automation (2026-06-04)
-- PGPASSWORD exposed via `docker exec -e` (visible in `ps aux` for the duration of the call) — spec-prescribed pattern; fixing it needs Docker secrets or a wrapper script. **[AUDIT 2026-09-04: still open and WIDER than recorded.** The cited line has moved (`pg-backup.sh:22` -> `:32`), and the same pattern occurs three more times in `restore-from-dump.sh` (`:135`, `:138`, `:142` — DROP DATABASE, CREATE DATABASE and the dump replay), which the original entry did not cover.]** `[PICKED UP by skillars-deferred-94 AC1: environment-variable inheritance pattern applied to all 5 occurrences]` [`deploy/backup/pg-backup.sh:32`, `deploy/backup/restore-from-dump.sh:134,137,143,152`]
-- Credentials visible in `/proc/<pid>/environ` when `.env` is sourced — project-wide pattern, not introduced by this story
+- Credentials visible in `/proc/<pid>/environ` when `.env` is sourced — project-wide pattern, not introduced by this story `[DECIDED 2026-09-10 (skillars-deferred-107 AC6): accept as won't-fix. Mechanism corrected by that story's code review: env-guard.sh bare-sources .env with no `set -a`, so the scripts hold the creds as UNEXPORTED shell vars — NOT in their own /proc/<pid>/environ. The real surfaces are the short-lived `PGPASSWORD=… docker exec -e` child's environ and the postgres/app container envs (via `docker compose --env-file`) — all root-only, single-tenant VPS, `.env` is root:root 0600, `deploy` user has no read. PGPASSFILE evaluated and rejected. See docs/deployment/secrets-reference.md#accepted-credential-exposure-surface and the pointer comments in pg-backup.sh / restore-from-dump.sh. The ps-aux argv half WAS fixed (skillars-deferred-94 AC1).]`
 
 ## Deferred from: code review of skillars-3-9-bulk-session-request-from-calendar (2026-06-16)
 <!-- skillars-deferred-100 AC7: W1 verified stale — closed by skillars-deferred-69 AC6 at 8af28a42:src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java:509 (+ :407); W2 verified closed by AC4 at WORKTREE:src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchStatusListener.java:31 (@Transactional REQUIRES_NEW readOnly) -->
@@ -1150,7 +1149,6 @@ The following ledger items were verified against current source and found alread
 
 skillars-deferred-91 closed the genuine one-off bugs (AC12–AC19), the rolling-deploy bucket (AC6–AC8), the i18n bucket (AC9–AC10), the N+1 bucket (AC11), a generic transactional outbox (AC1) wired onto the money / notification / SLU AFTER_COMMIT paths (AC2–AC4), and `CAPTURE_PENDING`'s slot-hold harm (AC5 Part A). The following residuals remain:
 
-- **Completion-gated coach payout — its own story.** AC5 Part B. The current model uses Stripe **destination charges**, so the coach is paid at capture / booking-confirmation. True completion-gating needs a switch to **separate charges & transfers** (design doc option B-1) — a payment-architecture change across `StripePaymentGateway`, `PaymentLifecycleService`, `BookingPaymentPersistenceService`, `CancellationRefundService`, every `CoachRevenue*` / `RevenueReporting*` path, a new `COACH_PAYOUT_TRANSFER` outbox handler and a `coach_payouts` ledger table. Design input: `docs/architecture/payout-and-capture-pending.md` — note the doc is still `DRAFT` and **D1–D5 are unanswered**; obtaining that sign-off is the first task of the Part B story (corrected by the 2026-09-03 code review, D8). AC5 Part A (the `CAPTURE_PENDING` → `CAPTURE_ABANDONED` timeout + slot release) shipped in this story.
 - **de-DE wording is AI-authored to native quality, not yet human-verified by a native German speaker.** AC9 rewrote every informal `du`/`dein…` and informal imperative to formal `Sie` across the whole `de-DE/index.js` (54 replacement groups, 0 informal forms left) and the frontend bundle parity check confirms 1022/1022 keys with 0 `{placeholder}` drift, but a native-speaker review of register/idiom is still owed. (Carried forward from skillars-deferred-90.)
 - **`getPublicProfile` — leave as-is, measured.** AC11 measured `CoachProfileService.getPublicProfile` at exactly **8** JDBC round-trips, **constant** in profile size (`CoachPublicProfileQueryCountIT` doubles every collection → still 8). Every read is index-covered on `coach_id`; there is no N+1 and the endpoint is a single page view. A `JOIN FETCH` / `@EntityGraph` collapse across the six `@OneToMany` collections would risk `MultipleBagFetchException` / a cartesian row explosion for no measurable gain. The IT stays as the regression guard.
 - **No frontend test framework.** ~6 recorded coverage gaps (`5-4` W9, `deferred-17`/`-18`/`-30`/`-37`/`-38`/`-43` D6) depend on standing up Vitest / Vue Test Utils. Out of scope — its own initiative. Every `.vue` / `.js` change in skillars-deferred-91 (AC14 `handleLogout`, AC9/AC10 i18n) was verified by ESLint + `quasar build` + code reading. `[FRAMEWORK AVAILABLE 2026-09-09 (skillars-deferred-104): Vitest runner now stood up (`5-4` W9 closed by its AC7); the `deferred-91` `handleLogout` / i18n coverage is now in-scope for its own follow-up story]`
@@ -1256,7 +1254,6 @@ _bmad-code-review Chunk 3 (i18n, AC12–AC14). Three `[Review][Defer]` findings.
 
 ## Deferred from: code review of skillars-deferred-94 (2026-09-07)
 
-- **Hardcoded container-UID `chown` values are never verified against the image's real runtime UID.** `deploy/provision.sh:599-610` and `deploy/backup/restore-from-volume-backup.sh:89-101` — a future `grafana`/`loki`/`tempo`/`prometheus` image bump that shifts the container's runtime uid (Grafana's has moved historically, 104→472) makes `chown -R <old-uid>` produce a data dir the new image cannot write; provision/restore "succeeds" and the container silently crash-loops or starts empty. `[PICKED UP by skillars-deferred-94 AC2: guard comments added; accepted mitigation for now]`
 - **Actuator health endpoint should surface notification-channel reachability.** `[skillars-deferred-100 AC7 (2026-09-08) reframe: the SMTP half SHIPPED in skillars-deferred-99 AC5 — `SmtpHealthIndicator` reports `mail` DOWN when the SMTP host is unreachable (`application.yaml:175`). The Slack half does NOT apply to the application: the app has no Slack integration; Slack notification lives only in `.github/workflows/deploy.yml`, so a Slack `HealthIndicator` inside Spring Boot would monitor a channel the app never uses. Nothing left to do here — closing.]`
 
 ## Deferred from: skillars-deferred-104 implementation (2026-09-09)
@@ -1444,8 +1441,10 @@ delete-outright convention — no `[CLOSED by …]` tag left behind):
 `skillars-8-1` D2 entries are struck through and annotated as closed by this story; the `deploy-1-3`
 LGTM `mkdir -p` entry carries a note that its "gated inside `[ -b ]`" premise looks stale at HEAD.
 
-**Not folded in / stays deferred:** completion-gated coach payout (`deferred-91` AC5 Part B — decision
-**D2**, its own future story); ~~the frontend test-framework initiative backlog~~ (stood up by
+**Not folded in / stays deferred:** ~~completion-gated coach payout (`deferred-91` AC5 Part B — decision
+**D2**, its own future story)~~ (shipped by `skillars-deferred-106`, 2026-09-09 — separate charges &
+transfers, `coach_payouts` ledger `V133`–`V135`, `CoachPayoutTransferHandler`); ~~the frontend
+test-framework initiative backlog~~ (stood up by
 `skillars-deferred-104`, 2026-09-09); the pre-production
 migration rebaseline; the `main.pending_blob_deletions` table drop; `deploy-3-3` Alertmanager /
 node_exporter; `deploy-3-1` `/proc/<pid>/environ`; `deploy-1-3` LGTM `mkdir -p`; and every wont-fix
@@ -1553,7 +1552,111 @@ bullets enumerated above, the three now-empty `## Deferred from:` headers remove
 the two strike-through annotations in prior audit blocks, the W5 retag, and this block.
 `[DECIDED]` / `[DISMISSED]` bullets: none touched. `[PICKED UP by …]` bullets: none touched.
 
-## Deferred from: code review of skillars-deferred-103-payment-reliability-pack-pause-hardening-and-cross-module-cleanup (2026-09-09)
+## Last audit: 2026-09-10 (post-merge prune — deferred-104 / -105 / -106)
 
-- **`pack.pause.maxDays` misconfigured `≤ 0` silently blocks every pause.** `PackSessionService.pausePack` reads `configService.getLong("pack.pause.maxDays", DEFAULT_PACK_PAUSE_MAX_DAYS)` — the 2-arg overload guards only an *absent* key (which is what `skillars-deferred-103` AC6 asked for). It is not range-checked, so an operator-stored `0` or negative value is accepted and makes every request with `pauseDurationDays >= 1` fail as `booking.pauseDurationInvalid`, with nothing indicating the config is the cause. Pre-existing pattern across many `ConfigService.getLong` call sites; a `getLongInRange`-style clamp (or a startup assertion) would close it.
-- **`SessionPackExpiryNotifier` class javadoc is stale about the listener transaction phase.** The javadoc at `SessionPackExpiryNotifier.java:37,44` still describes `SessionPackEmailListener` as `@TransactionalEventListener(AFTER_COMMIT)` with a "(fallible, unretried) send"; since `skillars-deferred-92` the listener is `BEFORE_COMMIT` + `enqueueEmail(Propagation.MANDATORY)`. `skillars-deferred-103` AC4 verified the runtime behaviour is already correct and needs no code change — only this doc comment is wrong.
+Targeted prune only (not a full re-mine — the 2026-09-08 deferred-101 re-mine and the 2026-09-09
+deferred-103 pass remain the last full audits). Three stories merged after deferred-103:
+`skillars-deferred-104` (frontend test runner — already has its own section below/above),
+`skillars-deferred-105` (CI build-warning cleanup — no ledger items), and `skillars-deferred-106`
+(completion-gated coach payout).
+
+**Bullets deleted (verified closed against HEAD before removal, per this file's delete-outright
+convention — no `[CLOSED by …]` tag left behind):**
+
+- `## Deferred from: skillars-deferred-91 …` — **"Completion-gated coach payout — its own story"**
+  (AC5 Part B). Shipped by `skillars-deferred-106`: Stripe **separate charges & transfers**,
+  `coach_payouts` ledger (`V133__coach_payouts_and_commission_rate.sql`, `V134`, `V135`),
+  `CoachPayoutTransferHandler` / `CoachPayoutReversalHandler` / `CoachPayoutEnqueueListener` /
+  `CoachPayoutOutboxSupport`, `CoachPayout` entity + repo. Owner sign-off on
+  `payout-and-capture-pending.md` D1–D5 recorded in `sprint-status.yaml` (hold_hours=48, no
+  post-completion cancel, revenue on `coach_payouts.RELEASED`). The other four deferred-91 residuals
+  (de-DE native review, `getPublicProfile` measured, no-frontend-framework, `AFTER_COMMIT` catalogue,
+  `uq_pcl_reference_type`) are untouched; header kept.
+- `## Deferred from: code review of deploy-3-1-postgresql-backup-automation (2026-06-04)` —
+  **"PGPASSWORD exposed via `docker exec -e`"**. Closed by `skillars-deferred-94` AC1 (shipped
+  2026-09-07): every call site now uses `PGPASSWORD="…" docker exec -e PGPASSWORD "$CID"` env-var
+  inheritance (verified at HEAD: `deploy/backup/pg-backup.sh:40`,
+  `deploy/backup/restore-from-dump.sh:139,142,145,151,160`) — the secret is no longer an argv token
+  visible in `ps aux`. The sibling **"Credentials visible in `/proc/<pid>/environ`"** bullet is a
+  distinct, still-open project-wide concern and stays; header kept.
+
+**Prior audit-block references updated (annotated, not deleted):** the `2026-09-04` `deploy-*`
+re-audit table's PGPASSWORD row is struck through and marked CLOSED; the
+`2026-09-08 (skillars-deferred-102 …)` block's "Not folded in / stays deferred" list has its
+completion-gated-coach-payout entry struck through and annotated shipped by `skillars-deferred-106`.
+
+**Reconstruction check:** every surviving non-blank line matches the pre-edit file (master @
+`918ff206`), in order, with nothing reworded or reordered — the only differences are the two deleted
+bullets above (no `## Deferred from:` header emptied — both sections retain other bullets), the two
+strike-through annotations in prior audit blocks, and this block. `[DECIDED]` / `[DISMISSED]`
+bullets: none touched. `[PICKED UP by …]` bullets: none deleted (the deleted PGPASSWORD bullet's
+`[PICKED UP by skillars-deferred-94 AC1]` tag went with it as a genuine closure).
+
+## Last audit: 2026-09-10 (skillars-deferred-107 story implementation)
+
+Not a full re-mine — the 2026-09-08 `deferred-101` re-mine and the 2026-09-09 `deferred-103` pass
+remain the last full audits, and this session's earlier post-104/-105/-106 prune (block above) is the
+immediate baseline. `skillars-deferred-107` shipped the two `deferred-103` code-review items and five
+long-deferred `deploy-*` items; this block records the ledger consequences.
+
+**Decision items — accept & document (retagged `[DECIDED]` in place, per the file's decided-retention rule):**
+
+- `## Deferred from: code review of deploy-3-3-…` — **"node_exporter network isolation"** →
+  `[DECIDED 2026-09-10 (skillars-deferred-107 AC5)]`. No topology change; the `docker-compose.yml`
+  `node_exporter` comment now carries the full won't-fix rationale (first-party `app`/`grafana` peers
+  only; a compromised `app` already holds every provider credential; dedicated network evaluated and
+  rejected).
+- `## Deferred from: code review of deploy-3-3-…` — **"Double notification risk if Alertmanager
+  added later"** → `[DECIDED 2026-09-10 (skillars-deferred-107 AC7)]`. Decision written into
+  `docs/deployment/monitoring.md` (new **"Alerting architecture — the Alertmanager decision"**
+  section): Grafana-managed alerting is the single delivery path; a future Alertmanager change
+  carries a 4-step checklist. `docker-compose.yml` prometheus-service comment replaced with a pointer.
+- `## Deferred from: code review of deploy-3-1-…` — **"Credentials visible in `/proc/<pid>/environ`"**
+  → `[DECIDED 2026-09-10 (skillars-deferred-107 AC6)]`. No script logic change; `docs/deployment/
+  secrets-reference.md` gains an **"Accepted credential-exposure surface"** section and `pg-backup.sh`
+  / `restore-from-dump.sh` gain a one-line pointer comment near the `.env` load.
+
+**Bullets deleted (genuine fixes shipped by `skillars-deferred-107`, per this file's delete-outright
+convention — no `[CLOSED by …]` tag left behind):**
+
+- `## Deferred from: code review of skillars-deferred-103-… (2026-09-09)` — **both** bullets:
+  **"`pack.pause.maxDays` misconfigured `≤ 0`"** (fixed by AC1 — `PackSessionService.pausePack` now
+  reads `configService.getBoundedLong("pack.pause.maxDays", 90L, 1L, 3650L)`; AC2 generalised the
+  bullet's own closing sentence — *"pre-existing pattern across many `ConfigService.getLong` call
+  sites"* — into a codebase-wide sweep of all 31 non-`ConfigService` `getLong`/`getInt` sites through
+  the range-bounded accessors; AC3 added the `ConfigStartupAssertion` fail-fast boot check) and
+  **"`SessionPackExpiryNotifier` class javadoc is stale"** (fixed by AC4 — the "Delivery." paragraph
+  now describes the current `BEFORE_COMMIT` + outbox-enqueue wiring, keeping the pre-`deferred-92`
+  history as one clearly-marked sentence). The section had only these two bullets — **header removed**.
+- `## Deferred from: code review of skillars-deferred-94 (2026-09-07)` — **"Hardcoded container-UID
+  `chown` values are never verified against the image's real runtime UID"** (`[PICKED UP by
+  skillars-deferred-94 AC2: accepted mitigation for now]`). Fixed by AC8: `provision.sh` and
+  `restore-from-volume-backup.sh` now probe each service's image for its real runtime uid
+  (`image_runtime_ugid` → `chown_probed`), keeping the numeric constants as a WARN-on-mismatch
+  fallback; redis keeps its deliberate gid-1000 override (probe the uid only). The section keeps its
+  actuator-health bullet — **header kept**.
+
+**Prior audit-block references struck through + annotated (not deleted, matching the `deploy-1-3`
+LGTM-row precedent in the `2026-09-04` table):** in the `2026-09-04 (…first-ever deploy-* re-audit)`
+table — `deploy-3-4` "DROP DATABASE / open connections" → CLOSED by `deferred-101` AC6; `deploy-3-4`
+"APP_CID capture race" → CLOSED by `deferred-102` AC2; `deploy-3-3` "double notification if
+Alertmanager added" → DECIDED by `deferred-107` AC7; `deploy-3-3` "node_exporter network isolation"
+→ DECIDED by `deferred-107` AC5; `deploy-1-5` "`git clean` vs the data subdirectory" → CLOSED by
+`deferred-102` AC6/AC7. (The `deploy-3-4` "hardcoded container UIDs 65534/10001/472" row and its
+duplicate bullet under `## Deferred from: code review of deploy-3-4-…` were left untouched — the AC8
+fix closes the underlying issue but the story's ledger instructions scoped the deletion to the
+`deferred-94`-review re-filing only; flagged for a future prune.)
+
+**Reconstruction check:** every surviving non-blank line matches the pre-edit file (master @
+`918ff206` + this session's earlier post-104/-105/-106 prune), in order, with nothing reworded or
+reordered. The only differences are: the three `[DECIDED 2026-09-10 …]` tags appended to existing
+`deploy-3-3` / `deploy-3-1` bullets; the three deleted bullets above (one `## Deferred from:` header
+removed — the now-empty `deferred-103` review section; the `deferred-94` review section keeps its
+other bullet); the five struck-through rows in the `2026-09-04` audit table; and this block.
+`[DISMISSED]` count: unchanged. `[DECIDED]` count: +3 (the three retags above). `[PICKED UP by …]`
+bullets touched: one — the `deferred-94` hardcoded-UID `chown` bullet, deleted as a genuine closure.
+
+## Deferred from: code review of skillars-deferred-107 (2026-09-10)
+
+- **`image_runtime_ugid` adds un-timed `docker pull`s to the disaster-restore path.** `deploy/backup/restore-from-volume-backup.sh:39` runs `docker image inspect "$img" || docker pull "$img"` once per service, between `${DC} down` (`:97`) and `${DC} up -d` (`:160`). On a host with no or slow egress, or one whose images were pruned — the exact conditions a rebuild-from-backup implies — this extends the outage window by however long up to five pulls take to fail, since `|| return 0` only fires once the pull has finished failing. Deferred: inherent to the AC8 probe design, and the fallback contains the correctness risk. Revisit if a restore is ever observed stalling here; a `timeout` wrapper would be the cheap fix.
+- **AC3's "do not hand-list the templated key strings" is violated in letter.** `ConfigBounds.java:180-181` hand-lists `VIDEO_QUOTA_TIER_SEGMENTS` and `VIDEO_TYPE_SEGMENTS` rather than iterating `CoachSubscriptionTier` / `VideoType`. Deferred: the documented reason — keeping the `config` module free of a dependency on `video.contract` / `marketplace.contract` — is sound, and `ConfigBoundsEnumCoverageTest` supplies exactly the drift guard the AC was reaching for (it fails if a new enum constant lands without a matching bound). Needs project-owner sign-off only because `story-review.md` deliberately hardened that wording from "enumerate or skip" to "must iterate".

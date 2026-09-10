@@ -58,7 +58,9 @@ public class RadarCompositeDlqProcessor {
         transactionTemplate.execute(status -> {
             row.setAttempts(row.getAttempts() + 1);
             row.setLastError(e.getMessage());
-            int maxAttempts = (int) configService.getLong("platform.development.radar_composite_dlq.max_attempts", 5L);
+            // skillars-deferred-107 AC2: 0/neg would dead-letter on the first attempt (or never).
+            int maxAttempts = (int) configService.getBoundedLong(
+                "platform.development.radar_composite_dlq.max_attempts", 5L, 1L, 100L);
             if (row.getAttempts() >= maxAttempts) {
                 row.setStatus("DEAD");
                 log.error("[DEAD_LETTER playerId={} skillCodes={}] radar composite recalculation exhausted retries",

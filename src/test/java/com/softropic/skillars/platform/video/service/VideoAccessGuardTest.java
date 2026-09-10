@@ -28,8 +28,10 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -56,7 +58,7 @@ class VideoAccessGuardTest {
 
     @BeforeEach
     void setUp() {
-        lenient().when(configService.getLong(eq("platform.video.access.coach_window_days"), any(Long.class)))
+        lenient().when(configService.getBoundedLong(eq("platform.video.access.coach_window_days"), anyLong(), anyLong(), anyLong()))
             .thenReturn(90L);
         lenient().when(videoAccessCache.getParentDecision(any())).thenReturn(Optional.empty());
     }
@@ -130,6 +132,11 @@ class VideoAccessGuardTest {
             .thenReturn(true);
 
         assertThat(guard.canPlay(null, VIDEO_ID)).isTrue();
+
+        // skillars-deferred-107 AC2: the coach access window is read through the range-bounded
+        // accessor — a stored 0/negative would otherwise deny every coach with a recent booking.
+        // Revert VideoAccessGuard to getLong(key, 90L) and this verify fails.
+        verify(configService).getBoundedLong("platform.video.access.coach_window_days", 90L, 1L, 3650L);
     }
 
     @Test

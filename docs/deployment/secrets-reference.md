@@ -367,3 +367,37 @@ re-reads the `volatile` cache. All users must re-authenticate. Roll during a low
    ```bash
    docker compose exec grafana grafana-cli admin reset-admin-password '<NEW_PASSWORD>'
    ```
+
+---
+
+## Accepted credential-exposure surface
+
+**Decision (skillars-deferred-107 AC6, [DECIDED 2026-09-10]): won't fix.**
+
+**Mechanism (corrected by the skillars-deferred-107 code review).** `deploy/backup/env-guard.sh`
+sources `/opt/skillars/.env` with a bare `.` and **no `set -a`**, so the credentials become
+*unexported shell variables* in the sourcing script — they do **not** appear in that script's own
+`/proc/<pid>/environ` (only exported variables do). The genuine exposures are narrower:
+
+- **`PGPASSWORD="${POSTGRES_PASSWORD}" docker exec -e PGPASSWORD "$CID" …`** — the short-lived
+  `docker exec` **child** process carries `PGPASSWORD` in its environment for the few seconds it
+  runs; that child's `/proc/<pid>/environ` is readable by root (the child runs as root).
+- **`docker compose --env-file /opt/skillars/.env`** — passes values into the **postgres / app
+  container** environments. Those containers legitimately need the DB password; this is by design and
+  is the same surface any Compose deployment has.
+
+This is accepted, not fixed, because:
+
+- Everything above is readable only by **root**, and root already owns `/opt/skillars/.env` itself
+  (`root:root`, mode `0600`) — it exposes nothing root cannot already read.
+- The VPS is **single-tenant**. The only non-root operator account is the unprivileged `deploy`
+  user, which cannot read `.env` (`provision.sh` places it outside the checkout, `root:root 0600`)
+  and runs no script that sources it — it runs only `git pull` + `docker compose`.
+- `PGPASSFILE` / stdin-piping was **evaluated and rejected**: it would rewrite every
+  `psql`/`pg_dump`/`pg_restore` invocation across the three backup/restore scripts and change nothing
+  about *who* can read the secret (still root, still the same `.env`, still the same container envs).
+- The `ps aux` argv-exposure half of the original finding **was** fixed
+  (`skillars-deferred-94` AC1 — env-var inheritance: `PGPASSWORD="…" docker exec -e PGPASSWORD "$CID"`).
+
+**Revisit** only if the VPS ever becomes multi-tenant, or if a non-root account is granted the
+ability to run (or `ptrace`) a process that has sourced `.env` or an in-flight `docker exec` child.

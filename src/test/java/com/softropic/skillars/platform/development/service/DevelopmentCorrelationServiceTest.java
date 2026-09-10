@@ -66,7 +66,7 @@ class DevelopmentCorrelationServiceTest {
     void getInsights_insufficientSessions_returnsInsufficiencyResponse() {
         when(coachProfileService.getCoachSubscriptionTier(COACH_ID))
             .thenReturn(CoachSubscriptionTier.ACADEMY);
-        when(configService.getLong("development.correlation.minSessionCount")).thenReturn(5L);
+        when(configService.getBoundedLong("development.correlation.minSessionCount", 0L, 10000L)).thenReturn(5L);
         when(sluRepository.countDistinctSessions(PLAYER_ID)).thenReturn(3L);
 
         CorrelationResponse response = service.getInsights(PLAYER_ID, COACH_ID);
@@ -264,7 +264,7 @@ class DevelopmentCorrelationServiceTest {
     private void stubAcademyWithSessions() {
         when(coachProfileService.getCoachSubscriptionTier(COACH_ID))
             .thenReturn(CoachSubscriptionTier.ACADEMY);
-        when(configService.getLong("development.correlation.minSessionCount")).thenReturn(5L);
+        when(configService.getBoundedLong("development.correlation.minSessionCount", 0L, 10000L)).thenReturn(5L);
         when(sluRepository.countDistinctSessions(PLAYER_ID)).thenReturn(6L);
     }
 

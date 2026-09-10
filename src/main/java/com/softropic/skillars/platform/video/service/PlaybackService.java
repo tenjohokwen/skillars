@@ -101,9 +101,15 @@ public class PlaybackService {
                 }
             }
 
+            // skillars-deferred-107 AC2: 0 → every signed HLS URL is expired on issue and all
+            // playback breaks; huge → weak-security long-lived URLs. Clamps to 120 + WARN;
+            // ConfigStartupAssertion also refuses to boot on a bad stored value (failFast key).
+            // skillars-deferred-107 code review: Math.max(1, …) on tokenMaxTtlMinutes too — it is an
+            // unvalidated @ConfigurationProperties int, and a 0/negative override would defeat the
+            // bounded config read via this Math.min.
             long ttlMinutes = Math.min(
-                configService.getLong("platform.video.playback.signed_url_ttl_minutes", 120L),
-                properties.getPlayback().getTokenMaxTtlMinutes());
+                configService.getBoundedLong("platform.video.playback.signed_url_ttl_minutes", 120L, 1L, 1440L),
+                Math.max(1, properties.getPlayback().getTokenMaxTtlMinutes()));
             Instant expiresAt = Instant.now().plus(ttlMinutes, ChronoUnit.MINUTES);
 
             boolean ipBindingEnabled = configService.getBoolean("platform.video.playback.ip_binding_enabled", false);

@@ -55,7 +55,7 @@ class QuickCompleteTimeoutServiceTest {
         service = new QuickCompleteTimeoutService(
             completionDataRepository, bookingService, eventPublisher, configService, txTemplate
         );
-        lenient().when(configService.getLong("booking.quick_complete_timeout_hours")).thenReturn(24L);
+        lenient().when(configService.getBoundedLong("booking.quick_complete_timeout_hours", 1L, 168L)).thenReturn(24L);
     }
 
     @Test

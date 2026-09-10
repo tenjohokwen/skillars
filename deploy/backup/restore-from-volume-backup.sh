@@ -26,6 +26,47 @@ require_env_vars "restore-from-volume-backup" "restore" HOS_ACCESS_KEY HOS_SECRE
 COMPOSE_FILE="/opt/skillars/app/docker-compose.yml"
 DC="docker compose --env-file /opt/skillars/.env -f ${COMPOSE_FILE}"
 DATA_DIR="/opt/skillars/data"
+
+# skillars-deferred-107 AC8 (+ code review): echo the numeric uid the given compose service's image
+# declares (its Config.User), or "" on any failure — same probe as provision.sh's image_runtime_uid.
+# `docker inspect .Config.User`, not `docker run … id -u`: images that drop privileges in their
+# entrypoint (redis: root → gosu 999) report the pre-drop uid from `id -u`. Names are resolved
+# inside the image; "" / 0 / unresolvable all yield "".
+image_runtime_uid() {
+  local svc="$1" img user uid
+  img=$(${DC} config --format json 2>/dev/null \
+        | jq -r --arg s "$svc" '.services[$s].image // empty' 2>/dev/null) || return 0
+  [ -n "${img:-}" ] || return 0
+  docker image inspect "$img" >/dev/null 2>&1 || docker pull "$img" >/dev/null 2>&1 || return 0
+  user=$(docker image inspect --format '{{.Config.User}}' "$img" 2>/dev/null) || return 0
+  user="${user%%:*}"
+  [ -n "$user" ] || return 0
+  case "$user" in
+    ''|*[!0-9]*) uid=$(docker run --rm --entrypoint sh "$img" -c "id -u '$user'" 2>/dev/null) || return 0 ;;
+    *) uid="$user" ;;
+  esac
+  case "${uid:-}" in ''|*[!0-9]*|0) return 0 ;; esac
+  printf '%s' "$uid"
+}
+
+# chown -R $dir to the probed image uid, keeping the hardcoded $3's GID pinned (the data dir group is
+# deliberate and independent of the image's declared group — redis wants gid 1000 while its process
+# is gid 999; grafana's image declares gid 0). Falls back to $3 silently when the probe can't
+# determine a non-root uid (normal for redis / root-group images); WARNs only on a real drift — a
+# probed non-zero uid that differs from the constant. skillars-deferred-107 AC8 + code review.
+chown_probed() {
+  local svc="$1" dir="$2" fallback="$3"
+  local fb_uid="${fallback%%:*}" fb_gid="${fallback##*:}" probed_uid
+  probed_uid="$(image_runtime_uid "$svc")"
+  if [ -z "$probed_uid" ]; then
+    chown -R "$fallback" "$dir"
+  elif [ "$probed_uid" != "$fb_uid" ]; then
+    log "⚠️  ${svc}: image now runs as uid ${probed_uid}, hardcoded constant is ${fb_uid} — using ${probed_uid}:${fb_gid} for ${dir}; update the constant in provision.sh and restore-from-volume-backup.sh"
+    chown -R "${probed_uid}:${fb_gid}" "$dir"
+  else
+    chown -R "$fallback" "$dir"
+  fi
+}
 PREFIX="${HOS_VOLUME_BACKUP_PREFIX:-volume-backups/}"
 PREFIX="${PREFIX%/}/"
 KEY="${1:-}"   # optional: exact object key to restore; default = most recently modified
@@ -88,19 +129,20 @@ rm -f "${ARCHIVE_FILE}"
 # Only directories that actually extracted from this archive are fixed up — an archive taken
 # before a service was added to VOLUME_SUBDIRS, or a service that was never provisioned, is a
 # legitimate absence, not a failure.
-# Container UIDs are tied to specific image versions (prometheus, loki, tempo, grafana, redis, traefik).
-# Update these chown calls if the corresponding docker-compose.yml image versions change.
+# skillars-deferred-107 AC8: the numeric uid:gid below are FALLBACKS — chown_probed reads the
+# runtime uid from each service's image first (image_runtime_uid) and only uses these if the probe
+# can't determine a non-root uid. The GID is always the pinned constant.
 for d in $VOLUME_SUBDIRS; do
   if [ ! -d "${DATA_DIR}/${d}" ]; then
     log "skipping ownership fix for ${d} — not present in this archive"
     continue
   fi
   case "$d" in
-    redis)      chown -R 999:1000 "${DATA_DIR}/${d}" ;;
-    prometheus) chown -R 65534:65534 "${DATA_DIR}/${d}" ;;
-    loki)       chown -R 10001:10001 "${DATA_DIR}/${d}" ;;
-    tempo)      chown -R 10001:10001 "${DATA_DIR}/${d}" ;;
-    grafana)    chown -R 472:472 "${DATA_DIR}/${d}" ;;
+    redis)      chown_probed redis      "${DATA_DIR}/${d}" 999:1000 ;;
+    prometheus) chown_probed prometheus "${DATA_DIR}/${d}" 65534:65534 ;;
+    loki)       chown_probed loki       "${DATA_DIR}/${d}" 10001:10001 ;;
+    tempo)      chown_probed tempo      "${DATA_DIR}/${d}" 10001:10001 ;;
+    grafana)    chown_probed grafana    "${DATA_DIR}/${d}" 472:472 ;;
     traefik)
       chmod 700 "${DATA_DIR}/${d}"
       if [ -f "${DATA_DIR}/${d}/acme.json" ]; then

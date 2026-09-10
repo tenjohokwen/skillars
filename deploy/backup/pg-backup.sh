@@ -30,6 +30,9 @@ trap 'rm -f "${DUMP_FILE}" || true' EXIT
 
 # skillars-deferred-102 AC6: checkout is /opt/skillars/app; .env stays at /opt/skillars/.env
 # (outside the checkout) so pass it explicitly. Runs as root.
+# The DB password reaches the postgres container env via `docker compose --env-file` and, briefly,
+# the `docker exec -e PGPASSWORD` child below — an accepted, root-only surface. See
+# docs/deployment/secrets-reference.md#accepted-credential-exposure-surface (skillars-deferred-107 AC6).
 CID=$(docker compose --env-file /opt/skillars/.env -f /opt/skillars/app/docker-compose.yml ps -q postgres 2>/dev/null | head -1)
 if [ -z "$CID" ]; then
   echo "[pg-backup][error] postgres container not running" >&2
