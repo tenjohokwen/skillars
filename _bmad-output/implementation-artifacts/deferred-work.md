@@ -17,6 +17,32 @@ One bullet = one open item. Grouped by the review that raised it; the heading ca
   Verify against the code before trusting an unannotated forward-reference.
 - **File paths and line numbers age fast.** They were accurate at the review date in the heading.
 
+## Last audit: 2026-09-11 (post-merge prune — deferred-work.md hygiene)
+
+Routine sweep after `skillars-deferred-109` (PR #176) merged to master, per this file's own
+delete-outright-when-closed convention. Found two live bullets that had accumulated a
+`[CLOSED by ...]` / "closing" tag but were never actually removed:
+
+- `## Deferred from: code review of skillars-deferred-94 (2026-09-07)` — the actuator
+  health-endpoint bullet, tagged `[skillars-deferred-100 AC7 (2026-09-08) reframe: … Nothing left
+  to do here — closing.]`. Deleted outright; it was the only bullet under that header, so the
+  header was removed with it.
+- `## Deferred from: skillars-deferred-104 implementation (2026-09-09)` — the "~6 frontend
+  coverage gaps are now unblocked, not closed" bullet, tagged `[CLOSED by skillars-deferred-108
+  AC1–AC6 (2026-09-10): …]` — `deferred-108`'s own audit added the tag but never deleted the
+  bullet. Deleted outright; the sibling "Quasar Vitest AE library-only" bullet under the same
+  header is untouched and stays open.
+
+No other item in the file carries a `[CLOSED by ...]` / `[STALE ...]` / `[WITHDRAWN ...]` tag
+outside historical `## Last audit` narrative text (checked by full-file grep before writing).
+`[DECIDED ...]` and `[DISMISSED ...]` bullets are untouched by design — declined / decided-wont-fix,
+not closures. Reconstruction check: every surviving line matches the pre-prune file, in order, with
+nothing added or reworded besides the two deletions above. Baseline before this pass: 1998 lines,
+88 `## Deferred from:` headers. **Measured after writing** (fresh `wc -l` / `grep -c` / `grep -o`,
+this audit block itself included): **2005** lines; **87** `## Deferred from:` headers; **50** raw
+`[DECIDED` tokens; **40** raw `[DISMISSED` tokens (both raw counts read higher than the real
+±0 item delta because this block's own prose names both tokens, same as every prior audit block).
+
 ## Last audit: 2026-09-04 (deferred-work.md prune + first-ever `deploy-*` re-audit)
 
 Two passes, both run during `skillars-deferred-92` story creation at `c2c47c1`.
@@ -1237,10 +1263,6 @@ _bmad-code-review Chunk 3 (i18n, AC12–AC14). Three `[Review][Defer]` findings.
 - **[DECIDED 2026-09-11 (skillars-deferred-109 AC12 / owner D5)] `VideoModerationEmailListener` blank-recipient behaviour is a documented decision, not a gap.** The original bullet ("silent drop, no send attempt, no ERROR") was materially stale at HEAD. The blank `platform.admin_alert_email` path now has: a `@PostConstruct checkAdminAlertConfig()` that logs `log.error("STARTUP: …")` and throws `IllegalStateException` ("STARTUP ABORTED") when `ARACHNID_ENABLED` is on; a per-send `log.error("… admin alert NOT sent")` in `adminAlertEnvelope()`; and a **deliberate documented decision** in `sendAdminAlertSync` NOT to retain the outbox row for an unset config key ("no number of re-drives fixes an unset config key, and a retained row would occupy a claim slot until a human noticed"). That behaviour is kept as-is by owner decision D5. `skillars-deferred-109` AC12.1 additionally split the read-back into explicit `persisted == null` (→ WARN "not yet visible") and `persisted == SENT` (→ INFO "delivered") branches — a single trailing `log.info` had been mislabelling a null read-back as a delivery. [`src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/VideoModerationEmailListener.java`]
 - **[DECIDED 2026-09-11 (skillars-deferred-109 AC12)] the retryable/permanent send mapping is now covered.** `VideoModerationEmailListenerTest.RealMailManagerMappingAC122` drives a real `MailManager` (real Resilience4J circuit breaker + `RetryTemplate`) over a stubbed `MailService` (the seam — `@MockitoBean JavaMailSender` does not work because `MailService` gets its sender from `SenderProvider.nextSender()`), and asserts on the produced `EnvelopeEntity` row: a retryable send failure → `FAILED, isRetry=true` → `sendAdminAlertSync` rethrows; a permanent failure → `FAILED, isRetry=false` → it logs `UNDELIVERABLE` and returns. Scope: the send-mapping + listener-decision seam; the durable outbox-row retain/delete lifecycle is `ModerationAdminAlertOutboxHandler`'s and is covered by `ModerationOutboxIT`. The old bullet's note about `NotificationEmailOutboxAtomicityIT` using `TestMailManager` is correct and is why the seam was moved to `MailService`.
 
-## Deferred from: code review of skillars-deferred-94 (2026-09-07)
-
-- **Actuator health endpoint should surface notification-channel reachability.** `[skillars-deferred-100 AC7 (2026-09-08) reframe: the SMTP half SHIPPED in skillars-deferred-99 AC5 — `SmtpHealthIndicator` reports `mail` DOWN when the SMTP host is unreachable (`application.yaml:175`). The Slack half does NOT apply to the application: the app has no Slack integration; Slack notification lives only in `.github/workflows/deploy.yml`, so a Slack `HealthIndicator` inside Spring Boot would monitor a channel the app never uses. Nothing left to do here — closing.]`
-
 ## Deferred from: skillars-deferred-104 implementation (2026-09-09)
 
 skillars-deferred-104 stood up the frontend unit-test runner (Vitest + `@vue/test-utils`,
@@ -1262,21 +1284,6 @@ residual:
   `quasar ext add` proper so the config can be derived from `quasar.config.js` directly rather than
   via `vite-tsconfig-paths` reading `.quasar/tsconfig.json`. [`src/frontend/vitest.config.mjs`,
   `src/frontend/package.json`]
-- **~6 frontend coverage gaps are now unblocked, not closed.** Each dependent line above
-  (`deferred-11` payment [was written `deferred-12` here — a typo; `skillars-deferred-12` is an
-  unrelated backend story, the payment frontend-tests gap was `skillars-deferred-11`'s code-review
-  bullet], `deferred-17`/`-18` D6, `deferred-35`/`-36`/`-37`/`-38` `booking.store.js`,
-  `deferred-43` `playerStore.js`, `deferred-90`/`-98` remaining `sessionManager` coverage,
-  `deferred-91` `handleLogout` / i18n) still needs its own follow-up story to actually write the
-  specs — the runner existing does not write them.
-  `[CLOSED by skillars-deferred-108 AC1–AC6 (2026-09-10): every named gap now has a
-  mutation-sensitive spec — AC1 `paymentStoreSpec.js` + `PaymentMethodCardSpec.js`; AC2
-  `BookingRequestPageSpec.js` + `ParentBookingsPageSpec.js` + `ProfileBuilderStep3Spec.js`; AC3
-  `bookingStoreSpec.js`; AC4 `playerStoreSpec.js` + `MainLayoutSpec.js`; AC5
-  `sessionManagerCoverageSpec.js`; AC6 `useSessionSpec.js` + `MainLayoutSpec.js` locale block.
-  The sibling "Quasar Vitest AE library-only" residual above stays open — still blocked on
-  `@quasar/app-vite` v3. `deferred-30` has no bullet anywhere in this file (pre-existing stray
-  reference; not this story's to fix).]`
 
 ## Deferred from: skillars-deferred-100 implementation (2026-09-08)
 
